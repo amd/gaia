@@ -11,7 +11,15 @@ from a different skill and commands a prompt injection talks the model into.
 So a grant is keyed on the *invocation*, not the tool name:
 
     run_shell_command  command="gh issue list"   ->  run_shell_command:gh issue list
+    run_shell_command  command="cd p && python -m pytest -q 2>&1"
+                                                 ->  run_shell_command:pytest
     write_file         file_path="notes.md"      ->  write_file:notes.md
+
+A shell grant covers a command *family*: the program and its subcommand,
+wherever it sits in a line. A ``cd``, a harmless redirection (``2>&1``) and a
+read-only filter (``| tail``) do not change what was approved, so they do not
+split the grant. A line running two families grants both, and a later line is
+covered only when every family in it was granted. Deleting is never granted.
 
 A tool with no scope rule returns ``None``, which means **"always" is not
 offered at all** for that call. That is the safe default and it is honest: the
@@ -28,16 +36,17 @@ it. Scoping keeps the affordance and takes away the blast radius.
 
 from __future__ import annotations
 
-import ntpath
 import posixpath
-import shlex
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-#: Shell metacharacters. A command containing any of them runs more than one
-#: thing, so no single scope describes it — the grant is refused outright
-#: rather than keyed on whichever binary happens to come first.
-_SHELL_METACHARACTERS = ("|", "&", ";", ">", "<", "`", "$(", "\n", "\r")
+from gaia.agents.base.call_risk import DESTRUCTIVE, shell_command_risk
+from gaia.agents.base.command_facts import (
+    PYTHON_BINARIES,
+    binary_name,
+    effective_argv,
+    read_command,
+)
 
 #: Binaries whose name bounds nothing: they run whatever they are handed, so
 #: "allow `bash` this session" is "allow everything this session" wearing a
@@ -55,15 +64,6 @@ _UNBOUNDED_BINARIES = frozenset(
         "command",
         "powershell",
         "pwsh",
-        "python",
-        "python3",
-        "py",
-        "node",
-        "deno",
-        "bun",
-        "perl",
-        "ruby",
-        "php",
         "osascript",
         "env",
         "nohup",
@@ -78,6 +78,39 @@ _UNBOUNDED_BINARIES = frozenset(
         "uvx",
     }
 )
+
+#: Interpreters. Their name bounds nothing either, but running scripts is the
+#: everyday work of a coding session, so they get a grant whose label SAYS it
+#: covers any script — `python (any script)`, never a bare `python`.
+_INTERPRETERS = frozenset({"node", "deno", "bun", "perl", "ruby", "php"})
+
+#: Programs that only move the session or read what another command printed.
+#: They never decide what a line may do, so they do not split a grant:
+#: `cd proj && pytest | tail -5` is the same decision as `pytest`. Only programs
+#: with no flag that writes a file or runs another program belong here — `sort -o`,
+#: `uniq in out` and `rg --pre` do both, so they are families of their own.
+_TRANSPARENT = frozenset({"cd", "pushd", "popd", "set-location"})
+_READ_FILTERS = frozenset(
+    {
+        "head",
+        "tail",
+        "grep",
+        "findstr",
+        "wc",
+        "cut",
+        "tr",
+        "column",
+        "cat",
+        "more",
+        "echo",
+        "printf",
+        "true",
+    }
+)
+
+#: Programs that take flags first as a matter of course and have no subcommand
+#: a flag could redirect: `pytest -q tests/` is still `pytest`.
+_FLAG_FIRST_BINARIES = frozenset({"pytest", "ls", "grep", "unittest"})
 
 #: How many words after the binary a shell grant may cover. Two is enough for
 #: the command-group/subcommand shape most CLIs use (``gh issue list``,
@@ -120,18 +153,32 @@ _SKILL_TOOLS = frozenset({"install_skill", "remove_skill"})
 #: identity, since the bytes behind it can change between captures.
 _UNGRANTABLE_TOOLS = frozenset({"capture_skill"})
 
+#: Tools whose every call is the same kind of action, so the family IS the
+#: tool. The label says how wide that is.
+_FAMILY_TOOLS = {
+    "run_python": "Python snippets (run_python)",
+    "execute_python_file": "running Python files",
+    "notify_desktop": "desktop notifications",
+}
+
 
 @dataclass(frozen=True)
 class GrantScope:
     """One "always allow" grant: what gets recorded, and what to call it.
 
-    ``key`` is matched exactly on later calls. ``label`` is what the prompt
+    ``keys`` are the families the grant records; a later call is covered only
+    when every one of its keys was granted. ``label`` is what the prompt
     promises the user — the two must describe the same thing, because the
     label is the only account of the grant anyone ever reads.
     """
 
-    key: str
+    keys: Tuple[str, ...]
     label: str
+
+    @property
+    def key(self) -> str:
+        """The grant as one string — the single key of a one-family call."""
+        return " + ".join(self.keys)
 
 
 def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
@@ -148,6 +195,8 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
         return _path_scope(tool_name, args)
     if tool_name in _SKILL_TOOLS:
         return _named_scope(tool_name, args, _SKILL_ARG_NAMES)
+    if tool_name in _FAMILY_TOOLS:
+        return GrantScope(keys=(tool_name,), label=_FAMILY_TOOLS[tool_name])
     return None
 
 
@@ -163,26 +212,51 @@ def _shell_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     command = _first_str(args, _COMMAND_ARG_NAMES)
     if not command:
         return None
-    if any(meta in command for meta in _SHELL_METACHARACTERS):
+    facts = read_command(command)
+    # Unreadable, or a redirect into a file the family does not name.
+    if facts.opaque or facts.writes_file:
         return None
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        # Unbalanced quotes: the command cannot be read, so it cannot be scoped.
-        return None
-    if not tokens:
+    # A delete is never a standing grant: each one is answered on its own.
+    if shell_command_risk(command) == DESTRUCTIVE:
         return None
 
-    binary = _binary_name(tokens[0])
+    segments = [s for s in facts.segments if binary_name(s[0]) not in _TRANSPARENT]
+    significant = [s for s in segments if binary_name(s[0]) not in _READ_FILTERS]
+    # A line that only reads (`echo hello`, `cat x | head`) is granted as itself.
+    chosen = significant or segments[:1] or facts.segments[:1]
+
+    labels: List[str] = []
+    for segment in chosen:
+        label = _family(segment)
+        if label is None:
+            return None
+        if label not in labels:
+            labels.append(label)
+    keys = tuple(f"{tool_name}:{label}" for label in labels)
+    return GrantScope(keys=keys, label=", ".join(labels))
+
+
+def _family(argv: Tuple[str, ...]) -> Optional[str]:
+    """The family one simple command belongs to, or None if it has none."""
+    binary = binary_name(argv[0])
+    if binary in PYTHON_BINARIES:
+        if "-c" in argv[1:]:
+            return "python -c (any inline Python)"
+        argv = effective_argv(argv)
+        binary = argv[0]
+        if binary in PYTHON_BINARIES:
+            return "python (any script)"
+    elif binary in _INTERPRETERS:
+        return f"{binary} (any script)"
     if not binary or binary in _UNBOUNDED_BINARIES:
         return None
 
-    rest = tokens[1:]
+    rest = argv[1:]
     # A flag before any subcommand redirects what the command acts on —
     # `git -C /elsewhere commit` is not `git commit`. Neither scope is honest:
     # `git commit` hides the redirection, and a bare `git` covers every
     # subcommand there is. So this call simply cannot be granted.
-    if rest and rest[0].startswith("-"):
+    if rest and rest[0].startswith("-") and binary not in _FLAG_FIRST_BINARIES:
         return None
 
     words = [binary]
@@ -194,19 +268,7 @@ def _shell_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
         if not _is_subcommand_word(token):
             break
         words.append(token)
-
-    label = " ".join(words)
-    return GrantScope(key=f"{tool_name}:{label}", label=label)
-
-
-def _binary_name(token: str) -> str:
-    """The bare program name, with any directory and .exe suffix removed."""
-    name = ntpath.basename(posixpath.basename(token)).lower()
-    for suffix in (".exe", ".cmd", ".bat", ".com", ".ps1"):
-        if name.endswith(suffix):
-            name = name[: -len(suffix)]
-            break
-    return name
+    return " ".join(words)
 
 
 def _is_subcommand_word(token: str) -> bool:
@@ -216,8 +278,14 @@ def _is_subcommand_word(token: str) -> bool:
     return all(ch.isalnum() or ch in "-_" for ch in token)
 
 
+def path_argument(tool_args: Any) -> str:
+    """The path a file-writing call targets, or "" when it names none."""
+    args = tool_args if isinstance(tool_args, dict) else {}
+    return _first_str(args, _PATH_ARG_NAMES)
+
+
 def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
-    raw = _first_str(args, _PATH_ARG_NAMES)
+    raw = path_argument(args)
     if not raw:
         return None
     # Normalised for matching, never resolved: this must stay a pure function of
@@ -225,7 +293,7 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     normalised = posixpath.normpath(raw.replace("\\", "/"))
     display = posixpath.basename(normalised) or normalised
     return GrantScope(
-        key=f"{tool_name}:{normalised}", label=f"{tool_name} on {display}"
+        keys=(f"{tool_name}:{normalised}",), label=f"{tool_name} on {display}"
     )
 
 
@@ -235,7 +303,7 @@ def _named_scope(
     value = _first_str(args, names)
     if not value:
         return None
-    return GrantScope(key=f"{tool_name}:{value}", label=f"{tool_name} {value}")
+    return GrantScope(keys=(f"{tool_name}:{value}",), label=f"{tool_name} {value}")
 
 
-__all__ = ["GrantScope", "grant_scope"]
+__all__ = ["GrantScope", "PATH_TOOLS", "grant_scope", "path_argument"]

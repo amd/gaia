@@ -204,6 +204,7 @@ func TestRiskTierBadgeWords(t *testing.T) {
 		RiskWrite:       "WRITE",
 		RiskDestructive: "DESTRUCTIVE",
 		RiskDenied:      "BLOCKED",
+		RiskExecute:     "RUNS CODE",
 	} {
 		if b := tier.Badge(); !strings.Contains(b, want) {
 			t.Errorf("Badge() for %v = %q, want it to contain %q", tier, b, want)
@@ -241,12 +242,12 @@ func TestDestructiveTierShowsExtraWarning(t *testing.T) {
 // otherwise would be the lie.
 func TestConfirmationHintNamesTheKeysAndTimeout(t *testing.T) {
 	view := stripANSI(NewConfirmationModel("run-1", "send_draft", "x", "").View())
-	for _, want := range []string{"y run once", "n/esc deny", "30s"} {
+	for _, want := range []string{"y once", "n/esc deny", "30s"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("hint missing %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, " a allow any ") {
+	if strings.Contains(view, "a always") {
 		t.Errorf("always must not be offered with no channel to grant it on:\n%s", view)
 	}
 }
@@ -261,10 +262,10 @@ func TestLiveConfirmationOffersAlwaysAndABoundedClock(t *testing.T) {
 	view := stripANSI(m.View())
 
 	for _, want := range []string{
-		"y run once",
-		"a allow `pwd` this session",
+		"y once",
+		"a always: pwd (this session)",
 		"n/esc deny",
-		"auto-denies in 10",
+		"expires in 10",
 		`command="pwd"`, // the payload the old prompt hid
 	} {
 		if !strings.Contains(view, want) {
@@ -414,7 +415,7 @@ func TestAlwaysPromisesOnlyTheScopeTheAgentNamed(t *testing.T) {
 		WithLiveChannel("cid-1", "gh issue list")
 
 	view := stripANSI(m.View())
-	if !strings.Contains(view, "a allow `gh issue list` this session") {
+	if !strings.Contains(view, "a always: gh issue list (this session)") {
 		t.Errorf("the offer must name the scope:\n%s", view)
 	}
 	for _, forbidden := range []string{"any arguments", "any run_shell_command"} {
@@ -499,7 +500,7 @@ func TestConfirmationViewDoesNotPanicWhenResolved(t *testing.T) {
 // without reading on the dangerous one. `pwd` is tiered Destructive because
 // run_shell_command's NAME does not bound it — not because pwd is destructive.
 func TestDestructiveWarningDistinguishesUnboundedFromIrreversible(t *testing.T) {
-	shell := destructiveWarning("run_shell_command")
+	shell := destructiveWarning("run_shell_command", false)
 	if strings.Contains(shell, "may not be reversible") {
 		t.Errorf("shell warning still claims irreversibility: %q", shell)
 	}
@@ -507,12 +508,12 @@ func TestDestructiveWarningDistinguishesUnboundedFromIrreversible(t *testing.T) 
 		t.Errorf("shell warning must point at the command on screen: %q", shell)
 	}
 
-	if got := destructiveWarning("run_cli_command"); got != shell {
+	if got := destructiveWarning("run_cli_command", false); got != shell {
 		t.Errorf("both shell tools must share the wording, got %q", got)
 	}
 
 	// A genuinely irreversible action keeps the strong claim.
-	del := destructiveWarning("permanent_delete")
+	del := destructiveWarning("permanent_delete", false)
 	if !strings.Contains(del, "may not be reversible") {
 		t.Errorf("permanent_delete lost its warning: %q", del)
 	}
@@ -545,5 +546,84 @@ func TestEngineeringConsentIsWriteNotDestruction(t *testing.T) {
 		if strings.Contains(view, "DESTRUCTIVE") || !strings.Contains(view, "Codex") {
 			t.Errorf("misleading confirmation: %s", view)
 		}
+	}
+}
+
+// --- #4446: proportionate labels, one command, y/a/n, timeout ---------------
+
+// The agent read the command; its label replaces the tool-name guess. Running
+// the tests is RUNS CODE, never DESTRUCTIVE, and carries no warning paragraph.
+func TestAgentRiskReplacesTheToolNameGuess(t *testing.T) {
+	m := NewConfirmationModel("run-1", "run_shell_command", "python -m pytest -q tests/", "").
+		WithRisk("execute")
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "RUNS CODE") {
+		t.Errorf("a test run must be labelled RUNS CODE:\n%s", view)
+	}
+	for _, forbidden := range []string{"DESTRUCTIVE", "may not be reversible", "check the command above"} {
+		if strings.Contains(view, forbidden) {
+			t.Errorf("a test run must not carry %q:\n%s", forbidden, view)
+		}
+	}
+
+	rm := stripANSI(NewConfirmationModel("run-1", "run_shell_command", "rm -rf build", "").
+		WithRisk("destructive").View())
+	if !strings.Contains(rm, "DESTRUCTIVE") || !strings.Contains(rm, "may not be reversible") {
+		t.Errorf("a delete keeps the strong label and warning:\n%s", rm)
+	}
+}
+
+// An unknown risk word never softens the label.
+func TestUnknownRiskKeepsTheCautiousTier(t *testing.T) {
+	m := NewConfirmationModel("run-1", "run_shell_command", "x", "").WithRisk("harmless")
+	if m.Tier() != RiskDestructive {
+		t.Errorf("tier = %v, want the cautious default", m.Tier())
+	}
+}
+
+// The command appears once: the title asks in words, the body is the command.
+func TestTheCommandIsShownOnce(t *testing.T) {
+	m := NewConfirmationModel("run-1", "run_shell_command",
+		"python -m pytest -q tests/ 2>&1\nin ~/AppData/…/newuser/proj", "").
+		WithRisk("execute").WithLiveChannel("cid", "pytest")
+	view := stripANSI(m.View())
+	if n := strings.Count(view, "python -m pytest"); n != 1 {
+		t.Errorf("the command appears %d times, want once:\n%s", n, view)
+	}
+	if strings.Contains(view, "run_shell_command") {
+		t.Errorf("the tool name is the machine's handle, not the question:\n%s", view)
+	}
+	if !strings.Contains(view, "Run this command?") {
+		t.Errorf("missing the plain-language title:\n%s", view)
+	}
+}
+
+// The keys are the last line, so a clipped modal is still answerable, and the
+// mode hint sits just above them.
+func TestKeysAreTheLastLineAndTheModeHintIsAbove(t *testing.T) {
+	m := NewConfirmationModel("run-1", "run_shell_command", "pytest", "").
+		WithLiveChannel("cid", "pytest")
+	m.SetModeHint("mode: ask · shift+tab to change")
+	lines := strings.Split(strings.TrimRight(stripANSI(m.View()), "\n "), "\n")
+	last := strings.TrimSpace(lines[len(lines)-1])
+	if !strings.HasPrefix(last, "y once · a always: pytest") {
+		t.Errorf("last line = %q, want the keys", last)
+	}
+	if prev := lines[len(lines)-2]; !strings.Contains(prev, "shift+tab to change") {
+		t.Errorf("line above the keys = %q, want the mode hint", prev)
+	}
+}
+
+// Timing out is not the user saying no, and the modal must not say it was.
+func TestATimedOutPromptSaysTimedOutNotDenied(t *testing.T) {
+	m := NewConfirmationModel("run-1", "run_shell_command", "pytest", "").WithLiveChannel("cid", "")
+	m, cmd := m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-1"})
+	msg := cmd().(ConfirmationDecidedMsg)
+	if !msg.TimedOut || msg.Approved {
+		t.Fatalf("decision = %+v, want a timed-out non-approval", msg)
+	}
+	view := strings.Join(strings.Fields(stripANSI(m.View())), " ")
+	if !strings.Contains(view, "not that you said no") {
+		t.Errorf("the timeout must be told apart from a refusal:\n%s", view)
 	}
 }

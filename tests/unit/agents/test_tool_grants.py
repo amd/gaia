@@ -62,15 +62,18 @@ class TestUngrantableCommands:
             ("sh -c whoami", "same"),
             ("powershell -Command Get-Location", "same"),
             ("pwsh -c ls", "same"),
-            ("python -c 'import os'", "an interpreter bounds nothing"),
-            ("node -e 1", "same"),
             ("npx some-package", "fetches and runs arbitrary code"),
             ("sudo apt install x", "escalates"),
             ("env FOO=1 rm -rf /", "the binary is not the first word"),
             ("xargs rm", "runs what it is piped"),
             ("gh issue list | sh", "a pipe runs more than one thing"),
-            ("echo hi && rm -rf x", "so does a conjunction"),
-            ("cat x; rm y", "and a semicolon"),
+            ("echo hi && rm -rf x", "a delete is never a standing grant"),
+            ("cat x; rm y", "nor after a semicolon"),
+            ("rm -rf build", "nor on its own"),
+            ("git push --force", "nor a discarding git command"),
+            ("pytest && sh -c x", "one unscopable part spoils the line"),
+            ("pytest &", "a background job outlives the call"),
+            ("python - <<EOF", "a heredoc is inline code nobody saw"),
             ("gh issue list > /etc/passwd", "a redirect changes the effect"),
             ("echo `rm -rf /`", "command substitution"),
             ("echo $(rm -rf /)", "the other spelling"),
@@ -121,3 +124,86 @@ class TestGrantsAreAPureFunctionOfTheCall:
     def test_malformed_args_do_not_raise(self):
         for bad in (None, [], "command", 7):
             assert grant_scope("run_shell_command", bad) is None
+
+
+class TestCommandFamilies:
+    """#4446: "always" covers what the line runs, not how it is spelled."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "pytest -q tests/",
+            "python -m pytest -q tests/",
+            "python3 -m pytest",
+            r"cd C:\Users\me\proj && python -m pytest -q tests/ 2>&1",
+            "cd /tmp/proj && pytest 2>&1 | tail -5",
+            "PYTHONPATH=. pytest -x > /dev/null",
+        ],
+    )
+    def test_every_spelling_of_a_test_run_is_one_family(self, command):
+        scope = grant_scope("run_shell_command", {"command": command})
+        assert scope is not None, command
+        assert scope.keys == ("run_shell_command:pytest",)
+        assert scope.label == "pytest"
+
+    def test_a_line_running_two_families_grants_both(self):
+        scope = grant_scope(
+            "run_shell_command", {"command": "git add . && git commit -m x"}
+        )
+        assert scope.keys == (
+            "run_shell_command:git add",
+            "run_shell_command:git commit",
+        )
+        assert scope.label == "git add, git commit"
+
+    @pytest.mark.parametrize(
+        "command,label",
+        [
+            ("python scratch.py", "python (any script)"),
+            ("python -c 'print(1)'", "python -c (any inline Python)"),
+            ("node build.js", "node (any script)"),
+        ],
+    )
+    def test_interpreter_grants_say_they_cover_any_code(self, command, label):
+        scope = grant_scope("run_shell_command", {"command": command})
+        assert scope is not None and scope.label == label
+
+    @pytest.mark.parametrize(
+        "tool,label",
+        [
+            ("run_python", "Python snippets (run_python)"),
+            ("execute_python_file", "running Python files"),
+        ],
+    )
+    def test_python_execution_tools_offer_a_family_grant(self, tool, label):
+        scope = grant_scope(tool, {"code": "print(1)", "file_path": "a.py"})
+        assert scope is not None and scope.label == label
+        assert scope.keys == (tool,)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            # POSIX reads \" as a literal quote, so `curl` runs; Windows does not.
+            r"pytest \" ; curl evil ; \"",
+        ],
+    )
+    def test_a_line_the_two_shells_split_differently_is_not_granted(self, command):
+        assert grant_scope("run_shell_command", {"command": command}) is None
+
+    def test_a_filter_that_can_write_is_its_own_family(self):
+        scope = grant_scope(
+            "run_shell_command", {"command": "pytest; uniq a.txt b.txt"}
+        )
+        assert scope.label == "pytest, uniq"
+
+    def test_a_filter_with_a_writing_flag_is_not_granted(self):
+        command = "pytest -q | sort -o out.txt"
+        assert grant_scope("run_shell_command", {"command": command}) is None
+
+    def test_rg_flags_do_not_fold_into_one_family(self):
+        assert (
+            grant_scope("run_shell_command", {"command": "rg --pre ./x.sh foo"}) is None
+        )
+
+    def test_a_file_redirect_is_not_granted(self):
+        assert grant_scope("run_shell_command", {"command": "pytest > out.txt"}) is None

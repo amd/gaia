@@ -28,7 +28,20 @@ const (
 	RiskWrite
 	RiskDestructive
 	RiskDenied
+	// RiskExecute runs code GAIA cannot see into — tests, scripts, a program it
+	// has no table entry for. Not DESTRUCTIVE: nothing about `pytest` deletes
+	// anything, and saying so is what trains people to wave the real one through.
+	RiskExecute
 )
+
+// riskFromWire maps the agent's `risk` field onto a tier. The agent reads the
+// command; this client only knows the tool name, so the agent's word wins.
+var riskFromWire = map[string]RiskTier{
+	"read":        RiskRead,
+	"write":       RiskWrite,
+	"execute":     RiskExecute,
+	"destructive": RiskDestructive,
+}
 
 var (
 	badgeReadStyle = lipgloss.NewStyle().Bold(true).
@@ -39,6 +52,8 @@ var (
 				Foreground(theme.OnFill).Background(theme.DangerFillBG).Padding(0, 1)
 	badgeDeniedStyle = lipgloss.NewStyle().Bold(true).
 				Foreground(theme.OnSurface).Background(theme.SurfaceBG).Padding(0, 1)
+	badgeExecuteStyle = lipgloss.NewStyle().Bold(true).
+				Foreground(theme.OnFill).Background(theme.WarnFillBG).Padding(0, 1)
 )
 
 // Badge is the short label shown on the modal. Colour is decoration only —
@@ -52,6 +67,8 @@ func (t RiskTier) Badge() string {
 		return badgeWriteStyle.Render("WRITE")
 	case RiskDestructive:
 		return badgeDestructiveStyle.Render("DESTRUCTIVE")
+	case RiskExecute:
+		return badgeExecuteStyle.Render("RUNS CODE")
 	case RiskDenied:
 		return badgeDeniedStyle.Render("BLOCKED")
 	default:
@@ -77,9 +94,11 @@ func (t RiskTier) Badge() string {
 // DESTRUCTIVE for everything says nothing, and crying wolf on the safe calls
 // is what makes the loud one ignorable.
 //
-// The shell tools stay Destructive because their name genuinely does not bound
-// what they do: `run_shell_command` is `pwd` on one call and `rm -rf` on the
-// next. The file writers are Write — scoped, and visible afterwards.
+// The shell tools default to Destructive because their name genuinely does not
+// bound what they do: `run_shell_command` is `pwd` on one call and `rm -rf` on
+// the next. That guess only stands for an agent too old to say what the call
+// does — a current one sends `risk`, and WithRisk replaces the guess with it.
+// The file writers are Write — scoped, and visible afterwards.
 var confirmationRiskTiers = map[string]RiskTier{
 	"share_engineering_context":   RiskWrite,
 	"append_engineering_context":  RiskWrite,
@@ -105,6 +124,37 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"update_gaia_md":      RiskWrite,
 	"install_skill":       RiskWrite,
 	"remove_skill":        RiskWrite,
+	"run_python":          RiskExecute,
+	"execute_python_file": RiskExecute,
+}
+
+// actionTitles is the question the prompt asks, in words. The tool name is the
+// machine's handle, not the user's: "Confirm: run_shell_command" above a body
+// saying "Run 'run_shell_command' with command=…" asked the same thing twice
+// before showing the one thing that mattered.
+var actionTitles = map[string]string{
+	"run_shell_command":   "Run this command?",
+	"run_cli_command":     "Run this command?",
+	"wait_for_condition":  "Poll with this command?",
+	"run_python":          "Run this Python code?",
+	"execute_python_file": "Run this Python file?",
+	"write_file":          "Write this file?",
+	"write_python_file":   "Write this file?",
+	"write_markdown_file": "Write this file?",
+	"edit_file":           "Edit this file?",
+	"edit_python_file":    "Edit this file?",
+	"replace_function":    "Edit this file?",
+	"update_gaia_md":      "Update GAIA.md?",
+	"install_skill":       "Install this skill?",
+	"remove_skill":        "Remove this skill?",
+}
+
+// ActionTitle is the prompt's question for a gated action.
+func ActionTitle(action string) string {
+	if title, ok := actionTitles[action]; ok {
+		return title
+	}
+	return "Allow " + action + "?"
 }
 
 // unboundedRiskActions are tiered Destructive because their name does not bound
@@ -127,7 +177,10 @@ var unboundedRiskActions = map[string]bool{
 // So the unbounded case says the true thing instead, and points at the one
 // piece of information that actually settles it: the command, already on screen
 // directly above this line.
-func destructiveWarning(action string) string {
+func destructiveWarning(action string, fromAgent bool) string {
+	if fromAgent {
+		return "This deletes or discards data and may not be reversible."
+	}
 	if unboundedRiskActions[action] {
 		return "A shell command can read, change, or delete anything you can — " +
 			"check the command above before approving."
@@ -282,8 +335,14 @@ type ConfirmationModel struct {
 	// (e.g. `gh issue list`). Empty means no grant is on offer for this call.
 	alwaysScope string
 	tier        RiskTier
-	state       ConfirmState
-	width       int
+	// riskFromAgent is set when tier came from the agent reading the call,
+	// rather than this client guessing from the tool name.
+	riskFromAgent bool
+	// modeHint is the line naming the permission mode and the key that changes
+	// it. The chat view owns the mode, so it supplies the words.
+	modeHint string
+	state    ConfirmState
+	width    int
 }
 
 // NewConfirmationModel builds the modal for one needs_confirmation event.
@@ -311,6 +370,22 @@ func (m ConfirmationModel) WithLiveChannel(confirmID, alwaysScope string) Confir
 	m.alwaysScope = alwaysScope
 	return m
 }
+
+// WithRisk takes the agent's reading of what this call does. An unknown or
+// empty value keeps the tool-name tier.
+func (m ConfirmationModel) WithRisk(risk string) ConfirmationModel {
+	if tier, ok := riskFromWire[risk]; ok {
+		m.tier = tier
+		m.riskFromAgent = true
+	}
+	return m
+}
+
+// SetModeHint sets the line that names the permission mode on this prompt.
+func (m *ConfirmationModel) SetModeHint(hint string) { m.modeHint = hint }
+
+// Summary is the call as the agent described it — the command, the file.
+func (m ConfirmationModel) Summary() string { return m.summary }
 
 func (m ConfirmationModel) RunID() string       { return m.runID }
 func (m ConfirmationModel) Action() string      { return m.action }
@@ -435,22 +510,24 @@ func (m ConfirmationModel) View() string {
 	}
 
 	var lines []string
-	lines = append(lines, m.tier.Badge()+" "+confirmationTitleStyle.Render("Confirm: "+m.action))
-	lines = append(lines, "")
+	lines = append(lines, m.tier.Badge()+" "+confirmationTitleStyle.Render(ActionTitle(m.action)))
 
-	summary := m.summary
-	if summary == "" {
-		summary = "Run '" + m.action + "'?"
+	// The call itself, once. The title already says what kind of action it is.
+	if summary := strings.TrimSpace(m.summary); summary != "" {
+		lines = append(lines, confirmationBodyStyle.Render(WrapText(summary, inner)))
 	}
-	lines = append(lines, confirmationBodyStyle.Render(WrapText(summary, inner)))
 
 	if m.tier == RiskDestructive {
-		lines = append(lines, "")
 		lines = append(lines, confirmationWarnStyle.Render(WrapText(
-			destructiveWarning(m.action), inner)))
+			destructiveWarning(m.action, m.riskFromAgent), inner)))
 	}
 
-	lines = append(lines, "")
+	// The keys stay on the LAST line: clipConfirmation keeps the head and the
+	// final line on a short terminal, and a prompt whose keys are clipped is
+	// unanswerable. The mode line sits just above them.
+	if m.state == ConfirmationPending {
+		lines = append(lines, confirmationHintStyle.Render(WrapText(m.footnote(), inner)))
+	}
 	lines = append(lines, m.resultOrHint(inner))
 
 	return confirmationPanelStyle.Width(m.width - confirmationBorderCols).Render(strings.Join(lines, "\n"))
@@ -462,13 +539,13 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 		return confirmationOkStyle.Render("approved")
 	case ConfirmationAlways:
 		return confirmationOkStyle.Render(WrapText(
-			"approved — and `"+m.alwaysScope+"` will not ask again this session", inner))
+			"approved — "+m.alwaysScope+" won't ask again this session", inner))
 	case ConfirmationDenied:
 		return confirmationNoStyle.Render("denied")
 	case ConfirmationTimedOut:
 		return confirmationWarnStyle.Render(WrapText(
-			"timed out after "+HumanTimeout(m.timeout())+
-				" with no response — denied, and the agent was told so", inner))
+			"no answer in "+HumanTimeout(m.timeout())+
+				" — skipped. The agent was told it timed out, not that you said no.", inner))
 	default:
 		return confirmationHintStyle.Render(WrapText(m.keyHint(), inner))
 	}
@@ -483,12 +560,18 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 // scope verbatim is the difference between informed consent and a pleasant
 // surprise, and it is why an empty AlwaysScope hides the choice entirely.
 func (m ConfirmationModel) keyHint() string {
-	base := "y run once · n/esc deny"
 	if m.allowAlways() {
-		base = "y run once · a allow `" + m.alwaysScope +
-			"` this session · n/esc deny"
+		return "y once · a always: " + m.alwaysScope + " (this session) · n/esc deny"
 	}
-	return base + " · auto-denies in " + HumanTimeout(m.timeout()) + " if you do nothing"
+	return "y once · n/esc deny"
+}
+
+// footnote is the dim line above the keys: the mode, and when the prompt expires.
+func (m ConfirmationModel) footnote() string {
+	if m.modeHint == "" {
+		return "expires in " + HumanTimeout(m.timeout())
+	}
+	return m.modeHint + " · expires in " + HumanTimeout(m.timeout())
 }
 
 // HumanTimeout spells a duration the way a person would say it out loud.

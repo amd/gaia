@@ -6,10 +6,11 @@
     "control_verbs": {
       "tool_decision": { "fields": ["decision", "confirm_id"], "sent_by_tui": true },
       "full_access": { "fields": ["enabled"], "sent_by_tui": true },
+      "accept_edits": { "fields": ["enabled"], "sent_by_tui": true },
       "cancel": { "fields": [], "sent_by_tui": true },
       "clear_history": { "fields": [], "sent_by_tui": false }
     },
-    "decisions": ["allow", "deny", "always"],
+    "decisions": ["allow", "deny", "always", "timeout"],
     "query_sentinels": {
       "clear_conversation": { "query": "\u0000gaia:clear_conversation\u0000", "ack_answer": "conversation_cleared" },
       "memory_dump": { "query": "\u0000gaia:memory_dump\u0000" },
@@ -33,7 +34,7 @@
     "tool_call": { "fields": ["tool", "args", "narration"] },
     "tool_result": { "fields": ["tool", "render", "data", "preview"], "not_sent_over_stdio": ["render"] },
     "needs_confirmation": {
-      "fields": ["run_id", "action", "summary", "confirm_id", "always_scope", "confirm_url"],
+      "fields": ["run_id", "action", "summary", "confirm_id", "always_scope", "risk", "confirm_url"],
       "not_sent_over_stdio": ["confirm_url"]
     },
     "needs_input": {

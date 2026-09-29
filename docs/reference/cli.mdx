@@ -132,12 +132,14 @@ forward / permanent delete, calendar RSVP) prompt before they run:
   "subject": "Q3 budget",
   "to": "boss@example.com"
 }
-Allow this? [y]es / [N]o / [a]lways for this tool:
+Allow this? [y]es / [N]o:
 ```
 
-The default is **no** — a bare Enter, Ctrl-C, or EOF denies. `a` remembers that
-one tool until the command exits (not offered for `run_shell_command` /
-`run_cli_command`).
+The default is **no** — a bare Enter, Ctrl-C, or EOF denies. Where the call has
+a narrow enough scope, the prompt adds `[a]lways for <scope>` and names it — a
+command family such as `pytest` or `git commit`, one file, or one skill — and
+`a` stops asking about that scope until the command exits. It is never offered
+for a delete or for a command line GAIA cannot read.
 
 When GAIA is not attached to a terminal — output piped or redirected, a CI job, a
 host process — there is nobody to ask, so gated tools are **denied** with an
@@ -1538,8 +1540,34 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 
 ### Full access
 
-By default the agent asks before it runs a shell command or writes a file. Turn
-that off every time you launch `gaia-tui` with:
+By default the agent asks before it runs a shell command or writes a file.
+**Full access** stops the asking: every gated tool runs without a prompt, and
+the shell guardrails come off — output redirection works, and the read-only
+command list is replaced by a developer set (`python`, `pytest`, `node`, `npm`,
+`make`, `go`, `cargo`, `gh`, `git`, …) that can run arbitrary code. `git` is
+unrestricted, including push and history rewrites. It is the only mode in which
+commands GAIA otherwise refuses outright (a credential print such as
+`gh auth token`, an encoded PowerShell command) can run.
+
+Full access is one of three permission modes. `Shift+Tab` in the TUI cycles
+them, and the status bar shows the one that is on:
+
+| Mode | What still asks |
+|---|---|
+| `ask` (default) | Every shell command, Python run and file write |
+| `accept edits` | Shell commands and Python. File edits inside the folder GAIA was started in run unasked, except under `.git/` or in a folder on `PATH` |
+| `full access` | Nothing |
+
+Ways to turn full access on — each is deliberate:
+
+| | |
+|---|---|
+| `gaia-tui --full-access` | for this launch |
+| `/full-access`, then `/full-access confirm` (in the TUI) | for this session; the first command only explains what it does |
+| `Shift+Tab` (in the TUI) | switches straight to it only once it has been on this session, or the launch had it; otherwise it explains and stays in `ask` |
+| `gaia config set full_access true` / `/full-access always` | every launch — see below |
+
+Turn it on every time you launch `gaia-tui` with:
 
 ```bash
 gaia config set full_access true
@@ -3143,6 +3171,17 @@ gaia tui status                                # background service + what is in
 | `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia tui run --query` is, `--timeout` included. |
 | `gaia tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
 | `gaia tui version` | Print the build version. |
+
+Options accepted by every `gaia tui` command:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--full-access` | off | Run every tool without asking, with the shell guardrails off — arbitrary code execution. Subprocess agents only (the flagship when the TUI launches it); refused over the background service. A banner stays on screen while it is on, and `/full-access off` ends it mid-session. See [Full access](#full-access). The retired `--bypass-permissions` fails naming this flag. |
+| `--use-claude` | off | Answer with Anthropic's Claude API instead of local Lemonade. **Your conversation is sent to Anthropic.** Needs `ANTHROPIC_API_KEY`; the local server is not started and first-run setup is skipped, so RAG, memory and the code index (which embed through Lemonade) need `gaia init --skip-chat-model` later |
+| `--claude-model <id>` | `claude-sonnet-5` | The Claude model `--use-claude` runs on. Only valid with `--use-claude`; an id the agent does not offer is refused before the TUI opens. `""` lets the agent pick |
+| `--dev` | off | Developer mode: per-turn timings, steps, tool arguments and output on screen, and DEBUG logging for agents the TUI launches. `--debug` is an alias |
+| `--control`, `--control-port <n>` | off | The loopback control API — see [TUI Control API](#tui-control-api) |
+| `--trace[=<path>]` | off | Record every agent event to a JSONL file — see [TUI Event Trace](#tui-event-trace) |
 
 There is no `list`, `install`, `uninstall`, or `hub` subcommand — the TUI does
 not browse or manage the Agent Hub catalog. Installing or removing a hub

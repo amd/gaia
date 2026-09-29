@@ -82,7 +82,8 @@ func (m ChatModel) armFullAccess() (tea.Model, tea.Cmd) {
 			"execute arbitrary code in this directory. git is unrestricted " +
 			"there, including push and history rewrites.\n" +
 			"    Type /full-access confirm to turn it on, or /full-access off at any " +
-			"time to turn it back off.\n" +
+			"time to turn it back off. Once it has been on, Shift+Tab switches " +
+			"straight to it.\n" +
 			"    /full-access always keeps it on for every future session too.",
 	})
 	m.updateViewport()
@@ -119,6 +120,7 @@ func (m ChatModel) setFullAccess(enabled bool) (tea.Model, tea.Cmd) {
 
 	m.fullAccess = enabled
 	if enabled {
+		m.fullAccessUnlocked = true
 		m.messages = append(m.messages, Message{
 			Role: RoleStatus,
 			Content: "[!] FULL ACCESS IS ON. " + m.agentName +
@@ -161,6 +163,7 @@ func (m ChatModel) applyLaunchFullAccess() ChatModel {
 		return m
 	}
 	m.fullAccess = true
+	m.fullAccessUnlocked = true
 
 	reason := "Launched with --full-access"
 	undo := "Type /full-access off to turn it off for this session."

@@ -387,6 +387,10 @@ func TestCanonicalNeedsConfirmationIsSurfacedAndTurnContinues(t *testing.T) {
 			t.Errorf("the prompt must not also be copied into the transcript: %+v", msg)
 		}
 	}
+	// The detail is on the modal, once — not repeated into scrollback.
+	if m.confirmation == nil || !strings.Contains(m.confirmation.View(), "alice@example.com") {
+		t.Error("the modal must show what is being approved")
+	}
 
 	m = feed(t, m, event.CanonicalFinalEvent{Type: "final", Answer: "Skipped — needs approval."})
 	if m.streaming {

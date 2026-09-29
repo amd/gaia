@@ -119,7 +119,10 @@ type CanonicalNeedsConfirmationEvent struct {
 	// Empty means this call has no scope narrow enough to grant, so the client
 	// must not offer the choice — the agent decides that, not the renderer.
 	AlwaysScope string `json:"always_scope,omitempty"`
-	ConfirmURL  string `json:"confirm_url,omitempty"`
+	// Risk is what the agent read the call as doing: read, write, execute or
+	// destructive. Empty from an older agent; the client then labels by tool.
+	Risk       string `json:"risk,omitempty"`
+	ConfirmURL string `json:"confirm_url,omitempty"`
 }
 
 // CanonicalNeedsInputEvent — the run pauses on a QUESTION and resumes on this
