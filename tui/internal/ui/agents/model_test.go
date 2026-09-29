@@ -4,6 +4,7 @@ package agents
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -276,5 +277,28 @@ func TestAStalePanelsLoadCannotLandOnTheNextPanel(t *testing.T) {
 	}
 	if !second.loading {
 		t.Error("the fresh panel stopped showing its own load as in-progress")
+	}
+}
+
+// A list taller than the window showed only its tail, so the highlighted agent
+// at the top (or middle) was off screen and Enter picked a row you could not see.
+func TestSelectedAgentStaysVisibleInALongList(t *testing.T) {
+	entries := []catalog.HubEntry{{ID: "gaia", Name: "GAIA"}}
+	for i := 0; i < 30; i++ {
+		entries = append(entries, catalog.HubEntry{ID: fmt.Sprintf("agent-%02d", i), Name: "Agent"})
+	}
+	for _, width := range []int{30, 80} {
+		m := loadSync(New(&stubLister{catalogOut: &catalog.HubCatalog{Agents: entries}}, width, 12))
+		for i := 0; i < len(entries); i++ {
+			view := ansi.Strip(m.View())
+			if !strings.Contains(view, "› "+m.rows[m.selected].id) {
+				t.Fatalf("width %d: selected %q is off screen:\n%s", width, m.rows[m.selected].id, view)
+			}
+			if n := strings.Count(view, "\n") + 1; n > 12 {
+				t.Fatalf("width %d: %d lines in a 12-line window", width, n)
+			}
+			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+			m = next.(Model)
+		}
 	}
 }
