@@ -42,6 +42,17 @@ from typing import (
 
 from gaia.agents.base.completion import CompletionEvidence, incomplete_answer
 from gaia.agents.base.console import AgentConsole, SilentConsole
+from gaia.agents.base.context_eviction import (
+    DEFAULT_EVICT_KEEP_STEPS,
+    DEFAULT_EVICT_MIN_BATCH_TOKENS,
+    DEFAULT_EVICT_THRESHOLD_TOKENS,
+    ContextEvictor,
+    context_eviction_from_env,
+    evict_keep_from_env,
+    evict_min_batch_from_env,
+    evict_threshold_from_env,
+    resolve_context_eviction,
+)
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.extraction import MAX_SECONDS as EXTRACTION_MAX_SECONDS
 from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
@@ -1350,6 +1361,10 @@ Do NOT wrap conversational replies in JSON.
         skill_set: Optional[str] = None,
         resend_reasoning_across_requests: bool = False,
         max_output_tokens: Optional[int] = None,
+        context_eviction: str = "off",
+        context_eviction_threshold_tokens: int = DEFAULT_EVICT_THRESHOLD_TOKENS,
+        context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS,
+        context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS,
     ):
         """
         Initialize the Agent with LLM client.
@@ -1398,6 +1413,20 @@ Do NOT wrap conversational replies in JSON.
                           included. None (default) picks per model:
                           CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
                           LOCAL_MAX_OUTPUT_TOKENS otherwise.
+            context_eviction: "off" (default), "on" or "auto": evict tool
+                          results older than ``context_eviction_keep_steps``
+                          from the context sent to the model once the last
+                          measured prompt exceeds
+                          ``context_eviction_threshold_tokens`` and the
+                          evictable results add up to
+                          ``context_eviction_min_batch_tokens``. Each evicted
+                          result is archived whole and readable through
+                          ``read_tool_output``; the conversation log is not
+                          touched. "auto" is on only for a cloud model whose
+                          cached/uncached input price ratio is known and high
+                          enough (gaia.llm.cache_pricing). GAIA_CONTEXT_EVICTION,
+                          GAIA_EVICT_THRESHOLD, GAIA_EVICT_KEEP and
+                          GAIA_EVICT_MIN_BATCH override the four settings.
 
         Note: Uses local LLM server by default unless use_claude is True.
         """
@@ -1587,6 +1616,31 @@ Do NOT wrap conversational replies in JSON.
         # Every agent shares DEFAULT_MODEL_NAME so switching agents never evicts
         # and cold-reloads the resident model.
         from gaia.llm.lemonade_client import cloud_model_provider
+
+        for name, value in (
+            ("context_eviction_threshold_tokens", context_eviction_threshold_tokens),
+            ("context_eviction_keep_steps", context_eviction_keep_steps),
+            ("context_eviction_min_batch_tokens", context_eviction_min_batch_tokens),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer, got {value!r}.")
+        # Env wins over the arguments; malformed values fail here, not mid-turn.
+        mode = context_eviction_from_env() or context_eviction
+        self.context_eviction_enabled = resolve_context_eviction(
+            mode, model_id, cloud=cloud_model_provider(model_id) is not None
+        )
+        evictor = ContextEvictor(
+            threshold_tokens=evict_threshold_from_env()
+            or context_eviction_threshold_tokens,
+            keep_steps=evict_keep_from_env() or context_eviction_keep_steps,
+            min_batch_tokens=evict_min_batch_from_env()
+            or context_eviction_min_batch_tokens,
+        )
+        self._context_evictor: Optional[ContextEvictor] = (
+            evictor if self.context_eviction_enabled else None
+        )
+        # Set by the step head when a batch fires; the step's stats record takes it.
+        self._pending_eviction: Optional[Dict[str, int]] = None
 
         chat_config = AgentConfig(
             model=model_id or DEFAULT_MODEL_NAME,
@@ -6705,6 +6759,9 @@ Do NOT wrap conversational replies in JSON.
         loop_break_answer_unprinted = False
         # A refused cloud account ends the turn with nothing to verify.
         account_refused = False
+        if self._context_evictor is not None:
+            self._context_evictor.begin_turn()
+        self._pending_eviction = None
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
@@ -6768,6 +6825,13 @@ Do NOT wrap conversational replies in JSON.
             steps_taken += 1
             step_timer.begin_step(steps_taken)
             logger.debug(f"Step {steps_taken}/{steps_limit}")
+            if self._context_evictor is not None:
+                from gaia.agents.base.artifacts import store_for
+
+                # Only the sent list changes; ``conversation`` keeps every result.
+                self._pending_eviction = self._context_evictor.evict(
+                    messages, steps_taken, store_for(self)
+                )
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
 
@@ -8397,6 +8461,11 @@ Do NOT wrap conversational replies in JSON.
                     "performance_stats": perf_stats or {},
                 }
                 step_timer.attach(stats_record)
+                if self._pending_eviction is not None:
+                    stats_record.update(self._pending_eviction)
+                    self._pending_eviction = None
+                if self._context_evictor is not None:
+                    self._context_evictor.note_prompt_tokens(perf_stats)
                 conversation.append({"role": "system", "content": stats_record})
 
             # Check for final answer (after collecting stats)
