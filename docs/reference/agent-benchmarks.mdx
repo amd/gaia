@@ -48,11 +48,10 @@ you're set.
 ## Quick start
 
 <Warning>
-  Unlike this repo's other local-tooling reports, **`gaia eval tasks`'s default
-  output directory is not gitignored.** `eval/results/eval-tasks-<timestamp>` is a
-  plain path inside the repo, so a stray `git add -A` after a run stages a full
-  transcript. Point `--out` (or `$GAIA_BENCH_RESULTS_DIR`) outside the repo, as
-  below, and never commit anything a run writes.
+  The default output directory, `eval/results/eval-tasks-<timestamp>`, is
+  gitignored, but only by its `eval-*` name: an `--out` elsewhere in the repo is
+  not. Point `--out` (or `$GAIA_BENCH_RESULTS_DIR`) outside the repo, as below,
+  and never commit anything a run writes.
 </Warning>
 
 ```bash
@@ -371,10 +370,11 @@ Cost carries its source because the numbers aren't the same kind of dollar:
   inflating one run's reported cost by 58%. Keep metered runs on one account
   serial, the same rule as everything else that shares Lemonade.
 - **The judge sometimes returns nothing for a batch.** A timeout or a malformed
-  response leaves a task ungraded — it counts as not passed, not as dropped from
-  the average. Re-run `gaia eval tasks judge DIR` (it regrades from the saved
-  transcripts, no agent re-run needed); never treat a scorecard with ungraded
-  tasks as final.
+  response leaves a task ungraded: an ungraded question counts as not passed, a
+  coding task keeps its test result, and either one drops out of the quality and
+  truthfulness averages, so those averages cover fewer tasks. Re-run
+  `gaia eval tasks judge DIR` (it regrades from the saved transcripts, no agent
+  re-run needed); never treat a scorecard with ungraded tasks as final.
 - **The harness's own token counts run 1–6% below the provider's meter.**
   `harness_counts` is a real estimate, not a rounding artifact — when the number
   needs to be exact, meter it instead of trusting the harness count.
@@ -392,10 +392,10 @@ it's written, and a run fails outright if anything survives that check rather th
 writing a leak — but that only catches credential shapes, not general repo content,
 so it's not a substitute for reading a transcript before sharing it.
 
-**Results are never committed to the repo.** As the Quick Start above notes, the
-default output directory is a plain path inside the repo and is *not* gitignored —
-always send `--out` (or `$GAIA_BENCH_RESULTS_DIR`) somewhere outside it, and never
-`git add` anything a run wrote.
+**Results are never committed to the repo.** As the Quick Start above notes, only
+the default `eval-*` output directory is gitignored, and any other path inside the
+repo is not — always send `--out` (or `$GAIA_BENCH_RESULTS_DIR`) somewhere
+outside it, and never `git add` anything a run wrote.
 
 ## See also
 

@@ -397,14 +397,15 @@ jobs:
 
   # ── Stage 1c: judged gaia eval (release gate, self-hosted) ─────────
   # A bounded subset of the judged suite (the cheap categories — the full
-  # 13-category run is the weekly/dispatch profile; a release must not hold
-  # the serial Lemonade slot for a day). Report mode end-to-end: it only
-  # hard-blocks when a manifest under tests/fixtures/gaia/ sets enforce:true.
-  # What always blocks: zero judged scenarios / unmeasured scenarios / a
-  # missing judge credential (the callee's integrity gates).
+  # 13-category run is the nightly/dispatch profile; a release must not hold
+  # the serial Lemonade slot for a day). Blocks the release on a breached
+  # quality bar (quality_gate_thresholds.json ships enforce:true); the perf
+  # bars and the baseline compare only report. Also always blocks: zero judged
+  # scenarios / unmeasured scenarios / a missing judge credential (the callee's
+  # integrity gates).
   # gaia_skills_capture is in the subset despite the cost rule: capture is the
   # one release surface that lands third-party content on a user's disk, so it
-  # does not ship on weekly-only coverage.
+  # does not ship on nightly-only coverage.
   gaia-eval:
     name: Gaia eval subset (release gate)
     uses: ./.github/workflows/test_gaia_agent_eval.yml
