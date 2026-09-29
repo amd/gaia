@@ -6755,6 +6755,12 @@ Do NOT wrap conversational replies in JSON.
         self._extraction_ledger = ExtractionLedger(
             user_input, os.getcwd(), available=self._read_validator() is not None
         )
+        # A test agent built via __new__ never ran Agent.__init__, so it has
+        # no guard yet — create one rather than crash (mirrors _extraction_ledger).
+        if getattr(self, "_turn_scope", None) is None:
+            self._turn_scope = TurnScopeGuard(
+                getattr(self, "max_consecutive_repeats", 4)
+            )
         self._turn_scope.begin_turn(user_input, os.getcwd())
 
         # Orientation. Runs before the prompt is composed so anything it
