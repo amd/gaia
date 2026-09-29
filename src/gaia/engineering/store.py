@@ -165,7 +165,10 @@ def clean_context(text: str) -> str:
         flags=re.S,
     )
     text = re.sub(
-        r"(?i)(\b(?:api[_-]?key|access[_-]?token|password|secret|authorization)[\"']?\s*[:=]\s*)([^\n]+)",
+        r"(?i)([A-Za-z0-9_.-]*"
+        r"(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|secret|authorization)"
+        # A suffix needs a separator, so "secretary:" stays prose.
+        r"(?:[_-][A-Za-z0-9_.-]*)?[\"']?\s*[:=]\s*)([^\n]+)",
         r"\1[REDACTED]",
         text,
     )

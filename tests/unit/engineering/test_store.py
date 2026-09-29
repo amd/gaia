@@ -83,6 +83,32 @@ def test_context_limits_and_redaction():
         clean_context("")
 
 
+def test_prefixed_credential_names_are_redacted():
+    # Environment variables carry a prefix, which is the shape a terminal snapshot has.
+    for line in (
+        "DB_PASSWORD=hunter2",
+        "MY_API_KEY=zzz",
+        "AWS_SECRET_ACCESS_KEY=wJalrXUt",
+        "ANTHROPIC_AUTH_TOKEN=xyzzy",
+        "client_secret=shhh",
+        "MYSQL_PASSWD=abc",
+        'export GH_ACCESS_TOKEN="abc"',
+    ):
+        key = line.split("=", 1)[0]
+        assert clean_context(line) == f"{key}=[REDACTED]"
+
+
+def test_ordinary_developer_text_is_not_redacted():
+    for line in (
+        "secretary: alice",
+        "the password reset flow",
+        'parser.add_argument("--api-key")',
+        "keyboard: mechanical",
+        "passwordless login: enabled",
+    ):
+        assert clean_context(line) == line
+
+
 @pytest.mark.parametrize("after_seq", [True, -1, "1", 1.0])
 def test_context_cursor_must_be_a_nonnegative_int(tmp_path, after_seq):
     with pytest.raises(ValueError, match="nonnegative integer"):
