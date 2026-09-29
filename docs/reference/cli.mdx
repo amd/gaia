@@ -1990,6 +1990,7 @@ gaia eval tasks run --suite adversarial            # Only the trap tasks (red su
 gaia eval tasks run --suite full --no-judge        # All tasks, skip the judge
 gaia eval tasks judge eval/results/eval-tasks-<ts> # Grade a finished run's quality
 gaia eval tasks gate eval/results/eval-tasks-<ts> --enforce  # Fail on a missed expectation
+gaia eval tasks propose runs/qwen-everyday --out eval/tasks/expectations/<model>.everyday.json  # Limits every repeat met
 ```
 
 **Harness × model comparison.** The same tasks, fixtures, time limit and judge, against more than one agent — so a difference in the table is a difference between the agents, not between their conditions:

@@ -2614,6 +2614,20 @@ afterwards (or `swebench <run_dir>` does, later).
         default=None,
         help="Also write expectations measured from this run to this path",
     )
+    tasks_propose_parser = tasks_actions.add_parser(
+        "propose",
+        help="Write expectations every one of several judged runs met",
+    )
+    tasks_propose_parser.add_argument(
+        "run_dirs",
+        nargs="+",
+        help="Directories `run` wrote; a --repeats directory counts as each of its runs",
+    )
+    tasks_propose_parser.add_argument(
+        "--out",
+        required=True,
+        help="Expectations file to write (eval/tasks/expectations/<model>.<suite>.json)",
+    )
     tasks_report_parser = tasks_actions.add_parser(
         "report", help="The harness x model table from finished, judged runs"
     )
@@ -3779,6 +3793,24 @@ def _handle_eval_tasks(args):
             print()
             print(ft.render_report(card, None))
         print(f"[OUTPUT] {out_dir.resolve()}")
+        return
+
+    if args.tasks_action == "propose":
+        try:
+            cards = [
+                ft.read_scorecard(each)
+                for given in args.run_dirs
+                for each in ft.run_dirs(Path(given))
+            ]
+            proposal = ft.propose_consistent_expectations(cards)
+        except (ValueError, FileNotFoundError) as exc:
+            print(f"❌ Nothing proposed: {exc}")
+            sys.exit(2)
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(
+            json.dumps(proposal, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"[PROPOSED] {args.out} from {len(cards)} run(s): {json.dumps(proposal)}")
         return
 
     run_dir = Path(args.run_dir)

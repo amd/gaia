@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 
 # Judged eval for the FLAGSHIP gaia agent — on gaia PRs (subset), on demand
-# (full), and as a release/weekly gate via workflow_call.
+# (full), and as a release gate via workflow_call. The nightly full run of these
+# categories happens in eval_flagship.yml's gaia-* lanes, in parallel.
 #
 # Drives `gaia eval agent --agent-type gaia` over the committed scenario corpus
 # (eval/scenarios/gaia_*, 13 categories, ~99 scenarios) against the Agent UI
@@ -122,8 +123,8 @@ on:
         description: 'Runs per scenario. >1 exposes flaky vs stable-fail, which n=1 cannot. Cost and wall clock scale linearly with N.'
         required: false
         default: '3'
-  # Reusable: called by weekly_eval.yml and release_agent_gaia.yml so the
-  # weekly and the release run the same eval definition. The `lemonade-eval`
+  # Reusable: called by release_agent_gaia.yml so the release runs the same
+  # eval definition. The `lemonade-eval`
   # job group keeps calls strictly serial on the single Lemonade slot.
   workflow_call:
     inputs:
@@ -156,7 +157,7 @@ concurrency:
   # Non-PR key is `github.run_id` on purpose, NOT `github.ref`: a called
   # reusable workflow's `concurrency` is evaluated in the CALLER's context
   # (the weekly_eval.yml phantom-job scar), so run_id makes each
-  # weekly/release/dispatch run the sole member of its own group. The PR key
+  # release/dispatch run the sole member of its own group. The PR key
   # is the PR number so successive pushes to the SAME PR supersede each other.
   group: gaia-agent-eval-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -172,7 +173,7 @@ env:
   # as scoring it (runner.py passes it to `claude -p`), so changing it
   # compares two different eval agents. Override per-run via the input.
   EVAL_MODEL: ${{ inputs.eval_model || 'claude-sonnet-4-6' }}
-  # Runs per scenario. A PR keeps 1 (cost); dispatch/weekly default to 3 so
+  # Runs per scenario. A PR keeps 1 (cost); dispatch defaults to 3 so
   # `flaky` is distinguishable from `stable-fail` — n=1 cannot express it.
   # Cost and wall clock scale linearly with this number.
   EVAL_ITERATIONS: ${{ inputs.iterations || '1' }}
@@ -256,7 +257,7 @@ jobs:
     #     5) x 20 -> 280 -> eval step 300
     #   FULL: ~95 scenarios (99 - 2 win_shim - 2 live) x 20 -> 1900 -> eval
     #     step 1980 (33h — self-hosted jobs may run up to 5 days; the serial
-    #     slot cost is real and is why the full run is dispatch/weekly only)
+    #     slot cost is real and is why the full serial run is dispatch only)
     #   setup (venv + node + lemonade start with its own 15-min cap +
     #     embeddings preflight + fixture staging)                    -> 40
     #   collect + integrity + gates + compare + summary + upload     -> 20
@@ -364,21 +365,11 @@ jobs:
       # into the agent's skills root (scenarios that USE skills), then build
       # + sign + trust the fixture hub with a per-run ephemeral key
       # (scenarios ABOUT the install loop).
+      # Shared with eval_flagship.yml's gaia_* lanes, so both stage the same way.
       - name: Stage fixtures + skills + fixture hub
         run: |
-          $ErrorActionPreference = "Stop"
-          $stage = Join-Path $env:USERPROFILE "gaia-eval"
-          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-          Copy-Item tests\fixtures\gaia $stage -Recurse
-          Write-Host "staged fixtures -> $stage"
-
-          $skillsRoot = Join-Path $env:USERPROFILE ".gaia\skills"
-          New-Item -ItemType Directory -Force $skillsRoot | Out-Null
-          Copy-Item hub\skills\* $skillsRoot -Recurse -Force
-          Write-Host "pre-seeded starter skills -> $skillsRoot"
-
-          python tests/fixtures/gaia/prepare_fixture_hub.py --skills-root $skillsRoot
-          if ($LASTEXITCODE -ne 0) { throw "prepare_fixture_hub failed" }
+          python tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE"
+          if ($LASTEXITCODE -ne 0) { throw "Staging the gaia_* fixtures failed; the output above says which part." }
 
       - name: Run the gaia eval categories serially
         # Own timeout so an overrun fails HERE, by name, with the collect /
