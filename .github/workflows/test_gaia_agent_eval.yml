@@ -6,7 +6,7 @@
 # categories happens in eval_flagship.yml's gaia-* lanes, in parallel.
 #
 # Drives `gaia eval agent --agent-type gaia` over the committed scenario corpus
-# (eval/scenarios/gaia_*, 13 categories, ~99 scenarios) against the Agent UI
+# (eval/scenarios/gaia_*, 14 categories, ~106 scenarios) against the Agent UI
 # backend + a real Lemonade Server, scored by the Claude judge on planted-fact
 # ground truth (fixtures under tests/fixtures/gaia/ — every external surface is
 # canned: fake gh shim, local web/RSS pages, fixture skill hub; nothing live).
@@ -102,12 +102,12 @@ on:
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
       - 'installer/scripts/ensure-lemonade-running.ps1'
-  # Manual trigger — the FULL run (all 13 categories, all tiers). This is also
+  # Manual trigger — the FULL run (all 14 categories, all tiers). This is also
   # how the first Gemma baselines get captured on the runner.
   workflow_dispatch:
     inputs:
       categories:
-        description: 'Comma-separated gaia_* categories to run (default: all 13)'
+        description: 'Comma-separated gaia_* categories to run (default: all 14)'
         required: false
         default: ''
       enforce:
@@ -129,7 +129,7 @@ on:
   workflow_call:
     inputs:
       categories:
-        description: 'Comma-separated gaia_* categories to run (default: all 13)'
+        description: 'Comma-separated gaia_* categories to run (default: all 14)'
         required: false
         type: string
         default: ''
@@ -168,7 +168,7 @@ permissions:
 env:
   # `inputs.*` (not github.event.inputs.*) so values propagate for BOTH
   # workflow_dispatch AND workflow_call.
-  EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks,gaia_skills_capture' }}
+  EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks,gaia_skills_capture,gaia_mcp' }}
   # PINNED TO THE BASELINE'S JUDGE — `--model` drives every scenario as well
   # as scoring it (runner.py passes it to `claude -p`), so changing it
   # compares two different eval agents. Override per-run via the input.
@@ -371,6 +371,11 @@ jobs:
           python tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE"
           if ($LASTEXITCODE -ne 0) { throw "Staging the gaia_* fixtures failed; the output above says which part." }
 
+          # gaia_mcp: the agent reads its MCP config when built, so this must
+          # land before the backend starts in the next step.
+          python tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py install
+          if ($LASTEXITCODE -ne 0) { throw "stage_mcp_stub failed" }
+
       - name: Run the gaia eval categories serially
         # Own timeout so an overrun fails HERE, by name, with the collect /
         # gate steps still running on the partial results. See the budget
@@ -464,7 +469,7 @@ jobs:
             Add-Summary "| --- | ---: |"
 
             # PR subset: tier-filtered cheap categories. Everything else: the
-            # category list from the dispatch/call input (default all 13).
+            # category list from the dispatch/call input (default all 14).
             if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
               $runs = @(
                 @{ cat = 'gaia_core';           extra = @('--tag','t1_basic','--tag','t2_compound') },
