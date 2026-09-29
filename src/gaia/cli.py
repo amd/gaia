@@ -7792,6 +7792,7 @@ def handle_agent_import(args):
 
     # Lazy import to keep CLI startup fast.
     from gaia.installer.export_import import import_agent_bundle
+    from gaia.utils.terminal import stdin_is_interactive
 
     bundle_path = Path(args.path).expanduser()
 
@@ -7824,7 +7825,7 @@ def handle_agent_import(args):
 
     # Trust gate.
     if not args.yes:
-        if not sys.stdin.isatty():
+        if not stdin_is_interactive():
             print(
                 "Error: refusing to import non-interactively without --yes. "
                 "Re-run with --yes to confirm.",

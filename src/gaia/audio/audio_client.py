@@ -3,13 +3,13 @@
 
 import asyncio
 import queue
-import sys
 import threading
 import time
 
 from gaia.llm import create_client
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
+from gaia.utils.terminal import stdin_is_interactive
 
 
 class AudioClient:
@@ -411,11 +411,7 @@ class AudioClient:
         """Start the session's single Enter-to-interrupt listener (terminal only)."""
         if self._stdin_listener is not None:
             return True
-        try:
-            interactive = sys.stdin is not None and sys.stdin.isatty()
-        except (AttributeError, ValueError):
-            interactive = False
-        if not interactive:
+        if not stdin_is_interactive():
             return False
 
         def listen():

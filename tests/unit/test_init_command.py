@@ -2192,6 +2192,7 @@ class TestInitPreflightRefusal(unittest.TestCase):
 
         with (
             patch.object(sys.stdin, "isatty", return_value=True),
+            patch("gaia.utils.terminal.is_windows_console", return_value=True),
             patch.object(cmd, "_print_header") as mock_header,
             patch.object(
                 cmd, "_ensure_lemonade_ready", return_value=False
@@ -2289,6 +2290,7 @@ class TestRunKeyboardInterruptExitCode(unittest.TestCase):
 
         with (
             patch.object(sys.stdin, "isatty", return_value=True),
+            patch("gaia.utils.terminal.is_windows_console", return_value=True),
             patch.object(cmd, "_ensure_lemonade_ready", return_value=True),
             patch.object(cmd, "_verify_setup", return_value=True),
             patch("gaia.ui.build.ensure_webui_built", return_value=False),

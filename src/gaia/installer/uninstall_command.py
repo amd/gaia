@@ -795,11 +795,7 @@ def _should_skip_prompt(yes: bool) -> bool:
     """
     if yes:
         return True
-    try:
-        return not sys.stdin.isatty()
-    except (AttributeError, ValueError, OSError):
-        # E.g. stdin closed; treat as non-interactive.
-        return True
+    return not stdin_is_tty()
 
 
 def _stdin_is_tty() -> bool:

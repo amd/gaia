@@ -261,10 +261,8 @@ def test_one_stdin_listener_per_session():
             raise item
         return item
 
-    fake_stdin = MagicMock()
-    fake_stdin.isatty.return_value = True
     with (
-        patch("gaia.audio.audio_client.sys.stdin", fake_stdin),
+        patch("gaia.audio.audio_client.stdin_is_interactive", return_value=True),
         patch("builtins.input", side_effect=fake_input),
     ):
         assert client._start_stdin_listener() is True
@@ -277,9 +275,7 @@ def test_one_stdin_listener_per_session():
 
 def test_no_listener_without_a_terminal():
     client = _client(enable_tts=True)
-    fake_stdin = MagicMock()
-    fake_stdin.isatty.return_value = False
-    with patch("gaia.audio.audio_client.sys.stdin", fake_stdin):
+    with patch("gaia.audio.audio_client.stdin_is_interactive", return_value=False):
         assert client._start_stdin_listener() is False
     assert client._stdin_listener is None
 

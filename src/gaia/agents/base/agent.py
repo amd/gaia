@@ -89,6 +89,7 @@ from gaia.llm.lemonade_client import (
     truncation_budget,
 )
 from gaia.llm.providers.lemonade import CONNECTION_FAILURE_RE
+from gaia.utils.terminal import stdin_is_interactive
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
@@ -9175,12 +9176,8 @@ Do NOT wrap conversational replies in JSON.
 
                 # Ask user if they want to continue (skip in silent mode OR if stdin is not available)
                 # A server's TTY says nothing about the requester; ask the console.
-                import sys
-
                 has_stdin = (
-                    self._console_accepts_stdin_prompts()
-                    and sys.stdin
-                    and sys.stdin.isatty()
+                    self._console_accepts_stdin_prompts() and stdin_is_interactive()
                 )
                 if has_stdin and not (
                     hasattr(self, "silent_mode") and self.silent_mode

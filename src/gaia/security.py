@@ -16,11 +16,12 @@ import platform
 import re
 import shutil
 import stat
-import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, List, Optional, Set, Tuple
+
+from gaia.utils.terminal import stdin_is_interactive
 
 logger = logging.getLogger(__name__)
 
@@ -1181,11 +1182,7 @@ def _is_interactive() -> bool:
     Used to suppress blocking ``input()`` prompts when the validator runs
     inside the Agent UI server, API server, or any non-TTY context (CI, pipe).
     """
-    try:
-        return bool(sys.stdin.isatty())
-    except (AttributeError, ValueError):
-        # sys.stdin may be replaced or closed in some embedded contexts
-        return False
+    return stdin_is_interactive()
 
 
 def _format_size(size_bytes: int) -> str:

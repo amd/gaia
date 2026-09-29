@@ -141,9 +141,9 @@ class InstallResult:
 
 def _interactive_confirm(prompt: str) -> bool:
     """Ask on the terminal; refuse when there is no terminal to ask."""
-    import sys
+    from gaia.utils.terminal import stdin_is_interactive
 
-    if not sys.stdin or not sys.stdin.isatty():
+    if not stdin_is_interactive():
         return False
     try:
         answer = input(f"{prompt} [y/N] ").strip().lower()
