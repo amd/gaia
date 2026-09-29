@@ -98,6 +98,15 @@ def resolve_mcp_config(run_dir) -> Path:
     run's artifacts. The path is absolute because ``claude -p`` runs from
     ``REPO_ROOT``, not the caller's cwd.
     """
+    config = _resolved_mcp_config()
+    resolved = Path(run_dir).resolve() / "mcp-config.resolved.json"
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    return resolved
+
+
+def _resolved_mcp_config() -> dict:
+    """The MCP config template with generic interpreter names resolved."""
     config = load_mcp_config_template()
     for name, server in (config.get("mcpServers") or {}).items():
         command = server.get("command")
@@ -110,11 +119,7 @@ def resolve_mcp_config(run_dir) -> Path:
                     command,
                     server["command"],
                 )
-
-    resolved = Path(run_dir).resolve() / "mcp-config.resolved.json"
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    return resolved
+    return config
 
 
 # ── Single-runner lock ────────────────────────────────────────────────────
@@ -410,6 +415,50 @@ def _stamp_agent_provenance(
             "agent_type kwarg on create_session; the score measures the wrong "
             "agent and is discarded."
         )
+
+
+INFRA_ERROR_ABORT_AFTER = 3
+
+# The driver writes root_cause in its own words, so the known harness failures
+# are matched by pattern; anything else must repeat near-verbatim.
+_INFRA_ERROR_SIGNATURES = (
+    (
+        re.compile(
+            r"connection[_ ]closed|mcp server|mcp tools?|"
+            r"tools? (?:are |were |is )?(?:not available|unavailable)",
+            re.IGNORECASE,
+        ),
+        "the Agent UI MCP server is unavailable (CONNECTION_CLOSED / no tools)",
+    ),
+    (
+        re.compile(
+            r"not reachable|connection refused|econnrefused|failed to connect",
+            re.IGNORECASE,
+        ),
+        "the Agent UI backend is unreachable",
+    ),
+)
+
+
+def _infra_error_signature(result: dict) -> Optional[str]:
+    """A root-cause key for an INFRA_ERROR result; None for any other status."""
+    if result.get("status") != "INFRA_ERROR":
+        return None
+    parts = []
+    for field in ("error", "root_cause"):
+        value = result.get(field)
+        if value:
+            parts.append(value if isinstance(value, str) else json.dumps(value))
+    text = " ".join(parts)
+    for pattern, label in _INFRA_ERROR_SIGNATURES:
+        if pattern.search(text):
+            return label
+    scenario_id = str(result.get("scenario_id") or "")
+    if scenario_id:
+        text = re.sub(rf"\b{re.escape(scenario_id)}\b", "<scenario>", text)
+    return re.sub(r"\s+", " ", re.sub(r"\d+", "#", text)).strip()[:200] or (
+        "no error or root_cause reported"
+    )
 
 
 def _compute_effective_timeout(base_timeout: int, scenario_data: dict) -> int:
@@ -1085,6 +1134,148 @@ def _check_mcp_server_commands() -> list:
     return errors
 
 
+MCP_HANDSHAKE_TIMEOUT_S = 20
+
+# stderr text → the fix to name. A launcher dying at import is the common case.
+_MCP_STDERR_HINTS = (
+    (
+        re.compile(r"No module named '?mcp[.'\s]"),
+        "the MCP SDK is not installed in this venv — install it with "
+        '`uv pip install -e ".[mcp]"` (or `pip install "amd-gaia[mcp]"`)',
+    ),
+    (
+        re.compile(r"No module named '?gaia[.'\s]"),
+        f"gaia is not importable from {sys.executable} — run the eval from the "
+        "venv GAIA is installed in",
+    ),
+)
+
+
+def _read_initialize_response(stdout, request_id):
+    """Return the first JSON-RPC message on ``stdout`` whose id is ``request_id``."""
+    for line in stdout:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"non-JSON line on stdout: {line[:200]!r}") from e
+        if isinstance(message, dict) and message.get("id") == request_id:
+            return message
+    return None
+
+
+def _probe_mcp_server(name, server, timeout=MCP_HANDSHAKE_TIMEOUT_S) -> Optional[str]:
+    """Start one MCP server and complete ``initialize``; return an error or None.
+
+    A command that resolves can still crash on import, and ``claude -p`` only
+    reports that as CONNECTION_CLOSED — so the server must actually answer.
+    """
+    import threading
+
+    command = [server["command"], *(server.get("args") or [])]
+    env = {**os.environ, **{k: str(v) for k, v in (server.get("env") or {}).items()}}
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "gaia-eval-preflight", "version": "1"},
+        },
+    }
+
+    try:
+        proc = subprocess.Popen(
+            command,
+            cwd=str(REPO_ROOT),
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as e:
+        return f"MCP server '{name}' could not be started ({command!r}): {e}"
+
+    outcome = {}
+    stderr_chunks = []
+
+    def _talk():
+        try:
+            proc.stdin.write(json.dumps(request) + "\n")
+            proc.stdin.flush()
+            outcome["response"] = _read_initialize_response(proc.stdout, 1)
+        except OSError:
+            outcome["response"] = None  # pipe closed: the server already exited
+        except ValueError as e:
+            outcome["error"] = str(e)
+
+    talker = threading.Thread(target=_talk, daemon=True)
+    drainer = threading.Thread(
+        target=lambda: stderr_chunks.append(proc.stderr.read()), daemon=True
+    )
+    talker.start()
+    drainer.start()
+    talker.join(timeout)
+    timed_out = talker.is_alive()
+    if not timed_out and outcome.get("response") is None:
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(5)  # stdout closed; let the exit code land
+    exit_code = proc.poll()
+
+    proc.kill()
+    proc.wait()
+    drainer.join(5)
+
+    response = outcome.get("response")
+    if not timed_out and isinstance(response, dict) and "result" in response:
+        return None
+
+    if timed_out:
+        cause = f"no initialize response within {timeout}s"
+    elif "error" in outcome:
+        cause = f"broke the protocol: {outcome['error']}"
+    elif response is None:
+        cause = f"exited (code {exit_code}) before answering initialize"
+    else:
+        cause = f"answered initialize without a result: {json.dumps(response)[:300]}"
+
+    stderr_text = "".join(stderr_chunks).strip()
+    hint = next((h for rx, h in _MCP_STDERR_HINTS if rx.search(stderr_text)), None)
+    tail = "\n".join(stderr_text.splitlines()[-15:])
+    message = (
+        f"MCP server '{name}' ({' '.join(command)}) {cause}. "
+        "Every scenario would score INFRA_ERROR (CONNECTION_CLOSED)."
+    )
+    if hint:
+        message += f" Fix: {hint}."
+    message += (
+        "\n    server stderr:\n      " + tail.replace("\n", "\n      ")
+        if tail
+        else "\n    server stderr: (empty)"
+    )
+    return message
+
+
+def _check_mcp_server_handshakes() -> list:
+    """Start each configured MCP server and require a JSON-RPC handshake."""
+    try:
+        config = _resolved_mcp_config()
+    except (OSError, ValueError) as e:
+        return [str(e)]
+    errors = []
+    for name, server in (config.get("mcpServers") or {}).items():
+        error = _probe_mcp_server(name, server)
+        if error:
+            errors.append(error)
+    return errors
+
+
 def preflight_check(backend_url, scenarios=None):
     """Check prerequisites before running scenarios.
 
@@ -1120,7 +1311,8 @@ def preflight_check(backend_url, scenarios=None):
     if not MCP_CONFIG.exists():
         errors.append(f"MCP config not found: {MCP_CONFIG}")
     else:
-        errors.extend(_check_mcp_server_commands())
+        command_errors = _check_mcp_server_commands()
+        errors.extend(command_errors or _check_mcp_server_handshakes())
 
     # Check claude CLI
     claude_bin = shutil.which("claude")
@@ -2332,6 +2524,8 @@ class AgentEvalRunner:
 
         # ---- Phase A: Run initial eval ----
         results = []
+        infra_streak = []
+        aborted = None
         for scenario_path, scenario_data in scenarios:
             sid = scenario_data["id"]
             if sid in completed:
@@ -2425,6 +2619,21 @@ class AgentEvalRunner:
             completed[sid] = result.get("status")
             progress_path.write_text(json.dumps(completed, indent=2), encoding="utf-8")
 
+            signature = _infra_error_signature(result)
+            if signature is None or (infra_streak and infra_streak[0] != signature):
+                infra_streak = []
+            if signature is not None:
+                infra_streak.append(signature)
+            if len(infra_streak) >= INFRA_ERROR_ABORT_AFTER:
+                remaining = len(scenarios) - len(results)
+                aborted = (
+                    f"Stopped after {len(infra_streak)} consecutive INFRA_ERROR "
+                    f"results with the same cause: {signature}. "
+                    f"{remaining} scenario(s) were not run — fix the harness and "
+                    f"re-run; the scores so far measure infrastructure, not the agent."
+                )
+                break
+
         # Clean up progress file — all scenarios complete
         if progress_path.exists():
             progress_path.unlink()
@@ -2448,6 +2657,10 @@ class AgentEvalRunner:
 
         # Print summary
         self._print_summary(scorecard, run_id, run_dir)
+
+        if aborted:
+            print(f"\n[ERROR] {aborted}", file=sys.stderr)
+            sys.exit(1)
 
         if not fix_mode:
             return scorecard
