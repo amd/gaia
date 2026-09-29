@@ -108,9 +108,33 @@ Check credentials, account model access, the gateway URL, and Lemonade's server 
 
 Use `/provider` to reconnect or switch destinations, or `/model <id>` to select
 an already-discovered model. Successful switches preserve the current conversation
-and loaded skills. A failed switch keeps the previous model. Selection applies to
-this running session; if the agent restarts, the TUI reports any reversion to its
-launch model.
+and loaded skills. A failed switch keeps the previous model. If the agent restarts
+mid-session, the TUI reports any reversion to its launch model.
+
+### Your model is remembered
+
+The model you last switched to — from `/provider`, `/model`, or the provider
+screen at startup — is restored the next time you open the TUI. The header names
+it before your first message, and a restore says "Restored your last model."
+
+If it can't be restored — the key is gone, the provider isn't connected, the
+model is no longer listed, or you stop the restore — GAIA says so in one line and
+opens the provider picker. It never quietly runs a different model in its place:
+
+```
+Couldn't restore your last model, Fireworks AI · deepseek-v4p1-flash: Fireworks AI
+does not list it — the key may be missing or the provider is not connected. Pick a
+model to continue, now or later with /provider.
+```
+
+A remembered cloud model is what GAIA starts on, so the startup check skips
+loading a local chat model. A remembered local or Claude model is switched to as
+the chat opens, so a deleted model or a missing `ANTHROPIC_API_KEY` gets the same
+one line and picker.
+
+The choice is stored in `~/.gaia/config.json` as `last_provider` and `last_model`
+(`GAIA_CONFIG_DIR` relocates it). `--use-claude` overrides it for one launch;
+`gaia config set last_model ""` forgets it.
 
 For development, build `tui/bin/gaia-tui` and launch the checkout with:
 

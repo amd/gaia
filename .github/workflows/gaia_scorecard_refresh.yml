@@ -83,6 +83,8 @@ permissions:
 env:
   SCORECARD: hub/agents/gaia/npm/SCORECARD.md
   MANIFEST: hub/agents/gaia/python/gaia-agent.yaml
+  # gaia_email is not in this serial default (its budget is unsized here);
+  # eval_flagship.yml's gaia-email lane measures it. Name it to include it.
   EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks,gaia_skills_capture' }}
   EVAL_MODEL: ${{ inputs.eval_model || 'claude-sonnet-4-6' }}
   MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
@@ -96,6 +98,10 @@ env:
   FIXTURE_PORT: '8765'
   GAIA_HUB_URL: http://127.0.0.1:8765/fixture_hub
   GAIA_WEB_ALLOWED_HOSTS: '127.0.0.1'
+  # gaia_email reads this offline fixture mailbox instead of a connected
+  # account (src/gaia/agents/tools/_email/fixture.py); set for every run so a
+  # dispatch that names the category finds it.
+  GAIA_EVAL_MAILBOX: ${{ github.workspace }}/tests/fixtures/gaia/email/eval_inbox.mbox
   GAIA_MEMORY_ADMIN: '1'
   GAIA_AUTO_APPROVE_TOOLS: '1'
   NO_PROXY: 'localhost,127.0.0.1'

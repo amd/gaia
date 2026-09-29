@@ -979,6 +979,74 @@ def test_verified_reads_every_runner_the_record_knows(conversation, verified):
     assert ft.tests_verified(conversation) is verified
 
 
+ANSWERED = {"role": "system", "content": {"type": "answered", "step": 4}}
+BUGFIX = "toybox/dates.py mishandles a lowercase z. Fix it and add a regression test."
+
+
+def _read(path):
+    return _tool("read_file", {"file_path": path}, {"status": "success"})
+
+
+@pytest.mark.parametrize(
+    "conversation, strays",
+    [
+        ([_read("toybox/cli.py"), _edit(), _shell(RUN, 0, PASSED)], []),
+        ([_edit(), ANSWERED, _shell(RUN, 0, PASSED), _edit()], []),
+        (
+            [
+                _edit(),
+                ANSWERED,
+                _tool(
+                    "extract_document_items",
+                    {"file_path": "toybox/cli.py"},
+                    {"status": "success"},
+                ),
+                _read("toybox/sorting.py"),
+            ],
+            ["extract_document_items", "read_file"],
+        ),
+        (
+            [
+                _edit(),
+                ANSWERED,
+                _tool(
+                    "read_file",
+                    {"file_path": "README.md"},
+                    {"executed": False, "status": "error", "error": "not run"},
+                ),
+            ],
+            [],
+        ),
+        ([_read("toybox/cli.py"), ANSWERED, _read("toybox/cli.py")], []),
+    ],
+    ids=[
+        "no-answer-yet",
+        "rerunning-tests-and-the-requested-file",
+        "new-work-after-the-answer",
+        "refused-calls-never-ran",
+        "a-file-read-before-the-answer",
+    ],
+)
+def test_calls_after_answer_counts_only_work_the_request_never_touched(
+    conversation, strays, tmp_path
+):
+    assert ft.calls_after_answer(conversation, BUGFIX, tmp_path) == strays
+
+
+def test_a_judged_task_that_kept_working_after_its_answer_stays_failed():
+    task = ft.Task(
+        id="q", check="stated", prompt="What does parse_updated accept?", max_steps=10
+    )
+    entry = {
+        "passed": False,
+        "why": "kept working after its answer: read_file",
+        "after_answer": ["read_file"],
+        "judge": {"answers_correctly": True},
+    }
+    ft._apply_verdict(entry, task)
+    assert entry["passed"] is False
+
+
 def test_a_huge_setup_diff_reaches_the_judge_as_a_file_list():
     """A generated fixture's contents are noise the judge may answer from."""
     log = "".join(f"+2026-09-18 line {i}\n" for i in range(2000))

@@ -124,15 +124,20 @@ func (m ChatModel) supersededSetup(ch <-chan gaiainit.Event) bool {
 // or was cancelled: the one-shot --query launch, or else the warm-up stage
 // (warmup.go), which has no model to load until setup has run.
 func (m *ChatModel) releaseAfterSetupGate() tea.Cmd {
-	if m.initialQuery == "" {
-		if m.warmUpApplies() {
-			return func() tea.Msg { return startWarmUpMsg{} }
-		}
-		return nil
+	var cmds []tea.Cmd
+	switch {
+	case m.startup.pending:
+		// The warm-up follows a confirmed restore (Update), on that model.
+		cmds = append(cmds, startupModelCmd())
+	case m.warmUpApplies():
+		cmds = append(cmds, func() tea.Msg { return startWarmUpMsg{} })
 	}
-	query := m.initialQuery
-	m.initialQuery = ""
-	return func() tea.Msg { return sendQueryMsg{query: query} }
+	if m.initialQuery != "" {
+		query := m.initialQuery
+		m.initialQuery = ""
+		cmds = append(cmds, func() tea.Msg { return sendQueryMsg{query: query} })
+	}
+	return tea.Batch(cmds...)
 }
 
 // handleSetupCheckResult reacts to the first-boot readiness probe. A ready

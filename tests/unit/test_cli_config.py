@@ -571,3 +571,41 @@ class TestFullAccessSetting:
     def test_it_is_a_listed_config_key(self):
         """So `gaia config set` accepts it and `gaia config show` prints it."""
         assert "full_access" in self._cfg().field_names()
+
+
+# ---------------------------------------------------------------------------
+# last_provider / last_model — the TUI's remembered model choice
+# ---------------------------------------------------------------------------
+
+
+class TestLastModelSetting:
+    """The TUI writes these; `gaia config` must keep and show them."""
+
+    @staticmethod
+    def _cfg():
+        from gaia.config import GaiaConfig
+
+        return GaiaConfig
+
+    def test_unset_by_default(self):
+        config = self._cfg()()
+        assert config.last_provider is None and config.last_model is None
+
+    def test_listed_so_gaia_config_can_show_and_clear_them(self):
+        names = self._cfg().field_names()
+        assert "last_provider" in names and "last_model" in names
+
+    def test_a_save_from_python_keeps_the_tui_choice(self, tmp_path):
+        """GaiaConfig.save writes declared fields only, so undeclared keys vanish."""
+        path = tmp_path / "config.json"
+        path.write_text(
+            '{"last_provider": "fireworks", '
+            '"last_model": "fireworks.deepseek-v4p1-flash"}',
+            encoding="utf-8",
+        )
+        config = self._cfg().load(path)
+        config.set("default_device", "npu")
+        config.save(path)
+        reloaded = self._cfg().load(path)
+        assert reloaded.last_provider == "fireworks"
+        assert reloaded.last_model == "fireworks.deepseek-v4p1-flash"

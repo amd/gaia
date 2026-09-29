@@ -247,7 +247,8 @@ func (m Model) View() string {
 		lines = append(lines, m.loadErr)
 	case m.onlyFlagship:
 		lines = append(lines, "Only the flagship is installed. Install another with: gaia hub install <id>")
-	default:
+	case len(m.rows) > 0:
+		rowLines := make([][]string, len(m.rows))
 		for i, r := range m.rows {
 			marker := "  "
 			if i == m.selected {
@@ -264,10 +265,28 @@ func (m Model) View() string {
 				version = "v" + r.version
 			}
 			label := fmt.Sprintf("%s%-10s %-16s %-8s %s", marker, r.id, r.name, version, state)
+			rowLines[i] = strings.Split(ansi.Wrap(label, w, ""), "\n")
 			if i == m.selected {
-				label = title.Render(label)
+				for j := range rowLines[i] {
+					rowLines[i][j] = title.Render(rowLines[i][j])
+				}
 			}
-			lines = append(lines, label)
+		}
+		// Scroll the rows around the selection: the height crop below keeps
+		// only the tail, which would drop a selection near the top.
+		avail := max(1, m.height-6)
+		start, end := m.selected, m.selected+1
+		used := len(rowLines[m.selected])
+		for start > 0 && used+len(rowLines[start-1]) <= avail {
+			start--
+			used += len(rowLines[start])
+		}
+		for end < len(rowLines) && used+len(rowLines[end]) <= avail {
+			used += len(rowLines[end])
+			end++
+		}
+		for _, rl := range rowLines[start:end] {
+			lines = append(lines, rl...)
 		}
 	}
 

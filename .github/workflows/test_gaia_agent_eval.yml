@@ -168,6 +168,8 @@ permissions:
 env:
   # `inputs.*` (not github.event.inputs.*) so values propagate for BOTH
   # workflow_dispatch AND workflow_call.
+  # gaia_email is not in this serial default (its budget is unsized here);
+  # eval_flagship.yml's gaia-email lane measures it. Name it to include it.
   EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks,gaia_skills_capture,gaia_mcp' }}
   # PINNED TO THE BASELINE'S JUDGE — `--model` drives every scenario as well
   # as scoring it (runner.py passes it to `claude -p`), so changing it
@@ -193,6 +195,10 @@ env:
   # the fixture host so web scenarios can reach the canned pages. Production
   # posture unchanged — other private IPs stay blocked.
   GAIA_WEB_ALLOWED_HOSTS: '127.0.0.1'
+  # gaia_email reads this offline fixture mailbox instead of a connected
+  # account (src/gaia/agents/tools/_email/fixture.py); set for every run so a
+  # dispatch that names the category finds it.
+  GAIA_EVAL_MAILBOX: ${{ github.workspace }}/tests/fixtures/gaia/email/eval_inbox.mbox
   # MEMORY ON (deviation, see header): GAIA_MEMORY_DISABLED is deliberately
   # NOT set; the admin seed/clear tools are exposed for scenario isolation.
   GAIA_MEMORY_ADMIN: '1'

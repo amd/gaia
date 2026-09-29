@@ -70,6 +70,20 @@ type FlagshipModel struct {
 	// model overrides the agent's own default (--model). Only a daemon-backed
 	// agent can honour it; cli.checkModelSupported refuses it for the rest.
 	model string
+	// startupKind/startupProvider/startupModel are the chat's opening /model
+	// turn — a saved choice to restore or a gate pick to confirm (lastmodel.go).
+	startupKind     chat.StartupModelKind
+	startupProvider string
+	startupModel    string
+	// saveModel persists a switch the agent confirmed; nil saves nothing.
+	saveModel func(provider, model string) error
+	// last is the flagship's remembered model (lastmodel.go).
+	last *lastModel
+	// gateChatModel is the local chat model the last gate loaded, named in the
+	// header until the agent reports its own.
+	gateChatModel string
+	// launchNotice is shown once in the first chat frame.
+	launchNotice string
 	// trace records every agent event to a JSONL file (--trace). Nil when off.
 	// Owned by the caller of RunFlagship, which closes it after the event loop.
 	trace *event.TraceWriter
@@ -272,12 +286,19 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch v := msg.(type) {
 		case providers.ClosedMsg:
 			m.providerPanel = nil
+			// Resizes while the panel was open reached only the panel.
+			if m.width > 0 && m.height > 0 {
+				updated, _ := m.preflight.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+				gate := updated.(preflight.Model)
+				m.preflight = &gate
+			}
 			return m, m.preflight.Init()
 		case providers.SelectedMsg:
 			m.providerPanel = nil
 			m.model = v.ID
 			m.useClaude = false
 			m.claudeModel = ""
+			m = m.pickedAtGate(v.ID)
 			// m.pending, not m.agent — the gate being reopened is the one the
 			// 'p' key was pressed on, which during a switch is the incoming
 			// agent, not the still-live outgoing one m.agent names until the
@@ -346,7 +367,7 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gateway.CloseMsg:
 		m.gw = nil
 		m.activeView = viewChat
-		return m, nil
+		return m.syncChatSize()
 
 	case preflight.ProceedMsg:
 		if !m.gateIsFor(msg.AgentID) {
@@ -467,6 +488,18 @@ func (m FlagshipModel) openGateway() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// syncChatSize hands the chat the current window size on the way back to it:
+// resizes while another screen was up reached only that screen.
+func (m FlagshipModel) syncChatSize() (FlagshipModel, tea.Cmd) {
+	if m.chat == nil || m.width <= 0 || m.height <= 0 {
+		return m, nil
+	}
+	updated, cmd := m.chat.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+	chatModel := updated.(chat.ChatModel)
+	m.chat = &chatModel
+	return m, cmd
+}
+
 func (m FlagshipModel) updateGateway(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.gw == nil {
 		return m, nil
@@ -533,7 +566,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	// question and answers it.
 	c, err := client.ForAgent(agent, client.ForAgentOptions{
 		Dev: m.dev, Logf: m.logf, Interactive: true,
-		Model:       m.model,
+		Model:       m.launchModel(agent),
 		Trace:       m.trace,
 		FullAccess:  m.fullAccess,
 		UseClaude:   m.useClaude,
@@ -581,6 +614,12 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 		// It explains this launch only; an /agents switch must not repeat it.
 		m.fullAccessNotice = ""
 	}
+	if m.launchNotice != "" {
+		chatModel = chatModel.WithNotice(m.launchNotice)
+		m.launchNotice = ""
+	}
+	chatModel = m.withStartupModel(agent, chatModel, m.gateChatModel)
+	m.gateChatModel = ""
 	m.chat = &chatModel
 	m.agent = agent
 	m.activeView = viewChat

@@ -282,3 +282,31 @@ def test_the_gaia_child_records_calls_as_they_happen(tmp_path):
             "content": {"status": "success", "echo": {"file_path": "x"}},
         },
     ]
+
+
+def test_the_gaia_child_records_where_the_turn_first_answered(tmp_path):
+    from gaia.agents.base.turn_scope import TurnScopeGuard
+    from gaia.eval.bench import gaia_child
+
+    class Agent:
+        def __init__(self):
+            self.chat = None
+            self._turn_scope = TurnScopeGuard(failure_limit=4)
+
+        def _execute_tool(self, name, args):
+            return {"status": "success"}
+
+    agent = Agent()
+    progress = tmp_path / "progress.jsonl"
+    gaia_child.instrument(progress)(agent)
+    agent._execute_tool("edit_file", {"file_path": "x.py"})
+    agent._turn_scope.mark_answered()
+    agent._turn_scope.mark_answered()
+    agent._execute_tool("read_file", {"file_path": "y.py"})
+    # A run cut off at the cap is rebuilt from this file, marker included.
+    assert [e.get("role") for e in harness._progress(progress)] == [
+        "tool",
+        "system",
+        "tool",
+    ]
+    assert agent._turn_scope.answered

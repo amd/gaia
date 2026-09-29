@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -479,20 +480,40 @@ func (m GatewayModel) View() string {
 		b.WriteString(errorStyle.Render(m.initErr.Error()))
 		b.WriteString("\n\n")
 		b.WriteString(keyStyle.Render("esc") + dimStyle.Render(" back"))
-		return b.String()
+		return m.fit(b.String())
 	}
 	if !m.haveInit {
 		b.WriteString(busyStyle.Render("Checking Lemonade..."))
-		return b.String()
+		return m.fit(b.String())
 	}
 
+	var tail strings.Builder
+	if m.busy != "" {
+		tail.WriteString("\n" + busyStyle.Render(m.busy) + "\n")
+	}
+	if m.notice != "" {
+		tail.WriteString("\n" + noticeStyle.Render(m.notice) + "\n")
+	}
+	if m.errMsg != "" {
+		tail.WriteString("\n" + errorStyle.Render(m.errMsg) + "\n")
+	}
+	tail.WriteString("\n")
+	tail.WriteString(m.renderKeys())
+
+	inputWidth := 60
+	if m.width > 0 {
+		// Prompt and cursor take three cells beside the text.
+		inputWidth = max(1, min(inputWidth, m.width-3))
+	}
 	switch m.stage {
 	case stageURL:
 		b.WriteString(labelStyle.Render("Gateway base URL"))
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render("The OpenAI-compatible endpoint, e.g. https://llm-api.amd.com/Unified/v1"))
 		b.WriteString("\n")
-		b.WriteString(m.urlInput.View())
+		in := m.urlInput
+		in.Width = inputWidth
+		b.WriteString(in.View())
 		b.WriteString("\n")
 	case stageToken:
 		b.WriteString(labelStyle.Render("Gateway API token"))
@@ -501,28 +522,40 @@ func (m GatewayModel) View() string {
 			"Saved to your OS credential store, so you are not asked again.\n" +
 				"Set " + APIKeyEnv + " in Lemonade's environment to use that instead."))
 		b.WriteString("\n")
-		b.WriteString(m.tokenInput.View())
+		in := m.tokenInput
+		in.Width = inputWidth
+		b.WriteString(in.View())
 		b.WriteString("\n")
 	case stageModels:
-		b.WriteString(m.renderModels())
+		used := len(m.wrap(b.String())) + len(m.wrap(tail.String())) - 1
+		b.WriteString(m.renderModels(m.height - used))
 	}
 
-	if m.busy != "" {
-		b.WriteString("\n" + busyStyle.Render(m.busy) + "\n")
-	}
-	if m.notice != "" {
-		b.WriteString("\n" + noticeStyle.Render(m.notice) + "\n")
-	}
-	if m.errMsg != "" {
-		b.WriteString("\n" + errorStyle.Render(m.errMsg) + "\n")
-	}
-
-	b.WriteString("\n")
-	b.WriteString(m.renderKeys())
-	return b.String()
+	b.WriteString(tail.String())
+	return m.fit(b.String())
 }
 
-func (m GatewayModel) renderModels() string {
+// wrap splits s into the lines it takes at the screen width.
+func (m GatewayModel) wrap(s string) []string {
+	if m.width > 0 {
+		s = ansi.Wrap(s, m.width, "")
+	}
+	return strings.Split(s, "\n")
+}
+
+// fit wraps the frame to the window and, if it is still too tall, keeps the
+// title and the bottom — where the input, list and keys are.
+func (m GatewayModel) fit(s string) string {
+	lines := m.wrap(s)
+	if m.height > 0 && len(lines) > m.height {
+		lines = append(lines[:1], lines[len(lines)-m.height+1:]...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderModels lists the models in at most budget lines (no limit when the
+// window size is unknown), scrolled so the cursor row stays visible.
+func (m GatewayModel) renderModels(budget int) string {
 	var b strings.Builder
 	if len(m.models) == 0 {
 		b.WriteString(dimStyle.Render(
@@ -534,7 +567,9 @@ func (m GatewayModel) renderModels() string {
 
 	b.WriteString(labelStyle.Render(fmt.Sprintf("%d gateway model(s)", len(m.models))))
 	b.WriteString("\n\n")
+	blocks := make([]string, len(m.models))
 	for i, model := range m.models {
+		var row strings.Builder
 		cursor := "  "
 		if i == m.cursor {
 			cursor = selectedStyle.Render("> ")
@@ -551,16 +586,35 @@ func (m GatewayModel) renderModels() string {
 		if model.Recommended() {
 			star = dimStyle.Render(" *")
 		}
-		b.WriteString(cursor + mark + " " + name + star + "\n")
+		row.WriteString(cursor + mark + " " + name + star + "\n")
 
 		details := append([]string{}, model.Labels...)
 		if model.CtxSize > 0 {
 			details = append(details, fmt.Sprintf("%dK ctx", model.CtxSize/1024))
 		}
 		if len(details) > 0 {
-			b.WriteString("      " + dimStyle.Render(strings.Join(details, ", ")) + "\n")
+			row.WriteString("      " + dimStyle.Render(strings.Join(details, ", ")) + "\n")
 		}
+		blocks[i] = row.String()
 	}
+	if m.height <= 0 {
+		b.WriteString(strings.Join(blocks, ""))
+		return b.String()
+	}
+	// A block ends in a newline, so it takes one line fewer than wrap reports.
+	height := func(i int) int { return len(m.wrap(blocks[i])) - 1 }
+	avail := max(1, budget-2)
+	start, end := m.cursor, m.cursor+1
+	used := height(m.cursor)
+	for start > 0 && used+height(start-1) <= avail {
+		start--
+		used += height(start)
+	}
+	for end < len(blocks) && used+height(end) <= avail {
+		used += height(end)
+		end++
+	}
+	b.WriteString(strings.Join(blocks[start:end], ""))
 	return b.String()
 }
 
@@ -584,7 +638,19 @@ func (m GatewayModel) renderKeys() string {
 		}
 	}
 	keys = append(keys, key("esc", "back"))
-	return strings.Join(keys, dimStyle.Render("  ·  "))
+	// Break between keys, never inside one, when the row is too narrow.
+	sep := dimStyle.Render("  ·  ")
+	var rows []string
+	line := keys[0]
+	for _, k := range keys[1:] {
+		if m.width > 0 && ansi.StringWidth(line+sep+k) > m.width {
+			rows = append(rows, line)
+			line = k
+			continue
+		}
+		line += sep + k
+	}
+	return strings.Join(append(rows, line), "\n")
 }
 
 // ActiveModel is the gateway model currently selected, for the status bar.

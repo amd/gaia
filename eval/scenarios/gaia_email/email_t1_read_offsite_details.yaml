@@ -1,0 +1,44 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/email/eval_inbox.mbox (build_mailbox.py) —
+# Priya Shah "Offsite logistics - Lakeview Lodge": shuttle 7:45 AM from the
+# main lobby; return 5:30 PM; Thursday, October 8, 2026; room Cedar B; parking
+# code 4417. The shuttle line sits past the 200-char listing preview.
+id: email_t1_read_offsite_details
+name: "Email — Answer From One Planted Message Body"
+category: gaia_email
+severity: high
+tags: [t1_basic]
+description: |
+  #3814's Read/Answer gate on the offline fixture: the answer lives only in
+  a message BODY, past the preview a listing shows, so the agent has to find
+  the message and read it rather than answer from the subject line.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  mailbox_fixture: attached
+  notes: "Backend runs with GAIA_EVAL_MAILBOX (the fixture mailbox) and GAIA_MEMORY_ADMIN=1; the runner applies mailbox_fixture."
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator actions, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all), so no earlier scenario's memory leaks in (the runner has already set the fixture mailbox from setup.mailbox_fixture). Then send this turn: ask when the offsite shuttle leaves and from where"
+    user_message: "Priya sent something about the offsite — what time does the shuttle leave, and from where?"
+    ground_truth:
+      expected_answer: "7:45 AM, from the main lobby of the office"
+    success_criteria: |
+      Answer states 7:45 AM AND the main lobby of the office. agent_tools
+      must show a mail read (read_email, or a search/listing followed by
+      read_email) — the time is not in the subject or the preview. Any other
+      time, or an answer without a mail tool call, is a FAIL.
+
+  - turn: 2
+    objective: "Follow-up from the same message"
+    user_message: "And what day is it, and where exactly?"
+    ground_truth:
+      expected_answer: "Thursday, October 8, 2026 at Lakeview Lodge, room Cedar B"
+    success_criteria: "States Thursday, October 8 (2026) and Lakeview Lodge, room Cedar B. Re-reading the message is fine; a different date or room is a FAIL."
+
+expected_outcome: |
+  The agent locates Priya's offsite email, reads its body, and answers the
+  shuttle time, place, date and room exactly.

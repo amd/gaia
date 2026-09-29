@@ -153,3 +153,15 @@ func styledRun(rendered, text string) string {
 	}
 	return rendered[start : start+end+1]
 }
+
+// Inline code has no box, so the builtin's one-space padding around each span
+// only doubled the spaces around every path and flag: "run  pytest  now".
+func TestInlineCodeIsNotPaddedWithExtraSpaces(t *testing.T) {
+	out := ansi.Strip(RenderMarkdown("run `pytest -q` now"))
+	if strings.Contains(out, "  pytest") || strings.Contains(out, "-q  ") {
+		t.Errorf("inline code is padded with extra spaces: %q", out)
+	}
+	if !strings.Contains(out, "run pytest -q now") {
+		t.Errorf("inline code lost its surrounding text: %q", out)
+	}
+}

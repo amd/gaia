@@ -64,11 +64,11 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 	if err != nil {
 		return err
 	}
-	m := root.NewFlagshipModel(*agent, dev).
+	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithFullAccessNotice(notice).
-		WithClaude(useClaude, claudeModel).
+		WithClaude(useClaude, claudeModel)).
 		WithTrace(trace).
 		WithLocalPreflight(preflight.LocalOptions{
 			// The gate has to answer about the binary this launch will actually
@@ -319,11 +319,11 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	// passes. That is what gains an interactive --agent launch a gate: it had
 	// none, and email in particular went straight to chat and reported a
 	// missing daemon as a failed first message.
-	m := root.NewFlagshipModel(*agent, dev).
+	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithClaude(useClaude, claudeModel).
-		WithModel(model).
+		WithModel(model)).
 		WithTrace(trace)
 	if err := run(m, dev, ctrl); err != nil {
 		return 1, err
@@ -376,4 +376,19 @@ func launchFullAccess(agent catalog.Agent, fullAccess, saved bool) (bool, string
 		return false, "", err
 	}
 	return fullAccess, "", nil
+}
+
+// withLastModel restores the model the user last chose and remembers the next
+// one. Applied after the launch flags, which win over a saved choice.
+func withLastModel(m root.FlagshipModel) root.FlagshipModel {
+	m = m.WithModelMemory(func(provider, model string) error {
+		_, err := preflight.WriteLastModel(provider, model)
+		return err
+	})
+	saved, err := preflight.ReadLastModel()
+	if err != nil {
+		return m.WithLaunchNotice("[!] Your last model was not restored: " + err.Error() +
+			". Pick one with /provider.")
+	}
+	return m.WithSavedModel(saved)
 }

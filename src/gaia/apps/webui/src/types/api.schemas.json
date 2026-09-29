@@ -1230,6 +1230,19 @@
     "title": "DownloadProgress",
     "type": "object"
   },
+  "EvalMailboxRequest": {
+    "properties": {
+      "attached": {
+        "title": "Attached",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "attached"
+    ],
+    "title": "EvalMailboxRequest",
+    "type": "object"
+  },
   "FileEntry": {
     "description": "A single file or folder entry in a directory listing.",
     "properties": {

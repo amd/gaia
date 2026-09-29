@@ -117,12 +117,20 @@ class GaiaConfig:
             project-local ``.env`` or a checked-in config must never be able to
             switch off another person's confirmation prompts. The TUI still
             shows its banner on every frame while it is on.
+        last_provider: Provider of the model last chosen in the TUI
+            (``local``, ``fireworks``, ``amd``, ``claude``, ...). Saved with
+            ``last_model`` after every switch the agent confirms.
+        last_model: Model id last chosen in the TUI, restored on its next
+            launch. A restore that fails is reported, never replaced with
+            another model. ``gaia config set last_model ""`` forgets it.
     """
 
     profile: str = "chat"
     default_device: str = "gpu"
     default_model: Optional[str] = None
     full_access: bool = False
+    last_provider: Optional[str] = None
+    last_model: Optional[str] = None
 
     #: Strings accepted for a boolean field, and what each means. Anything
     #: else raises — "false" silently meaning True is the exact accident this

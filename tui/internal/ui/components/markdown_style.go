@@ -80,6 +80,10 @@ func gaiaStyle(dark bool) ansi.StyleConfig {
 	// and dropping our override just let THAT through (the same reason H1 above
 	// clears its purple fill).
 	base.Code.BackgroundColor = nil
+	// The builtin pads each span with a space for its box. With no box the
+	// padding only doubles the spaces around every path and flag.
+	base.Code.Prefix = ""
+	base.Code.Suffix = ""
 
 	// One column of inset, so the block's tinted background starts clear of the
 	// prose margin. Glamour reflows code to the same measure as the rest of the

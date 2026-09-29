@@ -301,12 +301,14 @@ class TestAgentEvalRunner:
             "gaia_code",
             "gaia_voice",
             "gaia_media",
+            "gaia_email",
         }
         known_tags = {
             "t1_basic",
             "t2_compound",
             "t3_stress",
             "t4_adversarial",
+            "security",
             "usability",
             "live",
             "tui",

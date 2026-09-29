@@ -284,7 +284,8 @@ def _progress_lines(path: Path) -> List[Dict[str, Any]]:
 
 
 def _progress(path: Path) -> List[Dict[str, Any]]:
-    return [e for e in _progress_lines(path) if e.get("role") == "tool"]
+    """Tool calls, and the marker where the turn first answered."""
+    return [e for e in _progress_lines(path) if e.get("role") in ("tool", "system")]
 
 
 def _progress_steps(path: Path) -> int:

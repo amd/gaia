@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // resetRenderer puts the package globals back after a test has moved them.
@@ -115,5 +117,31 @@ func TestRenderMarkdownRendersWithAResolvedStyle(t *testing.T) {
 	out := RenderMarkdown("**bold**")
 	if !strings.Contains(out, "bold") {
 		t.Errorf("rendered output lost the content: %q", out)
+	}
+}
+
+// Every hyphen in a paragraph used to make its line one column too long for
+// the wrapper (muesli/reflow, patched in tui/third_party), and glamour then
+// re-wrapped the overflow — stranding "m" on a row of its own after "python -"
+// and ending lines far short of the width. No line may end while the next word
+// would still have fitted on it.
+func TestHyphenatedProseFillsTheLine(t *testing.T) {
+	const wrap = 60
+	resetRenderer(t)
+	SetWordWrap(wrap)
+	doc := strings.Repeat("Use `python -m pytest` and `python -m pip` once the well-known set-up is ready. ", 6)
+	lines := strings.Split(ansi.Strip(RenderMarkdown(doc)), "\n")
+	for i := 0; i+1 < len(lines); i++ {
+		cur, next := strings.TrimRight(lines[i], " "), strings.TrimSpace(lines[i+1])
+		if cur == "" || next == "" {
+			continue
+		}
+		if ansi.StringWidth(cur) > wrap {
+			t.Errorf("row %d is %d columns, past the %d-column wrap: %q", i, ansi.StringWidth(cur), wrap, cur)
+		}
+		first := strings.Fields(next)[0]
+		if ansi.StringWidth(cur)+1+ansi.StringWidth(first) < wrap-2 {
+			t.Errorf("row %d wrapped early: %q, though %q fits after it", i, cur, first)
+		}
 	}
 }
