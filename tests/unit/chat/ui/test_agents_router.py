@@ -97,7 +97,10 @@ class TestListAgents:
         app = create_app(db_path=":memory:")
         app.state.agent_registry = registry
 
-        data = TestClient(app).get("/api/agents").json()
+        # The endpoint also unions in hub-installed sidecars (#2118), so a dev
+        # machine with one installed would fail this on an unrelated id.
+        with patch("gaia.hub.installer.list_installed", return_value={}):
+            data = TestClient(app).get("/api/agents").json()
         ids = [a["id"] for a in data["agents"]]
         assert ids == ["gaia"]
         assert data["total"] == 1
