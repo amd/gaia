@@ -15,19 +15,23 @@ A task's ``gh`` block can also simulate trouble:
   until the window, counted from the first network call, has passed.
 - ``{"mode": "transient"}``: one HTTP 502, then normal service.
 
-:func:`install` writes a ``gh`` launcher that runs this file directly. It
-uses the standard library only, so a call costs an interpreter start, not an
-import of GAIA.
+:func:`install` writes ``gh`` launchers (plus ``gh.cmd`` and ``gh.exe`` on
+Windows) that run this file directly. It uses the standard library only, so a
+call costs an interpreter start, not an import of GAIA.
 """
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
+import sysconfig
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, NoReturn, Optional, Tuple
@@ -146,6 +150,48 @@ def _launchers(bin_dir: Path) -> None:
     sh.chmod(0o755)
     (bin_dir / "gh.cmd").write_text(
         f'@echo off\r\n"{python}" -I "{script}" %*\r\n', encoding="utf-8"
+    )
+    if sys.platform == "win32":
+        # A skill-granted CLI runs as argv, and CreateProcess only finds gh.exe.
+        (bin_dir / "gh.exe").write_bytes(_exe_launcher(python, script))
+
+
+def _exe_launcher(python: str, script: Path) -> bytes:
+    """pip's console-script format: launcher, shebang, zip with __main__.py."""
+    entry = (
+        "import runpy, sys\n"
+        "sys.argv[0] = 'gh'\n"
+        f"runpy.run_path({str(script)!r}, run_name='__main__')\n"
+    )
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as zf:
+        zf.writestr("__main__.py", entry)
+    exe = f'"{python}"' if " " in python else python
+    return _launcher_template() + f"#!{exe} -I\n".encode("utf-8") + stream.getvalue()
+
+
+def _launcher_template() -> bytes:
+    """distlib's console launcher, from pip or the pip wheel ensurepip bundles."""
+    bits = "64" if struct.calcsize("P") == 8 else "32"
+    arm = "-arm" if sysconfig.get_platform() == "win-arm64" else ""
+    name = f"t{bits}{arm}.exe"
+    try:
+        from pip._vendor.distlib.scripts import WRAPPERS as wrappers
+    except ImportError:
+        wrappers = {}
+    if name in wrappers:
+        return wrappers[name]
+    import ensurepip
+
+    bundled = Path(ensurepip.__file__).parent / "_bundled"
+    for wheel in bundled.glob("pip-*.whl"):
+        with zipfile.ZipFile(wheel) as zf:
+            if f"pip/_vendor/distlib/{name}" in zf.namelist():
+                return zf.read(f"pip/_vendor/distlib/{name}")
+    raise FileNotFoundError(
+        f"gh stand-in: no {name} launcher in pip or in {bundled}, so gh.exe "
+        "cannot be written and an agent would reach the real GitHub CLI. Install "
+        f"pip for {sys.executable} (`python -m ensurepip` or `uv pip install pip`)."
     )
 
 
