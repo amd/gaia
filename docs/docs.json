@@ -107,7 +107,6 @@
                     "group": "Connected Agents",
                     "pages": [
                       "guides/email",
-                      "guides/email-integration",
                       "guides/slack",
                       "guides/telegram-adapter"
                     ]

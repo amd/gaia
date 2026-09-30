@@ -10,17 +10,9 @@ The flagship [`gaia` agent](/guides/gaia) reads your mailbox — Gmail or Outloo
 
 **Reading is all it does today.** It lists your inbox, searches it, opens a message, and lists folders. It does not archive, label, draft, reply, or send. Triage itself — working out what actually needs you — is judgment the model does, driven by the bundled `inbox-triage` skill; the tools hand it facts, never verdicts. The plan for the write verbs is [Email triage as a skill](/plans/email-triage-skill).
 
-<Note>
-  **Looking for triage buckets, drafting, send, or calendar — or embedding email in
-  your own app?** Those belong to the standalone Email Triage Agent, a retired
-  development target documented at
-  [Email Triage Agent (retired)](/guides/email-integration). Nothing on that page
-  describes the agent you reach by asking GAIA about your mail.
-</Note>
-
 ## Action surface
 
-These five tools are the whole surface. Any other email tool you see named — here or elsewhere — belongs to the retired agent and is not reachable from the flagship.
+These five tools are the whole surface.
 
 | Tool | What you'd ask for |
 |---|---|
@@ -123,18 +115,18 @@ Gmail then stops being eligible and Outlook is selected. Re-grant to switch back
 
 ### Granting Gmail to the flagship
 
-If your Google account is already connected — including from the retired Email Triage Agent, whose connection carries the broader `gmail.modify` scope — the flagship reuses it rather than asking you to reconnect, but it does need its own entry in the grant ledger:
+If your Google account is already connected for something else, the flagship reuses that connection rather than asking you to reconnect, but it does need its own entry in the grant ledger:
 
 ```bash
 gaia connectors grants grant google installed:gaia \
   --scopes https://www.googleapis.com/auth/gmail.readonly
 ```
 
-That is a local ledger write — no browser, no OAuth round-trip. Pass `gmail.modify` instead if that is the scope your existing connection carries.
+That is a local ledger write — no browser, no OAuth round-trip. If your existing connection was authorized with a broader Gmail scope, pass that scope instead — the grant cannot ask for more than the connection carries.
 
 ## Privacy
 
-- **Local LLM only by default** — email bodies are processed by your local Lemonade model. Unlike the retired agent, the flagship has no allowlist pinning it there: if you configure it against a cloud provider, mail content goes with it.
+- **Local LLM only by default** — email bodies are processed by your local Lemonade model. Nothing pins them there: if you configure the flagship against a cloud provider, mail content goes with it.
 - **No mail mutation** — this tool surface cannot archive, send, label, or delete, so an instruction planted in an email body has no mail action to trigger. There is no confirmation dialog to get wrong, because there is no mutation to confirm.
 - **Untrusted input** — message bodies are wrapped in `<<<UNTRUSTED_EMAIL_BODY_*>>>` delimiters and flagged when they show phishing signals ([#4150](https://github.com/amd/gaia/issues/4150)). That is not a general injection defence: the flagship also holds web, file, and shell tools, so treat mail from untrusted senders as untrusted input.
 
