@@ -190,9 +190,7 @@ history budget; the newest turn is retained if it fits. The full stored trace
 remains in SQLite, and exclusions produce a warning in the backend log.
 
 `get_messages` and the ordinary transcript API do not expose the internal trace.
-Deleting a transcript message also deletes its evidence. The email sidecar's
-separate `/query` contract still carries bounded prose; native evidence replay
-for that transport is a separate extension.
+Deleting a transcript message also deletes its evidence.
 
 
 **Example:**
