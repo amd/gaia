@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 
 from gaia.daemon.lock import try_lock, unlock
+from gaia.utils.power import stay_awake
 
 LOCK_FILE = Path(tempfile.gettempdir()) / "gaia-eval.lock"
 HOLDER_FILE = LOCK_FILE.with_suffix(".holder.json")
@@ -45,33 +46,6 @@ def _holder_description() -> str:
         return "another process"
     started = time.strftime("%H:%M", time.localtime(holder.get("started", 0)))
     return f"PID {holder.get('pid')} (`{holder.get('command')}`, started {started})"
-
-
-#: SetThreadExecutionState flags: keep the system and display on until cleared.
-_ES_CONTINUOUS = 0x80000000
-_ES_SYSTEM_REQUIRED = 0x00000001
-_ES_DISPLAY_REQUIRED = 0x00000002
-
-
-@contextlib.contextmanager
-def _stay_awake():
-    """Hold off idle standby for this thread while a run is in progress."""
-    if sys.platform != "win32":
-        yield
-        return
-    import ctypes
-
-    set_state = ctypes.windll.kernel32.SetThreadExecutionState
-    if not set_state(_ES_CONTINUOUS | _ES_SYSTEM_REQUIRED | _ES_DISPLAY_REQUIRED):
-        raise OSError(
-            "Could not ask Windows to stay awake for the eval (SetThreadExecutionState "
-            "failed). An unattended run would stall when the PC goes into standby; "
-            "keep it awake another way (e.g. powercfg) and retry."
-        )
-    try:
-        yield
-    finally:
-        set_state(_ES_CONTINUOUS)
 
 
 @contextlib.contextmanager
@@ -126,7 +100,7 @@ def exclusive_eval(command: str):
     while *command* ran.
     """
     if os.environ.get(BYPASS_ENV) == "1":
-        with _stay_awake(), _sleep_watch(command):
+        with stay_awake(required=True), _sleep_watch(command):
             yield
         return
 
@@ -148,7 +122,7 @@ def exclusive_eval(command: str):
         encoding="utf-8",
     )
     try:
-        with _stay_awake(), _sleep_watch(command):
+        with stay_awake(required=True), _sleep_watch(command):
             yield
     finally:
         HOLDER_FILE.unlink(missing_ok=True)
