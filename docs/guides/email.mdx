@@ -72,7 +72,9 @@ gaia connectors connect google --grant-agent installed:gaia
 
 `--grant-agent installed:gaia` is enough on its own: GAIA reads the scopes the agent declares and authorizes + grants them in the same flow, so there is no `--scopes` list to type out or keep in sync. The consent screen asks for `gmail.readonly` and nothing more — read-only is the whole capability, so that is the whole ask.
 
-The command prints an authorization URL. Open it in a browser **on the machine running GAIA** — the sign-in completes via a `127.0.0.1` callback on that box. On a remote or headless host, open it there or forward the callback port over SSH.
+The command prints an authorization URL. Open it in a browser **on the machine running GAIA** — the sign-in completes via a `127.0.0.1` callback on that box.
+
+On a remote or headless host, open it there instead, or forward the callback port. The port is picked fresh on every run, so read it out of the printed URL's `redirect_uri=http%3A%2F%2F127.0.0.1%3A<PORT>%2Fcallback` and set the forward up in a second session **while the flow is still waiting** — there is no way to pin it in advance, and no device-code flow for Google.
 
 Skip the grant and the first mail tool call fails, naming the one command that fixes it — see [Troubleshooting](#troubleshooting).
 

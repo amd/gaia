@@ -259,6 +259,14 @@ completes.
   setup](/guides/email#setup) for the exact commands.
 </Note>
 
+<Note>
+  **`gaia connectors list` will still say `not configured` after the `configure`
+  step — that is expected, not a failure.** For an OAuth connector, "configured"
+  means a signed-in connection exists in the keyring; saving client credentials
+  does not create one. It flips only after `gaia connectors connect google`
+  completes.
+</Note>
+
 ## Step 6 — Grant scopes to specific agents
 
 Each agent must be granted the specific scopes it needs — a connection
