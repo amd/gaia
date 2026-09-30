@@ -26,7 +26,7 @@ def runtime():
     state = SimpleNamespace(
         session_locks={}, chat_semaphore=asyncio.BoundedSemaphore(1)
     )
-    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    request = SimpleNamespace(app=SimpleNamespace(state=state), headers={})
     server = SimpleNamespace(_stream_chat_response=helpers._stream_chat_response)
     with (
         patch.object(chat, "run_manager", manager),

@@ -41,6 +41,7 @@ from gaia.ui.email_sidecar.profiles import (
     profile_for,
 )
 
+from . import permissions as session_permissions
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .sse_handler import (
@@ -1899,6 +1900,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             # the orphan-cleanup mirror of the explicit /api/chat/cancel path.
             sse_handler.close_active_relay_response()
         _active_sse_handlers.pop(session_id, None)
+        if sse_handler is not None:
+            session_permissions.for_session(session_id).detach(sse_handler)
         if producer is not None:
             await asyncio.to_thread(producer.join, 5.0)
             if producer.is_alive():
@@ -1912,6 +1915,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     try:
         # Create SSE handler for streaming events
         sse_handler = SSEOutputHandler()
+        session_permissions.for_session(session_id).attach(sse_handler)
         # Expose the handler on the run so an external Stop can signal the
         # producer to bail even after every client has detached (#1580).
         run.handler = sse_handler

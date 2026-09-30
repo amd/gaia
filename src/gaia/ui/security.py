@@ -49,6 +49,12 @@ logger = logging.getLogger(__name__)
 UI_HEADER_NAME = "x-gaia-ui"
 UI_HEADER_VALUE = "1"
 
+#: Sent by the Agent UI frontend itself, which talks to the flagship only.
+#: Other clients (eval harness, MCP bridge) may still pick any registered agent.
+CLIENT_HEADER_NAME = "x-gaia-client"
+AGENT_UI_CLIENT = "agent-ui"
+FLAGSHIP_AGENT_ID = "gaia"
+
 #: Path prefixes the guards apply to -- everything a client calls.
 GUARDED_PREFIXES = ("/api/", "/v1/")
 
@@ -178,13 +184,43 @@ def is_allowed_origin(origin: str, host_header: str, app) -> bool:
 def require_ui_header(request: Request) -> None:
     """Require ``X-Gaia-UI: 1`` -- the single copy of the route-level guard.
 
-    Kept as a dependency for the few *read* routes that opt into it
-    explicitly (``GET /api/agents/disk`` and friends). Every mutating
-    route is covered by :class:`UIRequestGuardMiddleware` whether or not
-    its decorator names this.
+    Kept as a dependency so a *read* route can opt into it explicitly.
+    Every mutating route is covered by :class:`UIRequestGuardMiddleware`
+    whether or not its decorator names this.
     """
     if request.headers.get(UI_HEADER_NAME) != UI_HEADER_VALUE:
         raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
+
+
+def flagship_only(
+    request: Request, agent_type: Optional[str], stored: Optional[str] = None
+) -> Optional[str]:
+    """Hold Agent UI requests to the flagship; return the agent type to use.
+
+    Requests from other clients pass through unchanged. From the Agent UI, a
+    requested non-flagship agent is a 422, and a chat stored under a retired
+    agent is a 409 that says to start a new chat -- never a silent reroute.
+    """
+    if request.headers.get(CLIENT_HEADER_NAME) != AGENT_UI_CLIENT:
+        return agent_type
+    if agent_type and agent_type != FLAGSHIP_AGENT_ID:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"The Agent UI runs the GAIA agent only; agent_type {agent_type!r} "
+                "is not available here. Use `gaia eval agent --agent-type` or the "
+                "CLI to run another agent."
+            ),
+        )
+    if stored is not None and stored != FLAGSHIP_AGENT_ID:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This chat was made with the retired {stored!r} agent, so it is "
+                "read-only. Start a new chat; GAIA covers what that agent did."
+            ),
+        )
+    return FLAGSHIP_AGENT_ID
 
 
 # ── Middleware ──────────────────────────────────────────────────────────────

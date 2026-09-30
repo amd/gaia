@@ -13,16 +13,21 @@ accessed through ``gaia.ui.server`` so that test patches applied to
 import asyncio
 import logging
 import sys
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
+from gaia.agents.base.tool_grants import grant_scope
+
+from .. import permissions as session_permissions
 from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import ChatRequest, ChatResponse
 from ..run_manager import run_manager
+from ..security import flagship_only
 from ..sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THOUGHT_JSON_SUB_RE,
@@ -79,6 +84,9 @@ async def send_message(
     session = db.get_session(request.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    request.agent_type = flagship_only(
+        http_request, request.agent_type, session.get("agent_type") or "chat"
+    )
 
     # ── Per-session lock ─────────────────────────────────────────────
     # setdefault is atomic: safe under concurrent requests for the same session
@@ -231,19 +239,25 @@ async def send_message(
 
 
 class ToolConfirmRequest(BaseModel):
-    """Request body for the tool confirmation endpoint."""
+    """Request body for the tool confirmation endpoint.
+
+    ``always`` answers "allow" and grants this exact invocation for the rest of
+    the chat (see ``gaia.agents.base.tool_grants``). ``confirm_id`` echoes the
+    prompt being answered, so a late click cannot approve a newer prompt.
+    """
 
     session_id: str
     approved: bool
+    always: bool = False
+    confirm_id: Optional[str] = None
 
 
 @router.post("/api/chat/confirm-tool")
 async def confirm_tool(request: ToolConfirmRequest):
-    """Respond to a tool confirmation prompt from the agent.
+    """Answer the tool confirmation the agent is blocked on.
 
-    The agent blocks in ``SSEOutputHandler.confirm_tool_execution()`` until
-    this endpoint is called.  The frontend triggers this when the user
-    clicks Allow or Deny on the PermissionPrompt overlay.
+    The agent waits in ``SSEOutputHandler.confirm_tool_execution()`` until this
+    endpoint resolves it with allow once, always allow in this chat, or deny.
     """
     from .._chat_helpers import _active_sse_handlers
 
@@ -253,8 +267,88 @@ async def confirm_tool(request: ToolConfirmRequest):
             status_code=404,
             detail="No active chat session found for this session ID",
         )
-    handler.resolve_tool_confirmation(request.approved)
-    return {"status": "ok", "approved": request.approved}
+    stale = HTTPException(
+        status_code=409,
+        detail="That permission prompt is no longer waiting for an answer.",
+    )
+    always = request.always and request.approved
+    pending_tool, pending_args = None, {}
+    if always:
+        with handler._confirm_lock:
+            live_id = handler._confirm_id
+            pending_tool = handler._confirm_tool
+            pending_args = handler._confirm_args or {}
+        # A late click must not grant whatever prompt replaced the one it answered.
+        if request.confirm_id is not None and request.confirm_id != live_id:
+            raise stale
+        if not pending_tool or grant_scope(pending_tool, pending_args) is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This call has no scope narrow enough to allow always; "
+                    "answer it with allow once or deny."
+                ),
+            )
+    delivered = handler.resolve_tool_confirmation(
+        request.approved, always=always, confirm_id=request.confirm_id
+    )
+    if not delivered:
+        raise stale
+    granted = None
+    if always:
+        # Only now: a prompt that expired meanwhile must not leave a grant behind.
+        granted = session_permissions.for_session(request.session_id).grant(
+            pending_tool, pending_args
+        )
+    return {"status": "ok", "approved": request.approved, "granted": granted}
+
+
+class PermissionModeRequest(BaseModel):
+    """``ask`` prompts for every gated tool; ``full_access`` runs them unasked."""
+
+    mode: str
+
+
+def _permissions_view(session_id: str) -> dict:
+    perms = session_permissions.for_session(session_id)
+    return {"session_id": session_id, "mode": perms.mode, "grants": perms.grants()}
+
+
+@router.get("/api/chat/permissions")
+async def list_permissions():
+    """Every chat with full access on or "always allow" grants, for Settings."""
+    return {
+        "sessions": [
+            {"session_id": sid, "mode": p.mode, "grants": p.grants()}
+            for sid, p in session_permissions.all_sessions().items()
+            if p.grants() or p.mode != session_permissions.MODE_ASK
+        ]
+    }
+
+
+@router.get("/api/chat/permissions/{session_id}")
+async def get_permissions(session_id: str):
+    """This chat's permission mode and its "always allow" grants."""
+    return _permissions_view(session_id)
+
+
+@router.put("/api/chat/permissions/{session_id}")
+async def set_permission_mode(session_id: str, body: PermissionModeRequest):
+    """Switch between ask and full access; applies to the next gated tool."""
+    try:
+        session_permissions.for_session(session_id).set_mode(body.mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _permissions_view(session_id)
+
+
+@router.delete("/api/chat/permissions/{session_id}/grants")
+async def revoke_grants(session_id: str, key: Optional[str] = None):
+    """Revoke one "always allow" grant (``?key=``), or all of them."""
+    removed = session_permissions.for_session(session_id).revoke(key)
+    if key is not None and removed == 0:
+        raise HTTPException(status_code=404, detail=f"No grant {key!r} in this chat.")
+    return _permissions_view(session_id)
 
 
 class UserInputRequest(BaseModel):
