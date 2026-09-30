@@ -1555,7 +1555,7 @@ them, and the status bar shows the one that is on:
 | Mode | What still asks |
 |---|---|
 | `ask` (default) | Every shell command, Python run and file write |
-| `accept edits` | Shell commands and Python. File edits inside the folder GAIA was started in run unasked, except under `.git/` or in a folder on `PATH` |
+| `accept edits` | Shell commands and Python. File edits inside the folder GAIA was started in run unasked, except hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on `PATH`, and on Windows a file that shadows a program. Never the home folder or a drive root |
 | `full access` | Nothing |
 
 Ways to turn full access on — each is deliberate:

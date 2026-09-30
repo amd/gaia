@@ -162,6 +162,8 @@ class TestCommandFamilies:
             ("python scratch.py", "python (any script)"),
             ("python -c 'print(1)'", "python -c (any inline Python)"),
             ("node build.js", "node (any script)"),
+            # -c after -m belongs to pytest (its ini file), not to python.
+            ("python -m pytest -c pytest.ini", "pytest"),
         ],
     )
     def test_interpreter_grants_say_they_cover_any_code(self, command, label):

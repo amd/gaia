@@ -240,7 +240,14 @@ def _family(argv: Tuple[str, ...]) -> Optional[str]:
     """The family one simple command belongs to, or None if it has none."""
     binary = binary_name(argv[0])
     if binary in PYTHON_BINARIES:
-        if "-c" in argv[1:]:
+        # Only the interpreter's own options: `python -m pytest -c pytest.ini`
+        # passes -c to pytest, not to python.
+        own = []
+        for token in argv[1:]:
+            if not token.startswith("-") or token == "-m":
+                break
+            own.append(token)
+        if "-c" in own:
             return "python -c (any inline Python)"
         argv = effective_argv(argv)
         binary = argv[0]

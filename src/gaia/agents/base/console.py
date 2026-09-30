@@ -165,10 +165,14 @@ def edit_is_inside(target: str, roots: Tuple[str, ...]) -> bool:
     write there would run code nobody approved.
 
     Never auto-accepted, even inside a workspace: anything under ``.git`` (a
-    hook or config runs on the next git command), a file in a folder on
-    ``PATH``, and on Windows a file cmd.exe would run in place of a real
-    program (``git.bat`` in the folder a command runs from).
+    hook or config runs on the next git command), any hidden file or folder
+    (``.bashrc``, ``.envrc``, ``.github/workflows`` run code on their own), a
+    file in a folder on ``PATH``, and on Windows a file cmd.exe would run in
+    place of a real program (``git.bat`` in the folder a command runs from).
+    A home folder or drive root is never a workspace: started there, every
+    file the user owns would be "inside".
     """
+    roots = tuple(r for r in roots if not _too_broad_to_be_a_workspace(r))
     if not roots:
         return False
     try:
@@ -189,11 +193,20 @@ def edit_is_inside(target: str, roots: Tuple[str, ...]) -> bool:
         try:
             if os.path.commonpath(
                 [os.path.normcase(real_root), os.path.normcase(resolved)]
-            ) == os.path.normcase(real_root):
-                return True
+            ) != os.path.normcase(real_root):
+                continue
         except ValueError:
             continue  # different drives on Windows
+        inside = os.path.relpath(resolved, real_root).replace("\\", "/").split("/")
+        return not any(part.startswith(".") and part != "." for part in inside)
     return False
+
+
+def _too_broad_to_be_a_workspace(root: str) -> bool:
+    """A home folder or a drive root holds everything the user owns."""
+    real = os.path.normcase(os.path.realpath(root))
+    home = os.path.normcase(os.path.realpath(os.path.expanduser("~")))
+    return real == home or os.path.dirname(real) == real
 
 
 def _shadows_a_program(path: str) -> bool:

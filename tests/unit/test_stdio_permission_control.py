@@ -684,3 +684,28 @@ def test_a_file_that_would_shadow_a_program_is_never_auto_accepted(
     assert not console.edit_is_inside(str(tmp_path / "git.bat"), (str(tmp_path),))
     assert console.edit_is_inside(str(tmp_path / "notes.bat"), (str(tmp_path),))
     assert console.edit_is_inside(str(tmp_path / "git.py"), (str(tmp_path),))
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [".bashrc", ".envrc", ".github/workflows/ci.yml", "src/.hidden/x.py"],
+)
+def test_a_hidden_file_inside_the_workspace_still_asks(tmp_path, relative):
+    """Dotfiles run code on their own (shell rc, direnv, CI) — like .git."""
+    from gaia.agents.base.console import edit_is_inside
+
+    assert not edit_is_inside(str(tmp_path / relative), (str(tmp_path),))
+    assert edit_is_inside(str(tmp_path / "src" / "app.py"), (str(tmp_path),))
+
+
+def test_a_home_folder_or_drive_root_is_never_a_workspace(tmp_path, monkeypatch):
+    """Started from ~, every file the user owns would count as "inside"."""
+    import os
+
+    from gaia.agents.base.console import edit_is_inside
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    assert not edit_is_inside(str(tmp_path / "notes.md"), (str(tmp_path),))
+    root = os.path.abspath(os.sep)
+    assert not edit_is_inside(os.path.join(root, "notes.md"), (root,))
