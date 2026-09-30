@@ -213,7 +213,8 @@ jobs:
     runs-on:
       - self-hosted
       - Windows
-      - ${{ (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }}
+      - xsj-dispatch
+      - ryzen-ai
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:

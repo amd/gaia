@@ -200,7 +200,8 @@ jobs:
     runs-on:
       - self-hosted
       - Windows
-      - ${{ 'stx' }}
+      - xsj-dispatch
+      - ryzen-ai
     strategy:
       fail-fast: false
       max-parallel: 1

@@ -81,7 +81,8 @@ jobs:
     runs-on:
       - self-hosted
       - Windows
-      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+      - xsj-dispatch
+      - ryzen-ai
     # Bound a wedged model pull/load — the LemonadeClient pull timeout alone
     # is 200 min; don't let one hold the self-hosted runner for the 6h default.
     timeout-minutes: 60
