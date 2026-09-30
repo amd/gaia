@@ -81,6 +81,14 @@ class AgentRun:
     conversation: List[Dict[str, Any]] = field(default_factory=list)
 
 
+#: Runs the child in the task checkout without that checkout on its import
+#: path, so a task repo GAIA also imports (``requests``) cannot replace GAIA's.
+CHILD_BOOTSTRAP = (
+    "import runpy, sys; sys.path.pop(0); "
+    "runpy.run_module('gaia.eval.bench.gaia_child', run_name='__main__')"
+)
+
+
 def toolchain_dir() -> str:
     """The interpreter's own bin directory: pytest and the project's tools."""
     return str(Path(sys.executable).parent)
@@ -225,9 +233,7 @@ def run_gaia(
     env["PYTHONPATH"] = os.pathsep.join(
         [*import_roots(), *filter(None, [env.get("PYTHONPATH")])]
     )
-    cmd = _fenced(
-        [sys.executable, "-m", "gaia.eval.bench.gaia_child", str(spec_path)], conditions
-    )
+    cmd = _fenced([sys.executable, "-c", CHILD_BOOTSTRAP, str(spec_path)], conditions)
     started = time.time()
     code, timed_out = launch(
         cmd,

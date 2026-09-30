@@ -310,3 +310,31 @@ def test_the_gaia_child_records_where_the_turn_first_answered(tmp_path):
         "tool",
     ]
     assert agent._turn_scope.answered
+
+
+def test_a_task_repository_cannot_replace_a_package_gaia_imports(tmp_path):
+    """SWE-bench's psf/requests checkout shadowed GAIA's own requests."""
+    import os
+    import subprocess
+    import sys
+
+    shadow = tmp_path / "requests"
+    shadow.mkdir()
+    marker = tmp_path / "shadow-imported"
+    (shadow / "__init__.py").write_text(
+        f"open({str(marker)!r}, 'w').close()\nraise ImportError('task repo')\n",
+        encoding="utf-8",
+    )
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(harness.import_roots()))
+    proc = subprocess.run(
+        [sys.executable, "-c", harness.CHILD_BOOTSTRAP],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    # No spec argument: the child prints its usage and exits 2 once imported.
+    assert proc.returncode == 2, proc.stderr[-2000:]
+    assert "usage" in proc.stderr
+    assert not marker.exists()
