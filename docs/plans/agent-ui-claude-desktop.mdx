@@ -1,0 +1,172 @@
+---
+title: "Agent UI: one simple chat app"
+description: "Research and decisions behind the Agent UI redesign modelled on the Claude Code desktop app: one agent, one conversation column, first-run setup in the app, and parity with the TUI."
+---
+
+**The Agent UI is now one chat app for the GAIA agent.** Before this redesign it opened on an
+Agent Hub with agent cards, app and component lanes, a custom-agent template tile and four
+marketing tiles, and a new user who had not run `gaia init` got a banner telling them to run
+it. Now it opens straight to an empty chat, sets itself up on first run with the same steps
+as the TUI, and keeps GAIA's own strengths (local-first inference, AMD hardware, memory,
+documents, skills, schedules, connectors, mobile access) one quiet click away.
+
+This page records what the reference apps do, what GAIA takes from them, what every existing
+screen became, and where the Agent UI stands against the TUI.
+
+## 1. What the reference apps do
+
+The interaction model comes from the **Claude Code desktop app** (the Code tab of Claude
+Desktop, and Claude Code on the web). Claude Desktop's chat surface, which shares its design,
+filled in details the Code docs leave out. GAIA reproduces the layout and interaction model
+only; it uses its own name, mark and design tokens.
+
+| Area | What the reference does | Source |
+|---|---|---|
+| Sidebar | Sessions list with a **New session** button (Ctrl/Cmd+N); filters by status or project; collapsible | [Claude Code desktop](https://code.claude.com/docs/en/desktop), [redesign post](https://claude.com/blog/claude-code-desktop-redesign) |
+| Conversation | One transcript; tool calls collapse into one-line summaries (e.g. "Ran 4 commands") that expand on click; text between tool calls stays visible | [desktop docs](https://code.claude.com/docs/en/desktop), [anthropics/claude-code#96497](https://github.com/anthropics/claude-code/issues/96497) |
+| Column width | About a 48rem (768px) reading column in the chat app | [motgenror/claude-css](https://github.com/motgenror/claude-css) (override stylesheet, inferred) |
+| Composer | One box at the bottom: **+** for attachments, a permission-mode selector and a model selector next to Send, Stop while running, Esc to stop | [desktop quickstart](https://code.claude.com/docs/en/desktop-quickstart), [model settings](https://support.claude.com/en/articles/8664678-change-the-model-effort-and-thinking-settings) |
+| Permission modes | Manual (ask), Accept edits, Plan, Auto, Bypass; bypass must be enabled in Settings first | [permission modes](https://code.claude.com/docs/en/permission-modes) |
+| Permission prompts | Inline in the transcript: **Allow once**, **Always allow**, **Deny**; approvals revocable in Settings | [desktop docs](https://code.claude.com/docs/en/desktop), [anthropics/claude-ai-mcp#1081](https://github.com/anthropics/claude-ai-mcp/issues/1081) |
+| Settings | One window with a section list: General, Profile, Capabilities, Appearance (Light / Dark / Match system), Connectors, Extensions, Developer | [appearance](https://support.claude.com/en/articles/8887527-customizing-your-appearance-settings), [connectors](https://support.claude.com/en/articles/11176164-use-connectors-to-extend-claude-s-capabilities) |
+| Palette | Near-monochrome with one accent; light, dark and high-contrast | [anthropics/claude-code#79305](https://github.com/anthropics/claude-code/issues/79305) (issue, not a spec) |
+| Shortcuts | Cmd+/ lists shortcuts; New session; Esc stops; Ctrl+O cycles transcript views; Cmd+Shift+M opens the mode menu | [desktop docs](https://code.claude.com/docs/en/desktop); chat-app shortcuts (Ctrl+K search, Ctrl+Shift+O new chat) from [fastshortcuts](https://fastshortcuts.com/shortcuts/claude/) (third party) |
+
+Uncertain and therefore not copied: exact colour values, fonts, composer radius, and the
+wording of thinking rows. None are needed for the interaction model.
+
+## 2. What GAIA takes
+
+- **Opens to an empty chat.** The composer, a small location and model indicator, and the
+  placeholder "Ask GAIA anything". No tagline, hero, tiles, version banner or promotional text.
+- **A quiet sidebar.** New chat, search, Memory, Scheduled tasks, Documents, then chats grouped
+  by recency (Today, Yesterday, Previous 7 days, Previous 30 days, Older). At the foot: where
+  inference runs ("Local · Gemma-4-E4B-it-GGUF" or "Fireworks AI · glm-5p3-flash"),
+  notifications, mobile access and Settings.
+- **One centred column** of about 760px for the transcript and the composer. Assistant text sits
+  on the page; the user's turn is a quiet bubble on the right. Tool steps are the existing
+  collapsible activity summary.
+- **A composer with inline controls:** **+** attaches files, the shield chip picks the permission
+  mode, the model chip picks the model (and shows local vs cloud), Send becomes Stop while running.
+- **Permission prompts inline**, above the composer: Allow once, Always allow *this exact call* in
+  this chat (only when the call has a scope narrow enough to describe), Deny — the TUI's choices.
+- **Settings in one window** with a section list: General, Model, Permissions, Skills,
+  Connectors, Memory, Privacy, Advanced.
+- **Near-neutral palette.** The Agent UI's light theme moved from porcelain/stone to a white
+  canvas with faintly cool greys; dark stays the shared graphite. The copper accent and the status
+  hues are unchanged, so the TUI and website ([design language](/spec/gaia-design-language)) are
+  untouched.
+
+## 3. GAIA's differentiators, and where each lives now
+
+| Differentiator (from the guides and roadmap) | Where it lives in the new UI |
+|---|---|
+| Local and private by default | Location indicator in the sidebar foot and on the model chip; the privacy note appears before the first switch to a cloud model; Settings → Privacy says where data goes right now |
+| AMD hardware awareness (NPU / GPU / CPU) | Setup shows this PC's memory, GPU, NPU and free disk; Settings → Model → Local picks the device for new chats; Settings → Advanced shows the running model, device, context and memory |
+| Cloud when chosen (Fireworks AI, AMD LLM Gateway) | Settings → Model: provider tabs, masked key entry, "key already configured", Forget key, ranked models with their measured evidence |
+| Memory, the second brain | Sidebar → Memory (the full dashboard: view, search, edit, forget); Settings → Memory for on/off; the eye icon in a chat makes it private |
+| Documents on this machine (RAG) | Sidebar → Documents (library and indexing); **+** in the composer and drag-and-drop attach files; the folder icon in a chat browses and indexes local files; indexed documents show above the transcript |
+| Skills | Settings → Skills lists what GAIA can load, with "Use in a new chat" |
+| Scheduled / autonomous tasks | Sidebar → Scheduled tasks (they now run the GAIA agent) |
+| Connectors and MCP | Settings → Connectors (Google, Microsoft, GitHub, MCP servers, per-agent grants); MCP server status in Settings → Advanced |
+| Mobile access tunnel | Phone icon in the sidebar foot (desktop widths) |
+| Voice | Not in the web UI today (it never was); `gaia talk` in a terminal. Tracked as a follow-up rather than built here |
+
+## 4. Every screen and feature, and what it became
+
+| Before | Status | Now |
+|---|---|---|
+| Welcome screen (typed headline, Private/Fast/Smart/Free tiles, version badge) | **Removed** | Empty chat. Marketing copy and fake typing contradicted the design language |
+| Agent Hub (agent/app/component/skill lanes, cards, detail modal, trust gate, install/uninstall) | **Removed** | The UI runs one agent. Deep-link installs from the website still work through the Electron main process |
+| "Build a Custom Agent Template" tile and builder chat | **Removed** | `gaia agent init` / the BuilderAgent from the CLI |
+| Agent picker in the composer, agent-grouped history, agent chips | **Removed** | Every new chat runs `gaia`; older `chat`/`doc`/`file` chats open read-only with a clear note |
+| Settings → Custom Agents (export/import) | **Removed** | `gaia agent export` / `gaia agent import` |
+| First-run wizard (welcome → hardware → model download → connector → done, gated on a marker file) | **Merged** | Setup screen driven by `gaia init --check`, shown only when setup is actually needed |
+| Permission modal with "remember for this chat" checkbox (client-side grant by tool name) | **Merged** | Inline prompt; grants are server-side and scoped to one call |
+| Settings → Tools & Permissions (client grants) | **Merged** | Settings → Permissions (server grants, full-access state, revoke) |
+| Settings page (one long scroll) | **Merged** | Settings window with sections |
+| Active model override (free text) | **Kept** | Settings → Advanced → Custom model ID |
+| Context size, dynamic tools, model server status, MCP server status, version and roll back | **Kept** | Settings → Advanced |
+| Connectors and grants | **Kept** | Settings → Connectors |
+| Memory dashboard | **Kept** | Sidebar → Memory (loaded on first open) |
+| Scheduled tasks | **Kept** | Sidebar → Scheduled tasks |
+| Document library, file browser | **Kept** | Sidebar → Documents; folder icon in a chat |
+| Notifications | **Kept** | Bell in the sidebar foot |
+| Mobile access | **Kept** | Phone icon in the sidebar foot |
+| Private chat, rename, export | **Kept** | Chat header |
+| Theme toggle in the sidebar | **Merged** | Settings → General: Light, Dark, Match system |
+| "Refresh dashboard" header button (sent the literal text `dashboard:refresh` to the agent) | **Removed** | Nothing handled it |
+| Unused Agent Manager, Agent Terminal, Agent Chat, install dialogs, agent/terminal/audit/system stores | **Removed** | They were no longer rendered anywhere |
+
+## 5. Parity with the TUI
+
+| TUI capability | Agent UI | Notes |
+|---|---|---|
+| First-run setup as steps: install the local model server, download the models, check they load | **Implemented** | Same `gaia init --check` and `gaia init --profile gaia --yes`; a cloud choice passes `--skip-chat-model` |
+| Starts GAIA's daemon, which owns the embedded Lemonade | **Implemented** | The backend calls `ensure_daemon_owns_lemonade()` at startup, like the CLI |
+| Providers: Local, Fireworks AI, AMD LLM Gateway | **Implemented** | Same Lemonade calls (`/install`, `/cloud/auth`, `/system-info`, `/models`) |
+| Ranked Fireworks models with measured evidence | **Implemented** | `gaia.llm.recommended_models` mirrors `RecommendedModels`; a test fails if they drift |
+| Masked key entry, "already configured", forget key | **Implemented** | Keys go only to local Lemonade and the OS credential store (`gaia.llm.cloud_keys`), refused over the mobile tunnel and to a non-local Lemonade |
+| Key kept across restarts and handed back to Lemonade | **Implemented** | Same credential-store slots as the TUI; replayed when the model settings open |
+| Last model remembered and restored with a one-line notice | **Implemented** | Same `last_provider` / `last_model` in `config.json`; never quietly runs a different model |
+| Model search and list | **Implemented** | Settings → Model and the model chip |
+| Local model download with progress | **Implemented** | Existing `/api/system/download-model` progress |
+| Fit check for local models | **Partial** | Setup shows memory/disk/GPU/NPU and blockers; the per-model fit check waits on #4479 |
+| Permission modes ask / full access | **Implemented** | Per chat, from the shield chip; full access needs a confirming click; `full_access` in `config.json` sets the default |
+| Accept edits mode and Shift+Tab cycle | **Out of scope** | Not on `main` in the TUI either (PR #4461); add both together when it lands |
+| "Always allow" for the session, list and revoke | **Implemented** | Invocation-scoped (`tool_grants.grant_scope`); the TUI has no list/revoke yet, so the UI goes one step further |
+| Context size | **Implemented** | Settings → Advanced |
+| Memory on/off | **Implemented** | Settings → Memory (not in the TUI) |
+| Privacy notice for cloud providers | **Implemented** | Same wording as the TUI |
+| `/clear`, `/cost`, `/slack`, `/gateway` screen | **Out of scope** | A new chat replaces `/clear`; cost and Slack stay TUI/CLI features |
+| Claude as the model (`--use-claude`) | **Out of scope** | Not a provider in the Agent UI backend |
+
+## 6. Backend changes
+
+- **Added:** `/api/setup/{check,run,status,cancel}`, `/api/providers` (+ `/active`, `/{p}/connect`,
+  `/{p}/key`, `/{p}/models`, `/select`), `/api/chat/permissions` (+ `/{session}` GET/PUT and
+  `/{session}/grants` DELETE), `/api/skills`. `POST /api/chat/confirm-tool` accepts `always` and
+  `confirm_id`.
+- **Removed:** `/api/agents/disk`, `/api/agents/export`, `/api/agents/import`,
+  `/api/agents/{id}` (GET), `/api/agents/{id}/{rollback,config,health,status}`,
+  `/api/agents/setup`, `/api/agents/setup-status`, `/api/onboarding/{status,complete}`.
+  The catalog/install routes stay for the Electron deep-link install; `GET /api/agents` stays for
+  connector grants and the eval harness.
+- **Flagship only from the UI:** requests carrying `X-Gaia-Client: agent-ui` may only create or
+  continue `gaia` chats. The eval harness and CLI, which do not send it, can still pick any agent.
+- **Scheduled and autonomous runs** use the GAIA agent instead of ChatAgent.
+
+## 7. Verification on a fresh `GAIA_HOME`
+
+Run in a browser against `python -m gaia.ui.server` with empty `GAIA_HOME` and
+`GAIA_CONFIG_DIR`, the embedded Lemonade, and a null keyring backend.
+
+| Flow | Result |
+|---|---|
+| First run: setup shown only because setup is needed, steps run with progress, "GAIA is ready", no "run `gaia init`" banner | Pass |
+| New chat, local model (Gemma-4-E4B-it-GGUF on the embedded Lemonade) | Pass |
+| Permission prompt inline in ask mode; "Always allow `write_file on perm-test.txt`" recorded server-side and listed in Settings → Permissions | Pass |
+| Full access from the shield (confirm click), applied to the new chat; gated tool ran without a prompt | Pass |
+| Memory: stored "favourite colour is teal", backend restarted, recalled in a new chat | Pass |
+| Document Q&A on a PDF (planted code `AMBER-7731` answered with page citation) | Pass |
+| Skill load from Settings → Skills (`summarize`) | Pass |
+| Scheduled task created from the sidebar | Pass |
+| Model switch to Qwen3-30B-A3B, remembered, "Restored your last model." after restart | Pass |
+| Unrestorable last model (Fireworks, no key): one-line notice, no silent switch | Pass |
+| Fireworks with a fake key: clear "did not accept that key" error, dud key not left behind | Pass |
+| Cloud model conversation | Not run: no Fireworks key on the test machine |
+| Connectors, Documents, Memory dashboard, Advanced settings open and load | Pass |
+| Light and dark themes; 400px wide window (drawer sidebar, composer fits) | Pass |
+
+![Before: Agent Hub home](/assets/img/agent-ui-redesign/before-home.jpg)
+![After: empty chat](/assets/img/agent-ui-redesign/after-home-light.jpg)
+![First-run setup](/assets/img/agent-ui-redesign/after-setup-progress.jpg)
+![Inline permission prompt](/assets/img/agent-ui-redesign/after-permission-prompt.jpg)
+![Settings → Model](/assets/img/agent-ui-redesign/after-settings-model.jpg)
+![Document Q&A and memory, dark](/assets/img/agent-ui-redesign/after-rag-memory-dark.jpg)
+
+## 8. Open follow-ups
+
+- Voice input in the web UI.
+- Accept-edits mode once PR #4461 lands, in both clients together.
+- Per-model fit check once #4479 lands.
