@@ -214,7 +214,7 @@ jobs:
       - self-hosted
       - Windows
       - xsj-dispatch
-      - ryzen-ai
+      - strix-point
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
