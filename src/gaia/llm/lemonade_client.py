@@ -11,6 +11,7 @@ OpenAI-compatible API and additional functionality.
 import json
 import logging
 import os
+import platform
 import signal
 import socket
 import subprocess
@@ -279,6 +280,20 @@ DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 # checkpoint + recipe + the ``embedding`` label (see MODELS entry).
 DEFAULT_EMBEDDING_MODEL = "user.embeddinggemma-300m-GGUF"
 DEFAULT_EMBEDDING_CHECKPOINT = "ggml-org/embeddinggemma-300M-GGUF:Q8_0"
+
+#: llama.cpp's Vulkan cooperative-matrix path crashes llama-server as it loads
+#: an embedding model on AMD Radeon iGPUs (#1831). The embedder is small, so it
+#: runs on the CPU backend and chat models keep the fast GPU path.
+CPU_BACKEND_MODELS = frozenset(
+    {DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_MODEL.removeprefix("user.")}
+)
+
+
+def llamacpp_backend_for(model_name: Optional[str]) -> Optional[str]:
+    """The llama.cpp backend *model_name* must load on, or None for the default."""
+    if platform.system() == "Darwin" or model_name not in CPU_BACKEND_MODELS:
+        return None
+    return "cpu"
 
 
 def cloud_model_provider(
@@ -1070,14 +1085,12 @@ def backend_crash_remedy(model: str) -> str:
     return (
         f"Lemonade is running, but llama.cpp exited while loading '{model}'. "
         "On an AMD Radeon GPU with the Vulkan backend, the likely cause is "
-        "llama.cpp's cooperative-matrix crash: Lemonade must start with "
-        "GGML_VK_DISABLE_COOPMAT=1. GAIA sets it on servers it starts, so run "
-        "`gaia lemonade embedded stop`, then `gaia lemonade embedded start`. "
-        "A Lemonade you run yourself needs it set before it starts (for the "
-        "systemd service: `systemctl --user edit lemond`, add "
-        "`Environment=GGML_VK_DISABLE_COOPMAT=1` under [Service], then "
-        "`systemctl --user restart lemond`). Otherwise, Lemonade's server log "
-        "has llama-server's own output."
+        "llama.cpp's cooperative-matrix crash. GAIA loads its embedding model on "
+        "the CPU backend to avoid it: run `gaia lemonade embedded stop`, then "
+        "`gaia lemonade embedded start`, so GAIA's server picks that up. For "
+        "another model, load it with llamacpp_backend=cpu, or start Lemonade "
+        "with GGML_VK_DISABLE_COOPMAT=1 (every model then runs slower). "
+        "Otherwise, Lemonade's server log has llama-server's own output."
     )
 
 
@@ -4633,6 +4646,9 @@ class LemonadeClient:
         self.log.debug(f"Loading {model_name}")
 
         request_data = {"model_name": model_name}
+        backend = llamacpp_backend_for(model_name)
+        if backend:
+            request_data["llamacpp_backend"] = backend
         if llamacpp_args:
             request_data["llamacpp_args"] = llamacpp_args
         if ctx_size is not None:
