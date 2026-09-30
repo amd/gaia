@@ -1,31 +1,33 @@
 ---
-title: "Email Integration (API)"
-description: "Embed the GAIA Email Triage agent in your own app as a local, on-device processing component — over REST or MCP."
+title: "Email Triage Agent (retired)"
+description: "Reference for the retired standalone Email Triage Agent — its REST/MCP integration contract, tools, and setup. Kept so existing installs are not stranded."
 icon: "plug"
 ---
 
-# Integrating the Email Triage Agent over the API
+# Email Triage Agent (retired)
 
-This guide is for developers building an application that **owns the user-facing
-experience and the mailbox connection**, and wants GAIA's Email Triage agent as a
-**local, on-device processing component** — every email body analyzed on the
-user's machine via Lemonade, never sent to a cloud LLM.
+**The standalone Email Triage Agent is a retired development target.** It is not
+fixed, released, or evolved, and it is **not** the agent you reach by asking GAIA
+about your mail — that is the flagship agent, documented at
+[Email](/guides/email). This page is kept because the hub package
+(`gaia-agent-email`, `@amd-gaia/agent-email`, the `gaia email` CLI) is still
+installable, so nobody already running it is stranded.
 
-<Note>
-  **Not building an integration?** If you just want to triage your own Gmail/Outlook
-  from GAIA's chat, the Agent UI, or `gaia email`, read [Email Triage](/guides/email)
-  instead. That guide covers the flow where **GAIA owns the UX and the connection**.
-  This guide covers the flow where **your app does**.
-</Note>
+**Reading about mail for the first time?** Go to [Email](/guides/email). Nothing on
+this page describes the flagship's behaviour.
 
-## When to use this guide
+## What this page still covers
 
-| Your situation | Read |
-|---|---|
-| You want to triage your inbox from GAIA's chat / Agent UI / CLI | [Email Triage](/guides/email) |
-| You're embedding the agent in **your** app, which owns the mailbox UX and OAuth | **This guide** |
+Two audiences, both on the retired agent:
 
-Use this integration path when you want:
+- **Integrators** embedding it in their own app as a local, on-device processing
+  component — every email body analyzed on the user's machine via Lemonade, never
+  sent to a cloud LLM. That is the REST/MCP contract below.
+- **Existing users** of `gaia email` and the Agent UI's Email Triage picker entry —
+  their setup, tools, and troubleshooting are in
+  [The retired agent in detail](#the-retired-agent-in-detail) at the end.
+
+The integration path gives you:
 
 - **Local inference** — email bodies are classified and summarized on-device by
   Lemonade. There is no configuration path that routes email content to a cloud LLM;
@@ -628,8 +630,625 @@ Tools exposed: `triage_email`, `triage_email_batch`, `draft_reply`, `send_email`
   tenant. Phishing quarantine is **Gmail-only** (an Outlook mailbox is refused with
   **400**, because its label-based undo can't reverse Outlook's folder move).
 
+---
+
+## The retired agent in detail
+
+<Warning>
+**None of the tools, flags, endpoints, or behaviour in this section exist on the
+flagship agent.** For the mail surface you actually get today, see
+[the flagship's action surface](/guides/email#action-surface).
+</Warning>
+
+### What the retired agent does
+
+- **Triage your inbox** — classify every message into one of five buckets — `URGENT`, `NEEDS_RESPONSE`, `FYI`, `PROMOTIONAL`, or `PERSONAL` — with a `suggested_action` verb (`reply` / `archive` / `none`) and separate `is_spam` and `is_phishing` flags.
+- **Follow-up tracking** — flag the mail you *sent* that never got a reply after a configurable window (default 3 days). Detection only — the agent never sends a nudge on its own.
+- **Capture action items as tasks** — action items extracted during triage persist to a local task list, each linked back to its source message and de-duplicated so re-triaging never duplicates a task.
+- **Find past mail** — search your mailbox with keyword or Gmail-syntax queries (`from:alice is:unread newer_than:7d`). Ask in chat (the `search_messages` tool) or call it from a consuming app via `POST /v1/email/search` on the REST contract; results carry metadata only (id, sender, subject, date, snippet) — never message bodies.
+- **Organize** — archive, label, mark read/unread, star/unstar. Reversible via the per-action undo log.
+- **Soft-delete with undo** — `trash_message` moves a message to Trash. `restore_message` is a fast undo path within a short window right after trashing; `restore_trashed_message` (with `search_trash` to find the message) works any time the message is still in Trash — no window, no id required. There is no permanent-delete: GAIA never requests the Gmail scope that would allow it.
+- **Draft + confirmed send** — generate replies (`draft_reply`) and forwards (`draft_forward`); `send_draft` and `send_now` require explicit user confirmation — the UI's permission dialog or a terminal prompt on the CLI — and are refused outright when there is nobody to ask.
+- **Attachments** — reading a message exposes each attachment's name, type, and size, and `draft_reply` / `send_now` accept local file paths to attach (contract schema 2.2, #1542).
+- **Voice-matched drafting** — learn your writing style from your Sent mail (`build_voice_profile`) so drafts sound like you; the style profile is derived and stored locally, nothing leaves the device.
+- **Calendar** — list events, accept/decline invites, create events from email content (all calendar mutations gated by user confirmation).
+
+### Setup (retired agent)
+
+The retired agent needs its own grant, under `installed:email`, and the broader
+Gmail + Calendar scopes the flagship deliberately never asks for. Configure the OAuth
+client as in [Step 1](/guides/email#setup) above — and enable the **Calendar
+API** on that Cloud project as well as the Gmail API, or the first calendar call 403s
+([#2116](https://github.com/amd/gaia/issues/2116)) — then:
+
+<Tabs>
+  <Tab title="Agent UI">
+    1. Open GAIA in your browser (`gaia chat --ui`, then navigate to **Settings → Connections**).
+    2. Find the **Google** connector and click **Connect**.
+    3. Complete the Google OAuth consent screen — grant all requested scopes:
+       - `gmail.modify` — read and modify messages (archive / label / trash)
+       - `gmail.send` — send drafts on your behalf
+       - `calendar.events` / `calendar.readonly` — read and update calendar events
+    4. After approval, the browser redirects back and the connector shows as **Connected**.
+
+    The Agent UI's **Connect** / **Reconnect** flow grants the Email Triage agent these scopes for you, so no separate grant step is needed here.
+
+    If you have an existing Google connection that predates GAIA v0.23, click **Reconnect** to grant the additional Gmail and Calendar scopes.
+  </Tab>
+  <Tab title="CLI (developer flow)">
+    **Sign in and grant the email agent in one command.**
+    `--grant-agent installed:email` alone is enough — GAIA reads the scopes
+    the email agent already declares and authorizes + grants them in the
+    same flow, so there's no `--scopes` list to type out or keep in sync:
+
+    ```bash
+    gaia connectors connect google --grant-agent installed:email
+    ```
+
+    The command prints an authorization URL. Open it in a browser **on the
+    machine running GAIA** (the sign-in completes via a `127.0.0.1` callback on
+    that box; on a remote/headless host, open it there or forward the callback
+    port over SSH), complete the OAuth consent screen granting every requested
+    scope, and the flow finishes.
+
+    <Note>
+    Want a narrower grant instead? Pass `--scopes` explicitly — but note it
+    does **not** union with the provider's default scopes, so a hand-typed
+    list that omits `openid` can still connect while resolving to `Connected
+    as default` instead of your real address. Prefer two explicit steps
+    instead of the combined flow? Run `gaia connectors connect google
+    --scopes …` first (authorize), then `gaia connectors grants grant google
+    installed:email --scopes …` (grant) with a matching list — `--grant-agent`
+    just runs both steps together and derives the scopes for you. See the
+    [Google connector guide's scope
+    table](/connectors/google#declare-scopes-under-data-access) for what each
+    scope buys.
+    </Note>
+
+    Skip this and the first email tool call fails with
+    `AGENT_NOT_GRANTED` — see [Retired-agent troubleshooting](#retired-agent-troubleshooting).
+    This explicit grant step is required until [#2117](https://github.com/amd/gaia/issues/2117) lands.
+
+    If you connected Google before GAIA v0.23, re-run `gaia connectors connect google --scopes …` with the full list to trigger a fresh consent screen with the updated scopes.
+  </Tab>
+</Tabs>
+
+### Starting the retired agent
+
+`gaia email` drives the retired hub agent — it is not how you use mail on the flagship.
+
+Email-body inference runs on your local Lemonade instance, which `gaia daemon` starts and supervises — you don't launch it yourself. If Lemonade isn't installed yet, `gaia init` installs it and pulls the model. The agent **rejects** any non-local LLM endpoint at startup — there is no path through configuration to route email content to a cloud LLM.
+
+<Tabs>
+  <Tab title="Agent UI">
+    Select **Email Triage** from the agent picker in the Agent UI and type your request in the chat input, for example:
+
+    - *Triage my inbox*
+    - *Summarize my unread emails from this week*
+    - *Archive all newsletters from the last month*
+
+    Destructive actions (send, delete, calendar mutations) show a confirmation dialog before executing.
+  </Tab>
+  <Tab title="CLI">
+    ```bash
+    gaia email -q "Triage my inbox"
+    gaia email -q "Summarize my unread emails from this week"
+    gaia email -i  # interactive mode
+    ```
+  </Tab>
+</Tabs>
+
+### CLI reference (retired agent)
+
+| Flag | Description |
+|---|---|
+| `-q, --query <text>` | One-shot query. Print result and exit. |
+| `-i, --interactive` | REPL loop. Type queries until `/quit`. |
+| `-v, --verbose` | Emit structured logs for every triage decision and tool call. Recommended when benchmarking against other email agents. |
+| `--debug` | Adds full prompt + LLM-response logging to verbose. Sensitive payloads in logs — use with care. |
+| `--trace` | Write the run's request and full event stream (every `status` / `tool_call` / `tool_result` / `final`) to `./email_trace_<timestamp>_<run-id>.json` in the current directory. The path is echoed on stderr. Interactive mode writes one file per turn. |
+
+<Note>
+  A trace contains the query, the agent's answer, and every tool argument and
+  result — i.e. real email content. It stays on your machine, but treat the file
+  like an inbox export before attaching it to a bug report.
+</Note>
+
+### Daily-driver pre-scan (Agent UI)
+
+The Agent UI rendering of Email Triage is built around a **pre-scan** view — a structured triage card that surfaces what's worth your attention without making you read prose. Open Agent UI, pick **Email Triage** from the agent picker, and click the **"Run a pre-scan"** conversation starter (or just type it).
+
+The card shows three sections:
+
+- **Urgent** — messages that need your attention right now (top 5).
+- **Needs a response** — messages requiring a reply or decision (top 5).
+- **Suggested archives** — low-priority messages the agent recommends archiving (top 10).
+
+Plus an **informational count** for the rest, so you know how much you're not seeing.
+
+Each row carries inline action buttons:
+
+- **Reply / Archive** (primary) — Reply for urgent + needs-a-response rows; Archive for suggested-archive rows. Clicking dispatches the corresponding tool call back through the chat (with confirmation when the action requires it).
+- **Open** — open the message in Gmail in a new tab.
+- **Dismiss** — remove the row from the visible card without affecting Gmail.
+
+If you haven't connected Google yet, the agent surfaces a one-click **Connect Google** button inline in the chat — no need to navigate to Settings → Connections manually.
+
+<Note>
+This is the **Agent UI** rendering of the pre-scan envelope. The terminal
+client (`tui/`) renders the same `email_pre_scan` data differently: one
+`needs_you` worklist (up to 5 rows, each tagged REPLY/DECIDE/CHECK/DO) plus a
+`bulk` line naming the test that filtered the rest, instead of the three
+sections above — see [`tui/README.md`](https://github.com/amd/gaia/blob/main/tui/README.md)
+for that surface. Both clients read the same contract; only the layout differs.
+</Note>
+
+#### Classification preferences (persist across restarts)
+
+Tell the agent how you want classification to behave:
+
+- *"Treat boss@company.com as urgent"* → calls `set_priority_sender`. That sender bypasses the heuristic and lands in **Urgent**.
+- *"Treat newsletter@stripe.com as low priority"* → calls `set_low_priority_sender`. That sender lands in **Suggested archives**.
+- *"Default promotional mail to archive"* → calls `set_category_default("PROMOTIONAL", "archive")`. `set_category_default` supports the `FYI` and `PROMOTIONAL` categories (action `archive` or `keep`); the corresponding items lift into **Suggested archives** until you reset.
+- *"Clear my preferences"* → calls `clear_session_preferences`.
+
+Preferences are snapshotted to the agent's on-device MemoryStore on every change and re-seeded on the next start, so they **survive restarts** (and quitting Agent UI). When memory is disabled the tools still work in-process — they just can't persist between sessions. Nothing leaves the device.
+
+#### Behavioral learning (auto-promotion)
+
+Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across every connected mailbox (Gmail, personal Outlook, and work Microsoft 365).
+
+#### Turning memory on or off
+
+All of the personalization above — inbox profiling, behavioral auto-promotion, and preference persistence — depends on the agent's memory. Memory is **on by default**; you can turn it off so nothing is read from or written to memory:
+
+- **At startup**, set the config field: `EmailAgentConfig(memory_enabled=False)`. The agent still constructs normally; it just runs with memory off from the first turn.
+- **At runtime**, call `agent.set_memory_enabled(False)` (and `True` to re-enable) — no restart. The Agent UI drives this per session, so a private session runs with memory off automatically.
+
+When memory is off, both halves are covered: the **write** path (profiling, behavioral learning, preference persistence, conversation storage) is suppressed, and the **read** path (your stored preferences/facts) is not injected into the prompt. This supersedes the older `GAIA_MEMORY_DISABLED=1` env var, which only worked at startup and required a restart to change.
+
+`set_memory_enabled()` returns a status dict — `{"ok", "enabled", "available", "message"}` — so a caller always gets feedback about what happened. Two cases worth knowing:
+
+- If memory was **never initialized this session** (started with `GAIA_MEMORY_DISABLED=1`, or Lemonade's embedding service was unreachable at startup), `available` is `false`. Trying to *enable* it at runtime returns `ok=false` with an actionable message — it can't be turned on without a restart, and the call says so rather than silently doing nothing.
+- Query the current state anytime with `agent.is_memory_enabled()` (bool) or `agent.memory_status()` (the same dict without changing anything).
+
+#### Scheduled daily briefing (off by default)
+
+The email sidecar can run the pre-scan on a daily timer — no prompt needed — so the
+triage card is already waiting for you in the morning. It is **off by default**;
+enable it with environment variables when launching the sidecar:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `GAIA_EMAIL_BRIEFING_ENABLED` | unset (off) | `true`/`1`/`yes` turns the daily briefing on. |
+| `GAIA_EMAIL_BRIEFING_TIME` | `08:00` | Daily fire time, 24h local `HH:MM`. |
+| `GAIA_EMAIL_BRIEFING_MAX_MESSAGES` | `25` | Inbox messages to scan per run (1–100). |
+
+Each run produces the same `email_pre_scan` envelope as an on-demand pre-scan
+(the classification path is shared — nothing is re-implemented) and persists it
+locally; fetch the latest run from `GET /v1/email/briefing` (`404` until the first
+scheduled run). Because that is always a cached run, the response — and the agent's
+`get_briefing` tool — also carry `cache_age_seconds` and `stale`, and past 24 hours
+the briefing's own headline opens with its age. An old briefing is labeled, never
+refused or silently regenerated. An invalid value fails sidecar startup with an
+actionable error rather than guessing a schedule. Push delivery and a cross-agent morning brief
+are planned on the autonomy engine (#555).
+
+### Small language model classifiers
+
+The retired agent can run compact SLMs **before** the main LLM for two triage tasks,
+using the same local Lemonade server as the chat model. Every SLM call **fails
+safe**: if unavailable or unusable, the agent falls back to the heuristic + LLM
+path.
+
+<Warning>
+**Retired-agent machinery, experimental, off by default.** `GAIA_EMAIL_USE_SLM` and
+`use_slm=True` configure the retired agent only — the flagship runs no SLM classifier
+and has no triage buckets to classify into.
+</Warning>
+
+- **Triage category** — when a heuristic isn't confident, the triage SLM
+  classifies first, and its answer is the category. The LLM classify call is
+  skipped only when the heuristic already settled `is_spam`; otherwise it still
+  runs for the spam verdict alone and its category opinion is discarded.
+  `force_llm` skips the SLM and forces the LLM instead.
+- **Phishing detection** — when the phishing SLM returns a usable result, that
+  result is used alone (phishing heuristics are not run). If SLM is off or
+  returns nothing, the agent falls back to `detect_phishing`.
+
+Configure via `EmailAgentConfig` (`use_slm`, `slm_triage_model` /
+`slm_triage_checkpoint`, `slm_phishing_model` / `slm_phishing_checkpoint`). The
+model and checkpoint pairs ship preconfigured, so enabling both classifiers is
+just `use_slm=True` — or `GAIA_EMAIL_USE_SLM=true` in the environment, which is
+how you enable it for `gaia email` or the sidecar without touching code (an
+unparseable value fails loudly rather than defaulting to off). A task activates
+only when **both** its model and checkpoint are set; one without the other fails
+startup. On first use each classifier is pulled into Lemonade (a one-time
+download); a failed pull is logged as an error naming the model and how to fix
+it, and the agent runs its heuristic + LLM path as before.
+
+In a bulk inbox scan both classifiers read the same subject + snippet the
+heuristic reads, so turning them on never adds a message fetch — the full body is
+still read only for messages that escalate to the LLM. On `POST /v1/email/triage`
+the caller supplies the body, so there the classifiers see all of it.
+
+<Note>
+**Raise Lemonade's model limit to 2 before enabling both classifiers.** Lemonade
+counts loaded models **per model type**, not in one shared pool: the chat model
+occupies an `llm` slot, and the two classifiers are embedding models that compete
+only with each other. So the arithmetic is 1 LLM + 2 embeddings, never three
+models fighting over the same slots — but at the default limit of 1 per type the
+second classifier evicts the first on every message, and each eviction costs a
+reload.
+
+```bash
+lemonade config set max_loaded_models=2
+```
+
+Confirm it took effect with `GET /api/v1/health`, whose `max_models` field is
+keyed by type — `"embedding": 2` is the value that matters here. With that set,
+`all_models_loaded` holds the chat model and both classifiers at once.
+</Note>
+
+### Action surface (retired agent)
+
+<Warning>
+None of the tools in this section exist on the flagship agent. They are the retired
+agent's surface, listed for anyone still running it — the flagship's five tools are at
+[Action surface](/guides/email#action-surface).
+</Warning>
+
+#### Read
+
+`list_inbox`, `get_message`, `get_thread`, `search_messages`, `list_labels`, `triage_inbox`, `pre_scan_inbox`, `check_followups`
+
+#### Briefing & tasks
+
+`get_briefing`, `list_tasks`, `extract_action_items` — natural-language asks like
+"give me a daily briefing", "what do I need to do from my inbox", and "show my
+tasks" bind to these dedicated tools. `extract_action_items` drives a fresh scan
+of your recent mail (it does not require a prior triage run), and `get_briefing`
+returns the latest scheduled briefing or generates one on demand.
+
+#### Classification preferences (persist across restarts)
+
+`set_priority_sender`, `set_low_priority_sender`, `set_category_default`, `clear_session_preferences`
+
+#### Inbox profiling
+
+`profile_inbox` — asks "who emails me most?" and returns a frequency ranking of senders with their dominant category (e.g. *URGENT*, *FYI*) and the timestamp of their most recent message. Profiling is built from the interaction history the agent accumulates during triage, so it improves the more you use the agent.
+
+#### Follow-up tracking (read-only)
+
+`check_followups` — answers *"who hasn't replied to me?"*. It scans the Sent folder of every connected mailbox and flags each thread whose latest message is still your own outbound mail — meaning nobody replied — once it is older than the window (default 3 days; ask for a different one, e.g. *"what's still unanswered after a week?"*). Each flagged item carries the recipient, subject, and age in days, sorted most overdue first, and threads you answered yourself or addressed only to yourself are skipped. The scan caps how many Sent messages it enumerates per mailbox (default 50, max 200); when a mailbox has more sent mail than that cap, the result carries `scan_truncated: true` so you know older, possibly-overdue threads weren't checked.
+
+This is detection only, distinct from autonomous follow-ups ([#555](https://github.com/amd/gaia/issues/555)): the agent surfaces the dropped threads but never sends a chase-up on its own — if you ask it to nudge someone, that reply goes through the normal draft → confirm → send flow.
+
+#### Voice-matched drafting
+
+`build_voice_profile` — ask the agent to "learn my writing style" and it samples your recent Sent mail, derives a style profile (usual greeting, sign-off, typical length, formality), and stores it on-device. From then on, drafted replies come out in your voice instead of neutral boilerplate — still returned for your approval, never auto-sent. The profile keeps derived features only (never your Sent message content) and lives in the agent's local SQLite database; nothing leaves the device. `clear_voice_profile` forgets it.
+
+#### Organize (reversible via the undo log)
+
+`archive_message`, `mark_read`, `mark_unread`, `add_star`, `remove_star`, `label_message`, `move_to_label`
+
+#### Soft delete (always reversible, no permanent delete)
+
+`trash_message` moves a message to Trash. Two ways back: `restore_message` is a fast path valid only for a short window right after trashing; `restore_trashed_message` (paired with `search_trash` to find the message) works any time the message is still in Trash — Gmail keeps it there for 30 days.
+
+There is no permanent-delete tool. Real permanent deletion of a Gmail message requires the `https://mail.google.com/` full-mailbox scope, and GAIA deliberately never requests it — that scope would grant every GAIA agent full-mailbox delete access for one rare operation. If you ask the agent to permanently delete something, it says so and offers Trash instead.
+
+#### Reply / send (require confirmation)
+
+`draft_reply`, `draft_forward` — drafts are harmless. `send_draft`, `send_now`, `forward_message` — gated by user confirmation; you always see the literal recipient/subject/body before you approve, in the UI's permission dialog or as a terminal prompt on the CLI. With no way to ask you — output piped or redirected, CI, an unattended host — these tools are **denied**, never sent silently (see [troubleshooting](/reference/troubleshooting)).
+
+#### Scheduled send & snooze
+
+`schedule_send` — schedule an email for a future time ("send this tomorrow at 9am"). Confirmation-gated **at creation**: you approve the literal recipient/subject/body *and the fire time*, then the send fires unattended at/after that time. The message is stored as a regular draft in your mailbox (visible in your mail client) until it sends — the body is never persisted in the agent's local database.
+
+`snooze_message` — move a message out of INBOX now and have it return at a chosen time ("snooze this until Monday"). Reversible, no confirmation needed; cancelling keeps the message archived.
+
+`cancel_scheduled_job`, `list_scheduled_jobs` — both scheduled sends and snoozes are cancellable any time before they fire; `list_scheduled_jobs` shows the pending jobs with their cancel handles. Jobs persist in the agent's SQLite, so a job whose time passed while no agent was running fires on the next start.
+
+**Attachments** (schema 2.2, #1542): `draft_reply` and `send_now` take an optional
+`attachments` parameter — a comma-separated list of full paths to local files. Checks
+are fail-loud: a missing file, an empty file, a file over 25 MB, or an extension whose
+MIME type can't be determined is an error, never a silently dropped attachment. The
+confirmation dialog shows the literal file paths alongside recipient/subject/body.
+On the read side, `get_message` exposes each attachment's filename, MIME type, size,
+and provider handle.
+
+#### Calendar (require confirmation)
+
+`list_calendar_events`, `accept_invite`, `decline_invite`, `create_event_from_email`
+
+**On the REST contract** (schema 2.1, for the Agent UI): calendar view / create / respond
+are exposed alongside triage/draft/send:
+
+- `GET /v1/email/calendar/events` — view events on the primary calendar (read-only).
+- `POST /v1/email/calendar/events/preview` → `POST /v1/email/calendar/events` — create
+  an event, gated by the same single-use confirmation-token handshake as `/v1/email/send`
+  (mint a token with `/preview`, echo it to create; no/invalid token → **HTTP 403**).
+- `POST /v1/email/calendar/events/respond` — RSVP accepted/declined/tentative to an invite.
+
+Each reaches whichever calendar (Google or Microsoft) the user connected; a missing
+`calendar.events` scope fails loud with **HTTP 403** and the reconnect CTA.
+
+### Driving the full agent over HTTP (sidecar)
+
+The stateless REST endpoints above (`/v1/email/triage`, `/draft`, `/send`, …) analyze a payload you pass in — they don't run the conversational agent and have no memory. For the full experience the Agent UI shows (natural-language requests, multi-step tool use, personalization, memory), the sidecar also hosts a **stateful, session-scoped agent** under `/v1/email/agent/*`:
+
+- `POST /v1/email/agent/session` — create (or `reset`) a session; builds the agent and reports memory status.
+- `POST /v1/email/agent/query` — run one turn; streams the agent loop back as Server-Sent Events (`thinking`, `step`, `tool` usage, `permission_request`, and a terminal `run_complete` with the answer). Because this runs the real agent loop, **every** agent tool is reachable through natural language — no per-tool endpoint.
+- `POST /v1/email/agent/confirm-tool` — approve or deny a gated tool (send/forward/delete/quarantine/calendar-create). The run blocks until you respond, mirroring the in-app confirmation prompt.
+- `POST /v1/email/agent/cancel` — cooperatively cancel an in-flight run.
+- `GET /v1/email/agent/session/{id}/history` — the conversation so far.
+- `POST /v1/email/agent/memory` + `GET /v1/email/agent/memory/{id}` — the runtime memory toggle over HTTP. Enabling memory that was never initialized this session (started with `GAIA_MEMORY_DISABLED` or Lemonade unreachable) returns **409** with an actionable message rather than silently doing nothing.
+
+Each session holds one agent; one turn runs at a time (an overlapping `/query` returns **409**). This is the surface the Agent UI uses to drive the packaged email agent over the network instead of importing it in-process.
+
+### Sending email — safety
+
+**The agent never sends email on its own. A send always requires your explicit confirmation, and this holds no matter how you drive the agent.** Drafting a reply is harmless and unconfirmed; turning a draft into a sent message is the only step that asks for your approval, and it always asks.
+
+This guarantee is enforced independently on every surface, so a missing confirmation on one path can't be a back door on another:
+
+- **Chat / Agent UI / CLI** — `send_draft`, `send_now`, `schedule_send`, and `forward_message` are confirmation-gated in the agent loop. Before the send runs (or is scheduled), you're shown the **literal** recipient, subject, and body (not an LLM paraphrase) and must approve. Decline, and nothing is sent. In unattended/background mode there's no one to approve, so the send is refused outright rather than run silently. The one deliberate variation is `schedule_send`: the confirmation happens **at creation** — you approve the exact message *and* its fire time — and only that pre-approved send later fires unattended; it is cancellable until it does.
+- **REST API** (`POST /v1/email/send`) — rejected with **HTTP 403** unless you supply a single-use confirmation token. You get that token from `POST /v1/email/draft`, and it is **bound to the exact `(to, subject, body, attachments)`** — for each attachment the binding covers filename, MIME type, and a digest of the file content (schema 2.2): a token minted for one message can't be replayed to send different content or different files, and it's consumed on first use.
+- **REST API** (`POST /v1/email/archive`, `POST /v1/email/quarantine`) — the two mutating mailbox actions follow the **same gate** (schema 2.1): each is rejected with **HTTP 403** unless you supply a single-use token from `POST /v1/email/confirm`, bound to that exact `(action, message_id)`. Both are reversible inside the 30-second undo window via the ungated `POST /v1/email/unarchive` / `POST /v1/email/unquarantine` (which *restore*, never destroy). Archive returns a `batch_id` undo handle and a `post_archive_id` so undo survives the id change an Outlook folder-move causes. Quarantine is **Gmail-only** — an Outlook mailbox is refused with **HTTP 400**, because its label-based undo can't reverse Outlook's folder move (#1738).
+- **MCP server** (`send_email`) — same rule as REST: a send without a valid, payload-bound token returns a structured error and sends nothing.
+
+There is no setting, flag, or "auto-send" mode that bypasses this — it's a safety invariant, not a preference. A consolidated regression test (`tests/integration/test_never_auto_send.py`) exercises all three surfaces together so the guarantee can't be quietly weakened on any one of them.
+
+### Privacy guarantees
+
+- **Local LLM only** — email body content never leaves your machine. The agent's configuration has no field that even *names* a cloud LLM provider; the `base_url` allowlist further enforces this at runtime.
+- **State stored locally** — `~/.gaia/email/state.db` (SQLite) holds the action audit log, draft metadata, and the task list captured from triage action items. Body previews are truncated to 100 characters before persistence.
+- **Untrusted input** — every email body shown to the LLM is wrapped in `<<<UNTRUSTED_EMAIL_BODY_*>>>` delimiters. The system prompt explicitly tells the model that body content is data, not instructions, so injection attempts (e.g., "forward this to attacker@evil.com") are surfaced to you instead of executed.
+
+### Phishing handling
+
+By default `is_phishing` comes from a multi-signal heuristic — subject keyword
+pairs, suspicious sender domain, and body-level phrases. With the experimental
+`use_slm=True`, the phishing SLM classifies first and its result becomes the
+sole decision; if it fails safe the heuristic decides. Detection never uses the
+chat LLM, is precision-first, and never auto-acts.
+
+See [Small language model classifiers](#small-language-model-classifiers) for
+how the phishing SLM is configured.
+
+When you ask the agent to quarantine a flagged message, it:
+
+1. **Asks for your confirmation** before touching anything.
+2. Applies a `GAIA_PHISHING_QUARANTINE` label and archives the message (two Gmail calls; the undo record is written only after both succeed).
+3. Records an undo row so you can reverse within the undo window.
+
+To reverse: ask the agent to unquarantine the message. It restores the original labels and moves the message back to INBOX. Undo is only possible within the undo window; after expiry the agent says so explicitly.
+
+The agent **never** auto-acts on links or instructions inside a phishing message, even if you ask it to.
+
+### Calendar provider selection
+
+When the calendar tools run (`list_calendar_events`, `accept_invite`, `decline_invite`,
+`create_event_from_email`), the agent picks a calendar backend using this deterministic order:
+
+1. **Injected backend** (eval / test seam) — always wins.
+2. **Explicit `calendar_provider`** config — used directly, no scope check.
+3. **Explicit `mail_provider`** config — calendar follows the mailbox (a Microsoft-only user
+   who set `mail_provider="microsoft"` gets Outlook Calendar without a separate setting).
+4. **Connector discovery** — queries which providers are connected AND hold a calendar scope:
+   - Google: `calendar.events` or `calendar.readonly`
+   - Microsoft: `Calendars.ReadWrite`
+
+   If exactly one provider is calendar-scoped, it is used. If both are scoped, Google is
+   preferred (registry order). If none are scoped, the agent raises an actionable error naming
+   the scope to grant — it never silently falls back to Google.
+
+**Common mismatch**: both Gmail and Outlook connected, but only Outlook has `Calendars.ReadWrite`
+(Google calendar scope was skipped during consent). Without an explicit provider setting the
+agent used to pick Google and fail. It now picks Outlook correctly.
+
+### Skill sets: disabled
+
+<Warning>
+**Agent Skills are switched off for the retired email agent.** The `skill_sets:` and
+`default_skill_set:` blocks in `hub/agents/email/python/gaia-agent.yaml` are
+commented out, so the agent loads **zero** skills: `active_skill_set` is `None`
+and `loaded_skills` is empty. They were turned on by default with no eval run
+behind them, and an active `personal` set cost ~1,334 prompt tokens — cutting
+the bulk-triage result envelope from 6144 to 4810 (`work`, to 4070). The agent
+is back to its full 6144-token envelope.
+</Warning>
+
+The agent still *bundles* six instruction-only skills at
+`gaia_agent_email/skills/<name>/SKILL.md` — `inbox-triage`, `newsletter-digest`,
+`travel-itinerary`, `meeting-scheduling`, `action-item-extraction`,
+`escalation-routing` — and the selection machinery
+(`EmailTriageAgent.select_skill_set()`, the account-type mapping,
+`GAIA_EMAIL_SKILL_SET`, `--skill-set`) is all still there. It is simply inert
+while no sets are declared.
+
+Pinning a set is therefore a startup error, not a silent no-op:
+
+```console
+$ gaia-agent-email serve --skill-set personal
+gaia-agent-email: error: --skill-set requested skill set 'personal', but this
+agent declares no skill sets — Agent Skills are switched off in this build. Drop
+the option, or uncomment the 'skill_sets:' and 'default_skill_set:' blocks in
+gaia-agent.yaml.
+```
+
+The account-type mapping behind that machinery is three-way: a personal
+Microsoft account (`microsoft`) resolves to `personal`, a work/school account
+(`microsoft_work`) resolves to `work`, and a Gmail-only mailbox has no
+equivalent tenant claim to inspect and falls through to `default_skill_set`.
+
+To re-enable, uncomment **both** blocks together — a non-empty `skill_sets:`
+with no `default_skill_set:` fails validation — and run the eval before
+shipping it on. `gaia skill list` shows what is discoverable; the startup log
+names what actually loaded. Full mechanism:
+[Composing skills and skill sets](/guides/composing-skills).
+
+### Dev mode: run the email agent from source
+
+The Agent UI talks to the email agent as an out-of-process **sidecar** — a
+self-contained HTTP service supervised by the **GAIA daemon** (`gaia daemon`),
+which spawns it, health-checks it, and tree-kills it. The UI backend is a
+daemon *client*: on each email request it asks the daemon to ensure the
+sidecar is running, then talks to the sidecar port directly. No Node.js is
+involved. Two modes, selected by `GAIA_EMAIL_AGENT_MODE`:
+
+- `user` (default) — runs the published frozen binary. The binary comes from an
+  **Agent Hub install**: its SHA-256 is verified against the hub manifest at install
+  time and re-checked before every spawn. In the Agent UI, click **Install** on the
+  email agent; on a **headless** machine, install it from the hub directly:
+
+  ```bash
+  gaia hub install email       # via the daemon; also `gaia agent install email`
+  gaia daemon start-agent email
+  ```
+
+  Only a GAIA **source checkout** additionally carries a `binaries.lock.json` from
+  which the binary can be lazily fetched on first use; an installed GAIA does not
+  ship that file, so an agent that was never installed reports "run `gaia hub
+  install email`" rather than a lock error. Either way SHA-256 is the integrity
+  gate: a tampered or unpublished binary fails loudly, and there is no silent
+  fallback to dev mode.
+- `dev` — runs the agent from your local source with hot reload, so prompt/tool
+  edits show up live without a freeze → publish cycle:
+
+  ```bash
+  uv pip install -e hub/agents/email/python   # once
+  GAIA_EMAIL_AGENT_MODE=dev gaia chat --ui
+  ```
+
+The sidecar binds an ephemeral local port (never 4001). Dev mode loads
+`packaging/server.py` as the top-level module `server`
+(`uvicorn server:app --app-dir hub/agents/email/python/packaging`) so the
+package's `packaging/` directory does not collide with the PyPI `packaging`
+library. If the source package is missing, dev mode fails loudly with the
+`uv pip install -e` remedy — it never silently falls back to the binary.
+
+Dev mode always runs from **the daemon's own checkout** — the daemon (a
+per-user singleton) is never told to spawn from an arbitrary path a caller
+sends it. `gaia daemon start-agent email --mode dev` and `gaia chat --ui`
+resolve *your own* checkout (via `git rev-parse --show-toplevel` against your
+shell's cwd, or an explicit `--dev-src-dir <path>`) and send it to the daemon
+purely for comparison. If it matches the checkout the daemon is already
+running from, nothing changes; if it doesn't, the daemon refuses loudly,
+naming both checkouts and the fix — restart the daemon from a Python
+environment/editable install rooted at your checkout (a bare `cd` there does
+not help if one virtualenv is shared across checkouts, since the daemon's
+default source dir follows the Python environment that launched it, not its
+cwd). This exists because a per-user daemon started from checkout A silently
+served checkout A's source to a `--mode dev` request made from checkout B —
+a testing-integrity bug, not a runtime one, but one that makes a passing test
+meaningless without saying so.
+
+**Operational behavior:**
+- The **daemon owns the sidecar lifecycle**. Closing the Agent UI no longer
+  kills the sidecar — it keeps running under the daemon until you stop it with
+  `gaia daemon stop-agent email` (sidecar only) or `gaia daemon stop` (daemon +
+  every sidecar). Inspect it any time with `gaia daemon status` or
+  `gaia daemon agents` (id, mode, pid, port, contract version).
+- The daemon spawns the sidecar with its stdout/stderr redirected to
+  `~/.gaia/agents/email/logs/sidecar-<port>.log` — check that file first when a
+  sidecar won't start (a failed start surfaces the log tail in the error too).
+- On every start the daemon reads the sidecar's `/version` and records the
+  contract `apiVersion`/`agentVersion`; a major-version mismatch (when a host
+  pins an expected version) fails loudly rather than sending requests the sidecar
+  would mishandle.
+- A sidecar HTTP error (e.g. Lemonade down → `502 local LLM triage failed`) is
+  surfaced verbatim with its actionable message, not flattened into a generic
+  error.
+- If the daemon is killed hard (SIGKILL, crash) while a sidecar runs, the next
+  daemon start identity-checks and reaps the recorded survivor before serving —
+  a sidecar never silently leaks its port or a loaded model.
+
+#### What the sidecar serves
+
+The sidecar is the **sole** backend for the email agent in the Agent UI — the
+core backend never imports the email wheel, so it stays lightweight, crash-
+isolated, and dogfoods the exact binary shipped to integrators.
+`GAIA_EMAIL_AGENT_MODE` only selects which *process* answers (`user` default /
+`dev`); there is no in-process fallback. Two surfaces run through it:
+
+- **The `/v1/email/*` REST surface** — the full REST contract (schema 2.12; init
+  readiness probe + provisioning, triage,
+  batch triage, search, inbox pre-scan, scheduled daily briefing, draft/send +
+  confirm — attachments included, archive/unarchive, quarantine/unquarantine,
+  calendar view/preview/create/respond, health, version). This is exactly what
+  third-party integrators consume, so the UI
+  exercises the real product. The sidecar's connector OAuth **write** routes are
+  never exposed (all grant writes stay on the backend's single-writer path).
+  Because the sidecar can send mail as you, it requires a **per-session bearer
+  token** on every `/v1/email/*` request (#1706, `401` without it) plus a loopback
+  Host/Origin allowlist (`400`/`403`) — closing local-process and DNS-rebinding
+  access. The daemon mints the token and hands it to the sidecar over a private
+  env channel at spawn; the UI backend receives it when it acquires the sidecar
+  from the daemon and replays it on every proxied call, so this is transparent in
+  the UI; integrators embedding the frozen sidecar get the same token wired by
+  `startSidecar`. See
+  [Authentication](#authentication).
+- **The in-app email chat agent** (`agent_type=email`) — the local-LLM tool loop
+  still runs in the UI backend, but every tool is a thin HTTP call to the
+  sidecar. The chat **pre-scan card** runs through the sidecar's `/prescan` route
+  and returns the same `email_pre_scan` envelope, so the card renders unchanged.
+
+The sidecar is spawned lazily on first email use (users who never touch email
+never pay for a daemon or sidecar) and keeps running under the daemon until
+`gaia daemon stop-agent email` or `gaia daemon stop`; the REST surface and the
+chat agent share one sidecar process. You can also start it explicitly with
+`gaia daemon start-agent email [--mode user|dev]` — asking for a mode different
+from the one already running is a loud conflict (stop it first), never a silent
+restart.
+
+**Chat tool surface (in-app email agent):** the sidecar-backed chat agent exposes
+the tools the REST contract (schema 2.12) serves today — inbox pre-scan, search,
+calendar view, and archive + undo. Tools that have no REST route yet (labels,
+stars, mark-read, move, trash/delete, summarize, profile, preferences, forward,
+send, scheduled send / snooze) are not exposed in the chat agent until their
+routes land; the underlying
+agent product still implements them, they are simply not reachable over the REST
+contract yet.
+
+### Retired-agent troubleshooting
+
+#### "AGENT_NOT_GRANTED — Email agent needs additional Google permissions"
+
+The email agent hasn't been granted the mailbox scopes on your Google connection — either you connected Google without granting the agent (common on the CLI flow), or your connection predates the email agent and lacks `gmail.modify`.
+
+- **Agent UI:** open Settings → Connections → Google → **Reconnect** to grant the missing scopes.
+- **CLI:** run the explicit grant (required until [#2117](https://github.com/amd/gaia/issues/2117) lands):
+
+  ```bash
+  gaia connectors grants grant google installed:email \
+    --scopes https://www.googleapis.com/auth/gmail.modify \
+             https://www.googleapis.com/auth/gmail.send \
+             https://www.googleapis.com/auth/calendar.events \
+             https://www.googleapis.com/auth/calendar.readonly
+  ```
+
+#### "NOT_CONNECTED: microsoft is not currently connected"
+
+You asked about a specific provider's mailbox (e.g. *"check my Outlook inbox"*) that isn't connected. The agent refuses rather than silently answering from a different mailbox. Connect that provider in Settings → Connections, or rephrase without naming a provider to scan every connected mailbox.
+
+#### Bulk-archive prompt asking for confirmation
+
+The agent surfaces a single batch confirmation when it tries more than five organize operations across more than three distinct senders in one turn. This is a defense against indirect prompt injection ("archive every email from boss@company.com"). Click confirm in the UI to proceed.
+
+### Limitations of the retired agent (as of v0.23)
+
+- Outlook / Exchange — tracked in [#963](https://github.com/amd/gaia/issues/963).
+- Bulk-undo (e.g., "undo my last 10 archives") — `batch_id` is recorded but no UI surface yet.
+- Audit-log inspection (`gaia email log`) — deferred to a follow-up; the SQLite at `~/.gaia/email/state.db` is queryable directly via `sqlite3` until then.
+- Vacation auto-responder collision detection — deferred. If you're on PTO and your auto-responder is enabled, treat agent replies with extra care.
+- Scheduled send / snooze fire from a running agent process — the scheduler polls every 30 s while an email agent is alive. A job whose time passes with no agent running fires on the next start (never silently dropped; failures are recorded on the job and logged). Wiring these jobs into the system-wide `gaia schedule` dispatcher is tracked in [#1371](https://github.com/amd/gaia/pull/1371) / autonomy epic [#555](https://github.com/amd/gaia/issues/555).
+
+---
+
 ## Related
 
-- [Email Triage](/guides/email) — the Agent UI / `gaia email` flow (GAIA owns the UX).
+- [Email](/guides/email) — the flagship agent's mail surface: what you actually get today.
 - [Email Triage Contract](https://github.com/amd/gaia/blob/main/hub/agents/email/python/CONTRACT.md) — the full #1262 request/response schema.
 - [`@amd-gaia/agent-email`](https://github.com/amd/gaia/tree/main/hub/agents/email/npm) — the JS/TS client + frozen sidecar.
