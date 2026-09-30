@@ -23,6 +23,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -32,6 +33,9 @@ LOCK_FILE = Path(tempfile.gettempdir()) / "gaia-eval.lock"
 HOLDER_FILE = LOCK_FILE.with_suffix(".holder.json")
 #: Escape hatch for runs that genuinely use separate backends (e.g. unit tests).
 BYPASS_ENV = "GAIA_EVAL_NO_LOCK"
+#: A heartbeat late by more than this means the machine was suspended.
+SLEEP_GAP_S = 60.0
+_HEARTBEAT_S = 5.0
 
 
 def _holder_description() -> str:
@@ -71,14 +75,58 @@ def _stay_awake():
 
 
 @contextlib.contextmanager
+def _sleep_watch(command: str):
+    """Fail the run if the machine was suspended while it ran.
+
+    A suspended process sees wall-clock time jump between two ticks. Timings
+    and timeouts inside such a run are meaningless, so its results must not
+    be recorded as a measurement.
+    """
+    gaps: list[tuple[float, float]] = []
+    stop = threading.Event()
+
+    def beat():
+        last = time.time()
+        while not stop.wait(_HEARTBEAT_S):
+            now = time.time()
+            if now - last > SLEEP_GAP_S:
+                gaps.append((last, now))
+            last = now
+
+    thread = threading.Thread(target=beat, name="eval-sleep-watch", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
+    if gaps:
+        spans = ", ".join(
+            f"{time.strftime('%H:%M:%S', time.localtime(a))}-"
+            f"{time.strftime('%H:%M:%S', time.localtime(b))}"
+            for a, b in gaps
+        )
+        print(
+            f"[ERROR] The machine was suspended during `{command}` ({spans}). "
+            "Local-model work stalls while suspended, so this run's scores and "
+            "timings are not a valid measurement. Keep the PC awake (on Windows: "
+            "`powercfg /change monitor-timeout-ac 0` and "
+            "`powercfg /change standby-timeout-ac 0`) and rerun.",
+            file=sys.stderr,
+        )
+        raise SystemExit(3)
+
+
+@contextlib.contextmanager
 def exclusive_eval(command: str):
     """Hold the machine-wide eval lock for the duration of *command*.
 
     Raises ``SystemExit(2)`` with the holder's details when another eval
-    already holds it.
+    already holds it, and ``SystemExit(3)`` when the machine was suspended
+    while *command* ran.
     """
     if os.environ.get(BYPASS_ENV) == "1":
-        with _stay_awake():
+        with _stay_awake(), _sleep_watch(command):
             yield
         return
 
@@ -100,7 +148,7 @@ def exclusive_eval(command: str):
         encoding="utf-8",
     )
     try:
-        with _stay_awake():
+        with _stay_awake(), _sleep_watch(command):
             yield
     finally:
         HOLDER_FILE.unlink(missing_ok=True)

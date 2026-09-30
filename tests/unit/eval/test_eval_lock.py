@@ -10,6 +10,9 @@ corrupted both runs' timings.
 import subprocess
 import sys
 import textwrap
+import time
+import types
+from itertools import chain, repeat
 
 import psutil
 import pytest
@@ -127,3 +130,24 @@ def test_a_refused_power_request_fails_the_run_loudly(monkeypatch):
     with pytest.raises(OSError):
         with eval_lock.exclusive_eval("gaia eval agent"):
             pass
+
+
+def test_a_run_the_machine_slept_through_is_refused(monkeypatch, capsys):
+    """Standby freezes the process; the next heartbeat sees the clock jump."""
+    clock = chain([1000.0, 1005.0, 1905.0], repeat(1910.0))
+    fake_time = types.SimpleNamespace(
+        time=lambda: next(clock), strftime=time.strftime, localtime=time.localtime
+    )
+    monkeypatch.setattr(eval_lock, "time", fake_time)
+    monkeypatch.setattr(eval_lock, "_HEARTBEAT_S", 0.01)
+    with pytest.raises(SystemExit) as exc:
+        with eval_lock.exclusive_eval("gaia eval tasks run"):
+            time.sleep(0.2)
+    assert exc.value.code == 3
+    assert "suspended" in capsys.readouterr().err
+
+
+def test_an_awake_run_is_not_flagged(monkeypatch):
+    monkeypatch.setattr(eval_lock, "_HEARTBEAT_S", 0.01)
+    with eval_lock.exclusive_eval("gaia eval tasks run"):
+        time.sleep(0.1)
