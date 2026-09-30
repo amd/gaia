@@ -289,7 +289,8 @@ _EXPLAINING = re.compile(
 
 #: The answer saying, itself, that it did not look or could not confirm.
 _ADMISSION = re.compile(
-    r"\b(?:unverified|not\s+(?:been\s+)?verified|could\s*(?:n[o']t|\s+not)\s+verify"
+    r"\b(?:unverified|not\s+(?:been\s+)?verified|kept\s+failing"
+    r"|could\s*(?:n[o']t|\s+not)\s+(?:verify|read|open|access|load)"
     r"|(?:did|have|has)\s*(?:n[o']t|\s+not)\s+(?:yet\s+)?(?:read|opened|open|looked|look|"
     r"checked|check|run|searched|search|verified|verify)"
     r"|without\s+(?:reading|opening|looking|running|checking))\b",

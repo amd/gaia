@@ -148,8 +148,11 @@ def _run_python(stdout, code="print('hi')"):
     )
 
 
-def _exists(_path):
-    return True
+WORKDIR = "C:\\work\\toybox"
+
+
+def _locate(path):
+    return WORKDIR + "\\" + path.replace("/", "\\")
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +181,7 @@ def test_named_targets_are_files_and_project_symbols(query, expected):
 
 
 def test_an_answer_about_a_file_no_tool_opened_is_caught():
-    findings = look_findings(GUESSED_SUMMARY, QA_QUERY, [], exists=_exists)
+    findings = look_findings(GUESSED_SUMMARY, QA_QUERY, [], locate=_locate)
 
     assert [f.gate for f in findings] == [LOOK]
     assert "You haven't read `toybox/dates.py`" in findings[0].correction
@@ -187,13 +190,13 @@ def test_an_answer_about_a_file_no_tool_opened_is_caught():
 def test_reading_the_file_satisfies_the_look_check():
     records = [_read("toybox/dates.py", DATES_SOURCE)]
 
-    assert look_findings(GUESSED_SUMMARY, QA_QUERY, records, exists=_exists) == []
+    assert look_findings(GUESSED_SUMMARY, QA_QUERY, records, locate=_locate) == []
 
 
 def test_an_absolute_path_to_the_same_file_counts():
     records = [_read("C:\\work\\toybox\\toybox\\dates.py", DATES_SOURCE)]
 
-    assert look_findings(GUESSED_SUMMARY, QA_QUERY, records, exists=_exists) == []
+    assert look_findings(GUESSED_SUMMARY, QA_QUERY, records, locate=_locate) == []
 
 
 def test_a_directory_listing_is_not_reading_the_file():
@@ -203,7 +206,7 @@ def test_a_directory_listing_is_not_reading_the_file():
         {"status": "success", "entries": [{"name": "dates.py"}]},
     )
 
-    findings = look_findings(GUESSED_SUMMARY, QA_QUERY, [listing], exists=_exists)
+    findings = look_findings(GUESSED_SUMMARY, QA_QUERY, [listing], locate=_locate)
 
     assert [f.gate for f in findings] == [LOOK]
 
@@ -211,44 +214,76 @@ def test_a_directory_listing_is_not_reading_the_file():
 def test_a_symbol_is_seen_when_a_read_shows_it():
     records = [_read("toybox/dates.py", DATES_SOURCE)]
 
-    assert look_findings(UNTESTED_FIX, BUGFIX_QUERY, records, exists=_exists) == []
+    assert look_findings(UNTESTED_FIX, BUGFIX_QUERY, records, locate=_locate) == []
 
 
 def test_a_file_that_does_not_exist_is_not_demanded():
     query = "What is the difference between setup.py and pyproject.toml?"
 
-    assert (
-        look_findings("They both configure builds.", query, [], lambda p: False) == []
-    )
+    assert look_findings("They both configure builds.", query, [], lambda p: None) == []
 
 
 def test_a_file_an_earlier_turn_discussed_is_not_demanded_again():
     history = "toybox/dates.py defines parse_created, parse_updated and parse_deleted."
 
     findings = look_findings(
-        GUESSED_SUMMARY, QA_QUERY, [], exists=_exists, history=history
+        GUESSED_SUMMARY, QA_QUERY, [], locate=_locate, history=history
     )
 
     assert findings == []
 
 
 def test_not_found_without_any_lookup_is_caught_even_for_a_missing_file():
-    findings = look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, [], lambda p: False)
+    findings = look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, [], lambda p: None)
 
     corrections = " ".join(f.correction for f in findings)
     assert "You haven't read `toybox/dates.py`" in corrections
     assert "no search, listing or read ran" in corrections
 
 
-def test_not_found_after_a_failed_read_is_backed_by_the_lookup():
+def test_a_failed_read_backs_not_found_but_is_not_reading_the_file():
+    # Qwen read `toybox\dates.py` from the wrong folder, then said it was missing.
     failed = _rec(
         "read_file",
-        {"file_path": "toybox/dates.py"},
-        {"status": "error", "error": "File not found: toybox/dates.py"},
+        {"file_path": "C:\\work\\toybox\\dates.py"},
+        {"status": "error", "error": "File not found: C:\\work\\toybox\\dates.py"},
         errored=True,
     )
 
-    assert look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, [failed], _exists) == []
+    findings = look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, [failed], _locate)
+
+    assert len(findings) == 1
+    assert "You haven't read `toybox/dates.py`" in findings[0].correction
+
+
+def test_the_correction_names_where_the_file_is():
+    findings = look_findings(GUESSED_SUMMARY, QA_QUERY, [], locate=_locate)
+
+    assert "`toybox/dates.py` is at `C:\\work\\toybox\\toybox\\dates.py`" in (
+        findings[0].correction
+    )
+
+
+def test_a_file_name_in_a_dir_listing_is_not_reading_it():
+    listing = _rec(
+        "run_shell_command",
+        {"command": "dir toybox /b"},
+        {"status": "success", "stdout": "cli.py\ndates.py\n", "return_code": 0},
+    )
+
+    findings = look_findings(GUESSED_SUMMARY, QA_QUERY, [listing], locate=_locate)
+
+    assert [f.gate for f in findings] == [LOOK]
+
+
+def test_a_cat_of_the_file_is_reading_it():
+    cat = _rec(
+        "run_shell_command",
+        {"command": "type toybox\\dates.py"},
+        {"status": "success", "stdout": DATES_SOURCE, "return_code": 0},
+    )
+
+    assert look_findings(GUESSED_SUMMARY, QA_QUERY, [cat], locate=_locate) == []
 
 
 @pytest.mark.parametrize(
@@ -404,7 +439,7 @@ def test_tested_without_a_test_run_is_caught():
         _rec("edit_file", {"file_path": "toybox/dates.py"}, {"status": "success"}),
     ]
 
-    findings = ungrounded(UNTESTED_FIX, BUGFIX_QUERY, records, exists=_exists)
+    findings = ungrounded(UNTESTED_FIX, BUGFIX_QUERY, records, locate=_locate)
 
     assert [f.gate for f in findings] == [ACTION]
     assert '"complete and tested"' in findings[0].correction
@@ -422,11 +457,11 @@ def test_tested_after_a_passing_pytest_is_backed():
     ]
     records[-1]["output"] = "4 passed in 0.05s\n"
 
-    assert ungrounded(UNTESTED_FIX, BUGFIX_QUERY, records, exists=_exists) == []
+    assert ungrounded(UNTESTED_FIX, BUGFIX_QUERY, records, locate=_locate) == []
 
 
 def test_documented_with_no_tool_is_caught_alongside_the_unread_readme():
-    findings = ungrounded(UNREAD_README, CONFIG_QUERY, [], exists=_exists)
+    findings = ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
 
     assert sorted(f.gate for f in findings) == [ACTION, LOOK]
 
@@ -454,19 +489,19 @@ def test_an_answer_that_admits_the_gap_is_not_corrected(answer):
     assert admits_unverified(answer)
     records = [_read("build_times.csv", BUILD_TIMES)]
 
-    assert ungrounded(answer, QA_QUERY, records, exists=_exists) == []
+    assert ungrounded(answer, QA_QUERY, records, locate=_locate) == []
 
 
 def test_admitting_one_gap_does_not_excuse_a_false_report_of_work():
     answer = "I haven't read the README, but I ran the tests."
 
-    findings = ungrounded(answer, CONFIG_QUERY, [], exists=_exists)
+    findings = ungrounded(answer, CONFIG_QUERY, [], locate=_locate)
 
     assert [f.gate for f in findings] == [ACTION]
 
 
 def test_the_correction_and_note_name_every_gap():
-    findings = ungrounded(UNREAD_README, CONFIG_QUERY, [], exists=_exists)
+    findings = ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
 
     correction = grounding_correction(findings)
     note = unverified_note(findings)

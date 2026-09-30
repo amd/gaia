@@ -65,7 +65,7 @@ from gaia.agents.base.extraction import (
 from gaia.agents.base.grounding import (
     OBSERVED_MAX_CHARS,
     grounding_correction,
-    path_exists,
+    path_locator,
     ungrounded,
     unverified_note,
 )
@@ -6572,7 +6572,7 @@ Do NOT wrap conversational replies in JSON.
             query or "",
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
-            exists=path_exists(roots),
+            locate=path_locator(roots),
         )
 
     def _mark_ungrounded(self, answer: Optional[str], query: str) -> Optional[str]:

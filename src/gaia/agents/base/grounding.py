@@ -157,21 +157,27 @@ def named_targets(query: str) -> List[str]:
     return targets
 
 
-def _touched(target: str, records: Iterable[Dict[str, Any]]) -> bool:
-    """True when some tool call named *target*, or a non-listing result showed it.
+_FINDER_WORDS = ("search", "grep", "find", "locate", "glob")
 
-    A path matches on its file name, because tools are called with relative
-    and absolute spellings of the same file. A failed read still looked.
+
+def _read_it(target: str, records: Iterable[Dict[str, Any]]) -> bool:
+    """True when a successful call read *target*.
+
+    A file counts when a read or command call names it — by file name, since
+    tools get relative and absolute spellings of the same file. A symbol also
+    counts when a search or read result shows it. A failed read, a listing,
+    and a file name that only appears in a ``dir`` output did not read it.
     """
     key = _slashed(re.split(r"[\\/]", target.rstrip("\\/"))[-1])
+    is_file = bool(_FILE_SUFFIX.search(target))
     for record in records:
-        if not _ran(record):
+        name = _name(record)
+        if not _ran(record) or record.get("failed") or _has(name, _LISTING_WORDS):
             continue
-        if key in _args_text(record):
-            return True
-        if not _has(_name(record), _LISTING_WORDS) and key in _slashed(
-            record.get("observed") or ""
-        ):
+        if is_file:
+            if not _has(name, _FINDER_WORDS) and key in _args_text(record):
+                return True
+        elif key in _args_text(record) or key in _slashed(record.get("observed") or ""):
             return True
     return False
 
@@ -187,14 +193,16 @@ def look_findings(
     answer: str,
     query: str,
     records: Sequence[Dict[str, Any]],
-    exists: Optional[Callable[[str], bool]] = None,
+    locate: Optional[Callable[[str], Optional[str]]] = None,
     history: str = "",
 ) -> List[Finding]:
-    """The request's files and symbols no tool touched, and unbacked "not found"s.
+    """The request's files and symbols nothing read, and unbacked "not found"s.
 
-    A named file only counts when it exists (*exists*) or the answer claims it
-    does not — a request that merely mentions ``setup.py`` in passing is not
-    asking for it to be read. A symbol counts whenever it is untouched. A
+    A named file only counts when *locate* finds it on disk or the answer
+    claims it does not exist — a request that merely mentions ``setup.py`` in
+    passing is not asking for it to be read. The correction names where the
+    file is, because a model that resolved the path against the wrong folder
+    will do it again. A symbol counts whenever nothing showed it. A
     target an earlier turn (*history*) already discussed is not asked for again.
     A "not found" only counts in a turn about something the request named, so
     explaining what a 404 means is not a claim about the disk.
@@ -205,23 +213,23 @@ def look_findings(
     findings: List[Finding] = []
     absent = absence_claim(answer)
     earlier = _slashed(history)
-    missed = [
-        target
-        for target in targets
-        if not _touched(target, records)
-        and _slashed(target) not in earlier
-        and (
-            not _FILE_SUFFIX.search(target)
-            or absent is not None
-            or (exists is not None and exists(target))
-        )
-    ]
+    missed = []
+    found: List[str] = []
+    for target in targets:
+        if _read_it(target, records) or _slashed(target) in earlier:
+            continue
+        where = locate(target) if locate and _FILE_SUFFIX.search(target) else None
+        if where:
+            found.append(f"`{target}` is at `{where}`")
+        if not _FILE_SUFFIX.search(target) or absent is not None or where:
+            missed.append(target)
     if missed:
         names = _names(missed)
+        located = f" ({'; '.join(found)})" if found else ""
         findings.append(
             Finding(
                 LOOK,
-                f"You haven't read {names} this turn — read "
+                f"You haven't read {names} this turn{located} — read "
                 f"{'it' if len(missed) == 1 else 'them'} now, or say plainly that "
                 "you didn't.",
                 f"no tool read {names} this turn",
@@ -527,7 +535,7 @@ def ungrounded(
     records: Sequence[Dict[str, Any]],
     *,
     history: str = "",
-    exists: Optional[Callable[[str], bool]] = None,
+    locate: Optional[Callable[[str], Optional[str]]] = None,
 ) -> List[Finding]:
     """Every gap between *answer* and this turn's tool record, look first.
 
@@ -535,7 +543,7 @@ def ungrounded(
     not look, or that its figures are unverified, has nothing left to correct
     about looking or figures — only a false report of work done still counts.
     """
-    findings = look_findings(answer, query, records, exists, history)
+    findings = look_findings(answer, query, records, locate, history)
     if admits_unverified(answer):
         findings = [f for f in findings if f.note == _ABSENT_NOTE]
     else:
@@ -562,18 +570,28 @@ def unverified_note(findings: Sequence[Finding]) -> str:
     return UNVERIFIED_PREFIX + "; ".join(notes) + "."
 
 
-def path_exists(roots: Sequence[Optional[str]]) -> Callable[[str], bool]:
-    """An ``exists`` for :func:`look_findings`: absolute, or under any of *roots*."""
+def path_locator(
+    roots: Sequence[Optional[str]],
+) -> Callable[[str], Optional[str]]:
+    """A ``locate`` for :func:`look_findings`: the file's absolute path, or ``None``.
 
-    def exists(path: str) -> bool:
+    An absolute path is taken as given; a relative one is tried under each of
+    *roots* in order.
+    """
+
+    def locate(path: str) -> Optional[str]:
         expanded = os.path.expanduser(path)
-        if os.path.isabs(expanded):
-            return os.path.isfile(expanded)
-        return any(
-            root and os.path.isfile(os.path.join(root, expanded)) for root in roots
+        candidates = (
+            [expanded]
+            if os.path.isabs(expanded)
+            else [os.path.join(root, expanded) for root in roots if root]
         )
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                return os.path.normpath(candidate)
+        return None
 
-    return exists
+    return locate
 
 
 def _clip(text: str, limit: int = 120) -> str:
