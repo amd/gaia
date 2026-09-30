@@ -142,7 +142,9 @@ and easy to miss because nothing in the flow above mentions it.
 </Warning>
 
 You only need to declare the scopes the agents you actually use will
-request — the [Email Triage agent](/guides/email) needs `gmail.modify`,
+request — the flagship [`gaia` agent](/guides/email) needs only
+`gmail.readonly`, while the retired
+[Email Triage agent](/guides/email-integration) needs `gmail.modify`,
 `gmail.send`, `calendar.events`, and `calendar.readonly`; `openid` /
 `email` / `profile` are requested on every connection regardless of
 agent. `email` is listed twice, once as the short OIDC name and once as
@@ -253,7 +255,7 @@ completes.
 <Note>
   **Prefer the CLI?** The whole flow works headless without opening the
   Agent UI — `gaia connectors configure google --client-id … --client-secret …`
-  then `gaia connectors connect google`. See the [Email guide's retired-agent
+  then `gaia connectors connect google`. See the [Email guide's
   setup](/guides/email#setup) for the exact commands.
 </Note>
 
@@ -310,9 +312,10 @@ gaia connectors grants grant google builtin:chat \
   hand-typed list that omits `openid` can still connect but resolve to
   `Connected as default` instead of your real address — one reason
   `--grant-agent` is the recommended path for any agent that supports it.
-  The [Email guide's retired-agent setup](/guides/email#setup) has the full
-  two-command sequence; a missing grant either way surfaces as
-  `AGENT_NOT_GRANTED`.
+  The [Email guide's setup](/guides/email#setup) has the full two-command
+  sequence for the flagship, and the [retired agent's
+  setup](/guides/email-integration#setup-retired-agent) has its own; a missing
+  grant either way surfaces as `AGENT_NOT_GRANTED`.
 </Note>
 
 The default scopes a connection is established with, and every scope an
@@ -418,7 +421,8 @@ Two places — both work:
 ## See also
 
 - [Connectors overview](/connectors)
-- [Email Triage agent](/guides/email) — the agent that uses these Gmail scopes
+- [Email](/guides/email) — the flagship agent, which uses `gmail.readonly`
+- [Email Triage Agent (retired)](/guides/email-integration) — the retired agent, which uses the broader Gmail and Calendar scopes
 - [Google OAuth client runbook](https://github.com/amd/gaia/blob/main/docs/runbooks/google-oauth-client.md) — the AMD-internal client + rotation procedure (maintainers)
 - [Manage OAuth Clients — Google Cloud Console Help](https://support.google.com/cloud/answer/15549257)
 - [Get started with the Google Auth Platform — Google Cloud Console Help](https://support.google.com/cloud/answer/15544987)

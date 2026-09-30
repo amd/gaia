@@ -919,9 +919,12 @@ gaia prompt "Write a story" \
 
 ### Email Command
 
-<Card title="Email Triage" icon="envelope" href="/guides/email">
-  Read, organize, and reply to Gmail with all email content processed locally on your machine.
+<Card title="Email Triage Agent (retired)" icon="envelope" href="/guides/email-integration">
+  Triage, organize, and reply to Gmail with all email content processed locally. Retired — kept installable, no longer developed.
 </Card>
+
+`gaia email` drives the **retired** Email Triage Agent, not the flagship. To read your
+mail with the agent you get by asking GAIA about it, see [Email](/guides/email).
 
 ```bash
 gaia email -q "<query>"           # one-shot
@@ -946,9 +949,12 @@ gaia email -v -q "Triage my inbox"  # verbose logs for benchmarking
 
 **Privacy:** all email body inference runs locally on Lemonade — the agent **rejects** any non-local LLM endpoint at startup.
 
-[→ Full Email Triage Agent Documentation](/guides/email)
+[→ Full Email Triage Agent documentation (retired)](/guides/email-integration)
 
 #### `gaia email autonomy` — autonomy control
+
+Autonomy is a feature of the **retired** Email Triage Agent; the flagship has no
+autonomy levels.
 
 A thin client over the sidecar's `/v1/email/agent/autonomy*` REST routes, relayed
 through the daemon like every other `gaia email` command (same auth path — no
