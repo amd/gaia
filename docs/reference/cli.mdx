@@ -784,6 +784,12 @@ gaia chat [MESSAGE] [OPTIONS]
 - **No message**: Starts interactive chat session
 - **Message provided**: Sends single message and exits
 
+**Output:** the answer goes to stdout; the device banner, model-load progress,
+warnings and errors go to stderr, so `gaia chat -q "…" > answer.txt` captures
+just the answer. INFO diagnostics are written only to the log file
+(`~/.gaia/gaia.log`, or the path in `GAIA_AGENT_LOG`); `--debug` also shows them
+on stderr.
+
 **Options:**
 
 | Option | Type | Default | Description |
@@ -803,7 +809,7 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--stats`, `--show-stats` | flag | false | Show performance statistics |
 | `--stream` | flag | false | Enable streaming responses |
 | `--show-prompts` | flag | false | Display prompts sent to LLM |
-| `--debug` | flag | false | Enable debug output |
+| `--debug` | flag | false | Enable debug output, including INFO diagnostics on stderr |
 | `--list-tools` | flag | false | List available tools and exit |
 | `--ui` | flag | false | Launch the Chat Web UI (browser-based interface on port 4200) |
 | `--ui-port` | integer | 4200 | Port for the Agent UI server (used with `--ui`) |
