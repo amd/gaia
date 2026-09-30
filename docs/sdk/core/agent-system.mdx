@@ -1036,7 +1036,7 @@ without looking and report work they never did:
 
 | Check | Fires when |
 |-------|------------|
-| look | The request names a file (that exists) or a snake_case symbol such as `parse_updated()`, and no tool call named it or returned it; or, in such a turn, the answer says something "does not exist" with no search, listing or read on record. |
+| look | The request names a file (that exists) or a snake_case symbol such as `parse_updated()`, and no successful read named it — a failed read, or the name appearing in a directory listing, does not count; the correction says where the file is on disk. Or, in such a turn, the answer says something "does not exist" with no search, listing or read on record. |
 | content | The answer presents data — a table or an untagged/CSV/JSON code block — and its values (with any decimals, dates and percentages in the surrounding prose) appear in no tool output, tool argument, or earlier user or tool message. A value one arithmetic step from two grounded values the answer shows (a sum, a difference, an average of two, a ratio) counts as grounded; small whole numbers, versions and estimates are not judged. |
 | action | The answer says it searched, read, ran, tested, verified or documented something, and no tool of that kind ran. Negated clauses ("I did not run the tests"), advice ("once you have run it") and descriptions ("it is tested on every pull request") are not claims. |
 
