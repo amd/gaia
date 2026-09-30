@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/amd/gaia/tui/internal/lemonade"
 	tea "github.com/charmbracelet/bubbletea"
@@ -186,5 +187,22 @@ func TestSetupSaysWhereAPastedKeyIsKept(t *testing.T) {
 				t.Errorf("height %d: stale %q in:\n%s", height, stale, view)
 			}
 		}
+	}
+}
+
+// A slow read sent before registration cannot undo the key registration revealed.
+func TestAnOlderProviderReadCannotUndoANewerOne(t *testing.T) {
+	m := New("", 100, 30)
+	m.selected = 1
+	m = m.setup()
+	sent := time.Now()
+	fresh := loadedMsg{started: sent, providers: []lemonade.Provider{{Name: "fireworks", EnvKey: true}}}
+	stale := loadedMsg{started: sent.Add(-time.Second)}
+	for _, msg := range []loadedMsg{fresh, stale} {
+		next, _ := m.Update(msg)
+		m = next.(Model)
+	}
+	if view := flat(m); !strings.Contains(view, "A key is already set — Enter connects") {
+		t.Errorf("a stale read put the key prompt back:\n%s", view)
 	}
 }

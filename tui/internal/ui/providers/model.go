@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/theme"
@@ -26,6 +27,8 @@ type loadedMsg struct {
 	source    *lemonade.Client
 	providers []lemonade.Provider
 	err       error
+	// started is when the read was sent, so a slow one cannot undo a newer one.
+	started time.Time
 }
 type modelsMsg struct {
 	source *lemonade.Client
@@ -61,6 +64,8 @@ type Model struct {
 	setupStep int
 	// down is set while the last provider read found no Lemonade at all.
 	down bool
+	// readAt is when the provider read now shown was sent.
+	readAt time.Time
 }
 
 var names = []string{"local", "fireworks", "amd"}
@@ -80,8 +85,9 @@ func (m Model) Init() tea.Cmd {
 		for _, name := range names[1:] {
 			restoreKey(name)
 		}
+		started := time.Now()
 		p, e := c.Providers(m.ctx)
-		return loadedMsg{source: c, providers: p, err: e}
+		return loadedMsg{source: c, providers: p, err: e, started: started}
 	}
 }
 
@@ -113,11 +119,12 @@ func (m Model) register() tea.Cmd {
 	p := lemonade.Provider{Name: "fireworks", BaseURL: lemonade.FireworksURL, Header: "Authorization", Prefix: "Bearer "}
 	return func() tea.Msg {
 		if err := c.Configure(m.ctx, p, ""); err != nil {
-			return loadedMsg{source: c, err: err}
+			return loadedMsg{source: c, err: err, started: time.Now()}
 		}
 		restoreKey(p.Name)
+		started := time.Now()
 		providers, err := c.Providers(m.ctx)
-		return loadedMsg{source: c, providers: providers, err: err}
+		return loadedMsg{source: c, providers: providers, err: err, started: started}
 	}
 }
 func (m Model) listed(name string) bool {
@@ -208,6 +215,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.source != nil && v.source != m.client {
 			return m, nil
 		}
+		if v.started.Before(m.readAt) {
+			return m, nil
+		}
+		m.readAt = v.started
 		// A failed read keeps what is known rather than forgetting every key.
 		if v.err == nil || v.providers != nil {
 			m.providers = v.providers
