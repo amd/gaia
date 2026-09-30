@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from gaia.agents.base.project_deps import declared_python_deps, missing_deps
 from gaia.agents.base.system_context import DEV_TOOL_PROBES, probe_binaries
 from gaia.agents.base.turn_metrics import count_tokens
 from gaia.logger import get_logger
@@ -236,6 +237,10 @@ class ProjectMap:
     tools_absent: List[str] = field(default_factory=list)
     #: The subset of the above on ``run_shell_command``'s read-only list.
     shell_commands: List[str] = field(default_factory=list)
+    #: Runtime dependencies the manifest declares, and those ``python`` lacks
+    #: (``None``: not a Python project, or the interpreter could not be asked).
+    python_deps: List[str] = field(default_factory=list)
+    missing_python_deps: Optional[List[str]] = None
     quirks: PlatformQuirks = field(default_factory=detect_platform_quirks)
     fingerprint: str = ""
 
@@ -371,6 +376,7 @@ def _collect(path: Path, fingerprint: str) -> ProjectMap:
     # most of the toolchain is not allowlisted — ``uv`` and ``npm`` are on this
     # machine and ``run_shell_command`` runs either only once the user approves.
     shell_commands = sorted(n for n in allowlist if probed.get(n))
+    python_deps = declared_python_deps(path)
 
     return ProjectMap(
         root=str(path),
@@ -383,6 +389,8 @@ def _collect(path: Path, fingerprint: str) -> ProjectMap:
         tools_present=tools_present,
         tools_absent=tools_absent,
         shell_commands=shell_commands,
+        python_deps=python_deps,
+        missing_python_deps=missing_deps(python_deps),
         quirks=detect_platform_quirks(),
         fingerprint=fingerprint,
     )
@@ -511,6 +519,7 @@ def render_project_map(
     index_status: Optional[str] = None,
     token_budget: int = PROJECT_MAP_TOKEN_BUDGET,
     has_shell_tool: bool = True,
+    work_roots: Sequence[str] = (),
 ) -> str:
     """Render *pm* as a system-prompt block of at most *token_budget* tokens.
 
@@ -531,6 +540,10 @@ def render_project_map(
         header.append(f"Code repository: yes ({detail})")
     else:
         header.append("Code repository: no (no VCS directory, no known manifest)")
+    if work_roots:
+        header.append(
+            "You can read and write only under: " + "; ".join(sorted(work_roots))
+        )
 
     quirks = [
         "Platform (these three change the commands you write):",
@@ -574,6 +587,19 @@ def render_project_map(
     elif pm.tools_present:
         commands.append(f"Installed: {', '.join(pm.tools_present)}")
 
+    deps: List[str] = []
+    if pm.missing_python_deps:
+        deps.append(
+            f"Python dependencies NOT installed for `python`: "
+            f"{', '.join(pm.missing_python_deps)} (of {len(pm.python_deps)} "
+            "declared). Importing the project, and running its tests, fails "
+            "until they are installed."
+        )
+    elif pm.missing_python_deps == [] and pm.python_deps:
+        deps.append(
+            f"Python dependencies: all {len(pm.python_deps)} declared are installed."
+        )
+
     index: List[str] = [f"Code index: {index_status}"] if index_status else []
 
     # The header always ships — a map that says nothing but "you are in
@@ -584,6 +610,7 @@ def render_project_map(
     used = count_tokens(head)
 
     optional: Sequence[str] = (
+        "\n".join(deps),
         "\n".join(quirks),
         _fit("\n".join(shape), int(token_budget * _DIR_SHAPE_SHARE)),
         "\n".join(entries),
@@ -686,7 +713,12 @@ class ProjectMapMixin:
             pm,
             index_status=self._code_index_status(pm),
             has_shell_tool=self._shell_tool_offered(),
+            work_roots=self._work_roots(),
         )
+
+    def _work_roots(self) -> List[str]:
+        validator = getattr(self, "path_validator", None)
+        return [str(p) for p in getattr(validator, "allowed_paths", None) or ()]
 
     def _shell_tool_offered(self) -> bool:
         """Whether *this turn* offers the shell, not whether the agent owns it.
