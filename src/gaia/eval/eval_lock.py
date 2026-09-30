@@ -10,6 +10,10 @@ enforces it for ``gaia eval agent`` and ``gaia eval tasks run``.
 The OS releases the lock when its holder dies, so a crashed run never leaves
 a stale lock. The holder's details live in a separate file because Windows
 refuses reads of a locked byte range.
+
+While the lock is held the machine is kept awake. On a Modern Standby PC an
+idle screen timeout puts the system into standby, where a local model's GPU
+work stalls: a run left unattended scores a machine that was asleep.
 """
 
 from __future__ import annotations
@@ -39,6 +43,33 @@ def _holder_description() -> str:
     return f"PID {holder.get('pid')} (`{holder.get('command')}`, started {started})"
 
 
+#: SetThreadExecutionState flags: keep the system and display on until cleared.
+_ES_CONTINUOUS = 0x80000000
+_ES_SYSTEM_REQUIRED = 0x00000001
+_ES_DISPLAY_REQUIRED = 0x00000002
+
+
+@contextlib.contextmanager
+def _stay_awake():
+    """Hold off idle standby for this thread while a run is in progress."""
+    if sys.platform != "win32":
+        yield
+        return
+    import ctypes
+
+    set_state = ctypes.windll.kernel32.SetThreadExecutionState
+    if not set_state(_ES_CONTINUOUS | _ES_SYSTEM_REQUIRED | _ES_DISPLAY_REQUIRED):
+        raise OSError(
+            "Could not ask Windows to stay awake for the eval (SetThreadExecutionState "
+            "failed). An unattended run would stall when the PC goes into standby; "
+            "keep it awake another way (e.g. powercfg) and retry."
+        )
+    try:
+        yield
+    finally:
+        set_state(_ES_CONTINUOUS)
+
+
 @contextlib.contextmanager
 def exclusive_eval(command: str):
     """Hold the machine-wide eval lock for the duration of *command*.
@@ -47,7 +78,8 @@ def exclusive_eval(command: str):
     already holds it.
     """
     if os.environ.get(BYPASS_ENV) == "1":
-        yield
+        with _stay_awake():
+            yield
         return
 
     fd = os.open(str(LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o644)
@@ -68,7 +100,8 @@ def exclusive_eval(command: str):
         encoding="utf-8",
     )
     try:
-        yield
+        with _stay_awake():
+            yield
     finally:
         HOLDER_FILE.unlink(missing_ok=True)
         unlock(fd)

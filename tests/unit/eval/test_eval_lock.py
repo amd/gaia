@@ -94,3 +94,36 @@ def test_the_bypass_skips_the_lock(tmp_path, monkeypatch):
             pass
     finally:
         _kill_tree(holder)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows power requests")
+def test_the_machine_is_kept_awake_while_an_eval_runs(monkeypatch):
+    """An idle screen timeout sent the PC into Modern Standby mid-run and the
+    local model's GPU work stalled; the run scored a sleeping machine."""
+    import ctypes
+
+    calls = []
+    monkeypatch.setattr(
+        ctypes.windll.kernel32,
+        "SetThreadExecutionState",
+        lambda flags: calls.append(flags) or 1,
+    )
+    with eval_lock.exclusive_eval("gaia eval tasks run"):
+        assert calls == [0x80000000 | 0x1 | 0x2]
+    assert calls[-1] == 0x80000000
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows power requests")
+def test_a_refused_power_request_fails_the_run_loudly(monkeypatch):
+    import ctypes
+
+    monkeypatch.setattr(
+        ctypes.windll.kernel32, "SetThreadExecutionState", lambda flags: 0
+    )
+    with pytest.raises(OSError, match="stay awake"):
+        with eval_lock.exclusive_eval("gaia eval agent"):
+            pass
+    # The lock must not stay held after the failure.
+    with pytest.raises(OSError):
+        with eval_lock.exclusive_eval("gaia eval agent"):
+            pass
