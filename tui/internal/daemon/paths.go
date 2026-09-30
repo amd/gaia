@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // EnvHome overrides the daemon state directory (tests, and any non-default
@@ -29,6 +30,11 @@ const EnvHome = "GAIA_DAEMON_HOME"
 func HostDir() (string, error) {
 	if override := os.Getenv(EnvHome); override != "" {
 		return override, nil
+	}
+	// GAIA_HOME isolates the whole runtime; a daemon outside it would manage
+	// another home's Lemonade. Mirrors src/gaia/daemon/paths.py.
+	if gaiaHome := strings.TrimSpace(os.Getenv("GAIA_HOME")); gaiaHome != "" {
+		return filepath.Join(gaiaHome, "host"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
