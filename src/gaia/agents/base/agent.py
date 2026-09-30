@@ -9696,8 +9696,13 @@ Do NOT wrap conversational replies in JSON.
         if not scope.answered:
             return self._answer_after_repeated_calls(
                 tool_name,
-                scope.failures.get(tool_name, 0),
-                [{"status": "error", "error": scope.last_error.get(tool_name, "")}],
+                scope.failures.get(scope.end_key or tool_name, 0),
+                [
+                    {
+                        "status": "error",
+                        "error": scope.last_error.get(scope.end_key or tool_name, ""),
+                    }
+                ],
                 messages,
                 conversation,
                 steps_taken,
