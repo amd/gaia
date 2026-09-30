@@ -54,6 +54,14 @@ class _Upstream(BaseHTTPRequestHandler):
                             "completion_tokens": 5,
                             "prompt_tokens_details": {"cached_tokens": 20},
                         },
+                        "timings": {
+                            "prompt_n": 30,
+                            "prompt_ms": 60.0,
+                            "predicted_n": 5,
+                            "predicted_ms": 50.0,
+                            "cache_n": 20,
+                            "prompt_per_second": 500.0,
+                        },
                     }
                 ).encode()
             )
@@ -165,3 +173,38 @@ def test_paths_pass_through_as_sent(base, root):
 
 def test_a_body_that_is_not_json_is_forwarded_as_is():
     assert gw.keep_system_messages(b"not json") == b"not json"
+
+
+def test_each_call_keeps_its_latency_and_the_backends_own_timing(upstream):
+    """Prefill and decode speed come from llama.cpp's measurement, not wall time."""
+    with gw.Gateway(upstream, UPSTREAM_KEY) as gateway:
+        requests.post(
+            f"{gateway.url}/api/v1/chat/completions",
+            json={"model": "m", "messages": []},
+            timeout=30,
+        )
+        record = gateway.take_usage().records[0]
+    assert record["timings"] == {
+        "prompt_n": 30,
+        "prompt_ms": 60.0,
+        "predicted_n": 5,
+        "predicted_ms": 50.0,
+        "cache_n": 20,
+    }
+    assert record["seconds"] >= 0
+    assert 0 <= record["first_byte_seconds"] <= record["seconds"] + 0.01
+
+
+def test_a_streamed_reply_reports_the_timing_on_its_last_event():
+    body = (
+        b'data: {"choices":[{"delta":{"content":"h"}}]}\n\n'
+        b'data: {"choices":[],"timings":{"prompt_n":9,"prompt_ms":3.0}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    assert gw.response_timings(body) == {"prompt_n": 9, "prompt_ms": 3.0}
+
+
+def test_a_backend_that_measured_nothing_reports_no_timing():
+    """A cloud-routed model sends usage only; no speed is invented for it."""
+    body = json.dumps({"choices": [], "usage": {"prompt_tokens": 3}}).encode()
+    assert gw.response_timings(body) == {}

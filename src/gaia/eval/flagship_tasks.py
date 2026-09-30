@@ -640,12 +640,28 @@ class TaskResult:
     reported_cost_usd: Optional[float] = None
     #: Tokens the model gateway counted, whichever harness ran.
     gateway_tokens: Dict[str, int] = field(default_factory=dict)
+    #: One entry per model call: latency, tokens, and the backend's own
+    #: prefill/decode timing where it reports one (llama.cpp does, cloud does not).
+    model_calls: List[Dict[str, Any]] = field(default_factory=list)
     #: Calls that reached, or tried to reach, the internet (``transcripts.web_uses``).
     web_uses: List[str] = field(default_factory=list)
     gh_calls: int = 0
     gh_blocked_writes: int = 0
     #: Tools that ran after the answer on work nobody asked for (``calls_after_answer``).
     after_answer: List[str] = field(default_factory=list)
+
+
+_CALL_FIELDS = ("seconds", "first_byte_seconds", "tokens", "timings")
+_MODEL_PATHS = ("/chat/completions", "/messages", "/responses")
+
+
+def model_calls(records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """The gateway's records for calls that reached the model, one entry each."""
+    return [
+        {k: r.get(k) for k in _CALL_FIELDS}
+        for r in records
+        if not r.get("unreachable") and str(r.get("path", "")).endswith(_MODEL_PATHS)
+    ]
 
 
 def scrub_judge_credentials() -> Dict[str, str]:
@@ -877,6 +893,7 @@ def run_task(
                     "cached": used.cached,
                     "output": used.output,
                 }
+                result.model_calls = model_calls(used.records)
                 if ran.error and used.unreachable:
                     # The backend was not there: not measured, whichever harness.
                     result.error_kind = "unavailable"
