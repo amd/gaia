@@ -217,6 +217,8 @@ def test_cd_slash_d_is_a_plain_cd():
     steps, error = _parse_line("cd /d /work/repo && git status")
     assert error is None, error
     assert steps[0].segments == [["cd", "/work/repo"]]
+    # The raw text a Windows cd target is read from loses the flag too.
+    assert steps[0].text == "cd /work/repo"
 
 
 def test_cd_with_any_other_flag_is_still_refused():

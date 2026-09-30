@@ -1225,6 +1225,10 @@ def _connector_runs(connector: str, previous_code: int) -> bool:
     return True
 
 
+#: The ``/d`` of a leading ``cd /d``, for the text a step keeps beside its segments.
+_CD_DRIVE_FLAG = re.compile(r"^(\s*cd)\s+/d(?=\s)", re.I)
+
+
 def _without_cd_drive_flag(segment: list) -> list:
     """``cd /d <dir>`` as ``cd <dir>``.
 
@@ -1390,7 +1394,7 @@ def _parse_line(command: str, bypass_gates: bool = False) -> tuple:
             return [], error
         segments = [_without_cd_drive_flag(segment) for segment in segments]
         step = _Step(
-            text=text.strip(),
+            text=_CD_DRIVE_FLAG.sub(r"\1", text).strip(),
             segments=segments,
             connector=connector,
             stderr_modes=tuple(modes.get(i, "") for i in range(len(segments))),
