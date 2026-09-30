@@ -567,14 +567,13 @@ class LemonadeProvider(LLMClient):
                 messages
             )
 
-        # Default to low temperature for deterministic responses (matches old LLMClient behavior)
-        kwargs.setdefault("temperature", 0.1)
-
-        # Stops local models looping on tables and paragraphs. Cloud models get
-        # none: the penalties hit their reasoning tokens and the thinking runs away.
-        # repeat_penalty / repeat_last_n are llama.cpp-native (sent via extra_body
-        # when streaming).
+        # Low temperature and penalties stop local models looping on tables and
+        # paragraphs. Cloud models get neither: near-greedy sampling and the
+        # penalties both send a reasoning model's thinking into a runaway, so
+        # they get the client's standard 0.7. repeat_penalty / repeat_last_n
+        # are llama.cpp-native (sent via extra_body when streaming).
         if not self._backend.cloud_model_provider(effective_model):
+            kwargs.setdefault("temperature", 0.1)
             kwargs.setdefault("frequency_penalty", 0.3)
             kwargs.setdefault("presence_penalty", 0.1)
             kwargs.setdefault("repeat_penalty", 1.1)
