@@ -56,15 +56,16 @@ gaia connectors configure google \
 
 Both flags are required together — Google rejects token requests that omit the secret even for Desktop-app PKCE clients.
 
-Then sign in and grant the flagship, in one command:
+Then sign in, and grant the flagship read access:
 
 ```bash
-gaia connectors connect google --grant-agent installed:gaia
+gaia connectors connect google --scopes https://www.googleapis.com/auth/gmail.readonly
+gaia connectors grants grant google installed:gaia --scopes https://www.googleapis.com/auth/gmail.readonly
 ```
 
-`--grant-agent installed:gaia` is enough on its own: GAIA reads the scopes the agent declares and authorizes + grants them in the same flow, so there is no `--scopes` list to type out or keep in sync. The consent screen asks for `gmail.readonly` and nothing more — read-only is the whole capability, so that is the whole ask.
+`gmail.readonly` is the whole ask — read-only is the whole capability. The second command is a local ledger write: no browser, no OAuth round-trip.
 
-The command prints an authorization URL. Open it in a browser **on the machine running GAIA** — the sign-in completes via a `127.0.0.1` callback on that box.
+The first command prints an authorization URL. Open it in a browser **on the machine running GAIA** — the sign-in completes via a `127.0.0.1` callback on that box.
 
 On a remote or headless host, open it there instead, or forward the callback port. The port is picked fresh on every run, so read it out of the printed URL's `redirect_uri=http%3A%2F%2F127.0.0.1%3A<PORT>%2Fcallback` and set the forward up in a second session **while the flow is still waiting** — there is no way to pin it in advance, and no device-code flow for Google.
 
@@ -76,19 +77,21 @@ Skip the grant and the first mail tool call fails, naming the one command that f
 
 **Already connected Google for something else?** You don't need a new browser round-trip — see [Granting Gmail to the flagship](#granting-gmail-to-the-flagship).
 
-### 2. Confirm Lemonade is running
+### 2. Set up GAIA's local model runtime
 
 ```bash
-gaia init
+gaia init          # add --yes for scripted, non-interactive runs
 ```
 
-Email-body inference runs on your local Lemonade instance — `gaia init` installs it, downloads the model, and starts it.
+Email-body inference runs on Lemonade — `gaia init` installs GAIA's own instance, downloads the model, and starts it. It is a six-step interactive flow that pauses at `Continue? [Y/n]` before the download, and refuses to run without a terminal unless you pass `--yes`. A Lemonade you already run yourself is separate: GAIA installs and serves its own on its own port.
 
 ### 3. Ask for your mail
 
 ```bash
-npx @amd-gaia/gaia    # or `gaia tui` in a source checkout
+npx @amd-gaia/gaia    # requires Node.js and npm
 ```
+
+Or run the installed binary directly — `~/.gaia/bin/gaia-tui`, which you may need to add to your `PATH`.
 
 Then just ask:
 
@@ -142,7 +145,7 @@ The agent could not reach any mailbox, and the error names each provider's own s
 
 ### "Gmail API returned 401"
 
-The access token has expired or scopes were revoked. Reconnect Google in Settings → Connections, or re-run `gaia connectors connect google --grant-agent installed:gaia`.
+The access token has expired or scopes were revoked. Reconnect Google in Settings → Connections, or re-run `gaia connectors connect google --scopes https://www.googleapis.com/auth/gmail.readonly`.
 
 ### Reading stopped partway through a big inbox
 
