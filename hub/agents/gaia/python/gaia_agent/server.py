@@ -849,7 +849,7 @@ async def query(request: QueryRequest):
         if request.can_answer_questions is False:
             # Nobody is there to answer. Let the loop know so it resolves
             # ambiguity itself instead of parking on a question forever.
-            handler.can_answer_questions = False
+            handler.answers_questions = False
 
         # Pushed context, never pulled (spec §2.4).
         if request.context and hasattr(agent, "conversation_history"):

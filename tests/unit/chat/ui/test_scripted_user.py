@@ -11,9 +11,11 @@ the backend opted in, and never outlives the scenario that set it.
 from unittest.mock import patch
 
 import pytest
+from starlette.testclient import TestClient
 
 from gaia.eval import runner
 from gaia.ui import scripted_user
+from gaia.ui.server import create_app
 from gaia.ui.sse_handler import SSEOutputHandler
 
 
@@ -107,10 +109,17 @@ def test_a_command_that_names_nothing_is_rejected():
 _UI = {"X-Gaia-UI": "1"}
 
 
+@pytest.fixture
+def ui_client():
+    """No lifespan: entering it installs a process-wide agent registry that
+    outlives this test and changes what later suites see."""
+    return TestClient(create_app(db_path=":memory:"))
+
+
 class TestTheEndpoint:
-    def test_refused_unless_the_backend_opted_in(self, ui_api_client, monkeypatch):
+    def test_refused_unless_the_backend_opted_in(self, ui_client, monkeypatch):
         monkeypatch.delenv(scripted_user.ENV_VAR, raising=False)
-        resp = ui_api_client.post(
+        resp = ui_client.post(
             "/api/eval/scripted-user",
             json={"decline_commands": ["pytest"]},
             headers=_UI,
@@ -119,9 +128,9 @@ class TestTheEndpoint:
         assert scripted_user.ENV_VAR in resp.json()["detail"]
         assert not scripted_user.active()
 
-    def test_sets_and_clears(self, ui_api_client, monkeypatch):
+    def test_sets_and_clears(self, ui_client, monkeypatch):
         monkeypatch.setenv(scripted_user.ENV_VAR, "1")
-        resp = ui_api_client.post(
+        resp = ui_client.post(
             "/api/eval/scripted-user",
             json={"decline_commands": ["pytest"]},
             headers=_UI,
@@ -129,7 +138,7 @@ class TestTheEndpoint:
         assert resp.status_code == 200
         assert scripted_user.active()
 
-        resp = ui_api_client.post("/api/eval/scripted-user", json={}, headers=_UI)
+        resp = ui_client.post("/api/eval/scripted-user", json={}, headers=_UI)
         assert resp.status_code == 200
         assert not scripted_user.active()
 
