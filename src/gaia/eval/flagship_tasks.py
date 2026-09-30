@@ -1590,8 +1590,10 @@ def swebench_grade_run(
         verdict = verdicts.get(entry["id"]) or swebench.Verdict(
             entry["id"], error="the harness returned no verdict"
         )
+        # A pass already set by an earlier grading is the harness's to revise.
+        graded_before = "swebench" in entry
         entry["swebench"] = verdict.as_dict()
-        if entry.get("error") or entry.get("passed") is False:
+        if entry.get("error") or (entry.get("passed") is False and not graded_before):
             continue
         if verdict.resolved is None:
             entry["passed"], entry["why"] = None, f"not graded: {verdict.error}"
