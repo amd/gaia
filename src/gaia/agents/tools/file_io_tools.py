@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, Optional
 from gaia.agents.base.errors import missing_host_attr_message, require_host_attr
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools.edit_impact import edit_impact
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
     file_read_record,
@@ -698,9 +699,11 @@ class FileIOToolsMixin:
                     detail,
                 )
 
+                impact = edit_impact(Path(file_path), current_content, modified_content)
                 return {
                     "status": "success",
                     "file_path": file_path,
+                    **({"impact": impact} if impact else {}),
                     "diff": diff,
                     "backup_created": backup_path is not None,
                     "backup_path": backup_path,
@@ -1221,9 +1224,12 @@ class FileIOToolsMixin:
                     detail,
                 )
 
+                impact = edit_impact(path, current_content, updated_content)
                 result = {
                     "status": "success",
                     "file_path": str(path),
+                    # Ahead of the diff, so a truncated result still carries it.
+                    **({"impact": impact} if impact else {}),
                     "old_size": len(current_content),
                     "new_size": len(updated_content),
                     "file_type": path.suffix[1:] if path.suffix else "unknown",
@@ -1528,10 +1534,12 @@ class FileIOToolsMixin:
                     detail,
                 )
 
+                impact = edit_impact(Path(file_path), content, modified_content)
                 return {
                     "status": "success",
                     "file_path": file_path,
                     "function_replaced": function_name,
+                    **({"impact": impact} if impact else {}),
                     "backup_path": backup_path if backup else None,
                     "diff": diff,
                 }
