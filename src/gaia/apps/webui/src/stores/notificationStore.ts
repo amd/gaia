@@ -19,28 +19,20 @@ import { confirmTool } from '../services/api';
 const MAX_NOTIFICATIONS = 500;
 
 /**
- * Legacy localStorage key for the "always allow" tool list.
- *
- * Always-allow grants now live in this store only, scoped to one chat
- * session: a tick on `run_shell_command` must not silently approve every
- * shell command in every chat for the life of the browser profile. The key
- * is still named here so `purgeLegacyAlwaysAllow()` can delete any list a
- * previous build persisted.
+ * Legacy localStorage key for a client-side "always allow" list. Grants now
+ * live on the backend, scoped to one call in one chat
+ * (`GET /api/chat/permissions`); this drops any list an older build persisted.
  */
 export const LEGACY_ALWAYS_ALLOW_TOOLS_KEY = 'gaia_always_allow_tools';
 
-/**
- * Drop any always-allow list persisted by an older build. Called once at app
- * start; grants from a previous run are not carried into this one.
- */
 export function purgeLegacyAlwaysAllow(): void {
     try {
         if (localStorage.getItem(LEGACY_ALWAYS_ALLOW_TOOLS_KEY) !== null) {
             localStorage.removeItem(LEGACY_ALWAYS_ALLOW_TOOLS_KEY);
             console.warn(
                 '[notificationStore] Discarded a persisted "always allow" tool list from an ' +
-                'earlier version — grants now cover one chat until you reload or restart GAIA and are ' +
-                'revocable in Settings → Tools & Permissions.'
+                'earlier version. Grants now cover one call in one chat and are listed in ' +
+                'Settings → Permissions.'
             );
         }
     } catch (err) {
@@ -48,12 +40,8 @@ export function purgeLegacyAlwaysAllow(): void {
     }
 }
 
-/** A tool the user allowed for the rest of one chat session. In memory only. */
-export interface SessionToolGrant {
-  sessionId: string;
-  tool: string;
-  grantedAt: number;
-}
+/** How the user answered a permission prompt. */
+export type PermissionDecision = 'allow' | 'always' | 'deny';
 
 /** These decisions apply to one displayed snapshot or code scope, never a tool name. */
 export function requiresFreshConsent(tool: string | undefined): boolean {
@@ -72,12 +60,6 @@ interface NotificationState {
   /** Active type filter for the notification center (null = all). */
   typeFilter: NotificationType | null;
 
-  /**
-   * "Allow for the rest of this chat" grants, keyed by chat session + tool.
-   * Never persisted — a reload or restart starts empty.
-   */
-  alwaysAllowGrants: SessionToolGrant[];
-
   // ── Actions ─────────────────────────────────────────────────────────
   addNotification: (notification: GaiaNotification) => void;
   dismiss: (id: string) => void;
@@ -87,17 +69,14 @@ interface NotificationState {
   setShowPanel: (show: boolean) => void;
   setTypeFilter: (type: NotificationType | null) => void;
 
-  /** Respond to a permission request notification. */
-  respondToPermission: (id: string, action: 'allow' | 'deny', remember: boolean) => Promise<void>;
+  /**
+   * Answer a permission request. Rejects when the answer did not reach the
+   * agent, so the prompt stays answerable and the caller can say why.
+   */
+  respondToPermission: (id: string, decision: PermissionDecision) => Promise<void>;
 
-  /** Whether `tool` carries an always-allow grant in chat session `sessionId`. */
-  isAlwaysAllowed: (sessionId: string, tool: string) => boolean;
-
-  /** Revoke one grant. */
-  revokeAlwaysAllow: (sessionId: string, tool: string) => void;
-
-  /** Revoke every grant in every chat. */
-  revokeAllAlwaysAllow: () => void;
+  /** Drop chat `sessionId`'s unanswered prompts once its run has ended. */
+  dismissSessionPrompts: (sessionId: string) => void;
 }
 
 // ── Store Implementation ─────────────────────────────────────────────────
@@ -106,7 +85,6 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   notifications: [],
   showPanel: false,
   typeFilter: null,
-  alwaysAllowGrants: [],
 
   addNotification: (notification) =>
     set((state) => ({
@@ -138,72 +116,36 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
 
   setTypeFilter: (type) => set({ typeFilter: type }),
 
-  respondToPermission: async (id, action, remember) => {
-    const notification = get().notifications.find((n) => n.id === id);
-    const chatSessionId = notification?.sessionId;
-    const rememberChoice = remember && !requiresFreshConsent(notification?.tool);
+  dismissSessionPrompts: (sessionId) =>
+    set((state) => ({
+      notifications: state.notifications.map((n) =>
+        n.type === 'permission_request' && n.sessionId === sessionId && !n.response
+          ? { ...n, dismissed: true }
+          : n
+      ),
+    })),
 
-    // Chat prompts belong to the backend even when Electron IPC is available.
+  respondToPermission: async (id, decision) => {
+    const notification = get().notifications.find((n) => n.id === id);
+    if (!notification) throw new Error('That permission request is no longer pending.');
+    const allow = decision !== 'deny';
+    const always = decision === 'always' && !requiresFreshConsent(notification.tool);
     const electronApi = window.gaiaAPI;
-    if (chatSessionId) {
-      try {
-        await confirmTool(chatSessionId, action === 'allow');
-      } catch (err) {
-        console.error('[notificationStore] Failed to send permission response via REST:', err);
-        return;
-      }
-    } else if (notification && electronApi?.notification?.respondPermission) {
-      try {
-        await electronApi.notification.respondPermission(id, action, rememberChoice);
-      } catch (err) {
-        console.error('[notificationStore] Failed to send permission response via IPC:', err);
-        // Don't update local state — the agent didn't receive the response.
-        // The permission prompt remains actionable so the user can retry.
-        return;
-      }
+    if (notification.sessionId) {
+      await confirmTool(notification.sessionId, allow, { always, confirmId: notification.confirmId });
+    } else if (electronApi?.notification?.respondPermission) {
+      await electronApi.notification.respondPermission(id, allow ? 'allow' : 'deny', always);
     } else {
-      console.error('[notificationStore] No permission response destination for notification:', id);
-      return;
+      throw new Error('No agent is waiting for this answer any more.');
     }
-    // Grant only within the chat that asked. A request with no chat session
-    // (an OS agent) has nothing to auto-approve here; its remember flag
-    // already went to the agent above.
-    const tool = notification?.tool;
-    if (action === 'allow' && rememberChoice && chatSessionId && tool) {
-      set((state) =>
-        state.alwaysAllowGrants.some((g) => g.sessionId === chatSessionId && g.tool === tool)
-          ? state
-          : {
-              alwaysAllowGrants: [
-                ...state.alwaysAllowGrants,
-                { sessionId: chatSessionId, tool, grantedAt: Date.now() },
-              ],
-            }
-      );
-    }
-    // Update local state after response is delivered
     set((state) => ({
       notifications: state.notifications.map((n) =>
         n.id === id
-          ? { ...n, response: action, respondedAt: Date.now(), read: true }
+          ? { ...n, response: allow ? 'allow' : 'deny', respondedAt: Date.now(), read: true }
           : n
       ),
     }));
   },
-
-  isAlwaysAllowed: (sessionId, tool) =>
-    !requiresFreshConsent(tool)
-    && get().alwaysAllowGrants.some((g) => g.sessionId === sessionId && g.tool === tool),
-
-  revokeAlwaysAllow: (sessionId, tool) =>
-    set((state) => ({
-      alwaysAllowGrants: state.alwaysAllowGrants.filter(
-        (g) => !(g.sessionId === sessionId && g.tool === tool)
-      ),
-    })),
-
-  revokeAllAlwaysAllow: () => set({ alwaysAllowGrants: [] }),
-
 }));
 
 // ── Selectors ────────────────────────────────────────────────────────────
@@ -227,12 +169,9 @@ export const selectVisibleNotifications = (state: NotificationState): GaiaNotifi
   return visible;
 };
 
-/** Every active "allow for the rest of this chat" grant. */
-export const selectAlwaysAllowGrants = (state: NotificationState): SessionToolGrant[] =>
-  state.alwaysAllowGrants;
-
-/** Get the first pending permission request (reactive selector for PermissionPrompt). */
-export const selectActivePermissionPrompt = (state: NotificationState): GaiaNotification | null =>
-  state.notifications.find(
-    (n) => n.type === 'permission_request' && !n.response && !n.dismissed
-  ) ?? null;
+/** The newest unanswered permission request of chat `sessionId` — the one the agent waits on. */
+export const selectSessionPermissionPrompt = (sessionId: string) =>
+  (state: NotificationState): GaiaNotification | null =>
+    state.notifications.find(
+      (n) => n.type === 'permission_request' && n.sessionId === sessionId && !n.response && !n.dismissed
+    ) ?? null;

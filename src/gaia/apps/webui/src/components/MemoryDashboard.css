@@ -2,7 +2,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Memory Dashboard — agent memory observability */
 
-/* ── Full-page layout (same pattern as SettingsPage) ─── */
+/* ── Full-page layout ─── */
 .memory-dashboard-page {
     display: flex;
     flex-direction: column;

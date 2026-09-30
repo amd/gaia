@@ -53,30 +53,46 @@ describe('chatStore streaming state', () => {
     });
 });
 
-describe('chatStore Hub navigation (#2206)', () => {
+describe('chatStore full-page views', () => {
     beforeEach(() => {
-        useChatStore.setState({ showHub: false, currentSessionId: null });
+        useChatStore.setState({ showMemoryDashboard: false, showSchedules: false, currentSessionId: null });
     });
 
-    it('selecting a session leaves the Hub view (Home → session regression)', () => {
-        // Home opens the full-screen Hub.
-        useChatStore.getState().setShowHub(true);
-        expect(useChatStore.getState().showHub).toBe(true);
-
-        // Clicking a session must drop the Hub and switch to the chat view,
-        // not strand the user on the Hub (#2206).
+    it.each([
+        ['memory', () => useChatStore.getState().setShowMemoryDashboard(true)],
+        ['schedules', () => useChatStore.getState().setShowSchedules(true)],
+    ])('selecting a chat leaves the %s view', (_name, open) => {
+        open();
         useChatStore.getState().setCurrentSession('session-1');
-        expect(useChatStore.getState().showHub).toBe(false);
-        expect(useChatStore.getState().currentSessionId).toBe('session-1');
+        const s = useChatStore.getState();
+        expect(s.showMemoryDashboard).toBe(false);
+        expect(s.showSchedules).toBe(false);
+        expect(s.currentSessionId).toBe('session-1');
     });
 
-    it('clearing the session (Home) does not fight setShowHub(true)', () => {
-        // Home calls setCurrentSession(null) *then* setShowHub(true); the null
-        // clear must not touch showHub or the Hub would never open.
+    it('clearing the chat does not close a view opened right after', () => {
         useChatStore.getState().setCurrentSession(null);
-        useChatStore.getState().setShowHub(true);
-        expect(useChatStore.getState().showHub).toBe(true);
+        useChatStore.getState().setShowSchedules(true);
+        expect(useChatStore.getState().showSchedules).toBe(true);
         expect(useChatStore.getState().currentSessionId).toBeNull();
+    });
+
+    it('memory and schedules are mutually exclusive', () => {
+        useChatStore.getState().setShowMemoryDashboard(true);
+        useChatStore.getState().setShowSchedules(true);
+        expect(useChatStore.getState().showMemoryDashboard).toBe(false);
+        expect(useChatStore.getState().showSchedules).toBe(true);
+    });
+});
+
+describe('chatStore settings dialog', () => {
+    it('opens on General by default, on a named section, and closes', () => {
+        useChatStore.getState().openSettings();
+        expect(useChatStore.getState().settingsSection).toBe('general');
+        useChatStore.getState().openSettings('permissions');
+        expect(useChatStore.getState().settingsSection).toBe('permissions');
+        useChatStore.getState().closeSettings();
+        expect(useChatStore.getState().settingsSection).toBeNull();
     });
 });
 

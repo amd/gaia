@@ -18,7 +18,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
-import { useNotificationStore, selectActivePermissionPrompt } from '../../stores/notificationStore';
+import { useNotificationStore, selectSessionPermissionPrompt } from '../../stores/notificationStore';
 import type { AgentInfo, Session, StreamEvent } from '../../types';
 import * as api from '../../services/api';
 
@@ -35,7 +35,7 @@ const SESSION: Session = {
     system_prompt: null,
     message_count: 0,
     document_ids: [],
-    agent_type: 'email',
+    agent_type: 'gaia',
 };
 
 const EMAIL_AGENT: AgentInfo = {
@@ -67,6 +67,7 @@ beforeEach(() => {
 
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
     mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+    mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({
         documents: [],
         total: 0,
@@ -88,7 +89,6 @@ beforeEach(() => {
 
     useChatStore.setState({
         agents: [EMAIL_AGENT],
-        activeAgentId: 'email',
         sessions: [SESSION],
         currentSessionId: SESSION.id,
         messages: [],
@@ -117,10 +117,10 @@ async function driveSend() {
     render(<ChatView sessionId={SESSION.id} />);
 
     await act(async () => {
-        fireEvent.change(screen.getByLabelText('Message input'), {
+        fireEvent.change(screen.getByLabelText('Message'), {
             target: { value: 'triage my inbox' },
         });
-        fireEvent.click(screen.getByLabelText('Send message'));
+        fireEvent.click(screen.getByLabelText('Send'));
     });
 
     expect(capturedCallbacks).not.toBeNull();
@@ -169,14 +169,14 @@ describe('ChatView needs_input wiring (#2595)', () => {
         await driveSend();
 
         expect(useNotificationStore.getState().notifications).toEqual([]);
-        expect(selectActivePermissionPrompt(useNotificationStore.getState())).toBeNull();
+        expect(selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState())).toBeNull();
 
         act(() => {
             capturedCallbacks!.onAgentEvent(needsInputEvent);
         });
 
         expect(useNotificationStore.getState().notifications).toEqual([]);
-        expect(selectActivePermissionPrompt(useNotificationStore.getState())).toBeNull();
+        expect(selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState())).toBeNull();
     });
 
     it('answering the rendered card calls respondToInput with the session and request id', async () => {

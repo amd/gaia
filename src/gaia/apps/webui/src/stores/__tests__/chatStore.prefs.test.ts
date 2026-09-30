@@ -39,12 +39,24 @@ describe('UI preferences survive a blocked localStorage -- loudly', () => {
         const { useChatStore } = await import('../chatStore');
         breakStorage('write denied');
 
-        useChatStore.getState().setActiveAgentId('email');
+        useChatStore.getState().setSidebarCollapsed(true);
 
-        expect(useChatStore.getState().activeAgentId).toBe('email');
+        expect(useChatStore.getState().sidebarCollapsed).toBe(true);
         expect(warn, 'a refused preference write was swallowed silently').toHaveBeenCalled();
-        expect(warnings()).toMatch(/gaia-active-agent-id/);
+        expect(warnings()).toMatch(/gaia-chat-sidebar-collapsed/);
         expect(warnings(), 'the warning must say what the user loses').toMatch(/reset on reload/);
+    });
+
+    it('still applies a theme choice the store refuses to save', async () => {
+        const { useChatStore } = await import('../chatStore');
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        breakStorage('write denied');
+
+        useChatStore.getState().setThemePreference('light');
+
+        expect(useChatStore.getState().themePreference).toBe('light');
+        expect(useChatStore.getState().theme).toBe('light');
+        expect(warnings()).toMatch(/gaia-chat-theme/);
     });
 
     it('warns, and falls back to the default, when the read is refused', async () => {
@@ -53,9 +65,8 @@ describe('UI preferences survive a blocked localStorage -- loudly', () => {
 
         const { useChatStore } = await import('../chatStore');
 
-        // The flagship, not `chat` — that id is hidden from the picker now, so
-        // falling back to it would open on an agent the backend does not list.
-        expect(useChatStore.getState().activeAgentId).toBe('gaia');
+        expect(useChatStore.getState().themePreference).toBe('dark');
+        expect(useChatStore.getState().sidebarCollapsed).toBe(false);
         expect(warn, 'an unreadable preference was swallowed silently').toHaveBeenCalled();
         expect(warnings()).toMatch(/unreadable/);
     });
@@ -64,7 +75,7 @@ describe('UI preferences survive a blocked localStorage -- loudly', () => {
         const { useChatStore } = await import('../chatStore');
         breakStorage('write denied');
 
-        useChatStore.getState().setSidebarWidth(420);
+        useChatStore.getState().setSidebarCollapsed(true);
 
         expect(warnings()).toMatch(/private-browsing|site-data/);
     });

@@ -124,7 +124,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
   // Handle approve for permission_request
   const handleApprove = useCallback(
     (notif: GaiaNotification) => {
-      respondToPermission(notif.id, 'allow', false);
+      respondToPermission(notif.id, 'allow').catch((err) => console.error('[NotificationCenter] allow failed:', err));
     },
     [respondToPermission]
   );
@@ -132,7 +132,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
   // Handle deny for permission_request
   const handleDeny = useCallback(
     (notif: GaiaNotification) => {
-      respondToPermission(notif.id, 'deny', false);
+      respondToPermission(notif.id, 'deny').catch((err) => console.error('[NotificationCenter] deny failed:', err));
     },
     [respondToPermission]
   );

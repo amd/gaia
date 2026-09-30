@@ -2,39 +2,25 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, selectUnreadCount } from '../stores/notificationStore';
+import { useNotificationStore } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
-import { getAgentIcon } from './agentIcons';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
 import { ConnectorRetryBanner } from './ConnectorRetryBanner';
-import type { Message, StreamEvent, AgentStep, Attachment, Session, AgentInfo, RenderCardData } from '../types';
+import type { Message, StreamEvent, AgentStep, RenderCardData } from '../types';
 
 import './ChatView.css';
-import DashboardProgress from './DashboardProgress';
-
-const EMPTY_SUGGESTIONS = [
-    'Summarize a document',
-    'Find a file on my computer',
-    'Analyze a spreadsheet',
-    'Show my recent files',
-];
-
-function formatAgentCapabilities(agent?: AgentInfo): string {
-    if (!agent) return '';
-    const parts: string[] = [];
-    if (typeof agent.tools_count === 'number' && agent.tools_count > 0) {
-        parts.push(`${agent.tools_count} ${agent.tools_count === 1 ? 'tool' : 'tools'}`);
-    }
-    const tags = (agent.tags ?? []).filter(Boolean).slice(0, 3);
-    if (tags.length > 0) parts.push(tags.join(', '));
-    return parts.join(' | ');
-}
+import { Composer } from './Composer';
+import { ModelChip } from './ModelChip';
+import { PermissionModeChip } from './PermissionModeChip';
+import { PermissionPrompt } from './PermissionPrompt';
+import { useAttachments } from '../hooks/useAttachments';
+import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -164,26 +150,21 @@ function policyReceiptAnchor(receiptId: string): string {
 
 interface ChatViewProps {
     sessionId: string;
-    onCreateAgent?: () => void;
-    onAgentChange?: (agentId: string) => void;
 }
 
-export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewProps) {
+export function ChatView({ sessionId }: ChatViewProps) {
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
         agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
         cards, appendCard, clearCards,
-        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, setShowMemoryDashboard, isLoadingMessages, setLoadingMessages,
+        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
         systemStatus,
-        agents, activeAgentId, setActiveAgentId,
     } = useChatStore();
 
     const addNotification = useNotificationStore((s) => s.addNotification);
-    const showNotificationPanel = useNotificationStore((s) => s.showPanel);
     const setNotificationPanelVisible = useNotificationStore((s) => s.setShowPanel);
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
-    const notificationUnreadCount = useNotificationStore(selectUnreadCount);
     const pendingPrompt = useChatStore((s) => s.pendingPrompt);
 
     const session = sessions.find((s) => s.id === sessionId);
@@ -195,80 +176,12 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const [isDragOver, setIsDragOver] = useState(false);
     const [showScrollBtn, setShowScrollBtn] = useState(false);
     // Store agent steps snapshot for completed messages
-    const [completedSteps, setCompletedSteps] = useState<AgentStep[]>([]);
-    const [attachments, setAttachments] = useState<Attachment[]>([]);
+    const attach = useAttachments();
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
     const [policyToast, setPolicyToast] = useState<{ tool: string; receiptId?: string } | null>(null);
-    const [showDashboardProgress, setShowDashboardProgress] = useState(false);
-    // Agent picker dropdown state
-    const [agentPickerOpen, setAgentPickerOpen] = useState(false);
-    const agentPickerRef = useRef<HTMLDivElement>(null);
-    // Use session's stored agent_type as the source of truth for the picker display
-    const displayedAgentId = session?.agent_type || activeAgentId;
-    // Resolve human-readable agent names for the message header
-    const sessionAgentName = agents.find((a) => a.id === session?.agent_type)?.name;
-    const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name;
-    const displayedAgent = useMemo(
-        () => agents.find((a) => a.id === displayedAgentId),
-        [agents, displayedAgentId],
-    );
-    const displayedAgentCapabilities = useMemo(
-        () => formatAgentCapabilities(displayedAgent),
-        [displayedAgent],
-    );
-    const DisplayedAgentIcon = getAgentIcon(displayedAgent?.icon);
-
-    // Close agent picker on outside click
-    useEffect(() => {
-        if (!agentPickerOpen) return;
-        const handler = (e: MouseEvent) => {
-            if (agentPickerRef.current && !agentPickerRef.current.contains(e.target as Node)) {
-                setAgentPickerOpen(false);
-            }
-        };
-        document.addEventListener('mousedown', handler);
-        return () => document.removeEventListener('mousedown', handler);
-    }, [agentPickerOpen]);
-
-    // Suffix for the notification id — Date.now() alone repeats on rapid retries.
-    const agentSwitchErrorSeq = useRef(0);
-
-    const handleAgentChange = useCallback(async (newAgentId: string) => {
-        setAgentPickerOpen(false);
-        if (newAgentId === displayedAgentId) return;
-        const previousAgentId = displayedAgentId; // capture before any mutations
-        setActiveAgentId(newAgentId);
-        if (messages.length === 0) {
-            updateSessionInList(sessionId, { agent_type: newAgentId } as Partial<Session>);
-            try {
-                await api.updateSession(sessionId, { agent_type: newAgentId });
-            } catch (err) {
-                // Roll back optimistic update on failure and surface the backend reason
-                updateSessionInList(sessionId, { agent_type: previousAgentId } as Partial<Session>);
-                setActiveAgentId(previousAgentId);
-                const detail = err instanceof Error ? err.message : 'Could not switch agent.';
-                agentSwitchErrorSeq.current += 1;
-                addNotification({
-                    id: `agent-switch-${Date.now()}-${agentSwitchErrorSeq.current}`,
-                    type: 'error',
-                    agentId: sessionId,
-                    agentName: 'GAIA',
-                    title: 'Agent switch failed',
-                    message: detail,
-                    timestamp: Date.now(),
-                    read: false,
-                    dismissed: false,
-                    priority: 'high',
-                    sessionId,
-                });
-                // Open the panel — the picker snapping back is otherwise the only signal.
-                setNotificationPanelVisible(true);
-            }
-        } else {
-            onAgentChange?.(newAgentId);
-        }
-    }, [displayedAgentId, messages.length, sessionId, setActiveAgentId, updateSessionInList, onAgentChange, addNotification, setNotificationPanelVisible]);
+    // A chat made by a retired agent (chat/doc/file) can be read but not continued.
+    const retiredAgent = session?.agent_type && session.agent_type !== FLAGSHIP_AGENT_ID ? session.agent_type : null;
 
     // Smooth streaming exit — snapshot last content so fade-out shows real text
     const [streamEnding, setStreamEnding] = useState(false);
@@ -412,26 +325,24 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             .catch(() => {});
     }, [setDocuments]);
 
-    // Consume pending prompt from store (set by WelcomeScreen suggestions
-    // or Ask Agent in FileBrowser). Reactive subscription ensures prompts
-    // are consumed both on mount AND when set while ChatView is already
-    // mounted (e.g., Ask Agent from file browser in an existing session).
+    // Send a prompt queued before this view mounted (a new chat's first
+    // message, or "Ask GAIA" from the file browser).
+    const mountedRef = useRef(true);
     useEffect(() => {
-        // Use getState() as authoritative source to prevent double-fire
-        // in React StrictMode (effects mount/unmount/remount).
-        const pending = useChatStore.getState().pendingPrompt;
-        if (!pending) return;
-        log.chat.info(`Consuming pending prompt: "${pending.slice(0, 60)}"`);
+        mountedRef.current = true;
+        return () => { mountedRef.current = false; };
+    }, []);
+    useEffect(() => {
+        const { pendingPrompt: pending, isLoadingMessages: loading } = useChatStore.getState();
+        // Wait for the history load, or it would replace the message just sent.
+        if (!pending || loading) return;
         useChatStore.getState().setPendingPrompt(null);
-        setInput(pending);
-        // Defer send to next tick so React finishes mount.
-        // Guard against component unmounting before the frame fires.
-        let cancelled = false;
-        requestAnimationFrame(() => {
-            if (!cancelled) sendMessageRef.current(pending);
-        });
-        return () => { cancelled = true; };
-    }, [pendingPrompt]);
+        // A timer, not rAF: rAF never fires while the window is hidden, and
+        // clearing the prompt re-runs this effect, so no cleanup may cancel it.
+        setTimeout(() => {
+            if (mountedRef.current) sendMessageRef.current(pending);
+        }, 0);
+    }, [pendingPrompt, isLoadingMessages]);
 
     // Auto-scroll (throttled) — scrolls at most once per 100ms while
     // streaming, and also schedules a trailing scroll so the final chunk
@@ -482,11 +393,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             }
             setPolicyToast(null);
             streamBufferRef.current = '';
-            // Revoke any attachment blob URLs to prevent memory leaks
-            setAttachments(prev => {
-                prev.forEach(a => { if (a.url) URL.revokeObjectURL(a.url); });
-                return [];
-            });
         };
     }, [sessionId]);
 
@@ -507,6 +413,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
     // Stop streaming — reads fresh state from store to avoid stale closures
     const handleStop = useCallback(() => {
+        useNotificationStore.getState().dismissSessionPrompts(sessionId);
         log.stream.warn('User stopped generation');
         // Tell the backend to cancel the run. Since runs now outlive the SSE
         // connection (#1580), aborting the client alone only detaches us — the
@@ -545,7 +452,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         streamBufferRef.current = '';
         setStreaming(false);
         clearStreamContent();
-        setCompletedSteps([]);
         clearAgentSteps();
         clearCards();
     }, [sessionId, addMessage, setStreaming, clearStreamContent, clearAgentSteps, clearCards]);
@@ -566,117 +472,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         return () => window.removeEventListener('keydown', handler);
     }, [isStreaming, handleStop]);
 
-    // Auto-resize textarea
-    const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-        setInput(e.target.value);
-        const el = e.target;
-        el.style.height = 'auto';
-        el.style.height = Math.min(el.scrollHeight, 200) + 'px';
-    };
-
-    // Handle clipboard paste (screenshots)
-    const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
-        const items = e.clipboardData?.items;
-        if (!items) return;
-
-        const imageItems: DataTransferItem[] = [];
-        for (const item of Array.from(items)) {
-            if (item.type.startsWith('image/')) {
-                imageItems.push(item);
-            }
-        }
-
-        if (imageItems.length === 0) return; // Let normal text paste happen
-
-        e.preventDefault(); // Prevent pasting image as text
-
-        for (const item of imageItems) {
-            const file = item.getAsFile();
-            if (!file) continue;
-
-            const id = `attach-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const previewUrl = URL.createObjectURL(file);
-            const attachment: Attachment = {
-                id,
-                file,
-                name: file.name || `screenshot-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.png`,
-                url: previewUrl,
-                uploading: true,
-                uploaded: false,
-                isImage: true,
-            };
-
-            setAttachments(prev => [...prev, attachment]);
-            log.chat.info(`Pasted image: ${attachment.name} (${file.size} bytes)`);
-
-            // Upload in background
-            try {
-                const result = await api.uploadFile(file);
-                setAttachments(prev => prev.map(a =>
-                    a.id === id ? { ...a, uploading: false, uploaded: true, serverUrl: result.url } : a
-                ));
-                log.chat.info(`Upload complete: ${attachment.name} -> ${result.url}`);
-            } catch (err) {
-                log.chat.error(`Upload failed: ${attachment.name}`, err);
-                setAttachments(prev => prev.map(a =>
-                    a.id === id ? { ...a, uploading: false, error: 'Upload failed' } : a
-                ));
-            }
-        }
-    }, []);
-
-    // Handle file drop on input area
-    const handleInputDrop = useCallback(async (e: React.DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsDragOver(false);
-
-        const files = e.dataTransfer?.files;
-        if (!files || files.length === 0) return;
-
-        for (const file of Array.from(files)) {
-            const isImage = file.type.startsWith('image/');
-            const id = `attach-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const previewUrl = isImage ? URL.createObjectURL(file) : '';
-
-            const attachment: Attachment = {
-                id,
-                file,
-                name: file.name,
-                url: previewUrl,
-                uploading: true,
-                uploaded: false,
-                isImage,
-            };
-
-            setAttachments(prev => [...prev, attachment]);
-            log.chat.info(`Dropped file: ${file.name} (${file.size} bytes, image=${isImage})`);
-
-            // Upload in background
-            try {
-                const result = await api.uploadFile(file);
-                setAttachments(prev => prev.map(a =>
-                    a.id === id ? { ...a, uploading: false, uploaded: true, serverUrl: result.url } : a
-                ));
-                log.chat.info(`Upload complete: ${file.name} -> ${result.url}`);
-            } catch (err) {
-                log.chat.error(`Upload failed: ${file.name}`, err);
-                setAttachments(prev => prev.map(a =>
-                    a.id === id ? { ...a, uploading: false, error: 'Upload failed' } : a
-                ));
-            }
-        }
-    }, []);
-
-    // Remove an attachment
-    const removeAttachment = useCallback((id: string) => {
-        setAttachments(prev => {
-            const attachment = prev.find(a => a.id === id);
-            if (attachment?.url) URL.revokeObjectURL(attachment.url);
-            return prev.filter(a => a.id !== id);
-        });
-    }, []);
-
     // Send message
     const sendMessage = useCallback(async (overrideText?: string, options?: { attach?: boolean }) => {
         // attach=true re-subscribes to a run already in flight server-side
@@ -684,16 +479,20 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         // stream-event handling below but skips composing/sending a new turn:
         // no optimistic user message, no input/attachment handling, and the
         // controller comes from api.attachToRun instead of api.sendMessageStream.
-        const attach = options?.attach === true;
+        const reattach = options?.attach === true;
         const text = (overrideText || input).trim();
-        const hasAttachments = attachments.length > 0 && attachments.some(a => a.uploaded);
+        const hasAttachments = attach.hasUploaded;
 
         // User just sent a message — re-pin scroll to the bottom so the
         // new message and streaming response are visible.
         isNearBottomRef.current = true;
 
         const isInitializing = systemStatus?.init_state === 'initializing';
-        if (attach) {
+        if (!reattach && retiredAgent) {
+            log.chat.warn(`Send blocked: chat ${sessionId} belongs to the retired "${retiredAgent}" agent`);
+            return;
+        }
+        if (reattach) {
             // Don't double-attach if a stream is already live in this view.
             if (isStreaming) return;
         } else if ((!text && !hasAttachments) || isStreaming || isInitializing) {
@@ -705,33 +504,15 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
         // Build message text with attachment references
         let messageText = text;
-        if (!attach) {
-            const uploadedAttachments = attachments.filter(a => a.uploaded && a.serverUrl);
-            if (uploadedAttachments.length > 0) {
-                const attachmentLines = uploadedAttachments.map(a => {
-                    if (a.isImage) {
-                        return `![${a.name}](${a.serverUrl})`;
-                    }
-                    return `[${a.name}](${a.serverUrl})`;
-                }).join('\n');
-                messageText = messageText
-                    ? `${messageText}\n\n${attachmentLines}`
-                    : attachmentLines;
-            }
+        if (!reattach) {
+            messageText = attach.compose(text);
 
             log.chat.info(`Sending message to session=${sessionId}`, { length: messageText.length, preview: messageText.slice(0, 80) });
 
             setInput('');
-            if (inputRef.current) {
-                inputRef.current.style.height = 'auto';
-                inputRef.current.focus();
-            }
+            inputRef.current?.focus();
 
-            // Clear attachments
-            setAttachments(prev => {
-                prev.forEach(a => { if (a.url) URL.revokeObjectURL(a.url); });
-                return [];
-            });
+            attach.clear();
 
             // Optimistic user message
             const userMsg: Message = {
@@ -754,7 +535,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         // Also covers attach-replay dedupe — attachToRun replays all events
         // from the start, so stale cards would double up without this.
         clearCards();
-        setCompletedSteps([]);
         stepIdRef.current = 0;
         toolOccurredRef.current = false;
 
@@ -812,16 +592,10 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 // Ignore events from a stream the user navigated away from so its
                 // steps don't leak into the new session's view (#1580).
                 if (isStale()) return;
-                // Permission request — check always-allow list, then push to
-                // notification store for the PermissionPrompt overlay.
+                // Permission request — shown inline above the composer. Calls the
+                // user already allowed "always" never get here: the backend skips them.
                 if (event.type === 'permission_request') {
                     const toolName = event.tool || '';
-                    if (useNotificationStore.getState().isAlwaysAllowed(sessionId, toolName)) {
-                        api.confirmTool(sessionId, true).catch(
-                            (err) => console.error('[ChatView] auto-confirm failed:', err)
-                        );
-                        return;
-                    }
                     const { addNotification: addNotif } = useNotificationStore.getState();
                     addNotif({
                         id: event.confirm_id ?? `perm-${Date.now()}`,
@@ -837,7 +611,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         priority: 'high',
                         tool: toolName,
                         toolArgs: event.args as Record<string, unknown> | undefined,
-                        timeoutSeconds: event.timeout_seconds ?? 60,
+                        confirmId: event.confirm_id,
+                        alwaysScope: typeof event.always_scope === 'string' ? event.always_scope : undefined,
+                        timeoutSeconds: event.timeout_seconds ?? undefined,
                     });
                     return;
                 }
@@ -1043,6 +819,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 }
             },
             onDone: (event) => {
+                useNotificationStore.getState().dismissSessionPrompts(sessionId);
                 if (doneHandled) return;
                 doneHandled = true;
 
@@ -1085,7 +862,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     addMessage(assistantMsg);
                 }
 
-                setCompletedSteps(stepsSnapshot);
                 setStreaming(false);
                 clearStreamContent();
                 clearAgentSteps();
@@ -1128,7 +904,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 // Auto-title on first message
                 // Skip client-side auto-title when re-attaching (no user text in
                 // hand and the run's lifecycle already titles server-side, #1580).
-                if (!attach && session && session.title === 'New Task') {
+                if (!reattach && session && session.title === 'New Task') {
                     const autoTitle = text.slice(0, 50) + (text.length > 50 ? '...' : '');
                     // Not a user choice — leave unpinned so the server-side
                     // LLM titler can still replace it (#2165).
@@ -1138,6 +914,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 }
             },
             onError: (err) => {
+                useNotificationStore.getState().dismissSessionPrompts(sessionId);
                 // Cancel any pending rAF flush
                 if (streamRafRef.current !== null) {
                     cancelAnimationFrame(streamRafRef.current);
@@ -1159,21 +936,17 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
                 if (msg.includes('Lemonade') || msg.includes('LLM') || msg.includes('Could not get response')) {
                     errorContent =
-                        'Could not reach the LLM server. Start Lemonade Server — on Windows from the '+
-                        'tray icon, on macOS from the Lemonade app — then try sending your '+
-                        'message again. Settings shows the exact command for this machine.' + issueFooter;
+                        'The model server did not answer. Open Settings → Model to check it, '
+                        + 'then send your message again.\n\n'
+                        + `Details: ${msg}` + issueFooter;
                 } else if (err instanceof TypeError || msg.includes('fetch') || msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
                     errorContent =
-                        'Cannot connect to the GAIA server. Make sure the backend is running:\n\n' +
-                        '```\ngaia chat --ui\n```' + issueFooter;
-                } else if (msg.includes('500')) {
-                    errorContent =
-                        'The server encountered an error. This usually means Lemonade Server is not running or the model failed to load.\n\n' +
-                        'Start Lemonade Server — Settings shows how to start it on this machine.' + issueFooter;
+                        'Lost the connection to GAIA. Check that GAIA is still running, then send '
+                        + 'your message again.' + issueFooter;
                 } else if (msg.includes('timed out') || msg.includes('timeout') || msg.includes('Timeout')) {
                     errorContent =
-                        'The request timed out. The query may be too complex — try breaking it into simpler questions.\n\n' +
-                        'If Lemonade Server is running but responses are slow, the model may need more resources.' + issueFooter;
+                        'The request timed out. Try a shorter question, or a faster model in '
+                        + 'Settings → Model.' + issueFooter;
                 } else {
                     errorContent = `Error: ${msg}` + issueFooter;
                 }
@@ -1191,25 +964,14 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 clearAgentSteps();
                 clearCards();
             },
-            onAgentCreated: () => {
-                // A new agent was created — refresh the list so it appears
-                // in the agent selector immediately without a page reload.
-                api.listAgents()
-                    .then((data) => useChatStore.getState().setAgents(data.agents || []))
-                    .catch(() => { /* non-critical */ });
-            },
         };
 
-        // Dispatch to the agent pinned to THIS session (its persisted
-        // agent_type), not the globally-active one — otherwise two sessions
-        // pinned to different agents would both route to whichever was last
-        // selected in the store (#2179).
-        const controller = attach
+        const controller = reattach
             ? api.attachToRun(sessionId, streamCallbacks)
-            : api.sendMessageStream(sessionId, messageText, streamCallbacks, undefined, undefined, displayedAgentId);
+            : api.sendMessageStream(sessionId, messageText, streamCallbacks);
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, displayedAgentId, addNotification, isStale]);
+    }, [input, attach, isStreaming, sessionId, session, retiredAgent, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, addNotification, isStale]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
@@ -1335,13 +1097,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         }
     }, [messages, handleResendMessage]);
 
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
-        }
-    };
-
 
 
     // Title editing
@@ -1446,13 +1201,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
 
-    const handleSuggestionClick = (text: string) => {
-        setInput(text);
-        sendMessage(text);
-    };
-
-    const showEmptyState = !isLoadingMessages && messages.length === 0 && !isStreaming;
-
     // Stale connector-reply cue (#2119): when the newest reply was a connector
     // auth-required error, offer to re-run once the account is connected.
     const lastMessage = messages.length > 0 ? messages[messages.length - 1] : undefined;
@@ -1460,9 +1208,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         && !isLoadingMessages
         && lastMessage?.role === 'assistant'
         && isAuthRequiredMessage(lastMessage.content);
-    const emptyStateSuggestions = displayedAgent?.conversation_starters?.length
-        ? displayedAgent.conversation_starters
-        : EMPTY_SUGGESTIONS;
 
     // Pre-compute per-message latency: time from preceding user message to each
     // assistant message. O(N) single pass, avoids repeated backward scans in render.
@@ -1481,19 +1226,20 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         return map;
     }, [messages]);
 
+    const composerBlocked = retiredAgent
+        ? `This chat used the retired "${retiredAgent}" agent and is read-only. Start a new chat.`
+        : systemStatus?.init_state === 'initializing'
+            ? 'GAIA is starting…'
+            : null;
+
     return (
         <main
             className={`task-view ${isDragOver ? 'drag-active' : ''}`}
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
+            aria-label={session?.title || 'Chat'}
         >
-            {showDashboardProgress && (
-                <div className="dashboard-overlay">
-                    <DashboardProgress sessionId={sessionId} onClose={() => setShowDashboardProgress(false)} />
-                </div>
-            )}
-            {/* Header */}
             <header className="task-header">
                 <div className="task-header-left">
                     {editingTitle ? (
@@ -1502,101 +1248,40 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             value={titleDraft}
                             onChange={(e) => setTitleDraft(e.target.value)}
                             onBlur={saveTitle}
-                            onKeyDown={(e) => e.key === 'Enter' && saveTitle()}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') saveTitle();
+                                if (e.key === 'Escape') setEditingTitle(false);
+                            }}
                             autoFocus
-                            aria-label="Edit task title"
+                            aria-label="Chat title"
                         />
                     ) : (
-                        <>
-                            <h3 className="task-title">{session?.title || 'New Task'}</h3>
-                            <button className="btn-icon-sm" onClick={startEditTitle} title="Rename" aria-label="Rename task">
-                                <Edit3 size={13} />
-                            </button>
-                        </>
+                        <button type="button" className="task-title" onClick={startEditTitle} title="Rename">
+                            <span>{session?.title || 'New chat'}</span>
+                            <Edit3 size={12} aria-hidden="true" className="task-title-edit" />
+                        </button>
                     )}
                 </div>
                 <div className="task-header-right">
-                    {displayedAgent && (
-                        <div
-                            className="active-agent-indicator"
-                            aria-label="Active agent"
-                            title={displayedAgentCapabilities
-                                ? `${displayedAgent.name}: ${displayedAgentCapabilities}`
-                                : displayedAgent.name}
-                        >
-                            <DisplayedAgentIcon size={13} className="active-agent-icon" />
-                            <span className="active-agent-copy">
-                                <span className="active-agent-name">{displayedAgent.name}</span>
-                                {displayedAgentCapabilities && (
-                                    <span className="active-agent-capabilities">{displayedAgentCapabilities}</span>
-                                )}
-                            </span>
-                        </div>
-                    )}
-                    <span
-                        className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}
-                        title={
-                            systemStatus?.model_loaded && systemStatus?.model_context_size
-                                ? `${systemStatus.model_loaded} · context window: ${systemStatus.model_context_size.toLocaleString()} tokens`
-                                : (systemStatus?.model_loaded || 'No model loaded')
-                        }
-                    >
-                        {systemStatus?.model_loaded || 'No model loaded'}
-                        {systemStatus?.model_loaded && systemStatus?.model_context_size != null && (
-                            <span className="model-ctx-size">
-                                {/* Pretty-print the context window: 32768 → "32K", 8192 → "8K", etc.
-                                    Falls back to a localized integer for odd sizes. */}
-                                {' · '}
-                                {systemStatus.model_context_size % 1024 === 0
-                                    ? `${systemStatus.model_context_size / 1024}K`
-                                    : systemStatus.model_context_size.toLocaleString()}
-                            </span>
-                        )}
-                    </span>
-                    <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Attach documents">
-                        <Paperclip size={15} />
-                    </button>
-                    <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files" aria-label="Browse files">
-                        <FolderSearch size={15} />
-                    </button>
                     <button
                         className={`btn-icon-sm${session?.private ? ' active' : ''}`}
                         onClick={handleTogglePrivate}
-                        title={session?.private ? 'Private mode on — click to disable' : 'Enable private mode (nothing saved to memory)'}
-                        aria-label={session?.private ? 'Disable private mode' : 'Enable private mode'}
+                        title={session?.private ? 'Private: this chat is not saved to memory' : 'Make private (not saved to memory)'}
+                        aria-label={session?.private ? 'Private chat on' : 'Make chat private'}
                         aria-pressed={!!session?.private}
                     >
                         <EyeOff size={15} />
                     </button>
-                    <button className="btn-icon-sm" onClick={() => setShowMemoryDashboard(true)} title="Memory" aria-label="Open memory dashboard">
-                        <Brain size={15} />
+                    <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
+                        <FolderSearch size={15} />
                     </button>
-                    <button className="btn-icon-sm" onClick={handleExport} title="Export" aria-label="Export task">
+                    <button className="btn-icon-sm" onClick={handleExport} title="Export as Markdown" aria-label="Export chat">
                         <Download size={15} />
-                    </button>
-                    <button className="btn-icon-sm" onClick={() => setShowDashboardProgress((s) => !s)} title="Refresh dashboard" aria-label="Refresh dashboard">
-                        <ArrowDown size={15} />
-                    </button>
-                    <button
-                        className={`notification-center-trigger ${notificationUnreadCount > 0 ? 'has-unread' : ''}`}
-                        onClick={() => setNotificationPanelVisible(!showNotificationPanel)}
-                        aria-label="Open notification center"
-                        aria-expanded={showNotificationPanel}
-                        title="Notifications"
-                    >
-                        <Bell size={15} />
-                        {notificationUnreadCount > 0 && (
-                            <span className="notification-center-trigger-badge">
-                                {notificationUnreadCount > 99 ? '99+' : notificationUnreadCount}
-                            </span>
-                        )}
                     </button>
                 </div>
             </header>
 
-            {/* Indexed documents context bar — shows only docs attached to this session */}
             {sessionDocs.length > 0 && (() => {
-                // Sort by most recently accessed (last_accessed_at), falling back to indexed_at
                 const sorted = [...sessionDocs].sort((a, b) => {
                     const aTime = a.last_accessed_at || a.indexed_at || '';
                     const bTime = b.last_accessed_at || b.indexed_at || '';
@@ -1609,48 +1294,31 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         className={`doc-context-bar${docsExpanded ? ' doc-context-expanded' : ''}`}
                         aria-label={`${sessionDocs.length} indexed document${sessionDocs.length !== 1 ? 's' : ''}`}
                     >
-                        <CheckCircle2 size={12} className="doc-context-icon" />
-                        <span
-                            className="doc-context-label"
-                            onClick={() => setShowDocLibrary(true)}
-                            title="Click to manage documents"
-                            role="button"
-                            tabIndex={0}
-                        >
+                        <CheckCircle2 size={12} className="doc-context-icon" aria-hidden="true" />
+                        <button type="button" className="doc-context-label" onClick={() => setShowDocLibrary(true)} title="Manage documents">
                             {sessionDocs.length} indexed
-                        </span>
+                        </button>
                         <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
                             {visibleDocs.map((d) => (
                                 <span key={d.id} className="doc-pill" title={d.filepath || d.filename}>
-                                    <FileText size={9} className="doc-pill-icon" />
+                                    <FileText size={9} className="doc-pill-icon" aria-hidden="true" />
                                     <span className="doc-pill-name">{d.filename}</span>
                                     <button
                                         className="doc-pill-remove"
                                         onClick={(e) => handleRemoveDocument(e, d.id)}
-                                        title={`Remove ${d.filename} from this session`}
-                                        aria-label={`Remove ${d.filename} from this session`}
+                                        aria-label={`Remove ${d.filename} from this chat`}
                                     >
                                         <X size={10} />
                                     </button>
                                 </span>
                             ))}
                             {!docsExpanded && hiddenCount > 0 && (
-                                <button
-                                    className="doc-pill-more"
-                                    onClick={(e) => { e.stopPropagation(); setDocsExpanded(true); }}
-                                    title="Show all indexed files"
-                                    aria-label={`Show ${hiddenCount} more files`}
-                                >
+                                <button className="doc-pill-more" onClick={(e) => { e.stopPropagation(); setDocsExpanded(true); }}>
                                     +{hiddenCount} more
                                 </button>
                             )}
                             {docsExpanded && hiddenCount > 0 && (
-                                <button
-                                    className="doc-pill-collapse"
-                                    onClick={(e) => { e.stopPropagation(); setDocsExpanded(false); }}
-                                    title="Show fewer files"
-                                    aria-label="Collapse file list"
-                                >
+                                <button className="doc-pill-collapse" onClick={(e) => { e.stopPropagation(); setDocsExpanded(false); }}>
                                     show less
                                 </button>
                             )}
@@ -1659,118 +1327,73 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 );
             })()}
 
-            {/* Messages */}
             <div className="messages-scroll" ref={messagesScrollRef} onScroll={handleScroll}>
-                {isLoadingMessages && (
-                    <div className="skeleton-messages" aria-label="Loading messages">
-                        {[0, 1, 2].map((i) => (
-                            <div key={i} className="skeleton-msg">
-                                <div className="skeleton-header">
-                                    <div className="skeleton-avatar" />
-                                    <div className="skeleton-role" />
+                <div className="messages-column">
+                    {isLoadingMessages && (
+                        <div className="skeleton-messages" aria-label="Loading messages">
+                            {[0, 1, 2].map((i) => (
+                                <div key={i} className="skeleton-msg">
+                                    <div className="skeleton-lines">
+                                        <div className="skeleton-line" />
+                                        <div className="skeleton-line" />
+                                        {i !== 2 && <div className="skeleton-line" />}
+                                    </div>
                                 </div>
-                                <div className="skeleton-lines">
-                                    <div className="skeleton-line" />
-                                    <div className="skeleton-line" />
-                                    {i !== 2 && <div className="skeleton-line" />}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-
-                {showEmptyState && (
-                    <div className="empty-task">
-                        <div className={`empty-task-icon${displayedAgent ? ' agent-aware' : ''}`}>
-                            {displayedAgent ? (
-                                <DisplayedAgentIcon size={36} strokeWidth={1.2} />
-                            ) : (
-                                <MessageSquare size={36} strokeWidth={1.2} />
-                            )}
-                        </div>
-                        <h4 className="empty-task-title">{displayedAgent?.name || 'What can I help you with?'}</h4>
-                        <p className={`empty-task-desc${displayedAgentCapabilities ? '' : ' empty-task-desc-spaced'}`}>
-                            {displayedAgent?.description || (
-                                <>Ask about your documents, search files, or analyze data &mdash; powered by local AI.</>
-                            )}
-                        </p>
-                        {displayedAgentCapabilities && (
-                            <div className="empty-task-capabilities">{displayedAgentCapabilities}</div>
-                        )}
-                        <div className="empty-task-suggestions">
-                            {emptyStateSuggestions.map((s) => (
-                                <button
-                                    key={s}
-                                    className="empty-task-chip"
-                                    onClick={() => handleSuggestionClick(s)}
-                                >
-                                    {s}
-                                </button>
                             ))}
                         </div>
-                    </div>
-                )}
+                    )}
 
-                {messages.map((msg, idx) => {
-                    // During stream-ending, skip rendering the just-completed
-                    // assistant message entirely — the streaming bubble shows it.
-                    // This prevents the flash/jump when transitioning.
-                    const isStreamEndingMsg = streamEnding
-                        && msg.role === 'assistant'
-                        && idx === messages.length - 1;
-                    if (isStreamEndingMsg) return null;
+                    {messages.map((msg, idx) => {
+                        // The streaming bubble shows the just-finished answer while it fades out.
+                        const isStreamEndingMsg = streamEnding
+                            && msg.role === 'assistant'
+                            && idx === messages.length - 1;
+                        if (isStreamEndingMsg) return null;
+                        return (
+                            <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}>
+                                <MessageBubble
+                                    message={msg}
+                                    agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
+                                    onDelete={!isStreaming ? handleDeleteMessage : undefined}
+                                    onResend={!isStreaming && msg.role === 'user' && !retiredAgent ? handleResendMessage : undefined}
+                                    latencyMs={latencyByMsgId.get(msg.id)}
+                                />
+                            </div>
+                        );
+                    })}
 
-                    const latencyMs = latencyByMsgId.get(msg.id);
-
-                    return (
-                        <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}>
+                    {(isStreaming || streamEnding) && (
+                        <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
                             <MessageBubble
-                                message={msg}
-                                agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
-                                onDelete={!isStreaming ? handleDeleteMessage : undefined}
-                                onResend={!isStreaming && msg.role === 'user' ? handleResendMessage : undefined}
-                                latencyMs={latencyMs}
-                                agentName={msg.role === 'assistant' ? sessionAgentName : undefined}
+                                message={{
+                                    id: -1,
+                                    session_id: sessionId,
+                                    role: 'assistant',
+                                    content: (isStreaming ? streamingContent : lastStreamContentRef.current) || '',
+                                    created_at: '',
+                                    rag_sources: null,
+                                }}
+                                isStreaming={isStreaming}
+                                agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
+                                agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
+                                cards={isStreaming ? cards : lastCardsRef.current}
                             />
                         </div>
-                    );
-                })}
-
-                {/* Active streaming message with agent activity inside */}
-                {(isStreaming || streamEnding) && (
-                    <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
-                        <MessageBubble
-                            message={{
-                                id: -1,
-                                session_id: sessionId,
-                                role: 'assistant',
-                                content: (isStreaming ? streamingContent : lastStreamContentRef.current) || '',
-                                created_at: '',
-                                rag_sources: null,
-                            }}
-                            isStreaming={isStreaming}
-                            agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
-                            agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
-                            cards={isStreaming ? cards : lastCardsRef.current}
-                            agentName={activeAgentName}
-                        />
-                    </div>
-                )}
-                <div ref={messagesEndRef} />
+                    )}
+                    <div ref={messagesEndRef} />
+                </div>
             </div>
 
-            {/* Scroll to bottom */}
             {showScrollBtn && (
                 <button className="scroll-bottom-btn" onClick={scrollToBottom} title="Scroll to bottom" aria-label="Scroll to bottom">
                     <ArrowDown size={16} />
                 </button>
             )}
 
-            {/* Drag overlay */}
             {isDragOver && (
                 <div className="drag-overlay">
-                    <Upload size={32} strokeWidth={1.5} />
-                    <span>Drop files to index</span>
+                    <Upload size={32} strokeWidth={1.5} aria-hidden="true" />
+                    <span>Drop files to index them for this chat</span>
                 </div>
             )}
 
@@ -1801,164 +1424,25 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 </div>
             )}
 
-            {/* Stale connector-reply retry cue (#2119) */}
-            {lastIsConnectorError && lastMessage && (
-                <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
-            )}
-
-            {/* Input */}
             <div className="input-area">
-                <div
-                    className={`input-box ${attachments.length > 0 ? 'has-attachments' : ''}`}
-                    onDrop={handleInputDrop}
-                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                >
-                    <div className="input-content">
-                        {/* Attachment previews */}
-                        {attachments.length > 0 && (
-                            <div className="attachment-strip">
-                                {attachments.map(a => (
-                                    <div key={a.id} className={`attachment-preview ${a.error ? 'attachment-error' : ''}`}>
-                                        {a.isImage && a.url ? (
-                                            <img src={a.url} alt={a.name} className="attachment-thumb" />
-                                        ) : (
-                                            <div className="attachment-file-icon">
-                                                <FileText size={16} />
-                                            </div>
-                                        )}
-                                        <span className="attachment-name" title={a.name}>
-                                            {a.name.length > 20 ? a.name.slice(0, 17) + '...' : a.name}
-                                        </span>
-                                        {a.uploading && <span className="attachment-spinner" />}
-                                        {a.error && <span className="attachment-error-text">{a.error}</span>}
-                                        <button
-                                            className="attachment-remove"
-                                            onClick={() => removeAttachment(a.id)}
-                                            title="Remove"
-                                            aria-label={`Remove ${a.name}`}
-                                        >
-                                            <X size={12} />
-                                        </button>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                        <textarea
-                            ref={inputRef}
-                            className="msg-input"
-                            value={input}
-                            onChange={handleInputChange}
-                            onKeyDown={handleKeyDown}
-                            onPaste={handlePaste}
-                            placeholder="Type a message or paste an image... (Shift+Enter for new line)"
-                            rows={1}
-                            disabled={isStreaming || systemStatus?.init_state === 'initializing'}
-                            aria-label="Message input"
-                        />
-                    </div>
-                    <div className="input-btns">
-                        <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Upload document" aria-label="Upload document">
-                            <Upload size={15} />
-                        </button>
-                        <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files" aria-label="Browse files">
-                            <FolderSearch size={15} />
-                        </button>
-                        {isStreaming ? (
-                            <button
-                                className="stop-btn"
-                                onClick={handleStop}
-                                title="Stop generating"
-                                aria-label="Stop generating"
-                            >
-                                <Square size={14} />
-                            </button>
-                        ) : (
-                            <button
-                                className="send-btn"
-                                onClick={() => sendMessage()}
-                                disabled={!input.trim() && !attachments.some(a => a.uploaded)}
-                                title="Send (Enter)"
-                                aria-label="Send message"
-                            >
-                                <Send size={16} />
-                            </button>
-                        )}
-                    </div>
-                </div>
-                <div className="input-footer">
-                    {onCreateAgent && (
-                        <>
-                            <button
-                                className="create-agent-btn"
-                                onClick={onCreateAgent}
-                                title="Build a custom agent template"
-                                aria-label="Build a custom agent template"
-                            >
-                                <Plus size={10} />
-                            </button>
-                            {agents.length > 1 && <span className="input-footer-sep" />}
-                        </>
+                <div className="input-column">
+                    {lastIsConnectorError && lastMessage && (
+                        <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
                     )}
-                    {agents.length > 1 && (
-                        <>
-                            <div className="agent-picker" ref={agentPickerRef}>
-                                <button
-                                    className="agent-picker-btn"
-                                    onClick={() => !isStreaming && setAgentPickerOpen((v) => !v)}
-                                    title="Switch agent"
-                                    aria-label="Switch agent"
-                                    disabled={isStreaming}
-                                >
-                                    <Bot size={10} />
-                                    <span>{agents.find((a) => a.id === displayedAgentId)?.name || 'Agent'}</span>
-                                    <ChevronDown size={10} />
-                                </button>
-                                {agentPickerOpen && (
-                                    <div className="agent-picker-dropdown">
-                                        {agents.map((agent) => (
-                                            <button
-                                                key={agent.id}
-                                                className={`agent-picker-option${agent.id === displayedAgentId ? ' active' : ''}`}
-                                                onClick={() => handleAgentChange(agent.id)}
-                                            >
-                                                <Bot size={12} />
-                                                <span>{agent.name}</span>
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                            <span className="input-footer-sep" />
-                        </>
-                    )}
-                    <span className="input-footer-item">
-                        <Lock size={10} />
-                        <span>100% local &amp; private</span>
-                    </span>
-                    <span className="input-footer-sep" />
-                    <span className="input-footer-item">
-                        <kbd className="kbd-hint">Enter</kbd>
-                        <span>send</span>
-                    </span>
-                    <span className="input-footer-item">
-                        <kbd className="kbd-hint">Shift+Enter</kbd>
-                        <span>new line</span>
-                    </span>
-                    {isStreaming && (
-                        <span className="input-footer-item">
-                            <kbd className="kbd-hint">Esc</kbd>
-                            <span>stop</span>
-                        </span>
-                    )}
-                    <span className="input-footer-sep" />
-                    <span className="input-footer-item">
-                        <kbd className="kbd-hint">Ctrl+K</kbd>
-                        <span>search</span>
-                    </span>
-                    <span className="input-footer-item">
-                        <kbd className="kbd-hint">Ctrl+V</kbd>
-                        <span>paste image</span>
-                    </span>
+                    <PermissionPrompt sessionId={sessionId} />
+                    <Composer
+                        value={input}
+                        onChange={setInput}
+                        onSubmit={() => sendMessage()}
+                        onStop={handleStop}
+                        streaming={isStreaming}
+                        disabledReason={composerBlocked}
+                        attachments={attach}
+                        inputRef={inputRef}
+                        placeholder={messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}
+                        leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
+                        rightControls={<ModelChip disabled={isStreaming} />}
+                    />
                 </div>
             </div>
         </main>

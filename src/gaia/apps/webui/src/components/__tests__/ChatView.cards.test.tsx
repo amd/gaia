@@ -30,7 +30,7 @@ const SESSION: Session = {
     system_prompt: null,
     message_count: 0,
     document_ids: [],
-    agent_type: 'doc',
+    agent_type: 'gaia',
 };
 
 const DOC_AGENT: AgentInfo = {
@@ -76,6 +76,7 @@ beforeEach(() => {
 
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
     mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+    mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({
         documents: [],
         total: 0,
@@ -96,7 +97,6 @@ beforeEach(() => {
 
     useChatStore.setState({
         agents: [DOC_AGENT],
-        activeAgentId: 'doc',
         sessions: [SESSION],
         currentSessionId: SESSION.id,
         messages: [],
@@ -120,10 +120,10 @@ async function driveSend() {
     render(<ChatView sessionId={SESSION.id} />);
 
     await act(async () => {
-        fireEvent.change(screen.getByLabelText('Message input'), {
+        fireEvent.change(screen.getByLabelText('Message'), {
             target: { value: 'scan my inbox' },
         });
-        fireEvent.click(screen.getByLabelText('Send message'));
+        fireEvent.click(screen.getByLabelText('Send'));
     });
 
     expect(capturedCallbacks).not.toBeNull();
@@ -233,7 +233,7 @@ describe('ChatView streaming cards (#2108)', () => {
             });
 
             act(() => {
-                fireEvent.click(screen.getByLabelText('Stop generating'));
+                fireEvent.click(screen.getByLabelText('Stop'));
             });
 
             // Stay under the 3s message-poll interval so a stray poll doesn't
