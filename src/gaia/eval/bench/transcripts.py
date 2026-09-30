@@ -223,7 +223,7 @@ def check_runs(transcript: Mapping[str, Any]) -> List[Tuple[int, str, bool]]:
 def checks_actually_run(transcript: Mapping[str, Any]) -> str:
     """Test-runner summaries read from the tool results, as fact for the judge.
 
-    The agent's own "Verification:" footer is a claim, not evidence; a harness
+    The harness's own verification note is a claim, not evidence; a harness
     bug in that footer once reported a verified run as unverified, and the judge
     scored a truthful agent 1/5 for fabricating.
     """

@@ -34,12 +34,12 @@ from gaia.agents.base.checks import (
 from gaia.agents.base.claims import claims_success, passing_test_claim
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import (
-    build_verification_scope,
     is_file_mutation,
     strip_verification_scope,
     unsupported_test_claim,
     verification_check_label,
     verification_record,
+    verification_summary,
 )
 
 #: Trimmed from the fabricating run.
@@ -283,7 +283,7 @@ def test_the_footer_reads_the_fact_without_the_text_parser():
     assert record["check_label"] == "pytest"
     assert record["check_kind"] == "test"
     assert record["declared"] is True
-    assert "verified — pytest ran and passed" in build_verification_scope([record])
+    assert verification_summary([record])["state"] == "verified"
 
 
 def test_the_fact_overrides_the_exit_code():
@@ -424,7 +424,7 @@ def _edit(failed=False):
 def test_no_check_at_all_does_not_support_a_pass_claim():
     claim, why = unsupported_test_claim(FABRICATED, [_run(), _run()])
     assert claim == "111 passed"
-    assert "no test run" in why
+    assert "no tests were run" in why
 
 
 def test_a_passing_check_supports_the_claim():
@@ -434,13 +434,13 @@ def test_a_passing_check_supports_the_claim():
 def test_a_failed_check_does_not_support_a_pass_claim():
     claim, why = unsupported_test_claim(FABRICATED, [_run(_check(False))])
     assert claim == "111 passed"
-    assert "did not pass" in why
+    assert "didn't pass" in why
 
 
 def test_a_check_that_ran_before_the_last_edit_does_not_support_the_claim():
     claim, why = unsupported_test_claim(FABRICATED, [_run(_check()), _edit()])
     assert claim == "111 passed"
-    assert "before the last file change" in why
+    assert "ran before the last change" in why
 
 
 def test_a_check_rerun_after_the_edit_supports_the_claim():
@@ -456,7 +456,7 @@ def test_a_lint_run_is_not_a_test_run():
     lint = _check(label="ruff", target="ruff check", kind="lint")
     claim, why = unsupported_test_claim(FABRICATED, [_run(lint)])
     assert claim == "111 passed"
-    assert "no test run" in why
+    assert "no tests were run" in why
 
 
 def test_a_refused_check_never_ran():
@@ -468,7 +468,7 @@ def test_a_refused_check_never_ran():
     )
     claim, why = unsupported_test_claim(FABRICATED, [refused])
     assert claim == "111 passed"
-    assert "no test run" in why
+    assert "no tests were run" in why
 
 
 def test_an_answer_without_a_claim_is_never_unsupported():
@@ -592,7 +592,7 @@ def test_an_unsupported_claim_is_corrected_once(agent):
     assert len(sent) == 2
     correction = sent[1][-1]["content"]
     assert "111 passed" in correction
-    assert "no test run" in correction
+    assert "no tests were run" in correction
     assert _final_text(result) == HONEST
 
 
@@ -613,7 +613,7 @@ def test_a_failed_check_in_the_record_is_named_in_the_correction(agent):
     agent.process_query("Fix the matrix lookup", max_steps=10)
 
     assert len(sent) == 3
-    assert "did not pass" in sent[2][-1]["content"]
+    assert "didn't pass" in sent[2][-1]["content"]
 
 
 def test_a_check_before_the_last_edit_does_not_support_the_claim(agent):
@@ -625,7 +625,7 @@ def test_a_check_before_the_last_edit_does_not_support_the_claim(agent):
     agent.process_query("Fix the matrix lookup", max_steps=10)
 
     assert len(sent) == 4
-    assert "before the last file change" in sent[3][-1]["content"]
+    assert "ran before the last change" in sent[3][-1]["content"]
 
 
 def test_a_check_after_the_last_edit_supports_the_claim(agent):
@@ -666,7 +666,7 @@ def test_no_step_left_returns_incomplete_without_the_claim(agent):
     assert len(sent) == 1
     assert FABRICATED not in result["result"]
     assert result["status"] == "incomplete"
-    assert "unverified" in result["result"]
+    assert "No tests were run this turn." in result["result"]
 
 
 def test_the_correction_asks_for_the_whole_answer_and_is_on_the_record(agent):
