@@ -445,6 +445,22 @@ def is_agent_own_source(root: os.PathLike | str) -> bool:
     return checkout is not None and (path == checkout or checkout in path.parents)
 
 
+def working_directory_line() -> str:
+    """Where relative paths resolve, for a session that is not in a project.
+
+    Told only "read the working directory", a model asked about docs/report.pdf
+    searched the whole home folder and read a same-named copy elsewhere. Empty
+    for GAIA's own source, where a daemon-launched sidecar runs.
+    """
+    cwd = os.getcwd()
+    if is_agent_own_source(cwd):
+        return ""
+    return (
+        f"Working directory: {cwd} — relative paths the user names "
+        "(e.g. docs/report.pdf) are inside it."
+    )
+
+
 def resolve_project_root(explicit: Optional[str] = None) -> Optional[str]:
     """The project this task is about, or ``None`` when there isn't one.
 
@@ -681,7 +697,7 @@ class ProjectMapMixin:
         """Auto-discovered by ``Agent._get_mixin_prompts``."""
         pm = self.materialize_project_map()
         if pm is None:
-            return ""
+            return working_directory_line()
         return render_project_map(
             pm,
             index_status=self._code_index_status(pm),
