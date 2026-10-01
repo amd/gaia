@@ -451,3 +451,16 @@ class TestLazyIndex:
         sdk = _FakeSDK(indexed=True)
         assert self._search(tmp_path, sdk) == []
         assert sdk.index_calls == 0
+
+    def test_a_repo_path_that_is_home_is_refused(self, tmp_path):
+        """The lazy build must refuse ``~`` the same way index_codebase does.
+
+        Outside a repository the flagship agent's repo_path falls back to
+        the whole home directory (its default file scope). A search there
+        must not trigger an embedding pass over every file the user owns.
+        """
+        sdk = _FakeSDK(indexed=False)
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            out = self._search(tmp_path, sdk)
+        assert sdk.index_calls == 0
+        assert "home directory" in out["error"]

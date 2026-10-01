@@ -39,6 +39,25 @@ _MISSING_DEPS_MSG = (
     "code_index dependencies missing. Install with: pip install -e '.[rag]'"
 )
 
+# Shared by every path that can trigger an index build (explicit
+# index_codebase and the lazy build on first search): the sandbox ceiling may
+# be the user's whole home directory (the flagship agent's default file
+# scope), and indexing that is never what "index the codebase" means — it
+# walks and embeds every repo, download, and cache the user owns.
+_HOME_DIRECTORY_REFUSAL = json.dumps(
+    {
+        "error": (
+            "refusing to index your entire home directory — "
+            "call index_codebase with the repository's path, "
+            "e.g. index_codebase(repo_path='~/projects/myrepo')"
+        )
+    }
+)
+
+
+def _is_home_directory(repo_path: str) -> bool:
+    return str(Path(repo_path).resolve()) == str(Path.home().resolve())
+
 
 class CodeIndexToolsMixin:
     """Mixin providing semantic code-index tools.
@@ -179,22 +198,8 @@ class CodeIndexToolsMixin:
                 self._code_index_config = None
                 self._code_index_sdk = None
 
-            # The sandbox ceiling may be the user's whole home directory (the
-            # flagship agent's default file scope). Indexing that is never
-            # what "index the codebase" means — it walks and embeds every
-            # repo, download, and cache the user owns, and blows the tool
-            # timeout doing it. Require an actual repo path instead.
-            effective = str(Path(self._repo_path).resolve())
-            if effective == str(Path.home().resolve()):
-                return json.dumps(
-                    {
-                        "error": (
-                            "refusing to index your entire home directory — "
-                            "call index_codebase with the repository's path, "
-                            "e.g. index_codebase(repo_path='~/projects/myrepo')"
-                        )
-                    }
-                )
+            if _is_home_directory(self._repo_path):
+                return _HOME_DIRECTORY_REFUSAL
 
             sdk = self._get_code_index_sdk()
             if sdk is None:
@@ -244,6 +249,12 @@ class CodeIndexToolsMixin:
             try:
                 built = None
                 if not sdk.is_indexed():
+                    # Same refusal index_codebase applies — the lazy build is
+                    # the same index_repository() call and must not embed the
+                    # sandbox ceiling just because no one called the explicit
+                    # tool first.
+                    if _is_home_directory(self._repo_path):
+                        return _HOME_DIRECTORY_REFUSAL
                     # Built on first use rather than at task start.
                     built = sdk.index_repository()
                 results = sdk.search(query, scope=scope, top_k=top_k)
