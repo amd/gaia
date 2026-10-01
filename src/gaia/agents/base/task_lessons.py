@@ -28,7 +28,7 @@ MAX_LESSONS = 8
 _CALL_CHARS = 120
 
 
-def _call_text(tool: str, args: Dict[str, Any]) -> str:
+def _call_text(args: Dict[str, Any]) -> str:
     command = args.get("command")
     text = command if isinstance(command, str) else json.dumps(args, default=str)
     text = " ".join(text.split())
@@ -52,7 +52,7 @@ class TaskLessons:
             lesson = self._lessons.pop(key, None) or {"failures": 0, "worked": None}
             lesson["failures"] += 1
             lesson["error"] = _error_brief(result)
-            lesson["failed_call"] = _call_text(tool, args)
+            lesson["failed_call"] = _call_text(args)
             self._lessons[key] = lesson
             while len(self._lessons) > MAX_LESSONS:
                 self._lessons.pop(next(iter(self._lessons)))
@@ -61,7 +61,7 @@ class TaskLessons:
                 return self.lines()
             return None
         if key in self._lessons:
-            self._lessons[key]["worked"] = _call_text(tool, args)
+            self._lessons[key]["worked"] = _call_text(args)
         return None
 
     def lines(self) -> List[str]:
