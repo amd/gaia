@@ -1211,6 +1211,20 @@ class _Step:
     def is_cd(self) -> bool:
         return len(self.segments) == 1 and self.segments[0][0].lower() == "cd"
 
+    @property
+    def cd_target(self) -> str:
+        """The directory a ``cd`` step names.
+
+        On Windows it is read from the raw text: ``\\`` is a path separator
+        there, and the POSIX lexer would have eaten it (``C:\\a`` -> ``C:a``).
+        """
+        if os.name != "nt":
+            return self.segments[0][1]
+        target = self.text.split(None, 1)[1].strip()
+        if len(target) >= 2 and target[0] == target[-1] and target[0] in "\"'":
+            return target[1:-1]
+        return target
+
 
 def _connector_runs(connector: str, previous_code: int) -> bool:
     """sh's rule: ``&&`` needs the last status 0, ``||`` needs it non-zero.
@@ -2995,7 +3009,7 @@ class ShellToolsMixin:
                     step_cwds.append(walk_cwd)
                     if step.is_cd:
                         walk_cwd, error = self._resolve_cd_target(
-                            step.segments[0][1], walk_cwd
+                            step.cd_target, walk_cwd
                         )
                         if error:
                             return error
