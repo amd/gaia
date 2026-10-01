@@ -201,7 +201,7 @@ jobs:
       - self-hosted
       - Windows
       - xsj-dispatch
-      - ryzen-ai
+      - strix-point
     strategy:
       fail-fast: false
       max-parallel: 1
