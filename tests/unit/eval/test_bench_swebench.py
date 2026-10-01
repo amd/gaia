@@ -1050,6 +1050,8 @@ def test_the_grader_container_needs_no_host_install_of_swebench(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: Up())
     swebench._require_harness()
+
+
 def test_a_sample_is_seeded_sorted_and_reproducible():
     pool = [f"repo__pkg-{i}" for i in range(40)]
     first = swebench.sample_ids(5, seed=7, ids=pool)
