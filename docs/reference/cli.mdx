@@ -2038,6 +2038,8 @@ gaia eval tasks swebench eval/results/eval-tasks-swebench   # Grade those predic
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--instances` | the five-instance pilot | Comma-separated SWE-bench Verified instance ids; only with `--suite swebench` |
+| `--sample N` | off | A seeded random N of the 500 SWE-bench Verified instances instead of `--instances`; the same N and seed always pick the same tasks |
+| `--seed S` | `20260930` | The seed `--sample` draws with |
 | `--no-evaluate` | off | Capture predictions without grading them in Docker |
 
 [→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks) · [→ Comparing harnesses and models](/reference/eval#comparing-harnesses-and-models)

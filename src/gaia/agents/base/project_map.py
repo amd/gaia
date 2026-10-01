@@ -725,7 +725,9 @@ class ProjectMapMixin:
             return "building now in the background; grep until it lands"
         if state == _FAILED:
             return "build FAILED — grep instead, or call index_codebase to see why"
-        return "not built — call index_codebase to enable semantic code search"
+        return (
+            "not built — the first search_code_index builds it (slow on a large repo)"
+        )
 
     def _code_index_is_built(self) -> Optional[bool]:
         """``True``/``False``, or ``None`` when this agent has no code index.
@@ -748,7 +750,7 @@ class ProjectMapMixin:
         override = auto_index_env_override()
         if override is not None:
             return override
-        return bool(getattr(getattr(self, "config", None), "auto_index", True))
+        return bool(getattr(getattr(self, "config", None), "auto_index", False))
 
     def _on_task_start(self, user_input: str) -> None:
         """Materialize the map and, if warranted, kick off ``index_codebase``."""

@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import random
 import shutil
 import subprocess
 import sys
@@ -131,12 +132,17 @@ def _fetch_with_datasets(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
     return {r["instance_id"]: r for r in rows if r["instance_id"] in wanted}
 
 
-def _fetch_with_rest(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
-    """Page through the split on the datasets-server; stop once every id is seen."""
+def _fetch_with_rest(ids: Optional[Sequence[str]]) -> Dict[str, Dict[str, Any]]:
+    """Page through the split on the datasets-server; stop once every id is seen.
+
+    ``None`` reads every row.
+    """
     import requests  # pylint: disable=import-outside-toplevel
 
-    wanted, found, offset = set(ids), {}, 0
-    while wanted - set(found):
+    wanted = None if ids is None else set(ids)
+    found: Dict[str, Dict[str, Any]] = {}
+    offset = 0
+    while wanted is None or wanted - set(found):
         query = urlencode(
             {
                 "dataset": DATASET,
@@ -158,7 +164,7 @@ def _fetch_with_rest(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
             ) from exc
         rows = [entry["row"] for entry in page.get("rows") or []]
         for row in rows:
-            if row.get("instance_id") in wanted:
+            if wanted is None or row.get("instance_id") in wanted:
                 found[row["instance_id"]] = row
         offset += len(rows)
         if not rows or offset >= int(page.get("num_rows_total") or 0):
@@ -176,6 +182,33 @@ def fetch_instances(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
         f"reading {DATASET} needs the `datasets` package or `requests`. "
         "Run `pip install datasets` (or `pip install requests`)."
     )
+
+
+#: The seed behind the published GAIA samples, so `--sample N` is reproducible.
+SAMPLE_SEED = 20260930
+
+
+def all_instance_ids() -> List[str]:
+    """Every instance id in the split, sorted."""
+    if importlib.util.find_spec("datasets") is not None:
+        from datasets import (  # pylint: disable=import-outside-toplevel,import-error
+            load_dataset,
+        )
+
+        return sorted(load_dataset(DATASET, split=SPLIT)["instance_id"])
+    return sorted(_fetch_with_rest(None))
+
+
+def sample_ids(
+    n: int, seed: int = SAMPLE_SEED, ids: Optional[Sequence[str]] = None
+) -> List[str]:
+    """A seeded random *n* of the split: the same *n* and seed pick the same tasks."""
+    pool = sorted(ids if ids is not None else all_instance_ids())
+    if not 1 <= n <= len(pool):
+        raise SweBenchError(
+            f"--sample must be between 1 and {len(pool)} ({DATASET} {SPLIT}), not {n}"
+        )
+    return sorted(random.Random(seed).sample(pool, n))
 
 
 def load_instances(

@@ -2521,6 +2521,20 @@ afterwards (or `swebench <run_dir>` does, later).
         "is built from (default: the five-instance pilot); only with --suite swebench",
     )
     tasks_run_parser.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        metavar="N",
+        help="swebench: a seeded random N of SWE-bench Verified instead of named "
+        "--instances; the same N and --seed always pick the same tasks",
+    )
+    tasks_run_parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for --sample (default: the seed GAIA's published numbers use)",
+    )
+    tasks_run_parser.add_argument(
         "--no-evaluate",
         action="store_true",
         help="swebench: capture the predictions but do not grade them in Docker "
@@ -3775,7 +3789,22 @@ def _handle_eval_tasks(args):
         model = args.model or DEFAULT_MODEL_NAME
         only = [t.strip() for t in (args.tasks or "").split(",") if t.strip()]
         instances = [i.strip() for i in (args.instances or "").split(",") if i.strip()]
+        if args.sample is not None or args.seed is not None:
+            if args.suite != "swebench" or instances or args.sample is None:
+                print(
+                    "❌ --sample N (and --seed) pick SWE-bench instances: use them "
+                    "with --suite swebench and without --instances."
+                )
+                sys.exit(2)
         try:
+            if args.sample is not None:
+                from gaia.eval.bench import swebench as _swebench
+
+                instances = _swebench.sample_ids(
+                    args.sample,
+                    _swebench.SAMPLE_SEED if args.seed is None else args.seed,
+                )
+                print(f"[SAMPLE] {len(instances)} instances: {','.join(instances)}")
             ft.select(
                 ft.load_suite(
                     args.suite, instances=instances, work_root=config.work_root
