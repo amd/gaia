@@ -23,10 +23,11 @@ def host_dir() -> Path:
     if override:
         return Path(override)
     # GAIA_HOME isolates the whole runtime; a daemon outside it would manage
-    # another home's Lemonade.
+    # another home's Lemonade. Expand ~ and $VARS like config/Lemonade do, or
+    # an unexpanded value resolves relative to cwd instead of $HOME.
     gaia_home = os.environ.get("GAIA_HOME", "").strip()
     if gaia_home:
-        return Path(gaia_home) / "host"
+        return Path(os.path.expandvars(os.path.expanduser(gaia_home))) / "host"
     return Path.home() / ".gaia" / "host"
 
 

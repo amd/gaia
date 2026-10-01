@@ -27,3 +27,10 @@ def test_without_either_it_is_the_users_gaia_dir(monkeypatch):
     monkeypatch.delenv("GAIA_DAEMON_HOME", raising=False)
     monkeypatch.delenv("GAIA_HOME", raising=False)
     assert paths.host_dir() == Path.home() / ".gaia" / "host"
+
+
+def test_gaia_home_with_tilde_and_env_var_is_expanded(tmp_path, monkeypatch):
+    monkeypatch.delenv("GAIA_DAEMON_HOME", raising=False)
+    monkeypatch.setenv("GAIA_PROFILE_DIR", "profile2")
+    monkeypatch.setenv("GAIA_HOME", "~/$GAIA_PROFILE_DIR")
+    assert paths.host_dir() == Path.home() / "profile2" / "host"
