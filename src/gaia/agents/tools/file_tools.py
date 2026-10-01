@@ -2349,6 +2349,22 @@ class FileSearchToolsMixin:
                         summary[col] = col_summary
 
                     result["summary"] = summary
+                    groupable = [
+                        col
+                        for col, info in summary.items()
+                        if info["type"] != "numeric"
+                        and 1 < info.get("unique_values", 0) <= 20
+                    ]
+                    has_numeric = any(
+                        info["type"] == "numeric" for info in summary.values()
+                    )
+                    if groupable and has_numeric and not group_by:
+                        # Models read the overall sum as the answer to "which X has the most".
+                        result["per_group_totals"] = (
+                            "Not computed in this summary. Call analyze_data_file "
+                            f"again with group_by set to one of {groupable} to sum "
+                            "every numeric column per value."
+                        )
 
                     # Sample rows (first 5)
                     result["sample_rows"] = rows[:5]
