@@ -316,6 +316,16 @@ the run starts:
   from the cache only in the `judge` step, but it never decides the pass: that
   is the harness's verdict alone.
 
+**In CI.** `.github/workflows/eval_swebench.yml` runs the flagship on fixed
+subsets listed, with the reason for each instance, in
+`eval/tasks/swebench_subsets.json`. `smoke` is three fast tasks the agent solved
+on every measured run; it runs on pull requests that touch the agent loop, its
+tools or the coding skill. `hard` is ten tasks strong Claude agents rarely solve
+on the leaderboard; it runs nightly. The model is DeepSeek V4.1 Flash on
+Fireworks through GAIA's embedded Lemonade, so the runner needs no GPU and needs
+the `FIREWORKS_API_KEY` repository secret. Results go to the job summary and an
+artifact. Nothing is gated until expectations are measured on that runner.
+
 ### Keeping credentials out of published artifacts
 
 Results are meant to be published, and an agent with a shell prints its
