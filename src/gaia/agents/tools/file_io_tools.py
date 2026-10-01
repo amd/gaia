@@ -202,6 +202,55 @@ def _function_span(node, lines: list) -> tuple:
     return start, node.end_lineno
 
 
+#: Lines one ranged read returns at most.
+MAX_READ_LINES = 400
+#: Chars a read returns when the host has no model-sized budget.
+DEFAULT_READ_CHARS = 20000
+
+
+def _read_budget(host: Any) -> int:
+    """Chars one read may return: the host's tool-result target, so it is never truncated."""
+    budget = getattr(host, "_truncation_budget", None)
+    return budget()[1] if callable(budget) else DEFAULT_READ_CHARS
+
+
+def _line_window(
+    lines: list, start_line: Optional[int], end_line: Optional[int], max_chars: int
+) -> Dict[str, Any]:
+    """Lines *start_line*..*end_line* (1-based, inclusive), numbered like ``cat -n``."""
+    total = len(lines)
+    start = 1 if start_line is None else start_line
+    if start < 1:
+        return {"error": "start_line is 1-based: the first line is 1."}
+    if total == 0:
+        return {"content": "", "start_line": 1, "end_line": 0, "total_lines": 0}
+    if start > total:
+        return {
+            "error": f"start_line {start} is past the end: the file has {total} lines."
+        }
+    end = total if end_line is None else min(end_line, total)
+    if end < start:
+        return {"error": f"end_line {end_line} is before start_line {start}."}
+    end = min(end, start + MAX_READ_LINES - 1)
+    out, size = [], 0
+    for number in range(start, end + 1):
+        line = f"{number:>6}\t{lines[number - 1]}\n"
+        if out and size + len(line) > max_chars:
+            end = number - 1
+            break
+        out.append(line)
+        size += len(line)
+    window = {
+        "content": "".join(out),
+        "start_line": start,
+        "end_line": end,
+        "total_lines": total,
+    }
+    if end < total:
+        window["next_start_line"] = end + 1
+    return window
+
+
 _PATH_VALIDATOR_HINT = "Set self.path_validator = <PathValidator instance>."
 _PATH_VALIDATOR_DOC_ANCHOR = "docs/spec/file-io-tools-mixin.mdx#host-agent-contract"
 
@@ -288,7 +337,11 @@ class FileIOToolsMixin:
 
         @tool
         def read_file(
-            file_path: str, offset: int = 0, limit: Optional[int] = None
+            file_path: str,
+            offset: int = 0,
+            limit: Optional[int] = None,
+            start_line: Optional[int] = None,
+            end_line: Optional[int] = None,
         ) -> Dict[str, Any]:
             """Read any file and intelligently analyze based on file type.
 
@@ -297,10 +350,15 @@ class FileIOToolsMixin:
             - Markdown files (.md): Headers + code blocks + links
             - Other text files: Raw content
 
+            Read the part you need with start_line/end_line, e.g. the line a
+            search reported.
+
             Args:
                 file_path: Path to the file to read
                 offset: Zero-based character offset for a bounded text page.
                 limit: Page size (1..8000 characters); omitted preserves full analysis.
+                start_line: First line to return (1-based); the result is line-numbered.
+                end_line: Last line to return, inclusive (at most 400 lines per read).
 
             Returns:
                 Dictionary with file content and type-specific metadata
@@ -320,6 +378,27 @@ class FileIOToolsMixin:
 
                 reads = file_read_record(self)
                 seen = stamp_of(file_path)
+
+                if start_line is not None or end_line is not None:
+                    if offset or limit is not None:
+                        return {
+                            "status": "error",
+                            "error": "Use offset/limit (characters) or "
+                            "start_line/end_line (lines), not both.",
+                        }
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            lines = f.read().splitlines()
+                    except UnicodeDecodeError:
+                        return {
+                            "status": "error",
+                            "error": f"{file_path} is binary: it has no lines to read.",
+                        }
+                    page = _line_window(lines, start_line, end_line, _read_budget(self))
+                    if "error" in page:
+                        return {"status": "error", **page}
+                    reads.note(file_path, seen)
+                    return {"status": "success", "file_path": file_path, **page}
 
                 if offset or limit is not None:
                     from gaia.agents.base.artifacts import read_text_page
