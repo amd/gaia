@@ -75,11 +75,39 @@ def test_instances_are_fetched_once_cut_to_the_columns_and_cached(tmp_path):
     cache = tmp_path / "swebench"
     first = swebench.load_instances([FLASK, REQUESTS], cache, fetch)
     assert [i["instance_id"] for i in first] == [FLASK, REQUESTS], "in the order asked"
-    assert set(first[0]) == set(swebench.COLUMNS), "hints and eval script are dropped"
+    assert set(first[0]) == set(swebench.COLUMNS) - {
+        "patch"
+    }, "hints and eval script are dropped"
     assert (cache / f"{REQUESTS}.json").is_file()
     again = swebench.load_instances([REQUESTS], cache, fetch)
     assert again == [first[1]]
     assert fetch.asked == [[FLASK, REQUESTS]], "the second load never fetched"
+
+
+def test_the_gold_patch_is_never_on_disk_during_a_run(tmp_path):
+    """A full-access agent read the cached instance file, gold patch and all."""
+    cache = tmp_path / "swebench"
+    (inst,) = swebench.load_instances([REQUESTS], cache, _stub(_row()))
+    assert "patch" not in inst
+    assert "patch" not in (cache / f"{REQUESTS}.json").read_text()
+
+
+def test_an_older_cache_has_its_gold_patch_removed(tmp_path):
+    cache = tmp_path / "swebench"
+    cache.mkdir()
+    legacy = swebench._normalize(_row())
+    (cache / f"{REQUESTS}.json").write_text(json.dumps(legacy))
+    (inst,) = swebench.load_instances([REQUESTS], cache, _stub())
+    assert "patch" not in inst
+    assert "patch" not in (cache / f"{REQUESTS}.json").read_text()
+
+
+def test_the_judge_fetches_the_gold_patch_without_writing_it(tmp_path):
+    gold = swebench.gold_patches([REQUESTS], _stub(_row()))
+    assert gold[REQUESTS].endswith("+fix\n")
+    assert list(tmp_path.iterdir()) == []
+    with pytest.raises(swebench.SweBenchError, match="no instance"):
+        swebench.gold_patches(["nope__x-1"], _stub(_row()))
 
 
 def test_test_lists_stored_as_json_text_become_lists(tmp_path):
@@ -1008,6 +1036,9 @@ def test_the_judge_grades_a_swebench_attempt_against_the_gold_patch(
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(ft, "judge_command", lambda model, env: ["claude"])
     monkeypatch.setattr(ft.shutil, "which", lambda name: "/bin/claude")
+    # The gold is fetched at judge time; the run's cache never held it.
+    assert "patch" not in (pilot / "swebench" / f"{REQUESTS}.json").read_text()
+    monkeypatch.setattr(swebench, "fetch_instances", _stub(_row()))
     card = ft.judge_run(out, "judge-m", {})
     (payload,) = sent
     assert "SWE-bench Verified" in payload and "TheRock" not in payload

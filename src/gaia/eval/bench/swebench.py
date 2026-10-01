@@ -248,7 +248,11 @@ def load_instances(
     for instance_id in ids:
         path = cache_dir / f"{instance_id}.json"
         if path.is_file():
-            cached[instance_id] = json.loads(path.read_text(encoding="utf-8"))
+            inst = json.loads(path.read_text(encoding="utf-8"))
+            if inst.pop("patch", None) is not None:
+                # Written by an older harness: take the answer back off disk.
+                path.write_text(json.dumps(inst, indent=2), encoding="utf-8")
+            cached[instance_id] = inst
     missing = [i for i in ids if i not in cached]
     if missing:
         fetched = (fetch or fetch_instances)(missing)
@@ -260,11 +264,24 @@ def load_instances(
             )
         for instance_id in missing:
             inst = _normalize(fetched[instance_id])
+            # The gold patch is the answer. A full-access agent can read any
+            # file on the machine, so it never sits on disk during a run;
+            # gold_patches() fetches it for the judge afterwards.
+            del inst["patch"]
             (cache_dir / f"{instance_id}.json").write_text(
                 json.dumps(inst, indent=2), encoding="utf-8"
             )
             cached[instance_id] = inst
     return [cached[i] for i in ids]
+
+
+def gold_patches(ids: Sequence[str], fetch: Optional[Fetcher] = None) -> Dict[str, str]:
+    """The reference fix for each instance, fetched now and never written to disk."""
+    fetched = (fetch or fetch_instances)(list(ids))
+    missing = [i for i in ids if i not in fetched]
+    if missing:
+        raise SweBenchError(f"{DATASET} ({SPLIT}) has no instance {missing}.")
+    return {i: _normalize(fetched[i])["patch"] for i in ids}
 
 
 # ---------------------------------------------------------------------------
