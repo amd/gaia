@@ -186,3 +186,39 @@ describe('the welcome screen', () => {
         expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ agent_type: 'gaia' });
     });
 });
+
+// A chat's link (#<short hash>) reloaded to the home page: with no session
+// selected yet, the hash-sync effect cleared the hash before the deferred URL
+// handler read it.
+describe('opening the app on a chat link', () => {
+    afterEach(() => {
+        window.history.replaceState(null, '', '/');
+        useChatStore.setState({ sessions: [], currentSessionId: null });
+    });
+
+    it('opens that chat and keeps its link', async () => {
+        const chat = session({ id: '2676152b-4c2d-4b6e-af47-c790ffd3f2b7' });
+        mocked.listSessions.mockResolvedValue({ sessions: [chat], total: 1 });
+        useChatStore.setState({ sessions: [], currentSessionId: null });
+        window.history.replaceState(null, '', '/#2676152');
+
+        render(<App />);
+
+        await waitFor(() =>
+            expect(useChatStore.getState().currentSessionId).toBe(chat.id),
+        );
+        expect(window.location.hash).toBe('#2676152');
+    });
+
+    it('drops a link to a chat that no longer exists', async () => {
+        mocked.listSessions.mockResolvedValue({ sessions: [session()], total: 1 });
+        useChatStore.setState({ sessions: [], currentSessionId: null });
+        window.history.replaceState(null, '', '/#deadbee');
+
+        render(<App />);
+
+        await waitFor(() => expect(mocked.listSessions).toHaveBeenCalled());
+        await waitFor(() => expect(window.location.hash).toBe(''));
+        expect(useChatStore.getState().currentSessionId).toBeNull();
+    });
+});
