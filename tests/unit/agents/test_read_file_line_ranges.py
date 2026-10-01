@@ -84,17 +84,12 @@ def test_a_small_file_still_comes_back_whole(read_file, tmp_path):
     assert "start_line" not in result
 
 
-def test_a_large_file_comes_back_as_its_start_and_outline(read_file, tmp_path):
+def test_a_large_file_still_comes_back_whole_for_the_chunk_index(read_file, tmp_path):
+    """Whole-file reads are unchanged: the chunk index pages large results."""
     path = _code(tmp_path, 400)
     result = read_file(str(path))
-    assert result["status"] == "success"
-    assert result["content"].startswith("     1\tdef f0():\n")
-    assert len(result["content"]) <= 2000
-    assert result["total_lines"] == 400
-    assert result["next_start_line"] == result["end_line"] + 1
-    assert "start_line/end_line" in result["note"]
-    # The outline covers the whole file, so the next read can aim.
-    assert result["symbols"][-1] == {"name": "f199", "type": "function", "line": 399}
+    assert result["content"] == path.read_text(encoding="utf-8")
+    assert "start_line" not in result
 
 
 def test_a_line_window_is_never_a_full_readback(tmp_path):

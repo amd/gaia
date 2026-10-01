@@ -349,9 +349,8 @@ class FileIOToolsMixin:
             - Markdown files (.md): Headers + code blocks + links
             - Other text files: Raw content
 
-            A file too large to return whole comes back as its first lines
-            (numbered) plus an outline; read the part you need with
-            start_line/end_line, e.g. the line a search reported.
+            Read the part you need with start_line/end_line, e.g. the line a
+            search reported.
 
             Args:
                 file_path: Path to the file to read
@@ -508,18 +507,6 @@ class FileIOToolsMixin:
                 # Other text files
                 else:
                     result["file_type"] = ext[1:] if ext else "text"
-
-                budget = _read_budget(self)
-                if len(content) > budget:
-                    # Returning it whole would be truncated into pages; hand back
-                    # the start plus the outline so the next read can aim.
-                    result.pop("code_blocks", None)
-                    result.update(_line_window(content.splitlines(), 1, None, budget))
-                    result["note"] = (
-                        f"The file has {result['total_lines']} lines, too many to "
-                        f"return whole: this is lines 1-{result['end_line']}. Read "
-                        "another part with start_line/end_line."
-                    )
 
                 return result
 
