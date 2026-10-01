@@ -213,6 +213,7 @@ gaia eval tasks report runs/cc-opus runs/gaia-glm runs/cc-glm --out runs/report
 | `--meter fireworks` | Reads the run's real cost from the provider's billing meter. |
 | `--therock-url URL` | Where the `therock` suite clones from (default `https://github.com/ROCm/TheRock`). |
 | `--instances a,b` | The SWE-bench Verified instance ids the `swebench` suite is built from (default: the pilot). Only with `--suite swebench`. |
+| `--sample N [--seed S]` | `swebench`: a seeded random N of the 500 instances instead of `--instances`. The same N and seed always pick the same tasks, so a result can be reproduced and compared. |
 | `--no-evaluate` | `swebench`: capture the predictions and stop; grade later with `gaia eval tasks swebench DIR`. |
 | `--docker-platform P` | The platform the SWE-bench images are pulled for (default `linux/amd64`; they exist for no other). |
 | `--keep-images` | `swebench`: do not pull each image just before its run and remove it after (about 3 GB each). |
