@@ -187,6 +187,13 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const pendingPrompt = useChatStore((s) => s.pendingPrompt);
 
     const session = sessions.find((s) => s.id === sessionId);
+    // The session's model is what answers; Lemonade's model_loaded is only the
+    // server's most recent one (another client's cloud model, say).
+    const badgeModel = session?.model || systemStatus?.model_loaded || null;
+    const badgeCtx =
+        badgeModel && systemStatus?.model_loaded?.toLowerCase() === badgeModel.toLowerCase()
+            ? systemStatus.model_context_size
+            : null;
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useState('');
@@ -1534,22 +1541,22 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         </div>
                     )}
                     <span
-                        className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}
+                        className={`model-badge ${!badgeModel ? 'no-model' : ''}`}
                         title={
-                            systemStatus?.model_loaded && systemStatus?.model_context_size
-                                ? `${systemStatus.model_loaded} · context window: ${systemStatus.model_context_size.toLocaleString()} tokens`
-                                : (systemStatus?.model_loaded || 'No model loaded')
+                            badgeModel && badgeCtx
+                                ? `${badgeModel} · context window: ${badgeCtx.toLocaleString()} tokens`
+                                : (badgeModel || 'No model loaded')
                         }
                     >
-                        {systemStatus?.model_loaded || 'No model loaded'}
-                        {systemStatus?.model_loaded && systemStatus?.model_context_size != null && (
+                        {badgeModel || 'No model loaded'}
+                        {badgeModel && badgeCtx != null && (
                             <span className="model-ctx-size">
                                 {/* Pretty-print the context window: 32768 → "32K", 8192 → "8K", etc.
                                     Falls back to a localized integer for odd sizes. */}
                                 {' · '}
-                                {systemStatus.model_context_size % 1024 === 0
-                                    ? `${systemStatus.model_context_size / 1024}K`
-                                    : systemStatus.model_context_size.toLocaleString()}
+                                {badgeCtx % 1024 === 0
+                                    ? `${badgeCtx / 1024}K`
+                                    : badgeCtx.toLocaleString()}
                             </span>
                         )}
                     </span>

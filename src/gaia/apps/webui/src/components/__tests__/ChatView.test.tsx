@@ -89,3 +89,30 @@ describe('ChatView agent metadata', () => {
         expect(within(headerIndicator).getByText('3 tools | rag, files')).toBeInTheDocument();
     });
 });
+
+describe('ChatView model badge', () => {
+    it("names the session's model, not the server's most recent one", async () => {
+        useChatStore.setState({
+            systemStatus: {
+                model_loaded: 'fireworks.deepseek-v4p1-flash',
+                model_context_size: 4096,
+            } as never,
+        });
+        const { container } = render(<ChatView sessionId={SESSION.id} />);
+        await screen.findByRole('heading', { name: 'Doc Agent' });
+
+        const badge = container.querySelector('.model-badge');
+        expect(badge?.textContent).toBe('qwen');
+        expect(badge?.textContent).not.toContain('fireworks');
+    });
+
+    it('shows the context size when the loaded model is the session model', async () => {
+        useChatStore.setState({
+            systemStatus: { model_loaded: 'Qwen', model_context_size: 65536 } as never,
+        });
+        const { container } = render(<ChatView sessionId={SESSION.id} />);
+        await screen.findByRole('heading', { name: 'Doc Agent' });
+
+        expect(container.querySelector('.model-badge')?.textContent).toBe('qwen · 64K');
+    });
+});
