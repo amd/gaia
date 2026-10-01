@@ -64,6 +64,8 @@ from gaia.agents.base.extraction import (
 )
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
+from gaia.agents.base.task_lessons import TaskLessons
+from gaia.agents.base.task_lessons import attach as attach_task_lessons
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
@@ -1499,6 +1501,7 @@ Do NOT wrap conversational replies in JSON.
             )
         self.max_consecutive_repeats = max_consecutive_repeats
         self._turn_scope = TurnScopeGuard(max_consecutive_repeats)
+        self._task_lessons = TaskLessons()
         self._current_query: Optional[str] = (
             None  # Store current query for error context
         )
@@ -4910,6 +4913,7 @@ Do NOT wrap conversational replies in JSON.
             self._note_verification_signal(tool_name, tool_args, result, before=before)
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
+                result = self._with_task_lessons(tool_name, tool_args, result)
             return result
 
         started = time.perf_counter()
@@ -4924,6 +4928,7 @@ Do NOT wrap conversational replies in JSON.
             self._note_verification_signal(tool_name, tool_args, result, before=before)
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
+                result = self._with_task_lessons(tool_name, tool_args, result)
             return result
         finally:
             self._tool_timing_depth = 0
@@ -4947,6 +4952,13 @@ Do NOT wrap conversational replies in JSON.
                     )
                 except Exception as e:  # noqa: BLE001 - never displace a tool error
                     logger.warning("could not record tool timing: %s", e)
+
+    def _with_task_lessons(self, tool_name: str, tool_args: Any, result: Any) -> Any:
+        """A failed result carries what this task has already learned."""
+        lessons = getattr(self, "_task_lessons", None)
+        if lessons is None:
+            return result
+        return attach_task_lessons(result, lessons.record(tool_name, tool_args, result))
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
@@ -6762,6 +6774,9 @@ Do NOT wrap conversational replies in JSON.
                 getattr(self, "max_consecutive_repeats", 4)
             )
         self._turn_scope.begin_turn(user_input, os.getcwd())
+        if getattr(self, "_task_lessons", None) is None:
+            self._task_lessons = TaskLessons()
+        self._task_lessons.begin_turn()
 
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
@@ -9696,8 +9711,13 @@ Do NOT wrap conversational replies in JSON.
         if not scope.answered:
             return self._answer_after_repeated_calls(
                 tool_name,
-                scope.failures.get(tool_name, 0),
-                [{"status": "error", "error": scope.last_error.get(tool_name, "")}],
+                scope.failures.get(scope.end_key or tool_name, 0),
+                [
+                    {
+                        "status": "error",
+                        "error": scope.last_error.get(scope.end_key or tool_name, ""),
+                    }
+                ],
                 messages,
                 conversation,
                 steps_taken,
