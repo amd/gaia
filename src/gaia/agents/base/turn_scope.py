@@ -32,6 +32,8 @@ from gaia.agents.base.verification import (
 
 #: Conversation entry type marking where the turn first produced an answer.
 ANSWERED_MARKER = "answered"
+#: Conversation entry type marking where a check sent the answer back for more work.
+REOPENED_MARKER = "reopened"
 
 #: A second off-request call after the answer ends the turn.
 DEFAULT_DRIFT_LIMIT = 2
@@ -184,6 +186,15 @@ class TurnScopeGuard:
     def mark_answered(self) -> None:
         """The turn has produced an answer; later calls must serve it."""
         self.answered = True
+
+    def reopen(self) -> None:
+        """A check sent the answer back: the work it asks for is the request's."""
+        self.answered = False
+        self.drift_blocked = 0
+
+    def widen(self, text: str) -> None:
+        """Paths a check names (a missing deliverable) become part of the request."""
+        self.paths |= {_norm(p, self.root) for p in mentioned_paths(text or "")}
 
     def _call_paths(self, args: Dict[str, Any]) -> Set[str]:
         return {
