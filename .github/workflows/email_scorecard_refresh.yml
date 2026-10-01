@@ -195,7 +195,7 @@ jobs:
     # steps + LemonadeServer.exe) — landing on Linux dies instantly with
     # 'powershell: command not found'. fromJSON(...) yields a label ARRAY so the
     # runner must have Windows AND the stx/stx-test label.
-    runs-on: [self-hosted, Windows, xsj-dispatch, ryzen-ai]
+    runs-on: [self-hosted, Windows, xsj-dispatch, strix-point]
     # Budget derivation (#2094) — measured against run 29433392568 (limit 60,
     # killed at the old flat 90-min job timeout mid action-item judge eval).
     # Judge-step ceilings are profile-independent: their corpora are fixed
