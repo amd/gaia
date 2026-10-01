@@ -13,7 +13,13 @@ from unittest.mock import patch
 import pytest
 import responses
 
-from gaia.llm.lemonade_client import CHAT_LLAMACPP_ARGS, LemonadeClient
+from gaia.llm.lemonade_client import (
+    CHAT_LLAMACPP_ARGS,
+    CONVERSATION_SLOT,
+    SIDE_SLOT,
+    LemonadeClient,
+)
+from gaia.llm.providers.lemonade import LemonadeProvider
 
 BASE = "http://localhost:13305/api/v1"
 CATALOG = [
@@ -64,3 +70,41 @@ def test_a_llamacpp_chat_load_gets_two_slots_and_no_ram_cache(client):
 def test_other_loads_keep_their_flags(client, model, kwargs):
     sent = _sent_load(client, model, **kwargs)
     assert sent.get("llamacpp_args") == kwargs.get("llamacpp_args")
+
+
+def _provider_sending(model):
+    with patch("gaia.llm.providers.lemonade.LemonadeClient") as backend:
+        backend.return_value.chat_completions.return_value = {
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]
+        }
+        backend.return_value.cloud_model_provider.side_effect = lambda m: (
+            "fireworks" if m.startswith("fireworks.") else None
+        )
+        provider = LemonadeProvider(model=model)
+        provider.chat([{"role": "user", "content": "q"}])
+        return backend.return_value.chat_completions.call_args.kwargs
+
+
+def test_a_local_request_is_pinned_to_the_conversation_slot():
+    sent = _provider_sending("Qwen3-30B-A3B-Instruct-2507-GGUF")
+    assert sent["id_slot"] == CONVERSATION_SLOT
+
+
+def test_a_cloud_request_carries_no_slot():
+    assert "id_slot" not in _provider_sending("fireworks.glm-5p3")
+
+
+def test_memory_extraction_runs_on_the_side_slot():
+    from unittest.mock import MagicMock
+
+    from gaia.agents.base.memory import MemoryMixin
+
+    class Host(MemoryMixin):
+        pass
+
+    host = Host()
+    host.chat = MagicMock()
+    host.chat.send_messages.return_value = MagicMock(text="[]")
+    assert host._extract_via_llm("My manager is Priya.", "Noted.", []) == []
+    assert host.chat.send_messages.call_args.kwargs["id_slot"] == SIDE_SLOT
+    assert SIDE_SLOT != CONVERSATION_SLOT

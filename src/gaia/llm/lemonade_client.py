@@ -364,6 +364,11 @@ NPU_CTX_SIZE = 32768  # NPU — gemma4-it-e2b-FLM (FastFlowLM ceiling)
 CHAT_LLAMACPP_ARGS = (
     "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5"
 )
+#: Slots requests are pinned to (llama.cpp ``id_slot``). Left to LRU, a memory
+#: extraction landed on the conversation's slot and overwrote it, and the next
+#: turn re-read 28K tokens (109s). A server with one slot ignores the pin.
+CONVERSATION_SLOT = 0
+SIDE_SLOT = 1
 
 
 def profile_ctx_size(device: Optional[str]) -> int:

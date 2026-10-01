@@ -10,6 +10,7 @@ from typing import Callable, Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
 from ..lemonade_client import (
+    CONVERSATION_SLOT,
     DEFAULT_MODEL_NAME,
     LemonadeClient,
     active_profile_ctx_size,
@@ -583,6 +584,7 @@ class LemonadeProvider(LLMClient):
         # they get the client's standard 0.7. repeat_penalty / repeat_last_n
         # are llama.cpp-native (sent via extra_body when streaming).
         if not self._backend.cloud_model_provider(effective_model):
+            kwargs.setdefault("id_slot", CONVERSATION_SLOT)
             kwargs.setdefault("temperature", 0.1)
             kwargs.setdefault("frequency_penalty", 0.3)
             kwargs.setdefault("presence_penalty", 0.1)
