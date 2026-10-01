@@ -185,3 +185,27 @@ describe('user messages are never cleaned', () => {
         expect(container.querySelector('.code-lang')?.textContent).toBe('shell');
     });
 });
+
+describe('the no-op verification line is not shown', () => {
+    it('drops a trailing "Verification: unverified" line', () => {
+        const { container } = renderContent(
+            '391\n\nVerification: unverified — no tools ran, so nothing was checked.',
+        );
+        expect(container.textContent).toContain('391');
+        expect(container.textContent).not.toContain('Verification');
+    });
+
+    it('keeps a line that reports a check result', () => {
+        const { container } = renderContent(
+            'Fixed the bug.\n\nVerification: verified — pytest ran and passed.',
+        );
+        expect(container.textContent).toContain('Verification: verified');
+    });
+
+    it('keeps the words when they are part of the answer', () => {
+        const { container } = renderContent(
+            'Verification: unverified means no check ran.\n\nThat is all.',
+        );
+        expect(container.textContent).toContain('Verification: unverified means');
+    });
+});
