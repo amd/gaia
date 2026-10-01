@@ -771,11 +771,11 @@ async def async_main(action, **kwargs):
             return
 
         except KeyboardInterrupt:
-            print("\n\nInterrupted by user")
+            print("\n\nInterrupted by user", file=sys.stderr)
             return
         except Exception as e:
             log.error(f"Error in chat: {e}", exc_info=True)
-            print(f"❌ Error: {e}")
+            print(f"❌ Error: {e}", file=sys.stderr)
             return
         finally:
             # Cleanup. The drain is here rather than beside the one-shot
