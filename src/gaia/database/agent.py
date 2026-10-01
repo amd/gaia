@@ -41,7 +41,9 @@ def _resolve_where(
     return build_where(conditions, context=context)
 
 
-class DatabaseAgent(Agent, DatabaseMixin):
+class DatabaseAgent(Agent, DatabaseMixin):  # pylint: disable=abstract-method
+    # Deliberately incomplete: a concrete subclass provides _register_tools
+    # (see the PatientAgent example below), the same pattern as ApiAgent.
     """
     Agent with built-in SQLite database tools.
 
