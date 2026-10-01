@@ -98,15 +98,13 @@ model emits. A contributor can check the list off:
 
 ## Automatic code indexing
 
-When the root is a code repository and no [code index](/guides/code-index)
-exists, the map calls `index_codebase` in a background thread and says so in the
-prompt, so the model knows to grep until it lands. It fires at most once per
-session.
-
-Turn it off on a monorepo where a full embedding pass is not worth it:
+By default the [code index](/guides/code-index) is built on the first
+`search_code_index`, not at task start, and the map says the index is not built
+yet. Opt in to building it in a background thread at task start, at most once
+per session:
 
 ```bash
-export GAIA_PROJECT_MAP_AUTO_INDEX=0
+export GAIA_PROJECT_MAP_AUTO_INDEX=1
 ```
 
 ## Choosing the root

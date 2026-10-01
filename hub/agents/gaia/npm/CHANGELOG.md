@@ -14,6 +14,11 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- **The code index is built on first search, not at task start.** In 32
+  SWE-bench tasks the agent never searched it, yet every task embedded the whole
+  repository in the background: about 2,000 local embedding requests per six
+  tasks. The first `search_code_index` now builds it; `GAIA_PROJECT_MAP_AUTO_INDEX=1`
+  restores building at task start.
 - **The first answer on a local model starts in seconds, not after a ~20 s
   silence.** The terminal UI now shows a "Getting GAIA ready" stage before the
   chat: the agent starts, loads its model and reads its system prompt there,
