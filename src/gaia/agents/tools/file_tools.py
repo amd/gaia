@@ -41,6 +41,38 @@ from gaia.security import BackupError
 logger = get_logger(__name__)
 
 
+#: Rows searched for a table's header below title and note rows.
+HEADER_SEARCH_ROWS = 20
+
+
+def _header_row_index(rows: List[tuple]) -> int:
+    """The row that names a sheet's columns, below any title or note rows.
+
+    Real spreadsheets put a title ("FY2024 Budget vs Actual by Department") and
+    notes above the table. Taking row 0 as the header turned every column into
+    Column_1..Column_4 and a model filled the values it could not see.
+
+    The header is the first row that spans the table's full width with text in
+    every cell. A sheet with no such row keeps row 0, as before.
+
+    Row 0 is also kept whenever it already looks like a header (2+ filled,
+    all-text cells) — otherwise a text-only sheet whose header has an unused
+    trailing column narrower than its data rows would skip row 0 for the
+    first data row, silently dropping it from the results.
+    """
+    head = rows[:HEADER_SEARCH_ROWS]
+    filled = [[c for c in r if c is not None and str(c).strip()] for r in head]
+    if len(filled[0]) >= 2 and all(isinstance(c, str) for c in filled[0]):
+        return 0
+    width = max((len(cells) for cells in filled), default=0)
+    if width < 2:
+        return 0
+    for i, cells in enumerate(filled):
+        if len(cells) == width and all(isinstance(c, str) for c in cells):
+            return i
+    return 0
+
+
 def _python_syntax_error(source: str, filename: str) -> str | None:
     """The SyntaxError *source* would raise on import, or None if it is valid.
 
@@ -1429,12 +1461,14 @@ class FileSearchToolsMixin:
                     wb.close()
                     if not ws_rows:
                         return [], [], None
-                    # First row is headers
+                    header = _header_row_index(ws_rows)
                     columns = [
                         str(c) if c is not None else f"Column_{i}"
-                        for i, c in enumerate(ws_rows[0])
+                        for i, c in enumerate(ws_rows[header])
                     ]
-                    for row_vals in ws_rows[1:]:
+                    for row_vals in ws_rows[header + 1 :]:
+                        if all(v is None or not str(v).strip() for v in row_vals):
+                            continue
                         row_dict = {}
                         for i, val in enumerate(row_vals):
                             col_name = columns[i] if i < len(columns) else f"Column_{i}"
