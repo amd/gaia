@@ -502,7 +502,8 @@ def resolve_effective_device(
             print(
                 "No GPU detected — inference will run on CPU "
                 "(slower). Run `gaia init` to set up GPU "
-                "acceleration."
+                "acceleration.",
+                file=sys.stderr,
             )
             effective_device = "cpu"
 
@@ -523,6 +524,11 @@ def _gaia_cli_client_params(kwargs: dict) -> dict:
 
 async def async_main(action, **kwargs):
     log = get_logger(__name__)
+
+    if action == "chat":
+        from gaia.logger import log_manager
+
+        log_manager.configure_agent_console(debug=kwargs.get("debug", False))
 
     # Map actions to agent profiles for Lemonade initialization
     # Each agent has specific model and context size requirements
@@ -670,14 +676,21 @@ async def async_main(action, **kwargs):
             # Always announce which device the agent will run on.
             device_labels = {"cpu": "CPU", "gpu": "GPU", "npu": "NPU (Ryzen AI)"}
             device_label = device_labels.get(effective_device, effective_device.upper())
-            print(f"🖥️  Device: {device_label}  |  Model: {explicit_model or 'auto'}")
+            # stderr: stdout carries only the answer, so `-q` output is scriptable.
+            print(
+                f"🖥️  Device: {device_label}  |  Model: {explicit_model or 'auto'}",
+                file=sys.stderr,
+            )
             if effective_device == "cpu":
                 print(
                     "   ⚠️  Running on CPU — expect significantly slower response "
-                    "times. Use 'gaia init' to set up GPU acceleration."
+                    "times. Use 'gaia init' to set up GPU acceleration.",
+                    file=sys.stderr,
                 )
             if effective_device == "npu":
-                print("   ℹ️  NPU mode requires: gaia init --profile npu")
+                print(
+                    "   ℹ️  NPU mode requires: gaia init --profile npu", file=sys.stderr
+                )
 
             # Create configuration with CLI values
             config = ChatAgentConfig(
@@ -758,11 +771,11 @@ async def async_main(action, **kwargs):
             return
 
         except KeyboardInterrupt:
-            print("\n\nInterrupted by user")
+            print("\n\nInterrupted by user", file=sys.stderr)
             return
         except Exception as e:
             log.error(f"Error in chat: {e}", exc_info=True)
-            print(f"❌ Error: {e}")
+            print(f"❌ Error: {e}", file=sys.stderr)
             return
         finally:
             # Cleanup. The drain is here rather than beside the one-shot
@@ -946,6 +959,10 @@ def _launch_interactive_cli(log=None):
     """
     if log is None:
         log = get_logger(__name__)
+
+    from gaia.logger import log_manager
+
+    log_manager.configure_agent_console(debug=False)
 
     try:
         success, base_url = initialize_lemonade_for_agent("chat")
