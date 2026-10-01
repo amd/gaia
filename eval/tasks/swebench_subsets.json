@@ -1,0 +1,20 @@
+{
+  "_about": "SWE-bench Verified instances the GAIA flagship is tracked on in CI. Chosen from the harness experiments of Sep-Oct 2026 (DeepSeek V4.1 Flash): 'smoke' are fast tasks the agent solved on every run, so a failure is a regression signal; 'hard' are tasks strong Claude agents rarely solve on the public leaderboard and that separated GAIA configurations in those runs. Results are reported, not gated, until expectations are measured on the CI runner itself.",
+  "smoke": [
+    {"id": "astropy__astropy-8707", "why": "solved in every run, 3-7 min"},
+    {"id": "django__django-15851", "why": "solved in every run, ~1.5 min"},
+    {"id": "scikit-learn__scikit-learn-13135", "why": "solved in every run, ~1-2 min"}
+  ],
+  "hard": [
+    {"id": "django__django-16256", "why": "needs the sibling generic-relations manager; solved only with the edit impact note"},
+    {"id": "matplotlib__matplotlib-24870", "why": "needs the second caller in tri/; flips between runs"},
+    {"id": "pylint-dev__pylint-8898", "why": "flips between runs"},
+    {"id": "django__django-12325", "why": "two-file fix; usually solved"},
+    {"id": "astropy__astropy-8707", "why": "usually solved; anchors the set"},
+    {"id": "pylint-dev__pylint-7080", "why": "solved by GAIA, 1 of 9 strong Claude agents"},
+    {"id": "django__django-12273", "why": "solved by GAIA, 1 of 9 strong Claude agents"},
+    {"id": "sympy__sympy-17630", "why": "solved by GAIA, 1 of 9 strong Claude agents"},
+    {"id": "scikit-learn__scikit-learn-25747", "why": "missed by GAIA: existing test contradicts the issue"},
+    {"id": "pydata__xarray-6599", "why": "missed by GAIA and Claude Code: misdiagnosis hidden by test input"}
+  ]
+}
