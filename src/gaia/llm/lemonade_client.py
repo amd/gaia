@@ -356,6 +356,15 @@ DEFAULT_CONTEXT_SIZE = 32768
 GPU_CTX_SIZE = 65536  # GPU/CPU — Gemma-4-E4B-it-GGUF (llama.cpp)
 NPU_CTX_SIZE = 32768  # NPU — gemma4-it-e2b-FLM (FastFlowLM ceiling)
 
+# llama.cpp flags for a chat model. One slot meant every side request with its
+# own prompt (memory extraction, titles) first saved the conversation's cache to
+# host RAM — ~87s for a 30K-token Qwen3-30B context on a Radeon 8060S. A second
+# slot over one shared KV pool keeps the conversation resident, so the RAM copy
+# buys nothing; the similarity floor keeps a short side prompt off its slot.
+CHAT_LLAMACPP_ARGS = (
+    "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5"
+)
+
 
 def profile_ctx_size(device: Optional[str]) -> int:
     """Context window for *device*'s profile.
@@ -1970,6 +1979,13 @@ class LemonadeClient:
         elif hasattr(self, "server_process") and self.server_process:
             if hasattr(self, "log"):
                 self.log.info("Not terminating server because keep_alive=True")
+
+    def _model_recipe(self, model_name: str) -> Optional[str]:
+        """The catalog's recipe for *model_name* (``llamacpp``, ``flm``, ``cloud``…)."""
+        for model in self.list_models(show_all=True).get("data", []):
+            if _model_ids_match(model.get("id"), model_name):
+                return model.get("recipe")
+        return None
 
     def get_model_info(self, model_name: str) -> Dict[str, Any]:
         """
@@ -4631,6 +4647,13 @@ class LemonadeClient:
             LemonadeClientError: If model loading fails
         """
         self.log.debug(f"Loading {model_name}")
+
+        if (
+            llamacpp_args is None
+            and ctx_size is not None
+            and self._model_recipe(model_name) == "llamacpp"
+        ):
+            llamacpp_args = CHAT_LLAMACPP_ARGS
 
         request_data = {"model_name": model_name}
         if llamacpp_args:
