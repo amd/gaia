@@ -1227,3 +1227,41 @@ def test_unreadable_content_search_reports_reason(tmp_path, caplog):
                 "find", directory=str(tmp_path)
             )
     assert "test permission denial" in caplog.text
+
+
+class TestDataSummaryPointsAtGroupBy:
+    """A summary of categorical data says per-category totals need group_by.
+
+    Asked which region earned most, a local model read the summary's
+    whole-file sum six times and then made up a regional figure.
+    """
+
+    CSV = "region,product,revenue\n" "East,A,100\nEast,B,250\nWest,A,90\nNorth,B,40\n"
+
+    def test_summary_names_the_groupable_columns(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        data = safe_dir / "sales.csv"
+        data.write_text(self.CSV, encoding="utf-8")
+
+        result = tools["analyze_data_file"](str(data))
+
+        hint = result["per_group_totals"]
+        assert "group_by" in hint and "'region'" in hint and "'product'" in hint
+
+    def test_a_grouped_call_carries_no_hint(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        data = safe_dir / "sales.csv"
+        data.write_text(self.CSV, encoding="utf-8")
+
+        result = tools["analyze_data_file"](str(data), group_by="region")
+
+        assert "per_group_totals" not in result
+        assert result["group_by_results"][0]["region"] == "East"
+        assert result["group_by_results"][0]["revenue_total"] == 350.0
+
+    def test_numbers_only_carry_no_hint(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        data = safe_dir / "nums.csv"
+        data.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
+
+        assert "per_group_totals" not in tools["analyze_data_file"](str(data))
