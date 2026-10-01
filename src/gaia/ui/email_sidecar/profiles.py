@@ -246,6 +246,8 @@ EMAIL_PROFILE = RelayProfile(
 _GAIA_MUTATING_TOOLS = frozenset(
     {
         "run_shell_command",
+        "start_process",
+        "stop_process",
         "write_file",
         "edit_file",
         "remember",
@@ -295,6 +297,11 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "wait_for_condition": "Waiting for a condition",
     "get_shell_state": "Checking the shell session",
     "reset_shell_session": "Resetting the shell session",
+    "start_process": "Starting a background process",
+    "process_status": "Checking a background process",
+    "read_process_output": "Reading background process output",
+    "wait_for_process": "Waiting for a background process",
+    "stop_process": "Stopping a background process",
     "sleep": "Waiting",
     "get_file_info": "Inspecting file",
     "list_recent_files": "Listing recent files",

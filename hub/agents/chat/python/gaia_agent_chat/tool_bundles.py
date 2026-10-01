@@ -451,6 +451,23 @@ FULL_BUNDLES = [
         ),
     ),
     ToolBundle(
+        name="background_processes",
+        members=frozenset(
+            {
+                "start_process",
+                "process_status",
+                "read_process_output",
+                "wait_for_process",
+                "stop_process",
+            }
+        ),
+        description=(
+            "Run a long command in the background — a dev server, build, test "
+            "suite, download or data export — keep working, and check its "
+            "progress, wait for it, read its output, or stop it."
+        ),
+    ),
+    ToolBundle(
         name="cli_setup",
         members=frozenset(
             {

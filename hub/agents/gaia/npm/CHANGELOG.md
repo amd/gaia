@@ -50,6 +50,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Released with GAIA 0.25.0, and requires it.
 
+### Added
+
+- **Long commands no longer hold the conversation hostage.** The agent can start
+  a dev server, build, test suite, download or export in the background
+  (`start_process`), keep working, and check on it in the same turn or a later
+  one (`process_status`, `read_process_output`, `wait_for_process`,
+  `stop_process`). A background command passes the same allowlist and approval
+  as `run_shell_command` and starts only when a person approves it or full
+  access is on; at most 8 run at once, each keeps at most 4 MiB of
+  output on disk, and stopping one — or closing the session — kills everything
+  it spawned. When one finishes mid-turn, the agent is told at its next step.
+  Tools: 96 → 101.
+
 ### Changed
 
 - **Requires `amd-gaia>=0.25.0` and `gaia-agent-chat>=0.2.0`.** Every file tool

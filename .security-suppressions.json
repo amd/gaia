@@ -12,6 +12,11 @@
       "justification": "CLI install / sign-in driver. Both call sites (_run and start_device_login) execute an argv assembled only from BINARY_POLICIES literals — policy.binary plus a table-declared install_commands / auth_login_argv / auth_status_argv tuple. No caller string reaches argv: the tools take a binary *name* that must be a key in the table, and a mismatched echo of the command refuses the call instead of running it. shell=False always, stdin closed."
     },
     {
+      "path": "src/gaia/agents/tools/background_process.py",
+      "rule": "B602",
+      "justification": "start_process's launcher. It runs only a ShellLinePlan returned by ShellToolsMixin._prepare_shell_line, the same allowlist/tier/path gate run_shell_command uses, and takes argv-vs-shell from the shared _launch_for, so shell=True happens in exactly the cases run_shell_command uses it (Windows cmd.exe built-ins, or full access) and never for a skill-granted CLI."
+    },
+    {
       "path": "src/gaia/agents/tools/command_timeouts.py",
       "rule": "B603",
       "justification": "taskkill's argv is fixed; the only variable is a PID from a Popen this process started. No user-supplied text reaches it and it never goes through a shell."

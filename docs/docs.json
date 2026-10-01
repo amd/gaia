@@ -304,6 +304,7 @@
               "spec/file-tools-mixin",
               "spec/rag-tools-mixin",
               "spec/shell-tools-mixin",
+              "spec/process-tools-mixin",
               "spec/file-search-mixin",
               "spec/browser-tools"
             ]
