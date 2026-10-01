@@ -209,7 +209,7 @@ gaia eval tasks report runs/cc-opus runs/gaia-glm runs/cc-glm --out runs/report
 | `--work-root DIR` | Where task workdirs live while running (default: a temp directory). |
 | `--gateway-url URL` | A gateway already running; otherwise each run starts its own. |
 | `--fence` | Fences the agent off the answer keys with macOS `sandbox-exec`. Refused where it cannot be enforced — see below. |
-| `--full-access` | Gives GAIA no path boundary, the reach Claude Code has with its permissions skipped. |
+| `--full-access` | Gives GAIA no path boundary and no shell guardrails, the reach Claude Code has with its permissions skipped. |
 | `--meter fireworks` | Reads the run's real cost from the provider's billing meter. |
 | `--therock-url URL` | Where the `therock` suite clones from (default `https://github.com/ROCm/TheRock`). |
 | `--instances a,b` | The SWE-bench Verified instance ids the `swebench` suite is built from (default: the pilot). Only with `--suite swebench`. |

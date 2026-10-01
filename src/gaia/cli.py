@@ -2586,8 +2586,8 @@ afterwards (or `swebench <run_dir>` does, later).
     tasks_run_parser.add_argument(
         "--full-access",
         action="store_true",
-        help="Give GAIA no path boundary, the reach Claude Code has with its "
-        "permissions skipped",
+        help="Give GAIA no path boundary and no shell guardrails, the reach "
+        "Claude Code has with its permissions skipped",
     )
     tasks_run_parser.add_argument(
         "--meter",
