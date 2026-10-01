@@ -44,11 +44,13 @@ def build(dest: Path) -> Path:
             f"{journal} is missing. --dest must be the staged copy of "
             "tests/fixtures/gaia/tiers_resilience (run stage_eval_env.py first)."
         )
-    # Inside the checkout this would nest a repo in the developer's tree.
+    # Nesting a repo inside any enclosing one (the checkout, or a dotfiles
+    # repo at $HOME) would make it uncommittable.
     if _git(dest, "rev-parse", "--show-toplevel").returncode == 0:
         raise SystemExit(
-            f"{dest} is inside a git repository. Build into the staged copy "
-            "(~/gaia-eval/tiers_resilience), not the checkout."
+            f"{dest} is inside a git repository (the checkout, or an enclosing "
+            "one such as a dotfiles repo at $HOME). --dest must not be inside any "
+            "git repository."
         )
 
     _checked_git(journal, "init", "--quiet")

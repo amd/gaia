@@ -43,7 +43,6 @@ def add_unrelated_failure(workdir: Path) -> None:
 #: passes once an earlier run has warmed the cache (a developer's machine).
 CACHE = '''"""Tiny on-disk cache for parsed timestamps."""
 import hashlib
-import os
 import json
 import os
 import tempfile
