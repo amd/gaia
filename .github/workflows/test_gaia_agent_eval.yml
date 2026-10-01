@@ -233,7 +233,7 @@ jobs:
     # `Windows` is load-bearing: every step is PowerShell + LemonadeServer.exe.
     # `lemonade-eval` narrows to the box carrying the label; serialization
     # comes from the concurrency group, not the label.
-    runs-on: [self-hosted, Windows, lemonade-eval]
+    runs-on: [self-hosted, Windows, xsj-dispatch, strix-halo]
     # THE SERIAL SLOT. Same group name as test_email_agent_eval.yml,
     # email_scorecard_refresh.yml and test_eval_agent_gemma_consolidation.yml
     # — `lemonade-eval`, exactly — so at most one eval touches the single

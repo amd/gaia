@@ -112,7 +112,7 @@ env:
 jobs:
   refresh:
     name: Re-run gaia eval, refresh-or-reject scorecard
-    runs-on: [self-hosted, Windows, lemonade-eval]
+    runs-on: [self-hosted, Windows, xsj-dispatch, strix-halo]
     defaults:
       run:
         shell: powershell
