@@ -1265,3 +1265,59 @@ class TestDataSummaryPointsAtGroupBy:
         data.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
 
         assert "per_group_totals" not in tools["analyze_data_file"](str(data))
+
+
+class TestSpreadsheetHeaderBelowATitle:
+    """A sheet's header is found below its title and note rows.
+
+    department_budget_2024.xlsx opens with a title, a note and a blank row;
+    taking row 0 as the header named the columns Column_1..Column_4, and a
+    local model made up four of the six departments' budgets.
+    """
+
+    def _sheet(self, path, rows):
+        openpyxl = pytest.importorskip("openpyxl")
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        for row in rows:
+            ws.append(list(row))
+        wb.save(path)
+
+    def test_the_table_header_is_found_below_the_title(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        path = safe_dir / "budget.xlsx"
+        self._sheet(
+            path,
+            [
+                ("Meridian — FY2024 Budget vs Actual by Department", None, None),
+                ("Currency: USD", None, None),
+                (None, None, None),
+                ("Department", "FY2024 Budget", "FY2024 Actual"),
+                ("Engineering", 22000000, 22260000),
+                ("Operations", 8000000, 7994000),
+                (None, None, None),
+                ("Note: Operations came in under budget.", None, None),
+            ],
+        )
+
+        result = tools["analyze_data_file"](str(path), group_by="Department")
+
+        assert result["columns"] == ["Department", "FY2024 Budget", "FY2024 Actual"]
+        totals = {
+            r["Department"]: r["FY2024 Budget_total"]
+            for r in result["group_by_results"]
+        }
+        assert totals["Engineering"] == 22000000.0
+        assert totals["Operations"] == 8000000.0
+
+    def test_a_sheet_that_starts_with_its_header_is_unchanged(
+        self, sandboxed_read_tools
+    ):
+        tools, safe_dir, _ = sandboxed_read_tools
+        path = safe_dir / "plain.xlsx"
+        self._sheet(path, [("region", "revenue"), ("East", 100), ("West", 50)])
+
+        result = tools["analyze_data_file"](str(path))
+
+        assert result["columns"] == ["region", "revenue"]
+        assert result["row_count"] == 2
