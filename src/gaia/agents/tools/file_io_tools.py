@@ -30,6 +30,25 @@ from gaia.security import BackupError
 logger = get_logger(__name__)
 
 
+def _python_syntax_error(path: Path, content: str) -> Optional[str]:
+    """Why a just-written .py file will not run, or ``None`` when it parses.
+
+    Reported with the write itself: a model told only "success" wrote a stray
+    backslash into a print call, then called the later "unterminated string
+    literal" a parsing artifact and described output the file cannot produce.
+    """
+    if path.suffix != ".py":
+        return None
+    try:
+        ast.parse(content)
+    except SyntaxError as e:
+        return (
+            f"line {e.lineno}: {e.msg} — the file was saved but will not run. "
+            "Fix it before answering."
+        )
+    return None
+
+
 def _resolve_target(file_path: str, project_dir: Optional[str] = None) -> Path:
     """Where write_file / edit_file act: ``file_path``, under ``project_dir``."""
     path = Path(file_path)
@@ -1149,6 +1168,9 @@ class FileIOToolsMixin:
                     "size_bytes": content_size,
                     "file_type": path.suffix[1:] if path.suffix else "unknown",
                 }
+                syntax_error = _python_syntax_error(path, content)
+                if syntax_error:
+                    result["syntax_error"] = syntax_error
                 if backup_path:
                     result["backup_path"] = backup_path
                 if display_error:
@@ -1312,6 +1334,11 @@ class FileIOToolsMixin:
                     "old_size": len(current_content),
                     "new_size": len(updated_content),
                     "file_type": path.suffix[1:] if path.suffix else "unknown",
+                    **(
+                        {"syntax_error": syntax_error}
+                        if (syntax_error := _python_syntax_error(path, updated_content))
+                        else {}
+                    ),
                     "diff": diff,
                 }
                 if backup_path:
