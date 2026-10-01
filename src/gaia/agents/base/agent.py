@@ -96,6 +96,7 @@ from gaia.llm.lemonade_client import (
     truncation_budget,
 )
 from gaia.llm.providers.lemonade import CONNECTION_FAILURE_RE
+from gaia.utils.power import stay_awake
 from gaia.utils.terminal import stdin_is_interactive
 
 if TYPE_CHECKING:
@@ -6679,7 +6680,8 @@ Do NOT wrap conversational replies in JSON.
         """
         ns_id = self._namespaced_agent_id()
         try:
-            with self._agent_identity_context(ns_id):
+            # Standby would stall a local model mid-turn until someone wakes the PC.
+            with self._agent_identity_context(ns_id), stay_awake():
                 return self._process_query_impl(user_input, max_steps, trace, filename)
         finally:
             # The impl re-raises on purpose (the wrong-ctx reload its caller

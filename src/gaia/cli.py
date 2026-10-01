@@ -3761,6 +3761,7 @@ def _handle_eval_tasks(args):
 
     if args.tasks_action == "run":
         from gaia.eval.bench import config as bench_config
+        from gaia.eval.eval_lock import exclusive_eval
 
         try:
             config = bench_config.resolve(
@@ -3840,16 +3841,17 @@ def _handle_eval_tasks(args):
                 f"[RUN] suite {args.suite} on {model} via {config.harness}"
                 + (f" (repeat {repeat}/{config.repeats})" if config.repeats > 1 else "")
             )
-            card = ft.run_suite(
-                args.suite,
-                model,
-                run_dir,
-                on_progress=_progress,
-                config=config,
-                repeat=repeat,
-                only=only,
-                **({"instances": instances} if instances else {}),
-            )
+            with exclusive_eval("gaia eval tasks run"):
+                card = ft.run_suite(
+                    args.suite,
+                    model,
+                    run_dir,
+                    on_progress=_progress,
+                    config=config,
+                    repeat=repeat,
+                    only=only,
+                    **({"instances": instances} if instances else {}),
+                )
             if not args.no_judge:
                 card = _judge(run_dir, judge_env)
             if args.suite == "swebench" and not args.no_evaluate:

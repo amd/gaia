@@ -125,6 +125,15 @@ pre-commit gate. It exits 2 if a baseline scenario is missing or produced no
 measurement, as well as for measured regressions. Without this opt-in, incomplete
 measurements remain visible as warnings and the comparison judges measured results.
 
+### One eval at a time
+
+`gaia eval agent` and `gaia eval tasks run` refuse to start while another of them is
+running on the same machine, and name the run that holds the lock. Two evals sharing
+one Lemonade evict each other's models and slow each other down, so both runs' scores
+and timings would be wrong. The lock is released when the run ends or its process
+dies. Set `GAIA_EVAL_NO_LOCK=1` only when the two runs use separate backends.
+Judging, gating and reports don't take the lock.
+
 ## Flagship Agent Tasks
 
 `gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. Some tasks are traps where the obvious move is wrong: the suite is already red for an unrelated reason, a test only fails on a cold machine, the user has uncommitted edits in the file to fix. It scores what the finished project **does**, not what the agent says it did. CI runs `core` on pull requests that touch the agent, and `everyday` plus `therock` every night on `main`, all with the local Qwen3 30B (`Qwen3-30B-A3B-Instruct-2507-GGUF`) on the Strix Halo runner pool. It fails the build when passes, tested changes, quality, honesty, tokens, steps or runtime fall outside the expectations committed for that model and suite, and a nightly failure files an issue naming the suite.
