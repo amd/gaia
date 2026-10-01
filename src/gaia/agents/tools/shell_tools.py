@@ -2037,6 +2037,32 @@ _UNIX_TO_WIN = {
 }
 
 
+#: cmd.exe tools that Git-for-Windows shadows with a GNU tool of the same name.
+_SHADOWED_WIN_TOOLS = frozenset({"find", "sort"})
+
+#: A cmd-style switch: /c, /i, /+3, /off — one segment, so never a path.
+_CMD_SWITCH_RE = re.compile(r"/[a-z+?][^/\\]*", re.IGNORECASE)
+
+
+def _wants_windows_tool(segment: list) -> bool:
+    """Whether *segment* is find/sort spelled with cmd-style ``/x`` switches."""
+    return segment[0].lower() in _SHADOWED_WIN_TOOLS and any(
+        _CMD_SWITCH_RE.fullmatch(arg) for arg in segment[1:]
+    )
+
+
+def _system32_first(env: Dict[str, str], segments: list) -> Dict[str, str]:
+    """*env* with System32 leading PATH when a segment means the Windows tool.
+
+    GNU find reads ``/c`` as the C: drive and walks all of it.
+    """
+    if not any(_wants_windows_tool(segment) for segment in segments):
+        return env
+    system32 = os.path.join(os.environ["SystemRoot"], "System32")
+    logger.info("Resolving find/sort with cmd-style switches from %s", system32)
+    return {**env, "PATH": system32 + os.pathsep + env.get("PATH", "")}
+
+
 def _run_step(
     step: _Step,
     cwd: str,
@@ -2117,6 +2143,10 @@ def _run_step(
         "" if shell_owns_redirection or not step.stderr_modes else step.stderr_modes[0]
     )
 
+    env = _segment_env(step.envs[0] if step.envs else {})
+    if use_shell and os.name == "nt":
+        env = _system32_first(env, segments)
+
     # encoding/errors are explicit, and load-bearing. Bare ``text=True``
     # decodes with the locale codec — cp1252 on a default Windows box — and
     # subprocess does that decode inside its pipe reader THREAD. A byte that
@@ -2161,7 +2191,7 @@ def _run_step(
         stdin=subprocess.DEVNULL,
         encoding="utf-8",
         errors="replace",
-        env=_segment_env(step.envs[0] if step.envs else {}),
+        env=env,
         # POSIX: its own session, so the kill reaches every descendant — and
         # never the agent's own process group. Windows gets that reach from
         # taskkill /T instead.
@@ -3183,7 +3213,10 @@ class ShellToolsMixin:
                 part_lower = part.lower()
                 flag = part_lower.split("=", 1)[0]
                 is_output = False
-                if flag.startswith("--"):
+                if len(flag) > 1 and "/output".startswith(flag):
+                    # Windows sort: /o, /out, /output.
+                    is_output = True
+                elif flag.startswith("--"):
                     # --output and any unambiguous abbreviation (--o, --out, ...).
                     if len(flag) > 2 and "--output".startswith(flag):
                         is_output = True
@@ -3197,7 +3230,7 @@ class ShellToolsMixin:
                     return {
                         "status": "error",
                         "tier": TIER_CONFIRM,
-                        "error": "sort -o/--output writes to a file, which is not allowed under the read-only command policy.",
+                        "error": "sort -o/--output (or /o) writes to a file, which is not allowed under the read-only command policy.",
                         "has_errors": True,
                         "hint": "Drop -o/--output and read sort's result from stdout (e.g. 'sort file' or 'sort file | head').",
                     }
