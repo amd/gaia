@@ -50,6 +50,7 @@ def _functions(source: str) -> Optional[Dict[str, Tuple[str, str, bool]]]:
 
 
 def _project_root(path: Path) -> Optional[Path]:
+    path = path.resolve()
     for parent in [path.parent, *path.parents]:
         if (parent / ".git").exists():
             return parent
@@ -118,6 +119,8 @@ def edit_impact(path: Path, before: str, after: str) -> Optional[Dict[str, objec
         if qualname not in old or old[qualname][1] == args:
             continue
         name = qualname.rsplit(".", 1)[-1]
+        if name.startswith("__"):
+            continue
         uses = [
             line
             for line in _git_grep(root, rf"\b{re.escape(name)}\b")
