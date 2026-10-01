@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS files (
     size INTEGER,
     created_at TIMESTAMP,
     modified_at TIMESTAMP,
+    mtime_ns INTEGER,
     content_hash TEXT DEFAULT NULL,
     parent_dir TEXT NOT NULL,
     depth INTEGER,
@@ -151,7 +152,7 @@ class FileSystemIndexService(DatabaseMixin):
     """
 
     DB_PATH = "~/.gaia/file_index.db"
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, db_path: Optional[str] = None):
         """
@@ -293,11 +294,6 @@ class FileSystemIndexService(DatabaseMixin):
             logger.info(
                 "Migrating schema from v%d to v%d", current, self.SCHEMA_VERSION
             )
-            # Future migrations go here as elif blocks:
-            # if current < 2:
-            #     self.execute("ALTER TABLE files ADD COLUMN tags TEXT")
-            #     self.insert("schema_version", {"version": 2, ...})
-
             # Ensure tables exist (idempotent CREATE IF NOT EXISTS)
             self.execute(_SCHEMA_SQL)
             if current < 1:
@@ -307,6 +303,25 @@ class FileSystemIndexService(DatabaseMixin):
                         "version": 1,
                         "applied_at": _now_iso(),
                         "description": "Initial schema",
+                    },
+                )
+            if current < 2:
+                columns = {
+                    row["name"] for row in self.query("PRAGMA table_info(files)")
+                }
+                if "mtime_ns" not in columns:
+                    self.execute("ALTER TABLE files ADD COLUMN mtime_ns INTEGER")
+                    logger.warning(
+                        "File index upgraded to v2 (exact mtime_ns change "
+                        "detection); already-indexed entries will be refreshed "
+                        "once on their next scan"
+                    )
+                self.insert(
+                    "schema_version",
+                    {
+                        "version": 2,
+                        "applied_at": _now_iso(),
+                        "description": "files.mtime_ns for exact change detection",
                     },
                 )
 
@@ -491,12 +506,18 @@ class FileSystemIndexService(DatabaseMixin):
         stats["files_scanned"] += 1
 
         try:
-            stat = entry.stat(follow_symlinks=False)
+            # On NTFS, scandir's cached directory mtime can lag the real one.
+            stat = (
+                os.stat(entry.path, follow_symlinks=False)
+                if is_directory
+                else entry.stat(follow_symlinks=False)
+            )
         except OSError as exc:
             logger.debug("Cannot stat %s: %s", resolved_path, exc)
             return
 
         size = stat.st_size if not is_directory else 0
+        mtime_ns = stat.st_mtime_ns
         mtime_iso = datetime.datetime.fromtimestamp(stat.st_mtime).isoformat()
         try:
             ctime_iso = datetime.datetime.fromtimestamp(stat.st_ctime).isoformat()
@@ -510,12 +531,12 @@ class FileSystemIndexService(DatabaseMixin):
         # Incremental: check if unchanged
         if incremental:
             existing = self.query(
-                "SELECT id, size, modified_at FROM files WHERE path = :path",
+                "SELECT id, size, mtime_ns FROM files WHERE path = :path",
                 {"path": resolved_path},
                 one=True,
             )
             if existing:
-                if existing["size"] == size and existing["modified_at"] == mtime_iso:
+                if existing["size"] == size and existing["mtime_ns"] == mtime_ns:
                     return  # unchanged
                 # File changed -- update
                 mime_type = mimetypes.guess_type(name)[0] if not is_directory else None
@@ -528,6 +549,7 @@ class FileSystemIndexService(DatabaseMixin):
                         "size": size,
                         "created_at": ctime_iso,
                         "modified_at": mtime_iso,
+                        "mtime_ns": mtime_ns,
                         "parent_dir": parent_dir,
                         "depth": depth,
                         "is_directory": is_directory,
@@ -552,6 +574,7 @@ class FileSystemIndexService(DatabaseMixin):
                 "size": size,
                 "created_at": ctime_iso,
                 "modified_at": mtime_iso,
+                "mtime_ns": mtime_ns,
                 "parent_dir": parent_dir,
                 "depth": depth,
                 "is_directory": is_directory,
