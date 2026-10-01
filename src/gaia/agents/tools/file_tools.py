@@ -54,9 +54,16 @@ def _header_row_index(rows: List[tuple]) -> int:
 
     The header is the first row that spans the table's full width with text in
     every cell. A sheet with no such row keeps row 0, as before.
+
+    Row 0 is also kept whenever it already looks like a header (2+ filled,
+    all-text cells) — otherwise a text-only sheet whose header has an unused
+    trailing column narrower than its data rows would skip row 0 for the
+    first data row, silently dropping it from the results.
     """
     head = rows[:HEADER_SEARCH_ROWS]
     filled = [[c for c in r if c is not None and str(c).strip()] for r in head]
+    if len(filled[0]) >= 2 and all(isinstance(c, str) for c in filled[0]):
+        return 0
     width = max((len(cells) for cells in filled), default=0)
     if width < 2:
         return 0

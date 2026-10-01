@@ -1321,3 +1321,29 @@ class TestSpreadsheetHeaderBelowATitle:
 
         assert result["columns"] == ["region", "revenue"]
         assert result["row_count"] == 2
+
+    def test_a_narrower_text_header_keeps_its_first_data_row(
+        self, sandboxed_read_tools
+    ):
+        """A header with an unused trailing column must not look like a title.
+
+        The header row here (2 filled cells) is narrower than the data rows
+        below it (3 filled cells, all text). Without a guard for an
+        already-header-shaped row 0, the width-matching search picks the first
+        data row as the header instead, silently dropping it from the results.
+        """
+        tools, safe_dir, _ = sandboxed_read_tools
+        path = safe_dir / "contacts.xlsx"
+        self._sheet(
+            path,
+            [
+                ("Name", "Email", None),
+                ("Alice", "a@x.com", "VIP"),
+                ("Bob", "b@x.com", "VIP"),
+            ],
+        )
+
+        result = tools["analyze_data_file"](str(path))
+
+        assert result["columns"] == ["Name", "Email", "Column_2"]
+        assert result["row_count"] == 2
