@@ -219,10 +219,11 @@ class CodeIndexToolsMixin:
             scope: str = "all",
             top_k: int = 10,
         ) -> str:
-            """Semantic search over an indexed codebase.
+            """Semantic search over the codebase.
 
             Embeds the query and returns the most relevant code chunks from
-            the FAISS index.
+            the FAISS index. The first search builds the index if there is
+            none, which is slow on a large repository.
 
             Args:
                 query: Natural language or code snippet to search for.
@@ -241,6 +242,10 @@ class CodeIndexToolsMixin:
                 return json.dumps({"error": "code_index SDK not initialised"})
 
             try:
+                built = None
+                if not sdk.is_indexed():
+                    # Built on first use rather than at task start.
+                    built = sdk.index_repository()
                 results = sdk.search(query, scope=scope, top_k=top_k)
                 output = []
                 for r in results:
@@ -259,6 +264,17 @@ class CodeIndexToolsMixin:
                     if hasattr(chunk, "start_line"):
                         entry["start_line"] = chunk.start_line
                     output.append(entry)
+                if built is not None:
+                    return json.dumps(
+                        {
+                            "index_built_now": {
+                                "files_indexed": built.files_indexed,
+                                "chunks_created": built.chunks_created,
+                            },
+                            "results": output,
+                        },
+                        indent=2,
+                    )
                 return json.dumps(output, indent=2)
             except Exception as e:
                 logger.error("search_code_index failed: %s", e)

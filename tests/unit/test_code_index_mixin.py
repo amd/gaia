@@ -409,3 +409,45 @@ class TestSeparateCeilings:
         bare._ensure_code_index_state()
 
         assert bare._code_index_ceilings == (str(tmp_path),)
+
+
+class _FakeSDK:
+    def __init__(self, indexed):
+        self.indexed = indexed
+        self.index_calls = 0
+
+    def is_indexed(self):
+        return self.indexed
+
+    def index_repository(self):
+        from types import SimpleNamespace
+
+        self.index_calls += 1
+        self.indexed = True
+        return SimpleNamespace(files_indexed=3, chunks_created=7)
+
+    def search(self, query, scope="all", top_k=10):
+        return []
+
+
+class TestLazyIndex:
+    """The index is built by the first search, not at task start."""
+
+    def _search(self, tmp_path, sdk):
+        harness = make_harness(tmp_path)
+        harness._get_code_index_sdk = lambda: sdk
+        with patch("gaia.agents.tools.code_index_tools._CODE_INDEX_AVAILABLE", True):
+            fn = _TOOL_REGISTRY["search_code_index"]["function"]
+            return json.loads(fn(query="where are models loaded"))
+
+    def test_the_first_search_builds_a_missing_index(self, tmp_path):
+        sdk = _FakeSDK(indexed=False)
+        out = self._search(tmp_path, sdk)
+        assert sdk.index_calls == 1
+        assert out["index_built_now"] == {"files_indexed": 3, "chunks_created": 7}
+        assert out["results"] == []
+
+    def test_an_existing_index_is_searched_as_is(self, tmp_path):
+        sdk = _FakeSDK(indexed=True)
+        assert self._search(tmp_path, sdk) == []
+        assert sdk.index_calls == 0
