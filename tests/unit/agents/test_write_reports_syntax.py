@@ -10,7 +10,7 @@ output the file cannot produce.
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.agents.tools.file_io_tools import FileIOToolsMixin, _python_syntax_error
 from gaia.security import PathValidator
 
 
@@ -55,3 +55,17 @@ def test_an_edit_that_breaks_the_syntax_says_so(tools, tmp_path):
 def test_valid_python_and_other_files_carry_nothing(tools, tmp_path, name, content):
     out = tools["write_file"](str(tmp_path / name), content)
     assert "syntax_error" not in out
+
+
+def test_a_parser_value_error_is_reported_not_raised(tmp_path, monkeypatch):
+    # Python 3.10/3.11 raise ValueError (not SyntaxError) for null bytes; the
+    # check must not let that escape and turn a completed write into a crash.
+    import gaia.agents.tools.file_io_tools as file_io_tools
+
+    def raise_value_error(_content):
+        raise ValueError("source code string cannot contain null bytes")
+
+    monkeypatch.setattr(file_io_tools.ast, "parse", raise_value_error)
+    message = _python_syntax_error(tmp_path / "sieve.py", "print('hi')\x00")
+    assert message is not None
+    assert "null bytes" in message

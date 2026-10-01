@@ -46,6 +46,11 @@ def _python_syntax_error(path: Path, content: str) -> Optional[str]:
             f"line {e.lineno}: {e.msg} — the file was saved but will not run. "
             "Fix it before answering."
         )
+    except ValueError as e:
+        # Python 3.10/3.11 raise ValueError (not SyntaxError) for null bytes;
+        # 3.12+ raises SyntaxError. Catch both so the check itself can't crash
+        # a successful write into a reported failure.
+        return f"{e} — the file was saved but will not run. Fix it before answering."
     return None
 
 
