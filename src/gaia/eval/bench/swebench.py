@@ -86,6 +86,14 @@ DOCKER_PLATFORM = "linux/amd64"
 HARNESS_TIMEOUT_S = 1800
 #: Identifies the evaluation in the harness's ``logs/run_evaluation/<run_id>``.
 RUN_ID = "gaia-bench"
+#: The harness version the Linux grader container pins (Windows hosts only).
+GRADER_SWEBENCH = "5.0.2"
+GRADER_IMAGE = f"gaia-swebench-grader:{GRADER_SWEBENCH}"
+GRADER_DOCKERFILE = f"""FROM python:3.11-slim
+COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
+RUN pip install --no-cache-dir swebench=={GRADER_SWEBENCH}
+"""
+GRADER_BUILD_TIMEOUT_S = 1800
 GIT_TIMEOUT_S = 900
 FETCH_TIMEOUT_S = 120
 DOCKER_PULL_TIMEOUT_S = 3600
@@ -484,8 +492,61 @@ def harness_command(
     ]
 
 
+def _grade_in_container() -> bool:
+    """Whether the harness must run in a Linux container rather than here.
+
+    On Windows the harness writes each instance's eval script and patch with
+    CRLF line endings; bash in the instance container then reads every command
+    with a trailing CR, so every patch "fails to apply" and no test runs.
+    """
+    return sys.platform == "win32"
+
+
+def containerized_harness_command(
+    preds_path: Path, instance_id: str, report_dir: Path
+) -> List[str]:
+    """The harness run inside :data:`GRADER_IMAGE`, driving the host's Docker."""
+    inner = harness_command(preds_path, instance_id, report_dir, python="python")
+    inner[inner.index("--predictions_path") + 1] = f"/preds/{preds_path.name}"
+    inner[inner.index("--report_dir") + 1] = "/work"
+    return [
+        shutil.which("docker") or "docker",
+        "run",
+        "--rm",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "-v",
+        f"{report_dir.resolve()}:/work",
+        "-v",
+        f"{preds_path.resolve().parent}:/preds:ro",
+        "-w",
+        "/work",
+        GRADER_IMAGE,
+        *inner,
+    ]
+
+
+def _ensure_grader_image() -> None:
+    if _docker(["image", "inspect", GRADER_IMAGE], FETCH_TIMEOUT_S).returncode == 0:
+        return
+    log.info("SWE-bench: building the Linux grader image %s", GRADER_IMAGE)
+    built = subprocess.run(
+        [shutil.which("docker") or "docker", "build", "-t", GRADER_IMAGE, "-"],
+        input=GRADER_DOCKERFILE,
+        capture_output=True,
+        text=True,
+        timeout=GRADER_BUILD_TIMEOUT_S,
+        check=False,
+    )
+    if built.returncode != 0:
+        raise SweBenchError(
+            f"could not build the SWE-bench grader image {GRADER_IMAGE}: "
+            f"{(built.stderr or built.stdout).strip()[-400:]}"
+        )
+
+
 def _require_harness() -> None:
-    if importlib.util.find_spec("swebench") is None:
+    if not _grade_in_container() and importlib.util.find_spec("swebench") is None:
         raise SweBenchError(
             "grading needs the official harness in this interpreter: "
             f"`{sys.executable} -m pip install swebench` (5.x)."
@@ -540,6 +601,9 @@ def evaluate(
     _require_harness()
     if not preds_path.is_file():
         raise SweBenchError(f"no predictions at {preds_path}: nothing to grade")
+    in_container = _grade_in_container()
+    if in_container:
+        _ensure_grader_image()
     submitted = {r["instance_id"] for r in read_predictions(preds_path)}
     report_dir.mkdir(parents=True, exist_ok=True)
     failures: Dict[str, str] = {}
@@ -558,8 +622,13 @@ def evaluate(
                     f"{image}` failed: {pulled.stderr.strip()[-300:]}"
                 )
         log.info("SWE-bench: grading %s", instance_id)
+        command = (
+            containerized_harness_command(preds_path, instance_id, report_dir)
+            if in_container
+            else harness_command(preds_path, instance_id, report_dir)
+        )
         proc = subprocess.run(
-            harness_command(preds_path, instance_id, report_dir),
+            command,
             cwd=str(report_dir),
             capture_output=True,
             text=True,
