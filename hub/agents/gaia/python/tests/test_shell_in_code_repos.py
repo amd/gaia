@@ -55,7 +55,9 @@ def _offered_tools(monkeypatch, env_root: str | None = None, **config) -> list[s
     monkeypatch.setattr(GaiaAgent, "_embed_texts_batch", _tool_vecs)
     monkeypatch.setattr(GaiaAgent, "_uses_native_tool_calls", lambda self: True)
     with _isolated_registry():
-        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config))
+        agent = GaiaAgent(
+            config=GaiaAgentConfig(silent_mode=True, dynamic_tools=True, **config)
+        )
         try:
             # Memory is off (no embedder in CI); the loader only needs a store.
             agent._memory_store = object()

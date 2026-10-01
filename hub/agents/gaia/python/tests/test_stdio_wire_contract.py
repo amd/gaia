@@ -181,7 +181,10 @@ def test_warm_up_is_skipped_for_a_remote_model(monkeypatch):
     events = _warm(monkeypatch, agent)
     assert not agent.warmed
     assert events == [
-        {"type": "final", "answer": STDIN["query_sentinels"]["warm_up"]["skipped_answer"]}
+        {
+            "type": "final",
+            "answer": STDIN["query_sentinels"]["warm_up"]["skipped_answer"],
+        }
     ]
 
 
