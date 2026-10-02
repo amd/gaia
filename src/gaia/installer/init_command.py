@@ -61,9 +61,10 @@ HUB_INSTALL_AGENTS = frozenset({"gaia"})
 
 # Agent ids a profile's quick-start commands need, whether or not `gaia init`
 # can fetch them. Wider than HUB_INSTALL_AGENTS by exactly `chat`: `--profile
-# chat` and `--profile npu` both lead with `gaia chat`, which resolves through
-# the `gaia-agent-chat` wheel, so reporting "initialization complete" without
-# it would be a false promise even though init cannot install it.
+# chat` and `--profile npu` both lead with `gaia chat`, which imports the
+# flagship's `gaia-agent-gaia` wheel and the `gaia-agent-chat` wheel it builds
+# on, so reporting "initialization complete" without them would be a false
+# promise even though init cannot install them.
 PROFILE_REQUIRED_AGENTS = HUB_INSTALL_AGENTS | {"chat"}
 
 # Hub agent id -> the module a source/pip install of it makes importable. Every
@@ -81,9 +82,9 @@ INIT_PROFILES = {
     "gaia": {
         "description": "The flagship GAIA agent — chat, documents, data, web, memory",
         # Installs the flagship from the Agent Hub, which publishes it as a
-        # native binary (`gaia-agent`), not a wheel -- so this does NOT bring
-        # `gaia-agent-chat` along the way a pip dependency would. `gaia chat`
-        # still needs that wheel separately; the completion message says so.
+        # native binary (`gaia-agent`), not a wheel -- so nothing it installs is
+        # importable. `gaia chat` still needs the `gaia-agent-chat` and
+        # `gaia-agent-gaia` wheels separately; the completion message says so.
         "agent": "gaia",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",
@@ -1702,16 +1703,22 @@ class InitCommand:
         return hub_installer.read_sentinel(agent_id) is not None
 
     @staticmethod
-    def _chat_agent_available() -> bool:
-        """Whether the standalone gaia-agent-chat wheel is importable.
+    def _chat_agent_missing_wheels() -> list:
+        """The wheels ``gaia chat`` imports that are missing, in install order.
 
-        ``gaia chat`` resolves through that wheel (#1102), which no init
-        profile installs (it isn't a pip extra -- #2240). Printing `gaia
-        chat` as a ready next step when it isn't installed is a false
-        promise, so completion messaging checks first. Delegates to
-        ``_is_hub_agent_available``, so a hub install counts too.
+        ``gaia chat`` runs the flagship (``gaia_agent``), which builds on the
+        ``gaia_agent_chat`` wheel. No init profile installs either as a wheel
+        (#2240), and the flagship the hub installs is a binary no import can
+        see -- so only an importable ``gaia_agent`` counts for it, never its
+        hub sentinel. Printing `gaia chat` as a ready next step without both
+        is a false promise, so completion messaging checks first.
         """
-        return InitCommand._is_hub_agent_available("chat")
+        missing = []
+        if not InitCommand._is_hub_agent_available("chat"):
+            missing.append("gaia-agent-chat")
+        if importlib.util.find_spec(_AGENT_IMPORT_NAMES["gaia"]) is None:
+            missing.append("gaia-agent-gaia")
+        return missing
 
     def _profile_agent_available(self) -> bool:
         """Whether the agent THIS profile's quick-start commands need is present.
@@ -1719,11 +1726,14 @@ class InitCommand:
         True for profiles that need none (sd/vlm/minimal/...), so their
         completion headline is never gated on someone else's agent. Keyed on
         ``PROFILE_REQUIRED_AGENTS``, not ``HUB_INSTALL_AGENTS``: `chat` cannot
-        be hub-installed but `--profile chat`/`--profile npu` still need it.
+        be hub-installed but `--profile chat`/`--profile npu` still need it,
+        along with the flagship wheel `gaia chat` runs.
         """
         agent_id = INIT_PROFILES[self.profile].get("agent")
         if agent_id not in PROFILE_REQUIRED_AGENTS:
             return True
+        if agent_id == "chat":
+            return not self._chat_agent_missing_wheels()
         return self._is_hub_agent_available(agent_id)
 
     def _ensure_hub_agent_installed(self) -> None:
@@ -1836,10 +1846,10 @@ class InitCommand:
 
     def _print_completion(self):
         """Print completion message with next steps."""
-        chat_agent_available = self._chat_agent_available()
-        chat_install_note = (
-            "Chat agent not installed yet -- run: "
-            f"{source_install_command('gaia-agent-chat')}"
+        missing_chat_wheels = self._chat_agent_missing_wheels()
+        chat_agent_available = not missing_chat_wheels
+        chat_install_note = "`gaia chat` agent not installed yet -- run: " + (
+            " then ".join(source_install_command(w) for w in missing_chat_wheels)
         )
         # The flagship is a hub BINARY, so its missing-hint names the hub, not a
         # pip command. Pointing at gaia-agent-chat here would answer a headline

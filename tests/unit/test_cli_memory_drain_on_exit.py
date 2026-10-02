@@ -130,3 +130,27 @@ def test_interactive_chat_runs_the_flagship(chat_agent_stubs, drain):
     chat_agent_stubs.app.interactive_mode.assert_called_once_with(
         chat_agent_stubs.agent
     )
+
+
+# ``run_cli`` goes through ``asyncio.run``, whose Windows self-pipe trips the
+# unit-test socket guard; the stubs keep this test off the network.
+@pytest.mark.allow_network
+def test_one_shot_chat_runs_the_flagship(chat_agent_stubs, drain):
+    """`gaia chat -q` must build GaiaAgent and hand it the query."""
+    from gaia.cli import run_cli
+
+    chat_agent_stubs.agent.process_query.return_value = {"status": "success"}
+
+    rc = run_cli(
+        "chat",
+        query="hi",
+        model="stub-model",
+        device="cpu",
+        base_url="http://stub.invalid/api/v1",
+        no_lemonade_check=True,
+    )
+
+    assert rc == 0
+    chat_agent_stubs.module.GaiaAgent.assert_called_once()
+    chat_agent_stubs.agent.process_query.assert_called_once_with("hi", trace=False)
+    drain.assert_called_once_with(chat_agent_stubs.agent)

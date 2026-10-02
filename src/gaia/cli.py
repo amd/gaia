@@ -727,8 +727,8 @@ async def async_main(action, **kwargs):
                 agent._learned_skills_enabled = False
 
             # Create initial session if not loading one. ``_ensure_tool_loader_reset``
-            # is a ChatAgent method (#2323); guard with hasattr since cli.py (core)
-            # and gaia-agent-chat (an independently-versioned hub wheel) can drift —
+            # is a ChatAgent method GaiaAgent inherits (#2323); guard with hasattr since
+            # cli.py (core) and the agent wheels (independently versioned) can drift —
             # an older installed wheel won't have it yet. It logs its own
             # "Created new session" line, so the fallback branch below does too
             # (for parity), but the two are not both reachable in one call.
@@ -985,9 +985,9 @@ def _launch_interactive_cli(log=None):
         )
         agent = GaiaAgent(config)
 
-        # ``_ensure_tool_loader_reset`` is a ChatAgent method (#2323); guard with
-        # hasattr since cli.py (core) and gaia-agent-chat (an independently
-        # versioned hub wheel) can drift — an older installed wheel won't have it.
+        # ``_ensure_tool_loader_reset`` is a ChatAgent method GaiaAgent inherits
+        # (#2323); guard with hasattr since cli.py (core) and the agent wheels
+        # (independently versioned) can drift — an older wheel won't have it.
         if not agent.current_session:
             if hasattr(agent, "_ensure_tool_loader_reset"):
                 agent._ensure_tool_loader_reset()
