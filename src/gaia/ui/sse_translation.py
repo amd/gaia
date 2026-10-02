@@ -71,6 +71,7 @@ import os
 import re
 from typing import Any, Callable, Dict, List, Optional
 
+from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
     derive_narration,
@@ -521,6 +522,11 @@ class CanonicalTranslator:
         # body is the one thing the decision turns on, shown once.
         if tool in COMMAND_SUMMARY_TOOLS or tool in CODE_SUMMARY_TOOLS:
             return render_command_summary(tool, args)
+        if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(args.get("path"), str):
+            return (
+                f"Allow GAIA to use {args['path']} (and anything inside it, "
+                "including changes) for this session?"
+            )
         label = self._action_labels.get(tool, f"Run {tool!r}")
         detail = render_invocation(args)
         if not detail:

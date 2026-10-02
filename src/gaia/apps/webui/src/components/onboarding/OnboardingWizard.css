@@ -299,6 +299,7 @@
 .connector-choice .cc-title { color: var(--text-primary); font-weight: 600; }
 .connector-choice .cc-desc { color: var(--text-muted); font-size: 0.82rem; }
 .connector-choice .cc-connected { color: var(--accent-green); font-size: 0.85rem; font-weight: 600; }
+.connector-choice .cc-later { color: var(--text-muted); font-size: 0.85rem; white-space: nowrap; }
 
 .onboarding-spin {
     animation: onboarding-spin 1s linear infinite;

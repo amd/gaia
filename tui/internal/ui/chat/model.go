@@ -2675,7 +2675,11 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		// Wrapped, not clipped: the viewport does not soft-wrap, so a status
 		// line longer than the pane loses its tail — and for the ones that
 		// carry a remedy, the tail IS the remedy.
-		return statusMsgStyle.Render(m.wrapForPane("  " + msg.Content))
+		body := msg.Content
+		if m.width > 0 {
+			body = components.WrapText(body, max(m.cardWidth()-2, 1))
+		}
+		return statusMsgStyle.Render("  " + strings.ReplaceAll(body, "\n", "\n  "))
 
 	default:
 		return msg.Content

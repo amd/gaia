@@ -131,6 +131,8 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"update_gaia_md":      RiskWrite,
 	"install_skill":       RiskWrite,
 	"remove_skill":        RiskWrite,
+	// Not a tool: PathValidator asking to widen this session's scope by one path (reads and changes).
+	"allow_path_access": RiskWrite,
 }
 
 // actionTitles is the question the prompt asks, in words. The tool name is the
