@@ -36,6 +36,7 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import keyring
@@ -695,6 +696,49 @@ async def list_agent_mcps(request: Request) -> Dict[str, Any]:
     servers.sort(key=lambda s: (s["disabled"], s["server_name"].lower()))
 
     return {"agent_mcps": servers}
+
+
+# Eval-only: the gaia_email scenarios' offline fixture mailbox. Registered
+# before the /{connector_id} routes, which would otherwise capture the path.
+
+
+class EvalMailboxRequest(BaseModel):
+    attached: bool
+
+
+def _eval_mailbox_state() -> Dict[str, Any]:
+    from gaia.agents.tools._email import fixture
+
+    path = fixture.fixture_path()
+    if not path:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "the eval fixture mailbox is off — start the backend with "
+                f"{fixture.EVAL_MAILBOX_ENV}=<path to .mbox> (built by "
+                "tests/fixtures/gaia/email/build_mailbox.py). Eval-only."
+            ),
+        )
+    return {
+        "path": path,
+        "exists": Path(path).expanduser().is_file(),
+        "attached": fixture.is_attached(),
+    }
+
+
+@router.get("/eval-mailbox")
+async def get_eval_mailbox() -> Dict[str, Any]:
+    return _eval_mailbox_state()
+
+
+@router.post("/eval-mailbox", dependencies=[Depends(_require_ui_header)])
+async def set_eval_mailbox(body: EvalMailboxRequest) -> Dict[str, Any]:
+    """Attach or detach the fixture for sessions that start reading mail next."""
+    from gaia.agents.tools._email import fixture
+
+    _eval_mailbox_state()
+    fixture.set_attached(body.attached)
+    return _eval_mailbox_state()
 
 
 @router.get("/{connector_id}/grants")

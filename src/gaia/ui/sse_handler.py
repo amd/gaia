@@ -560,6 +560,9 @@ class SSEOutputHandler(OutputHandler):
     def stop_progress(self):
         pass  # No-op for SSE - frontend manages its own spinners
 
+    def report_progress(self, message: str):
+        self._emit({"type": "status", "status": "working", "message": message})
+
     # === Structured-render map (#2109) ===
 
     # Mapping from tool name to the card "kind" the frontend's render-card

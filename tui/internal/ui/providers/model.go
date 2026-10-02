@@ -6,9 +6,11 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/theme"
@@ -25,6 +27,8 @@ type loadedMsg struct {
 	source    *lemonade.Client
 	providers []lemonade.Provider
 	err       error
+	// started is when the read was sent, so a slow one cannot undo a newer one.
+	started time.Time
 }
 type modelsMsg struct {
 	source *lemonade.Client
@@ -55,6 +59,13 @@ type Model struct {
 	activity      string
 	note          string
 	width, height int
+	// setupStep is the first-run step that installs Lemonade, or 0 once it
+	// is past; while it is pending an unreachable Lemonade is expected.
+	setupStep int
+	// down is set while the last provider read found no Lemonade at all.
+	down bool
+	// readAt is when the provider read now shown was sent.
+	readAt time.Time
 }
 
 var names = []string{"local", "fireworks", "amd"}
@@ -74,11 +85,56 @@ func (m Model) Init() tea.Cmd {
 		for _, name := range names[1:] {
 			restoreKey(name)
 		}
+		started := time.Now()
 		p, e := c.Providers(m.ctx)
-		return loadedMsg{source: c, providers: p, err: e}
+		return loadedMsg{source: c, providers: p, err: e, started: started}
 	}
 }
+
+// WithSetupStep tells the panel Lemonade is still first-run step n, so its
+// absence reads as a step not reached rather than a fault.
+func (m Model) WithSetupStep(n int) Model { m.setupStep = n; return m }
+
 func (m Model) chosen() string { return names[m.selected] }
+
+// waiting is true when Lemonade is absent only because setup has not
+// installed it yet.
+func (m Model) waiting() bool { return m.down && m.setupStep > 0 }
+
+// explain turns a Lemonade error into the note shown under the panel.
+func (m Model) explain(err error) string {
+	if m.setupStep > 0 && errors.Is(err, lemonade.ErrUnreachable) {
+		return fmt.Sprintf("Lemonade isn't installed yet — setup step %d installs it. "+
+			"Choose a provider once that step is done: close this panel and press enter to start it.", m.setupStep)
+	}
+	return err.Error()
+}
+
+// register lists Fireworks with Lemonade — the same fixed settings Connect
+// sends, without a key — because Lemonade reports an environment key only
+// for a provider it has registered, and a kept key can only be restored into
+// one.
+func (m Model) register() tea.Cmd {
+	c := m.client
+	p := lemonade.Provider{Name: "fireworks", BaseURL: lemonade.FireworksURL, Header: "Authorization", Prefix: "Bearer "}
+	return func() tea.Msg {
+		if err := c.Configure(m.ctx, p, ""); err != nil {
+			return loadedMsg{source: c, err: err, started: time.Now()}
+		}
+		restoreKey(p.Name)
+		started := time.Now()
+		providers, err := c.Providers(m.ctx)
+		return loadedMsg{source: c, providers: providers, err: err, started: started}
+	}
+}
+func (m Model) listed(name string) bool {
+	for _, p := range m.providers {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
+}
 
 // keyStatus reports whether the chosen provider already has a credential,
 // read live from m.providers rather than a value snapshotted at setup() time
@@ -123,14 +179,7 @@ func (m Model) setup() Model {
 	}
 	m.fields[3].EchoMode = textinput.EchoPassword
 	m.fields[3].EchoCharacter = '•'
-	switch env, runtime := m.keyStatus(); {
-	case env:
-		m.fields[3].Placeholder = "Blank uses the environment key"
-	case runtime:
-		m.fields[3].Placeholder = "Blank keeps the saved key"
-	default:
-		m.fields[3].Placeholder = "Paste API key"
-	}
+	m.fields[3].Placeholder = m.keyPlaceholder()
 	m.focus = 3
 	if p.Name == "amd" && p.BaseURL == "" {
 		m.focus = 0
@@ -139,6 +188,12 @@ func (m Model) setup() Model {
 	m.stage = "setup"
 	m.note = ""
 	return m
+}
+func (m Model) keyPlaceholder() string {
+	if env, runtime := m.keyStatus(); env || runtime {
+		return "A key is already set — Enter connects"
+	}
+	return "Paste API key"
 }
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.ctx.Err() != nil {
@@ -160,9 +215,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.source != nil && v.source != m.client {
 			return m, nil
 		}
-		m.providers = v.providers
+		if v.started.Before(m.readAt) {
+			return m, nil
+		}
+		m.readAt = v.started
+		// A failed read keeps what is known rather than forgetting every key.
+		if v.err == nil || v.providers != nil {
+			m.providers = v.providers
+		}
+		wasWaiting := m.waiting()
+		m.down = errors.Is(v.err, lemonade.ErrUnreachable)
 		if v.err != nil {
-			m.note = v.err.Error()
+			m.note = m.explain(v.err)
+		} else if wasWaiting {
+			m.note = ""
+		}
+		if m.stage == "setup" {
+			m.fields[3].Placeholder = m.keyPlaceholder()
 		}
 		return m, nil
 	case modelsMsg:
@@ -171,7 +240,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = false
 		if v.err != nil {
-			m.note = v.err.Error()
+			m.note = m.explain(v.err)
 			return m, nil
 		}
 		if len(v.models) == 0 {
@@ -207,7 +276,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = false
 		if v.err != nil {
-			m.note = v.err.Error()
+			m.note = m.explain(v.err)
 		} else {
 			m.note = "Key cleared, here and for future sessions. An environment key, if set, remains active."
 			// Reflect the clear immediately rather than waiting on the
@@ -255,12 +324,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "down", "tab":
 				m.selected = (m.selected + 1) % 3
 			case "enter":
+				// Nothing to connect to until setup installs Lemonade.
+				if m.waiting() {
+					return m, nil
+				}
 				if m.chosen() == "local" {
 					m.busy = true
 					m.activity = "Loading models"
 					return m, tea.Batch(m.spin.Tick, m.fetchModels())
 				}
 				m = m.setup()
+				if m.chosen() == "fireworks" && !m.listed("fireworks") {
+					return m, tea.Batch(textinput.Blink, m.register())
+				}
 				return m, textinput.Blink
 			case "r":
 				return m, m.Init()
@@ -389,7 +465,9 @@ func (m Model) View() string {
 		lines = append(lines, "Choose where GAIA runs chat inference.", "")
 		for i, name := range names {
 			desc := "On this machine · downloaded models"
-			if name != "local" {
+			if m.waiting() {
+				desc = fmt.Sprintf("Available after setup step %d", m.setupStep)
+			} else if name != "local" {
 				desc = "Via Lemonade · key needed"
 				for _, p := range m.providers {
 					if p.Name == name && (p.EnvKey || p.RuntimeKey) {
@@ -410,7 +488,7 @@ func (m Model) View() string {
 	case "setup":
 		lines = append(lines, title.Render(lemonade.Label(m.chosen())))
 		if m.height < 22 {
-			lines = append(lines, "Remote chat · key kept until restart.")
+			lines = append(lines, "Remote chat · key saved on this computer.")
 			if m.chosen() == "fireworks" {
 				lines = append(lines, "Usage may incur charges.")
 			}
@@ -421,7 +499,7 @@ func (m Model) View() string {
 			lines = append(lines, "Chat history is sent to your configured AMD gateway.")
 		}
 		if m.height >= 22 {
-			lines = append(lines, "Keys stay in Lemonade memory until it restarts.", "Provider settings are shared by clients of this Lemonade server.")
+			lines = append(lines, "A pasted key is saved in this computer's credential store and handed back to Lemonade after it restarts.", "Provider settings are shared by clients of this Lemonade server.")
 		}
 		success := lipgloss.NewStyle().Foreground(theme.Success)
 		switch env, runtime := m.keyStatus(); {
@@ -525,6 +603,9 @@ func (m Model) View() string {
 				hint = "tab · enter · esc"
 			}
 		}
+	}
+	if m.waiting() && m.stage == "providers" {
+		hint = "r re-check · esc close"
 	}
 	if m.busy {
 		hint = m.spin.View() + " " + m.activity + "… · esc cancel"

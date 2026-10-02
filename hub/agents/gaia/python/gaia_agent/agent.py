@@ -259,9 +259,10 @@ class GaiaAgentConfig(ChatAgentConfig):
     project_root: Optional[str] = None
 
     # Build the semantic code index at task start when the project is a
-    # repository and has none. Off-switch: ``GAIA_PROJECT_MAP_AUTO_INDEX=0``,
-    # for a monorepo where a full embed pass is not worth it.
-    auto_index: bool = True
+    # repository and has none. Off by default: the first search_code_index
+    # builds it instead, so a task that never searches never pays for an embed
+    # pass over the whole repository. ``GAIA_PROJECT_MAP_AUTO_INDEX=1`` opts in.
+    auto_index: bool = False
 
     # The fast conversational path (#4103). Trades this agent's whole tool
     # surface for the prefill of a plain chat agent, for a session that is only

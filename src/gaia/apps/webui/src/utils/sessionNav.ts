@@ -28,3 +28,9 @@ export function resolveUrlNavTarget(
     if (sessions.some((s) => s.id === target)) return target;
     return findSessionByHash(sessions, target);
 }
+
+/** The session a URL names: `?session=<id>` wins over `#<hash>`. */
+export function readUrlTarget(location: Pick<Location, 'search' | 'hash'>): string | null {
+    const param = new URLSearchParams(location.search).get('session');
+    return param || location.hash.replace(/^#/, '') || null;
+}

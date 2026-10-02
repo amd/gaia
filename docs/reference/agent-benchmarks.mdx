@@ -143,6 +143,9 @@ write that copy and nothing else. Scoring runs in two stages:
 - **Verified** additionally checks the agent's own tool record for a `pytest` run
   that passed after its last file edit — proof the "4 tests pass" in the answer
   matches a command that was actually run, not just claimed.
+- **After the answer**, any tool that ran on work the request never touched
+  fails the task: an agent that fixed the bug and then spent minutes on a job
+  nobody asked for did not finish cleanly, however good the fix.
 
 **The judge for everything a probe can't check** — quality of the reasoning,
 whether instructions were followed, and question tasks like "what does this file
@@ -203,6 +206,8 @@ JSON file under the work root (`$GAIA_BENCH_WORK_ROOT/swebench/`), which `--fenc
 keeps out of the agent's reach. `--instances a,b,c` names the instances; without
 it the run is the five-instance pilot: `psf__requests-1921`, `psf__requests-5414`,
 `pallets__flask-5014`, `pylint-dev__pylint-4970`, `sphinx-doc__sphinx-8721`.
+`--sample N` draws a seeded random N of all 500 instead (`--seed S` picks another
+draw), so a check on tasks nobody tuned on is one flag and anyone can reproduce it.
 
 **The checkout is built the way `therock` builds its own.** A bare cache per
 repository is filled by commit, to a depth of 200, so it never holds the fix that

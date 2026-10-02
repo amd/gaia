@@ -233,6 +233,17 @@ def _scan_paths(text: str, immediate: bool, modifiers: bool = False) -> list[str
     return paths
 
 
+def mentioned_paths(text: str) -> list[str]:
+    """Every path *text* names, whether it is read from or written to."""
+    return list(
+        dict.fromkeys(
+            path
+            for match in _TARGET.finditer(text)
+            if (path := _path_token(match)) is not None
+        )
+    )
+
+
 def destination_paths(text: str, prepositions: re.Pattern = _DESTINATION) -> list[str]:
     """Read a destination noun phrase, stopping at the next action."""
     # A later 'email it to me' must not replace the save's destination.
@@ -558,7 +569,8 @@ class CompletionEvidence:
         if item is None or not item.written or raw.get("is_binary"):
             return
         content = raw.get("content")
-        if not isinstance(content, str):
+        # A numbered line window is not the file's bytes: never a full readback.
+        if not isinstance(content, str) or raw.get("start_line") is not None:
             return
         start = raw.get("offset", 0)
         end = start + len(content)

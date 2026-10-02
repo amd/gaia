@@ -1420,6 +1420,20 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
     MCP servers declared by custom-Python agents (issue #1020).
   </Accordion>
 
+  <Accordion title="GET /api/connectors/eval-mailbox">
+    **Eval-only**, gated by `GAIA_EVAL_MAILBOX` (403 otherwise). Reports the
+    offline fixture mailbox the `gaia_email` scenarios read: its path, whether
+    the file exists, and whether it is attached.
+  </Accordion>
+
+  <Accordion title="POST /api/connectors/eval-mailbox">
+    **Eval-only**, gated by `GAIA_EVAL_MAILBOX`; requires `X-Gaia-UI: 1`.
+    `{"attached": false}` makes the mail tools answer as if no mailbox were
+    connected, for sessions that start reading mail afterwards; `true` restores
+    the fixture. The eval runner calls it from each scenario's
+    `setup.mailbox_fixture`.
+  </Accordion>
+
   <Accordion title="GET /api/connectors/_debug">
     Diagnostics dump, gated by `GAIA_DEBUG=1` (404 otherwise).
   </Accordion>

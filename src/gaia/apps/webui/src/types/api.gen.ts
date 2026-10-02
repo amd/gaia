@@ -37,6 +37,7 @@ export interface ApiSchemas {
   DocumentUploadRequest: DocumentUploadRequest;
   DownloadModelRequest: DownloadModelRequest;
   DownloadProgress: DownloadProgress;
+  EvalMailboxRequest: EvalMailboxRequest;
   FileEntry: FileEntry;
   FileListResponse: FileListResponse;
   FilePreviewResponse: FilePreviewResponse;
@@ -414,6 +415,9 @@ export interface DownloadProgress {
   state: string;
   total_bytes?: number;
   total_files?: number;
+}
+export interface EvalMailboxRequest {
+  attached: boolean;
 }
 /**
  * Response with file content preview.

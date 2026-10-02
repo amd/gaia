@@ -2598,10 +2598,10 @@ func (m ChatModel) answerStats(msg *Message) string {
 		stats = append(stats, fmt.Sprintf("%.1f tok/s", msg.TokPerS))
 	}
 	if msg.Steps > 0 {
-		stats = append(stats, fmt.Sprintf("%d steps", msg.Steps))
+		stats = append(stats, fmt.Sprintf("%d %s", msg.Steps, pluralize("steps", msg.Steps)))
 	}
 	if msg.ToolsUsed > 0 {
-		stats = append(stats, fmt.Sprintf("%d tools", msg.ToolsUsed))
+		stats = append(stats, fmt.Sprintf("%d %s", msg.ToolsUsed, pluralize("tools", msg.ToolsUsed)))
 	}
 	// The fixed prompt re-sent on every call — the term that actually explains
 	// a slow local turn, and the only one none of the numbers above imply.

@@ -146,7 +146,7 @@ func TestCanonicalRenderOmitsTokensWhenZero(t *testing.T) {
 	if strings.Contains(rendered, "tokens") || strings.Contains(rendered, "tok/s") {
 		t.Errorf("expected no tokens/tok-per-sec sub-line when Tokens == 0:\n%s", rendered)
 	}
-	for _, want := range []string{"3.2s", "ttft 0.8s", "2 steps", "1 tools"} {
+	for _, want := range []string{"3.2s", "ttft 0.8s", "2 steps", "1 tool"} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("expected stats line to still contain %q:\n%s", want, rendered)
 		}
@@ -519,5 +519,26 @@ func TestLegacyEventsStillHandled(t *testing.T) {
 	last := m.messages[len(m.messages)-1]
 	if last.Role != RoleAssistant || last.Content != "legacy answer" {
 		t.Fatalf("unexpected message: %+v", last)
+	}
+}
+
+// A one-step, one-tool turn reads "1 step · 1 tool", not "1 steps · 1 tools".
+func TestStatsLineSingularForOne(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.dev = true
+	rendered := m.renderMessage(&Message{
+		Role:      RoleAssistant,
+		Duration:  time.Second,
+		Steps:     1,
+		ToolsUsed: 1,
+		Content:   "391",
+	}, nil)
+	for _, bad := range []string{"1 steps", "1 tools"} {
+		if strings.Contains(rendered, bad) {
+			t.Errorf("stats line says %q:\n%s", bad, rendered)
+		}
+	}
+	if !strings.Contains(rendered, "1 step · 1 tool") {
+		t.Errorf("stats line missing \"1 step · 1 tool\":\n%s", rendered)
 	}
 }

@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import random
 import shutil
 import subprocess
 import sys
@@ -85,6 +86,14 @@ DOCKER_PLATFORM = "linux/amd64"
 HARNESS_TIMEOUT_S = 1800
 #: Identifies the evaluation in the harness's ``logs/run_evaluation/<run_id>``.
 RUN_ID = "gaia-bench"
+#: The harness version the Linux grader container pins (Windows hosts only).
+GRADER_SWEBENCH = "5.0.2"
+GRADER_IMAGE = f"gaia-swebench-grader:{GRADER_SWEBENCH}"
+GRADER_DOCKERFILE = f"""FROM python:3.11-slim
+COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
+RUN pip install --no-cache-dir swebench=={GRADER_SWEBENCH}
+"""
+GRADER_BUILD_TIMEOUT_S = 1800
 GIT_TIMEOUT_S = 900
 FETCH_TIMEOUT_S = 120
 DOCKER_PULL_TIMEOUT_S = 3600
@@ -131,12 +140,17 @@ def _fetch_with_datasets(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
     return {r["instance_id"]: r for r in rows if r["instance_id"] in wanted}
 
 
-def _fetch_with_rest(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
-    """Page through the split on the datasets-server; stop once every id is seen."""
+def _fetch_with_rest(ids: Optional[Sequence[str]]) -> Dict[str, Dict[str, Any]]:
+    """Page through the split on the datasets-server; stop once every id is seen.
+
+    ``None`` reads every row.
+    """
     import requests  # pylint: disable=import-outside-toplevel
 
-    wanted, found, offset = set(ids), {}, 0
-    while wanted - set(found):
+    wanted = None if ids is None else set(ids)
+    found: Dict[str, Dict[str, Any]] = {}
+    offset = 0
+    while wanted is None or wanted - set(found):
         query = urlencode(
             {
                 "dataset": DATASET,
@@ -158,7 +172,7 @@ def _fetch_with_rest(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
             ) from exc
         rows = [entry["row"] for entry in page.get("rows") or []]
         for row in rows:
-            if row.get("instance_id") in wanted:
+            if wanted is None or row.get("instance_id") in wanted:
                 found[row["instance_id"]] = row
         offset += len(rows)
         if not rows or offset >= int(page.get("num_rows_total") or 0):
@@ -176,6 +190,33 @@ def fetch_instances(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
         f"reading {DATASET} needs the `datasets` package or `requests`. "
         "Run `pip install datasets` (or `pip install requests`)."
     )
+
+
+#: The seed behind the published GAIA samples, so `--sample N` is reproducible.
+SAMPLE_SEED = 20260930
+
+
+def all_instance_ids() -> List[str]:
+    """Every instance id in the split, sorted."""
+    if importlib.util.find_spec("datasets") is not None:
+        from datasets import (  # pylint: disable=import-outside-toplevel,import-error
+            load_dataset,
+        )
+
+        return sorted(load_dataset(DATASET, split=SPLIT)["instance_id"])
+    return sorted(_fetch_with_rest(None))
+
+
+def sample_ids(
+    n: int, seed: int = SAMPLE_SEED, ids: Optional[Sequence[str]] = None
+) -> List[str]:
+    """A seeded random *n* of the split: the same *n* and seed pick the same tasks."""
+    pool = sorted(ids if ids is not None else all_instance_ids())
+    if not 1 <= n <= len(pool):
+        raise SweBenchError(
+            f"--sample must be between 1 and {len(pool)} ({DATASET} {SPLIT}), not {n}"
+        )
+    return sorted(random.Random(seed).sample(pool, n))
 
 
 def load_instances(
@@ -451,8 +492,61 @@ def harness_command(
     ]
 
 
+def _grade_in_container() -> bool:
+    """Whether the harness must run in a Linux container rather than here.
+
+    On Windows the harness writes each instance's eval script and patch with
+    CRLF line endings; bash in the instance container then reads every command
+    with a trailing CR, so every patch "fails to apply" and no test runs.
+    """
+    return sys.platform == "win32"
+
+
+def containerized_harness_command(
+    preds_path: Path, instance_id: str, report_dir: Path
+) -> List[str]:
+    """The harness run inside :data:`GRADER_IMAGE`, driving the host's Docker."""
+    inner = harness_command(preds_path, instance_id, report_dir, python="python")
+    inner[inner.index("--predictions_path") + 1] = f"/preds/{preds_path.name}"
+    inner[inner.index("--report_dir") + 1] = "/work"
+    return [
+        shutil.which("docker") or "docker",
+        "run",
+        "--rm",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "-v",
+        f"{report_dir.resolve()}:/work",
+        "-v",
+        f"{preds_path.resolve().parent}:/preds:ro",
+        "-w",
+        "/work",
+        GRADER_IMAGE,
+        *inner,
+    ]
+
+
+def _ensure_grader_image() -> None:
+    if _docker(["image", "inspect", GRADER_IMAGE], FETCH_TIMEOUT_S).returncode == 0:
+        return
+    log.info("SWE-bench: building the Linux grader image %s", GRADER_IMAGE)
+    built = subprocess.run(
+        [shutil.which("docker") or "docker", "build", "-t", GRADER_IMAGE, "-"],
+        input=GRADER_DOCKERFILE,
+        capture_output=True,
+        text=True,
+        timeout=GRADER_BUILD_TIMEOUT_S,
+        check=False,
+    )
+    if built.returncode != 0:
+        raise SweBenchError(
+            f"could not build the SWE-bench grader image {GRADER_IMAGE}: "
+            f"{(built.stderr or built.stdout).strip()[-400:]}"
+        )
+
+
 def _require_harness() -> None:
-    if importlib.util.find_spec("swebench") is None:
+    if not _grade_in_container() and importlib.util.find_spec("swebench") is None:
         raise SweBenchError(
             "grading needs the official harness in this interpreter: "
             f"`{sys.executable} -m pip install swebench` (5.x)."
@@ -507,6 +601,9 @@ def evaluate(
     _require_harness()
     if not preds_path.is_file():
         raise SweBenchError(f"no predictions at {preds_path}: nothing to grade")
+    in_container = _grade_in_container()
+    if in_container:
+        _ensure_grader_image()
     submitted = {r["instance_id"] for r in read_predictions(preds_path)}
     report_dir.mkdir(parents=True, exist_ok=True)
     failures: Dict[str, str] = {}
@@ -525,8 +622,13 @@ def evaluate(
                     f"{image}` failed: {pulled.stderr.strip()[-300:]}"
                 )
         log.info("SWE-bench: grading %s", instance_id)
+        command = (
+            containerized_harness_command(preds_path, instance_id, report_dir)
+            if in_container
+            else harness_command(preds_path, instance_id, report_dir)
+        )
         proc = subprocess.run(
-            harness_command(preds_path, instance_id, report_dir),
+            command,
             cwd=str(report_dir),
             capture_output=True,
             text=True,

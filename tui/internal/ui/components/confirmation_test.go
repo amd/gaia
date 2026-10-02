@@ -652,3 +652,25 @@ func TestATimedOutPromptSaysTimedOutNotDenied(t *testing.T) {
 		t.Errorf("the timeout must be told apart from a refusal:\n%s", view)
 	}
 }
+
+// Python code is as unbounded as a shell command: a groupby must not be told it
+// "may not be reversible", and the warning must point at the code on screen.
+func TestDestructiveWarningForCodeRunnersPointsAtTheCode(t *testing.T) {
+	for _, tool := range []string{"run_python", "execute_python_file"} {
+		if got := ClassifyActionRisk(tool); got != RiskDestructive {
+			t.Errorf("ClassifyActionRisk(%q) = %v, want destructive", tool, got)
+		}
+		w := destructiveWarning(tool, false)
+		if strings.Contains(w, "may not be reversible") || !strings.Contains(w, "check the code above") {
+			t.Errorf("%s warning = %q", tool, w)
+		}
+	}
+	if got := destructiveWarning("wait_for_condition", false); got != destructiveWarning("run_shell_command", false) {
+		t.Errorf("wait_for_condition polls with a shell command, got %q", got)
+	}
+	for _, tool := range []string{"install_cli", "sign_in_cli"} {
+		if got := ClassifyActionRisk(tool); got != RiskWrite {
+			t.Errorf("ClassifyActionRisk(%q) = %v, want write", tool, got)
+		}
+	}
+}

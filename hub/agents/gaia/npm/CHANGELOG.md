@@ -14,6 +14,11 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- **The code index is built on first search, not at task start.** In 32
+  SWE-bench tasks the agent never searched it, yet every task embedded the whole
+  repository in the background: about 2,000 local embedding requests per six
+  tasks. The first `search_code_index` now builds it; `GAIA_PROJECT_MAP_AUTO_INDEX=1`
+  restores building at task start.
 - **The first answer on a local model starts in seconds, not after a ~20 s
   silence.** The terminal UI now shows a "Getting GAIA ready" stage before the
   chat: the agent starts, loads its model and reads its system prompt there,
@@ -39,6 +44,20 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- **`/model` no longer offers speech or other non-chat models as chat
+  targets.** Whisper was listed as a "chat-capable" local model; switching to it
+  reported success and broke the next turn. Transcription, speech, music,
+  classification, upscaling and 3D models are excluded; a model labeled `chat`
+  still qualifies even if it also transcribes.
+
+- **The agent no longer starts an unrelated job after answering.** A bugfix
+  request loaded the `coding` skill, whose "find every call site" tip switched
+  on document inventorying; after the fix was done and verified, the agent spent
+  minutes extracting every file it had read until the user cancelled. Only a
+  skill built on the extraction tool turns inventorying on now. Separately,
+  once a turn has answered, a tool call on nothing the request touched is not
+  run and a second one ends the turn, and a tool that keeps failing with new
+  arguments is stopped like an identical repeat.
 - `/v1/gaia/query` now honours `provider` on an existing session. It used to
   matter only when the session was created, so `provider: "lemonade"` could keep
   sending a Claude session's conversation to Anthropic, and `provider: "claude"`

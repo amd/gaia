@@ -23,7 +23,9 @@ Selection is connector-derived and has no override: a mailbox is eligible only
 if it is connected, carries a read scope, and this agent holds a grant for it.
 With both eligible, Gmail wins on registry order, and the way to change that is
 to revoke the grant — not to set an environment variable, which would bypass
-the gate that makes any of this checkable.
+the gate that makes any of this checkable. The one exception is the scenario
+eval's offline fixture mailbox (``GAIA_EVAL_MAILBOX``, see ``_email/fixture.py``),
+which replaces the mailbox outright rather than choosing between real ones.
 """
 
 import json
@@ -198,6 +200,10 @@ def _thread_key(message: Dict) -> str:
     return message.get("thread_id") or message.get("id") or ""
 
 
+def _not_connected(provider: str) -> str:
+    return f"not connected. Run `gaia connectors connect {provider}`"
+
+
 def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:
     """``(resolved_scope, explanation)`` for one provider.
 
@@ -210,7 +216,7 @@ def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:
 
     conn = get_connection(provider)
     if not conn:
-        return None, f"not connected. Run `gaia connectors connect {provider}`"
+        return None, _not_connected(provider)
     if conn.get("error") == "configuration":
         return None, (
             "connected, but its OAuth client credentials are no longer "
@@ -308,7 +314,22 @@ class EmailToolsMixin:
 
     def _build_email_backend(self):
         """Construct the mailbox backend, or fail with an actionable error."""
-        from gaia.agents.tools._email import MailboxError
+        from gaia.agents.tools._email import MailboxError, fixture
+
+        eval_mailbox = fixture.fixture_path()
+        if eval_mailbox:
+            # Eval only: never consult connectors, so no real mailbox can leak in.
+            if not fixture.is_attached():
+                raise MailboxError(
+                    _no_mailbox_error(
+                        {p: (None, _not_connected(p)) for p in MAILBOX_PROVIDERS}
+                    )
+                )
+            backend = fixture.build_fixture_backend(eval_mailbox)
+            self._email_provider = GOOGLE_CONNECTOR_ID
+            self._email_provider_source = "eval-fixture"
+            self._email_alternatives = []
+            return backend
 
         try:
             import gaia.connectors.api as connectors_api

@@ -125,6 +125,15 @@ pre-commit gate. It exits 2 if a baseline scenario is missing or produced no
 measurement, as well as for measured regressions. Without this opt-in, incomplete
 measurements remain visible as warnings and the comparison judges measured results.
 
+### One eval at a time
+
+`gaia eval agent` and `gaia eval tasks run` refuse to start while another of them is
+running on the same machine, and name the run that holds the lock. Two evals sharing
+one Lemonade evict each other's models and slow each other down, so both runs' scores
+and timings would be wrong. The lock is released when the run ends or its process
+dies. Set `GAIA_EVAL_NO_LOCK=1` only when the two runs use separate backends.
+Judging, gating and reports don't take the lock.
+
 ## Flagship Agent Tasks
 
 `gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. Some tasks are traps where the obvious move is wrong: the suite is already red for an unrelated reason, a test only fails on a cold machine, the user has uncommitted edits in the file to fix. It scores what the finished project **does**, not what the agent says it did. CI runs `core` on pull requests that touch the agent, and `everyday` plus `therock` every night on `main`, all with the local Qwen3 30B (`Qwen3-30B-A3B-Instruct-2507-GGUF`) on the Strix Halo runner pool. It fails the build when passes, tested changes, quality, honesty, tokens, steps or runtime fall outside the expectations committed for that model and suite, and a nightly failure files an issue naming the suite.
@@ -142,6 +151,7 @@ It needs the flagship installed (`pip install -e hub/agents/gaia/python`), a run
 - A task can name a **setup** (`"setup"` in `tasks.json`, defined in `src/gaia/eval/task_setups.py`) that changes its copy before the agent starts: an unrelated failing test, a test that passes only once its cache is warm, a test that never finishes, a 1.7 MB log generated from a fixed seed, a README that contradicts the code, or a git checkout with uncommitted edits. Everything works offline. The harness keeps a snapshot of the copy after its setup, outside the agent's reach, and measures the agent's changes against that snapshot.
 - A **coding task** passes when every check in its `expect` block holds: the project's own tests pass (`tests_pass`), a probe run inside the finished project confirms the behavior (`probe`), and each file listed in `unchanged` is byte-identical to the snapshot. For example, the bug fix must accept lowercase `z`, and the weekly report must match an independent recomputation row for row.
 - A **question task** is decided by the judge: it passes only if the answer establishes every one of the task's required points (`must_establish`), in any wording. Keyword matching was tried first and dropped: correct answers phrase the same finding in too many ways. A question has no `expect` block; loading one that does is an error.
+- A task **fails when the agent kept working after its answer**: any tool that ran after the turn's first answer on something the request never touched (no file it named, read or changed, and not a test run) is listed in the task's `after_answer`, and the task fails whatever its checks or the judge say. GAIA harness only.
 - **Verified** records, per task, whether the agent's own tool record shows a pytest run that passed after its last file edit. `pytest`, `python -m pytest`, and pytest run through `run_python` all count. A command run twice counts by its latest run, and a failure that a snippet or a pipe prints is a failure even when the command exits 0. Edits made through a shell command or a snippet are not seen.
 - The **judge** (Claude, with no tools) reads the original project once, then each task's setup changes, answer and diff, and grades every task in a single call. It scores four things from 1 to 5: following the instructions, quality of the work, reasoning, and whether the answer claims anything the agent never did. It is never told whether a coding task passed.
 - If the model backend cannot be reached, the task is **not measured**. That is reported as an infrastructure failure, never as the agent getting worse.
@@ -208,10 +218,11 @@ gaia eval tasks report runs/cc-opus runs/gaia-glm runs/cc-glm --out runs/report
 | `--work-root DIR` | Where task workdirs live while running (default: a temp directory). |
 | `--gateway-url URL` | A gateway already running; otherwise each run starts its own. |
 | `--fence` | Fences the agent off the answer keys with macOS `sandbox-exec`. Refused where it cannot be enforced — see below. |
-| `--full-access` | Gives GAIA no path boundary, the reach Claude Code has with its permissions skipped. |
+| `--full-access` | Gives GAIA no path boundary and no shell guardrails, the reach Claude Code has with its permissions skipped. |
 | `--meter fireworks` | Reads the run's real cost from the provider's billing meter. |
 | `--therock-url URL` | Where the `therock` suite clones from (default `https://github.com/ROCm/TheRock`). |
 | `--instances a,b` | The SWE-bench Verified instance ids the `swebench` suite is built from (default: the pilot). Only with `--suite swebench`. |
+| `--sample N [--seed S]` | `swebench`: a seeded random N of the 500 instances instead of `--instances`. The same N and seed always pick the same tasks, so a result can be reproduced and compared. |
 | `--no-evaluate` | `swebench`: capture the predictions and stop; grade later with `gaia eval tasks swebench DIR`. |
 | `--docker-platform P` | The platform the SWE-bench images are pulled for (default `linux/amd64`; they exist for no other). |
 | `--keep-images` | `swebench`: do not pull each image just before its run and remove it after (about 3 GB each). |
@@ -314,6 +325,16 @@ the run starts:
 - The judge grades a SWE-bench attempt's quality against the gold patch, read
   from the cache only in the `judge` step, but it never decides the pass: that
   is the harness's verdict alone.
+
+**In CI.** `.github/workflows/eval_swebench.yml` runs the flagship on fixed
+subsets listed, with the reason for each instance, in
+`eval/tasks/swebench_subsets.json`. `smoke` is three fast tasks the agent solved
+on every measured run; it runs on pull requests that touch the agent loop, its
+tools or the coding skill. `hard` is ten tasks strong Claude agents rarely solve
+on the leaderboard; it runs nightly. The model is DeepSeek V4.1 Flash on
+Fireworks through GAIA's embedded Lemonade, so the runner needs no GPU and needs
+the `FIREWORKS_API_KEY` repository secret. Results go to the job summary and an
+artifact. Nothing is gated until expectations are measured on that runner.
 
 ### Keeping credentials out of published artifacts
 
