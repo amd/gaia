@@ -785,10 +785,6 @@ def test_start_hint_instruction_embeds_the_command_verbatim(mocker):
     assert hint.command in hint.instruction
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
-
-
 def test_start_hint_points_at_gaias_own_server_once_init_installed_it(tmp_path):
     from gaia.llm.lemonade_embedded import EmbeddedLemonade
     from gaia.llm.lemonade_launcher import describe_start_hint
@@ -799,3 +795,33 @@ def test_start_hint_points_at_gaias_own_server_once_init_installed_it(tmp_path):
     hint = describe_start_hint()
     assert hint.command == "gaia lemonade embedded start"
     assert "not installed" not in hint.instruction
+
+
+def test_start_hint_prefers_a_configured_lemonade_base_url_over_embedded(
+    mocker, tmp_path
+):
+    """A user pointing GAIA at another server must not be told to start the
+    embedded one, even if `gaia init` also installed it -- GAIA's own
+    LemonadeManager.start_embedded_if_stopped skips the embedded server in
+    this case, so the hint must agree."""
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    daemon = EmbeddedLemonade().daemon_path
+    daemon.parent.mkdir(parents=True)
+    daemon.write_bytes(b"")
+    mocker.patch.dict(
+        os.environ, {"LEMONADE_BASE_URL": "http://localhost:9000"}, clear=False
+    )
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(found=False, kind="none"),
+    )
+
+    hint = describe_start_hint()
+
+    assert hint.command != "gaia lemonade embedded start"
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

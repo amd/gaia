@@ -352,10 +352,12 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     ``lemonade-server serve`` CLI is only ever named when a legacy install
     was actually resolved.
     """
+    from gaia.llm.lemonade_client import configured_lemonade_url
     from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
-    # `gaia init` installs GAIA's own server, and GAIA uses it over any other.
-    if EmbeddedLemonade().is_installed():
+    # `gaia init` installs GAIA's own server, and GAIA uses it unless
+    # LEMONADE_BASE_URL names another -- mirror LemonadeManager's guard.
+    if not configured_lemonade_url() and EmbeddedLemonade().is_installed():
         return StartHint(
             instruction=(
                 "GAIA starts its Lemonade Server when it needs it. To start it "
