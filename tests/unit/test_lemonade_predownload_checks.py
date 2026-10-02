@@ -152,14 +152,14 @@ class TestFirstRunBanner:
     def test_undownloaded_model_announces_download(self, server, client, capsys):
         self._ensure(client, "Gemma-4-12B-it-GGUF")
 
-        assert "Downloading model" in capsys.readouterr().out
+        assert "Downloading model" in capsys.readouterr().err
 
     def test_downloaded_model_announces_load(self, server, client, capsys):
         self._ensure(client, "Gemma-4-E4B-it-GGUF")
 
-        out = capsys.readouterr().out
-        assert "Loading model" in out
-        assert "Downloading model" not in out
+        err = capsys.readouterr().err
+        assert "Loading model" in err
+        assert "Downloading model" not in err
 
 
 class TestCheckModelLoaded:

@@ -457,3 +457,74 @@ def test_recheck_exception_caught_by_outer_handler():
         c for c in sse._emit.call_args_list if c.args[0].get("status") == "warning"
     ]
     assert warning_calls, "Expected a warning SSE after exception in re-check"
+
+
+# ---------------------------------------------------------------------------
+# Cloud models and reload scope
+# ---------------------------------------------------------------------------
+
+_RESOLVE_CTX = "gaia.llm.lemonade_client.resolve_ctx_size"
+
+
+def _cloud(name, ctx_size=4096):
+    return {
+        "type": "llm",
+        "model_name": name,
+        "recipe": "cloud",
+        "recipe_options": {"ctx_size": ctx_size},
+    }
+
+
+def test_a_resident_cloud_model_is_never_reloaded_or_evicts_local_models():
+    """Lemonade reports a small ctx for cloud models; that is not a reason to reload."""
+    health = _health_ok(
+        [
+            _cloud("fireworks.deepseek-v4p1-flash"),
+            _model("llm", "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=65536),
+            _model("embedding", "embeddinggemma-300m-GGUF"),
+        ]
+    )
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, return_value=health),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        _maybe_load_expected_model("fireworks.deepseek-v4p1-flash")
+    mock_cls.assert_not_called()
+
+
+def test_a_cloud_model_not_yet_resident_still_loads_nothing_locally():
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, return_value=_health_ok([])),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        _maybe_load_expected_model("fireworks.deepseek-v4p1-flash")
+    mock_cls.assert_not_called()
+
+
+def test_a_reload_uses_the_agents_ctx_and_keeps_the_embedder():
+    """Loading below the agent's window made it reload again on its first turn."""
+    expected = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+    health = _health_ok(
+        [
+            _model("llm", expected, ctx_size=32768),
+            _model("embedding", "embeddinggemma-300m-GGUF"),
+        ]
+    )
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, return_value=health),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+        patch(_RESOLVE_CTX, return_value=65536),
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        client = MagicMock()
+        mock_cls.return_value = client
+        _maybe_load_expected_model(expected)
+
+    client.unload_model.assert_called_once_with(expected, ignore_if_not_loaded=True)
+    client.load_model.assert_called_once()
+    assert client.load_model.call_args.kwargs["ctx_size"] == 65536

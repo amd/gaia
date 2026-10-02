@@ -39,6 +39,25 @@ _MISSING_DEPS_MSG = (
     "code_index dependencies missing. Install with: pip install -e '.[rag]'"
 )
 
+# Shared by every path that can trigger an index build (explicit
+# index_codebase and the lazy build on first search): the sandbox ceiling may
+# be the user's whole home directory (the flagship agent's default file
+# scope), and indexing that is never what "index the codebase" means — it
+# walks and embeds every repo, download, and cache the user owns.
+_HOME_DIRECTORY_REFUSAL = json.dumps(
+    {
+        "error": (
+            "refusing to index your entire home directory — "
+            "call index_codebase with the repository's path, "
+            "e.g. index_codebase(repo_path='~/projects/myrepo')"
+        )
+    }
+)
+
+
+def _is_home_directory(repo_path: str) -> bool:
+    return str(Path(repo_path).resolve()) == str(Path.home().resolve())
+
 
 class CodeIndexToolsMixin:
     """Mixin providing semantic code-index tools.
@@ -179,22 +198,8 @@ class CodeIndexToolsMixin:
                 self._code_index_config = None
                 self._code_index_sdk = None
 
-            # The sandbox ceiling may be the user's whole home directory (the
-            # flagship agent's default file scope). Indexing that is never
-            # what "index the codebase" means — it walks and embeds every
-            # repo, download, and cache the user owns, and blows the tool
-            # timeout doing it. Require an actual repo path instead.
-            effective = str(Path(self._repo_path).resolve())
-            if effective == str(Path.home().resolve()):
-                return json.dumps(
-                    {
-                        "error": (
-                            "refusing to index your entire home directory — "
-                            "call index_codebase with the repository's path, "
-                            "e.g. index_codebase(repo_path='~/projects/myrepo')"
-                        )
-                    }
-                )
+            if _is_home_directory(self._repo_path):
+                return _HOME_DIRECTORY_REFUSAL
 
             sdk = self._get_code_index_sdk()
             if sdk is None:
@@ -219,10 +224,11 @@ class CodeIndexToolsMixin:
             scope: str = "all",
             top_k: int = 10,
         ) -> str:
-            """Semantic search over an indexed codebase.
+            """Semantic search over the codebase.
 
             Embeds the query and returns the most relevant code chunks from
-            the FAISS index.
+            the FAISS index. The first search builds the index if there is
+            none, which is slow on a large repository.
 
             Args:
                 query: Natural language or code snippet to search for.
@@ -241,6 +247,16 @@ class CodeIndexToolsMixin:
                 return json.dumps({"error": "code_index SDK not initialised"})
 
             try:
+                built = None
+                if not sdk.is_indexed():
+                    # Same refusal index_codebase applies — the lazy build is
+                    # the same index_repository() call and must not embed the
+                    # sandbox ceiling just because no one called the explicit
+                    # tool first.
+                    if _is_home_directory(self._repo_path):
+                        return _HOME_DIRECTORY_REFUSAL
+                    # Built on first use rather than at task start.
+                    built = sdk.index_repository()
                 results = sdk.search(query, scope=scope, top_k=top_k)
                 output = []
                 for r in results:
@@ -259,6 +275,17 @@ class CodeIndexToolsMixin:
                     if hasattr(chunk, "start_line"):
                         entry["start_line"] = chunk.start_line
                     output.append(entry)
+                if built is not None:
+                    return json.dumps(
+                        {
+                            "index_built_now": {
+                                "files_indexed": built.files_indexed,
+                                "chunks_created": built.chunks_created,
+                            },
+                            "results": output,
+                        },
+                        indent=2,
+                    )
                 return json.dumps(output, indent=2)
             except Exception as e:
                 logger.error("search_code_index failed: %s", e)

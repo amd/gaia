@@ -14,7 +14,7 @@ persona: data_analyst
 
 setup:
   index_documents: []
-  notes: "Requires stage_mcp_stub.py install before the backend starts, and the fixture CSV staged at ~/gaia-eval/csv/sales.csv."
+  notes: "Requires stage_mcp_stub.py install before this category runs, and the fixture CSV staged at ~/gaia-eval/csv/sales.csv."
 
 turns:
   - turn: 1
