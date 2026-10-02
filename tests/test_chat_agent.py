@@ -104,14 +104,11 @@ class TestChatAgent:
         # Check if at least one expected key is present
         assert any(key in " ".join(keys) for key in expected_keys)
 
-    def test_system_prompt_updated_after_index(self, agent):
-        """Test that the system prompt includes indexed documents after indexing.
+    def test_indexed_document_reaches_the_next_turn(self, agent):
+        """After /index, the next turn names the document; the prompt stays put.
 
-        This test simulates what the /index command handler should do:
-        1. Index the document via agent.rag.index_document()
-        2. Update the system prompt via agent.rebuild_system_prompt()
-
-        After these steps, the system prompt should list the indexed document.
+        The indexed set is sent with each turn rather than in the system
+        prompt, so indexing never invalidates the server's prompt cache.
         """
         # Use a test file in the project directory (within allowed paths)
         test_dir = Path(__file__).parent / "test_data"
@@ -122,7 +119,8 @@ class TestChatAgent:
             test_file.write_text("This is test content about machine learning and AI.")
 
             # Verify initial state: no documents indexed
-            assert "No documents are currently indexed" in agent.system_prompt
+            assert "[Indexed documents:" not in agent.get_memory_dynamic_context()
+            prompt_before = agent.system_prompt
 
             # Mock the LemonadeClient to avoid needing server
             mock_lemonade = Mock()
@@ -152,9 +150,11 @@ class TestChatAgent:
             # Step 2: Update the system prompt (what /index command should do after indexing)
             agent.rebuild_system_prompt()
 
-            # After both steps, system prompt should be updated to list the document
-            assert "test_document_for_prompt.txt" in agent.system_prompt
-            assert "No documents are currently indexed" not in agent.system_prompt
+            assert (
+                "[Indexed documents: test_document_for_prompt.txt]"
+                in agent.get_memory_dynamic_context()
+            )
+            assert agent.system_prompt == prompt_before
         finally:
             # Cleanup
             if test_file.exists():
