@@ -169,7 +169,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `token` | `{delta}` | stream assistant text |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
-| `needs_confirmation` | `{run_id, action, summary, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model |
+| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, risk?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
 | `final` | `{answer, usage?}` | finalize the message; terminal |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
@@ -622,8 +622,9 @@ turn is running. A control message never writes to stdout.
 
 | `gaia_control` | Fields | Effect |
 |---|---|---|
-| `tool_decision` | `decision`, `confirm_id?` | Answers the pending `needs_confirmation`. `decision` is `allow`, `deny` or `always`; any other value is treated as `deny`. |
-| `bypass` | `enabled` | Turns unattended approval on or off for the session. |
+| `tool_decision` | `decision`, `confirm_id?` | Answers the pending `needs_confirmation`. `decision` is `allow`, `deny`, `always` or `timeout`; `timeout` denies but tells the agent nobody answered, so it does not report a refusal. Any other value is treated as `deny`. |
+| `full_access` | `enabled` | Turns full access on or off for the session: gated tools run unasked and the shell guardrails come off. (`bypass`, the retired name, turns it off.) |
+| `accept_edits` | `enabled` | Turns "accept edits" on or off: file edits inside the agent's starting folder run unasked; everything else still asks. |
 | `cancel` | — | Stops the running turn but keeps the process, so skills, grants and history survive. |
 | `clear_history` | — | Clears history after the current turn. The agent accepts it, but the TUI sends the `clear_conversation` sentinel instead, because only the sentinel gets an acknowledgement. |
 

@@ -422,15 +422,16 @@ the HTTP surface above instead (§6.1).
 
 It emits the identical canonical event vocabulary, but its input channel accepts
 a JSON line carrying a `gaia_control` key: a back-channel that answers a
-confirmation prompt *while* a turn is in flight, toggles full access, and stops
-a turn (`cancel`) without ending the process — so loaded skills, "always"
-grants, history and full access survive a cancel.
+confirmation prompt *while* a turn is in flight, toggles full access or
+"accept edits" (file edits inside the starting folder run unasked; commands still
+ask), and stops a turn (`cancel`) without ending the process — so loaded skills,
+"always" grants, history and the permission mode survive a cancel.
 
 Contract 2.14 gave the HTTP surface the same three capabilities per run and per
 session — `/tool_decision`, `/sessions/{id}/bypass` (the route keeps its
 original spelling), and `provider: "claude"`. What remains stdio-only is the
 *launch* form of those switches: `--full-access` starts a process with gating
-already off, and `--use-claude` / `--claude-model` pin the backend for the life
+already off, `--accept-edits` starts it in accept-edits mode, and `--use-claude` / `--claude-model` pin the backend for the life
 of the process (embeddings stay on Lemonade either way).
 
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through

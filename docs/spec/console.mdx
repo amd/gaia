@@ -262,9 +262,10 @@ class TerminalConfirmationMixin:
     terminal.
 
     - stdin AND stdout a TTY -> shows the tool and its literal arguments, then
-      reads `[y]es / [N]o / [a]lways for this tool`. Default is no; Ctrl-C and
-      EOF are no. "always" is per tool and never offered for
-      `run_shell_command` / `run_cli_command`.
+      reads `[y]es / [N]o / [a]lways for `<scope>``. Default is no; Ctrl-C and
+      EOF are no. "always" covers the scope `grant_scope` names — a command
+      family such as `pytest` or `git commit`, one file, or one skill — never a
+      whole tool, and is not offered for a delete or a line it cannot read.
     - otherwise -> denies with an actionable message.
     - a broken terminal (render or read fails) -> denies; the gate never raises
       into the agent loop.

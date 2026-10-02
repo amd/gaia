@@ -141,6 +141,9 @@ QUERY_KEY = "gaia_query"
 #: screen; ``full_access`` turns unattended approval on or off for the session.
 CONTROL_TOOL_DECISION = "tool_decision"
 CONTROL_FULL_ACCESS = "full_access"
+#: ``accept_edits`` lets file edits inside the workspace run without asking;
+#: shell commands and code still ask. The middle of the TUI's Shift+Tab modes.
+CONTROL_ACCEPT_EDITS = "accept_edits"
 #: The retired spelling of ``full_access``. A host still sending it is older
 #: than this agent, so the toggle it meant cannot be trusted in either
 #: direction: it is answered by turning full access OFF, the direction that
@@ -165,6 +168,9 @@ CONTROL_CANCEL = "cancel"
 DECISION_ALLOW = "allow"
 DECISION_DENY = "deny"
 DECISION_ALWAYS = "always"
+#: The client's own clock ran out with no answer. Denies like ``deny``, but the
+#: agent is told it timed out — the user never said no.
+DECISION_TIMEOUT = "timeout"
 
 
 class PermissionState:
@@ -181,10 +187,19 @@ class PermissionState:
     """
 
     def __init__(
-        self, full_access: bool = False, *, lifts_shell_gates: bool = True
+        self,
+        full_access: bool = False,
+        *,
+        lifts_shell_gates: bool = True,
+        accept_edits: bool = False,
+        edit_roots: Optional[tuple] = None,
     ) -> None:
         self._lock = threading.Lock()
         self._full_access = full_access
+        self._accept_edits = accept_edits
+        # The workspace is the folder the session was opened on; "accept edits"
+        # never reaches past it.
+        self._edit_roots = tuple(edit_roots) if edit_roots else (os.getcwd(),)
         self._lifts_shell_gates = lifts_shell_gates
         self._grants: set = set()
         self._handler: Any = None
@@ -201,6 +216,11 @@ class PermissionState:
         with self._lock:
             return self._full_access
 
+    @property
+    def accept_edits(self) -> bool:
+        with self._lock:
+            return self._accept_edits
+
     def _apply(self, handler: Any, enabled: bool) -> None:
         """Write this session's full-access decision onto one handler.
 
@@ -214,6 +234,8 @@ class PermissionState:
         """
         handler.auto_approve_gated_tools = enabled
         handler.full_access = enabled and self._lifts_shell_gates
+        handler.accept_edits = self._accept_edits
+        handler.edit_roots = self._edit_roots
 
     def set_full_access(self, enabled: bool) -> None:
         """Turn full access on or off, taking effect on the very next gated tool.
@@ -229,6 +251,19 @@ class PermissionState:
             "Full access %s (shell gates %s)",
             "ENABLED" if enabled else "disabled",
             ("off" if enabled else "on") if self._lifts_shell_gates else "still on",
+        )
+
+    def set_accept_edits(self, enabled: bool) -> None:
+        """Turn "accept edits" on or off, from the very next gated tool."""
+        with self._lock:
+            self._accept_edits = enabled
+            if self._handler is not None:
+                self._handler.accept_edits = enabled
+                self._handler.edit_roots = self._edit_roots
+        audit.warning(
+            "Accept edits %s (roots: %s)",
+            "ENABLED" if enabled else "disabled",
+            ", ".join(self._edit_roots),
         )
 
     def attach(self, handler: Any) -> None:
@@ -271,6 +306,7 @@ class PermissionState:
                 approved=decision in (DECISION_ALLOW, DECISION_ALWAYS),
                 always=decision == DECISION_ALWAYS,
                 confirm_id=confirm_id,
+                timed_out=decision == DECISION_TIMEOUT,
             )
 
     def cancel_active(self, reason: str = "stdin closed mid-turn") -> bool:
@@ -340,6 +376,8 @@ def apply_control(message: Dict[str, Any], state: PermissionState) -> None:
     verb = message.get(CONTROL_KEY)
     if verb == CONTROL_FULL_ACCESS:
         state.set_full_access(bool(message.get("enabled")))
+    elif verb == CONTROL_ACCEPT_EDITS:
+        state.set_accept_edits(bool(message.get("enabled")))
     elif verb == _RETIRED_CONTROL_VERB:
         state.set_full_access(False)
         audit.error(
@@ -353,7 +391,12 @@ def apply_control(message: Dict[str, Any], state: PermissionState) -> None:
             logger.info("Cancel requested with no turn running — nothing to stop")
     elif verb == CONTROL_TOOL_DECISION:
         decision = str(message.get("decision") or DECISION_DENY)
-        if decision not in (DECISION_ALLOW, DECISION_DENY, DECISION_ALWAYS):
+        if decision not in (
+            DECISION_ALLOW,
+            DECISION_DENY,
+            DECISION_ALWAYS,
+            DECISION_TIMEOUT,
+        ):
             # Fail closed: an unreadable decision is not consent.
             audit.warning("Unknown tool decision %r — denying", decision)
             decision = DECISION_DENY
@@ -1396,6 +1439,15 @@ def build_parser() -> "argparse.ArgumentParser":
         "control channel. Every shell command run this way is audit-logged.",
     )
     parser.add_argument(
+        "--accept-edits",
+        dest="accept_edits",
+        action="store_true",
+        help="Start in accept-edits mode: file edits inside the folder the "
+        "agent was started in run without asking. Shell commands, code and "
+        "anything outside that folder still ask. The host can toggle it over "
+        "the control channel.",
+    )
+    parser.add_argument(
         "--bypass-permissions",
         action=_RetiredFlag,
         new_name="--full-access",
@@ -1411,7 +1463,7 @@ def main(argv: Optional[list] = None) -> int:
     out = sys.stdout
     _configure_logging(out, dev=args.dev)
 
-    state = PermissionState(full_access=args.full_access)
+    state = PermissionState(full_access=args.full_access, accept_edits=args.accept_edits)
 
     # Built ONCE, before the first query, and kept for the life of the process.
     # A failure here is fatal and must say so on the turn the user actually

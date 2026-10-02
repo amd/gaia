@@ -95,7 +95,7 @@ depends on the handler:
 
 | Handler | Behaviour |
 |---------|-----------|
-| `AgentConsole` / `SilentConsole`, stdin **and** stdout are a terminal | Prints the tool and its literal arguments, then asks `[y]es / [N]o / [a]lways for this tool`. Defaults to **no**; Ctrl-C and EOF also mean no. `a` remembers that one tool for the life of the console (never offered for `run_shell_command` / `run_cli_command`, where the name says nothing about the next call). Silent mode suppresses narration, not consent. |
+| `AgentConsole` / `SilentConsole`, stdin **and** stdout are a terminal | Prints the tool and its literal arguments, then asks `[y]es / [N]o`, plus `[a]lways for <scope>` when the call has one. `a` covers only that scope — a command family (`pytest`, `git commit`), one file, or one skill — for the life of the console, never the whole tool, and is not offered for a delete or an unreadable command line. Defaults to **no**; Ctrl-C and EOF also mean no. Silent mode suppresses narration, not consent. |
 | Either console with piped stdin, redirected stdout, CI, or a subprocess host | **Denies** — there is nobody to ask, or nowhere the question would be visible. The tool result explains why and how to proceed. |
 | Any handler that doesn't override the default (e.g. the OpenAI-compatible API server's SSE handler) | **Denies**, same reasoning. |
 | Agent UI's `SSEOutputHandler` | Emits a `permission_request` event, blocks up to 60 s for the modal's answer, denies on timeout. |

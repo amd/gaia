@@ -93,7 +93,7 @@ func TestStdioEnvelopeKeysMatchTheSharedFixture(t *testing.T) {
 
 func TestPermissionDecisionsMatchTheSharedFixture(t *testing.T) {
 	f := loadStdioWireFixture(t)
-	got := []string{string(PermissionAllow), string(PermissionDeny), string(PermissionAlways)}
+	got := []string{string(PermissionAllow), string(PermissionDeny), string(PermissionAlways), string(PermissionTimeout)}
 	want := append([]string(nil), f.Stdin.Decisions...)
 	sort.Strings(got)
 	sort.Strings(want)
@@ -131,8 +131,9 @@ func TestEveryControlLineTheClientWritesMatchesTheSharedFixture(t *testing.T) {
 		"tool_decision": func(c *SubprocessClient) error {
 			return c.RespondToolPermission("confirm-7", PermissionAlways)
 		},
-		"full_access": func(c *SubprocessClient) error { return c.SetFullAccess(true) },
-		"cancel":      func(c *SubprocessClient) error { return c.Cancel(context.Background()) },
+		"full_access":  func(c *SubprocessClient) error { return c.SetFullAccess(true) },
+		"accept_edits": func(c *SubprocessClient) error { return c.SetAcceptEdits(true) },
+		"cancel":       func(c *SubprocessClient) error { return c.Cancel(context.Background()) },
 	}
 
 	for verb, spec := range f.Stdin.ControlVerbs {

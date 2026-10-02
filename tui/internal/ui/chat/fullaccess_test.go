@@ -25,6 +25,7 @@ type permissionClient struct {
 	decisions        []client.PermissionDecision
 	confirmIDs       []string
 	fullAccessCalls  []bool
+	acceptEditsCalls []bool
 	launchFullAccess bool
 	err              error
 }
@@ -43,6 +44,14 @@ func (c *permissionClient) SetFullAccess(enabled bool) error {
 		return c.err
 	}
 	c.fullAccessCalls = append(c.fullAccessCalls, enabled)
+	return nil
+}
+
+func (c *permissionClient) SetAcceptEdits(enabled bool) error {
+	if c.err != nil {
+		return c.err
+	}
+	c.acceptEditsCalls = append(c.acceptEditsCalls, enabled)
 	return nil
 }
 
@@ -76,8 +85,8 @@ func TestGatedCallShowsTheCommandAndAllThreeChoices(t *testing.T) {
 	view := m.View()
 	for _, want := range []string{
 		`command="pwd"`,
-		"y run once",
-		"a allow `pwd` this session",
+		"y once",
+		"a always: pwd (this session)",
 		"n/esc deny",
 	} {
 		if !strings.Contains(view, want) {

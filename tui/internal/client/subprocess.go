@@ -175,6 +175,9 @@ type SubprocessClient struct {
 	// the one the child was launched with. A respawn rebuilds argv from this, so
 	// a `/full-access off` typed before a hard cancel cannot come back on by itself.
 	fullAccess bool
+	// acceptEdits is the session's "accept edits" mode, carried into a
+	// respawned child's argv the same way fullAccess is.
+	acceptEdits bool
 	// respawned records that the child now backing this client is a REPLACEMENT
 	// for one that was killed. Read and cleared by the next Send, which reports
 	// it: the replacement has no loaded skills, no "always" grants and no prompt
@@ -213,13 +216,16 @@ func NewSubprocessClient(path string, args []string, debug bool) *SubprocessClie
 func (s *SubprocessClient) spawnArgs(fullAccess bool) []string {
 	out := make([]string, 0, len(s.args)+1)
 	for _, a := range s.args {
-		if a == FullAccessFlag {
+		if a == FullAccessFlag || a == AcceptEditsFlag {
 			continue
 		}
 		out = append(out, a)
 	}
 	if fullAccess {
 		out = append(out, FullAccessFlag)
+	}
+	if s.acceptEdits {
+		out = append(out, AcceptEditsFlag)
 	}
 	return out
 }
@@ -691,6 +697,32 @@ func (s *SubprocessClient) SetFullAccess(enabled bool) error {
 	if enabled {
 		s.mu.Lock()
 		s.fullAccess = true
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+// SetAcceptEdits turns "accept edits" on or off for the session. Recorded on the
+// client like SetFullAccess, so a respawned child comes back in the same mode.
+func (s *SubprocessClient) SetAcceptEdits(enabled bool) error {
+	s.mu.Lock()
+	started := s.started
+	if !enabled || !started {
+		s.acceptEdits = enabled
+	}
+	s.mu.Unlock()
+	if !started {
+		return nil
+	}
+	if err := s.writeControl(map[string]interface{}{
+		controlKey: "accept_edits",
+		"enabled":  enabled,
+	}); err != nil {
+		return err
+	}
+	if enabled {
+		s.mu.Lock()
+		s.acceptEdits = true
 		s.mu.Unlock()
 	}
 	return nil
