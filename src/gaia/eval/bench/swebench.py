@@ -14,6 +14,10 @@ Nothing of the dataset is committed here. At run time:
   depth 200 over ``file://`` (git ignores ``--depth`` on a plain local path),
   detached, with no remote. ``git fsck`` confirms the clone holds nothing off
   that history.
+- :func:`tool_interpreter` is the Python either harness's agent runs:
+  a bare venv, so a newer installed release of the package under test (fix
+  included) is not importable. Under ``--fence`` the installed copies are also
+  denied (:func:`host_site_packages`, :func:`deniable_copy`).
 - :func:`capture_prediction` turns what the agent changed into one row of the
   predictions file the official harness reads.
 - :func:`evaluate` runs ``swebench.harness.run_evaluation`` one instance at a
@@ -27,16 +31,22 @@ The gold patch is the judge's reference, read only in the judge step.
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import importlib.metadata
 import importlib.util
 import json
+import os
 import random
+import re
 import shutil
+import site
 import subprocess
 import sys
+import sysconfig
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlencode
 
 from gaia.eval.bench.therock import HISTORY_DEPTH
@@ -362,6 +372,143 @@ def checkout(
     remotes = _git(["remote"], cwd=workdir).strip()
     if remotes:
         raise SweBenchError(f"the checkout still has remotes: {remotes}")
+
+
+# ---------------------------------------------------------------------------
+# Isolation from the host's installed packages
+# ---------------------------------------------------------------------------
+
+
+def _bin_dir(venv: Path) -> Path:
+    return venv / ("Scripts" if os.name == "nt" else "bin")
+
+
+def _venv_packages(venv: Path) -> List[str]:
+    """What is installed in *venv*: every entry of its site-packages trees."""
+    trees = list(venv.glob("Lib/site-packages")) + list(
+        venv.glob("lib/python*/site-packages")
+    )
+    return sorted(e.name for t in trees for e in t.iterdir() if e.name != "__pycache__")
+
+
+def tool_interpreter(work_root: Path) -> Path:
+    """The Python the agent gets: a bare venv with nothing installed, not even pip.
+
+    The host interpreter can hold a newer release of the package under test,
+    fix included. The venv is shared by every task of the work root, so one
+    that holds anything — an agent installed into it — is rebuilt.
+    """
+    venv = (
+        cache_dir(work_root)
+        / "toolchain"
+        / f"py{sys.version_info.major}{sys.version_info.minor}"
+    )
+    python = _bin_dir(venv) / ("python.exe" if os.name == "nt" else "python")
+    if python.is_file() and not _venv_packages(venv):
+        return python
+    proc = subprocess.run(
+        [sys.executable, "-m", "venv", "--clear", "--without-pip", str(venv)],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=GIT_TIMEOUT_S,
+        check=False,
+    )
+    if proc.returncode != 0 or not python.is_file() or _venv_packages(venv):
+        raise SweBenchError(
+            f"could not build the agent's bare interpreter at {venv}: "
+            f"{(proc.stderr or proc.stdout).strip()[-500:]}. Check that "
+            f"`{sys.executable} -m venv --without-pip` works on this host."
+        )
+    return python
+
+
+def host_site_packages() -> Tuple[Path, ...]:
+    """Every site-packages tree of the interpreter running the eval, and of its base."""
+    base = {"base": sys.base_prefix, "platbase": sys.base_exec_prefix}
+    found = [
+        *site.getsitepackages(),
+        site.getusersitepackages(),
+        sysconfig.get_paths()["purelib"],
+        sysconfig.get_paths()["platlib"],
+        sysconfig.get_paths(vars=base)["purelib"],
+        sysconfig.get_paths(vars=base)["platlib"],
+    ]
+    paths = [Path(p).resolve() for p in found if p]
+    return tuple(
+        dict.fromkeys(
+            p
+            for p in paths
+            if p.name in ("site-packages", "dist-packages") and p.is_dir()
+        )
+    )
+
+
+def _dist_key(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def installed_copy(repo: str) -> Tuple[Path, ...]:
+    """Where the host interpreter has the package of *repo* installed, if it does.
+
+    The distribution is named after the repository (``matplotlib/matplotlib``,
+    ``scikit-learn/scikit-learn``); its top-level entries in site-packages —
+    packages, modules, ``.dist-info`` — are the copy.
+    """
+    try:
+        dist = importlib.metadata.distribution(repo.split("/")[-1])
+    except importlib.metadata.PackageNotFoundError:
+        return ()
+    tops = {Path(str(f)).parts[0] for f in dist.files or ()} - {"..", "__pycache__"}
+    paths = [Path(dist.locate_file(t)).resolve() for t in tops]
+    return tuple(sorted(p for p in paths if p.exists()))
+
+
+@functools.lru_cache(maxsize=None)
+def gaia_imports(
+    roots: Tuple[str, ...] = ("amd-gaia", "gaia-agent", "gaia-agent-chat")
+) -> frozenset:
+    """Distributions GAIA's agent process may import: *roots* and what they require.
+
+    Extras are left out (with them the set is most of SWE-bench); platform
+    markers are not evaluated, so otherwise it errs large. A package wrongly
+    left out fails loudly: the agent process exits on the denied import.
+    """
+    seen: set = set()
+    todo = [_dist_key(r) for r in roots]
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        try:
+            requires = importlib.metadata.requires(name) or []
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        for req in requires:
+            if "extra" in req.partition(";")[2]:
+                continue
+            match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req)
+            if match:
+                todo.append(_dist_key(match.group(1)))
+    return frozenset(seen)
+
+
+def deniable_copy(repo: str) -> Tuple[Path, ...]:
+    """The installed copy of *repo* that ``--fence`` can deny GAIA's agent process.
+
+    That process imports from site-packages, so it keeps the trees, losing only
+    the package under test, and not even that when GAIA imports it itself.
+    """
+    if _dist_key(repo.split("/")[-1]) in gaia_imports():
+        log.warning(
+            "%s is one of GAIA's own dependencies, so the fence cannot deny its "
+            "installed copy to the GAIA agent; the agent's bare interpreter "
+            "still cannot import it.",
+            repo,
+        )
+        return ()
+    return installed_copy(repo)
 
 
 # ---------------------------------------------------------------------------

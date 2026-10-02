@@ -11,7 +11,9 @@
   toolchain and the ``gh`` stand-in first on ``PATH``;
 - the same model route: the gateway, which alone holds the upstream key
   (Claude Code on Anthropic's own models uses its own login instead);
-- the same fence, when one is requested.
+- the same fence, when one is requested;
+- on a SWE-bench task, the same bare Python (:func:`isolate_python`), so
+  neither can import a newer release of the package under test.
 
 Scoring and judging happen afterwards, in the parent, identically for both.
 """
@@ -59,6 +61,8 @@ class Conditions:
     #: ``(fenced, read_write, read_only)`` when fenced; ``None`` otherwise.
     fence: Optional[Tuple[Tuple[Path, ...], Tuple[Path, ...], Tuple[Path, ...]]] = None
     full_access: bool = False
+    #: The only Python the agent may run, when the host's must stay out of reach.
+    tool_python: Optional[Path] = None
 
 
 @dataclass
@@ -118,7 +122,38 @@ def conditions_env(conditions: Conditions, harness: str, model: str) -> Dict[str
                 "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             }
         )
-    return agent_env(path_prefix=conditions.path_prefix, extra=extra)
+    env = agent_env(path_prefix=conditions.path_prefix, extra=extra)
+    if conditions.tool_python is not None:
+        isolate_python(env, conditions.tool_python)
+    return env
+
+
+def _host_python_dirs() -> List[str]:
+    """``PATH`` entries that hold the host's Python, safe to remove."""
+    dirs = []
+    if sys.prefix != sys.base_prefix:
+        dirs.append(Path(sys.executable).parent)
+    if os.name == "nt":
+        dirs += [Path(sys.base_prefix), Path(sys.base_prefix) / "Scripts"]
+    return [_norm(d) for d in dirs]
+
+
+def _norm(path: Any) -> str:
+    return os.path.normcase(str(Path(path).resolve()))
+
+
+def isolate_python(env: Dict[str, str], tool_python: Path) -> None:
+    """Make *tool_python* the Python the agent finds by name, and the host's unfindable.
+
+    ``VIRTUAL_ENV`` points at its venv, which the Windows ``py`` launcher follows.
+    """
+    host = set(_host_python_dirs())
+    env["PATH"] = os.pathsep.join(
+        p for p in env.get("PATH", "").split(os.pathsep) if p and _norm(p) not in host
+    )
+    env["VIRTUAL_ENV"] = str(Path(tool_python).parent.parent)
+    for name in ("PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE"):
+        env.pop(name, None)
 
 
 def _fenced(cmd: Sequence[str], conditions: Conditions) -> List[str]:
@@ -214,6 +249,9 @@ def run_gaia(
                 "workdir": str(workdir),
                 "memory_db": str(memory_db),
                 "full_access": conditions.full_access,
+                "tool_python": (
+                    str(conditions.tool_python) if conditions.tool_python else None
+                ),
                 "outcome": str(outcome_path),
                 "progress": str(progress_path),
             }
