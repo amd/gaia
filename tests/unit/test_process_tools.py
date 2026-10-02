@@ -407,6 +407,9 @@ class TestLifecycle:
         assert done["exit_code"] == 0
         assert done["check_result"]["label"] == "pytest"
         assert done["check_result"]["passed"] is True
+        # Grouped with the same command run in the foreground.
+        foreground = _tool("run_shell_command")(started["command"])
+        assert done["check_result"]["target"] == foreground["check_result"]["target"]
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +491,9 @@ class TestWait:
             ({"timeout": 0}, "between 1 and"),
             ({"timeout": 601}, "between 1 and"),
             ({"pattern": "("}, "not a valid regex"),
+            ({"pattern": "(a+)+$"}, "cannot be stopped"),
+            ({"pattern": r"(\w+\s?)+:"}, "cannot be stopped"),
+            ({"pattern": "x" * 201}, "at most 200"),
         ],
     )
     def test_bad_arguments_are_refused(self, host, kwargs, needle):
@@ -748,6 +754,58 @@ class TestNotices:
         result = _tool("wait_for_process")(process_id, timeout=30)
         assert result["state"] == "exited"
         assert "done" in result["new_output"]
+
+
+# ---------------------------------------------------------------------------
+# run_shell_command points at the background tools when the agent has them
+# ---------------------------------------------------------------------------
+
+
+class TestPointsAtStartProcess:
+    def test_a_trailing_ampersand_is_pointed_at_start_process(self, gated):
+        gated._tools_registry = {"start_process": {}}
+        for refusal in (
+            _tool("run_shell_command")("npm run dev &"),
+            gated.policy_refusal_for_call(
+                "run_shell_command", {"command": "npm run dev &"}
+            ),
+        ):
+            assert refusal["executed"] is False
+            assert "start_process" in refusal["hint"]
+
+    def test_no_pointer_to_a_tool_the_agent_lacks(self, gated):
+        gated._tools_registry = {}
+        refusal = _tool("run_shell_command")("npm run dev &")
+        assert "start_process" not in str(refusal)
+        ceiling = _tool("run_shell_command")("git --version", timeout=99999)
+        assert "start_process" not in str(ceiling)
+        assert "wait_for_condition" not in ceiling["error"]
+
+    def test_the_timeout_ceiling_is_pointed_at_start_process(self, gated):
+        gated._tools_registry = {"start_process": {}}
+        refusal = _tool("run_shell_command")("git --version", timeout=99999)
+        assert "ceiling" in refusal["error"]
+        assert "start_process" in refusal["hint"]
+
+    def test_a_chained_line_is_not_mistaken_for_backgrounding(self, gated):
+        gated._tools_registry = {"start_process": {}}
+        refusal = gated.policy_refusal_for_call(
+            "run_shell_command", {"command": "git --version && echo x > out"}
+        )
+        assert "trailing '&'" not in refusal.get("hint", "")
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="POSIX fork only")
+def test_a_forked_child_neither_holds_the_guardian_nor_stops_the_parents(host):
+    _tool("start_process")(f'{PY} -c "import time; time.sleep(30)"')
+    assert bp._GUARDIAN._proc is not None
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - runs in the child
+        ok = bp._GUARDIAN._proc is None and os.getpid() != bp._OWNER_PID
+        os._exit(0 if ok else 1)
+    _, status = os.waitpid(pid, 0)
+    assert os.WEXITSTATUS(status) == 0
+    assert host._process_table().running()
 
 
 def test_a_host_without_shell_tools_is_refused_by_name():

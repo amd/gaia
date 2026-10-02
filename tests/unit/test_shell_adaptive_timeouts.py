@@ -424,7 +424,9 @@ def test_an_out_of_range_timeout_is_refused_with_an_actionable_error(monkeypatch
 
     assert result["status"] == "error"
     assert str(MAX_COMMAND_TIMEOUT) in result["error"]
-    assert "wait_for_condition" in result["error"]
+    # The remedy that works everywhere; start_process is offered in the hint
+    # only where the agent has it (test_process_tools.py).
+    assert "shorter steps" in result["error"]
 
 
 # ---------------------------------------------------------------------------

@@ -390,6 +390,24 @@ class _PosixGuardian:
         self._proc: Optional[subprocess.Popen] = None
         self._groups: set = set()
         self._pruner: Optional[threading.Thread] = None
+        if hasattr(os, "register_at_fork"):
+            os.register_at_fork(after_in_child=self._forget_in_child)
+
+    def _forget_in_child(self) -> None:
+        """Drop a forked child's copy of the pipe.
+
+        A forked worker that kept it open would hold the guardian's stdin open
+        past the agent's death, and the guardian would never fire.
+        """
+        if self._proc is not None and self._proc.stdin is not None:
+            try:
+                os.close(self._proc.stdin.fileno())
+            except OSError:
+                pass  # already closed in this child: nothing to drop
+        self._proc = None
+        self._groups = set()
+        self._lock = threading.Lock()
+        self._pruner = None
 
     def _prune_forever(self) -> None:
         while True:
@@ -815,9 +833,13 @@ class BackgroundProcess:
 # ---------------------------------------------------------------------------
 
 _LIVE_TABLES: "weakref.WeakSet[ProcessTable]" = weakref.WeakSet()
+#: The process the tables belong to; a forked child must not stop its parent's.
+_OWNER_PID = os.getpid()
 
 
 def _stop_everything_at_exit() -> None:
+    if os.getpid() != _OWNER_PID:
+        return
     for table in list(_LIVE_TABLES):
         table.close()
 

@@ -190,9 +190,9 @@ DOC_BUNDLES = [
 
 # -- "full" profile (the flagship GaiaAgent) ---------------------------------
 #
-# Same contract as the DOC_* pair above, sized for the ``full`` registry: 66
-# tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
-# tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
+# Same contract as the DOC_* pair above, sized for the ``full`` registry: 71
+# tools instead of 37. At 66 the un-trimmed native ``tools=`` payload measured
+# ~10.2K tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
 # Always-on set (16 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:

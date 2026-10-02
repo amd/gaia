@@ -2420,6 +2420,15 @@ class ShellToolsMixin:
             session.close()
             self._shell_session = None
 
+    def _background_hint(self) -> str:
+        """A pointer to ``start_process``, when this agent has it; else ``""``."""
+        if "start_process" not in (getattr(self, "_tools_registry", None) or {}):
+            return ""
+        return (
+            "To keep working while it runs, start it with start_process and "
+            "check on it with process_status or wait_for_process."
+        )
+
     def _validate_shell_command(self, command: str) -> tuple:
         """Every refusal ``command`` earns on its text alone, plus its steps.
 
@@ -2430,6 +2439,14 @@ class ShellToolsMixin:
         error, steps = self._shell_command_refusal(command)
         if error is not None:
             error = {**error, **NOT_EXECUTED}
+            stripped = command.rstrip()
+            background = self._background_hint()
+            if background and stripped.endswith("&") and not stripped.endswith("&&"):
+                # The model reaching for `cmd &` wants exactly this tool.
+                error["hint"] = (
+                    "A trailing '&' is refused. " + background + " Pass the "
+                    "command without the '&'."
+                )
         return error, steps
 
     def _shell_command_refusal(self, command: str) -> tuple:
@@ -3681,13 +3698,16 @@ class ShellToolsMixin:
                 try:
                     timeout, timeout_class = resolve_timeout(command, timeout)
                 except ValueError as exc:
-                    return {
+                    refusal = {
                         **NOT_EXECUTED,
                         "status": "error",
                         "error": str(exc),
                         "command": command,
                         "has_errors": True,
                     }
+                    if self._background_hint():
+                        refusal["hint"] = self._background_hint()
+                    return refusal
 
                 error, plan = self._prepare_shell_line(
                     command, working_directory, bypass
@@ -3796,8 +3816,9 @@ class ShellToolsMixin:
                                     "in 'stdout'/'stderr' above. Either narrow the "
                                     "command (one test file rather than the whole "
                                     "suite) or re-run it with a larger timeout, up to "
-                                    f"{MAX_COMMAND_TIMEOUT}s."
-                                ),
+                                    f"{MAX_COMMAND_TIMEOUT}s. "
+                                    + self._background_hint()
+                                ).strip(),
                             },
                             check_from_command(
                                 command,

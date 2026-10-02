@@ -450,8 +450,7 @@ def resolve_timeout(command: str, requested: Optional[int]) -> Tuple[int, str]:
     if seconds > MAX_COMMAND_TIMEOUT:
         raise ValueError(
             f"timeout of {seconds}s exceeds the {MAX_COMMAND_TIMEOUT}s ceiling "
-            f"for a single shell command. Run the work in the background and "
-            f"poll it with wait_for_condition, or split it into shorter steps."
+            f"for a single shell command. Split it into shorter steps."
         )
     return seconds, command_class.name
 

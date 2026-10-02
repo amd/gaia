@@ -58,6 +58,12 @@ PAGE_BYTES = 8000
 _PATTERN_OVERLAP = 4096
 _PATTERN_SCAN_BYTES = 256 * 1024
 
+#: Longest pattern ``wait_for_process`` takes; a wait needs a line, not a parser.
+MAX_PATTERN_CHARS = 200
+#: A repeated group that itself repeats — ``(a+)+`` — can backtrack for
+#: minutes on a line that almost matches, and a regex cannot be interrupted.
+_NESTED_REPEAT = re.compile(r"\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)[+*{]")
+
 #: Tools that only look at or stop what the agent itself started.
 PROCESS_STATE_TOOLS = frozenset(
     {"process_status", "read_process_output", "wait_for_process", "stop_process"}
@@ -527,6 +533,19 @@ class ProcessToolsMixin:
                 "has_errors": True,
             }
         matcher = None
+        if pattern and (
+            len(pattern) > MAX_PATTERN_CHARS or _NESTED_REPEAT.search(pattern)
+        ):
+            return {
+                "status": "error",
+                "error": (
+                    f"pattern must be at most {MAX_PATTERN_CHARS} characters with "
+                    "no repeated group that itself repeats, like '(a+)+': such a "
+                    "regex can run for minutes and cannot be stopped."
+                ),
+                "has_errors": True,
+                "hint": "Wait for a plain phrase from the line, e.g. 'Listening on'.",
+            }
         if pattern:
             try:
                 matcher = re.compile(pattern, re.MULTILINE)
