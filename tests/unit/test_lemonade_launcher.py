@@ -27,6 +27,13 @@ from gaia.llm.lemonade_launcher import (
     resolve_lemonade,
 )
 
+
+@pytest.fixture(autouse=True)
+def _no_embedded_lemonade(monkeypatch, tmp_path):
+    """These tests resolve a system install; GAIA's own server would win."""
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+
+
 # Real captured modern-client output (from `lemonade --version` on Windows
 # 10.7.0) — must parse to exactly "10.7.0" via re.search(r"(\d+\.\d+\.\d+)").
 MODERN_VERSION_OUTPUT = "lemonade version 10.7.0"
@@ -780,3 +787,15 @@ def test_start_hint_instruction_embeds_the_command_verbatim(mocker):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_start_hint_points_at_gaias_own_server_once_init_installed_it(tmp_path):
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+    from gaia.llm.lemonade_launcher import describe_start_hint
+
+    daemon = EmbeddedLemonade().daemon_path
+    daemon.parent.mkdir(parents=True)
+    daemon.write_bytes(b"")
+    hint = describe_start_hint()
+    assert hint.command == "gaia lemonade embedded start"
+    assert "not installed" not in hint.instruction
