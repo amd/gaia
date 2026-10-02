@@ -68,7 +68,7 @@ func TestDescribeNamesEachPhase(t *testing.T) {
 		text  string
 	}{
 		{"Step 1/5: Starting Lemonade Server...", PhaseServer, "Starting the local model server"},
-		{"   Downloading Lemonade Server v2026.39.1...", PhaseServer, "Downloading the local model server"},
+		{"   Downloading Lemonade Server v2026.40.0...", PhaseServer, "Downloading the local model server"},
 		{"Step 2/5: Downloading models for 'gaia' profile...", PhaseModels, "Downloading the models"},
 		{"   Downloading: user.embeddinggemma-300m-GGUF", PhaseModels, "Downloading user.embeddinggemma-300m-GGUF"},
 		{"Step 5/5: Verifying setup...", PhaseFinish, "Checking that the models load"},

@@ -640,12 +640,28 @@ class TaskResult:
     reported_cost_usd: Optional[float] = None
     #: Tokens the model gateway counted, whichever harness ran.
     gateway_tokens: Dict[str, int] = field(default_factory=dict)
+    #: One entry per model call: latency, tokens, and the backend's own
+    #: prefill/decode timing where it reports one (llama.cpp does, cloud does not).
+    model_calls: List[Dict[str, Any]] = field(default_factory=list)
     #: Calls that reached, or tried to reach, the internet (``transcripts.web_uses``).
     web_uses: List[str] = field(default_factory=list)
     gh_calls: int = 0
     gh_blocked_writes: int = 0
     #: Tools that ran after the answer on work nobody asked for (``calls_after_answer``).
     after_answer: List[str] = field(default_factory=list)
+
+
+_CALL_FIELDS = ("seconds", "first_byte_seconds", "tokens", "timings")
+_MODEL_PATHS = ("/chat/completions", "/messages", "/responses")
+
+
+def model_calls(records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """The gateway's records for calls that reached the model, one entry each."""
+    return [
+        {k: r.get(k) for k in _CALL_FIELDS}
+        for r in records
+        if not r.get("unreachable") and str(r.get("path", "")).endswith(_MODEL_PATHS)
+    ]
 
 
 def scrub_judge_credentials() -> Dict[str, str]:
@@ -672,8 +688,8 @@ def _run_agent(
     crash is a failed task, not a failed eval. ``error_kind`` is
     ``"unavailable"`` when the model backend could not be reached at all: that
     task was not measured, and says nothing about the agent. *full_access*
-    lifts the path boundary, the reach Claude Code has with its permissions
-    skipped; *on_agent* sees the agent before it runs.
+    lifts the path boundary and the shell guardrails, the reach Claude Code
+    has with its permissions skipped; *on_agent* sees the agent before it runs.
     """
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -703,6 +719,9 @@ def _run_agent(
         )
         # Headless: nobody is there to approve a file write or a command.
         agent.console.auto_approve_gated_tools = True
+        # Claude Code's skipped permissions include its command policy, so a
+        # full-access run lifts GAIA's shell guardrails too, as the TUI's does.
+        agent.console.full_access = full_access
         if on_agent is not None:
             on_agent(agent)
         outcome = agent.process_query(prompt) or {}
@@ -749,15 +768,30 @@ class RunContext:
     fenced: Tuple[Path, ...] = ()
 
 
-def _conditions(ctx: RunContext, root: Path, workdir: Path) -> harness.Conditions:
+def _conditions(
+    ctx: RunContext, root: Path, workdir: Path, task: Optional[Task] = None
+) -> harness.Conditions:
     gh = gh_sandbox(workdir)
+    toolchain, tool_python = harness.toolchain_dir(), None
+    fenced, read_only = ctx.fenced, ()
+    if task is not None and task.check == swebench.CHECK:
+        # The host's interpreter can hold the package under test, fix included.
+        tool_python = swebench.tool_interpreter(ctx.config.work_root)
+        toolchain, read_only = str(tool_python.parent), (tool_python.parent.parent,)
+        if ctx.config.fence:
+            fenced += (
+                swebench.host_site_packages()
+                if ctx.config.harness == harness.CLAUDE_CODE
+                else swebench.deniable_copy(task.swebench["repo"])
+            )
     return harness.Conditions(
         time_limit_s=ctx.config.run_timeout_s,
-        path_prefix=(str(gh.bin_dir), harness.toolchain_dir()),
+        path_prefix=(str(gh.bin_dir), toolchain),
         extra_env=gh.env,
         gateway_url=ctx.gateway_url,
-        fence=(ctx.fenced, (root,), ()) if ctx.config.fence else None,
+        fence=(fenced, (root,), read_only) if ctx.config.fence else None,
         full_access=ctx.config.full_access,
+        tool_python=tool_python,
     )
 
 
@@ -798,7 +832,7 @@ def _agent_step(
     workdir: Path,
     ctx: RunContext,
 ) -> harness.AgentRun:
-    conditions = _conditions(ctx, root, workdir)
+    conditions = _conditions(ctx, root, workdir, task)
     if ctx.config.harness == harness.CLAUDE_CODE:
         return harness.run_claude_code(
             prompt=prompt,
@@ -877,6 +911,7 @@ def run_task(
                     "cached": used.cached,
                     "output": used.output,
                 }
+                result.model_calls = model_calls(used.records)
                 if ran.error and used.unreachable:
                     # The backend was not there: not measured, whichever harness.
                     result.error_kind = "unavailable"
@@ -1590,8 +1625,10 @@ def swebench_grade_run(
         verdict = verdicts.get(entry["id"]) or swebench.Verdict(
             entry["id"], error="the harness returned no verdict"
         )
+        # A pass already set by an earlier grading is the harness's to revise.
+        graded_before = "swebench" in entry
         entry["swebench"] = verdict.as_dict()
-        if entry.get("error") or entry.get("passed") is False:
+        if entry.get("error") or (entry.get("passed") is False and not graded_before):
             continue
         if verdict.resolved is None:
             entry["passed"], entry["why"] = None, f"not graded: {verdict.error}"

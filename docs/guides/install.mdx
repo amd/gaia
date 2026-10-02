@@ -176,7 +176,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Logs | `~/.gaia/gaia.log`, `~/.gaia/electron-install.log` |
 | Terminal hub and agent binaries (one-line installer) | `~/.gaia/bin/` |
 | Agent run traces | `~/.gaia/traces/` |
-| Daemon state (token, custody database, logs) | `~/.gaia/host/` |
+| Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |
 
 Setting `GAIA_HOME` moves Document Library uploads and chat file attachments to `$GAIA_HOME/documents/` and `$GAIA_HOME/chat/uploads/`. It must not be your home directory or one of its parents.

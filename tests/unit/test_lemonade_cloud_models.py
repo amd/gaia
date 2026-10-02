@@ -526,12 +526,27 @@ def _sent_body(monkeypatch, model, stream, **chat_kwargs):
 def test_cloud_model_request_carries_no_repetition_penalties(monkeypatch, stream):
     body = _sent_body(monkeypatch, "fireworks.deepseek-v4p1-flash", stream)
     assert [key for key in _PENALTIES if key in body] == []
-    assert body["temperature"] == 0.1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_cloud_model_request_is_not_near_greedy(monkeypatch, stream):
+    """Temperature 0.1 sent DeepSeek's reasoning into 32K-token runaways."""
+    body = _sent_body(monkeypatch, "fireworks.deepseek-v4p1-flash", stream)
+    assert body["temperature"] == 0.7
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_cloud_model_request_keeps_an_explicit_temperature(monkeypatch, stream):
+    body = _sent_body(
+        monkeypatch, "fireworks.deepseek-v4p1-flash", stream, temperature=0.4
+    )
+    assert body["temperature"] == 0.4
 
 
 @pytest.mark.parametrize("stream", [False, True])
 def test_local_model_request_keeps_repetition_penalties(monkeypatch, stream):
     body = _sent_body(monkeypatch, "Gemma-4-E4B-it-GGUF", stream)
+    assert body["temperature"] == 0.1
     assert {key: body[key] for key in _PENALTIES} == {
         "frequency_penalty": 0.3,
         "presence_penalty": 0.1,
