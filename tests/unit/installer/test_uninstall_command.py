@@ -917,20 +917,22 @@ class TestLemonadePythonResolution:
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"#!/opt/venvs/lemon/bin/python\n# rest\n")
 
-        monkeypatch.setattr("sys.platform", "linux")
+        # Keep the linux platform patch inside a context so it is undone before
+        # pyfakefs teardown. Otherwise reset_ids() calls os.getuid() on Windows.
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
-
-        assert uc._resolve_lemonade_python() == "/opt/venvs/lemon/bin/python"
+        with monkeypatch.context() as m:
+            m.setattr("sys.platform", "linux")
+            assert uc._resolve_lemonade_python() == "/opt/venvs/lemon/bin/python"
 
     def test_resolves_env_shebang_posix(self, fake_home, monkeypatch):
         lemonade = fake_home / "bin" / "lemonade-server"
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"#!/usr/bin/env python3\n# rest\n")
 
-        monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
-
-        assert uc._resolve_lemonade_python() == "python3"
+        with monkeypatch.context() as m:
+            m.setattr("sys.platform", "linux")
+            assert uc._resolve_lemonade_python() == "python3"
 
     def test_not_on_path_returns_none(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "linux")
@@ -942,10 +944,10 @@ class TestLemonadePythonResolution:
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"# no shebang here\nprint('hi')\n")
 
-        monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
-
-        assert uc._resolve_lemonade_python() is None
+        with monkeypatch.context() as m:
+            m.setattr("sys.platform", "linux")
+            assert uc._resolve_lemonade_python() is None
 
 
 # ---------------------------------------------------------------------------
