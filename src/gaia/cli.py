@@ -5396,7 +5396,10 @@ Let me know your answer!
             sys.exit(exit_code)
 
         from gaia.installer.init_command import run_init
+        from gaia.logger import log_manager
 
+        # init draws its own progress; INFO records belong in the log file.
+        log_manager.configure_agent_console(debug=getattr(args, "verbose", False))
         exit_code = run_init(
             profile=profile,
             skip_models=args.skip_models,

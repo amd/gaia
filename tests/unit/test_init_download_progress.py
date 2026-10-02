@@ -88,6 +88,15 @@ def test_the_streamed_pull_request_is_valid(client, kwargs, forbidden, required)
     assert required <= body.keys()
 
 
+def test_progress_redraws_are_throttled_and_skip_empty_files():
+    console = MagicMock()
+    progress = _DownloadProgress(console, "m")
+    for n in range(500):
+        progress({"event": "progress", "percent": 0, "bytes_total": 0})
+        progress({"event": "progress", "bytes_downloaded": n, "bytes_total": 999})
+    assert console.print_download_progress.call_count == 1
+
+
 def test_progress_draws_a_bar_and_prints_the_error_reason():
     console = MagicMock()
     progress = _DownloadProgress(console, "user.embeddinggemma-300m-GGUF")
