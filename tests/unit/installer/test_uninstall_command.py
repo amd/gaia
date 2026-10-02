@@ -912,12 +912,14 @@ class TestLemonadePythonResolution:
     interpreter by inspecting the lemonade-server console script.
     """
 
+    # Only the module's sys is POSIX: a global sys.platform patch outlives
+    # pyfakefs, whose teardown then calls os.getuid on Windows.
     def test_resolves_direct_shebang_posix(self, fake_home, monkeypatch):
         lemonade = fake_home / "bin" / "lemonade-server"
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"#!/opt/venvs/lemon/bin/python\n# rest\n")
 
-        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
 
         assert uc._resolve_lemonade_python() == "/opt/venvs/lemon/bin/python"
@@ -927,13 +929,13 @@ class TestLemonadePythonResolution:
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"#!/usr/bin/env python3\n# rest\n")
 
-        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
 
         assert uc._resolve_lemonade_python() == "python3"
 
     def test_not_on_path_returns_none(self, monkeypatch):
-        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
         monkeypatch.setattr(uc.shutil, "which", lambda name: None)
         assert uc._resolve_lemonade_python() is None
 
@@ -942,7 +944,7 @@ class TestLemonadePythonResolution:
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"# no shebang here\nprint('hi')\n")
 
-        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
 
         assert uc._resolve_lemonade_python() is None
