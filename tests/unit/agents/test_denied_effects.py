@@ -157,6 +157,26 @@ def test_render_call_names_a_file_change_in_words():
     )
 
 
+def test_render_call_keeps_the_other_args_a_user_declined():
+    """A re-confirmation must still show what the first denial covered (#4460)."""
+    rendered = render_call(
+        "download_file",
+        {"url": "https://evil.example.com/payload", "save_to": "report.pdf"},
+    )
+    assert rendered.startswith("download to report.pdf")
+    assert "https://evil.example.com/payload" in rendered
+
+    rendered = render_call(
+        "move_file", {"path": "secrets.env", "destination": "/public/share"}
+    )
+    assert rendered.startswith("move secrets.env")
+    assert "/public/share" in rendered
+
+    rendered = render_call("rename_file", {"target": "a.txt", "destination": "b.txt"})
+    assert rendered.startswith("rename a.txt")
+    assert "b.txt" in rendered
+
+
 # ---------------------------------------------------------------------------
 # Overlap
 # ---------------------------------------------------------------------------

@@ -774,7 +774,19 @@ def render_call(tool_name: str, tool_args: Optional[Dict[str, Any]]) -> str:
         for key in _PATH_ARG_NAMES:
             value = args.get(key)
             if isinstance(value, str) and value.strip():
-                return f"{_FILE_VERBS[verb.group(0).lower()]} {_file_in_words(value)}"
+                friendly = (
+                    f"{_FILE_VERBS[verb.group(0).lower()]} {_file_in_words(value)}"
+                )
+                extra = ", ".join(
+                    f"{k}={v!r}" for k, v in args.items() if k not in (key, "content")
+                )
+                if not extra:
+                    return friendly
+                extra = extra if len(extra) <= 300 else extra[:300] + "…"
+                # The path alone isn't the whole call: a user approving this
+                # exact string must see the other args too (e.g. the URL a
+                # download fetches, or the destination a move writes to).
+                return f"{friendly} ({extra})"
     shown = ", ".join(f"{k}={v!r}" for k, v in args.items() if k != "content")
     shown = shown if len(shown) <= 300 else shown[:300] + "…"
     return f"{tool_name}({shown})"
