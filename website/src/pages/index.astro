@@ -71,10 +71,11 @@ const PATHS = [
 
 // Only what the flagship agent actually exposes through the TUI today. Its
 // config is prompt_profile="full" — doc_rag + file_fs + data_scratch +
-// web_browse — plus the code index and the skill library, and every tool call
-// goes through the TUI's approval gate. Voice and image generation are NOT in
-// this list on purpose: neither ships in the TUI, and `enable_sd_tools` is off
-// by design (a second resident model would evict the chat model).
+// web_browse — plus the code index and the skill library. Writes, edits,
+// commands and code go through the approval gate; reads do not. Voice and
+// image generation are NOT in this list on purpose: neither ships in the TUI,
+// and `enable_sd_tools` is off by design (a second resident model would evict
+// the chat model).
 const CAPABILITIES = [
   {
     title: 'Answers from your documents',
@@ -98,7 +99,7 @@ const CAPABILITIES = [
   },
   {
     title: 'Asks before it acts',
-    body: 'Every tool call needs your approval until you decide otherwise.',
+    body: 'Writing a file, editing one, or running a command waits for your yes until you decide otherwise.',
   },
 ];
 
