@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, selectUnreadCount } from '../stores/notificationStore';
+import { useNotificationStore, selectUnreadCount, PATH_ACCESS_TOOL } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -830,7 +830,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         sessionId,
                         agentName: 'GAIA',
                         title: `Allow ${toolName}?`,
-                        message: `The agent wants to execute: ${toolName}`,
+                        message: toolName === PATH_ACCESS_TOOL
+                            ? `GAIA wants to open ${String((event.args as { path?: unknown } | undefined)?.path ?? 'a file')}, which this chat cannot reach yet. Allow it for this chat?`
+                            : `The agent wants to execute: ${toolName}`,
                         timestamp: Date.now(),
                         read: false,
                         dismissed: false,
