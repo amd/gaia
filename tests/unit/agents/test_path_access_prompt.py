@@ -99,9 +99,18 @@ def test_secret_file_never_reaches_the_console(layout):
     assert console.calls == []
 
 
-def test_auto_approve_answers_the_path_prompt(layout):
+def test_pre_approved_tools_never_widen_the_file_scope(layout):
+    """Eval harnesses and API servers pre-approve tools; nobody saw the path."""
     handler = SSEOutputHandler()
     handler.auto_approve_gated_tools = True
+    agent = _ReadAgent(layout["scope"], handler)
+
+    assert _read(agent, layout["file"])["status"] != "success"
+
+
+def test_full_access_answers_the_path_prompt(layout):
+    handler = SSEOutputHandler()
+    handler.full_access = True
     agent = _ReadAgent(layout["scope"], handler)
 
     assert _read(agent, layout["file"])["status"] == "success"
@@ -165,5 +174,6 @@ def test_the_prompt_reads_as_a_question_about_the_path():
         }
     )
     assert event["summary"] == (
-        r"Allow GAIA to open C:\Users\me\notes\plan.txt for this session?"
+        r"Allow GAIA to use C:\Users\me\notes\plan.txt (and anything inside it, "
+        "including changes) for this session?"
     )

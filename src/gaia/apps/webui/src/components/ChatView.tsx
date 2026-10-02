@@ -831,7 +831,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         agentName: 'GAIA',
                         title: `Allow ${toolName}?`,
                         message: toolName === PATH_ACCESS_TOOL
-                            ? `GAIA wants to open ${String((event.args as { path?: unknown } | undefined)?.path ?? 'a file')}, which this chat cannot reach yet. Allow it for this chat?`
+                            ? `GAIA wants to use ${String((event.args as { path?: unknown } | undefined)?.path ?? 'a file')} (and anything inside it, including changes), which this chat cannot reach yet. Allow it for this chat?`
                             : `The agent wants to execute: ${toolName}`,
                         timestamp: Date.now(),
                         read: false,

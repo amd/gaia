@@ -2136,6 +2136,17 @@ Do NOT wrap conversational replies in JSON.
 
     def _confirm_path_access(self, path: Path) -> bool:
         """Ask the user, via the console's confirmation dialog, to allow *path*."""
+        console = self.console
+        # Full access widens the file scope; pre-approving gated tools does not.
+        if getattr(console, "full_access", False):
+            logger.warning("Full access is on: granting %s without asking", path)
+            return True
+        auto_approves = getattr(console, "auto_approve_confirmations_enabled", None)
+        if callable(auto_approves) and auto_approves():
+            logger.warning(
+                "Not granting %s: tools are pre-approved, nobody asked", path
+            )
+            return False
         started = time.perf_counter()
         try:
             return (

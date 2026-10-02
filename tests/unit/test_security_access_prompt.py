@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """PathValidator's host access prompt: ask before denying an out-of-scope path."""
 
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -170,3 +171,16 @@ def test_clearing_the_prompt_restores_stdin_behaviour(layout):
     with patch("gaia.security._is_interactive", return_value=False):
         assert not validator.is_path_allowed(str(layout["docs"]))
     assert prompt.asked == []
+
+
+def test_a_folder_that_contains_the_temp_dir_is_never_granted(tmp_path):
+    import tempfile
+
+    temp = Path(os.path.realpath(tempfile.gettempdir()))
+    validator = PathValidator(allowed_paths=[str(tmp_path)])
+    asked = []
+    validator.set_access_prompt(lambda p: asked.append(p) or True)
+
+    assert validator._unaskable_reason(temp.parent)
+    assert not validator.is_path_allowed(str(temp.parent))
+    assert asked == []

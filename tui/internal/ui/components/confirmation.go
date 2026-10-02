@@ -112,8 +112,8 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"update_gaia_md":      RiskWrite,
 	"install_skill":       RiskWrite,
 	"remove_skill":        RiskWrite,
-	// Not a tool: PathValidator asking to widen this session's scope by one path.
-	"allow_path_access": RiskRead,
+	// Not a tool: PathValidator asking to widen this session's scope by one path (reads and changes).
+	"allow_path_access": RiskWrite,
 }
 
 // unboundedRiskActions are tiered Destructive because their name does not bound

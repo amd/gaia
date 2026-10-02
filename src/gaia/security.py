@@ -667,6 +667,15 @@ class PathValidator:
         # One click must not hand over a whole drive or the home tree.
         if path == Path(path.anchor) or _path_is_within(Path.home().resolve(), path):
             return f"'{path}' is too broad a grant: it covers the drive or home folder"
+        # Nor a folder that holds somewhere no answer may grant.
+        refused_roots = [
+            *(os.path.realpath(root) for root in _system_temp_roots()),
+            *BLOCKED_DIRECTORIES,
+            *SECRET_DIRECTORIES,
+        ]
+        for root in refused_roots:
+            if _path_is_within(Path(root), path):
+                return f"'{path}' is too broad a grant: it contains '{root}'"
         return ""
 
     def _can_prompt(self) -> bool:
