@@ -14,6 +14,10 @@ Nothing of the dataset is committed here. At run time:
   depth 200 over ``file://`` (git ignores ``--depth`` on a plain local path),
   detached, with no remote. ``git fsck`` confirms the clone holds nothing off
   that history.
+- :func:`tool_interpreter` is the Python either harness's agent runs:
+  a bare venv, so a newer installed release of the package under test (fix
+  included) is not importable. Under ``--fence`` the installed copies are also
+  denied (:func:`host_site_packages`, :func:`deniable_copy`).
 - :func:`capture_prediction` turns what the agent changed into one row of the
   predictions file the official harness reads.
 - :func:`evaluate` runs ``swebench.harness.run_evaluation`` one instance at a
@@ -27,15 +31,22 @@ The gold patch is the judge's reference, read only in the judge step.
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import importlib.metadata
 import importlib.util
 import json
+import os
+import random
+import re
 import shutil
+import site
 import subprocess
 import sys
+import sysconfig
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlencode
 
 from gaia.eval.bench.therock import HISTORY_DEPTH
@@ -85,6 +96,14 @@ DOCKER_PLATFORM = "linux/amd64"
 HARNESS_TIMEOUT_S = 1800
 #: Identifies the evaluation in the harness's ``logs/run_evaluation/<run_id>``.
 RUN_ID = "gaia-bench"
+#: The harness version the Linux grader container pins (Windows hosts only).
+GRADER_SWEBENCH = "5.0.2"
+GRADER_IMAGE = f"gaia-swebench-grader:{GRADER_SWEBENCH}"
+GRADER_DOCKERFILE = f"""FROM python:3.11-slim
+COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
+RUN pip install --no-cache-dir swebench=={GRADER_SWEBENCH}
+"""
+GRADER_BUILD_TIMEOUT_S = 1800
 GIT_TIMEOUT_S = 900
 FETCH_TIMEOUT_S = 120
 DOCKER_PULL_TIMEOUT_S = 3600
@@ -131,12 +150,17 @@ def _fetch_with_datasets(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
     return {r["instance_id"]: r for r in rows if r["instance_id"] in wanted}
 
 
-def _fetch_with_rest(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
-    """Page through the split on the datasets-server; stop once every id is seen."""
+def _fetch_with_rest(ids: Optional[Sequence[str]]) -> Dict[str, Dict[str, Any]]:
+    """Page through the split on the datasets-server; stop once every id is seen.
+
+    ``None`` reads every row.
+    """
     import requests  # pylint: disable=import-outside-toplevel
 
-    wanted, found, offset = set(ids), {}, 0
-    while wanted - set(found):
+    wanted = None if ids is None else set(ids)
+    found: Dict[str, Dict[str, Any]] = {}
+    offset = 0
+    while wanted is None or wanted - set(found):
         query = urlencode(
             {
                 "dataset": DATASET,
@@ -158,7 +182,7 @@ def _fetch_with_rest(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
             ) from exc
         rows = [entry["row"] for entry in page.get("rows") or []]
         for row in rows:
-            if row.get("instance_id") in wanted:
+            if wanted is None or row.get("instance_id") in wanted:
                 found[row["instance_id"]] = row
         offset += len(rows)
         if not rows or offset >= int(page.get("num_rows_total") or 0):
@@ -176,6 +200,33 @@ def fetch_instances(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
         f"reading {DATASET} needs the `datasets` package or `requests`. "
         "Run `pip install datasets` (or `pip install requests`)."
     )
+
+
+#: The seed behind the published GAIA samples, so `--sample N` is reproducible.
+SAMPLE_SEED = 20260930
+
+
+def all_instance_ids() -> List[str]:
+    """Every instance id in the split, sorted."""
+    if importlib.util.find_spec("datasets") is not None:
+        from datasets import (  # pylint: disable=import-outside-toplevel,import-error
+            load_dataset,
+        )
+
+        return sorted(load_dataset(DATASET, split=SPLIT)["instance_id"])
+    return sorted(_fetch_with_rest(None))
+
+
+def sample_ids(
+    n: int, seed: int = SAMPLE_SEED, ids: Optional[Sequence[str]] = None
+) -> List[str]:
+    """A seeded random *n* of the split: the same *n* and seed pick the same tasks."""
+    pool = sorted(ids if ids is not None else all_instance_ids())
+    if not 1 <= n <= len(pool):
+        raise SweBenchError(
+            f"--sample must be between 1 and {len(pool)} ({DATASET} {SPLIT}), not {n}"
+        )
+    return sorted(random.Random(seed).sample(pool, n))
 
 
 def load_instances(
@@ -324,6 +375,143 @@ def checkout(
 
 
 # ---------------------------------------------------------------------------
+# Isolation from the host's installed packages
+# ---------------------------------------------------------------------------
+
+
+def _bin_dir(venv: Path) -> Path:
+    return venv / ("Scripts" if os.name == "nt" else "bin")
+
+
+def _venv_packages(venv: Path) -> List[str]:
+    """What is installed in *venv*: every entry of its site-packages trees."""
+    trees = list(venv.glob("Lib/site-packages")) + list(
+        venv.glob("lib/python*/site-packages")
+    )
+    return sorted(e.name for t in trees for e in t.iterdir() if e.name != "__pycache__")
+
+
+def tool_interpreter(work_root: Path) -> Path:
+    """The Python the agent gets: a bare venv with nothing installed, not even pip.
+
+    The host interpreter can hold a newer release of the package under test,
+    fix included. The venv is shared by every task of the work root, so one
+    that holds anything — an agent installed into it — is rebuilt.
+    """
+    venv = (
+        cache_dir(work_root)
+        / "toolchain"
+        / f"py{sys.version_info.major}{sys.version_info.minor}"
+    )
+    python = _bin_dir(venv) / ("python.exe" if os.name == "nt" else "python")
+    if python.is_file() and not _venv_packages(venv):
+        return python
+    proc = subprocess.run(
+        [sys.executable, "-m", "venv", "--clear", "--without-pip", str(venv)],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=GIT_TIMEOUT_S,
+        check=False,
+    )
+    if proc.returncode != 0 or not python.is_file() or _venv_packages(venv):
+        raise SweBenchError(
+            f"could not build the agent's bare interpreter at {venv}: "
+            f"{(proc.stderr or proc.stdout).strip()[-500:]}. Check that "
+            f"`{sys.executable} -m venv --without-pip` works on this host."
+        )
+    return python
+
+
+def host_site_packages() -> Tuple[Path, ...]:
+    """Every site-packages tree of the interpreter running the eval, and of its base."""
+    base = {"base": sys.base_prefix, "platbase": sys.base_exec_prefix}
+    found = [
+        *site.getsitepackages(),
+        site.getusersitepackages(),
+        sysconfig.get_paths()["purelib"],
+        sysconfig.get_paths()["platlib"],
+        sysconfig.get_paths(vars=base)["purelib"],
+        sysconfig.get_paths(vars=base)["platlib"],
+    ]
+    paths = [Path(p).resolve() for p in found if p]
+    return tuple(
+        dict.fromkeys(
+            p
+            for p in paths
+            if p.name in ("site-packages", "dist-packages") and p.is_dir()
+        )
+    )
+
+
+def _dist_key(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def installed_copy(repo: str) -> Tuple[Path, ...]:
+    """Where the host interpreter has the package of *repo* installed, if it does.
+
+    The distribution is named after the repository (``matplotlib/matplotlib``,
+    ``scikit-learn/scikit-learn``); its top-level entries in site-packages —
+    packages, modules, ``.dist-info`` — are the copy.
+    """
+    try:
+        dist = importlib.metadata.distribution(repo.split("/")[-1])
+    except importlib.metadata.PackageNotFoundError:
+        return ()
+    tops = {Path(str(f)).parts[0] for f in dist.files or ()} - {"..", "__pycache__"}
+    paths = [Path(dist.locate_file(t)).resolve() for t in tops]
+    return tuple(sorted(p for p in paths if p.exists()))
+
+
+@functools.lru_cache(maxsize=None)
+def gaia_imports(
+    roots: Tuple[str, ...] = ("amd-gaia", "gaia-agent", "gaia-agent-chat")
+) -> frozenset:
+    """Distributions GAIA's agent process may import: *roots* and what they require.
+
+    Extras are left out (with them the set is most of SWE-bench); platform
+    markers are not evaluated, so otherwise it errs large. A package wrongly
+    left out fails loudly: the agent process exits on the denied import.
+    """
+    seen: set = set()
+    todo = [_dist_key(r) for r in roots]
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        try:
+            requires = importlib.metadata.requires(name) or []
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        for req in requires:
+            if "extra" in req.partition(";")[2]:
+                continue
+            match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req)
+            if match:
+                todo.append(_dist_key(match.group(1)))
+    return frozenset(seen)
+
+
+def deniable_copy(repo: str) -> Tuple[Path, ...]:
+    """The installed copy of *repo* that ``--fence`` can deny GAIA's agent process.
+
+    That process imports from site-packages, so it keeps the trees, losing only
+    the package under test, and not even that when GAIA imports it itself.
+    """
+    if _dist_key(repo.split("/")[-1]) in gaia_imports():
+        log.warning(
+            "%s is one of GAIA's own dependencies, so the fence cannot deny its "
+            "installed copy to the GAIA agent; the agent's bare interpreter "
+            "still cannot import it.",
+            repo,
+        )
+        return ()
+    return installed_copy(repo)
+
+
+# ---------------------------------------------------------------------------
 # Tasks and predictions
 # ---------------------------------------------------------------------------
 
@@ -451,8 +639,61 @@ def harness_command(
     ]
 
 
+def _grade_in_container() -> bool:
+    """Whether the harness must run in a Linux container rather than here.
+
+    On Windows the harness writes each instance's eval script and patch with
+    CRLF line endings; bash in the instance container then reads every command
+    with a trailing CR, so every patch "fails to apply" and no test runs.
+    """
+    return sys.platform == "win32"
+
+
+def containerized_harness_command(
+    preds_path: Path, instance_id: str, report_dir: Path
+) -> List[str]:
+    """The harness run inside :data:`GRADER_IMAGE`, driving the host's Docker."""
+    inner = harness_command(preds_path, instance_id, report_dir, python="python")
+    inner[inner.index("--predictions_path") + 1] = f"/preds/{preds_path.name}"
+    inner[inner.index("--report_dir") + 1] = "/work"
+    return [
+        shutil.which("docker") or "docker",
+        "run",
+        "--rm",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "-v",
+        f"{report_dir.resolve()}:/work",
+        "-v",
+        f"{preds_path.resolve().parent}:/preds:ro",
+        "-w",
+        "/work",
+        GRADER_IMAGE,
+        *inner,
+    ]
+
+
+def _ensure_grader_image() -> None:
+    if _docker(["image", "inspect", GRADER_IMAGE], FETCH_TIMEOUT_S).returncode == 0:
+        return
+    log.info("SWE-bench: building the Linux grader image %s", GRADER_IMAGE)
+    built = subprocess.run(
+        [shutil.which("docker") or "docker", "build", "-t", GRADER_IMAGE, "-"],
+        input=GRADER_DOCKERFILE,
+        capture_output=True,
+        text=True,
+        timeout=GRADER_BUILD_TIMEOUT_S,
+        check=False,
+    )
+    if built.returncode != 0:
+        raise SweBenchError(
+            f"could not build the SWE-bench grader image {GRADER_IMAGE}: "
+            f"{(built.stderr or built.stdout).strip()[-400:]}"
+        )
+
+
 def _require_harness() -> None:
-    if importlib.util.find_spec("swebench") is None:
+    if not _grade_in_container() and importlib.util.find_spec("swebench") is None:
         raise SweBenchError(
             "grading needs the official harness in this interpreter: "
             f"`{sys.executable} -m pip install swebench` (5.x)."
@@ -507,6 +748,9 @@ def evaluate(
     _require_harness()
     if not preds_path.is_file():
         raise SweBenchError(f"no predictions at {preds_path}: nothing to grade")
+    in_container = _grade_in_container()
+    if in_container:
+        _ensure_grader_image()
     submitted = {r["instance_id"] for r in read_predictions(preds_path)}
     report_dir.mkdir(parents=True, exist_ok=True)
     failures: Dict[str, str] = {}
@@ -525,8 +769,13 @@ def evaluate(
                     f"{image}` failed: {pulled.stderr.strip()[-300:]}"
                 )
         log.info("SWE-bench: grading %s", instance_id)
+        command = (
+            containerized_harness_command(preds_path, instance_id, report_dir)
+            if in_container
+            else harness_command(preds_path, instance_id, report_dir)
+        )
         proc = subprocess.run(
-            harness_command(preds_path, instance_id, report_dir),
+            command,
             cwd=str(report_dir),
             capture_output=True,
             text=True,

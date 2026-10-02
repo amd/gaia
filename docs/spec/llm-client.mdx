@@ -116,7 +116,7 @@ Historical release notes describe the providers that shipped in those releases.
    - Lazy provider loading via `importlib` (load only when needed)
    - Minimal overhead from abstraction layer
    - Streaming support across all providers
-   - Default temperature of 0.1 for deterministic responses
+   - Default temperature of 0.1 for local models; cloud models keep the client default
 
 2. **Reliability**
    - Type safety through ABC pattern
@@ -419,7 +419,7 @@ class LemonadeProvider(LLMClient):
 
         Note:
             Default model is DEFAULT_MODEL_NAME (currently "Gemma-4-E4B-it-GGUF").
-            All methods use temperature=0.1 by default for deterministic responses.
+            Local models default to temperature=0.1; cloud models keep the client default.
         """
 
     # Supports all methods: generate, chat, embed, vision,
@@ -535,11 +535,15 @@ class ClaudeProvider(LLMClient):
 
 ### Temperature Defaults
 
-All providers default to `temperature=0.1` for deterministic responses:
+Local models default to `temperature=0.1`, with repetition penalties, so they do not loop on
+tables and paragraphs. Cloud models get neither: near-greedy sampling sends a reasoning
+model's thinking into a runaway, so they keep the client default (0.7). An explicit
+`temperature` is always sent as given.
 
 ```python
 # In LemonadeProvider.chat()
-kwargs.setdefault("temperature", 0.1)
+if not self._backend.cloud_model_provider(effective_model):
+    kwargs.setdefault("temperature", 0.1)
 ```
 
 ### Provider-Specific Implementation

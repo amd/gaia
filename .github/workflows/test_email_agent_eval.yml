@@ -290,7 +290,7 @@ jobs:
     # runner must have Windows AND the stx/stx-test label.
     # The event_name guard keeps the pull_request dereference off schedule /
     # workflow_dispatch / workflow_call runs, where that context is absent.
-    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
+    runs-on: [self-hosted, Windows, xsj-dispatch, strix-point]
     # THE SERIAL SLOT. Same group name as email_scorecard_refresh.yml and
     # eval_flagship.yml — `lemonade-eval`, exactly — so at most one eval touches the single Lemonade backend at a time (CLAUDE.md: at
     # most one `gaia eval agent` process, period). Two concurrent runs

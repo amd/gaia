@@ -14,7 +14,7 @@ persona: casual_user
 
 setup:
   index_documents: []
-  notes: "Requires stage_mcp_stub.py install before the backend starts (acme_orders + acme_shipping active for installed:gaia)."
+  notes: "Requires stage_mcp_stub.py install before this category runs (acme_orders + acme_shipping active for installed:gaia)."
 
 turns:
   - turn: 1

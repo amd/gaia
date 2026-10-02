@@ -309,10 +309,16 @@ def test_read_file_schema_unchanged():
     _make_agent(_FileIOAgentNoValidator)
 
     entry = _TOOL_REGISTRY["read_file"]
-    assert set(entry["parameters"]) == {"file_path", "offset", "limit"}
+    assert set(entry["parameters"]) == {
+        "file_path",
+        "offset",
+        "limit",
+        "start_line",
+        "end_line",
+    }
     assert entry["parameters"]["file_path"]["required"] is True
-    assert entry["parameters"]["offset"]["required"] is False
-    assert entry["parameters"]["limit"]["required"] is False
+    for optional in ("offset", "limit", "start_line", "end_line"):
+        assert entry["parameters"][optional]["required"] is False
     assert "Read any file" in entry["description"]
 
 

@@ -53,7 +53,8 @@ def test_atomic_concurrent_feedback_preserves_all_updates(tmp_path):
     assert len(record["evidence"]) == 13
     assert record["revision"] == 13
     assert [e["seq"] for e in record["evidence"]] == list(range(1, 14))
-    assert os.stat(store.path(job["id"])).st_mode & 0o777 == 0o600
+    if os.name != "nt":  # Windows has no mode bits; its ACL is tested below.
+        assert os.stat(store.path(job["id"])).st_mode & 0o777 == 0o600
 
 
 def test_revision_conflict_corruption_and_path_refusal(tmp_path):

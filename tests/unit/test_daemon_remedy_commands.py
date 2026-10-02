@@ -243,31 +243,42 @@ def test_the_old_comma_separated_remedy_really_does_fail():
             proc.wait(timeout=10)
 
 
-def test_the_stray_process_error_names_the_working_command_and_sigkill():
-    """The message itself, not just the helper."""
+@pytest.mark.parametrize(
+    "os_name, remedy, note",
+    [
+        ("posix", "kill -9 4242 4243", "SIGTERM"),
+        ("nt", "taskkill /F /PID 4242 /PID 4243", None),
+    ],
+)
+def test_the_stray_process_error_names_the_working_command_and_sigkill(
+    tmp_path, monkeypatch, os_name, remedy, note
+):
+    """The message itself, not just the helper — on each platform's shell."""
+    from types import SimpleNamespace
+
+    import gaia.daemon.sidecars.install as mod
     from gaia.daemon.sidecars.errors import StopFailedError
 
     class _Proc:
         def __init__(self, pid, exe):
             self.info = {"pid": pid, "exe": exe, "cmdline": [exe]}
 
-    install_dir = Path("/tmp/gaia-test-agents/email")
+    install_dir = tmp_path / "agents" / "email"
     fake = [
         _Proc(4242, str(install_dir / "email-agent")),
         _Proc(4243, str(install_dir / "email-agent")),
     ]
-    import gaia.daemon.sidecars.install as mod
+    monkeypatch.setattr(mod, "os", SimpleNamespace(name=os_name))
+    monkeypatch.setattr("psutil.process_iter", lambda attrs=None: fake)
 
-    real_psutil = __import__("psutil")
-    original = real_psutil.process_iter
-    real_psutil.process_iter = lambda attrs=None: fake
-    try:
-        with pytest.raises(StopFailedError) as exc_info:
-            mod.assert_no_live_process_in(install_dir, "email")
-    finally:
-        real_psutil.process_iter = original
+    with pytest.raises(StopFailedError) as exc_info:
+        mod.assert_no_live_process_in(install_dir, "email")
 
     detail = str(exc_info.value)
-    assert "kill -9 4242 4243" in detail
+    assert remedy in detail
+    assert str(install_dir) in detail
     assert "gaia kill" not in detail  # the remedy that cannot do the job
-    assert "SIGTERM" in detail
+    if note:
+        assert note in detail
+    else:
+        assert "kill -9" not in detail and "SIGTERM" not in detail

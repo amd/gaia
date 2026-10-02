@@ -17,7 +17,10 @@ from typing import Any, Dict
 from .agent import Agent
 
 
-class ApiAgent(Agent):
+class ApiAgent(Agent):  # pylint: disable=abstract-method
+    # Deliberately incomplete: a concrete subclass combining this mixin with
+    # Agent (or another mixin) provides _register_tools — see the class
+    # docstring's inheritance patterns.
     """
     Optional mixin for agents exposed via OpenAI-compatible API.
 
