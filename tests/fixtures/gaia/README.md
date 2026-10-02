@@ -17,7 +17,7 @@ carry `# FIXTURE-SYNC:` comments naming the fixture).
 | `mini_repo/` | gaia_code (code-index) | `tempkeeper` package; see below |
 | `media/` | gaia_media | a 24.7 s voice memo + a sign image, planted facts in the contract; regenerate with `media/_gen_media.py` |
 | `fixture_hub/` | gaia_skills_lifecycle (search/install) | committed sources only; built + signed per run — see its README |
-| `mcp_stub/` | gaia_mcp | stdlib stdio MCP server as two servers (`acme_orders` answers, `acme_shipping` always fails); `stage_mcp_stub.py install` registers + activates them for the flagship before the backend starts |
+| `mcp_stub/` | gaia_mcp | stdlib stdio MCP server as two servers (`acme_orders` answers, `acme_shipping` always fails); `stage_mcp_stub.py install` registers + activates them for the flagship around `gaia_mcp` only, `remove` after |
 | `prepare_fixture_hub.py` | per-run hub build | ephemeral `eval-test-publisher` keypair, signs + trust-adds; no key committed |
 | `serve_fixtures.py` | HTTP for web/rss/hub | routed layout (below) |
 | `quality_gate_thresholds.json` / `perf_gate_thresholds.json` | eval gates | quality: `enforce: true` (0.60 judged pass rate, 5.0 average score); perf: `enforce: false` until the first runner baseline |

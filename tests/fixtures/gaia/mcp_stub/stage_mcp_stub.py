@@ -12,8 +12,10 @@ things ChatAgent reads before it surfaces an MCP server's tools:
 ``remove`` deletes exactly those entries and leaves everything else in both
 files untouched, so it is safe on a developer machine with real servers.
 
-Run it BEFORE starting the backend: the agent reads the config when it is
-built. The command uses this interpreter, so run it from the eval's venv.
+Run ``install`` before the ``gaia_mcp`` category and ``remove`` right after:
+each session builds a fresh agent that reads the config, so the stub joins
+every session in between. The command uses this interpreter, so run it from
+the eval's venv.
 
     python tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py install
     python tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py remove
@@ -23,7 +25,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 from gaia.connectors.activations import activate_agent, deactivate_agent
@@ -59,6 +63,19 @@ def _servers_key(data: dict) -> str:
     return "servers" if "servers" in data and "mcpServers" not in data else "mcpServers"
 
 
+def _write_config(path: Path, data: dict) -> None:
+    # Atomic: a crash mid-write must not corrupt a developer's real config.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2) + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
 def install() -> None:
     path = _config_path()
     data = _read_config(path)
@@ -68,8 +85,7 @@ def install() -> None:
             "command": sys.executable,
             "args": [str(STUB), "--server", persona],
         }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    _write_config(path, data)
     for name in SERVERS:
         activate_agent(name, FLAGSHIP_AGENT_ID)
     print(f"staged {sorted(SERVERS)} -> {path} (active for {FLAGSHIP_AGENT_ID})")
@@ -82,7 +98,7 @@ def remove() -> None:
         servers = data.get(_servers_key(data), {})
         for name in SERVERS:
             servers.pop(name, None)
-        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        _write_config(path, data)
     for name in SERVERS:
         deactivate_agent(name, FLAGSHIP_AGENT_ID)
     print(f"removed {sorted(SERVERS)} from {path}")

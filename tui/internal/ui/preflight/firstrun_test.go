@@ -332,3 +332,15 @@ func TestAModelThatWillNotLoadIsAFailureTheUserSees(t *testing.T) {
 
 // oneLine joins a wrapped screen back into single-spaced prose for assertions.
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// The provider picker names the step that installs Lemonade, and none once done.
+func TestLemonadeStepIsItsFirstRunNumber(t *testing.T) {
+	rep := firstRunReport()
+	if got := rep.LemonadeStep(); got != 1 {
+		t.Errorf("new machine: LemonadeStep() = %d, want 1", got)
+	}
+	rep.Rows[1] = Row{Key: KeyLemonade, Label: lemonadeRowLabel, State: StateOK}
+	if got := rep.LemonadeStep(); got != 0 {
+		t.Errorf("Lemonade installed: LemonadeStep() = %d, want 0", got)
+	}
+}

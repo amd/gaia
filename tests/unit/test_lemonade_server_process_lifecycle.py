@@ -138,6 +138,15 @@ def _launch_with_mocked_server(client):
     return launched
 
 
+def _assert_names_the_foreign_holder(error, port, pid, program):
+    """The refusal must give the user everything needed to free the port."""
+    message = str(error)
+    assert f"port {port}" in message
+    assert f"PID {pid} ({program})" in message
+    assert "GAIA will not stop" in message
+    assert "LEMONADE_BASE_URL" in message
+
+
 @posix_only
 @pytest.mark.skipif(shutil.which("nc") is None, reason="needs nc for a listener")
 def test_launch_server_leaves_a_non_gaia_listener_running():
@@ -155,13 +164,19 @@ def test_launch_server_leaves_a_non_gaia_listener_running():
                 pytest.skip("nc did not come up listening on the port")
             time.sleep(0.1)
 
+        holders = listeners_on_port(port)
+        [(holder_pid, holder_name)] = holders
+        assert holder_pid == listener.pid
+
         client = LemonadeClient(host="localhost", port=port, verbose=False)
-        with pytest.raises(
-            LemonadeClientError, match="which GAIA will not stop for you"
-        ):
+        with pytest.raises(LemonadeClientError) as refused:
             _launch_with_mocked_server(client)
 
+        _assert_names_the_foreign_holder(
+            refused.value, port, listener.pid, holder_name or "unknown process"
+        )
         assert listener.poll() is None, "launch_server killed a non-GAIA listener"
+        assert listeners_on_port(port) == holders
     finally:
         listener.kill()
         listener.wait(timeout=5)
@@ -176,8 +191,9 @@ def test_launch_server_refuses_a_foreign_listener_without_killing_it():
         ),
         patch("gaia.llm.lemonade_client.terminate_pid") as kill,
     ):
-        with pytest.raises(LemonadeClientError, match="PID 4242"):
+        with pytest.raises(LemonadeClientError) as refused:
             _launch_with_mocked_server(client)
+    _assert_names_the_foreign_holder(refused.value, 13305, 4242, "nginx")
     kill.assert_not_called()
 
 
@@ -282,8 +298,10 @@ def test_a_mixed_port_kills_nothing_before_refusing_to_launch():
         ),
         patch("gaia.llm.lemonade_client.terminate_pid") as kill,
     ):
-        with pytest.raises(LemonadeClientError, match="PID 4243"):
+        with pytest.raises(LemonadeClientError) as refused:
             _launch_with_mocked_server(client)
+    _assert_names_the_foreign_holder(refused.value, 13305, 4243, "nginx")
+    assert "PID 4242" not in str(refused.value)
     kill.assert_not_called()
 
 

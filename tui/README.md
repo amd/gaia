@@ -174,7 +174,8 @@ fine.
 
 Press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
 **Fireworks AI**, or **AMD LLM Gateway** through Lemonade 11.8.1+. Paste a key into
-the masked field; it stays in Lemonade memory until the server restarts. Provider
+the masked field; once it connects it is kept in the OS credential store and
+handed back to Lemonade after a restart. Provider
 settings are shared with other clients of that server. For Fireworks, the models
 that scored best on GAIA's agent benchmark are listed first, ranked and labelled
 with why (`fireworks.glm-5p3-flash` — best overall, cheapest;
