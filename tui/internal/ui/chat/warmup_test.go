@@ -183,3 +183,25 @@ func TestOnlyTheFlagshipWarmsUp(t *testing.T) {
 		t.Error("a launch with a question already pays for the same work")
 	}
 }
+
+// A fresh session opens on a few things to try, not a blank screen.
+func TestAFreshSessionOpensOnWhatToTry(t *testing.T) {
+	m, _ := warmModel(t)
+	m = feed(t, m, event.CanonicalFinalEvent{Type: "final", Answer: client.WarmedUp})
+	if !strings.Contains(frameText(m), "Try: ") {
+		t.Errorf("no starting hint on a fresh session:\n%s", frameText(m))
+	}
+}
+
+// Someone who already typed a question does not need the hint.
+func TestNoHintWhenAQuestionIsAlreadyWaiting(t *testing.T) {
+	m, _ := warmModel(t)
+	m.input.SetValue("what's on my calendar?")
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = feed(t, updated.(ChatModel), event.CanonicalFinalEvent{Type: "final", Answer: client.WarmedUp})
+	for _, msg := range m.messages {
+		if strings.Contains(msg.Content, firstPromptHint) {
+			t.Fatalf("hint shown although a question was queued: %q", msg.Content)
+		}
+	}
+}
