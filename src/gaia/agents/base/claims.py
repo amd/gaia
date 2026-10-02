@@ -147,6 +147,9 @@ _CHANGE = (
     r"function|implementation|feature)|it|this|they)\s+"
 )
 
+#: "ran into a problem", "run out of time": figures of speech, not commands.
+_NOT_IDIOM = r"(?!\s+(?:into|out|across|over)\b)"
+
 #: Work an answer says it did, by the kind of tool that would have done it.
 #: Past tense only: "I will run the tests" promises, it does not report.
 ACTION_CLAIMS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
@@ -170,7 +173,13 @@ ACTION_CLAIMS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     (
         "ran",
         re.compile(
-            _SPEAKER + r"(?:ran|executed)\b|" + _PERFECT + r"run\b",
+            _SPEAKER
+            + r"(?:ran|executed)\b"
+            + _NOT_IDIOM
+            + r"|"
+            + _PERFECT
+            + r"run\b"
+            + _NOT_IDIOM,
             re.IGNORECASE,
         ),
     ),

@@ -381,6 +381,27 @@ def test_prose_numbers_without_a_table_or_data_block_are_not_judged(answer):
     assert content_findings(answer, records) == []
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "How do I set `LEMONADE_BASE_URL`?",
+        "What does the `max_tokens` parameter do in the OpenAI API?",
+        "What's the difference between `snake_case` and camelCase?",
+    ],
+)
+def test_a_knowledge_question_naming_an_identifier_is_not_a_look_gap(query):
+    assert ungrounded("Here is how that works.", query, [], locate=lambda p: None) == []
+
+
+def test_a_symbol_in_a_turn_about_the_project_must_be_seen():
+    query = "What does parse_updated() return?"
+    ran = [_rec("list_directory", {"path": "toybox"}, {"status": "success"})]
+
+    assert look_findings("It returns a datetime.", query, [], lambda p: None) == []
+    findings = look_findings("It returns a datetime.", query, ran, lambda p: None)
+    assert "You haven't read `parse_updated`" in findings[0].correction
+
+
 def test_an_answer_from_knowledge_with_no_tool_is_not_a_content_gap():
     answer = "| year | share |\n|---|---|\n| 2023 | 41.5% |"
 
@@ -427,6 +448,8 @@ def test_versions_code_and_ordinals_are_not_data(answer):
         ("Based on reading the docs I'd suggest X.", []),
         ("I read your question as asking about dates.", []),
         ("I reviewed the code in `dates.py`.", ["read"]),
+        ("We ran into a problem with this approach before.", []),
+        ("We have run out of options here.", []),
     ],
 )
 def test_action_claim_vocabulary(answer, kinds):

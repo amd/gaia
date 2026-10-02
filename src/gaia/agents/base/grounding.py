@@ -140,8 +140,8 @@ def named_targets(query: str) -> List[str]:
     A file needs an extension ("dates.py", "toybox/dates.py"); a directory or
     the working folder the request opens with is not something to read. A
     capitalised ``Name.js`` is a framework, not a file. A symbol needs an
-    underscore and no dot, so ``parse_updated()`` counts and ``print()`` or
-    ``os.path.join()`` do not.
+    underscore, no dot and no capitals, so ``parse_updated()`` counts and
+    ``print()``, ``os.path.join()`` or ``LEMONADE_BASE_URL`` do not.
     """
     targets: List[str] = []
     for path in mentioned_paths(query or ""):
@@ -152,7 +152,7 @@ def named_targets(query: str) -> List[str]:
         targets.append(path)
     for match in _SYMBOL.finditer(query or ""):
         symbol = match.group(1) or match.group(2)
-        if "_" in symbol.strip("_") and symbol not in targets:
+        if "_" in symbol.strip("_") and symbol.islower() and symbol not in targets:
             targets.append(symbol)
     return targets
 
@@ -202,7 +202,9 @@ def look_findings(
     claims it does not exist — a request that merely mentions ``setup.py`` in
     passing is not asking for it to be read. The correction names where the
     file is, because a model that resolved the path against the wrong folder
-    will do it again. A symbol counts whenever nothing showed it. A
+    will do it again. A symbol counts when nothing showed it, but only in a
+    turn about the project — a named file exists or a tool ran — so asking
+    what `max_tokens` does is not a request to read code. A
     target an earlier turn (*history*) already discussed is not asked for again.
     A "not found" only counts in a turn about something the request named, so
     explaining what a 404 means is not a claim about the disk.
@@ -215,13 +217,21 @@ def look_findings(
     earlier = _slashed(history)
     missed = []
     found: List[str] = []
+    where_is = {
+        t: locate(t) if locate else None for t in targets if _FILE_SUFFIX.search(t)
+    }
+    about_project = any(where_is.values()) or any(_ran(r) for r in records)
     for target in targets:
         if _read_it(target, records) or _slashed(target) in earlier:
             continue
-        where = locate(target) if locate and _FILE_SUFFIX.search(target) else None
+        if target not in where_is:
+            if about_project:
+                missed.append(target)
+            continue
+        where = where_is[target]
         if where:
             found.append(f"`{target}` is at `{where}`")
-        if not _FILE_SUFFIX.search(target) or absent is not None or where:
+        if absent is not None or where:
             missed.append(target)
     if missed:
         names = _names(missed)
