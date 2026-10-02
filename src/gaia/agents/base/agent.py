@@ -9042,8 +9042,30 @@ Do NOT wrap conversational replies in JSON.
                     re.search(_p, answer_candidate, re.IGNORECASE)
                     for _p in _SD_OUTCOME_ACKNOWLEDGMENT
                 )
+
+                # Extract last user message and check if user explicitly requested an image
+                _last_user_msg = next(
+                    (
+                        m.get("content", "")
+                        for m in reversed(messages)
+                        if m.get("role") == "user"
+                        and isinstance(m.get("content"), str)
+                    ),
+                    "",
+                )
+                _USER_IMAGE_PATTERNS = [
+                    r"\b(generate|create|draw|make|render|show|produce|paint|design)\b.*\b(image|picture|photo|illustration|drawing|graphic|logo|banner)\b",
+                    r"\b(image|picture|photo)\b.*\b(of|showing|with|for)\b",
+                    r"\bgenerate_image\b",
+                ]
+                _user_requested_image = any(
+                    re.search(_p, _last_user_msg, re.IGNORECASE)
+                    for _p in _USER_IMAGE_PATTERNS
+                )
+
                 _should_block_sd = (
-                    is_capability_claim
+                    _user_requested_image
+                    and is_capability_claim
                     and not outcome_acknowledged
                     and steps_taken < steps_limit - 1
                 )
@@ -9052,16 +9074,6 @@ Do NOT wrap conversational replies in JSON.
                         "[WORKFLOW] Blocking SD capability claim%s: %s",
                         " (post-attempt)" if has_tried_capability_tool else "",
                         answer_candidate[:80],
-                    )
-                    # Extract what the user asked for from the last user message
-                    _last_user_msg = next(
-                        (
-                            m.get("content", "")
-                            for m in reversed(messages)
-                            if m.get("role") == "user"
-                            and isinstance(m.get("content"), str)
-                        ),
-                        "the requested image",
                     )
                     if not has_tried_capability_tool:
                         messages.append(
