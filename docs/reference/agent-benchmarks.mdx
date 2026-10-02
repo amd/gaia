@@ -227,6 +227,28 @@ one row of `DIR/predictions.jsonl` — `{"instance_id", "model_name_or_path",
 "model_patch"}`, exactly what the official harness reads. An agent that changed
 nothing fails the task then and there; there is nothing to submit.
 
+**The agent does not get the host's installed copy of the package under test.**
+GAIA's own interpreter often has a newer release of a SWE-bench repository
+installed, with the fix already in it: on `matplotlib__matplotlib-24870` the agent
+imported the host's matplotlib 3.11 and read the new code. So on a SWE-bench task
+both harnesses get a bare venv (`<work root>/swebench/toolchain/`, with nothing
+installed, not even pip) as their only Python: it is first on `PATH`, the host
+interpreter's directories are taken off `PATH`, `VIRTUAL_ENV` points at it, and
+GAIA's `run_python` / `run_python_file` run it too. An agent that imports the
+package gets `ModuleNotFoundError` and has to read the checkout; `pip install`
+fails, and is reported as web use. The venv is shared by the tasks of a work
+root and rebuilt before any task that finds something installed in it.
+`--fence` adds an OS-level deny on macOS: Claude Code loses every site-packages
+tree of the host interpreter, and GAIA loses the installed copy of the package
+under test — not the whole tree, because its own process imports from there,
+and not at all for a package GAIA itself depends on (`requests`, `sympy`); the
+run logs a warning for those.
+
+Without `--fence` (any non-macOS host) this is not a sandbox. GAIA's file tools
+stay inside the checkout unless `--full-access`, but a Python snippet or Claude
+Code's own tools can still open any file whose path the agent finds, and on
+Windows `python3` or `py -3.x` can reach another installed interpreter.
+
 **Grading runs the official harness, one instance at a time.** `run` does it after
 the suite unless `--no-evaluate`; `gaia eval tasks swebench DIR` does it later, or
 again. It needs the `swebench` package (5.x) in the same interpreter and a
