@@ -308,6 +308,14 @@ the run starts:
   a single-branch `file://` clone of it, detached, remote removed, and `git fsck
   --unreachable --no-reflogs` must find nothing. A plain local path would make
   git ignore `--depth` and copy every object.
+- The agent's only Python is a bare venv under `<work root>/swebench/toolchain/`
+  (nothing installed, not even pip; rebuilt if a task installed anything), for
+  both harnesses: first on `PATH`, the host interpreter's directories
+  removed, and the interpreter GAIA's `run_python` runs. GAIA's own interpreter
+  can hold a newer release of the package under test with the fix in it, and an
+  agent once imported it and read the fix. Under `--fence`, Claude Code is also
+  denied every host site-packages tree and GAIA the installed copy of the package
+  under test, unless GAIA imports that package itself.
 - The prompt is the issue text plus a fixed paragraph: work only in the checkout,
   minimal change, no internet, the tests cannot be run here. Web use is reported
   from the tool record as for the `therock` no-internet tasks.
@@ -352,7 +360,8 @@ environment sooner or later. Three defences, each tested:
 
 **The fence.** `--fence` puts the agent inside macOS `sandbox-exec` with the
 task definitions, the other tasks' workdirs and earlier results denied — they
-hold the answers. (An allow rule has to name `file-read-data` explicitly, or the
+hold the answers — and, on a SWE-bench task, the host's installed packages (see
+above). (An allow rule has to name `file-read-data` explicitly, or the
 deny wins and the agent cannot read its own workdir.) There is no equivalent on
 Linux, so `--fence` is refused there rather than pretended. The grading step
 gives the same protection structurally on any platform: the agent writes its

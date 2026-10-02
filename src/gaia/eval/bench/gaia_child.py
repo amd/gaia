@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -81,6 +82,16 @@ def instrument(progress: Path) -> Callable[[Any], None]:
     return _install
 
 
+def use_tool_python(python: str) -> None:
+    """Snippets the agent runs (``run_python``, ``run_python_file``) use *python*.
+
+    Those tools start ``sys.executable``; this process keeps the imports it
+    already has, and its children lose the path back to GAIA's own interpreter.
+    """
+    sys.executable = python
+    os.environ.pop("PYTHONPATH", None)
+
+
 def run(spec: Dict[str, Any]) -> Dict[str, Any]:
     from gaia.agents.base.agent import (  # pylint: disable=import-outside-toplevel
         _sum_cached_tokens,
@@ -89,6 +100,8 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
 
     progress = Path(spec["progress"])
     progress.write_text("", encoding="utf-8")
+    if spec.get("tool_python"):
+        use_tool_python(spec["tool_python"])
     outcome, error, kind = (
         flagship_tasks._run_agent(  # pylint: disable=protected-access
             spec["prompt"],
