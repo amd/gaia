@@ -784,6 +784,12 @@ gaia chat [MESSAGE] [OPTIONS]
 - **No message**: Starts interactive chat session
 - **Message provided**: Sends single message and exits
 
+**Output:** the answer goes to stdout; the device banner, model-load progress,
+warnings and errors go to stderr, so `gaia chat -q "…" > answer.txt` captures
+just the answer. INFO diagnostics are written only to the log file
+(`~/.gaia/gaia.log`, or the path in `GAIA_AGENT_LOG`); `--debug` also shows them
+on stderr.
+
 **Options:**
 
 | Option | Type | Default | Description |
@@ -803,7 +809,7 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--stats`, `--show-stats` | flag | false | Show performance statistics |
 | `--stream` | flag | false | Enable streaming responses |
 | `--show-prompts` | flag | false | Display prompts sent to LLM |
-| `--debug` | flag | false | Enable debug output |
+| `--debug` | flag | false | Enable debug output, including INFO diagnostics on stderr |
 | `--list-tools` | flag | false | List available tools and exit |
 | `--ui` | flag | false | Launch the Chat Web UI (browser-based interface on port 4200) |
 | `--ui-port` | integer | 4200 | Port for the Agent UI server (used with `--ui`) |
@@ -1720,7 +1726,7 @@ get a 401. `start` writes them to a file you source rather than printing the key
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
-✅ Embedded Lemonade 2026.39.1 running on http://localhost:62232/api/v1
+✅ Embedded Lemonade 2026.40.0 running on http://localhost:62232/api/v1
    pid 26080   logs: ~/.gaia/lemonade/lemond.log
 
    The instance is private. Load its URL and API key with:
@@ -2032,6 +2038,8 @@ gaia eval tasks swebench eval/results/eval-tasks-swebench   # Grade those predic
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--instances` | the five-instance pilot | Comma-separated SWE-bench Verified instance ids; only with `--suite swebench` |
+| `--sample N` | off | A seeded random N of the 500 SWE-bench Verified instances instead of `--instances`; the same N and seed always pick the same tasks |
+| `--seed S` | `20260930` | The seed `--sample` draws with |
 | `--no-evaluate` | off | Capture predictions without grading them in Docker |
 
 [→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks) · [→ Comparing harnesses and models](/reference/eval#comparing-harnesses-and-models)

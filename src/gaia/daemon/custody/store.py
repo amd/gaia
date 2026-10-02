@@ -119,8 +119,8 @@ class CustodyStore:
             raise StoreUnavailableError(
                 f"custody store at {self.db_path} could not be opened: {e}. "
                 "Check the daemon has write access to its host dir "
-                "(~/.gaia/host or $GAIA_DAEMON_HOME) and that the disk is not "
-                "full, then restart the daemon."
+                "(~/.gaia/host, $GAIA_HOME/host, or $GAIA_DAEMON_HOME) and "
+                "that the disk is not full, then restart the daemon."
             ) from e
 
     def close(self) -> None:

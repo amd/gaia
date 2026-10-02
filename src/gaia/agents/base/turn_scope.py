@@ -115,6 +115,31 @@ def _error_brief(result: Any) -> str:
     return "the tool returned an error"
 
 
+#: ``cd <dir> &&`` / ``cd <dir>;`` at the start of a command line.
+_CD_PREFIX = re.compile(
+    r"""^\s*cd\s+(?:/d\s+)?(?:"[^"]*"|'[^']*'|\S+)\s*(?:&&|;)\s*""", re.I
+)
+
+
+def _streak_key(tool: str, args: Dict[str, Any]) -> str:
+    """What a failure streak counts: the tool, or for a shell line the program it runs.
+
+    A shell tool dispatches many programs; `python` refused, then `ls` denied,
+    then `pip` refused is three walls, not one tool failing over and over.
+    """
+    command = args.get("command")
+    if not isinstance(command, str):
+        return tool
+    text = command
+    while (match := _CD_PREFIX.match(text)) is not None:
+        text = text[match.end() :]
+    words = text.split(None, 1)
+    if not words:
+        return tool
+    program = re.split(r"[\\/]", words[0].strip("\"'"))[-1].lower()
+    return f"{tool} ({program.removesuffix('.exe')})"
+
+
 def _is_tool_failure(result: Any) -> bool:
     """The tool refused or broke; a program exiting non-zero does not count."""
     if (
@@ -136,6 +161,8 @@ class TurnScopeGuard:
         self.answered = False
         self.turn_should_end = False
         self.end_reason: Optional[str] = None
+        #: The failure streak that ended the turn: a tool, or a tool and program.
+        self.end_key: Optional[str] = None
         self.drift_blocked = 0
         self.failures: Dict[str, int] = {}
         self.last_error: Dict[str, str] = {}
@@ -147,6 +174,7 @@ class TurnScopeGuard:
         self.answered = False
         self.turn_should_end = False
         self.end_reason = None
+        self.end_key = None
         self.drift_blocked = 0
         self.failures = {}
         self.last_error = {}
@@ -189,19 +217,21 @@ class TurnScopeGuard:
     def check(self, tool: str, args: Any) -> Optional[Dict[str, Any]]:
         """A not-executed result when the call must not run, else ``None``."""
         args = args if isinstance(args, dict) else {}
-        count = self.failures.get(tool, 0)
+        key = _streak_key(tool, args)
+        count = self.failures.get(key, 0)
         if self.failure_limit and count >= self.failure_limit:
-            if tool in self.corrected:
+            if key in self.corrected:
                 self.turn_should_end = True
                 self.end_reason = "failures"
-            self.corrected.add(tool)
+                self.end_key = key
+            self.corrected.add(key)
             return {
                 **NOT_EXECUTED,
                 "status": "error",
                 "error": FAILURE_STREAK_CORRECTION.format(
-                    tool=tool,
+                    tool=key,
                     count=count,
-                    error=self.last_error.get(tool, "the tool returned an error"),
+                    error=self.last_error.get(key, "the tool returned an error"),
                 ),
             }
         if not self.answered or self.related(tool, args):
@@ -221,12 +251,13 @@ class TurnScopeGuard:
     def record(self, tool: str, args: Any, result: Any) -> None:
         """Note a call that ran: widen the scope, and count or clear failures."""
         args = args if isinstance(args, dict) else {}
+        key = _streak_key(tool, args)
         if _is_tool_failure(result):
-            self.failures[tool] = self.failures.get(tool, 0) + 1
-            self.last_error[tool] = _error_brief(result)
+            self.failures[key] = self.failures.get(key, 0) + 1
+            self.last_error[key] = _error_brief(result)
             return
-        self.failures.pop(tool, None)
-        self.corrected.discard(tool)
+        self.failures.pop(key, None)
+        self.corrected.discard(key)
         if is_mutating_tool(tool):
             # The world changed, so a retry of anything is a new attempt.
             self.failures.clear()

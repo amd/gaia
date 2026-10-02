@@ -4427,7 +4427,8 @@ class LemonadeClient:
         try:
             from rich.console import Console
 
-            console = Console()
+            # Progress, not output: stdout stays clean for `gaia chat -q` pipes.
+            console = Console(stderr=True)
             if is_downloaded is False:
                 console.print(
                     f"[bold yellow]📥 Downloading model:[/bold yellow] "
@@ -4443,10 +4444,11 @@ class LemonadeClient:
             if is_downloaded is False:
                 print(
                     f"📥 Downloading model: {model} (first run — this can "
-                    f"take several minutes)..."
+                    f"take several minutes)...",
+                    file=sys.stderr,
                 )
             else:
-                print(f"🔄 Loading model: {model}...")
+                print(f"🔄 Loading model: {model}...", file=sys.stderr)
 
         # The actual load failure is the one this method must NOT swallow
         # (#2053): a model that is present but fails to load (bad recipe, OOM,
@@ -4481,7 +4483,7 @@ class LemonadeClient:
                     f"[bold green]✅ Model loaded:[/bold green] [cyan]{model}[/cyan]"
                 )
             else:
-                print(f"✅ Model loaded: {model}")
+                print(f"✅ Model loaded: {model}", file=sys.stderr)
         except Exception as exc:
             get_logger(__name__).warning(
                 "Could not display model load confirmation: %s", exc

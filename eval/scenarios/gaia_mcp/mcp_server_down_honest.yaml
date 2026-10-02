@@ -14,7 +14,7 @@ persona: casual_user
 
 setup:
   index_documents: []
-  notes: "Requires stage_mcp_stub.py install before the backend starts. acme_shipping fails every call by design."
+  notes: "Requires stage_mcp_stub.py install before this category runs. acme_shipping fails every call by design."
 
 turns:
   - turn: 1

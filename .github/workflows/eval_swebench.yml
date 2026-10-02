@@ -1,0 +1,154 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# The flagship GaiaAgent on real SWE-bench Verified issues, graded by the
+# official harness in Docker. The instances are listed, with why each was
+# chosen, in eval/tasks/swebench_subsets.json:
+#
+#   smoke - three fast tasks the agent solved on every measured run. PRs that
+#           touch the agent loop, its tools or the coding skill run these; a
+#           failure there is a regression signal, not noise.
+#   hard  - ten tasks strong Claude agents rarely solve on the leaderboard and
+#           that separated GAIA configurations in measured runs. Nightly.
+#
+# The model is DeepSeek V4.1 Flash on Fireworks, reached through GAIA's own
+# embedded Lemonade, so no GPU is needed and the Linux runner's Docker grades
+# natively. Lemonade reads LEMONADE_FIREWORKS_API_KEY from its environment; the
+# agent never sees it (the eval harness strips secret-named variables from the
+# agent's environment).
+#
+# Results are reported in the job summary and uploaded, not gated: no
+# expectations exist yet for this runner, and none are hand-authored. Commit
+# them from repeated runs on this workflow before turning a gate on.
+name: SWE-bench (flagship)
+
+on:
+  schedule:
+    - cron: '43 9 * * *'
+  workflow_dispatch:
+    inputs:
+      subset:
+        description: 'Instances to run (smoke | hard)'
+        required: false
+        default: 'hard'
+      instances:
+        description: 'Comma-separated instance ids (overrides subset)'
+        required: false
+        default: ''
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/agents/tools/**'
+      - 'src/gaia/llm/providers/lemonade.py'
+      - 'hub/agents/gaia/python/gaia_agent/**'
+      - 'hub/agents/chat/python/gaia_agent_chat/**'
+      - 'hub/skills/coding/**'
+      - 'src/gaia/eval/bench/**'
+      - 'src/gaia/eval/flagship_tasks.py'
+      - 'eval/tasks/swebench_subsets.json'
+      - '.github/workflows/eval_swebench.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  SWE_MODEL: fireworks.deepseek-v4p1-flash
+
+jobs:
+  swebench:
+    name: SWE-bench ${{ github.event_name == 'pull_request' && 'smoke' || (github.event.inputs.subset || 'hard') }}
+    # Forks have no Fireworks key; drafts wait for ready_for_ci.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.draft == false ||
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 90 || 360 }}
+    env:
+      SUBSET: ${{ github.event_name == 'pull_request' && 'smoke' || (github.event.inputs.subset || 'hard') }}
+      LEMONADE_FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+      OUT: eval-out/swebench
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Require the Fireworks key
+        run: |
+          if [ -z "$LEMONADE_FIREWORKS_API_KEY" ]; then
+            echo "::error::The FIREWORKS_API_KEY repository secret is not set. Add it under Settings > Secrets and variables > Actions; this workflow cannot reach the model without it."
+            exit 1
+          fi
+
+      - name: Setup Python Environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '-e .[dev,eval] -e hub/agents/chat/python -e hub/agents/gaia/python'
+
+      - name: Install the SWE-bench grading harness
+        # Not a GAIA dependency: only this workflow grades with it.
+        run: uv pip install --python "$(command -v python)" "swebench>=5.0,<6"
+
+      - name: Start GAIA's embedded Lemonade
+        timeout-minutes: 15
+        run: |
+          gaia lemonade embedded start --timeout 180
+          gaia lemonade embedded status
+
+      - name: Pick the instances
+        id: pick
+        run: |
+          if [ -n "${{ github.event.inputs.instances }}" ]; then
+            ids="${{ github.event.inputs.instances }}"
+          else
+            ids=$(python -c "import json,sys; print(','.join(t['id'] for t in json.load(open('eval/tasks/swebench_subsets.json'))[sys.argv[1]]))" "$SUBSET")
+          fi
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+          echo "Instances: $ids"
+
+      - name: Run and grade
+        # One task at a time; each image is pulled before its run and removed
+        # after, which keeps the hosted runner's disk under its limit.
+        run: |
+          . "$HOME/.gaia/lemonade/env.sh"
+          gaia eval tasks run --suite swebench --model "$SWE_MODEL" \
+            --instances "${{ steps.pick.outputs.ids }}" \
+            --no-judge --run-timeout 2400 --out "$OUT"
+
+      - name: Summarize
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, os, pathlib
+          card = pathlib.Path(os.environ["OUT"]) / "scorecard.json"
+          if not card.exists():
+              print("No scorecard: the run did not finish. See the step log.")
+              raise SystemExit(0)
+          tasks = json.loads(card.read_text(encoding="utf-8"))["tasks"]
+          solved = sum(1 for t in tasks if (t.get("swebench") or {}).get("resolved"))
+          mins = sum(t["wall_seconds"] for t in tasks) / 60
+          print(f"### SWE-bench {os.environ['SUBSET']}: {solved}/{len(tasks)} resolved, "
+                f"{sum(t['steps'] for t in tasks)} steps, {mins:.0f} min\n")
+          print("| Instance | Resolved | Steps | Minutes |\n|---|---|---|---|")
+          for t in tasks:
+              ok = "yes" if (t.get("swebench") or {}).get("resolved") else "no"
+              print(f"| `{t['id']}` | {ok} | {t['steps']} | {t['wall_seconds'] / 60:.1f} |")
+          EOF
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: swebench-${{ env.SUBSET }}-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: warn
+
+      - name: Stop Lemonade
+        if: always()
+        run: gaia lemonade embedded stop

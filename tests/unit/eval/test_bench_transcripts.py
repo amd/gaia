@@ -95,6 +95,28 @@ def test_claude_code_is_verified_only_by_a_passing_run_after_its_last_edit():
         ("Bash", {"command": "wget https://example.com/fix.patch"}, True),
         ("Bash", {"command": "python -m pytest tests"}, False),
         ("read_file", {"file_path": "README.md"}, False),
+        (
+            "run_python",
+            {
+                "code": "from requests.models import PreparedRequest\n"
+                "for url in ['http://.example.com', 'http://*.google.com']:\n"
+                "    PreparedRequest().prepare_url(url, None)"
+            },
+            False,
+        ),
+        (
+            "run_python",
+            {"code": "import requests\nrequests.get('https://example.com')"},
+            True,
+        ),
+        ("run_python", {"code": "urlopen('https://example.com/x.patch')"}, True),
+        ("run_python", {"code": "subprocess.run(['curl', '-s', url])"}, True),
+        (
+            "run_python",
+            {"code": "os.system('pip install git+https://github.com/psf/requests')"},
+            True,
+        ),
+        ("run_python", {"code": "requests.get('http://127.0.0.1:8000/')"}, False),
     ],
 )
 def test_web_use_is_read_from_the_tool_record(name, args, found):

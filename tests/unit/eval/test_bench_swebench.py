@@ -415,6 +415,7 @@ def _preds(tmp_path, *ids):
 def fake_tools(monkeypatch):
     """swebench importable, docker on PATH, and every subprocess recorded."""
     calls = []
+    monkeypatch.setattr(swebench, "_grade_in_container", lambda: False)
     monkeypatch.setattr(
         importlib.util,
         "find_spec",
@@ -572,6 +573,7 @@ def test_grading_without_the_harness_or_docker_says_what_to_install(
     tmp_path, monkeypatch
 ):
     preds = _preds(tmp_path, REQUESTS)
+    monkeypatch.setattr(swebench, "_grade_in_container", lambda: False)
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
     with pytest.raises(swebench.SweBenchError, match="pip install swebench"):
         swebench.evaluate(preds, [], tmp_path / "r")
@@ -732,6 +734,34 @@ def test_grading_a_run_writes_the_harness_verdicts_into_the_scorecard(
     )
     with pytest.raises(ValueError, match="only a swebench run"):
         ft.swebench_grade_run(other, pilot)
+
+
+def test_a_regrade_replaces_an_earlier_grade(pilot, fake_launch, tmp_path, monkeypatch):
+    """A broken grading (Windows CRLF: "patch did not apply") must be correctable."""
+    fake_launch.act = lambda workdir: (
+        (workdir / "sessions.py").write_text("x\n") or "done"
+    )
+    out = tmp_path / "out"
+    ft.run_suite(
+        "swebench",
+        "m",
+        out,
+        config=bench_config.resolve(work_root=str(pilot)),
+        instances=[REQUESTS],
+    )
+    verdicts = iter(
+        [
+            swebench.Verdict(REQUESTS, resolved=False, patch_applied=False),
+            swebench.Verdict(
+                REQUESTS, resolved=True, patch_applied=True, f2p_passed=1, f2p_total=1
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        swebench, "evaluate", lambda *a, **k: {REQUESTS: next(verdicts)}
+    )
+    assert ft.swebench_grade_run(out, pilot)["tasks"][0]["passed"] is False
+    assert ft.swebench_grade_run(out, pilot)["tasks"][0]["passed"] is True
 
 
 def test_the_judge_grades_a_swebench_attempt_against_the_gold_patch(
@@ -963,3 +993,100 @@ def test_an_instance_the_dataset_lacks_fails_at_startup(
     )
     assert code == 2
     assert "no instance ['nope__x-1']" in capsys.readouterr().out
+
+
+def test_on_windows_the_harness_runs_in_a_linux_container(
+    tmp_path, fake_tools, monkeypatch
+):
+    """Run on Windows, the harness wrote its eval script with CRLF endings and
+    bash in the instance container ran `cd $'/testbed\r'`: every patch
+    "failed to apply" and no test ran."""
+    monkeypatch.setattr(swebench, "_grade_in_container", lambda: True)
+    preds = _preds(tmp_path, REQUESTS)
+    report_dir = tmp_path / "swebench"
+
+    def on_call(proc):
+        if "swebench.harness.run_evaluation" in proc.args:
+            _report(report_dir, proc.args[proc.args.index("--instance_ids") + 1])
+        if proc.args[1:3] == ["image", "inspect"]:
+            proc.returncode = 1
+
+    fake_tools.on_call = on_call
+    verdicts = swebench.evaluate(
+        preds, [{"instance_id": REQUESTS, "image": IMAGE}], report_dir
+    )
+    argv = [c["args"] for c in fake_tools.calls]
+    assert argv[1] == ["/usr/bin/docker", "image", "inspect", swebench.GRADER_IMAGE]
+    assert argv[2] == ["/usr/bin/docker", "build", "-t", swebench.GRADER_IMAGE, "-"]
+    grade = next(a for a in argv if "swebench.harness.run_evaluation" in a)
+    assert grade[:3] == ["/usr/bin/docker", "run", "--rm"]
+    assert "/var/run/docker.sock:/var/run/docker.sock" in grade
+    assert f"{report_dir.resolve()}:/work" in grade
+    assert f"{preds.resolve().parent}:/preds:ro" in grade
+    assert swebench.GRADER_IMAGE in grade
+    # Paths inside the container are POSIX, whatever the host is.
+    assert grade[grade.index("--predictions_path") + 1] == f"/preds/{preds.name}"
+    assert grade[grade.index("--report_dir") + 1] == "/work"
+    assert verdicts[REQUESTS].resolved is True
+
+
+def test_a_built_grader_image_is_reused(tmp_path, fake_tools, monkeypatch):
+    monkeypatch.setattr(swebench, "_grade_in_container", lambda: True)
+    preds = _preds(tmp_path, REQUESTS)
+    swebench.evaluate(
+        preds, [{"instance_id": REQUESTS, "image": IMAGE}], tmp_path / "swebench"
+    )
+    argv = [c["args"] for c in fake_tools.calls]
+    assert not any(a[1:2] == ["build"] for a in argv)
+
+
+def test_the_grader_container_needs_no_host_install_of_swebench(monkeypatch):
+    monkeypatch.setattr(swebench, "_grade_in_container", lambda: True)
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/docker")
+
+    class Up:
+        returncode, stdout, stderr = 0, "", ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Up())
+    swebench._require_harness()
+
+
+def test_a_sample_is_seeded_sorted_and_reproducible():
+    pool = [f"repo__pkg-{i}" for i in range(40)]
+    first = swebench.sample_ids(5, seed=7, ids=pool)
+    assert first == swebench.sample_ids(5, seed=7, ids=list(reversed(pool)))
+    assert first == sorted(first) and len(set(first)) == 5
+    assert first != swebench.sample_ids(5, seed=8, ids=pool)
+
+
+def test_a_sample_larger_than_the_split_is_refused():
+    with pytest.raises(swebench.SweBenchError, match="between 1 and 3"):
+        swebench.sample_ids(4, ids=["a", "b", "c"])
+
+
+def test_every_id_is_listed_over_rest_when_datasets_is_missing(monkeypatch):
+    import requests
+
+    rows = [{"row": {"instance_id": f"r__p-{i}"}} for i in range(3)]
+
+    class Resp:
+        def __init__(self, offset):
+            self.offset = offset
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"rows": rows[self.offset : self.offset + 1], "num_rows_total": 3}
+
+    monkeypatch.setattr(swebench, "ROWS_PER_PAGE", 1)
+    monkeypatch.setattr(
+        importlib.util, "find_spec", lambda name: None if name == "datasets" else 1
+    )
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda url, timeout: Resp(int(url.split("offset=")[1].split("&")[0])),
+    )
+    assert swebench.all_instance_ids() == ["r__p-0", "r__p-1", "r__p-2"]
