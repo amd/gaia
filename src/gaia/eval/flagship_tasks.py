@@ -688,8 +688,8 @@ def _run_agent(
     crash is a failed task, not a failed eval. ``error_kind`` is
     ``"unavailable"`` when the model backend could not be reached at all: that
     task was not measured, and says nothing about the agent. *full_access*
-    lifts the path boundary, the reach Claude Code has with its permissions
-    skipped; *on_agent* sees the agent before it runs.
+    lifts the path boundary and the shell guardrails, the reach Claude Code
+    has with its permissions skipped; *on_agent* sees the agent before it runs.
     """
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -719,6 +719,9 @@ def _run_agent(
         )
         # Headless: nobody is there to approve a file write or a command.
         agent.console.auto_approve_gated_tools = True
+        # Claude Code's skipped permissions include its command policy, so a
+        # full-access run lifts GAIA's shell guardrails too, as the TUI's does.
+        agent.console.full_access = full_access
         if on_agent is not None:
             on_agent(agent)
         outcome = agent.process_query(prompt) or {}
