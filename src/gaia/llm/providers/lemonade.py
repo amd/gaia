@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import time
-from typing import Iterator, List, Optional, Tuple, Union
+from typing import Callable, Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
 from ..lemonade_client import (
@@ -63,6 +63,12 @@ def _reasoning_tokens(usage: dict) -> Optional[int]:
             if isinstance(value, int) and not isinstance(value, bool):
                 return value
     return None
+
+
+#: Seconds between progress reports while a tool call's arguments stream in.
+TOOL_CALL_PROGRESS_INTERVAL_S = 3.0
+#: Argument characters before a tool call is long enough to report on.
+TOOL_CALL_PROGRESS_MIN_CHARS = 1500
 
 
 def _accumulate_tool_calls(acc: dict, deltas: Optional[List[dict]]) -> None:
@@ -457,6 +463,10 @@ class LemonadeProvider(LLMClient):
     # llama.cpp ignores unknown message fields; a proxied model that rejects one 400s by name.
     accepts_reasoning_history = True
 
+    #: Called as (tool_name, argument_chars) while a long tool call streams:
+    #: its arguments arrive as silent deltas, minutes of nothing to show.
+    tool_call_progress: Optional[Callable[[str, int], None]] = None
+
     def __init__(
         self,
         model: Optional[str] = None,
@@ -567,14 +577,13 @@ class LemonadeProvider(LLMClient):
                 messages
             )
 
-        # Default to low temperature for deterministic responses (matches old LLMClient behavior)
-        kwargs.setdefault("temperature", 0.1)
-
-        # Stops local models looping on tables and paragraphs. Cloud models get
-        # none: the penalties hit their reasoning tokens and the thinking runs away.
-        # repeat_penalty / repeat_last_n are llama.cpp-native (sent via extra_body
-        # when streaming).
+        # Low temperature and penalties stop local models looping on tables and
+        # paragraphs. Cloud models get neither: near-greedy sampling and the
+        # penalties both send a reasoning model's thinking into a runaway, so
+        # they get the client's standard 0.7. repeat_penalty / repeat_last_n
+        # are llama.cpp-native (sent via extra_body when streaming).
         if not self._backend.cloud_model_provider(effective_model):
+            kwargs.setdefault("temperature", 0.1)
             kwargs.setdefault("frequency_penalty", 0.3)
             kwargs.setdefault("presence_penalty", 0.1)
             kwargs.setdefault("repeat_penalty", 1.1)
@@ -793,6 +802,7 @@ class LemonadeProvider(LLMClient):
         in_thinking = False
         thought = ""  # reasoning held back until a line is whole (see below)
         tool_calls: dict[int, dict] = {}
+        next_progress = time.perf_counter()
         finish_reason = ""
         text_seen: list[str] = []
         reasoning_seen: list[str] = []
@@ -821,6 +831,20 @@ class LemonadeProvider(LLMClient):
                 ):
                     self._last_ttft_seconds = time.perf_counter() - request_started
                 _accumulate_tool_calls(tool_calls, delta.get("tool_calls"))
+                if (
+                    delta.get("tool_calls")
+                    and self.tool_call_progress is not None
+                    and time.perf_counter() >= next_progress
+                ):
+                    chars = sum(
+                        len(tc["function"]["arguments"]) for tc in tool_calls.values()
+                    )
+                    if chars >= TOOL_CALL_PROGRESS_MIN_CHARS:
+                        name = tool_calls[max(tool_calls)]["function"]["name"]
+                        self.tool_call_progress(name, chars)
+                        next_progress = (
+                            time.perf_counter() + TOOL_CALL_PROGRESS_INTERVAL_S
+                        )
                 content = delta.get("content")
                 if content:
                     # Close thinking block before yielding actual content

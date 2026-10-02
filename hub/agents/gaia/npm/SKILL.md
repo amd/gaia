@@ -511,11 +511,12 @@ Two consequences an integrator needs to plan for:
 - **Up to 600 prompt tokens, every turn.** That is the enforced ceiling
   (1.8% of the NPU profile's 32K window), not a typical value — budget it
   alongside `gaia-voice`'s 702.
-- **A background embedding pass on first contact with a new repository.** If
-  the repo has no [code index](https://amd-gaia.ai/docs/guides/code-index), the
-  map starts one in a background thread so semantic search is ready when it is
-  needed. On a large monorepo that is minutes of local embedding.
-  `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns it off.
+- **An embedding pass on the first semantic code search.** If the repo has no
+  [code index](https://amd-gaia.ai/docs/guides/code-index), the first
+  `search_code_index` builds it, then searches. On a large monorepo that one
+  search takes minutes of local embedding; a task that never searches pays
+  nothing. `GAIA_PROJECT_MAP_AUTO_INDEX=1` builds it in the background at task
+  start instead.
 
 The sidecar's CLI accepts only `--host` and `--port`, so pointing the map at a
 specific project means `GAIA_PROJECT_ROOT=/path/to/repo` in its environment, or

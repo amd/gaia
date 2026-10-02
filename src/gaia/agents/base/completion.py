@@ -569,7 +569,8 @@ class CompletionEvidence:
         if item is None or not item.written or raw.get("is_binary"):
             return
         content = raw.get("content")
-        if not isinstance(content, str):
+        # A numbered line window is not the file's bytes: never a full readback.
+        if not isinstance(content, str) or raw.get("start_line") is not None:
             return
         start = raw.get("offset", 0)
         end = start + len(content)

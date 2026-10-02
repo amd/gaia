@@ -220,6 +220,46 @@ class TestSystemStatus:
         assert data["context_size_sufficient"] is False
 
     @patch("httpx.AsyncClient")
+    def test_a_cloud_model_is_never_called_too_small(self, mock_httpx_cls, client):
+        """Lemonade reports ctx_size 4096 for every cloud model — a placeholder."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "fireworks.deepseek-v4p1-flash",
+            "version": "2026.39.1",
+            "all_models_loaded": [
+                {
+                    "model_name": "fireworks.deepseek-v4p1-flash",
+                    "recipe": "cloud",
+                    "device": "none",
+                    "recipe_options": {"ctx_size": 4096},
+                }
+            ],
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            return make_response(404, {})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        data = client.get("/api/system/status").json()
+        assert data["model_loaded"] == "fireworks.deepseek-v4p1-flash"
+        assert data["model_context_size"] is None
+        assert data["context_size_sufficient"] is True
+
+    @patch("httpx.AsyncClient")
     def test_system_status_context_size_sufficient(self, mock_httpx_cls, client):
         """context_size_sufficient is True when loaded context >= 32768 tokens."""
         mock_client = AsyncMock()
