@@ -45,6 +45,10 @@ logger = get_logger(__name__)
 HEADER_SEARCH_ROWS = 20
 
 
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
 def _header_row_index(rows: List[tuple]) -> int:
     """The row that names a sheet's columns, below any title or note rows.
 
@@ -1918,8 +1922,10 @@ class FileSearchToolsMixin:
                     "entries_shown": len(entries),
                     "truncated": truncated,
                     "display_message": (
-                        f"Listing {len(entries)} items in {dir_path.name or str(dir_path)} "
-                        f"({total_folders} folders, {total_files} files)"
+                        f"Listing {_count(len(entries), 'item')} in "
+                        f"{dir_path.name or str(dir_path)} "
+                        f"({_count(total_folders, 'folder')}, "
+                        f"{_count(total_files, 'file')})"
                     ),
                 }
 
