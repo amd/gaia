@@ -152,3 +152,18 @@ def test_always_answer_grants_only_the_prompted_path(layout):
 
     assert len(requests) == 1
     assert results["second"]["status"] == "error"
+
+
+def test_the_prompt_reads_as_a_question_about_the_path():
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    (event,) = CanonicalTranslator(run_id=None, agent_id="gaia", debug=False).translate(
+        {
+            "type": "permission_request",
+            "tool": PATH_ACCESS_PROMPT_TOOL,
+            "args": {"path": r"C:\Users\me\notes\plan.txt"},
+        }
+    )
+    assert event["summary"] == (
+        r"Allow GAIA to open C:\Users\me\notes\plan.txt for this session?"
+    )

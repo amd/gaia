@@ -203,6 +203,8 @@ That's the honest scope for a personal document agent — "ask questions about m
 
 Both are refused with a message naming the file and why. Edit such a file yourself if that's genuinely what you wanted.
 
+**Reaching outside the scope asks first.** When a tool needs a file or folder outside the allowed set, the TUI and Agent UI show the same approval dialog as a write: *"Allow GAIA to open `<path>` for this session?"* Approving grants that one file or folder until the session ends — never saved, never "always", and each new path is asked about on its own. Paths that stay off limits whatever you answer (secrets, system and program directories, the system temp folder, a whole drive or your entire home folder) are refused without a prompt. The Agent UI scopes a chat to its attached documents, so this is how it reaches a file you name in your own folders.
+
 To narrow the scope, construct the agent with an explicit list:
 
 ```python
@@ -299,7 +301,7 @@ The hint `GET /v1/gaia/init` returns also names the pull command for whichever L
 
 ### "Access denied to path"
 
-The file resolves outside the allowed paths — by default, outside your home directory. Move the file inside the scope, or construct the agent with an `allowed_paths` list that covers it (see [File access scope](#file-access-scope)).
+The file resolves outside the allowed paths — by default, outside your home directory — and either you denied the approval prompt or the path is one that is never granted (see [File access scope](#file-access-scope)). Approve the prompt when it appears, move the file inside the scope, or construct the agent with an `allowed_paths` list that covers it.
 
 ### The sidecar won't start
 
