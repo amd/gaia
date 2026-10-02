@@ -96,6 +96,7 @@ from gaia.llm.lemonade_client import (
     truncation_budget,
 )
 from gaia.llm.providers.lemonade import CONNECTION_FAILURE_RE
+from gaia.utils.power import stay_awake
 from gaia.utils.terminal import stdin_is_interactive
 
 if TYPE_CHECKING:
@@ -386,6 +387,17 @@ class ToolExecutionTimeout(Exception):
 # This set only covers tools whose names GAIA controls. Tools registered at
 # runtime under a third-party name (MCP) carry a ``requires_confirmation`` flag
 # on their registry entry instead — see ``Agent._tool_requires_confirmation``.
+#: What a long tool call is doing, in the user's words, while it streams.
+_TOOL_CALL_PROGRESS_LABELS = {
+    "edit_file": "Writing a file edit",
+    "edit_python_file": "Writing a file edit",
+    "write_file": "Writing a file",
+    "write_python_file": "Writing a file",
+    "write_markdown_file": "Writing a file",
+    "run_python": "Writing Python code",
+    "run_shell_command": "Writing a command",
+}
+
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
     "run_cli_command",
@@ -3480,6 +3492,22 @@ Do NOT wrap conversational replies in JSON.
     def get_tools(self) -> List[Dict[str, Any]]:
         """Get a list of registered tools for the agent."""
         return list(self._tools_registry.values())
+
+    def _attach_tool_call_progress(self) -> None:
+        """Report a long tool call while its arguments stream in.
+
+        A local model writing a whole file into edit_file streamed for seven
+        minutes with nothing on screen but a timer.
+        """
+        provider = getattr(getattr(self, "chat", None), "llm_client", None)
+        if provider is not None and hasattr(provider, "tool_call_progress"):
+            provider.tool_call_progress = self._report_tool_call_progress
+
+    def _report_tool_call_progress(self, tool: str, chars: int) -> None:
+        label = _TOOL_CALL_PROGRESS_LABELS.get(tool) or (
+            f"Preparing {tool}" if tool else "Preparing a tool call"
+        )
+        self.console.report_progress(f"{label} — {chars:,} characters so far")
 
     def _tool_call_retry_prompt(self, reason: Exception) -> str:
         """Build the recovery turn sent after a tool-call parse failure.
@@ -6679,7 +6707,8 @@ Do NOT wrap conversational replies in JSON.
         """
         ns_id = self._namespaced_agent_id()
         try:
-            with self._agent_identity_context(ns_id):
+            # Standby would stall a local model mid-turn until someone wakes the PC.
+            with self._agent_identity_context(ns_id), stay_awake():
                 return self._process_query_impl(user_input, max_steps, trace, filename)
         finally:
             # The impl re-raises on purpose (the wrong-ctx reload its caller
@@ -7363,6 +7392,7 @@ Do NOT wrap conversational replies in JSON.
                 # behaviour as the non-streaming branch below — needed because
                 # multi-step ReAct loops accumulate tool results in `messages`.
                 _retried_after_trim_stream = False
+                self._attach_tool_call_progress()
                 while True:
                     try:
                         response_stream = self.chat.send_messages_stream(

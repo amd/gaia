@@ -58,7 +58,10 @@ def _project_root(path: Path) -> Optional[Path]:
 
 
 def _git_grep(root: Path, pattern: str) -> List[str]:
-    """``file:line: text`` for every ``*.py`` line matching *pattern* (extended regex)."""
+    """``file:line: text`` for every ``*.py`` line matching *pattern*.
+
+    Plain POSIX extended regex: macOS git grep has no ``\\b`` or ``\\s``.
+    """
     try:
         done = subprocess.run(
             [
@@ -123,7 +126,9 @@ def edit_impact(path: Path, before: str, after: str) -> Optional[Dict[str, objec
             continue
         uses = [
             line
-            for line in _git_grep(root, rf"\b{re.escape(name)}\b")
+            for line in _git_grep(
+                root, rf"(^|[^[:alnum:]_]){re.escape(name)}([^[:alnum:]_]|$)"
+            )
             if not re.search(rf"\bdef\s+{re.escape(name)}\b", line)
         ]
         if uses:
@@ -147,7 +152,9 @@ def edit_impact(path: Path, before: str, after: str) -> Optional[Dict[str, objec
             continue
         others = [
             line
-            for line in _git_grep(root, rf"def\s+{re.escape(name)}\s*\(")
+            for line in _git_grep(
+                root, rf"def[[:space:]]+{re.escape(name)}[[:space:]]*\("
+            )
             if not line.startswith(f"{rel}:")
         ]
         if 0 < len(others) <= MAX_OTHER_DEFINITIONS:

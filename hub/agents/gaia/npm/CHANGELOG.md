@@ -31,6 +31,12 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- **`/model` no longer offers speech or other non-chat models as chat
+  targets.** Whisper was listed as a "chat-capable" local model; switching to it
+  reported success and broke the next turn. Transcription, speech, music,
+  classification, upscaling and 3D models are excluded; a model labeled `chat`
+  still qualifies even if it also transcribes.
+
 - **The agent no longer starts an unrelated job after answering.** A bugfix
   request loaded the `coding` skill, whose "find every call site" tip switched
   on document inventorying; after the fix was done and verified, the agent spent
