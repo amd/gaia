@@ -171,6 +171,8 @@ async def create_session(
     request.agent_type = flagship_only(http_request, request.agent_type)
     _reject_unknown_agent_type(request.agent_type)
     try:
+        # Read before the chat exists, so a bad config leaves no chat behind.
+        start_mode = session_permissions.default_mode()
         session = db.create_session(
             title=request.title,
             model=request.model,
@@ -181,6 +183,7 @@ async def create_session(
             device=request.device,
             mail_provider=request.mail_provider,
         )
+        session_permissions.seed_new_session(session["id"], start_mode)
         return session_to_response(session)
     except Exception as e:
         logger.error("Failed to create session: %s", e, exc_info=True)

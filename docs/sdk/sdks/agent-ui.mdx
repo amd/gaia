@@ -1006,14 +1006,18 @@ Used to reach the UI from a phone.
     Every chat in this backend run that has full access on or at least one
     "always allow" grant, for the Settings → Permissions pane.
 
-    **Response:** `{"sessions": [{"session_id", "mode", "grants": [{"key", "label"}]}]}`
+    **Response:** `{"default_mode", "sessions": [{"session_id", "mode", "grants": [{"key", "label"}]}]}`
+    — `default_mode` is the mode a new chat starts in: `full_access` when it is
+    set in `~/.gaia/config.json`, otherwise `ask`.
   </Accordion>
 
   <Accordion title="GET /api/chat/permissions/{session_id}">
-    One chat's permission mode (`ask` or `full_access`) and its grants. A new
-    chat starts in `ask` unless `full_access` is set in `~/.gaia/config.json`.
+    One chat's permission mode (`ask` or `full_access`) and its grants. A chat
+    created in this backend run starts in `ask` unless `full_access` is set in
+    `~/.gaia/config.json`; a chat from an earlier run reopens in `ask`.
     Permission state lives in memory: it ends when the chat is deleted or the
-    backend restarts.
+    backend restarts. **404** when no such chat exists (also for `PUT` and
+    `DELETE` below).
   </Accordion>
 
   <Accordion title="PUT /api/chat/permissions/{session_id}">

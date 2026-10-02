@@ -282,8 +282,26 @@ function stripBogusCodeFences(text: string): string {
     );
 }
 
+/**
+ * A trailing "Verification: unverified ..." line is the agent's no-op scope
+ * note on a turn that ran no checks — the same disclaimer under every chat
+ * answer. "verified" / "partially verified" lines report real check results
+ * and stay. Mirrors the TUI's StripVerificationScope.
+ */
+const UNVERIFIED_SCOPE_RE = /\n{1,2}Verification: unverified[^\n]*\s*$/;
+
+function stripUnverifiedScope(content: string): string {
+    let text = content;
+    for (;;) {
+        const stripped = text.replace(UNVERIFIED_SCOPE_RE, '');
+        if (stripped === text) return text;
+        text = stripped;
+    }
+}
+
 function cleanToolCallContent(content: string, streaming = false): string {
     if (!content) return content;
+    content = stripUnverifiedScope(content);
     let cleaned = content;
 
     // Remove all tool-call JSON blocks from the content

@@ -10,9 +10,10 @@ the Agent UI's counterpart of ``PermissionState`` in the flagship's stdio host
 
 - **ask** (the default): every confirmation-gated tool call asks.
 - **full access**: gated calls run without asking and the shell guardrails are
-  lifted, exactly as the TUI's ``/full-access``. It starts on for a new chat only
-  when ``full_access`` is set in ``~/.gaia/config.json``
-  (``gaia config set full_access true`` or the TUI's ``/full-access always``).
+  lifted, exactly as the TUI's ``/full-access``. A chat created in this backend
+  run starts on it only when ``full_access`` is set in ``~/.gaia/config.json``
+  (``gaia config set full_access true`` or the TUI's ``/full-access always``);
+  a chat from an earlier run reopens in ask.
 - **grants**: "always allow" answers, scoped to the invocation by
   :func:`gaia.agents.base.tool_grants.grant_scope`. They last until the chat is
   deleted or the backend restarts, and can be listed and revoked.
@@ -43,6 +44,11 @@ def _default_full_access() -> bool:
     from gaia.config import GaiaConfig
 
     return bool(GaiaConfig.load().full_access)
+
+
+def default_mode() -> str:
+    """The mode a new chat starts in, from ``full_access`` in the config."""
+    return MODE_FULL_ACCESS if _default_full_access() else MODE_ASK
 
 
 class SessionPermissions:
@@ -119,13 +125,31 @@ _registry_lock = threading.Lock()
 
 
 def for_session(session_id: str) -> SessionPermissions:
-    """The permission state of *session_id*, created on first use."""
+    """The permission state of *session_id*, created in ask on first use."""
     with _registry_lock:
         perms = _registry.get(session_id)
         if perms is None:
-            perms = SessionPermissions(full_access=_default_full_access())
+            perms = SessionPermissions()
             _registry[session_id] = perms
         return perms
+
+
+def seed_new_session(session_id: str, mode: str) -> SessionPermissions:
+    """Start a chat created just now in *mode*, normally :func:`default_mode`."""
+    if mode not in MODES:
+        raise ValueError(
+            f"Unknown permission mode {mode!r}. Known: {', '.join(MODES)}."
+        )
+    perms = SessionPermissions(full_access=mode == MODE_FULL_ACCESS)
+    with _registry_lock:
+        _registry[session_id] = perms
+        return perms
+
+
+def get(session_id: str) -> Optional[SessionPermissions]:
+    """The permission state of *session_id*, or None; never creates it."""
+    with _registry_lock:
+        return _registry.get(session_id)
 
 
 def all_sessions() -> Dict[str, SessionPermissions]:

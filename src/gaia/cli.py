@@ -502,7 +502,8 @@ def resolve_effective_device(
             print(
                 "No GPU detected — inference will run on CPU "
                 "(slower). Run `gaia init` to set up GPU "
-                "acceleration."
+                "acceleration.",
+                file=sys.stderr,
             )
             effective_device = "cpu"
 
@@ -523,6 +524,11 @@ def _gaia_cli_client_params(kwargs: dict) -> dict:
 
 async def async_main(action, **kwargs):
     log = get_logger(__name__)
+
+    if action == "chat":
+        from gaia.logger import log_manager
+
+        log_manager.configure_agent_console(debug=kwargs.get("debug", False))
 
     # Map actions to agent profiles for Lemonade initialization
     # Each agent has specific model and context size requirements
@@ -670,14 +676,21 @@ async def async_main(action, **kwargs):
             # Always announce which device the agent will run on.
             device_labels = {"cpu": "CPU", "gpu": "GPU", "npu": "NPU (Ryzen AI)"}
             device_label = device_labels.get(effective_device, effective_device.upper())
-            print(f"🖥️  Device: {device_label}  |  Model: {explicit_model or 'auto'}")
+            # stderr: stdout carries only the answer, so `-q` output is scriptable.
+            print(
+                f"🖥️  Device: {device_label}  |  Model: {explicit_model or 'auto'}",
+                file=sys.stderr,
+            )
             if effective_device == "cpu":
                 print(
                     "   ⚠️  Running on CPU — expect significantly slower response "
-                    "times. Use 'gaia init' to set up GPU acceleration."
+                    "times. Use 'gaia init' to set up GPU acceleration.",
+                    file=sys.stderr,
                 )
             if effective_device == "npu":
-                print("   ℹ️  NPU mode requires: gaia init --profile npu")
+                print(
+                    "   ℹ️  NPU mode requires: gaia init --profile npu", file=sys.stderr
+                )
 
             # Create configuration with CLI values
             config = ChatAgentConfig(
@@ -758,11 +771,11 @@ async def async_main(action, **kwargs):
             return
 
         except KeyboardInterrupt:
-            print("\n\nInterrupted by user")
+            print("\n\nInterrupted by user", file=sys.stderr)
             return
         except Exception as e:
             log.error(f"Error in chat: {e}", exc_info=True)
-            print(f"❌ Error: {e}")
+            print(f"❌ Error: {e}", file=sys.stderr)
             return
         finally:
             # Cleanup. The drain is here rather than beside the one-shot
@@ -943,6 +956,10 @@ def _launch_interactive_cli(log=None):
     """
     if log is None:
         log = get_logger(__name__)
+
+    from gaia.logger import log_manager
+
+    log_manager.configure_agent_console(debug=False)
 
     try:
         success, base_url = initialize_lemonade_for_agent("chat")
@@ -2501,6 +2518,20 @@ afterwards (or `swebench <run_dir>` does, later).
         "is built from (default: the five-instance pilot); only with --suite swebench",
     )
     tasks_run_parser.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        metavar="N",
+        help="swebench: a seeded random N of SWE-bench Verified instead of named "
+        "--instances; the same N and --seed always pick the same tasks",
+    )
+    tasks_run_parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for --sample (default: the seed GAIA's published numbers use)",
+    )
+    tasks_run_parser.add_argument(
         "--no-evaluate",
         action="store_true",
         help="swebench: capture the predictions but do not grade them in Docker "
@@ -2552,8 +2583,8 @@ afterwards (or `swebench <run_dir>` does, later).
     tasks_run_parser.add_argument(
         "--full-access",
         action="store_true",
-        help="Give GAIA no path boundary, the reach Claude Code has with its "
-        "permissions skipped",
+        help="Give GAIA no path boundary and no shell guardrails, the reach "
+        "Claude Code has with its permissions skipped",
     )
     tasks_run_parser.add_argument(
         "--meter",
@@ -3727,6 +3758,7 @@ def _handle_eval_tasks(args):
 
     if args.tasks_action == "run":
         from gaia.eval.bench import config as bench_config
+        from gaia.eval.eval_lock import exclusive_eval
 
         try:
             config = bench_config.resolve(
@@ -3755,7 +3787,22 @@ def _handle_eval_tasks(args):
         model = args.model or DEFAULT_MODEL_NAME
         only = [t.strip() for t in (args.tasks or "").split(",") if t.strip()]
         instances = [i.strip() for i in (args.instances or "").split(",") if i.strip()]
+        if args.sample is not None or args.seed is not None:
+            if args.suite != "swebench" or instances or args.sample is None:
+                print(
+                    "❌ --sample N (and --seed) pick SWE-bench instances: use them "
+                    "with --suite swebench and without --instances."
+                )
+                sys.exit(2)
         try:
+            if args.sample is not None:
+                from gaia.eval.bench import swebench as _swebench
+
+                instances = _swebench.sample_ids(
+                    args.sample,
+                    _swebench.SAMPLE_SEED if args.seed is None else args.seed,
+                )
+                print(f"[SAMPLE] {len(instances)} instances: {','.join(instances)}")
             ft.select(
                 ft.load_suite(
                     args.suite, instances=instances, work_root=config.work_root
@@ -3791,16 +3838,17 @@ def _handle_eval_tasks(args):
                 f"[RUN] suite {args.suite} on {model} via {config.harness}"
                 + (f" (repeat {repeat}/{config.repeats})" if config.repeats > 1 else "")
             )
-            card = ft.run_suite(
-                args.suite,
-                model,
-                run_dir,
-                on_progress=_progress,
-                config=config,
-                repeat=repeat,
-                only=only,
-                **({"instances": instances} if instances else {}),
-            )
+            with exclusive_eval("gaia eval tasks run"):
+                card = ft.run_suite(
+                    args.suite,
+                    model,
+                    run_dir,
+                    on_progress=_progress,
+                    config=config,
+                    repeat=repeat,
+                    only=only,
+                    **({"instances": instances} if instances else {}),
+                )
             if not args.no_judge:
                 card = _judge(run_dir, judge_env)
             if args.suite == "swebench" and not args.no_evaluate:

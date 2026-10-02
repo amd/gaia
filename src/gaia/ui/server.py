@@ -210,6 +210,16 @@ def start_model_server_owner() -> threading.Thread:
     return thread
 
 
+def lemonade_is_remote() -> bool:
+    """Whether ``LEMONADE_BASE_URL`` names another machine, which no daemon here owns."""
+    from urllib.parse import urlparse
+
+    from gaia.llm.lemonade_supervisor import _is_loopback
+
+    base_url = os.environ.get("LEMONADE_BASE_URL")
+    return bool(base_url) and not _is_loopback(urlparse(base_url).hostname or "")
+
+
 # ── Application Factory ────────────────────────────────────────────────────
 
 
@@ -333,10 +343,12 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             import httpx
 
             from gaia.llm.lemonade_client import (
+                cloud_model_provider,
                 lemonade_auth_headers,
+                resolve_ctx_size,
                 resolve_lemonade_api_key,
             )
-            from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
+            from gaia.llm.lemonade_manager import LemonadeManager
             from gaia.ui._chat_helpers import model_load_lock
 
             base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
@@ -376,8 +388,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 except Exception:
                     pass  # proceed with load attempt
 
+                if cloud_model_provider(model_id, None):
+                    return  # cloud models are never loaded locally
                 LemonadeClient(verbose=False).load_model(
-                    model_id, ctx_size=DEFAULT_CONTEXT_SIZE, prompt=False
+                    model_id, ctx_size=resolve_ctx_size(model_id), prompt=False
                 )
 
         # Dispatch startup tasks.  Jobs A and B run in parallel; Job C
@@ -933,7 +947,8 @@ def main():
         # rather than a traceback. 64 is EX_USAGE, as gaia uninstall uses.
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(64) from exc
-    start_model_server_owner()
+    if not lemonade_is_remote():
+        start_model_server_owner()
     uvicorn.run(
         server_app,
         host=args.host,

@@ -515,6 +515,10 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             # clamp made the UI report a different (higher, wrong)
                             # context than the CLI for the same running server.
                             ctx = m.get("recipe_options", {}).get("ctx_size")
+                            # A cloud entry's ctx_size is a 4096 placeholder, not
+                            # the provider's window: leave it unknown, never "too small".
+                            if m.get("recipe") == "cloud":
+                                ctx = None
                             if ctx is not None:
                                 status.model_context_size = resolve_effective_ctx_size(
                                     ctx, m.get("max_context_window")

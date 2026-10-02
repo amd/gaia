@@ -65,6 +65,7 @@ beforeEach(() => {
     mocked.getMessages.mockResolvedValue({ messages: [] } as never);
     mocked.getPermissions.mockResolvedValue({ session_id: 'sess-new-0001', mode: 'ask', grants: [] });
     mocked.setPermissionMode.mockResolvedValue({ session_id: 'sess-new-0001', mode: 'full_access', grants: [] });
+    mocked.listAllPermissions.mockResolvedValue({ default_mode: 'ask', sessions: [] });
     mocked.sendMessageStream.mockImplementation(() => new AbortController());
     mocked.getOnboardingPreflight.mockResolvedValue({
         compatible: true, blockers: [], warnings: [], ram_gb: 32, gpu_name: null, npu_detected: false, disk_free_gb: 100,
@@ -77,7 +78,7 @@ beforeEach(() => {
     useModelStore.setState({ active: null, error: null, restoreNotice: null });
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null,
-        draftPermissionMode: 'ask', showMemoryDashboard: false, showSchedules: false, settingsSection: null,
+        draftPermissionMode: 'ask', defaultPermissionMode: 'ask', showMemoryDashboard: false, showSchedules: false, settingsSection: null,
     });
 });
 
@@ -136,6 +137,17 @@ describe('a new chat', () => {
         await waitFor(() => expect(mocked.setPermissionMode).toHaveBeenCalledWith('sess-new-0001', 'ask'));
     });
 
+    it('starts in full access when config makes that the default, and returns to it after', async () => {
+        mocked.listAllPermissions.mockResolvedValue({ default_mode: 'full_access', sessions: [] });
+        render(<App />);
+        await waitFor(() => expect(useChatStore.getState().draftPermissionMode).toBe('full_access'));
+        expect(await screen.findByRole('button', { name: 'Permission mode: full access' })).toBeInTheDocument();
+        await sendFirstMessage('go');
+
+        await waitFor(() => expect(mocked.setPermissionMode).toHaveBeenCalledWith('sess-new-0001', 'full_access'));
+        expect(useChatStore.getState().draftPermissionMode).toBe('full_access');
+    });
+
     it('does not send the message when the permission mode could not be set', async () => {
         mocked.setPermissionMode.mockRejectedValue(new Error('backend said no'));
         render(<App />);
@@ -170,5 +182,41 @@ describe('first-run setup', () => {
         });
         render(<App />);
         await waitFor(() => expect(mocked.checkSetup).toHaveBeenCalledWith(true));
+    });
+});
+
+// A chat's link (#<short hash>) reloaded to the home page: with no session
+// selected yet, the hash-sync effect cleared the hash before the deferred URL
+// handler read it.
+describe('opening the app on a chat link', () => {
+    afterEach(() => {
+        window.history.replaceState(null, '', '/');
+        useChatStore.setState({ sessions: [], currentSessionId: null });
+    });
+
+    it('opens that chat and keeps its link', async () => {
+        const chat = session({ id: '2676152b-4c2d-4b6e-af47-c790ffd3f2b7' });
+        mocked.listSessions.mockResolvedValue({ sessions: [chat], total: 1 });
+        useChatStore.setState({ sessions: [], currentSessionId: null });
+        window.history.replaceState(null, '', '/#2676152');
+
+        render(<App />);
+
+        await waitFor(() =>
+            expect(useChatStore.getState().currentSessionId).toBe(chat.id),
+        );
+        expect(window.location.hash).toBe('#2676152');
+    });
+
+    it('drops a link to a chat that no longer exists', async () => {
+        mocked.listSessions.mockResolvedValue({ sessions: [session()], total: 1 });
+        useChatStore.setState({ sessions: [], currentSessionId: null });
+        window.history.replaceState(null, '', '/#deadbee');
+
+        render(<App />);
+
+        await waitFor(() => expect(mocked.listSessions).toHaveBeenCalled());
+        await waitFor(() => expect(window.location.hash).toBe(''));
+        expect(useChatStore.getState().currentSessionId).toBeNull();
     });
 });

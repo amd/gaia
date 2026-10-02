@@ -332,6 +332,9 @@ class OutputHandler(ABC):
         """Stop progress indicator."""
         ...
 
+    def report_progress(self, message: str) -> None:
+        """A live line for long work that has nothing else to show yet. Optional."""
+
     def pause_progress(self):
         """Pause progress indicator, remembering state for later resume. Optional — default no-op."""
         ...

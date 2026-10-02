@@ -1408,10 +1408,12 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         import httpx
 
         from gaia.llm.lemonade_client import (
+            cloud_model_provider,
             lemonade_auth_headers,
+            resolve_ctx_size,
             resolve_lemonade_api_key,
         )
-        from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
+        from gaia.llm.lemonade_manager import LemonadeManager
 
         base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
@@ -1423,6 +1425,16 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
         expected_lower = model_id.lower()
         chat_models = [m for m in all_models if m.get("type") in ("llm", "vlm")]
+        # A cloud model occupies no local slot: nothing to load, nothing to evict.
+        if any(
+            (m.get("model_name") or "").lower() == expected_lower
+            and m.get("recipe") == "cloud"
+            for m in chat_models
+        ) or cloud_model_provider(model_id, None):
+            return
+        # The window the agent itself will require; loading smaller makes it reload.
+        required_ctx = resolve_ctx_size(model_id)
+        chat_models = [m for m in chat_models if m.get("recipe") != "cloud"]
         active_is_expected = any(
             (m.get("model_name") or "").lower() == expected_lower for m in chat_models
         )
@@ -1435,11 +1447,11 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         #   - no chat model active
         #   - active chat model isn't the one we want
         #   - active ctx is missing (== 0 from .get() fallback) OR < required
-        # The previous guard ``active_ctx and active_ctx < DEFAULT_CONTEXT_SIZE``
+        # The previous guard ``active_ctx and active_ctx < required``
         # let a 0-ctx state pass through, which is exactly the broken-model
         # state where reload is most needed.
         ctx_too_small = active_is_expected and (
-            active_ctx == 0 or active_ctx < DEFAULT_CONTEXT_SIZE
+            active_ctx == 0 or active_ctx < required_ctx
         )
         needs_load = not chat_models or not active_is_expected or ctx_too_small
         if not needs_load:
@@ -1452,7 +1464,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                 f"wrong model active ({[m.get('model_name') for m in chat_models]}); "
                 f"need {model_id}"
                 if not active_is_expected
-                else f"ctx={active_ctx} < required {DEFAULT_CONTEXT_SIZE}"
+                else f"ctx={active_ctx} < required {required_ctx}"
             )
         )
         logger.info("Pre-flight load: %s → loading %s", reason, model_id)
@@ -1484,12 +1496,12 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                 resident_chat_models = [
                     m
                     for m in resp2.json().get("all_models_loaded", [])
-                    if m.get("type") in ("llm", "vlm")
+                    if m.get("type") in ("llm", "vlm") and m.get("recipe") != "cloud"
                 ]
                 if any(
                     (m.get("model_name") or "").lower() == expected_lower
                     and (m.get("recipe_options", {}).get("ctx_size") or 0)
-                    >= DEFAULT_CONTEXT_SIZE
+                    >= required_ctx
                     for m in resident_chat_models
                 ):
                     logger.debug(
@@ -1500,20 +1512,13 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
             client = LemonadeClient(verbose=False)
             # Lemonade does not evict the resident model on a new /load, so
-            # loading a different model (or the same model at a larger ctx)
-            # leaves the previous one resident — a silent double-load that
-            # wastes memory and can degrade output. Unload the wrong/stale chat
-            # model first, mirroring gaia/rag/sdk.py before an embedder swap.
-            if resident_chat_models:
-                try:
-                    client.unload_model()
-                except Exception as unload_exc:
-                    logger.debug(
-                        "Pre-flight unload before reload failed: %s", unload_exc
-                    )
+            # unload the stale local chat models first — by name, so the
+            # embedder that memory and RAG need stays resident.
+            for stale in resident_chat_models:
+                client.unload_model(stale["model_name"], ignore_if_not_loaded=True)
             client.load_model(
                 model_id,
-                ctx_size=DEFAULT_CONTEXT_SIZE,
+                ctx_size=required_ctx,
                 prompt=False,
                 timeout=_PREFLIGHT_LOAD_TIMEOUT_S,
             )

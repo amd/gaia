@@ -291,7 +291,7 @@ class SetupRunner:
             self._run = run
             proc = self._proc
             view = run.view()
-        threading.Thread(target=self._pump, args=(run, proc), daemon=True).start()
+        threading.Thread(target=self._watch, args=(run, proc), daemon=True).start()
         return view
 
     def cancel(self) -> bool:
@@ -302,6 +302,20 @@ class SetupRunner:
             self._run.text = "Setup stopped"
             self._proc.kill()
             return True
+
+    def _watch(self, run: SetupRun, proc: subprocess.Popen) -> None:
+        """Run the setup thread; an unexpected error fails the run, never strands it."""
+        try:
+            self._pump(run, proc)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.exception("Setup thread failed")
+            with self._lock:
+                if run.state in ("running", "verifying"):
+                    run.state = "failed"
+                    run.error = (
+                        f"Setup stopped on an unexpected error: {e}. "
+                        "See the Agent UI backend log for details."
+                    )
 
     def _pump(self, run: SetupRun, proc: subprocess.Popen) -> None:
         buf = b""

@@ -310,31 +310,50 @@ class PermissionModeRequest(BaseModel):
 
 
 def _permissions_view(session_id: str) -> dict:
-    perms = session_permissions.for_session(session_id)
+    perms = session_permissions.get(session_id)
+    if perms is None:
+        return {
+            "session_id": session_id,
+            "mode": session_permissions.MODE_ASK,
+            "grants": [],
+        }
     return {"session_id": session_id, "mode": perms.mode, "grants": perms.grants()}
+
+
+def _require_session(db: ChatDatabase, session_id: str) -> None:
+    if db.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail=f"No chat {session_id!r}.")
 
 
 @router.get("/api/chat/permissions")
 async def list_permissions():
-    """Every chat with full access on or "always allow" grants, for Settings."""
+    """Every chat with full access on or "always allow" grants, for Settings.
+
+    ``default_mode`` is the mode a new chat starts in (``full_access`` in config).
+    """
     return {
+        "default_mode": session_permissions.default_mode(),
         "sessions": [
             {"session_id": sid, "mode": p.mode, "grants": p.grants()}
             for sid, p in session_permissions.all_sessions().items()
             if p.grants() or p.mode != session_permissions.MODE_ASK
-        ]
+        ],
     }
 
 
 @router.get("/api/chat/permissions/{session_id}")
-async def get_permissions(session_id: str):
+async def get_permissions(session_id: str, db: ChatDatabase = Depends(get_db)):
     """This chat's permission mode and its "always allow" grants."""
+    _require_session(db, session_id)
     return _permissions_view(session_id)
 
 
 @router.put("/api/chat/permissions/{session_id}")
-async def set_permission_mode(session_id: str, body: PermissionModeRequest):
+async def set_permission_mode(
+    session_id: str, body: PermissionModeRequest, db: ChatDatabase = Depends(get_db)
+):
     """Switch between ask and full access; applies to the next gated tool."""
+    _require_session(db, session_id)
     try:
         session_permissions.for_session(session_id).set_mode(body.mode)
     except ValueError as exc:
@@ -343,9 +362,13 @@ async def set_permission_mode(session_id: str, body: PermissionModeRequest):
 
 
 @router.delete("/api/chat/permissions/{session_id}/grants")
-async def revoke_grants(session_id: str, key: Optional[str] = None):
+async def revoke_grants(
+    session_id: str, key: Optional[str] = None, db: ChatDatabase = Depends(get_db)
+):
     """Revoke one "always allow" grant (``?key=``), or all of them."""
-    removed = session_permissions.for_session(session_id).revoke(key)
+    _require_session(db, session_id)
+    perms = session_permissions.get(session_id)
+    removed = perms.revoke(key) if perms is not None else 0
     if key is not None and removed == 0:
         raise HTTPException(status_code=404, detail=f"No grant {key!r} in this chat.")
     return _permissions_view(session_id)

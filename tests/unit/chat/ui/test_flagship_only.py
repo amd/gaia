@@ -14,6 +14,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from gaia.ui import _chat_helpers as helpers
 from gaia.ui.security import flagship_only
 from gaia.ui.server import create_app
 
@@ -55,8 +56,28 @@ class TestFlagshipOnly:
         assert flagship_only(req, "chat") == "chat"
 
 
+class _Registry:
+    """A machine with the flagship and ``chat`` installed, whatever CI has."""
+
+    def get(self, agent_id):
+        return object() if agent_id in ("gaia", "chat") else None
+
+    def list(self):
+        return []
+
+    def get_load_error(self, _agent_id):
+        return None
+
+
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # The app's startup sets a process-wide registry; keep it out of later tests.
+    monkeypatch.setattr(helpers, "_agent_registry", None)
+    monkeypatch.setattr(
+        helpers,
+        "set_agent_registry",
+        lambda _r: setattr(helpers, "_agent_registry", _Registry()),
+    )
     with TestClient(create_app(db_path=":memory:")) as test_client:
         yield test_client
 

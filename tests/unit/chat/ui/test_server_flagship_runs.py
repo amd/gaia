@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gaia.llm import lemonade_service
+from gaia.ui import _chat_helpers as helpers
 from gaia.ui import server
 
 pytestmark = pytest.mark.allow_network
@@ -50,6 +51,8 @@ def test_create_app_never_starts_the_daemon(monkeypatch):
 
     monkeypatch.setattr(lemonade_service, "ensure_daemon_owns_lemonade", refuse)
     monkeypatch.setattr(server, "start_model_server_owner", refuse)
+    # The app's startup sets a process-wide registry; keep it out of later tests.
+    monkeypatch.setattr(helpers, "_agent_registry", None)
     with TestClient(server.create_app(db_path=":memory:")) as client:
         assert client.get("/api/health").status_code in (200, 503)
 
@@ -68,6 +71,32 @@ def test_launch_agent_ui_starts_the_owner_only_for_a_local_server(
         patch("uvicorn.run"),
     ):
         gaia_cli._launch_agent_ui(port=0, base_url=base_url, log=MagicMock())
+    assert owner.call_count == expected
+
+
+@pytest.mark.parametrize(
+    "base_url,expected",
+    [
+        (None, 1),
+        ("http://127.0.0.1:8000/api/v1", 1),
+        ("http://localhost:8000", 1),
+        ("http://10.0.0.5:8000", 0),
+    ],
+)
+def test_standalone_runner_starts_the_owner_only_for_a_local_server(
+    monkeypatch, base_url, expected
+):
+    if base_url is None:
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("LEMONADE_BASE_URL", base_url)
+    monkeypatch.setattr(sys, "argv", ["gaia-ui"])
+    with (
+        patch("gaia.ui.server.create_app"),
+        patch("gaia.ui.server.start_model_server_owner") as owner,
+        patch("uvicorn.run"),
+    ):
+        server.main()
     assert owner.call_count == expected
 
 

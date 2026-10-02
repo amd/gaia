@@ -233,7 +233,7 @@ jobs:
     # `Windows` is load-bearing: every step is PowerShell + LemonadeServer.exe.
     # `lemonade-eval` narrows to the box carrying the label; serialization
     # comes from the concurrency group, not the label.
-    runs-on: [self-hosted, Windows, lemonade-eval]
+    runs-on: [self-hosted, Windows, xsj-dispatch, strix-halo]
     # THE SERIAL SLOT. Same group name as test_email_agent_eval.yml,
     # email_scorecard_refresh.yml and test_eval_agent_gemma_consolidation.yml
     # — `lemonade-eval`, exactly — so at most one eval touches the single
@@ -377,11 +377,6 @@ jobs:
           python tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE"
           if ($LASTEXITCODE -ne 0) { throw "Staging the gaia_* fixtures failed; the output above says which part." }
 
-          # gaia_mcp: the agent reads its MCP config when built, so this must
-          # land before the backend starts in the next step.
-          python tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py install
-          if ($LASTEXITCODE -ne 0) { throw "stage_mcp_stub failed" }
-
       - name: Run the gaia eval categories serially
         # Own timeout so an overrun fails HERE, by name, with the collect /
         # gate steps still running on the partial results. See the budget
@@ -495,6 +490,14 @@ jobs:
               Write-Host "  gaia eval agent --agent-type gaia --category $category"
               Write-Host "=================================================================="
               $swCat = [Diagnostics.Stopwatch]::StartNew()
+              # The acme MCP stub exists only for gaia_mcp; staged for any other
+              # category it would widen that category's toolset. Each session
+              # builds a fresh agent, so staging mid-run takes effect.
+              $stub = 'tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py'
+              if ($category -eq 'gaia_mcp') {
+                python $stub install
+                if ($LASTEXITCODE -ne 0) { Write-Host "::error::stage_mcp_stub install failed"; exit 1 }
+              }
               $global:LASTEXITCODE = 0
               $evalArgs = @('eval','agent','--agent-type','gaia','--category',$category,
                             '--backend',"$env:BACKEND_URL",'--model',"$env:EVAL_MODEL",
@@ -505,6 +508,10 @@ jobs:
                 Out-File -FilePath "eval-out\$category.log" -Encoding utf8
               $code = $LASTEXITCODE
               $swCat.Stop()
+              if ($category -eq 'gaia_mcp') {
+                python $stub remove
+                if ($LASTEXITCODE -ne 0) { Write-Host "::error::stage_mcp_stub remove failed"; exit 1 }
+              }
 
               $mins = [math]::Round($swCat.Elapsed.TotalMinutes, 1)
               Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min)"
@@ -522,6 +529,8 @@ jobs:
             Add-Summary "| **total** | **$([math]::Round($swTotal.Elapsed.TotalMinutes, 1))** |"
           }
           finally {
+            # Persistent runner: never leave the stub registered for the next job.
+            python tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py remove
             foreach ($proc in @($backend, $fixture)) {
               if ($proc -and -not $proc.HasExited) {
                 Write-Host "Stopping pid $($proc.Id)..."

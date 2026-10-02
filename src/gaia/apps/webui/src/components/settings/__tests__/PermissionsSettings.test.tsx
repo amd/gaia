@@ -32,7 +32,7 @@ const ROWS: SessionPermissions[] = [
 beforeEach(() => {
     vi.clearAllMocks();
     useChatStore.setState({ sessions: [CHAT] });
-    mockedApi.listAllPermissions.mockResolvedValue({ sessions: ROWS });
+    mockedApi.listAllPermissions.mockResolvedValue({ default_mode: 'ask', sessions: ROWS });
     mockedApi.revokeGrants.mockResolvedValue({ ...ROWS[0], grants: [] });
     mockedApi.setPermissionMode.mockResolvedValue({ ...ROWS[1], mode: 'ask' });
 });
@@ -74,7 +74,7 @@ describe('PermissionsSettings', () => {
     });
 
     it('says when nothing is allowed', async () => {
-        mockedApi.listAllPermissions.mockResolvedValue({ sessions: [] });
+        mockedApi.listAllPermissions.mockResolvedValue({ default_mode: 'ask', sessions: [] });
         render(<PermissionsSettings />);
         expect(await screen.findByText(/No chat has full access/)).toBeInTheDocument();
     });

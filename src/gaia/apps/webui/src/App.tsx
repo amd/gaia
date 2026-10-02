@@ -17,7 +17,7 @@ import { useNotificationStore } from './stores/notificationStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash } from './utils/format';
-import { resolveUrlNavTarget } from './utils/sessionNav';
+import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID } from './utils/newTask';
@@ -61,6 +61,7 @@ function App() {
     const setAgents = useChatStore((s) => s.setAgents);
     const setRunningSessions = useChatStore((s) => s.setRunningSessions);
     const setPendingPrompt = useChatStore((s) => s.setPendingPrompt);
+    const setDefaultPermissionMode = useChatStore((s) => s.setDefaultPermissionMode);
     const openSettings = useChatStore((s) => s.openSettings);
     const settingsSection = useChatStore((s) => s.settingsSection);
     const syncSystemTheme = useChatStore((s) => s.syncSystemTheme);
@@ -97,7 +98,11 @@ function App() {
         api.listAgents()
             .then((d) => setAgents(d.agents || []))
             .catch((err) => log.api.warn('Agent list unavailable; connector grants will be empty', err));
-    }, [checkSetup, setAgents]);
+        // A new chat starts in the configured mode (`full_access` in config).
+        api.listAllPermissions()
+            .then((d) => setDefaultPermissionMode(d.default_mode))
+            .catch((err) => log.api.warn('Default permission mode unavailable; new chats will ask', err));
+    }, [checkSetup, setAgents, setDefaultPermissionMode]);
 
     // ── Backend and model-server health ─────────────────────────────────
     const failCount = useRef(0);
@@ -164,20 +169,23 @@ function App() {
     const urlResolved = useRef(false);
     useEffect(() => {
         const navigate = () => {
-            const params = new URLSearchParams(window.location.search);
-            const target = params.get('session') || window.location.hash.replace(/^#/, '');
+            const target = readUrlTarget(window.location);
             const { currentSessionId: cur, sessions } = useChatStore.getState();
             const id = resolveUrlNavTarget(target, cur, sessions);
             if (id) {
                 setCurrentSession(id);
                 setMessages([]);
             }
+            return id;
         };
         // The link can only resolve once the chat list has loaded.
         const first = () => {
             if (urlResolved.current) return;
             urlResolved.current = true;
-            navigate();
+            // A link to a deleted chat: drop it, as the hash-sync effect would.
+            if (!navigate() && !useChatStore.getState().currentSessionId && window.location.hash) {
+                window.history.replaceState(null, '', window.location.pathname + window.location.search);
+            }
         };
         const unsubscribe = useChatStore.subscribe((state) => { if (state.sessions.length > 0) first(); });
         if (useChatStore.getState().sessions.length > 0) first();
@@ -251,7 +259,7 @@ function App() {
         addSession(session);
         setCurrentSession(session.id);
         setMessages([]);
-        // Always sent: a config default of full access must not hide behind an "Ask" chip.
+        // Always sent, so the chat runs in exactly the mode its chip showed.
         try {
             await api.setPermissionMode(session.id, store.draftPermissionMode);
         } catch (err) {
@@ -261,7 +269,7 @@ function App() {
             );
             return;
         }
-        store.setDraftPermissionMode('ask');
+        store.setDraftPermissionMode(store.defaultPermissionMode);
         setPendingPrompt(text);
     }, [addSession, setCurrentSession, setMessages, setPendingPrompt]);
 

@@ -158,9 +158,28 @@ class TestRegistry:
     def test_default_is_ask_without_config(self):
         assert permissions.for_session("s1").mode == permissions.MODE_ASK
 
-    def test_default_follows_config_full_access(self):
+    def test_default_mode_follows_config_full_access(self):
+        assert permissions.default_mode() == permissions.MODE_ASK
         _write_config({"full_access": True})
-        assert permissions.for_session("s1").mode == permissions.MODE_FULL_ACCESS
+        assert permissions.default_mode() == permissions.MODE_FULL_ACCESS
+
+    def test_a_chat_seeded_this_run_takes_the_given_mode(self):
+        perms = permissions.seed_new_session("s1", permissions.MODE_FULL_ACCESS)
+        assert perms is permissions.for_session("s1")
+        assert perms.mode == permissions.MODE_FULL_ACCESS
+
+    def test_seeding_an_unknown_mode_is_refused(self):
+        with pytest.raises(ValueError, match="Unknown permission mode"):
+            permissions.seed_new_session("s1", "yolo")
+        assert permissions.get("s1") is None
+
+    def test_a_chat_from_an_earlier_run_asks_despite_config(self):
+        _write_config({"full_access": True})
+        assert permissions.for_session("old-chat").mode == permissions.MODE_ASK
+
+    def test_get_never_creates(self):
+        assert permissions.get("s1") is None
+        assert "s1" not in permissions.all_sessions()
 
     def test_same_session_same_state(self):
         assert permissions.for_session("s1") is permissions.for_session("s1")
@@ -184,12 +203,25 @@ class TestRegistry:
 
 
 @pytest.fixture
-def client():
+def db():
+    database = ChatDatabase(":memory:")
+    yield database
+    database.close()
+
+
+@pytest.fixture
+def client(db):
     app = FastAPI()
     app.include_router(chat_router)
+    app.state.db = db
     app.state.session_locks = {}
     app.state.chat_semaphore = None
     return TestClient(app)
+
+
+@pytest.fixture
+def sid(db):
+    return db.create_session()["id"]
 
 
 @pytest.fixture
@@ -360,22 +392,32 @@ class TestConfirmTool:
 
 
 class TestPermissionRoutes:
-    def test_get_defaults_to_ask(self, client):
-        resp = client.get("/api/chat/permissions/s1")
+    def test_get_defaults_to_ask_and_creates_nothing(self, client, sid):
+        resp = client.get(f"/api/chat/permissions/{sid}")
         assert resp.status_code == 200
-        assert resp.json() == {"session_id": "s1", "mode": "ask", "grants": []}
+        assert resp.json() == {"session_id": sid, "mode": "ask", "grants": []}
+        assert permissions.get(sid) is None
 
-    def test_put_switches_mode(self, client):
-        resp = client.put("/api/chat/permissions/s1", json={"mode": "full_access"})
+    def test_unknown_chat_is_404_and_creates_nothing(self, client):
+        for resp in (
+            client.get("/api/chat/permissions/nope"),
+            client.put("/api/chat/permissions/nope", json={"mode": "full_access"}),
+            client.delete("/api/chat/permissions/nope/grants"),
+        ):
+            assert resp.status_code == 404
+        assert permissions.all_sessions() == {}
+
+    def test_put_switches_mode(self, client, sid):
+        resp = client.put(f"/api/chat/permissions/{sid}", json={"mode": "full_access"})
         assert resp.status_code == 200
         assert resp.json()["mode"] == "full_access"
-        assert permissions.for_session("s1").mode == "full_access"
+        assert permissions.for_session(sid).mode == "full_access"
 
-    def test_put_unknown_mode_is_422(self, client):
-        resp = client.put("/api/chat/permissions/s1", json={"mode": "everything"})
+    def test_put_unknown_mode_is_422(self, client, sid):
+        resp = client.put(f"/api/chat/permissions/{sid}", json={"mode": "everything"})
         assert resp.status_code == 422
         assert "Unknown permission mode" in resp.json()["detail"]
-        assert permissions.for_session("s1").mode == "ask"
+        assert permissions.for_session(sid).mode == "ask"
 
     def test_list_shows_only_chats_with_something_to_show(self, client):
         permissions.for_session("plain")
@@ -388,25 +430,37 @@ class TestPermissionRoutes:
         assert listed["granted"]["grants"][0]["key"] == SCOPED_KEY
         assert listed["open"]["mode"] == "full_access"
 
-    def test_delete_one_grant(self, client):
-        perms = permissions.for_session("s1")
+    def test_list_reports_the_configured_default(self, client):
+        assert client.get("/api/chat/permissions").json()["default_mode"] == "ask"
+        _write_config({"full_access": True})
+        assert (
+            client.get("/api/chat/permissions").json()["default_mode"] == "full_access"
+        )
+
+    def test_delete_one_grant(self, client, sid):
+        perms = permissions.for_session(sid)
         perms.grant(*SCOPED_CALL)
         perms.grant("write_file", {"file_path": "notes.md"})
         resp = client.delete(
-            "/api/chat/permissions/s1/grants", params={"key": SCOPED_KEY}
+            f"/api/chat/permissions/{sid}/grants", params={"key": SCOPED_KEY}
         )
         assert resp.status_code == 200
         assert [g["key"] for g in resp.json()["grants"]] == ["write_file:notes.md"]
 
-    def test_delete_unknown_grant_is_404(self, client):
-        resp = client.delete("/api/chat/permissions/s1/grants", params={"key": "x"})
+    def test_delete_unknown_grant_is_404(self, client, sid):
+        resp = client.delete(f"/api/chat/permissions/{sid}/grants", params={"key": "x"})
         assert resp.status_code == 404
 
-    def test_delete_all_grants(self, client):
-        permissions.for_session("s1").grant(*SCOPED_CALL)
-        resp = client.delete("/api/chat/permissions/s1/grants")
+    def test_delete_all_grants(self, client, sid):
+        permissions.for_session(sid).grant(*SCOPED_CALL)
+        resp = client.delete(f"/api/chat/permissions/{sid}/grants")
         assert resp.status_code == 200
         assert resp.json()["grants"] == []
+
+    def test_delete_all_on_a_chat_without_state_creates_nothing(self, client, sid):
+        resp = client.delete(f"/api/chat/permissions/{sid}/grants")
+        assert resp.status_code == 200
+        assert permissions.get(sid) is None
 
 
 # ── Wiring ─────────────────────────────────────────────────────────────────
@@ -437,8 +491,30 @@ async def test_each_turn_handler_is_attached_then_detached():
 
 
 @pytest.mark.allow_network
-def test_deleting_a_chat_forgets_its_permissions():
+def test_a_chat_created_this_run_starts_in_the_configured_mode(monkeypatch):
     from gaia.ui.server import create_app
+
+    # The app's startup sets a process-wide registry; keep it out of later tests.
+    monkeypatch.setattr(helpers, "_agent_registry", None)
+
+    _write_config({"full_access": True})
+    app = create_app(db_path=":memory:")
+    with TestClient(app) as test_client:
+        sid = test_client.post(
+            "/api/sessions", json={}, headers={"X-Gaia-UI": "1"}
+        ).json()["id"]
+        resp = test_client.get(
+            f"/api/chat/permissions/{sid}", headers={"X-Gaia-UI": "1"}
+        )
+        assert resp.json()["mode"] == "full_access"
+
+
+@pytest.mark.allow_network
+def test_deleting_a_chat_forgets_its_permissions(monkeypatch):
+    from gaia.ui.server import create_app
+
+    # The app's startup sets a process-wide registry; keep it out of later tests.
+    monkeypatch.setattr(helpers, "_agent_registry", None)
 
     app = create_app(db_path=":memory:")
     with TestClient(app) as test_client:

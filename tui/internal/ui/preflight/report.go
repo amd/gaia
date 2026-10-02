@@ -431,6 +431,17 @@ func (r Report) StepNumber(i int) int {
 	return 0
 }
 
+// LemonadeStep is the first-run step number that sets up Lemonade, or 0 when
+// Lemonade is not a step still to do.
+func (r Report) LemonadeStep() int {
+	for i, row := range r.Rows {
+		if row.Key == KeyLemonade {
+			return r.StepNumber(i)
+		}
+	}
+	return 0
+}
+
 // FirstAttention is the index of the row the user should act on: the first
 // FAILED row when there is one, otherwise the first row that is not OK.
 //

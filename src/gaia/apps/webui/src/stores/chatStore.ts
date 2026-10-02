@@ -149,6 +149,8 @@ interface ChatState {
     showSchedules: boolean;
     /** Permission mode picked on the new-chat screen, applied when the chat is created. */
     draftPermissionMode: PermissionMode;
+    /** The mode a new chat starts in: `full_access` in config, else ask. */
+    defaultPermissionMode: PermissionMode;
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     isLoadingMessages: boolean;
@@ -164,6 +166,8 @@ interface ChatState {
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
     setDraftPermissionMode: (mode: PermissionMode) => void;
+    /** Adopt the configured default; an untouched draft follows it. */
+    setDefaultPermissionMode: (mode: PermissionMode) => void;
     toggleSidebar: () => void;
     setSidebarOpen: (open: boolean) => void;
     toggleSidebarCollapsed: () => void;
@@ -326,6 +330,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showMemoryDashboard: false,
     showSchedules: false,
     draftPermissionMode: 'ask',
+    defaultPermissionMode: 'ask',
     setThemePreference: (pref) => {
         writePref('gaia-chat-theme', pref);
         const theme = resolveTheme(pref);
@@ -351,6 +356,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setShowSchedules: (show) =>
         set(show ? { showSchedules: true, showMemoryDashboard: false } : { showSchedules: false }),
     setDraftPermissionMode: (mode) => set({ draftPermissionMode: mode }),
+    setDefaultPermissionMode: (mode) =>
+        set((state) => ({
+            defaultPermissionMode: mode,
+            draftPermissionMode:
+                state.draftPermissionMode === state.defaultPermissionMode ? mode : state.draftPermissionMode,
+        })),
     toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     toggleSidebarCollapsed: () =>

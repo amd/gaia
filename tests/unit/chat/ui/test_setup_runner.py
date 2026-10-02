@@ -420,6 +420,25 @@ def test_verify_error_fails_the_run(monkeypatch):
     assert view["error"] == "Checking setup took too long."
 
 
+def test_an_unexpected_error_fails_the_run_and_frees_the_runner(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+
+    def check(*_a, **_k):
+        raise OSError("marker file is read-only")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    runner.start(False)
+    view = _wait_done(runner)
+    assert view["state"] == "failed"
+    assert "marker file is read-only" in view["error"]
+    # Not stranded in "verifying": a retry is allowed.
+    monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    runner.start(False)
+    assert _wait_done(runner)["state"] == "ready"
+
+
 def test_only_one_run_at_a_time_and_cancel(monkeypatch):
     proc = _FakeProc(_BlockingStdout())
     _popen(monkeypatch, proc)

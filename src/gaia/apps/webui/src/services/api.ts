@@ -727,7 +727,7 @@ export async function getPermissions(sessionId: string): Promise<SessionPermissi
     return apiFetch('GET', `/chat/permissions/${encodeURIComponent(sessionId)}`);
 }
 
-export async function listAllPermissions(): Promise<{ sessions: SessionPermissions[] }> {
+export async function listAllPermissions(): Promise<{ default_mode: PermissionMode; sessions: SessionPermissions[] }> {
     return apiFetch('GET', '/chat/permissions');
 }
 
