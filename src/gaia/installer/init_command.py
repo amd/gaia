@@ -19,6 +19,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -473,6 +474,44 @@ def _load_model_once(client, model_id: str) -> "ModelLoad":
         # bare traceback that leaves the check unanswered.
         return ModelLoad(model_id, role, size_gb, False, f"{type(e).__name__}: {e}")
     return ModelLoad(model_id, role, size_gb, True)
+
+
+class _DownloadProgress:
+    """Draws a model pull's streamed events as a live progress bar."""
+
+    def __init__(self, console, model_id: str):
+        self.console = console
+        self.model_id = model_id
+        self.events = 0
+        self.reported_error = False
+        self._last_bytes = 0
+        self._last_time = time.monotonic()
+        self._speed_mbps = 0.0
+
+    def __call__(self, event: dict) -> None:
+        self.events += 1
+        kind = event.get("event")
+        if kind == "progress":
+            done = event.get("bytes_downloaded", 0)
+            now = time.monotonic()
+            if now - self._last_time > 0.5 and done > self._last_bytes:
+                self._speed_mbps = (
+                    (done - self._last_bytes) / (now - self._last_time) / 1024**2
+                )
+                self._last_bytes, self._last_time = done, now
+            self.console.print_download_progress(
+                percent=int(event.get("percent", 0)),
+                bytes_downloaded=done,
+                bytes_total=event.get("bytes_total", 0),
+                speed_mbps=self._speed_mbps,
+            )
+        elif kind == "complete":
+            print()  # end the in-place progress line
+        elif kind == "error":
+            self.reported_error = True
+            self.console.print_download_error(
+                event.get("error", "unknown error"), self.model_id
+            )
 
 
 class InitCommand:
@@ -1311,10 +1350,17 @@ class InitCommand:
                     if (mr and is_custom)
                     else {}
                 )
-                if client.ensure_model_downloaded(model_id, **pull_kwargs):
-                    self._print_success(f"Downloaded {model_id}")
+                progress = _DownloadProgress(self.agent_console, model_id)
+                if client.ensure_model_downloaded(
+                    model_id, on_progress=progress, **pull_kwargs
+                ):
+                    if progress.events:
+                        self._print_success(f"Downloaded {model_id}")
+                    else:
+                        self._print_success(f"Already downloaded: {model_id}")
                 else:
-                    self._print_error(f"Failed to download {model_id}")
+                    if not progress.reported_error:
+                        self._print_error(f"Failed to download {model_id}")
                     success = False
 
             return success
