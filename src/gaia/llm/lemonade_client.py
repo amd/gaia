@@ -3862,6 +3862,7 @@ class LemonadeClient:
         checkpoint: Optional[str] = None,
         recipe: Optional[str] = None,
         embedding: Optional[bool] = None,
+        on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> bool:
         """
         Ensure a model is downloaded, downloading if necessary.
@@ -3880,6 +3881,9 @@ class LemonadeClient:
             recipe: Lemonade recipe for a custom-model registration (e.g. ``llamacpp``).
             embedding: Set True for a custom embedding model so the ``embeddings``
                 label is applied on registration.
+            on_progress: When given, the pull is streamed and every
+                ``pull_model_stream`` event (progress, complete, error) is
+                passed to it, so the caller can show the download live.
 
         Returns:
             True if model is available (was already downloaded or successfully downloaded),
@@ -3928,6 +3932,24 @@ class LemonadeClient:
                 self.log.info(
                     "   This may take minutes to hours depending on model size..."
                 )
+
+            if on_progress is not None:
+                complete = reported_error = False
+                try:
+                    for event in self.pull_model_stream(
+                        model_name,
+                        checkpoint=checkpoint,
+                        recipe=recipe,
+                        embedding=embedding,
+                    ):
+                        on_progress(event)
+                        complete = complete or event.get("event") == "complete"
+                        reported_error = reported_error or event.get("event") == "error"
+                except LemonadeClientError as e:
+                    if not reported_error:
+                        on_progress({"event": "error", "error": str(e)})
+                    return False
+                return complete
 
             # Download via pull_model. checkpoint/recipe/embedding register a
             # custom ``user.`` model on first pull; built-ins pull by name only.
