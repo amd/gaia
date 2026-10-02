@@ -1020,7 +1020,7 @@ class ChatAgent(
         if has_rag:
             indexed_docs_section = """
 **INDEXED DOCUMENTS:**
-When documents are indexed, the user's message begins with `[Indexed documents: ...]`. That line is always current — you never need to check what is indexed. With no such line, nothing is indexed: answer general questions and greetings from your knowledge, use the SMART DISCOVERY WORKFLOW below for domain-specific questions, and do NOT call query_documents or query_specific_file.
+When documents are indexed, the user's message includes a line `[Indexed documents: ...]`. The one in the latest message is current — you never need to check what is indexed. With no such line in the latest message, nothing is indexed: answer general questions and greetings from your knowledge, use the SMART DISCOVERY WORKFLOW below for domain-specific questions, and do NOT call query_documents or query_specific_file.
 
 **MANDATORY RULE — RAG-FIRST:** When the user asks ANY question about the content, data, pricing, features, or details of a listed document, you MUST call `query_documents` or `query_specific_file` BEFORE answering. Do NOT answer document-specific questions from your training knowledge.
 
