@@ -768,15 +768,30 @@ class RunContext:
     fenced: Tuple[Path, ...] = ()
 
 
-def _conditions(ctx: RunContext, root: Path, workdir: Path) -> harness.Conditions:
+def _conditions(
+    ctx: RunContext, root: Path, workdir: Path, task: Optional[Task] = None
+) -> harness.Conditions:
     gh = gh_sandbox(workdir)
+    toolchain, tool_python = harness.toolchain_dir(), None
+    fenced, read_only = ctx.fenced, ()
+    if task is not None and task.check == swebench.CHECK:
+        # The host's interpreter can hold the package under test, fix included.
+        tool_python = swebench.tool_interpreter(ctx.config.work_root)
+        toolchain, read_only = str(tool_python.parent), (tool_python.parent.parent,)
+        if ctx.config.fence:
+            fenced += (
+                swebench.host_site_packages()
+                if ctx.config.harness == harness.CLAUDE_CODE
+                else swebench.deniable_copy(task.swebench["repo"])
+            )
     return harness.Conditions(
         time_limit_s=ctx.config.run_timeout_s,
-        path_prefix=(str(gh.bin_dir), harness.toolchain_dir()),
+        path_prefix=(str(gh.bin_dir), toolchain),
         extra_env=gh.env,
         gateway_url=ctx.gateway_url,
-        fence=(ctx.fenced, (root,), ()) if ctx.config.fence else None,
+        fence=(fenced, (root,), read_only) if ctx.config.fence else None,
         full_access=ctx.config.full_access,
+        tool_python=tool_python,
     )
 
 
@@ -817,7 +832,7 @@ def _agent_step(
     workdir: Path,
     ctx: RunContext,
 ) -> harness.AgentRun:
-    conditions = _conditions(ctx, root, workdir)
+    conditions = _conditions(ctx, root, workdir, task)
     if ctx.config.harness == harness.CLAUDE_CODE:
         return harness.run_claude_code(
             prompt=prompt,
