@@ -282,10 +282,16 @@ def test_banner_slash_commands_exist_in_the_tui(sh_text, ps1_text, script):
     )
 
 
-def test_elevation_is_announced_before_it_is_needed(sh_text, ps1_text):
+def test_elevation_is_announced_before_it_is_needed(sh_text):
     assert "announce_elevation" in sh_text
     assert sh_text.index("announce_elevation\n") < sh_text.index("install_uv\n\n")
-    assert "Show-ElevationNotice" in ps1_text
+
+
+def test_windows_install_promises_no_elevation(ps1_text):
+    """`gaia init` installs GAIA's own Lemonade on Windows: no MSI, no UAC."""
+    assert "UAC" not in ps1_text
+    assert "administrator approval" not in ps1_text
+    assert "refreshenv" not in ps1_text
 
 
 # ── the documented one-liner pipes into `sh`, so no bash-only syntax ───────

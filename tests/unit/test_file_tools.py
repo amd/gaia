@@ -1347,3 +1347,15 @@ class TestSpreadsheetHeaderBelowATitle:
 
         assert result["columns"] == ["Name", "Email", "Column_2"]
         assert result["row_count"] == 2
+
+
+def test_browse_directory_status_counts_read_naturally(tmp_path):
+    _StubMixin().register_file_search_tools()
+    browse = _TOOL_REGISTRY["browse_directory"]["function"]
+    (tmp_path / "only").mkdir()
+    (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "data.csv").write_text("x", encoding="utf-8")
+    result = browse(str(tmp_path))
+    assert result["status"] == "success", result
+    assert result["display_message"].endswith("(1 folder, 2 files)")
+    assert result["display_message"].startswith("Listing 3 items in ")

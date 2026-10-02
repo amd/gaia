@@ -21,11 +21,17 @@ from pathlib import Path
 import pytest
 
 from gaia.llm.lemonade_launcher import (
-    LLAMACPP_ENV,
     build_start_command,
     get_installed_version,
     resolve_lemonade,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_embedded_lemonade(monkeypatch, tmp_path):
+    """These tests resolve a system install; GAIA's own server would win."""
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+
 
 # Real captured modern-client output (from `lemonade --version` on Windows
 # 10.7.0) — must parse to exactly "10.7.0" via re.search(r"(\d+\.\d+\.\d+)").
@@ -204,7 +210,7 @@ def test_build_start_command_modern_windows(mocker):
         r"C:\Users\test\AppData\Local\lemonade_server\bin\LemonadeServer.exe",
         "--silent",
     ]
-    assert spec.env == {"LEMONADE_CTX_SIZE": "32768", **LLAMACPP_ENV}
+    assert spec.env == {"LEMONADE_CTX_SIZE": "32768"}
 
 
 def test_build_start_command_legacy(mocker):
@@ -223,7 +229,7 @@ def test_build_start_command_legacy(mocker):
     spec = build_start_command(tooling, ctx_size=32768)
 
     assert spec.argv == ["lemonade-server", "serve", "--ctx-size", "32768"]
-    assert spec.env == LLAMACPP_ENV
+    assert spec.env == {}
 
 
 def test_build_start_command_legacy_windows_includes_no_tray(mocker):
@@ -246,7 +252,7 @@ def test_build_start_command_legacy_windows_includes_no_tray(mocker):
     assert "--no-tray" in spec.argv
     idx = spec.argv.index("--ctx-size")
     assert spec.argv[idx + 1] == "32768"
-    assert spec.env == LLAMACPP_ENV
+    assert spec.env == {}
 
 
 def test_build_start_command_modern_linux_uses_systemctl(mocker):
@@ -286,7 +292,7 @@ def test_env_override_modern_non_exe_launched_verbatim(mocker):
     spec = build_start_command(tooling, ctx_size=32768)
 
     assert spec.argv == ["/opt/lemonade/lemond"]
-    assert spec.env == {"LEMONADE_CTX_SIZE": "32768", **LLAMACPP_ENV}
+    assert spec.env == {"LEMONADE_CTX_SIZE": "32768"}
 
 
 @pytest.mark.parametrize(
@@ -300,17 +306,17 @@ def test_env_override_modern_non_exe_launched_verbatim(mocker):
         ("Linux", {"kind": "legacy", "server_launcher": "lemonade-server"}),
     ],
 )
-def test_every_process_gaia_spawns_disables_vulkan_coopmat(
+def test_no_process_gaia_spawns_disables_vulkan_coopmat_globally(
     mocker, system, tooling_kwargs
 ):
-    """Without it llama-server crashes loading any embedder on Radeon 8060S
-    Vulkan, so memory and RAG never come up (#1831)."""
+    """The flag halved every chat model's prompt speed on Strix Halo; the
+    embedder that needed it now loads on the CPU backend instead (#1831)."""
     from gaia.llm.lemonade_launcher import LemonadeTooling
 
     mocker.patch("platform.system", return_value=system)
     spec = build_start_command(LemonadeTooling(found=True, **tooling_kwargs), None)
 
-    assert spec.env["GGML_VK_DISABLE_COOPMAT"] == "1"
+    assert "GGML_VK_DISABLE_COOPMAT" not in spec.env
 
 
 def test_probe_resolved_modern_linux_still_uses_systemctl(mocker):
@@ -588,9 +594,7 @@ def test_start_hint_legacy_still_names_lemonade_server_serve(mocker):
 
     hint = describe_start_hint(ctx_size=8192)
 
-    assert hint.command == (
-        "GGML_VK_DISABLE_COOPMAT=1 /usr/local/bin/lemonade-server serve --ctx-size 8192"
-    )
+    assert hint.command == ("/usr/local/bin/lemonade-server serve --ctx-size 8192")
     assert hint.foreground is True
 
 
@@ -637,9 +641,9 @@ def test_start_hint_legacy_windows_path_is_joined_for_cmd_not_posix(mocker):
 
     assert hint.command is not None
     assert "'" not in hint.command
-    assert hint.command == (
-        'set GGML_VK_DISABLE_COOPMAT=1 && "C:\\Program Files\\lemonade\\'
-        'lemonade-server.exe" serve --no-tray'
+    assert (
+        hint.command
+        == '"C:\\Program Files\\lemonade\\lemonade-server.exe" serve --no-tray'
     )
 
 
@@ -666,10 +670,7 @@ def test_start_hint_windows_renders_env_the_cmd_way_never_drops_it(mocker):
     assert hint.command is not None
     assert "LEMONADE_CTX_SIZE=32768" in hint.command
     assert not hint.command.startswith("LEMONADE_CTX_SIZE")
-    assert hint.command == (
-        "set GGML_VK_DISABLE_COOPMAT=1 && set LEMONADE_CTX_SIZE=32768 && "
-        "C:\\lemonade\\lemond"
-    )
+    assert hint.command == "set LEMONADE_CTX_SIZE=32768 && C:\\lemonade\\lemond"
 
 
 def test_start_hint_macos_names_the_daemon_via_real_detection(mocker):
@@ -776,6 +777,44 @@ def test_start_hint_instruction_embeds_the_command_verbatim(mocker):
     hint = describe_start_hint(ctx_size=65536)
 
     assert hint.command in hint.instruction
+
+
+def test_start_hint_points_at_gaias_own_server_once_init_installed_it(tmp_path):
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+    from gaia.llm.lemonade_launcher import describe_start_hint
+
+    daemon = EmbeddedLemonade().daemon_path
+    daemon.parent.mkdir(parents=True)
+    daemon.write_bytes(b"")
+    hint = describe_start_hint()
+    assert hint.command == "gaia lemonade embedded start"
+    assert "not installed" not in hint.instruction
+
+
+def test_start_hint_prefers_a_configured_lemonade_base_url_over_embedded(
+    mocker, tmp_path
+):
+    """A user pointing GAIA at another server must not be told to start the
+    embedded one, even if `gaia init` also installed it -- GAIA's own
+    LemonadeManager.start_embedded_if_stopped skips the embedded server in
+    this case, so the hint must agree."""
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    daemon = EmbeddedLemonade().daemon_path
+    daemon.parent.mkdir(parents=True)
+    daemon.write_bytes(b"")
+    mocker.patch.dict(
+        os.environ, {"LEMONADE_BASE_URL": "http://localhost:9000"}, clear=False
+    )
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(found=False, kind="none"),
+    )
+
+    hint = describe_start_hint()
+
+    assert hint.command != "gaia lemonade embedded start"
 
 
 if __name__ == "__main__":

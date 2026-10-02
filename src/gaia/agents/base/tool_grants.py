@@ -118,7 +118,12 @@ _SKILL_TOOLS = frozenset({"install_skill", "remove_skill"})
 #: future source under that name, and the label would not describe what was
 #: granted. Keying on `source` would not fix it either — a URL is not a stable
 #: identity, since the bytes behind it can change between captures.
-_UNGRANTABLE_TOOLS = frozenset({"capture_skill"})
+#: The prompt ``PathValidator`` raises when a tool reaches outside the session's
+#: scope. Not a registered tool, and ungrantable: approving one path must never
+#: become "always allow any path" — each new path is asked about on its own.
+PATH_ACCESS_PROMPT_TOOL = "allow_path_access"
+
+_UNGRANTABLE_TOOLS = frozenset({"capture_skill", PATH_ACCESS_PROMPT_TOOL})
 
 
 @dataclass(frozen=True)
@@ -238,4 +243,4 @@ def _named_scope(
     return GrantScope(key=f"{tool_name}:{value}", label=f"{tool_name} {value}")
 
 
-__all__ = ["GrantScope", "grant_scope"]
+__all__ = ["PATH_ACCESS_PROMPT_TOOL", "GrantScope", "grant_scope"]

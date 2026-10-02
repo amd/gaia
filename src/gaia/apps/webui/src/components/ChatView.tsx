@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore } from '../stores/notificationStore';
+import { useNotificationStore, PATH_ACCESS_TOOL } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -604,7 +604,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         sessionId,
                         agentName: 'GAIA',
                         title: `Allow ${toolName}?`,
-                        message: `The agent wants to execute: ${toolName}`,
+                        message: toolName === PATH_ACCESS_TOOL
+                            ? `GAIA wants to use ${String((event.args as { path?: unknown } | undefined)?.path ?? 'a file')} (and anything inside it, including changes), which this chat cannot reach yet. Allow it for this chat?`
+                            : `The agent wants to execute: ${toolName}`,
                         timestamp: Date.now(),
                         read: false,
                         dismissed: false,

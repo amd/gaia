@@ -56,7 +56,7 @@ def _python_syntax_error(path: Path, content: str) -> Optional[str]:
 
 def _resolve_target(file_path: str, project_dir: Optional[str] = None) -> Path:
     """Where write_file / edit_file act: ``file_path``, under ``project_dir``."""
-    path = Path(file_path)
+    path = Path(file_path).expanduser()
     if project_dir and not path.is_absolute():
         path = Path(project_dir).resolve() / path
     return path.resolve()
@@ -67,7 +67,7 @@ def _project_target(args: Dict[str, Any]) -> Path:
 
 
 def _file_path_target(args: Dict[str, Any]) -> str:
-    return args["file_path"]
+    return os.path.expanduser(args["file_path"])
 
 
 def _gaia_md_target(args: Dict[str, Any]) -> str:
@@ -387,6 +387,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with file content and type-specific metadata
             """
+            file_path = os.path.expanduser(file_path)
             path_validator = _require_path_validator(self)
             try:
                 # Scope *and* secrets: being in an allowed directory never made
@@ -561,6 +562,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with write operation results
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 # Validate syntax if requested
                 if validate:
@@ -680,6 +682,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with edit operation results
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 # Security: validate write access.
                 # Report missing setup instead of writing without a check.
@@ -998,6 +1001,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with write operation results
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 content_size = len(content.encode("utf-8"))
 
@@ -1503,6 +1507,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with replacement result
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 # Security: validate write access.
                 # Report missing setup instead of writing without a check.

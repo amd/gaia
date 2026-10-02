@@ -131,13 +131,13 @@ func TestEveryPlatformGetsALauncherThatExistsThere(t *testing.T) {
 			name: "Linux without systemd names the daemon binary instead",
 			probe: fakeHostFor("linux", nil,
 				[]string{"/usr/bin/lemonade", "/usr/bin/lemond"}, nil),
-			wantStart: "env GGML_VK_DISABLE_COOPMAT=1 LEMONADE_CTX_SIZE=65536 /usr/bin/lemond",
+			wantStart: "env LEMONADE_CTX_SIZE=65536 /usr/bin/lemond",
 		},
 		{
 			name: "Linux with systemctl but no unit file names the binary too",
 			probe: fakeHostFor("linux", []string{"systemctl"},
 				[]string{"/usr/bin/lemond"}, nil),
-			wantStart: "env GGML_VK_DISABLE_COOPMAT=1 LEMONADE_CTX_SIZE=65536 /usr/bin/lemond",
+			wantStart: "env LEMONADE_CTX_SIZE=65536 /usr/bin/lemond",
 		},
 		{
 			// No PATH entry at all: a TUI launched from a GUI session inherits
@@ -179,7 +179,7 @@ func TestEveryPlatformGetsALauncherThatExistsThere(t *testing.T) {
 				map[string]string{"LOCALAPPDATA": `C:\Users\Jane Doe\AppData\Local`}),
 			// Quoted: the canonical path sits under the user profile, which can
 			// contain a space, and an unquoted one is not copy-pasteable.
-			wantStart: `set "GGML_VK_DISABLE_COOPMAT=1" && set "LEMONADE_CTX_SIZE=65536" && ` + `"` + filepath.Join(`C:\Users\Jane Doe\AppData\Local`, "lemonade_server", "bin", "LemonadeServer.exe") + `" --silent`,
+			wantStart: `set "LEMONADE_CTX_SIZE=65536" && ` + `"` + filepath.Join(`C:\Users\Jane Doe\AppData\Local`, "lemonade_server", "bin", "LemonadeServer.exe") + `" --silent`,
 			wantHint:  "tray icon",
 		},
 		{
@@ -208,7 +208,7 @@ func TestEveryPlatformGetsALauncherThatExistsThere(t *testing.T) {
 				[]string{"/usr/bin/lemonade", "/usr/lib/systemd/user/lemond.service",
 					"/opt/mine/lemonade-server"},
 				map[string]string{serverPathEnv: "/opt/mine/lemonade-server"}),
-			wantStart: "env GGML_VK_DISABLE_COOPMAT=1 LEMONADE_CTX_SIZE=65536 /opt/mine/lemonade-server",
+			wantStart: "env LEMONADE_CTX_SIZE=65536 /opt/mine/lemonade-server",
 		},
 	}
 
@@ -245,7 +245,7 @@ func TestAnOverrideBeatsTheModernPackageOnTheSameMachine(t *testing.T) {
 		map[string]string{serverPathEnv: "/opt/lemonade/bin/lemond"})
 
 	got := resolveLemonadeWith(probe)
-	if got.Start != "env GGML_VK_DISABLE_COOPMAT=1 LEMONADE_CTX_SIZE=65536 /opt/lemonade/bin/lemond" {
+	if got.Start != "env LEMONADE_CTX_SIZE=65536 /opt/lemonade/bin/lemond" {
 		t.Errorf("start = %q, want the override run verbatim", got.Start)
 	}
 	if strings.Contains(got.Start, "systemctl") {
@@ -627,14 +627,13 @@ func TestTheConfigPathMirrorsGaiaConfig(t *testing.T) {
 // exists is always true and would stop checking the binary that has to be there.
 func TestTheRunnableCheckLooksPastTheWindowPrefix(t *testing.T) {
 	for cmd, want := range map[string]string{
-		"env LEMONADE_CTX_SIZE=65536 /usr/local/bin/lemond":                                                  "/usr/local/bin/lemond",
-		`env LEMONADE_CTX_SIZE=65536 "/Users/j/My Tools/lemond"`:                                             "/Users/j/My Tools/lemond",
-		`set "LEMONADE_CTX_SIZE=65536" && "C:\a b\Lemonade.exe" --silent`:                                    `C:\a b\Lemonade.exe`,
-		`set "GGML_VK_DISABLE_COOPMAT=1" && set "LEMONADE_CTX_SIZE=65536" && "C:\a b\Lemonade.exe" --silent`: `C:\a b\Lemonade.exe`,
-		"env GGML_VK_DISABLE_COOPMAT=1 LEMONADE_CTX_SIZE=65536 /usr/bin/lemond":                              "/usr/bin/lemond",
-		"lemonade-server serve --ctx-size 65536":                                                             "lemonade-server",
-		"systemctl --user start lemond":                                                                      "systemctl",
-		"/usr/local/bin/lemond":                                                                              "/usr/local/bin/lemond",
+		"env LEMONADE_CTX_SIZE=65536 /usr/local/bin/lemond":               "/usr/local/bin/lemond",
+		`env LEMONADE_CTX_SIZE=65536 "/Users/j/My Tools/lemond"`:          "/Users/j/My Tools/lemond",
+		`set "LEMONADE_CTX_SIZE=65536" && "C:\a b\Lemonade.exe" --silent`: `C:\a b\Lemonade.exe`,
+		"env LEMONADE_CTX_SIZE=65536 /usr/bin/lemond":                     "/usr/bin/lemond",
+		"lemonade-server serve --ctx-size 65536":                          "lemonade-server",
+		"systemctl --user start lemond":                                   "systemctl",
+		"/usr/local/bin/lemond":                                           "/usr/local/bin/lemond",
 	} {
 		if got := firstWord(cmd); got != want {
 			t.Errorf("firstWord(%q) = %q, want %q", cmd, got, want)
