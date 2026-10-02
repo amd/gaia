@@ -6,8 +6,14 @@ import sys
 
 import pytest
 
+from gaia.agents.base import project_map
 from gaia.agents.base.project_deps import declared_python_deps, missing_deps
-from gaia.agents.base.project_map import ProjectMap, render_project_map
+from gaia.agents.base.project_map import (
+    ProjectMap,
+    build_project_map,
+    clear_project_map_cache,
+    render_project_map,
+)
 
 
 @pytest.mark.parametrize(
@@ -43,19 +49,55 @@ def test_the_interpreter_is_asked_which_are_missing():
     assert missing == ["surely-not-installed-xyz"]
 
 
+def test_an_install_is_seen_without_restarting(tmp_path, monkeypatch):
+    """PYTHONPATH counts, and a new package in a search path clears the answer."""
+    site = tmp_path / "site"
+    site.mkdir()
+    monkeypatch.setenv("PYTHONPATH", str(site))
+    name = "surely-not-installed-xyz"
+    assert missing_deps([name], sys.executable) == [name]
+    dist = site / "surely_not_installed_xyz-1.0.dist-info"
+    dist.mkdir()
+    (dist / "METADATA").write_text(
+        f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n"
+    )
+    assert missing_deps([name], sys.executable) == []
+
+
 def test_nothing_declared_means_nothing_to_ask():
     assert missing_deps([], sys.executable) is None
 
 
-def render(**fields):
+def test_the_map_rechecks_deps_when_its_fingerprint_has_not_changed(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\ndependencies = ["asgiref"]\n'
+    )
+    answers = [["asgiref"], []]
+    monkeypatch.setattr(project_map, "missing_deps", lambda names: answers.pop(0))
+    clear_project_map_cache()
+    try:
+        assert build_project_map(tmp_path).missing_python_deps == ["asgiref"]
+        assert build_project_map(tmp_path).missing_python_deps == []
+    finally:
+        clear_project_map_cache()
+
+
+def render(work_roots=("/r",), **fields):
     pm = ProjectMap(root="/r", is_repository=True, vcs=".git", **fields)
-    return render_project_map(pm, work_roots=["/r"])
+    return render_project_map(pm, work_roots=work_roots)
 
 
 def test_missing_deps_and_the_work_roots_are_on_the_map():
     text = render(python_deps=["asgiref", "sqlparse"], missing_python_deps=["asgiref"])
     assert "NOT installed for `python`: asgiref (of 2 declared)" in text
-    assert "You can read and write only under: /r" in text
+    assert "You can read and write without asking only under: /r" in text
+
+
+def test_a_long_list_of_work_roots_is_capped():
+    text = render(work_roots=[f"/r{n}" for n in range(7)])
+    assert "/r3; and 3 more" in text and "/r4" not in text
 
 
 def test_a_fully_installed_project_says_so():

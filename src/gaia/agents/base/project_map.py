@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 import os
 import platform
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -54,6 +54,10 @@ logger = get_logger(__name__)
 #: smaller window is the one that has to survive the addition, and a budget that
 #: only holds on 64K is not a budget.
 PROJECT_MAP_TOKEN_BUDGET = 600
+
+#: Work roots named in the header, which sits outside the budget; persisted
+#: grants can make the full list arbitrarily long.
+_WORK_ROOTS_SHOWN = 4
 
 #: Per-section sub-caps, as a fraction of the total budget. Without these the
 #: directory listing — the one unbounded section — eats the whole allowance and
@@ -307,16 +311,21 @@ def build_project_map(root: os.PathLike | str) -> ProjectMap:
 
     cached = _MAP_CACHE.get(key)
     if cached is not None and cached[0] == fp:
-        return cached[1]
-
-    pm = _collect(path, fp)
-    _MAP_CACHE[key] = (fp, pm)
-    logger.debug(
-        "[project-map] built for %s (%d top-level dirs, %d entry points)",
-        key,
-        len(pm.top_level_dirs),
-        len(pm.entry_points),
-    )
+        pm = cached[1]
+    else:
+        pm = _collect(path, fp)
+        _MAP_CACHE[key] = (fp, pm)
+        logger.debug(
+            "[project-map] built for %s (%d top-level dirs, %d entry points)",
+            key,
+            len(pm.top_level_dirs),
+            len(pm.entry_points),
+        )
+    # Re-asked every build: an install changes none of the fingerprint's inputs.
+    missing = missing_deps(pm.python_deps)
+    if missing != pm.missing_python_deps:
+        pm = replace(pm, missing_python_deps=missing)
+        _MAP_CACHE[key] = (fp, pm)
     return pm
 
 
@@ -390,7 +399,6 @@ def _collect(path: Path, fingerprint: str) -> ProjectMap:
         tools_absent=tools_absent,
         shell_commands=shell_commands,
         python_deps=python_deps,
-        missing_python_deps=missing_deps(python_deps),
         quirks=detect_platform_quirks(),
         fingerprint=fingerprint,
     )
@@ -541,9 +549,11 @@ def render_project_map(
     else:
         header.append("Code repository: no (no VCS directory, no known manifest)")
     if work_roots:
-        header.append(
-            "You can read and write only under: " + "; ".join(sorted(work_roots))
-        )
+        roots = sorted(work_roots)
+        shown = "; ".join(roots[:_WORK_ROOTS_SHOWN])
+        if len(roots) > _WORK_ROOTS_SHOWN:
+            shown += f"; and {len(roots) - _WORK_ROOTS_SHOWN} more"
+        header.append(f"You can read and write without asking only under: {shown}")
 
     quirks = [
         "Platform (these three change the commands you write):",
