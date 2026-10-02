@@ -1227,3 +1227,123 @@ def test_unreadable_content_search_reports_reason(tmp_path, caplog):
                 "find", directory=str(tmp_path)
             )
     assert "test permission denial" in caplog.text
+
+
+class TestDataSummaryPointsAtGroupBy:
+    """A summary of categorical data says per-category totals need group_by.
+
+    Asked which region earned most, a local model read the summary's
+    whole-file sum six times and then made up a regional figure.
+    """
+
+    CSV = "region,product,revenue\n" "East,A,100\nEast,B,250\nWest,A,90\nNorth,B,40\n"
+
+    def test_summary_names_the_groupable_columns(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        data = safe_dir / "sales.csv"
+        data.write_text(self.CSV, encoding="utf-8")
+
+        result = tools["analyze_data_file"](str(data))
+
+        hint = result["per_group_totals"]
+        assert "group_by" in hint and "'region'" in hint and "'product'" in hint
+
+    def test_a_grouped_call_carries_no_hint(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        data = safe_dir / "sales.csv"
+        data.write_text(self.CSV, encoding="utf-8")
+
+        result = tools["analyze_data_file"](str(data), group_by="region")
+
+        assert "per_group_totals" not in result
+        assert result["group_by_results"][0]["region"] == "East"
+        assert result["group_by_results"][0]["revenue_total"] == 350.0
+
+    def test_numbers_only_carry_no_hint(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        data = safe_dir / "nums.csv"
+        data.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
+
+        assert "per_group_totals" not in tools["analyze_data_file"](str(data))
+
+
+class TestSpreadsheetHeaderBelowATitle:
+    """A sheet's header is found below its title and note rows.
+
+    department_budget_2024.xlsx opens with a title, a note and a blank row;
+    taking row 0 as the header named the columns Column_1..Column_4, and a
+    local model made up four of the six departments' budgets.
+    """
+
+    def _sheet(self, path, rows):
+        openpyxl = pytest.importorskip("openpyxl")
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        for row in rows:
+            ws.append(list(row))
+        wb.save(path)
+
+    def test_the_table_header_is_found_below_the_title(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        path = safe_dir / "budget.xlsx"
+        self._sheet(
+            path,
+            [
+                ("Meridian — FY2024 Budget vs Actual by Department", None, None),
+                ("Currency: USD", None, None),
+                (None, None, None),
+                ("Department", "FY2024 Budget", "FY2024 Actual"),
+                ("Engineering", 22000000, 22260000),
+                ("Operations", 8000000, 7994000),
+                (None, None, None),
+                ("Note: Operations came in under budget.", None, None),
+            ],
+        )
+
+        result = tools["analyze_data_file"](str(path), group_by="Department")
+
+        assert result["columns"] == ["Department", "FY2024 Budget", "FY2024 Actual"]
+        totals = {
+            r["Department"]: r["FY2024 Budget_total"]
+            for r in result["group_by_results"]
+        }
+        assert totals["Engineering"] == 22000000.0
+        assert totals["Operations"] == 8000000.0
+
+    def test_a_sheet_that_starts_with_its_header_is_unchanged(
+        self, sandboxed_read_tools
+    ):
+        tools, safe_dir, _ = sandboxed_read_tools
+        path = safe_dir / "plain.xlsx"
+        self._sheet(path, [("region", "revenue"), ("East", 100), ("West", 50)])
+
+        result = tools["analyze_data_file"](str(path))
+
+        assert result["columns"] == ["region", "revenue"]
+        assert result["row_count"] == 2
+
+    def test_a_narrower_text_header_keeps_its_first_data_row(
+        self, sandboxed_read_tools
+    ):
+        """A header with an unused trailing column must not look like a title.
+
+        The header row here (2 filled cells) is narrower than the data rows
+        below it (3 filled cells, all text). Without a guard for an
+        already-header-shaped row 0, the width-matching search picks the first
+        data row as the header instead, silently dropping it from the results.
+        """
+        tools, safe_dir, _ = sandboxed_read_tools
+        path = safe_dir / "contacts.xlsx"
+        self._sheet(
+            path,
+            [
+                ("Name", "Email", None),
+                ("Alice", "a@x.com", "VIP"),
+                ("Bob", "b@x.com", "VIP"),
+            ],
+        )
+
+        result = tools["analyze_data_file"](str(path))
+
+        assert result["columns"] == ["Name", "Email", "Column_2"]
+        assert result["row_count"] == 2

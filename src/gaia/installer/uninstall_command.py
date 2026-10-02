@@ -184,7 +184,7 @@ def _purge_paths(home: Optional[Path] = None) -> List[Path]:
 
 
 def _daemon_host_dir() -> Path:
-    """The daemon's state directory (``~/.gaia/host`` or ``$GAIA_DAEMON_HOME``)."""
+    """The daemon's state directory (see :func:`gaia.daemon.paths.host_dir`)."""
     from gaia.daemon import paths
 
     return paths.host_dir()

@@ -320,7 +320,7 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// key is only ever meant for whichever agent the gate on screen is for.
 	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "p" && m.activeView == viewPreflight && m.preflight != nil && !m.preflight.Busy() && m.pending != nil && m.pending.ID == catalog.FlagshipID {
 		m.preflight.Cancel()
-		panel := providers.New("", m.width, m.height)
+		panel := providers.New("", m.width, m.height).WithSetupStep(m.preflight.Report().LemonadeStep())
 		m.providerPanel = &panel
 		return m, panel.Init()
 	}

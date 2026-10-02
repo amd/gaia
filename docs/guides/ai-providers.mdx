@@ -39,7 +39,8 @@ enter the required header name and leave the prefix empty. Use **Tab** to move
 between fields, then paste the key and press **Enter**.
 
 For **Local**, select a downloaded chat model. If none are installed, close the
-panel and run setup. Selecting a cloud provider before setup downloads only the
+panel and run setup. On a new machine, the providers become available once the
+setup step that installs Lemonade is done; the panel names that step until then. Selecting a cloud provider before setup downloads only the
 local embedding models, not an unused local chat model.
 
 ## What the ranked picks measured
@@ -83,7 +84,9 @@ still sends conversation history to Fireworks and incurs usage charges — see
   of that same Lemonade server.
 - If a credential is already active for a provider, the setup screen says so
   before you type anything — you don't have to guess whether a blank field is
-  safe to submit.
+  safe to submit. Opening Fireworks setup registers Fireworks with Lemonade (no
+  key is sent), because Lemonade reports an environment key only for a
+  registered provider.
 - Leave the key field blank to use a credential already configured in Lemonade.
   `LEMONADE_FIREWORKS_API_KEY` and `LEMONADE_AMD_API_KEY`, set in the **Lemonade
   server process**, take precedence over pasted keys. A conflict is reported

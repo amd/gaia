@@ -1789,6 +1789,15 @@ def test_an_allowed_binary_cannot_run_a_different_one(command, mechanism):
     assert verdict(command) == REFUSE, f"bypass reopened: {mechanism}"
 
 
+def test_python_c_refusal_names_the_snippet_tool():
+    """Told only "write it to a file", models wrote repro scripts into the repo."""
+    argv = shlex.split("python -c 'print(1)'")
+    decision = classify_invocation(BINARY_POLICIES["python"], argv)
+    assert decision.outcome == REFUSE
+    assert "run_python" in decision.message
+    assert "outside the repository" in decision.message
+
+
 @pytest.mark.parametrize(
     "command",
     [

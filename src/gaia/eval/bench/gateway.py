@@ -138,6 +138,37 @@ def normalize_usage(raw: Dict[str, int]) -> Dict[str, int]:
     }
 
 
+#: llama.cpp's own per-call measurement; a cloud-routed model reports none.
+_TIMING_KEYS = ("prompt_n", "prompt_ms", "predicted_n", "predicted_ms", "cache_n")
+
+
+def response_timings(body: bytes) -> Dict[str, float]:
+    """The backend's prefill and decode timing for one call, when it sent one."""
+    events: List[Any] = []
+    if body[:1] == b"{":
+        try:
+            events.append(json.loads(body))
+        except ValueError:
+            return {}
+    else:
+        for line in body.split(b"\n"):
+            if line.startswith(b"data: "):
+                try:
+                    events.append(json.loads(line[6:]))
+                except ValueError:
+                    continue
+    for event in reversed(events):
+        timings = event.get("timings") if isinstance(event, dict) else None
+        if isinstance(timings, dict):
+            return {
+                k: timings[k]
+                for k in _TIMING_KEYS
+                if isinstance(timings.get(k), (int, float))
+                and not isinstance(timings.get(k), bool)
+            }
+    return {}
+
+
 @dataclass
 class Usage:
     calls: int = 0
@@ -215,9 +246,12 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("transfer-encoding", "chunked")
         self.end_headers()
         buffered = bytearray()
+        first_byte: Optional[float] = None
         for chunk in upstream.iter_content(chunk_size=None):
             if not chunk:
                 continue
+            if first_byte is None:
+                first_byte = time.time() - started
             self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
             self.wfile.flush()
             buffered += chunk
@@ -230,7 +264,12 @@ class _Handler(BaseHTTPRequestHandler):
                     "path": urlparse(path).path,
                     "status": upstream.status_code,
                     "seconds": round(time.time() - started, 2),
+                    # On a streamed call, the time to its first token.
+                    "first_byte_seconds": (
+                        round(first_byte, 3) if first_byte is not None else None
+                    ),
                     "tokens": normalize_usage(raw) if raw else {},
+                    "timings": response_timings(bytes(buffered)),
                 }
             )
         self.wfile.write(b"0\r\n\r\n")
