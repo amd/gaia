@@ -249,7 +249,7 @@ smaller PC gets Gemma alone. A `default_model` you set yourself always wins, and
 <Note>
 On 128 GB-class PCs, `user.Qwen3.8-Flash-Next-GGUF` (an 82 GB download, multimodal) is
 a supported manual alternative — not auto-selected, since it needs the full Strix Halo
-memory class and a Lemonade newer than v2026.39.1 (its llama.cpp cannot load the model
+memory class and Lemonade v2026.39.1 or newer (its llama.cpp cannot load the model
 otherwise; upgrade with `gaia init --force-reinstall`). Switch to it with
 `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`, or pick it in the
 terminal UI's model picker; Lemonade downloads it on first use. To measure both on your
