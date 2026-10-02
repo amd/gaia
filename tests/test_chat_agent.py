@@ -250,12 +250,12 @@ class TestChatAgent:
                     "success"
                 ), f"Indexing failed: {result2.get('error')}"
 
-            # Update system prompt
             agent.rebuild_system_prompt()
 
-            # Verify both documents in system prompt
-            assert "doc1.txt" in agent.system_prompt
-            assert "doc2.txt" in agent.system_prompt
+            # Both reach the next turn; the system prompt names neither.
+            line = agent.get_memory_dynamic_context()
+            assert "[Indexed documents: doc1.txt, doc2.txt]" in line
+            assert "doc1.txt" not in agent.system_prompt
             assert len(agent.rag.indexed_files) == 2
         finally:
             for f in [test_file1, test_file2]:
@@ -315,21 +315,24 @@ class TestChatAgent:
             if test_dir.exists() and not any(test_dir.iterdir()):
                 test_dir.rmdir()
 
-    def test_tier2_rag_rules_absent_without_indexed_docs(self, agent):
-        """Tier 2 query rules must NOT appear when no documents are indexed.
+    def test_tier2_rag_rules_present_before_any_index(self, agent):
+        """Tier 2 query rules are in the prompt before anything is indexed.
+
+        Gating them on the first index re-read the whole ~19K-token prompt
+        mid-turn (~60 s on an iGPU); always present, they are read once at
+        warm-up and stay cached.
 
         RAG tools are always registered.  Tier 1 discovery guidance is always
         present in some form — when no files are loaded the agent shows a
         *compact* hint (search_file → index_document → query_*); when docs
         or a library are present it expands to the full SMART DISCOVERY /
-        FILE SEARCH workflow.  Tier 2 rules (FACTUAL ACCURACY, DOCUMENT
-        SILENCE, etc.) only appear once documents are actually indexed.
+        FILE SEARCH workflow.
 
         NOTE: POST-INDEX QUERY RULE is intentionally always present (in tool_rules)
         because Smart Discovery can trigger indexing mid-conversation even when no
         docs are initially indexed — the model needs this rule from the start.
         """
-        # No documents indexed — has_indexed is False
+        # No documents indexed
         assert not agent.rag.indexed_files
 
         prompt = agent.system_prompt
@@ -340,9 +343,8 @@ class TestChatAgent:
         assert "POST-INDEX QUERY RULE" in prompt
         # FILE SEARCH AND AUTO-INDEX is only present when enable_filesystem=True
 
-        # Tier 2 (absent until docs are indexed)
-        assert "FACTUAL ACCURACY RULE" not in prompt
-        assert "DOCUMENT SILENCE RULE" not in prompt
+        # Tier 2: present from the start, so indexing never changes the prompt
+        assert "FACTUAL ACCURACY RULE" in prompt
 
     def test_tier2_rag_rules_present_after_indexing(self, agent):
         """Tier 2 query rules appear in prompt once a document is indexed."""
