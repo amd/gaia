@@ -36,6 +36,7 @@ import signal
 import socket
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -180,7 +181,9 @@ def pid_exists(pid: int) -> bool:
     """
     if pid <= 0:
         return False
-    if platform.system() == "Windows":
+    # The real OS, not platform.system(): on Windows signal 0 is CTRL_C_EVENT,
+    # so os.kill(pid, 0) Ctrl+Cs the process group or raises WinError 87.
+    if sys.platform == "win32":
         import ctypes
 
         process_query_limited_information = 0x1000
