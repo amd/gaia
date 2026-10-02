@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """On-disk locations for the daemon's single-instance state (design §0.26).
 
-Everything lives under ``~/.gaia/host/``. ``GAIA_DAEMON_HOME`` overrides the
-directory (used by tests so a run never clobbers the user's real daemon, and so
+Everything lives under ``~/.gaia/host/``, or ``$GAIA_HOME/host`` when
+``GAIA_HOME`` is set. ``GAIA_DAEMON_HOME`` overrides the directory (used by tests so a run never clobbers the user's real daemon, and so
 concurrent tests stay isolated). The override is read on every call — not cached —
 so a subprocess spawned with a different env resolves its own directory.
 """
@@ -22,6 +22,12 @@ def host_dir() -> Path:
     override = os.environ.get(_ENV_HOME)
     if override:
         return Path(override)
+    # GAIA_HOME isolates the whole runtime; a daemon outside it would manage
+    # another home's Lemonade. Expand ~ and $VARS like config/Lemonade do, or
+    # an unexpanded value resolves relative to cwd instead of $HOME.
+    gaia_home = os.environ.get("GAIA_HOME", "").strip()
+    if gaia_home:
+        return Path(os.path.expandvars(os.path.expanduser(gaia_home))) / "host"
     return Path.home() / ".gaia" / "host"
 
 

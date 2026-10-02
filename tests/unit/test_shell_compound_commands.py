@@ -330,6 +330,69 @@ def test_cd_is_only_allowed_as_a_bare_one_argument_command(command, notes):
     assert result["executed"] is False
 
 
+class _WindowsOS:
+    """The real os, answering 'nt' — patching os.name itself breaks pathlib."""
+
+    name = "nt"
+
+    def __getattr__(self, attribute):
+        return getattr(os, attribute)
+
+
+def _cd_target(command):
+    steps, error = shell_tools._parse_line(command)
+    assert error is None, error
+    assert steps[0].is_cd
+    return steps[0].cd_target
+
+
+@pytest.mark.parametrize(
+    "command, target",
+    [
+        (r"cd C:\a\b && dir", r"C:\a\b"),
+        (r'cd "C:\a b\c" && dir', r"C:\a b\c"),
+        ("cd C:/a/b && dir", "C:/a/b"),
+        (r"cd sub\dir", r"sub\dir"),
+    ],
+)
+def test_windows_cd_keeps_the_backslashes_in_its_target(command, target, monkeypatch):
+    monkeypatch.setattr(shell_tools, "os", _WindowsOS())
+
+    assert _cd_target(command) == target
+
+
+@pytest.mark.parametrize(
+    "command, target",
+    [
+        ("cd /tmp/a/b && ls", "/tmp/a/b"),
+        ('cd "/tmp/a b" && ls', "/tmp/a b"),
+        (r"cd a\ b && ls", "a b"),
+    ],
+)
+def test_posix_cd_target_is_lexed_as_sh_would(command, target, monkeypatch):
+    class _PosixOS(_WindowsOS):
+        name = "posix"
+
+    monkeypatch.setattr(shell_tools, "os", _PosixOS())
+
+    assert _cd_target(command) == target
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="needs a real Windows path")
+@pytest.mark.parametrize(
+    "folder, quote", [("requests", ""), ("with space", '"')], ids=["bare", "quoted"]
+)
+def test_cd_to_an_absolute_windows_path_runs_the_line(folder, quote, tmp_path):
+    target = tmp_path / folder
+    target.mkdir()
+    (target / "only-here.txt").write_text("x\n")
+
+    result = _run(f"cd {quote}{target}{quote} && dir /b", tmp_path)
+
+    assert result["status"] == "success", result
+    assert result["stdout"].strip() == "only-here.txt"
+
+
 @posix_only
 def test_cd_does_not_leak_into_the_next_call(notes):
     (notes / "sub").mkdir()
@@ -498,14 +561,6 @@ def test_windows_never_hands_a_compound_line_to_cmd_exe_as_one_string(
     def fake_popen(args, **kwargs):
         calls.append((args, kwargs.get("shell", False)))
         return _Exited(args)
-
-    class _WindowsOS:
-        """The real os, answering 'nt' — patching os.name itself breaks pathlib."""
-
-        name = "nt"
-
-        def __getattr__(self, attribute):
-            return getattr(os, attribute)
 
     monkeypatch.setattr(shell_tools, "os", _WindowsOS())
     monkeypatch.setattr(shell_tools.subprocess, "Popen", fake_popen)

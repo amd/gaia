@@ -125,6 +125,15 @@ pre-commit gate. It exits 2 if a baseline scenario is missing or produced no
 measurement, as well as for measured regressions. Without this opt-in, incomplete
 measurements remain visible as warnings and the comparison judges measured results.
 
+### One eval at a time
+
+`gaia eval agent` and `gaia eval tasks run` refuse to start while another of them is
+running on the same machine, and name the run that holds the lock. Two evals sharing
+one Lemonade evict each other's models and slow each other down, so both runs' scores
+and timings would be wrong. The lock is released when the run ends or its process
+dies. Set `GAIA_EVAL_NO_LOCK=1` only when the two runs use separate backends.
+Judging, gating and reports don't take the lock.
+
 ## Flagship Agent Tasks
 
 `gaia eval tasks` gives the flagship GaiaAgent real work: fix a bug and add a regression test, add a feature, turn a CSV into a weekly report, explain a file. Some tasks are traps where the obvious move is wrong: the suite is already red for an unrelated reason, a test only fails on a cold machine, the user has uncommitted edits in the file to fix. It scores what the finished project **does**, not what the agent says it did. CI runs `core` on pull requests that touch the agent, and `everyday` plus `therock` every night on `main`, all with the local Qwen3 30B (`Qwen3-30B-A3B-Instruct-2507-GGUF`) on the Strix Halo runner pool. It fails the build when passes, tested changes, quality, honesty, tokens, steps or runtime fall outside the expectations committed for that model and suite, and a nightly failure files an issue naming the suite.
@@ -209,10 +218,11 @@ gaia eval tasks report runs/cc-opus runs/gaia-glm runs/cc-glm --out runs/report
 | `--work-root DIR` | Where task workdirs live while running (default: a temp directory). |
 | `--gateway-url URL` | A gateway already running; otherwise each run starts its own. |
 | `--fence` | Fences the agent off the answer keys with macOS `sandbox-exec`. Refused where it cannot be enforced — see below. |
-| `--full-access` | Gives GAIA no path boundary, the reach Claude Code has with its permissions skipped. |
+| `--full-access` | Gives GAIA no path boundary and no shell guardrails, the reach Claude Code has with its permissions skipped. |
 | `--meter fireworks` | Reads the run's real cost from the provider's billing meter. |
 | `--therock-url URL` | Where the `therock` suite clones from (default `https://github.com/ROCm/TheRock`). |
 | `--instances a,b` | The SWE-bench Verified instance ids the `swebench` suite is built from (default: the pilot). Only with `--suite swebench`. |
+| `--sample N [--seed S]` | `swebench`: a seeded random N of the 500 instances instead of `--instances`. The same N and seed always pick the same tasks, so a result can be reproduced and compared. |
 | `--no-evaluate` | `swebench`: capture the predictions and stop; grade later with `gaia eval tasks swebench DIR`. |
 | `--docker-platform P` | The platform the SWE-bench images are pulled for (default `linux/amd64`; they exist for no other). |
 | `--keep-images` | `swebench`: do not pull each image just before its run and remove it after (about 3 GB each). |
@@ -315,6 +325,16 @@ the run starts:
 - The judge grades a SWE-bench attempt's quality against the gold patch, read
   from the cache only in the `judge` step, but it never decides the pass: that
   is the harness's verdict alone.
+
+**In CI.** `.github/workflows/eval_swebench.yml` runs the flagship on fixed
+subsets listed, with the reason for each instance, in
+`eval/tasks/swebench_subsets.json`. `smoke` is three fast tasks the agent solved
+on every measured run; it runs on pull requests that touch the agent loop, its
+tools or the coding skill. `hard` is ten tasks strong Claude agents rarely solve
+on the leaderboard; it runs nightly. The model is DeepSeek V4.1 Flash on
+Fireworks through GAIA's embedded Lemonade, so the runner needs no GPU and needs
+the `FIREWORKS_API_KEY` repository secret. Results go to the job summary and an
+artifact. Nothing is gated until expectations are measured on that runner.
 
 ### Keeping credentials out of published artifacts
 

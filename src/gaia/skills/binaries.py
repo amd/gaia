@@ -1775,8 +1775,10 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                 denied_flag_reasons={
                     "-c": "it runs code passed on the command line. That code "
                     "is in no file anyone reviewed, and it can run any other "
-                    "program — including the ones this table refuses. Write "
-                    "the code to a file and run the file",
+                    "program — including the ones this table refuses. For a "
+                    "snippet, use the run_python tool if you have it; a script "
+                    "you keep goes in a file, outside the repository unless it "
+                    "belongs there",
                     "-i": "it drops into an interactive prompt on a stdin that "
                     "is closed for an agent, so the command never returns",
                     "-X": "it toggles interpreter implementation options that "

@@ -1690,3 +1690,26 @@ def test_a_judge_failure_is_described_as_a_grading_gap_not_an_outage(
     out = capsys.readouterr().out
     assert "No usable grade for 02-bugfix, 21-qa" in out
     assert "quality and misreport checks" in out and "unmeasured" not in out
+
+
+def test_model_calls_keep_only_calls_that_reached_the_model():
+    records = [
+        {
+            "path": "/api/v1/chat/completions",
+            "seconds": 2.0,
+            "first_byte_seconds": 2.0,
+            "tokens": {"input": 9},
+            "timings": {"prompt_n": 9},
+            "status": 200,
+        },
+        {"path": "/api/v1/health", "seconds": 0.1, "tokens": {}, "timings": {}},
+        {"path": "/api/v1/chat/completions", "unreachable": True},
+    ]
+    assert ft.model_calls(records) == [
+        {
+            "seconds": 2.0,
+            "first_byte_seconds": 2.0,
+            "tokens": {"input": 9},
+            "timings": {"prompt_n": 9},
+        }
+    ]
