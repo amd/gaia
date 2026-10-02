@@ -19,7 +19,8 @@ the terminal UI meant building it from source.
   the local model's prompt cache (17s to first token on a one-line question,
   0.4s without it) and left out the tool a question needed: a CSV question was
   given web tools and fetched an unrelated page. `GAIA_DYNAMIC_TOOLS=1` turns
-  selection back on.
+  selection back on. The registered count is 95: `load_tools`, the selector's
+  escape hatch, registers only while selection is on.
 
 - **The code index is built on first search, not at task start.** In 32
   SWE-bench tasks the agent never searched it, yet every task embedded the whole
