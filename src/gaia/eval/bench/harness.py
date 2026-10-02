@@ -87,8 +87,9 @@ class AgentRun:
 
 #: Runs the child in the task checkout without that checkout on its import
 #: path, so a task repo GAIA also imports (``requests``) cannot replace GAIA's.
+#: Removed by value: under ``PYTHONSAFEPATH`` there is no cwd entry to pop.
 CHILD_BOOTSTRAP = (
-    "import runpy, sys; sys.path.pop(0); "
+    "import runpy, sys; sys.path[:] = [p for p in sys.path if p != '']; "
     "runpy.run_module('gaia.eval.bench.gaia_child', run_name='__main__')"
 )
 

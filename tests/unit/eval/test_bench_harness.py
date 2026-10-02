@@ -326,14 +326,24 @@ def test_a_task_repository_cannot_replace_a_package_gaia_imports(tmp_path):
         encoding="utf-8",
     )
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(harness.import_roots()))
-    proc = subprocess.run(
-        [sys.executable, "-c", harness.CHILD_BOOTSTRAP],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    env.pop("PYTHONSAFEPATH", None)
+
+    def launch(*args):
+        return subprocess.run(
+            [sys.executable, *args],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    # The old launch form loads the planted package, so the fixture reproduces it.
+    launch("-m", "gaia.eval.bench.gaia_child")
+    assert marker.exists()
+    marker.unlink()
+
+    proc = launch("-c", harness.CHILD_BOOTSTRAP)
     # No spec argument: the child prints its usage and exits 2 once imported.
     assert proc.returncode == 2, proc.stderr[-2000:]
     assert "usage" in proc.stderr
