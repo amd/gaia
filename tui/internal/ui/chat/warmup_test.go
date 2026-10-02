@@ -205,3 +205,15 @@ func TestNoHintWhenAQuestionIsAlreadyWaiting(t *testing.T) {
 		}
 	}
 }
+
+// Every row of a long status line keeps the transcript's indent.
+func TestAWrappedStatusStaysIndented(t *testing.T) {
+	m, _ := warmModel(t)
+	m = feed(t, m, event.CanonicalFinalEvent{Type: "final", Answer: client.WarmedUp})
+	rendered := ansi.Strip(m.renderMessage(&m.messages[len(m.messages)-1], map[string]bool{}))
+	for _, row := range strings.Split(rendered, "\n") {
+		if strings.TrimSpace(row) != "" && !strings.HasPrefix(row, "  ") {
+			t.Errorf("row lost its indent: %q", row)
+		}
+	}
+}
