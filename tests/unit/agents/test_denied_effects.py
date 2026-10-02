@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -139,6 +140,20 @@ def test_render_call_shows_the_exact_command():
     assert (
         render_call("execute_python_file", {"file_path": "t.py", "args": "-v"})
         == "python t.py -v"
+    )
+
+
+def test_render_call_names_a_file_change_in_words():
+    temp_file = os.path.join(tempfile.gettempdir(), "scratch", "check_ties.py")
+    assert (
+        render_call("write_file", {"file_path": temp_file, "content": "x = 1"})
+        == "write check_ties.py in a temp folder"
+    )
+    assert render_call("edit_file", {"file_path": "README.md"}) == "edit README.md"
+    project = os.path.join(os.path.expanduser("~"), "proj")
+    assert (
+        render_call("replace_function", {"file_path": os.path.join(project, "a.py")})
+        == f"edit a.py in {project}"
     )
 
 

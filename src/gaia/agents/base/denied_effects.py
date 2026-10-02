@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import shlex
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -721,6 +722,38 @@ def effects_of_call(
     return effects
 
 
+_FILE_VERBS = {
+    "write": "write",
+    "create_file": "write",
+    "save": "write",
+    "edit": "edit",
+    "replace": "edit",
+    "append": "append to",
+    "delete": "delete",
+    "remove": "delete",
+    "move": "move",
+    "rename": "rename",
+    "download": "download to",
+}
+
+
+def _file_in_words(path: str) -> str:
+    """``check_ties.py in a temp folder`` rather than a three-line temp path."""
+    path = path.strip()
+    name = os.path.basename(path.rstrip("/\\")) or path
+    folder = os.path.dirname(path.rstrip("/\\"))
+    if not folder:
+        return name
+    try:
+        temp = os.path.realpath(tempfile.gettempdir())
+        in_temp = os.path.commonpath(
+            [os.path.normcase(temp), os.path.normcase(os.path.realpath(folder))]
+        ) == os.path.normcase(temp)
+    except (OSError, ValueError):
+        in_temp = False
+    return f"{name} in a temp folder" if in_temp else f"{name} in {folder}"
+
+
 def render_call(tool_name: str, tool_args: Optional[Dict[str, Any]]) -> str:
     """The exact thing about to run, as a person would read it."""
     args = tool_args if isinstance(tool_args, dict) else {}
@@ -736,6 +769,12 @@ def render_call(tool_name: str, tool_args: Optional[Dict[str, Any]]) -> str:
     if runs_python and isinstance(args.get("file_path"), str):
         extra = args.get("args") or ""
         return f"python {args['file_path']} {extra}".strip()
+    verb = _MUTATING_TOOL_RE.search(tool_name or "")
+    if verb:
+        for key in _PATH_ARG_NAMES:
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return f"{_FILE_VERBS[verb.group(0).lower()]} {_file_in_words(value)}"
     shown = ", ".join(f"{k}={v!r}" for k, v in args.items() if k != "content")
     shown = shown if len(shown) <= 300 else shown[:300] + "…"
     return f"{tool_name}({shown})"
