@@ -73,3 +73,76 @@ def test_embedded_lemonade_pins_the_embedder_for_auto_loads(tmp_path, not_macos)
     options = json.loads(options_path.read_text())
     assert options[DEFAULT_EMBEDDING_MODEL] == {"llamacpp_backend": "cpu"}
     assert options["builtin.Qwen3-30B-A3B-Instruct-2507-GGUF"] == {"ctx_size": 65536}
+
+
+def test_an_unreadable_options_file_fails_loudly(tmp_path, not_macos):
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
+
+    manager = EmbeddedLemonade(home=tmp_path)
+    options_path = manager.config_dir / "recipe_options.json"
+    options_path.parent.mkdir(parents=True)
+    options_path.write_text("[]")
+
+    with pytest.raises(EmbeddedLemonadeError, match="not a JSON object"):
+        manager.write_config()
+
+
+@pytest.fixture
+def fresh_pins(monkeypatch):
+    monkeypatch.setattr(lemonade_client, "_PINNED_BACKENDS", set())
+
+
+def _recording_client(calls):
+    client = LemonadeClient(verbose=False)
+
+    def fake_send(method, url, data=None, **kwargs):
+        calls.append((url.rsplit("/", 1)[-1], dict(data or {})))
+        if url.endswith("/embeddings"):
+            return {"data": [{"embedding": [0.0, 1.0]}]}
+        return {"status": "success"}
+
+    client._send_request = fake_send
+    return client
+
+
+def test_a_load_of_the_embedder_saves_its_backend(not_macos, fresh_pins):
+    """Lemonade auto-loads the embedder for ``/embeddings`` from saved options."""
+    calls = []
+    client = _recording_client(calls)
+
+    client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
+
+    assert calls == [
+        (
+            "load",
+            {
+                "model_name": DEFAULT_EMBEDDING_MODEL,
+                "llamacpp_backend": "cpu",
+                "save_options": True,
+            },
+        )
+    ]
+
+
+def test_the_first_embedding_pins_the_backend_once(not_macos, fresh_pins):
+    """A server GAIA did not configure would auto-load the embedder on Vulkan."""
+    calls = []
+    client = _recording_client(calls)
+    client.model = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+
+    client.embeddings("one", model=DEFAULT_EMBEDDING_MODEL)
+    client.embeddings("two", model=DEFAULT_EMBEDDING_MODEL)
+
+    assert [endpoint for endpoint, _ in calls] == ["load", "embeddings", "embeddings"]
+    assert calls[0][1]["llamacpp_backend"] == "cpu"
+    assert calls[0][1]["save_options"] is True
+    assert client.model == "Qwen3-30B-A3B-Instruct-2507-GGUF"
+
+
+def test_other_embedders_are_not_loaded_first(not_macos, fresh_pins):
+    calls = []
+    client = _recording_client(calls)
+
+    client.embeddings("one", model="nomic-embed-text-v2-moe-GGUF")
+
+    assert [endpoint for endpoint, _ in calls] == ["embeddings"]

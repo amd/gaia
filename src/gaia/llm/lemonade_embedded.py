@@ -626,8 +626,12 @@ class EmbeddedLemonade:
                     f"{path} is not valid JSON ({e}); fix or delete it, then "
                     "start again."
                 ) from e
-            if isinstance(loaded, dict):
-                options = loaded
+            if not isinstance(loaded, dict):
+                raise EmbeddedLemonadeError(
+                    f"{path} holds {type(loaded).__name__}, not a JSON object; "
+                    "fix or delete it, then start again."
+                )
+            options = loaded
         # Lemonade keys saved options by the registered (``user.``) name.
         for model in (DEFAULT_EMBEDDING_MODEL,):
             backend = llamacpp_backend_for(model)

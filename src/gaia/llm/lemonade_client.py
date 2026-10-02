@@ -296,6 +296,11 @@ def llamacpp_backend_for(model_name: Optional[str]) -> Optional[str]:
     return "cpu"
 
 
+#: ``(base_url, model)`` pairs whose backend this process has saved on the server.
+_PINNED_BACKENDS: set = set()
+_PINNED_BACKENDS_LOCK = threading.Lock()
+
+
 def cloud_model_provider(
     model_id: Optional[str], metadata: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
@@ -3182,6 +3187,7 @@ class LemonadeClient:
 
             # Use specified model or default
             embedding_model = model or self.model or DEFAULT_EMBEDDING_MODEL
+            self._pin_llamacpp_backend(embedding_model)
 
             payload = {"model": embedding_model, "input": input_texts}
 
@@ -3193,6 +3199,23 @@ class LemonadeClient:
         except Exception as e:
             self.log.error(f"Error generating embeddings: {str(e)}")
             raise LemonadeClientError(f"Error generating embeddings: {str(e)}")
+
+    def _pin_llamacpp_backend(self, model_name: str) -> None:
+        """Load *model_name* once on its required backend, saving the choice.
+
+        ``/embeddings`` makes Lemonade load the model itself on its default
+        backend; the saved option makes those auto-loads use the right one.
+        """
+        if llamacpp_backend_for(model_name) is None:
+            return
+        with _PINNED_BACKENDS_LOCK:
+            if (self.base_url, model_name) in _PINNED_BACKENDS:
+                return
+        active_model = self.model
+        try:
+            self.load_model(model_name, prompt=False)
+        finally:
+            self.model = active_model
 
     # =========================================================================
     # Image Generation (Stable Diffusion)
@@ -4577,7 +4600,7 @@ class LemonadeClient:
                 "the TUI provider settings if it is not connected."
             )
         with self._model_slot_lease(model_name):
-            return self._load_model_leased(
+            response = self._load_model_leased(
                 model_name,
                 timeout=timeout,
                 auto_download=auto_download,
@@ -4588,6 +4611,10 @@ class LemonadeClient:
                 prompt=prompt,
                 load_retries=load_retries,
             )
+        if llamacpp_backend_for(model_name) is not None:
+            with _PINNED_BACKENDS_LOCK:
+                _PINNED_BACKENDS.add((self.base_url, model_name))
+        return response
 
     def _load_model_leased(
         self,
@@ -4623,6 +4650,8 @@ class LemonadeClient:
                      Overrides the default value for this model.
             save_options: If True, persists ctx_size and llamacpp_args to config file.
                          Model will use these settings on future loads.
+                         Always on for a model with a forced llama.cpp backend
+                         (:func:`llamacpp_backend_for`).
             prompt: If True, prompt user before downloading (default: True).
                    Set to False to download automatically without user confirmation.
             load_retries: Number of times to retry on a TRANSIENT backend-startup
@@ -4649,6 +4678,8 @@ class LemonadeClient:
         backend = llamacpp_backend_for(model_name)
         if backend:
             request_data["llamacpp_backend"] = backend
+            # Saved so Lemonade's own auto-loads (``/embeddings``) use it too.
+            save_options = True
         if llamacpp_args:
             request_data["llamacpp_args"] = llamacpp_args
         if ctx_size is not None:

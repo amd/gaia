@@ -459,7 +459,7 @@ icon: "bug"
     gaia lemonade embedded start
     ```
 
-    If you run Lemonade yourself, GAIA asks for the CPU backend each time it loads the embedder, but Lemonade can also load it on its own for the first embedding request. Load it once with `llamacpp_backend` set to `cpu` and `save_options` set to `true` (`POST /api/v1/load`) so Lemonade remembers. Starting Lemonade with `GGML_VK_DISABLE_COOPMAT=1` also avoids the crash, but it slows prompt processing for every model: Qwen3 30B A3B on the 8060S drops from about 1,290 to 680 tokens/s. Generation speed is unchanged.
+    If you run Lemonade yourself, GAIA loads the embedder on the CPU backend before its first embedding request and saves that choice in Lemonade, so Lemonade's own later loads of it use the CPU too. Other tools that embed with it should load it the same way (`POST /api/v1/load` with `llamacpp_backend` set to `cpu` and `save_options` set to `true`). Starting Lemonade with `GGML_VK_DISABLE_COOPMAT=1` also avoids the crash, but it slows prompt processing for every model: Qwen3 30B A3B on the 8060S drops from about 1,290 to 680 tokens/s. Generation speed is unchanged.
 
     `llama-server failed to start` has other causes too (out of memory, a context size the model can't take). If you're not on a Radeon GPU with Vulkan, Lemonade's server log has llama-server's own error.
   </Accordion>
