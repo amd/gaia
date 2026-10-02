@@ -238,10 +238,8 @@ to the installer — there is no in-TUI download for the agent binary:
 This row has no `f`: the TUI cannot install its own agent binary, so it names
 the installer instead of offering a key that would not work.
 
-`email` (and any other daemon-supervised agent) goes through the same three
-screens, but its gate has five rows instead of three: background service,
-sidecar, Lemonade, model, and mailbox. See [Email Triage](/guides/email) for
-that gate end to end.
+A daemon-supervised sidecar agent goes through the same three screens, but its
+gate has more rows: background service, sidecar, Lemonade, and model.
 
 #### Markers
 
@@ -612,7 +610,6 @@ what is installed.
 
 ## Next steps
 
-- [Email Triage](/guides/email) — the id-addressed agent, end to end.
 - [CLI reference](/reference/cli#terminal-ui-gaia-tui) — the non-interactive
   subcommands (`run`, `chat`, `status`) and their exit codes.
 - [Driving the TUI programmatically](/guides/mcp/tui) — the control API, for tests

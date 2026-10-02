@@ -181,9 +181,8 @@ completes, then stores the refresh token in your OS keyring — identical to the
 browser flow from that point on. Grant an agent afterward:
 
 ```bash
-gaia connectors grants grant microsoft installed:email \
-  --scopes https://graph.microsoft.com/Mail.ReadWrite \
-           https://graph.microsoft.com/Mail.Send
+gaia connectors grants grant microsoft installed:gaia \
+  --scopes https://graph.microsoft.com/Mail.ReadWrite
 ```
 
 <Note>

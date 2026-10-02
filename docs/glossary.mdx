@@ -21,7 +21,7 @@ This glossary defines technical terms, acronyms, and concepts used throughout th
 A shell script that activates a Python virtual environment, making its packages available in the current terminal session.
 
 ### Agent
-An AI system that can autonomously plan, reason, and use tools to accomplish tasks. In GAIA, agents extend the base `Agent` class, register tools via `_register_tools()`, and follow an iterative loop: think about the task, act by calling tools, observe results, and reason about next steps. Built-in agents include GaiaAgent (the flagship) and EmailTriageAgent; ChatAgent is the flagship's base class rather than a selectable agent. See also: Agent Loop, Tool, Mixin.
+An AI system that can autonomously plan, reason, and use tools to accomplish tasks. In GAIA, agents extend the base `Agent` class, register tools via `_register_tools()`, and follow an iterative loop: think about the task, act by calling tools, observe results, and reason about next steps. GaiaAgent is the flagship; ChatAgent is its base class rather than a selectable agent. See also: Agent Loop, Tool, Mixin.
 
 ### Agent Loop
 The cyclic process an agent follows: thinking about the task, acting by calling tools, observing the results, and reasoning about next steps.
