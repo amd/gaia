@@ -602,6 +602,13 @@ class CompletionEvidence:
         gap goes to *soft*, worth one correction but never an incomplete turn.
         """
         required = {self.key(path) for path in self.requested}
+        # "Save it as notes.md in my Documents folder" names the file, not its
+        # folder: a write of that file anywhere this turn fulfils it.
+        bare = {
+            self.key(path)
+            for path in self.requested
+            if path and ntpath.basename(path) == path
+        }
         claim_without_path = False
         checkable = self.instructed or self.disk_tool_ran
         for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", answer)):
@@ -623,17 +630,29 @@ class CompletionEvidence:
                         )
                 continue
             required.update(self.key(path) for path in paths)
+            bare.update(self.key(p) for p in paths if ntpath.basename(p) == p)
             claim_without_path |= not paths
         gaps = self.cleanup_gaps(answer)
 
         def inside(path: str, folder: str) -> bool:
             return any(path.startswith(folder.rstrip("/\\") + sep) for sep in "/\\")
 
+        bare_names = {os.path.basename(path) for path in bare}
+
         def requested(path: str) -> bool:
             # A named folder is fulfilled by the files written inside it.
-            return path in required or any(inside(path, f) for f in required)
+            return (
+                path in required
+                or any(inside(path, f) for f in required)
+                or os.path.normcase(ntpath.basename(path)) in bare_names
+            )
 
+        written_names = {
+            os.path.basename(key) for key, item in self.files.items() if item.written
+        }
         for path in sorted(required):
+            if path in bare and os.path.basename(path) in written_names:
+                continue
             written_inside = any(
                 item.written and inside(key, path) for key, item in self.files.items()
             )
