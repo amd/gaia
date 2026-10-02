@@ -648,7 +648,9 @@ class CompletionEvidence:
             )
 
         written_names = {
-            os.path.basename(key) for key, item in self.files.items() if item.written
+            os.path.basename(key)
+            for key, item in self.files.items()
+            if item.written and not (self.scratch and inside(key, self.scratch))
         }
         for path in sorted(required):
             if path in bare and os.path.basename(path) in written_names:

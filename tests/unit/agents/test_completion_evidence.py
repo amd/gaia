@@ -929,3 +929,16 @@ def test_a_different_file_does_not_fulfil_a_named_save(tmp_path):
     write(ledger, other)
     read(ledger, other)
     assert "No successful write" in " ".join(gaps(ledger))
+
+
+def test_a_scratch_copy_does_not_fulfil_a_bare_named_save(tmp_path):
+    scratch = tmp_path / "gaia-scratch-1"
+    ledger = CompletionEvidence(
+        "Save that breakdown as revenue_by_region.md.",
+        str(tmp_path),
+        scratch=scratch,
+    )
+    draft = str(scratch / "revenue_by_region.md")
+    write(ledger, draft)
+    read(ledger, draft)
+    assert "No successful write" in " ".join(gaps(ledger))
