@@ -8,8 +8,10 @@ local one with the same shape (history, a base commit, a fix on top), and the
 harness and docker calls are recorded instead of run.
 """
 
+import importlib.metadata
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -20,7 +22,7 @@ import pytest
 from gaia import cli
 from gaia.eval import flagship_tasks as ft
 from gaia.eval.bench import config as bench_config
-from gaia.eval.bench import swebench
+from gaia.eval.bench import gaia_child, harness, sandbox, swebench
 
 from .conftest import gaia_tool
 
@@ -615,7 +617,18 @@ def pilot(upstream, tmp_path, monkeypatch, bench_env):
         ),
     )
     monkeypatch.setattr(swebench, "repo_url", lambda instance: upstream["url"])
+    # Building a real venv per test is slow; one test below builds it.
+    monkeypatch.setattr(
+        swebench,
+        "tool_interpreter",
+        lambda root: _tool_python(swebench.cache_dir(root)),
+    )
     return work_root
+
+
+def _tool_python(root: Path) -> Path:
+    venv = root / "toolchain" / "py3"
+    return venv / ("Scripts" if os.name == "nt" else "bin") / "python"
 
 
 def test_a_swebench_run_captures_each_patch_and_leaves_the_pass_to_the_harness(
@@ -673,6 +686,190 @@ def test_a_run_cut_off_at_the_cap_is_shown_but_not_submitted(
     assert entry["timed_out"] and "timed out" in entry["error"]
     assert not (out / "predictions.jsonl").exists()
     assert "--- a/sessions.py" in (out / REQUESTS / "workspace.diff").read_text()
+
+
+# ---------------------------------------------------------------------------
+# Isolation from the host's installed packages
+# ---------------------------------------------------------------------------
+
+
+def test_the_agents_interpreter_cannot_import_what_the_host_has_installed(tmp_path):
+    """matplotlib-24870: the agent imported the host's 3.11 matplotlib, fix included."""
+    python = swebench.tool_interpreter(tmp_path)
+    proc = subprocess.run(
+        [str(python), "-c", "import pytest"], capture_output=True, text=True
+    )
+    assert importlib.util.find_spec("pytest") is not None
+    assert proc.returncode != 0 and "No module named 'pytest'" in proc.stderr
+    pip = subprocess.run(
+        [str(python), "-m", "pip", "--version"], capture_output=True, text=True
+    )
+    assert pip.returncode != 0, "the agent could pip install the fixed release"
+    built = python.stat().st_mtime_ns
+    assert swebench.tool_interpreter(tmp_path) == python
+    assert python.stat().st_mtime_ns == built, "a second task rebuilt a clean venv"
+
+
+def test_a_package_an_agent_installed_is_gone_by_the_next_task(tmp_path):
+    python = swebench.tool_interpreter(tmp_path)
+    venv = python.parent.parent
+    (site_packages,) = list(venv.glob("Lib/site-packages")) + list(
+        venv.glob("lib/python*/site-packages")
+    )
+    (site_packages / "matplotlib").mkdir()
+    (site_packages / "__editable__.checkout.pth").write_text("/elsewhere")
+    assert swebench.tool_interpreter(tmp_path) == python
+    assert sorted(p.name for p in site_packages.iterdir()) == []
+
+
+def test_the_installed_copy_is_the_packages_dirs_and_its_metadata():
+    copy = swebench.installed_copy("pytest-dev/pytest")
+    names = {p.name for p in copy}
+    assert {"pytest", "_pytest"} <= names
+    assert any(n.startswith("pytest-") and n.endswith(".dist-info") for n in names)
+    assert all(p.parent.name in ("site-packages", "dist-packages") for p in copy)
+    assert swebench.installed_copy("nobody/no-such-distribution") == ()
+
+
+def test_host_site_packages_holds_the_running_interpreters_packages():
+    trees = swebench.host_site_packages()
+    pytest_home = Path(importlib.util.find_spec("pytest").origin).resolve().parents[1]
+    assert pytest_home in trees
+    assert all(t.name in ("site-packages", "dist-packages") for t in trees)
+
+
+def test_gaias_imports_follow_requirements_but_not_extras(monkeypatch):
+    graph = {
+        "root": ["Needed_Pkg>=1", "only-for-docs; extra == 'docs'"],
+        "needed-pkg": ["deep.dep ; python_version >= '3.8'"],
+    }
+
+    def requires(name):
+        if name not in graph and name != "deep-dep":
+            raise importlib.metadata.PackageNotFoundError(name)
+        return graph.get(name, [])
+
+    monkeypatch.setattr(swebench.importlib.metadata, "requires", requires)
+    assert swebench.gaia_imports.__wrapped__(("root",)) == {
+        "root",
+        "needed-pkg",
+        "deep-dep",
+    }
+
+
+def test_the_fence_leaves_gaia_the_packages_it_imports_itself(monkeypatch):
+    monkeypatch.setattr(swebench, "gaia_imports", lambda: frozenset({"requests"}))
+    monkeypatch.setattr(swebench, "installed_copy", lambda repo: (Path(repo),))
+    assert swebench.deniable_copy("psf/requests") == ()
+    assert swebench.deniable_copy("matplotlib/matplotlib") == (
+        Path("matplotlib/matplotlib"),
+    )
+
+
+@pytest.mark.parametrize("harness_name", [harness.GAIA, harness.CLAUDE_CODE])
+def test_both_harnesses_get_only_the_bare_interpreter(
+    pilot, fake_launch, tmp_path, monkeypatch, harness_name
+):
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "host-src"))
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join([harness.toolchain_dir(), os.environ["PATH"]])
+    )
+    specs = []
+
+    def act(workdir):
+        spec = workdir.parent / "harness" / "gaia-spec.json"
+        if spec.is_file():
+            specs.append(json.loads(spec.read_text()))
+        return "done"
+
+    fake_launch.act = act
+    ft.run_suite(
+        "swebench",
+        "m",
+        tmp_path / "out",
+        config=bench_config.resolve(work_root=str(pilot), harness=harness_name),
+        instances=[REQUESTS],
+    )
+    call = fake_launch.calls[0]
+    tools = _tool_python(swebench.cache_dir(pilot))
+    path = call["env"]["PATH"].split(os.pathsep)
+    assert path[1] == str(tools.parent)
+    if sys.prefix != sys.base_prefix:
+        assert harness.toolchain_dir() not in path
+    assert call["env"]["VIRTUAL_ENV"] == str(tools.parent.parent)
+    if harness_name == harness.GAIA:
+        assert [spec["tool_python"] for spec in specs] == [str(tools)]
+        assert str(tmp_path / "host-src") not in call["env"]["PYTHONPATH"]
+    else:
+        assert "PYTHONPATH" not in call["env"]
+
+
+@pytest.mark.parametrize(
+    "harness_name, denied",
+    [
+        (harness.CLAUDE_CODE, "every site-packages"),
+        (harness.GAIA, "the package under test"),
+    ],
+)
+def test_the_fence_denies_the_hosts_packages(pilot, harness_name, denied, monkeypatch):
+    monkeypatch.setattr(
+        swebench, "host_site_packages", lambda: (Path("every site-packages"),)
+    )
+    monkeypatch.setattr(
+        swebench, "deniable_copy", lambda repo: (Path("the package under test"),)
+    )
+    config = bench_config.BenchConfig(harness=harness_name, work_root=pilot, fence=True)
+    ctx = ft.RunContext(
+        config=config, gateway_url="http://x", scrubber=None, fenced=(pilot,)
+    )
+    task = ft.Task(
+        id=REQUESTS,
+        check=swebench.CHECK,
+        prompt="p",
+        max_steps=1,
+        swebench={"repo": "psf/requests"},
+    )
+    fenced, read_write, read_only = ft._conditions(
+        ctx, pilot / "root", pilot / "root" / "requests", task
+    ).fence
+    assert Path(denied) in fenced
+    venv = _tool_python(swebench.cache_dir(pilot)).parent.parent
+    assert read_only == (venv,)
+    # Later SBPL rules win: the venv must be reopened after the work root's deny.
+    rules = sandbox.profile(fenced, read_write, read_only).splitlines()
+
+    def quoted(path):
+        return f"(subpath {sandbox._q(path)})"
+
+    deny = next(
+        i for i, r in enumerate(rules) if r.startswith("(deny") and quoted(pilot) in r
+    )
+    allow = next(i for i, r in enumerate(rules) if quoted(venv) in r)
+    assert deny < allow and "file-read-data" in rules[allow]
+
+
+def test_the_gaia_child_runs_snippets_with_the_bare_interpreter(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run_agent(*args, **kwargs):
+        seen.update(executable=sys.executable, pythonpath=os.environ.get("PYTHONPATH"))
+        return {}, "", ""
+
+    monkeypatch.setattr(sys, "executable", sys.executable)
+    monkeypatch.setenv("PYTHONPATH", "host-src")
+    monkeypatch.setattr(ft, "_run_agent", fake_run_agent)
+    gaia_child.run(
+        {
+            "prompt": "p",
+            "model": "m",
+            "max_steps": 1,
+            "workdir": str(tmp_path),
+            "memory_db": str(tmp_path / "m.db"),
+            "progress": str(tmp_path / "progress.jsonl"),
+            "tool_python": str(tmp_path / "bare" / "python"),
+        }
+    )
+    assert seen == {"executable": str(tmp_path / "bare" / "python"), "pythonpath": None}
 
 
 def test_grading_a_run_writes_the_harness_verdicts_into_the_scorecard(
