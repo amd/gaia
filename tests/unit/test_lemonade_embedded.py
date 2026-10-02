@@ -630,3 +630,22 @@ class TestFailureMessages:
         assert kwargs["capture_output"] is True
         assert kwargs["text"] is True
         assert kwargs["check"] is False
+
+
+def test_checking_a_live_pid_never_kills_it_when_the_os_is_faked():
+    """Tests fake ``platform.system``; the liveness probe must still be harmless."""
+    import subprocess
+    import sys
+    from unittest.mock import patch
+
+    from gaia.llm.lemonade_embedded import pid_exists
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        for faked in ("Linux", "Windows", "Darwin"):
+            with patch("platform.system", return_value=faked):
+                assert pid_exists(child.pid)
+        assert child.poll() is None, "pid_exists terminated the process it probed"
+    finally:
+        child.kill()
+        child.wait()
