@@ -92,7 +92,7 @@ def _python_syntax_error(source: str, filename: str) -> str | None:
 
 def _resolved_target(args: Dict[str, Any]) -> Path:
     """The file write_file / edit_file act on, resolved as they resolve it."""
-    return Path(args["file_path"]).resolve()
+    return Path(args["file_path"]).expanduser().resolve()
 
 
 DATE_RANGE_FORMATS = (
@@ -847,6 +847,7 @@ class FileSearchToolsMixin:
             Returns:
                 Dictionary with file content and type-specific metadata
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 # Enforce the --allowed-paths sandbox on reads. Checked before
                 # the existence probe so paths outside the sandbox can't be used
@@ -1263,6 +1264,7 @@ class FileSearchToolsMixin:
             6. Backup creation before overwrite
             7. Audit logging of all write operations
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 resolved_path = Path(file_path).resolve()
                 content_size = len(content.encode("utf-8"))
@@ -1608,6 +1610,7 @@ class FileSearchToolsMixin:
             4. Backup creation before edit
             5. Audit logging
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 import difflib
 
