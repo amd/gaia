@@ -17,6 +17,7 @@ from gaia.llm.lemonade_client import (
     CHAT_LLAMACPP_ARGS,
     CONVERSATION_SLOT,
     SIDE_SLOT,
+    LemonadeAuthError,
     LemonadeClient,
 )
 from gaia.llm.providers.lemonade import LemonadeProvider
@@ -70,6 +71,47 @@ def test_a_llamacpp_chat_load_gets_two_slots_and_no_ram_cache(client):
 def test_other_loads_keep_their_flags(client, model, kwargs):
     sent = _sent_load(client, model, **kwargs)
     assert sent.get("llamacpp_args") == kwargs.get("llamacpp_args")
+
+
+def test_an_unreadable_catalog_loads_without_the_chat_flags(client, caplog):
+    with responses.RequestsMock() as rsps:
+        rsps.add(responses.GET, f"{BASE}/models", status=404)
+        with patch.object(
+            client, "_post_load_with_transient_retry", return_value={}
+        ) as post:
+            client.load_model(
+                "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=65536, prompt=False
+            )
+    sent = post.call_args.args[1]
+    assert sent == {
+        "model_name": "Qwen3-30B-A3B-Instruct-2507-GGUF",
+        "ctx_size": 65536,
+    }
+    assert "without the two-slot chat flags" in caplog.text
+
+
+def test_an_auth_failure_on_the_catalog_still_fails_the_load(client):
+    with responses.RequestsMock() as rsps:
+        rsps.add(responses.GET, f"{BASE}/models", status=401)
+        with patch.object(client, "_post_load_with_transient_retry") as post:
+            with pytest.raises(LemonadeAuthError):
+                client.load_model(
+                    "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=65536, prompt=False
+                )
+    post.assert_not_called()
+
+
+def test_a_known_recipe_skips_the_catalog_round_trip(client):
+    client._model_metadata["Qwen3-30B-A3B-Instruct-2507-GGUF"] = {"recipe": "llamacpp"}
+    with responses.RequestsMock() as rsps:  # any GET would raise ConnectionError
+        with patch.object(
+            client, "_post_load_with_transient_retry", return_value={}
+        ) as post:
+            client.load_model(
+                "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=65536, prompt=False
+            )
+        assert len(rsps.calls) == 0
+    assert post.call_args.args[1]["llamacpp_args"] == CHAT_LLAMACPP_ARGS
 
 
 def _provider_sending(model):

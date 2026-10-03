@@ -1987,6 +1987,9 @@ class LemonadeClient:
 
     def _model_recipe(self, model_name: str) -> Optional[str]:
         """The catalog's recipe for *model_name* (``llamacpp``, ``flm``, ``cloud``…)."""
+        for model_id, entry in self._model_metadata.items():
+            if entry.get("recipe") and _model_ids_match(model_id, model_name):
+                return entry["recipe"]
         for model in self.list_models(show_all=True).get("data", []):
             if _model_ids_match(model.get("id"), model_name):
                 return model.get("recipe")
@@ -4653,12 +4656,23 @@ class LemonadeClient:
         """
         self.log.debug(f"Loading {model_name}")
 
-        if (
-            llamacpp_args is None
-            and ctx_size is not None
-            and self._model_recipe(model_name) == "llamacpp"
-        ):
-            llamacpp_args = CHAT_LLAMACPP_ARGS
+        if llamacpp_args is None and ctx_size is not None:
+            # The chat flags are a speed-up; an unreadable catalog must not
+            # block the load itself, which only needs POST /load.
+            try:
+                recipe = self._model_recipe(model_name)
+            except LemonadeAuthError:
+                raise
+            except LemonadeClientError as e:
+                recipe = None
+                self.log.warning(
+                    f"Could not read the model catalog at {self.base_url}/models "
+                    f"to check {model_name}'s recipe ({e}); loading it without "
+                    "the two-slot chat flags, so side requests will evict the "
+                    "conversation cache."
+                )
+            if recipe == "llamacpp":
+                llamacpp_args = CHAT_LLAMACPP_ARGS
 
         request_data = {"model_name": model_name}
         if llamacpp_args:
