@@ -24,6 +24,7 @@ from gaia.llm.lemonade_client import (
     LemonadeStatus,
     ModelRequirement,
     ModelType,
+    llamacpp_backend_for,
 )
 from gaia.llm.providers.lemonade import (
     LemonadeContextOverflowError,
@@ -134,12 +135,16 @@ class TestLoadModelRequestConstruction:
         )
 
         payload = mock_send.call_args[0][2]
-        assert payload == {
+        expected = {
             "model_name": "user.embeddinggemma-300m-GGUF",
             "llamacpp_args": "--ubatch-size 2048",
             "ctx_size": 2048,
             "save_options": True,
         }
+        backend = llamacpp_backend_for("user.embeddinggemma-300m-GGUF")
+        if backend:
+            expected["llamacpp_backend"] = backend
+        assert payload == expected
 
     @patch.object(LemonadeClient, "_send_request")
     def test_load_endpoint_url(self, mock_send):

@@ -1684,6 +1684,7 @@ No documents are currently indexed.
                 import sys
                 import time
 
+                file_path = os.path.expanduser(file_path)
                 if not self.path_validator.is_path_allowed(file_path):
                     return {
                         "status": "error",

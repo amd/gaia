@@ -66,6 +66,7 @@ from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
 from gaia.agents.base.task_lessons import attach as attach_task_lessons
+from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
@@ -1625,6 +1626,7 @@ Do NOT wrap conversational replies in JSON.
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
         self._register_tools()
+        self._install_path_access_prompt()
         from gaia.agents.base.artifacts import ArtifactStore
 
         self._output_artifacts = ArtifactStore()
@@ -2126,6 +2128,36 @@ Do NOT wrap conversational replies in JSON.
         if validator is None:
             validator = getattr(self, "_path_validator", None)
         return validator
+
+    def _install_path_access_prompt(self) -> None:
+        """Route out-of-scope path approvals through this agent's console."""
+        validator = self._read_validator()
+        if validator is not None:
+            validator.set_access_prompt(self._confirm_path_access)
+
+    def _confirm_path_access(self, path: Path) -> bool:
+        """Ask the user, via the console's confirmation dialog, to allow *path*."""
+        console = self.console
+        # Full access widens the file scope; pre-approving gated tools does not.
+        if getattr(console, "full_access", False):
+            logger.warning("Full access is on: granting %s without asking", path)
+            return True
+        auto_approves = getattr(console, "auto_approve_confirmations_enabled", None)
+        if callable(auto_approves) and auto_approves():
+            logger.warning(
+                "Not granting %s: tools are pre-approved, nobody asked", path
+            )
+            return False
+        started = time.perf_counter()
+        try:
+            return (
+                self.console.confirm_tool_execution(
+                    PATH_ACCESS_PROMPT_TOOL, {"path": str(path)}
+                )
+                is True
+            )
+        finally:
+            self._confirmation_wait_s += time.perf_counter() - started
 
     def _check_extraction_sources(self):
         ledger = self._extraction_ledger

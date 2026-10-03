@@ -65,6 +65,20 @@ func (m *ChatModel) advanceWarmStep(step string) {
 	m.warmStep = step
 }
 
+// firstPromptHint gives a blank first screen somewhere to start.
+const firstPromptHint = "Try: \"What's in my Documents folder?\" · \"Summarize the report in my Downloads\" · " +
+	"\"Total sales by region in sales.csv\" · /help for commands"
+
+// hasUserMessage reports whether the user has said anything this session.
+func (m ChatModel) hasUserMessage() bool {
+	for _, msg := range m.messages {
+		if msg.Role == RoleUser {
+			return true
+		}
+	}
+	return false
+}
+
 // finishWarmUp ends the stage. A skipped warm-up (a remote model) leaves no
 // trace; a finished one says how long it took, once.
 func (m *ChatModel) finishWarmUp(answer string) {
@@ -79,10 +93,11 @@ func (m *ChatModel) finishWarmUp(answer string) {
 		if model == "" {
 			model = "the model"
 		}
-		m.messages = append(m.messages, Message{
-			Role:    RoleStatus,
-			Content: "[✓] Ready — " + model + " is loaded and has read its instructions (" + elapsed.String() + ").",
-		})
+		ready := "[✓] Ready — " + model + " is loaded and has read its instructions (" + elapsed.String() + ")."
+		if len(m.queued) == 0 && !m.hasUserMessage() {
+			ready += "\n" + firstPromptHint
+		}
+		m.messages = append(m.messages, Message{Role: RoleStatus, Content: ready})
 	}
 	m.settleTurn()
 	m.updateViewport()

@@ -1174,6 +1174,7 @@ class RAGToolsMixin:
         )
         def index_document(file_path: str) -> Dict[str, Any]:
             """Index a document with path validation and detailed statistics."""
+            file_path = os.path.expanduser(file_path)
             try:
                 if not self.rag:
                     return {
@@ -1867,7 +1868,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
                     }
 
-                dir_path = Path(directory_path).resolve()
+                dir_path = Path(directory_path).expanduser().resolve()
 
                 if not dir_path.exists():
                     return {

@@ -36,6 +36,7 @@ import signal
 import socket
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -180,7 +181,9 @@ def pid_exists(pid: int) -> bool:
     """
     if pid <= 0:
         return False
-    if platform.system() == "Windows":
+    # The real OS, not platform.system(): on Windows signal 0 is CTRL_C_EVENT,
+    # so os.kill(pid, 0) Ctrl+Cs the process group or raises WinError 87.
+    if sys.platform == "win32":
         import ctypes
 
         process_query_limited_information = 0x1000
@@ -602,7 +605,46 @@ class EmbeddedLemonade:
         # moves the request budget with it rather than leaving a stale number.
         merged = {**existing, **_lemond_config()}
         path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+        self._pin_llamacpp_backends()
         return path
+
+    def _pin_llamacpp_backends(self) -> None:
+        """Record per-model backends Lemonade applies even when it auto-loads.
+
+        The embedder is loaded on demand by ``/embeddings`` as well as by GAIA's
+        explicit loads, so the backend has to live in Lemonade's saved options.
+        """
+        from gaia.llm.lemonade_client import (
+            DEFAULT_EMBEDDING_MODEL,
+            llamacpp_backend_for,
+        )
+
+        path = self.config_dir / "recipe_options.json"
+        options: Dict[str, object] = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                raise EmbeddedLemonadeError(
+                    f"{path} is not valid JSON ({e}); fix or delete it, then "
+                    "start again."
+                ) from e
+            if not isinstance(loaded, dict):
+                raise EmbeddedLemonadeError(
+                    f"{path} holds {type(loaded).__name__}, not a JSON object; "
+                    "fix or delete it, then start again."
+                )
+            options = loaded
+        # Lemonade keys saved options by the registered (``user.``) name.
+        for model in (DEFAULT_EMBEDDING_MODEL,):
+            backend = llamacpp_backend_for(model)
+            if backend is None:
+                continue
+            entry = options.get(model)
+            entry = dict(entry) if isinstance(entry, dict) else {}
+            entry["llamacpp_backend"] = backend
+            options[model] = entry
+        path.write_text(json.dumps(options, indent=2), encoding="utf-8")
 
     # -- state ------------------------------------------------------------
 
@@ -906,9 +948,6 @@ class EmbeddedLemonade:
 
         env = dict(os.environ)
         env["LEMONADE_API_KEY"] = api_key
-        # Vulkan's cooperative-matrix path crashes llama-server on the first
-        # embedding on Strix Halo; every installer launch path sets this too.
-        env["GGML_VK_DISABLE_COOPMAT"] = "1"
 
         argv = [
             str(self.daemon_path),
