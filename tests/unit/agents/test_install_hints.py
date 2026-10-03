@@ -137,7 +137,8 @@ class TestAgentImportErrorMessage:
         assert "_symbol_not_exported_by_core" in message
         assert "Detected versions:" in message
         assert "amd-gaia" in message
-        assert source_install_command("gaia-agent-chat") in message
+        assert source_install_command("gaia-agent-chat", force_reinstall=True) in message
+        assert "--force-reinstall" in message
 
     def test_missing_transitive_dependency_reports_failed_import(self):
         # Real ModuleNotFoundError from importing a module that will never

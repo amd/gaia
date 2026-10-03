@@ -41,7 +41,7 @@ def _installed_version(package: str) -> Optional[str]:
         return None
 
 
-def source_install_command(wheel: str) -> str:
+def source_install_command(wheel: str, *, force_reinstall: bool = False) -> str:
     """Return the pip command that installs ``wheel`` straight from source.
 
     Uses ``sys.executable -m pip`` rather than a bare ``uv`` binary: a stock
@@ -62,8 +62,9 @@ def source_install_command(wheel: str) -> str:
     # skew that produced the misdiagnosed "not installed" ImportErrors.
     core_version = _installed_version("amd-gaia")
     ref = f"@v{core_version}" if core_version else ""
+    flag = "--force-reinstall " if force_reinstall else ""
     return (
-        f'{sys.executable} -m pip install "{wheel} @ git+{_REPO_URL}{ref}'
+        f'{sys.executable} -m pip install {flag}"{wheel} @ git+{_REPO_URL}{ref}'
         f'#subdirectory=hub/agents/{subdir}/python"'
     )
 
@@ -123,7 +124,7 @@ def agent_wheel_failed_message(
         f"Import error: {type(error).__name__}: {error}\n"
         "This is usually a version skew between the wheel and the installed "
         "core. Reinstall the wheel built from the matching core tag:\n"
-        f"`{source_install_command(wheel)}`"
+        f"`{source_install_command(wheel, force_reinstall=True)}`"
     )
     if next_step:
         message = f"{message} {next_step}"
