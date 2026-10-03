@@ -935,9 +935,10 @@ class TestLemonadePythonResolution:
             assert uc._resolve_lemonade_python() == "python3"
 
     def test_not_on_path_returns_none(self, monkeypatch):
-        monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setattr(uc.shutil, "which", lambda name: None)
-        assert uc._resolve_lemonade_python() is None
+        with monkeypatch.context() as m:
+            m.setattr("sys.platform", "linux")
+            assert uc._resolve_lemonade_python() is None
 
     def test_script_without_shebang_returns_none(self, fake_home, monkeypatch):
         lemonade = fake_home / "bin" / "lemonade-server"
@@ -1491,8 +1492,10 @@ class TestInstallerLeftovers:
         exit_code = uc.run(_ns(purge=True, dry_run=True), printer=captured)
 
         assert exit_code == uc.EXIT_OK, captured.text
+        # Needles use "/"; Windows dry-run output prints backslashes.
+        output = captured.text.replace("\\", "/")
         for needle in (".gaia/bin", ".gaia/host", ".gaia/traces", ".zshrc"):
-            assert needle in captured.text, captured.text
+            assert needle in output, captured.text
         assert (installer_home / ".gaia" / "host" / "instance.json").exists()
         assert zshrc.read_text() == original
 
