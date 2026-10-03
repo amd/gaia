@@ -1313,6 +1313,8 @@ class FileSystemToolsMixin:
             import fnmatch
 
             default_excludes = mixin._get_default_excludes()
+            # "fed rate decision" names fed_rate_decision_nov2024.txt.
+            query_words = query_lower.split()
 
             def _walk(current, depth):
                 if depth > max_depth or len(results) >= max_results:
@@ -1332,7 +1334,8 @@ class FileSystemToolsMixin:
                             if is_glob:
                                 match = fnmatch.fnmatch(name.lower(), query_lower)
                             else:
-                                match = query_lower in name.lower()
+                                name_lower = name.lower()
+                                match = all(w in name_lower for w in query_words)
 
                             if match:
                                 st = entry.stat(follow_symlinks=False)

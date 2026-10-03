@@ -126,9 +126,6 @@ func configPath(p hostProbe) string {
 // service or app launch (systemd, launchd, the macOS app, the Windows tray) takes
 // its environment from its own unit or bundle, so prefixing one of those would
 // look like it did something and change nothing at all.
-//
-// Off macOS it also carries vulkanCoopmatEnv, as the TUI's own launch does
-// (startEnv): a user-started server without it cannot load an embedder.
 func ctxPrefix(goos string, ctx int) string {
 	if goos == "windows" {
 		// cmd.exe, and the QUOTES matter: `set VAR=1 && cmd` assigns "1 " —
@@ -138,14 +135,11 @@ func ctxPrefix(goos string, ctx int) string {
 		// PowerShell wants `$env:VAR=...;` instead, and no single string is right
 		// in both; same tradeoff as the quoted exe path, and the tray app remains
 		// the shell-free alternative.
-		return fmt.Sprintf(`set "%s" && set "%s=%d" && `, vulkanCoopmatEnv, ctxSizeEnv, ctx)
+		return fmt.Sprintf(`set "%s=%d" && `, ctxSizeEnv, ctx)
 	}
 	// POSIX: `env VAR=value command` runs in any shell, unlike `VAR=value command`
 	// which is a shell builtin form.
-	if goos == "darwin" {
-		return fmt.Sprintf("env %s=%d ", ctxSizeEnv, ctx)
-	}
-	return fmt.Sprintf("env %s %s=%d ", vulkanCoopmatEnv, ctxSizeEnv, ctx)
+	return fmt.Sprintf("env %s=%d ", ctxSizeEnv, ctx)
 }
 
 // legacyCtxFlag is how the PRE-10.7 CLI took the same setting: a flag, not an

@@ -44,6 +44,7 @@ SCENARIOS_DIR = EVAL_DIR / "scenarios"
 CORPUS_DIR = EVAL_DIR / "corpus"
 RESULTS_DIR = EVAL_DIR / "results"
 MCP_CONFIG = EVAL_DIR / "mcp-config.json"
+AGENT_UI_MCP_SERVER = "gaia-agent-ui"
 MANIFEST = CORPUS_DIR / "manifest.json"
 REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
 
@@ -82,14 +83,23 @@ def load_mcp_config_template() -> dict:
         ) from e
 
 
-def resolve_mcp_config(run_dir) -> Path:
+def resolve_mcp_config(run_dir, backend_url: str) -> Path:
     """Write a runnable copy of the MCP config into ``run_dir``; return its path.
 
     The tracked template is never modified; the resolved copy ships with the
     run's artifacts. The path is absolute because ``claude -p`` runs from
-    ``REPO_ROOT``, not the caller's cwd.
+    ``REPO_ROOT``, not the caller's cwd. The Agent UI server is pointed at
+    ``backend_url``; without it the judge drives whatever runs on the default
+    port, not the backend the run was asked to evaluate.
     """
     config = _resolved_mcp_config()
+    server = (config.get("mcpServers") or {}).get(AGENT_UI_MCP_SERVER)
+    if server is None:
+        raise ValueError(
+            f"{MCP_CONFIG} has no {AGENT_UI_MCP_SERVER!r} server, so the eval "
+            "cannot reach the Agent UI backend."
+        )
+    server["args"] = [*server.get("args", []), "--backend", backend_url]
     resolved = Path(run_dir).resolve() / "mcp-config.resolved.json"
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -1496,7 +1506,7 @@ def run_scenario_subprocess(
             "--json-schema",
             result_schema,
             "--mcp-config",
-            str(resolve_mcp_config(run_dir)),
+            str(resolve_mcp_config(run_dir, backend_url)),
             "--strict-mcp-config",
             # No built-in tools: the driver works only through the agent UI's
             # MCP tools, and holds the judge's credentials.
