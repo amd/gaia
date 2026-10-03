@@ -11,6 +11,7 @@ OpenAI-compatible API and additional functionality.
 import json
 import logging
 import os
+import platform
 import signal
 import socket
 import subprocess
@@ -279,6 +280,25 @@ DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 # checkpoint + recipe + the ``embedding`` label (see MODELS entry).
 DEFAULT_EMBEDDING_MODEL = "user.embeddinggemma-300m-GGUF"
 DEFAULT_EMBEDDING_CHECKPOINT = "ggml-org/embeddinggemma-300M-GGUF:Q8_0"
+
+#: llama.cpp's Vulkan cooperative-matrix path crashes llama-server as it loads
+#: an embedding model on AMD Radeon iGPUs (#1831). The embedder is small, so it
+#: runs on the CPU backend and chat models keep the fast GPU path.
+CPU_BACKEND_MODELS = frozenset(
+    {DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_MODEL.removeprefix("user.")}
+)
+
+
+def llamacpp_backend_for(model_name: Optional[str]) -> Optional[str]:
+    """The llama.cpp backend *model_name* must load on, or None for the default."""
+    if platform.system() == "Darwin" or model_name not in CPU_BACKEND_MODELS:
+        return None
+    return "cpu"
+
+
+#: ``(base_url, model)`` pairs whose backend this process has saved on the server.
+_PINNED_BACKENDS: set = set()
+_PINNED_BACKENDS_LOCK = threading.Lock()
 
 
 def cloud_model_provider(
@@ -1070,14 +1090,12 @@ def backend_crash_remedy(model: str) -> str:
     return (
         f"Lemonade is running, but llama.cpp exited while loading '{model}'. "
         "On an AMD Radeon GPU with the Vulkan backend, the likely cause is "
-        "llama.cpp's cooperative-matrix crash: Lemonade must start with "
-        "GGML_VK_DISABLE_COOPMAT=1. GAIA sets it on servers it starts, so run "
-        "`gaia lemonade embedded stop`, then `gaia lemonade embedded start`. "
-        "A Lemonade you run yourself needs it set before it starts (for the "
-        "systemd service: `systemctl --user edit lemond`, add "
-        "`Environment=GGML_VK_DISABLE_COOPMAT=1` under [Service], then "
-        "`systemctl --user restart lemond`). Otherwise, Lemonade's server log "
-        "has llama-server's own output."
+        "llama.cpp's cooperative-matrix crash. GAIA loads its embedding model on "
+        "the CPU backend to avoid it: run `gaia lemonade embedded stop`, then "
+        "`gaia lemonade embedded start`, so GAIA's server picks that up. For "
+        "another model, load it with llamacpp_backend=cpu, or start Lemonade "
+        "with GGML_VK_DISABLE_COOPMAT=1 (every model then runs slower). "
+        "Otherwise, Lemonade's server log has llama-server's own output."
     )
 
 
@@ -3169,6 +3187,7 @@ class LemonadeClient:
 
             # Use specified model or default
             embedding_model = model or self.model or DEFAULT_EMBEDDING_MODEL
+            self._pin_llamacpp_backend(embedding_model)
 
             payload = {"model": embedding_model, "input": input_texts}
 
@@ -3180,6 +3199,23 @@ class LemonadeClient:
         except Exception as e:
             self.log.error(f"Error generating embeddings: {str(e)}")
             raise LemonadeClientError(f"Error generating embeddings: {str(e)}")
+
+    def _pin_llamacpp_backend(self, model_name: str) -> None:
+        """Load *model_name* once on its required backend, saving the choice.
+
+        ``/embeddings`` makes Lemonade load the model itself on its default
+        backend; the saved option makes those auto-loads use the right one.
+        """
+        if llamacpp_backend_for(model_name) is None:
+            return
+        with _PINNED_BACKENDS_LOCK:
+            if (self.base_url, model_name) in _PINNED_BACKENDS:
+                return
+        active_model = self.model
+        try:
+            self.load_model(model_name, prompt=False)
+        finally:
+            self.model = active_model
 
     # =========================================================================
     # Image Generation (Stable Diffusion)
@@ -3826,6 +3862,7 @@ class LemonadeClient:
         checkpoint: Optional[str] = None,
         recipe: Optional[str] = None,
         embedding: Optional[bool] = None,
+        on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> bool:
         """
         Ensure a model is downloaded, downloading if necessary.
@@ -3844,6 +3881,9 @@ class LemonadeClient:
             recipe: Lemonade recipe for a custom-model registration (e.g. ``llamacpp``).
             embedding: Set True for a custom embedding model so the ``embeddings``
                 label is applied on registration.
+            on_progress: When given, the pull is streamed and every
+                ``pull_model_stream`` event (progress, complete, error) is
+                passed to it, so the caller can show the download live.
 
         Returns:
             True if model is available (was already downloaded or successfully downloaded),
@@ -3892,6 +3932,24 @@ class LemonadeClient:
                 self.log.info(
                     "   This may take minutes to hours depending on model size..."
                 )
+
+            if on_progress is not None:
+                complete = reported_error = False
+                try:
+                    for event in self.pull_model_stream(
+                        model_name,
+                        checkpoint=checkpoint,
+                        recipe=recipe,
+                        embedding=embedding,
+                    ):
+                        on_progress(event)
+                        complete = complete or event.get("event") == "complete"
+                        reported_error = reported_error or event.get("event") == "error"
+                except LemonadeClientError as e:
+                    if not reported_error:
+                        on_progress({"event": "error", "error": str(e)})
+                    return False
+                return complete
 
             # Download via pull_model. checkpoint/recipe/embedding register a
             # custom ``user.`` model on first pull; built-ins pull by name only.
@@ -4564,7 +4622,7 @@ class LemonadeClient:
                 "the TUI provider settings if it is not connected."
             )
         with self._model_slot_lease(model_name):
-            return self._load_model_leased(
+            response = self._load_model_leased(
                 model_name,
                 timeout=timeout,
                 auto_download=auto_download,
@@ -4575,6 +4633,10 @@ class LemonadeClient:
                 prompt=prompt,
                 load_retries=load_retries,
             )
+        if llamacpp_backend_for(model_name) is not None:
+            with _PINNED_BACKENDS_LOCK:
+                _PINNED_BACKENDS.add((self.base_url, model_name))
+        return response
 
     def _load_model_leased(
         self,
@@ -4610,6 +4672,8 @@ class LemonadeClient:
                      Overrides the default value for this model.
             save_options: If True, persists ctx_size and llamacpp_args to config file.
                          Model will use these settings on future loads.
+                         Always on for a model with a forced llama.cpp backend
+                         (:func:`llamacpp_backend_for`).
             prompt: If True, prompt user before downloading (default: True).
                    Set to False to download automatically without user confirmation.
             load_retries: Number of times to retry on a TRANSIENT backend-startup
@@ -4633,6 +4697,11 @@ class LemonadeClient:
         self.log.debug(f"Loading {model_name}")
 
         request_data = {"model_name": model_name}
+        backend = llamacpp_backend_for(model_name)
+        if backend:
+            request_data["llamacpp_backend"] = backend
+            # Saved so Lemonade's own auto-loads (``/embeddings``) use it too.
+            save_options = True
         if llamacpp_args:
             request_data["llamacpp_args"] = llamacpp_args
         if ctx_size is not None:
