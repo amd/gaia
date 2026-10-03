@@ -273,6 +273,25 @@ def test_work_a_check_asks_for_after_the_answer_is_not_refused(agent, tmp_path):
     assert "SENTINEL-CONFTEST" in str(tool_results(sent)[-1])
 
 
+def test_work_a_test_claim_correction_asks_for_is_not_refused(agent, tmp_path):
+    """A pass claim the record can't show is sent back; checking it is that work."""
+    (tmp_path / "pytest.ini").write_text("SENTINEL-PYTEST-INI")
+    sent = script(
+        agent,
+        {"answer": "dates.py is fine; all 12 tests passed."},
+        call("read_file", file_path=str(tmp_path / "pytest.ini")),
+        {"answer": "dates.py is fine. I did not run the tests."},
+    )
+    agent.process_query("Is the lowercase z handled in dates.py?")
+    corrections = [
+        m["content"]
+        for m in sent[-1]
+        if m.get("role") == "user" and "Either run the check now" in str(m["content"])
+    ]
+    assert corrections
+    assert "SENTINEL-PYTEST-INI" in str(tool_results(sent)[-1])
+
+
 def test_a_check_naming_a_file_adds_only_that_file(guard, tmp_path):
     guard.mark_answered()
     report = str(tmp_path / "out" / "weekly.csv")
