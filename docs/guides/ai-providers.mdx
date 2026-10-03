@@ -67,9 +67,10 @@ models, not an unused local chat model.
 ### The default local model
 
 `gaia init` picks the local chat model from the same rule: **Qwen3 30B A3B
-Instruct 2507** where it fits (~19 GB for models — most dGPUs and CPU-only
-PCs with enough RAM qualify, not just a Strix Halo), **Gemma 4 E4B** on every
-smaller PC. It records the pick as `default_model` in `~/.gaia/config.json`,
+Instruct 2507** where it fits (~26 GB for models: its 17.4 GB of weights plus
+the context cache at GAIA's 64K window — a 64 GB+ Strix Halo, a 32 GB GPU, or a
+CPU-only PC with 32 GB of RAM qualifies; a 24 GB card does not), **Gemma 4 E4B**
+on every smaller PC. It records the pick as `default_model` in `~/.gaia/config.json`,
 so the TUI's agent starts on it. Set `gaia config set default_model <id>` to
 choose your own; `gaia init` never overwrites it. **Qwen3.8 Flash Next** (82 GB,
 multimodal, needs a 128 GB-class Strix Halo) is a supported manual option —

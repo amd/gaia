@@ -1269,6 +1269,39 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertEqual(events[3]["percent"], 100)
 
     @responses.activate
+    def test_pull_by_name_registers_a_known_user_model(self):
+        """A user. model pulled by name alone (the auto-download path) must carry
+        its registration, or Lemonade has nothing to pull; a built-in must carry
+        none, since a recipe on a built-in pull is a 400 (#1655)."""
+        from gaia.llm.lemonade_client import (
+            DEFAULT_MODEL_NAME,
+            FLASH_OPTION_MODEL_NAME,
+            find_model_requirement,
+        )
+
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            body='event: complete\ndata: {"percent":100}\n\n',
+            status=200,
+            content_type="text/event-stream",
+        )
+        list(self.client.pull_model_stream(model_name=FLASH_OPTION_MODEL_NAME))
+        list(self.client.pull_model_stream(model_name=DEFAULT_MODEL_NAME))
+
+        flash = json.loads(responses.calls[0].request.body)
+        mr = find_model_requirement(FLASH_OPTION_MODEL_NAME)
+        self.assertEqual(flash["model_name"], FLASH_OPTION_MODEL_NAME)
+        self.assertEqual(flash["checkpoint"], mr.checkpoint)
+        self.assertEqual(flash["recipe"], mr.recipe)
+        self.assertEqual(flash["mmproj"], mr.mmproj)
+        self.assertTrue(flash["vision"] and flash["reasoning"])
+
+        builtin = json.loads(responses.calls[1].request.body)
+        self.assertNotIn("checkpoint", builtin)
+        self.assertNotIn("recipe", builtin)
+
+    @responses.activate
     def test_pull_model_stream_error(self):
         """Test handling errors during streaming model pull."""
         # Mock SSE response with error

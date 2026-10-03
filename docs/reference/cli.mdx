@@ -237,8 +237,9 @@ profile. The default `gaia` profile is a superset, so a bare `gaia init` covers 
 
 <Note>
 For the `gaia`, `chat`, `rag` and `all` profiles the chat model follows the
-hardware. Where Lemonade reports enough memory for it — about 19 GB for models, which
-reaches well past a 128 GB Strix Halo to most dGPUs and CPU-only PCs with enough RAM —
+hardware. Where Lemonade reports enough memory for it — about 26 GB for models, its
+17.4 GB of weights plus the context cache at GAIA's 64K window, so a 64 GB+ Strix Halo,
+a 32 GB GPU or a CPU-only PC with 32 GB of RAM, but not a 24 GB card —
 `gaia init` also sets up `Qwen3-30B-A3B-Instruct-2507-GGUF` (a 17 GB Lemonade built-in,
 text only) as the chat model, prints why, and records it as `default_model`. Gemma is
 still downloaded, since vision and document-image extraction load it by name. Every
@@ -1558,7 +1559,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `user.Qwen3.8-Flash-Next-GGUF` on a PC with the memory for it and never overwrites a value you set |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3-30B-A3B-Instruct-2507-GGUF` on a PC with the memory for it and never overwrites a value you set |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |

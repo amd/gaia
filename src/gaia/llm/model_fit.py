@@ -11,9 +11,10 @@ with the server that will actually load the model:
   VRAM; Apple Silicon its Metal working set. With no GPU, system RAM.
 * **Disk** is the free space in Lemonade's model store.
 
-A model fits when ``size * MEMORY_OVERHEAD_FACTOR + MEMORY_OVERHEAD_GB`` fits
-the memory pool (the margin covers the KV cache and compute buffers at GAIA's
-64K window) and its download fits the disk.
+A model fits when ``size * MEMORY_OVERHEAD_FACTOR + MEMORY_OVERHEAD_GB`` plus
+its KV cache at GAIA's 64K window fits the memory pool, and its download fits
+the disk. The shared margin covers compute buffers and a small cache; a model
+whose cache is larger declares it (``ModelRequirement.kv_cache_gb``).
 
 ``tui/internal/lemonade/recommended_models.json`` carries the same two constants for
 the Go picker; ``tests/unit/test_model_fit.py`` fails if they drift.
@@ -27,7 +28,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 #: Multiplier on the weights' size for runtime buffers that scale with the model.
 MEMORY_OVERHEAD_FACTOR = 1.05
-#: Fixed headroom for the KV cache and compute buffers.
+#: Fixed headroom for compute buffers and a small KV cache.
 MEMORY_OVERHEAD_GB = 1.0
 
 
@@ -80,9 +81,13 @@ def check_server_supports(
     )
 
 
-def required_memory_gb(size_gb: float) -> float:
-    """Memory a model of ``size_gb`` weights needs to load and run."""
-    return size_gb * MEMORY_OVERHEAD_FACTOR + MEMORY_OVERHEAD_GB
+def required_memory_gb(size_gb: float, kv_cache_gb: float = 0.0) -> float:
+    """Memory a model of ``size_gb`` weights needs to load and run.
+
+    ``kv_cache_gb`` is the model's KV cache at GAIA's 64K window when it is
+    larger than the shared margin allows for.
+    """
+    return size_gb * MEMORY_OVERHEAD_FACTOR + MEMORY_OVERHEAD_GB + kv_cache_gb
 
 
 def _num(value: Any) -> float:
@@ -174,9 +179,11 @@ def capacity_from_system_info(info: Dict[str, Any]) -> MachineCapacity:
     return MachineCapacity(memory_gb=pool[0], memory_source=pool[1], disk_free_gb=disk)
 
 
-def check_fit(size_gb: float, capacity: MachineCapacity) -> FitVerdict:
+def check_fit(
+    size_gb: float, capacity: MachineCapacity, kv_cache_gb: float = 0.0
+) -> FitVerdict:
     """Whether a local model of ``size_gb`` fits ``capacity``, and if not why."""
-    need = required_memory_gb(size_gb)
+    need = required_memory_gb(size_gb, kv_cache_gb)
     if need > capacity.memory_gb:
         return FitVerdict(
             False,
@@ -192,7 +199,8 @@ def check_fit(size_gb: float, capacity: MachineCapacity) -> FitVerdict:
 
 
 def pick_default_model(candidates: Iterable[tuple], capacity: MachineCapacity) -> tuple:
-    """First ``(model_id, size_gb)`` candidate that fits, with the skipped reasons.
+    """First ``(model_id, size_gb[, kv_cache_gb])`` candidate that fits, with the
+    skipped reasons.
 
     ``candidates`` runs largest-first and must end with the floor model, which
     is returned even when it does not fit: a machine too small for the floor
@@ -206,8 +214,8 @@ def pick_default_model(candidates: Iterable[tuple], capacity: MachineCapacity) -
     if not items:
         raise ValueError("pick_default_model needs at least one candidate")
     skipped: List[Tuple[str, str]] = []
-    for model_id, size_gb in items[:-1]:
-        verdict = check_fit(size_gb, capacity)
+    for model_id, size_gb, *kv in items[:-1]:
+        verdict = check_fit(size_gb, capacity, kv[0] if kv else 0.0)
         if verdict.fits:
             return model_id, skipped
         skipped.append((model_id, verdict.reason))

@@ -421,13 +421,16 @@ func TestTooBigModelIsShownButCannotBeDownloaded(t *testing.T) {
 			t.Fatalf("view lacks %q:\n%s", want, view)
 		}
 	}
-	if m.entries[0].Model.ID != "Qwen3.8-Flash-Next-GGUF" {
-		t.Fatalf("first row %s", m.entries[0].Model.ID)
+	if m.entries[0].Model.ID != "Qwen3-30B-A3B-Instruct-2507-GGUF" {
+		t.Fatalf("first row %s, want the default", m.entries[0].Model.ID)
 	}
 	if m.entries[m.focus].Model.ID != "Gemma-4-E4B-it-GGUF" {
 		t.Fatalf("cursor should start on the first usable row, got %s", m.entries[m.focus].Model.ID)
 	}
-	m.focus = 0
+	m.focus = 1 // Qwen3.8 Flash: shown, but too big for this PC
+	if m.entries[m.focus].Model.ID != "Qwen3.8-Flash-Next-GGUF" {
+		t.Fatalf("row 1 is %s, want Qwen3.8 Flash", m.entries[m.focus].Model.ID)
+	}
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 	if cmd != nil || m.stage != "models" || !strings.Contains(m.note, "memory") {

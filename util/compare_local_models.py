@@ -345,7 +345,7 @@ def compare(models, ctx: int, suite: Optional[str], judge: bool, out: Path):
             result.fit_reason = "unknown download size; not downloading it blind"
             print(f"\n== {model}: skipped, {result.fit_reason}")
             continue
-        verdict = check_fit(size, capacity)
+        verdict = check_fit(size, capacity, mr.kv_cache_gb if mr else 0.0)
         result.fits, result.fit_reason = verdict.fits, verdict.reason
         if not verdict.fits:
             print(f"\n== {model}: skipped, {verdict.reason}")

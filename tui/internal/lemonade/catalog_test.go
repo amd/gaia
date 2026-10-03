@@ -51,14 +51,14 @@ func TestStrixHaloPoolIsVRAMPlusSharedMemory(t *testing.T) {
 	if c.MemorySource != "AMD iGPU" || c.MemoryGB < 111 || c.MemoryGB > 112 {
 		t.Fatalf("capacity %+v", c)
 	}
-	if ok, why := c.Fit(qwenFlash().SizeGB); !ok {
+	if ok, why := c.Fit(qwenFlash().SizeGB, qwenFlash().KVCacheGB); !ok {
 		t.Fatalf("Qwen3.8 Flash must fit a 128 GB Strix Halo: %s", why)
 	}
 }
 
 func TestQwenFlashDoesNotFitSmallerMachines(t *testing.T) {
 	for name, body := range map[string]string{"strix halo 64": strixHalo64, "mac m4": macM4, "cpu 32": cpuOnly} {
-		ok, why := capacityOf(t, body).Fit(qwenFlash().SizeGB)
+		ok, why := capacityOf(t, body).Fit(qwenFlash().SizeGB, qwenFlash().KVCacheGB)
 		if ok || !strings.Contains(why, "memory") {
 			t.Errorf("%s: fits=%v reason=%q", name, ok, why)
 		}
@@ -68,7 +68,7 @@ func TestQwenFlashDoesNotFitSmallerMachines(t *testing.T) {
 func TestDiskIsPartOfFit(t *testing.T) {
 	c := capacityOf(t, strixHalo128)
 	c.DiskFreeGB = 40
-	ok, why := c.Fit(qwenFlash().SizeGB)
+	ok, why := c.Fit(qwenFlash().SizeGB, qwenFlash().KVCacheGB)
 	if ok || !strings.Contains(why, "disk") {
 		t.Fatalf("fits=%v reason=%q", ok, why)
 	}
@@ -90,11 +90,14 @@ func TestEntriesPutRecommendationsFirstAndJudgeFit(t *testing.T) {
 		{ID: "Qwen3-Coder-Next-GGUF", Size: 48, Labels: []string{"chat", "coding"}},
 	}
 	entries := BuildEntries("local", models, capacityOf(t, macM4), nil)
-	if entries[0].Model.ID != "Qwen3.8-Flash-Next-GGUF" || entries[0].Listed || entries[0].Selectable() {
-		t.Fatalf("unlisted Qwen3.8 Flash should lead, unselectable on a 12 GB Mac: %+v", entries[0])
+	if entries[0].Model.ID != "Qwen3-30B-A3B-Instruct-2507-GGUF" || entries[0].Listed || entries[0].Selectable() {
+		t.Fatalf("the unlisted default should lead, unselectable on a 12 GB Mac: %+v", entries[0])
 	}
-	if entries[1].Model.ID != "Gemma-4-E4B-it-GGUF" || !entries[1].Selectable() {
-		t.Fatalf("Gemma should follow and be selectable: %+v", entries[1])
+	if entries[1].Model.ID != "Qwen3.8-Flash-Next-GGUF" || entries[1].Listed || entries[1].Selectable() {
+		t.Fatalf("unlisted Qwen3.8 Flash should follow, unselectable on a 12 GB Mac: %+v", entries[1])
+	}
+	if entries[2].Model.ID != "Gemma-4-E4B-it-GGUF" || !entries[2].Selectable() {
+		t.Fatalf("Gemma should follow and be selectable: %+v", entries[2])
 	}
 	byID := map[string]Entry{}
 	for _, e := range entries {

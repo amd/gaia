@@ -275,9 +275,9 @@ def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
 # ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
-# The default on any machine with the memory for it — at 17.4 GB this fits far
-# more than the 128 GB Strix Halo class that Qwen3.8 Flash needed (a 24 GB dGPU
-# or a 32 GB CPU-only box qualifies too). A Lemonade built-in, 2-5x faster
+# The default on any machine with the memory for it — 17.4 GB of weights plus a
+# ~6.4 GB KV cache at 64K, so a 64 GB+ Strix Halo, a 32 GB GPU or a 32 GB
+# CPU-only box qualifies, far past the 128 GB class Qwen3.8 Flash needed. A Lemonade built-in, 2-5x faster
 # decode than Flash on Strix Halo, but text-only. ``gaia init`` picks it only
 # when gaia.llm.model_fit says it fits, and records the pick as
 # ``default_model``.
@@ -693,6 +693,9 @@ class ModelRequirement:
     size_gb: Optional[float] = None
     # Oldest Lemonade whose bundled llama.cpp can load the model.
     min_lemonade_version: Optional[str] = None
+    # KV cache at GAIA's 64K window, in GB, for a model whose cache outgrows the
+    # fit rule's shared margin (gaia.llm.model_fit). 0 when the margin covers it.
+    kv_cache_gb: float = 0.0
 
     def pull_kwargs(self) -> Dict[str, Any]:
         """Registration fields for ``ensure_model_downloaded`` on a ``user.`` model.
@@ -775,7 +778,7 @@ MODELS = {
         size_gb=82.86,
         min_lemonade_version="2026.39.1",
     ),
-    # --- Qwen3 30B A3B Instruct 2507: the default where it fits (Strix Halo 128 GB) ---
+    # --- Qwen3 30B A3B Instruct 2507: the default wherever it fits ---
     # 30.5B MoE (3.3B active), a Lemonade built-in on llama.cpp (Q4_0).
     # Native tool calls, no vision and no thinking mode. The "-HRX" build of the
     # same weights is Linux-only and experimental, so it is not listed here.
@@ -786,6 +789,8 @@ MODELS = {
         min_ctx_size=GPU_CTX_SIZE,
         tool_calling=True,
         size_gb=17.4,
+        # 48 layers x 4 KV heads x 128 dims x K+V x f16 = 96 KB/token, ~6.4 GB at 64K.
+        kv_cache_gb=6.4,
     ),
     # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
@@ -1004,14 +1009,15 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
             # A size of 0 would fit every PC; never guess a larger model in.
             unsupported.append((model_id, "GAIA does not know its download size"))
             continue
-        if model_id != floor and check_fit(size, capacity).fits:
+        kv = mr.kv_cache_gb if mr else 0.0
+        if model_id != floor and check_fit(size, capacity, kv).fits:
             verdict = check_server_supports(
                 mr.min_lemonade_version if mr else None, server_version
             )
             if not verdict.fits:
                 unsupported.append((model_id, verdict.reason))
                 continue
-        candidates.append((model_id, size))
+        candidates.append((model_id, size, kv))
     model_id, skipped = pick_default_model(candidates, capacity)
     return model_id, unsupported + skipped, capacity
 
@@ -3895,6 +3901,22 @@ class LemonadeClient:
                 "a discovered model with /model."
             )
         self.log.info(f"Installing {model_name} with streaming progress")
+
+        if not checkpoint:
+            # A user. model Lemonade has not seen needs its registration on the
+            # first pull; every caller that pulls by name alone gets it here.
+            mr = find_model_requirement(model_name)
+            registration = mr.pull_kwargs() if mr else {}
+            if registration:
+                checkpoint = registration["checkpoint"]
+                recipe = recipe or registration["recipe"]
+                mmproj = mmproj or registration["mmproj"]
+                if vision is None:
+                    vision = registration["vision"]
+                if reasoning is None:
+                    reasoning = registration["reasoning"]
+                if embedding is None:
+                    embedding = registration["embedding"]
 
         request_data = {"model_name": model_name, "stream": True}
 

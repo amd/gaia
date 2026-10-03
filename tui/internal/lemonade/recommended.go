@@ -30,6 +30,9 @@ type Recommended struct {
 	Reasoning  bool    `json:"reasoning"`
 	// MinLemonade is the oldest Lemonade whose llama.cpp can load the model.
 	MinLemonade string `json:"min_lemonade_version"`
+	// KVCacheGB is the KV cache at GAIA's 64K window when it outgrows the fit
+	// rule's shared margin; 0 when the margin covers it.
+	KVCacheGB float64 `json:"kv_cache_gb"`
 }
 
 // Matches reports whether a catalog id is this recommendation. A cloud id also
@@ -66,9 +69,10 @@ func init() {
 		panic("recommended_models.json: fit.memory_overhead_factor must be positive")
 	}
 	recommended, fitRule = doc.Models, doc.Fit
-	// Fireworks recommendations are RecommendedModels in cloud.go directly, with
-	// Evidence citations from amd/gaia#4335 — not read from this JSON, which
-	// only carries the local models' fit-checking data.
+	// The ranked Fireworks list with its Evidence is RecommendedModels in
+	// cloud.go; this JSON's Fireworks entries only label and group those rows in
+	// the picker, and TestFireworksRecommendationsMatchTheRanking keeps the two
+	// in the same order.
 }
 
 // RecommendedFor returns the recommendations for one provider, in list order.

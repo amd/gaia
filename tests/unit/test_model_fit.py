@@ -101,23 +101,35 @@ class TestCapacity:
 
 class TestFit:
     def test_qwen_30b_fits_a_128gb_strix_halo(self):
-        assert check_fit(QWEN.size_gb, capacity_from_system_info(STRIX_HALO_128)).fits
+        assert check_fit(
+            QWEN.size_gb, capacity_from_system_info(STRIX_HALO_128), QWEN.kv_cache_gb
+        ).fits
 
     def test_qwen_30b_also_fits_a_64gb_strix_halo(self):
         # At 17.4 GB, the new default has a much smaller footprint than Flash's
         # 82.86 GB — a 64 GB Strix Halo (~55.9 GB pool) now qualifies too.
-        assert check_fit(QWEN.size_gb, capacity_from_system_info(STRIX_HALO_64)).fits
+        assert check_fit(
+            QWEN.size_gb, capacity_from_system_info(STRIX_HALO_64), QWEN.kv_cache_gb
+        ).fits
 
     def test_qwen_30b_does_not_fit_the_smallest_machines(self):
-        # At 17.4 GB, only a genuinely small machine (12 GB unified memory)
-        # fails to fit — a 32 GB CPU-only box or a 24 GB dGPU now qualify,
-        # unlike Flash's 82.86 GB, which only a 128 GB-class Strix Halo fit.
-        verdict = check_fit(QWEN.size_gb, capacity_from_system_info(MAC_M4))
+        verdict = check_fit(
+            QWEN.size_gb, capacity_from_system_info(MAC_M4), QWEN.kv_cache_gb
+        )
         assert not verdict.fits and "memory" in verdict.reason
 
-    @pytest.mark.parametrize("info", [CPU_ONLY, DGPU])
-    def test_qwen_30b_fits_a_32gb_cpu_box_and_a_24gb_dgpu(self, info):
-        assert check_fit(QWEN.size_gb, capacity_from_system_info(info)).fits
+    def test_qwen_30b_fits_a_32gb_cpu_box(self):
+        cap = capacity_from_system_info(CPU_ONLY)
+        assert check_fit(QWEN.size_gb, cap, QWEN.kv_cache_gb).fits
+
+    def test_qwen_30b_charges_its_kv_cache(self):
+        # 17.4 GB of weights plus ~6.4 GB of KV cache at 64K: a 24 GB card
+        # holds the weights but not the cache, so it must not be offered.
+        assert QWEN.kv_cache_gb > 0
+        cap = capacity_from_system_info(DGPU)
+        assert check_fit(QWEN.size_gb, cap).fits  # weights alone would pass
+        verdict = check_fit(QWEN.size_gb, cap, QWEN.kv_cache_gb)
+        assert not verdict.fits and "memory" in verdict.reason
 
     def test_flash_does_not_fit_a_64gb_strix_halo(self):
         # Flash's 82.86 GB (with the vision projector) still needs the full
@@ -234,6 +246,17 @@ class TestTuiDrift:
         assert lc.DEFAULT_MODEL_NAME in local
         assert lc.LARGE_DEFAULT_MODEL_NAME in local
 
+    def test_kv_cache_matches_the_python_registry(self, doc):
+        """The TUI's fit check must charge the same KV cache as Python's."""
+        for entry in doc["models"]:
+            mr = lc.find_model_requirement(entry.get("register_as") or entry["id"])
+            if mr is not None:
+                assert entry.get("kv_cache_gb", 0.0) == mr.kv_cache_gb, entry["id"]
+
+    def test_the_default_leads_the_local_list(self, doc):
+        local = [m["id"] for m in doc["models"] if m["provider"] == "local"]
+        assert local[0] == lc.LARGE_DEFAULT_MODEL_NAME
+
     def test_the_multimodal_alternative_is_recommended_and_known(self, doc):
         """Switchable to by name, and sized so the fit check can judge it."""
         local = {m["id"] for m in doc["models"] if m["provider"] == "local"}
@@ -275,7 +298,7 @@ class TestRealLemonadeReports:
         # The default Linux GTT limit (half of RAM) is too small for Flash's
         # 82.86 GB, but the new, much smaller 17.4 GB default fits fine.
         assert not check_fit(FLASH.size_gb, cap).fits
-        assert check_fit(QWEN.size_gb, cap).fits
+        assert check_fit(QWEN.size_gb, cap, QWEN.kv_cache_gb).fits
 
     def test_macos_metal(self):
         cap = capacity_from_system_info(_fixture("lemonade11_metal_macos.json"))

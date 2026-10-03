@@ -133,8 +133,8 @@ does not install. Required before any query succeeds:
    **v2026.39.1 or newer**, the version `gaia init` installs; older servers
    cannot load it.
 2. The machine's default chat model downloaded — run `gaia init`. It picks
-   `Qwen3-30B-A3B-Instruct-2507-GGUF` where it fits (~19 GB for models — most
-   dGPUs and CPU-only PCs with enough RAM qualify, not just a 128 GB Strix Halo)
+   `Qwen3-30B-A3B-Instruct-2507-GGUF` where it fits (~26 GB for models, weights
+   plus context cache — a 64 GB+ Strix Halo, a 32 GB GPU, or a 32 GB CPU-only PC)
    and `Gemma-4-E4B-it-GGUF` everywhere else, and records the pick as
    `default_model` in `~/.gaia/config.json`. On 128 GB-class PCs the user may
    switch to the multimodal `user.Qwen3.8-Flash-Next-GGUF` with `gaia config set

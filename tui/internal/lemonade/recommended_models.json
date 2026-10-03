@@ -5,6 +5,14 @@
   },
   "models": [
     {
+      "id": "Qwen3-30B-A3B-Instruct-2507-GGUF",
+      "provider": "local",
+      "label": "Qwen3 30B A3B Instruct 2507",
+      "note": "default where it fits (~26 GB for models); faster than Flash, text only",
+      "size_gb": 17.4,
+      "kv_cache_gb": 6.4
+    },
+    {
       "id": "Qwen3.8-Flash-Next-GGUF",
       "register_as": "user.Qwen3.8-Flash-Next-GGUF",
       "provider": "local",
@@ -22,14 +30,7 @@
       "id": "Gemma-4-E4B-it-GGUF",
       "provider": "local",
       "label": "Gemma 4 E4B",
-      "note": "default on PCs too small for Qwen3 30B A3B (below ~19 GB for models)"
-    },
-    {
-      "id": "Qwen3-30B-A3B-Instruct-2507-GGUF",
-      "provider": "local",
-      "label": "Qwen3 30B A3B Instruct 2507",
-      "note": "default where it fits (~19 GB for models); faster than Flash, text only",
-      "size_gb": 17.4
+      "note": "default on PCs too small for Qwen3 30B A3B (below ~26 GB for models)"
     },
     {
       "id": "Qwen3-Coder-30B-A3B-Instruct-GGUF",

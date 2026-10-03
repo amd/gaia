@@ -197,14 +197,16 @@ func (c Capacity) SupportsModel(minVersion string) (bool, string) {
 }
 
 // RequiredMemoryGB is the memory a model of sizeGB weights needs to run.
-func RequiredMemoryGB(sizeGB float64) float64 {
-	return sizeGB*fitRule.MemoryOverheadFactor + fitRule.MemoryOverheadGB
+// kvCacheGB is its KV cache at GAIA's 64K window when larger than the shared
+// margin allows for (0 otherwise).
+func RequiredMemoryGB(sizeGB, kvCacheGB float64) float64 {
+	return sizeGB*fitRule.MemoryOverheadFactor + fitRule.MemoryOverheadGB + kvCacheGB
 }
 
 // Fit reports whether a local model of sizeGB fits, and if not why — in the
 // same words as gaia.llm.model_fit.check_fit.
-func (c Capacity) Fit(sizeGB float64) (bool, string) {
-	if need := RequiredMemoryGB(sizeGB); need > c.MemoryGB {
+func (c Capacity) Fit(sizeGB, kvCacheGB float64) (bool, string) {
+	if need := RequiredMemoryGB(sizeGB, kvCacheGB); need > c.MemoryGB {
 		return false, fmt.Sprintf("needs ~%.0f GB of memory; this PC has %.0f GB (%s)", need, c.MemoryGB, c.MemorySource)
 	}
 	if c.DiskFreeGB >= 0 && sizeGB > c.DiskFreeGB {

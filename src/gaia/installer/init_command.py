@@ -258,7 +258,7 @@ def resolve_init_chat_model(
 ) -> ChatModelChoice:
     """The chat model `gaia init` sets up: the user's ``default_model`` when it
     is a local Lemonade model, else the largest default that fits this machine
-    (Qwen3.8-Flash on a 128 GB Strix Halo, Gemma 4 E4B everywhere else).
+    (Qwen3 30B A3B wherever it fits, Gemma 4 E4B everywhere else).
 
     ``--check`` and ``run()`` both go through here so they can never disagree
     about what "set up" means on this machine. ``reset_corrupt`` is run()'s
@@ -327,7 +327,7 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
     size = size or (mr.size_gb if mr else None)
     if size:
         capacity = capacity_from_system_info(client.get_system_info(timeout=15))
-        verdict = check_fit(float(size), capacity)
+        verdict = check_fit(float(size), capacity, mr.kv_cache_gb if mr else 0.0)
         if not verdict.fits:
             raise ModelFitError(
                 f"default_model {model_id} will not fit this PC: {verdict.reason}. "
