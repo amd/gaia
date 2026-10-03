@@ -334,3 +334,41 @@ def test_the_gaia_child_records_a_reopened_turn(tmp_path):
     markers = [e["content"]["type"] for e in harness._progress(progress)]
     assert markers == ["answered", "reopened", "answered"]
     assert agent._turn_scope.answered
+
+
+def test_a_task_repository_cannot_replace_a_package_gaia_imports(tmp_path):
+    """SWE-bench's psf/requests checkout shadowed GAIA's own requests."""
+    import os
+    import subprocess
+    import sys
+
+    shadow = tmp_path / "requests"
+    shadow.mkdir()
+    marker = tmp_path / "shadow-imported"
+    (shadow / "__init__.py").write_text(
+        f"open({str(marker)!r}, 'w').close()\nraise ImportError('task repo')\n",
+        encoding="utf-8",
+    )
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(harness.import_roots()))
+    env.pop("PYTHONSAFEPATH", None)
+
+    def launch(*args):
+        return subprocess.run(
+            [sys.executable, *args],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    # The old launch form loads the planted package, so the fixture reproduces it.
+    launch("-m", "gaia.eval.bench.gaia_child")
+    assert marker.exists()
+    marker.unlink()
+
+    proc = launch("-c", harness.CHILD_BOOTSTRAP)
+    # No spec argument: the child prints its usage and exits 2 once imported.
+    assert proc.returncode == 2, proc.stderr[-2000:]
+    assert "usage" in proc.stderr
+    assert not marker.exists()

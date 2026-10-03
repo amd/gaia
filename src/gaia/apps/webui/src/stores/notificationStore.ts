@@ -56,10 +56,14 @@ export interface SessionToolGrant {
 }
 
 /** These decisions apply to one displayed snapshot or code scope, never a tool name. */
+/** The prompt raised when a tool reaches outside the chat's files (security.py). */
+export const PATH_ACCESS_TOOL = 'allow_path_access';
+
 export function requiresFreshConsent(tool: string | undefined): boolean {
   return tool === 'share_engineering_context'
     || tool === 'append_engineering_context'
-    || tool === 'approve_engineering_code';
+    || tool === 'approve_engineering_code'
+    || tool === PATH_ACCESS_TOOL;
 }
 
 // ── State Interface ──────────────────────────────────────────────────────

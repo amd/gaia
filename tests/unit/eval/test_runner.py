@@ -716,17 +716,38 @@ class TestJudgeMismatchWarning:
 # ---------------------------------------------------------------------------
 
 
+BACKEND = "http://127.0.0.1:4301"
+
+
 class TestResolveMcpConfig:
     """The tracked config is a template; the interpreter is resolved per run."""
 
+    def test_the_agent_ui_server_drives_the_requested_backend(self, tmp_path):
+        resolved = runner.resolve_mcp_config(tmp_path, BACKEND)
+
+        args = json.loads(resolved.read_text(encoding="utf-8"))["mcpServers"][
+            "gaia-agent-ui"
+        ]["args"]
+        assert args[-2:] == ["--backend", BACKEND]
+
+    def test_a_template_without_the_agent_ui_server_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        template = tmp_path / "mcp-config.json"
+        template.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
+        monkeypatch.setattr(runner, "MCP_CONFIG", template)
+
+        with pytest.raises(ValueError, match="gaia-agent-ui"):
+            runner.resolve_mcp_config(tmp_path / "run", BACKEND)
+
     def test_resolved_config_names_the_running_interpreter(self, tmp_path):
-        resolved = runner.resolve_mcp_config(tmp_path)
+        resolved = runner.resolve_mcp_config(tmp_path, BACKEND)
 
         config = json.loads(resolved.read_text(encoding="utf-8"))
         assert config["mcpServers"]["gaia-agent-ui"]["command"] == sys.executable
 
     def test_resolved_copy_lands_in_the_run_dir(self, tmp_path):
-        resolved = runner.resolve_mcp_config(tmp_path)
+        resolved = runner.resolve_mcp_config(tmp_path, BACKEND)
 
         assert resolved.parent == tmp_path
         assert resolved != runner.MCP_CONFIG
@@ -734,7 +755,7 @@ class TestResolveMcpConfig:
     def test_template_on_disk_is_left_untouched(self, tmp_path):
         before = runner.MCP_CONFIG.read_bytes()
 
-        runner.resolve_mcp_config(tmp_path)
+        runner.resolve_mcp_config(tmp_path, BACKEND)
 
         assert runner.MCP_CONFIG.read_bytes() == before
         assert json.loads(before)["mcpServers"]["gaia-agent-ui"]["command"] == "python"
@@ -743,7 +764,7 @@ class TestResolveMcpConfig:
         # claude -p runs from REPO_ROOT, so a relative path would miss the file.
         monkeypatch.chdir(tmp_path)
 
-        resolved = runner.resolve_mcp_config(Path("run"))
+        resolved = runner.resolve_mcp_config(Path("run"), BACKEND)
 
         assert resolved.is_absolute()
         assert resolved == tmp_path.resolve() / "run" / "mcp-config.resolved.json"
@@ -752,19 +773,26 @@ class TestResolveMcpConfig:
     def test_non_python_commands_are_preserved(self, tmp_path, monkeypatch):
         template = tmp_path / "mcp-config.json"
         template.write_text(
-            json.dumps({"mcpServers": {"node-server": {"command": "npx"}}}),
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "gaia-agent-ui": {"command": "python", "args": []},
+                        "node-server": {"command": "npx"},
+                    }
+                }
+            ),
             encoding="utf-8",
         )
         monkeypatch.setattr(runner, "MCP_CONFIG", template)
 
-        resolved = runner.resolve_mcp_config(tmp_path / "run")
+        resolved = runner.resolve_mcp_config(tmp_path / "run", BACKEND)
 
         config = json.loads(resolved.read_text(encoding="utf-8"))
         assert config["mcpServers"]["node-server"]["command"] == "npx"
 
     def test_rewritten_interpreter_is_logged(self, tmp_path, caplog):
         with caplog.at_level("DEBUG", logger=runner.logger.name):
-            runner.resolve_mcp_config(tmp_path)
+            runner.resolve_mcp_config(tmp_path, BACKEND)
 
         # Match the raw args: %r doubles Windows backslashes in the message.
         assert any(
