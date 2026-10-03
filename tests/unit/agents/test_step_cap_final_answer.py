@@ -280,6 +280,7 @@ def test_failed_step_cap_call_returns_the_note_and_why(agent, caplog, reply, rea
 
     answer = result["result"]
     assert "I ran out of steps before I could finish — I used 3 of the 3" in answer
+    assert "`--max-steps 53`" in answer
     assert f"{_TOOL}: 3x" in answer
     failure_lines = [line for line in answer.splitlines() if reason in line]
     assert len(failure_lines) == 1

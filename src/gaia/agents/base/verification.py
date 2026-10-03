@@ -101,7 +101,9 @@ _SCOPE_BODY_RE = re.compile(
     + r"\s*[*_~`]*\s*(?:un|partially )?verified\s*[*_~`]*\s*[—–-]"
     + r"|I\s+haven['’]t\s+confirmed\s+this\s+works\s*—.*(?:"
     + r"didn['’]t\s+pass|didn['’]t\.|blocked\s+before"
-    + r"|didn['’]t\s+run\s+(?:the\s+tests|anything))"
+    + r"|didn['’]t\s+run\s+(?:the\s+tests|anything)"
+    # A note cut at VERIFICATION_SCOPE_MAX_CHARS loses its ending.
+    + r"|…[\s*_~`]*$)"
 )
 
 #: Cheap pre-check before the line-by-line scan.

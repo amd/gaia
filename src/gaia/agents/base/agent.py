@@ -5311,7 +5311,10 @@ Do NOT wrap conversational replies in JSON.
                 message += f"  - {tool}: {count}x\n"
             message += "\n"
 
-        message += "Ask me to continue and I'll pick up from here.\n"
+        message += (
+            "Ask me to continue and I'll pick up from here. From the command "
+            f"line, `--max-steps {steps_limit + 50}` gives me more room.\n"
+        )
 
         return message
 
@@ -6624,11 +6627,9 @@ Do NOT wrap conversational replies in JSON.
     def _project_has_tests(self, root: Optional[str]) -> bool:
         """``project_has_tests``, walked once per root per turn."""
         cache = self.__dict__.setdefault("_has_tests_cache", {})
-        key = (id(getattr(self, "_turn_tool_executions", None)), root)
-        if key not in cache:
-            cache.clear()
-            cache[key] = project_has_tests(root)
-        return cache[key]
+        if root not in cache:
+            cache[root] = project_has_tests(root)
+        return cache[root]
 
     def _unchecked_change(self) -> Tuple[Optional[str], bool]:
         """``(path, has_tests)`` for the last change nothing checked afterwards.
@@ -6986,6 +6987,7 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        self._has_tests_cache: Dict[Optional[str], bool] = {}
         self._completion_evidence = CompletionEvidence(
             user_input,
             os.getcwd(),

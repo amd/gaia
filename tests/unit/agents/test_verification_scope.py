@@ -1274,6 +1274,10 @@ ECHOED = (
 
 #: The current note, echoed back by a model that read it in history.
 ECHOED_NOTE = f"{VERIFICATION_NOTE_OPENER} — pytest didn't pass."
+# Long enough that the cap cuts off the note's ending.
+ECHOED_TRUNCATED_NOTE = build_verification_scope(
+    [], unchecked_change="src/" + "deeply/nested/" * 12 + "module.py"
+)
 
 MODEL_ECHOES = [
     ("plain_trailing", f"All five calls succeeded.\n\n{ECHOED}"),
@@ -1317,7 +1321,13 @@ MODEL_ECHOES = [
         "didn\u2019t pass.",
     ),
     ("new_note_twice", f"Body.\n\n{ECHOED_NOTE}\n\n{ECHOED_NOTE}"),
+    ("new_note_truncated", f"All five calls succeeded.\n\n{ECHOED_TRUNCATED_NOTE}"),
 ]
+
+
+def test_the_truncated_echo_fixture_really_is_cut_off():
+    assert ECHOED_TRUNCATED_NOTE.endswith("…")
+    assert len(ECHOED_TRUNCATED_NOTE) == VERIFICATION_SCOPE_MAX_CHARS
 
 
 def _scope_lines(text):
@@ -1687,3 +1697,15 @@ class TestSubtestSummariesAreRecognised:
         }
 
         assert summary_reports_failure("run_python", result) is False
+
+
+def test_a_new_turn_rechecks_whether_the_project_has_tests(agent, tmp_path):
+    root = str(tmp_path)
+    assert not agent._project_has_tests(root)
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+    assert not agent._project_has_tests(root), "cached within the turn"
+
+    _stub_chat(agent, _answer("Hello."))
+    agent.process_query("hi")
+
+    assert agent._project_has_tests(root)
