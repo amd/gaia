@@ -118,6 +118,20 @@ class TestTheToolRunsProjectTests:
         assert "value 42" in result["stdout"]
         assert f"cwd {project}" in result["stdout"]
 
+    def test_a_tilde_path_runs_the_file_under_home(
+        self, make_execute_python_file, project, monkeypatch
+    ):
+        monkeypatch.setenv("HOME", str(project.parent))
+        monkeypatch.setenv("USERPROFILE", str(project.parent))
+        monkeypatch.chdir(project)
+        execute_python_file = make_execute_python_file()
+
+        result = execute_python_file(file_path="~/project/tests/test_x.py")
+
+        assert result["status"] == "success", result
+        assert result["return_code"] == 0, result["stderr"]
+        assert "value 42" in result["stdout"]
+
     def test_an_unusable_project_root_is_a_tool_error_not_a_crash(
         self, make_execute_python_file, project, monkeypatch, tmp_path
     ):

@@ -906,3 +906,39 @@ def test_saving_an_inventory_offers_a_path_grant():
     from gaia.agents.base.tool_grants import PATH_TOOLS
 
     assert "save_extracted_items" in PATH_TOOLS
+
+
+def test_a_named_file_saved_in_the_named_folder_fulfils_the_save(tmp_path):
+    ledger = CompletionEvidence(
+        "Save that breakdown as revenue_by_region.md in my Documents folder.",
+        str(tmp_path),
+    )
+    saved = str(tmp_path / "Documents" / "revenue_by_region.md")
+    write(ledger, saved)
+    assert "read back" in " ".join(gaps(ledger))
+    read(ledger, saved)
+    assert gaps(ledger) == []
+
+
+def test_a_different_file_does_not_fulfil_a_named_save(tmp_path):
+    ledger = CompletionEvidence(
+        "Save that breakdown as revenue_by_region.md in my Documents folder.",
+        str(tmp_path),
+    )
+    other = str(tmp_path / "Documents" / "summary.md")
+    write(ledger, other)
+    read(ledger, other)
+    assert "No successful write" in " ".join(gaps(ledger))
+
+
+def test_a_scratch_copy_does_not_fulfil_a_bare_named_save(tmp_path):
+    scratch = tmp_path / "gaia-scratch-1"
+    ledger = CompletionEvidence(
+        "Save that breakdown as revenue_by_region.md.",
+        str(tmp_path),
+        scratch=scratch,
+    )
+    draft = str(scratch / "revenue_by_region.md")
+    write(ledger, draft)
+    read(ledger, draft)
+    assert "No successful write" in " ".join(gaps(ledger))
