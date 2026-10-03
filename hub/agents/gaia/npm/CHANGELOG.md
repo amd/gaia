@@ -24,6 +24,15 @@ the terminal UI meant building it from source.
   chat: the agent starts, loads its model and reads its system prompt there,
   step by step. New stdio sentinel `warm_up` (answers `warmed_up`, or
   `warm_up_skipped` for a remote model).
+- The default chat model now follows the hardware. On a PC with ~26 GB for
+  models — a 64 GB+ Strix Halo, a 32 GB GPU, or a CPU-only PC with 32 GB of RAM;
+  the 17.4 GB model also needs its context cache — `gaia init` sets up Qwen3 30B A3B Instruct 2507 (a 17 GB Lemonade
+  built-in, text only) and records it as `default_model`; the agent and its
+  `GET /v1/gaia/init` readiness check use it for chat. Gemma 4 E4B is still
+  downloaded for vision. Every smaller PC keeps Gemma alone.
+- Qwen3.8 Flash Next (82 GB, multimodal) is a supported manual option on
+  128 GB-class PCs — not auto-selected. Switch with
+  `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`.
 - **Bypass permissions is now called full access, everywhere.** `--full-access`
   and `/full-access` replace `--bypass-permissions` and `/bypass`; the old names
   fail with a message naming the new one. `/full-access always` (or

@@ -12,6 +12,7 @@ These run the real CLI in a subprocess, because the exit code IS the thing
 under test — calling the handler directly would not catch it.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -29,11 +30,19 @@ def _run_gaia(*argv):
         "PYTHONPATH": str(REPO_ROOT / "src"),
         # Keep the refusal paths from touching a real server.
         "LEMONADE_BASE_URL": "http://localhost:1/api/v1",
+        # The refusal prints emoji; Windows' default codepage cannot carry it.
+        "PYTHONIOENCODING": "utf-8",
     }
+    # Windows resolves the home dir from USERPROFILE, not HOME, and Python
+    # there needs SYSTEMROOT to start at all.
+    for name in ("USERPROFILE", "SYSTEMROOT"):
+        if name in os.environ:
+            env[name] = os.environ[name]
     return subprocess.run(
         [sys.executable, "-m", "gaia.cli", *argv],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         cwd=str(REPO_ROOT),
         env=env,
         timeout=120,

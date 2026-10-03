@@ -74,6 +74,24 @@ class TestHealthEndpoint:
 class TestSystemStatus:
     """Tests for /api/system/status endpoint."""
 
+    @patch("httpx.AsyncClient")
+    def test_system_status_names_this_pcs_default_even_with_nothing_loaded(
+        self, mock_httpx_cls, client
+    ):
+        """The UI's load and download actions target default_model_name, so it
+        must name the machine's default, not the Gemma floor, when no model is
+        loaded (a Strix Halo whose gaia init recorded Qwen3.8 Flash)."""
+        import httpx
+
+        from gaia.config import GaiaConfig
+
+        cfg = GaiaConfig()
+        cfg.default_model = "user.Qwen3.8-Flash-Next-GGUF"
+        cfg.save()
+        mock_httpx_cls.side_effect = httpx.ConnectError("down")
+        data = client.get("/api/system/status").json()
+        assert data["default_model_name"] == "user.Qwen3.8-Flash-Next-GGUF"
+
     def test_system_status_returns_200(self, client):
         resp = client.get("/api/system/status")
         assert resp.status_code == 200
