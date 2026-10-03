@@ -14,7 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.install_hints import agent_not_installed_message
+from gaia.agents.install_hints import agent_import_error_message
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
@@ -589,7 +589,8 @@ async def async_main(action, **kwargs):
             from gaia_agent_chat.app import interactive_mode
         except ImportError as e:
             raise RuntimeError(
-                agent_not_installed_message(
+                agent_import_error_message(
+                    e,
                     "The chat agent is not installed",
                     "gaia-agent-chat",
                     next_step="Then re-run `gaia chat`.",
@@ -975,7 +976,8 @@ def _launch_interactive_cli(log=None):
             from gaia_agent_chat.app import interactive_mode
         except ImportError as e:
             raise RuntimeError(
-                agent_not_installed_message(
+                agent_import_error_message(
+                    e,
                     "The chat agent is not installed",
                     "gaia-agent-chat",
                     next_step="Then re-run `gaia chat`.",
@@ -5594,7 +5596,8 @@ def handle_email_command(args):
             from gaia_agent_email.spec_html import write_and_open_spec
         except ImportError as e:
             raise RuntimeError(
-                agent_not_installed_message(
+                agent_import_error_message(
+                    e,
                     "The email agent is not installed",
                     "gaia-agent-email",
                     next_step="Then re-run `gaia email --spec`.",

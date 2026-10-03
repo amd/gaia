@@ -12,7 +12,9 @@ install path that actually resolves today: pip installing straight from the
 package's subdirectory in this repo.
 """
 
+import importlib.metadata
 import sys
+from typing import Optional
 
 # hub/agents/<subdir>/python for each wheel this module has a hint for. Keep
 # in sync with the directories under hub/agents/ (ls hub/agents/).
@@ -31,7 +33,15 @@ _REPO_URL = "https://github.com/amd/gaia.git"
 CHAT_WHEEL_AGENT_IDS = frozenset({"chat", "doc", "file"})
 
 
-def source_install_command(wheel: str) -> str:
+def _installed_version(package: str) -> Optional[str]:
+    """Installed version string for ``package``, or None when absent."""
+    try:
+        return importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def source_install_command(wheel: str, *, force_reinstall: bool = False) -> str:
     """Return the pip command that installs ``wheel`` straight from source.
 
     Uses ``sys.executable -m pip`` rather than a bare ``uv`` binary: a stock
@@ -47,9 +57,15 @@ def source_install_command(wheel: str) -> str:
     condition to swallow.
     """
     subdir = _AGENT_SOURCE_SUBDIRS[wheel]
+    # Pin the ref to the installed core: the wheels track this repo's trunk,
+    # so pulling `main` against an older released core is exactly the version
+    # skew that produced the misdiagnosed "not installed" ImportErrors.
+    core_version = _installed_version("amd-gaia")
+    ref = f"@v{core_version}" if core_version else ""
+    flag = "--force-reinstall " if force_reinstall else ""
     return (
-        f'{sys.executable} -m pip install "{wheel} @ git+{_REPO_URL}#subdirectory='
-        f'hub/agents/{subdir}/python"'
+        f'{sys.executable} -m pip install {flag}"{wheel} @ git+{_REPO_URL}{ref}'
+        f'#subdirectory=hub/agents/{subdir}/python"'
     )
 
 
@@ -78,3 +94,56 @@ def agent_not_installed_message(
     if next_step:
         message = f"{message} {next_step}"
     return message
+
+
+def agent_wheel_failed_message(
+    subject: str, wheel: str, error: ImportError, *, next_step: str = ""
+) -> str:
+    """Build the error text for an installed wheel that fails to import.
+
+    A blanket "not installed" answer here misdiagnoses version skew (a wheel
+    importing symbols a newer/older core does not have) as a missing package,
+    and reinstalling from a mismatched ref reproduces the same failure. Name
+    both package versions and surface the real import error instead.
+    """
+    installed = _installed_version(wheel) or "unknown"
+    core = _installed_version("amd-gaia") or "unknown"
+    if subject.endswith(" is not installed"):
+        opening = (
+            subject[: -len(" is not installed")]
+            + " is installed, but it could not be imported"
+        )
+    else:
+        opening = (
+            f"{subject}. The `{wheel}` package is installed, but it could "
+            "not be imported"
+        )
+    message = (
+        f"{opening}.\n"
+        f"Detected versions: {wheel} {installed}, amd-gaia {core}\n"
+        f"Import error: {type(error).__name__}: {error}\n"
+        "This is usually a version skew between the wheel and the installed "
+        "core. Reinstall the wheel built from the matching core tag:\n"
+        f"`{source_install_command(wheel, force_reinstall=True)}`"
+    )
+    if next_step:
+        message = f"{message} {next_step}"
+    return message
+
+
+def agent_import_error_message(
+    error: ImportError, subject: str, wheel: str, *, next_step: str = ""
+) -> str:
+    """Pick the right error message for a failed agent-wheel import.
+
+    Only a ``ModuleNotFoundError`` that names the wheel's own top-level
+    package means the package is genuinely absent. Anything else -- a
+    missing transitive dependency, or an ImportError from a version-skewed
+    wheel -- means the package is installed but broken.
+    """
+    top_level = wheel.replace("-", "_")
+    if isinstance(error, ModuleNotFoundError) and (
+        error.name == top_level or (error.name or "").startswith(top_level + ".")
+    ):
+        return agent_not_installed_message(subject, wheel, next_step=next_step)
+    return agent_wheel_failed_message(subject, wheel, error, next_step=next_step)

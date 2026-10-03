@@ -34,7 +34,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from gaia.agents.install_hints import agent_not_installed_message
+from gaia.agents.install_hints import agent_import_error_message
 from gaia.config import UnsafeGaiaHomeError
 
 # ── Backward-compatible re-exports ──────────────────────────────────────────
@@ -414,7 +414,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                     from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
                 except ImportError as e:
                     raise RuntimeError(
-                        agent_not_installed_message(
+                        agent_import_error_message(
+                            e,
                             "The chat agent is not installed",
                             "gaia-agent-chat",
                             next_step="Then re-run the scheduled chat task.",
