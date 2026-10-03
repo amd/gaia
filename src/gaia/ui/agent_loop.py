@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.install_hints import agent_not_installed_message
+from gaia.agents.install_hints import agent_import_error_message
 from gaia.ui.run_manager import run_manager
 
 logger = logging.getLogger(__name__)
@@ -439,7 +439,8 @@ class AgentLoop:
                         from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
                     except ImportError as e:
                         raise RuntimeError(
-                            agent_not_installed_message(
+                            agent_import_error_message(
+                                e,
                                 "The chat agent is not installed",
                                 "gaia-agent-chat",
                                 next_step="Then restart the server.",
