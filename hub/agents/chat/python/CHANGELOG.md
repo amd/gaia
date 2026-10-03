@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- File and document tools now expand a leading `~`, so `~/notes.txt` reads from the
+  home directory instead of failing with "File not found" or creating a literal `~`
+  folder.
 - `/clear-cache` no longer deletes the whole working-directory `.gaia` folder
   (all of `~/.gaia` when started from home). The RAG cache now lives in
   `~/.gaia/cache/rag`, and clearing removes only the files the cache wrote.

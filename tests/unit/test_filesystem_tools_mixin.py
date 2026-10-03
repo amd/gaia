@@ -1311,6 +1311,16 @@ class TestSearchNamesIndirect:
         result = self.find(query="important", scope=str(tmp_path))
         assert "important_document.pdf" in result
 
+    def test_words_match_a_name_with_separators(self, tmp_path):
+        """A file is found by the words a person would call it."""
+        folder = tmp_path / "financial"
+        folder.mkdir()
+        (folder / "fed_rate_decision_nov2024.txt").write_text("x")
+        (folder / "rate_card.txt").write_text("x")
+        result = self.find(query="Fed rate decision", scope=str(tmp_path))
+        assert "fed_rate_decision_nov2024.txt" in result
+        assert "rate_card.txt" not in result
+
     def test_glob_star(self, tmp_path):
         """Glob wildcards work in name search."""
         (tmp_path / "report_2026.xlsx").write_bytes(b"\x00")
