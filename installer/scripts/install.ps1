@@ -53,14 +53,6 @@ function Write-GaiaWarning {
     Write-Host "[!] $Message" -ForegroundColor $COLOR_YELLOW
 }
 
-# Warn about elevation before anything prompts for it.
-function Show-ElevationNotice {
-    Write-GaiaWarning "One step later on needs administrator approval:"
-    Write-Host "  'gaia init' installs Lemonade Server (the local model runtime), whose" -ForegroundColor White
-    Write-Host "  MSI raises a UAC prompt. This installer itself never needs elevation." -ForegroundColor White
-    Write-Host "`n"
-}
-
 function Install-Uv {
     Write-Step "Checking for uv package manager..."
 
@@ -135,12 +127,12 @@ function Install-Gaia {
     }
     Write-Success "Virtual environment created"
 
-    Write-Step "Installing GAIA package..."
+    Write-Step "Installing GAIA package (about a minute)..."
 
     # Target the venv python rather than running Activate.ps1: that is a script
     # on disk, so a Restricted execution policy blocks it even though the
     # piped-in installer itself is exempt.
-    & uv pip install --python "$GAIA_VENV\Scripts\python.exe" "amd-gaia[api]"
+    & uv pip install --python "$GAIA_VENV\Scripts\python.exe" "amd-gaia[api]" --quiet
     if ($LASTEXITCODE -ne 0) {
         Write-GaiaError "Failed to install the GAIA package (uv exit $LASTEXITCODE)."
         Write-Host "  Fix:  re-run this installer; if it persists report it at" -ForegroundColor $COLOR_YELLOW
@@ -396,11 +388,10 @@ function Show-NextSteps {
     Write-Host "`n"
 
     Write-Host "Next steps:" -ForegroundColor $COLOR_CYAN
-    Write-Host "  1. Close and reopen your terminal (or run: refreshenv)" -ForegroundColor White
+    Write-Host "  1. Open a new terminal window, so the gaia command is on your PATH" -ForegroundColor White
     Write-Host "  2. Run: " -ForegroundColor White -NoNewline
     Write-Host "gaia init" -ForegroundColor $COLOR_GREEN -NoNewline
-    Write-Host " to set up Lemonade Server and download models" -ForegroundColor White
-    Write-Host "     (the Lemonade installer asks for administrator approval)" -ForegroundColor White
+    Write-Host " to set up the local model runtime and download the model (~6 GB)" -ForegroundColor White
     if ($FlagshipInstalled) {
         Write-Host "  3. Talk to the agent: " -ForegroundColor White -NoNewline
         Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
@@ -435,8 +426,6 @@ function Main {
         Write-Host "  curl -fsSL https://amd-gaia.ai/install.sh | sh" -ForegroundColor $COLOR_YELLOW
         throw "GAIA install failed - see the error above."
     }
-
-    Show-ElevationNotice
 
     # Install uv if needed
     Install-Uv
