@@ -14,7 +14,7 @@ beforeEach(() => {
 });
 afterEach(() => { useNotificationStore.setState({ notifications: [], respondToPermission: originalRespond }); });
 
-it.each(['share_engineering_context', 'append_engineering_context', 'approve_engineering_code'])(
+it.each(['share_engineering_context', 'append_engineering_context', 'approve_engineering_code', 'allow_path_access'])(
     'shows one-time approval without a remember option for %s', async (tool) => {
         useNotificationStore.getState().addNotification({ id: 'decision', type: 'permission_request', agentId: 'session', agentName: 'GAIA', title: 'Review selected context', message: 'Share with configured provider', timestamp: 1, read: false, dismissed: false, priority: 'high', tool, toolArgs: { context: 'private sample' } });
         render(<PermissionPrompt />);

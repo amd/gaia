@@ -841,7 +841,7 @@ def inline_launch(cmd, *, env, cwd, timeout_s, stdout_path, stderr_path):
 
     The environment the child would get replaces this process's for the call.
     """
-    assert cmd[1:3] == ["-m", "gaia.eval.bench.gaia_child"], cmd
+    assert cmd[1:3] == ["-c", harness.CHILD_BOOTSTRAP], cmd
     saved = dict(os.environ)
     os.environ.clear()
     os.environ.update(env)
