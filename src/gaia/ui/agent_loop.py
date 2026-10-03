@@ -443,6 +443,7 @@ class AgentLoop:
                                 "The chat agent is not installed",
                                 "gaia-agent-chat",
                                 next_step="Then restart the server.",
+                                error=e,
                             )
                         ) from e
 

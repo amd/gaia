@@ -750,7 +750,7 @@ def generate_briefings(
                 agent_not_installed_message(
                     "The briefing eval needs the email agent",
                     "gaia-agent-email",
-                    next_step=f"Original import error: {exc}",
+                    error=exc,
                 )
             ) from exc
 

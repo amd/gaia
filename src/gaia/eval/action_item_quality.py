@@ -819,7 +819,7 @@ def generate_extractions(
                 agent_not_installed_message(
                     "The action-item extraction eval needs the email agent",
                     "gaia-agent-email",
-                    next_step=f"Original import error: {exc}",
+                    error=exc,
                 )
             ) from exc
 

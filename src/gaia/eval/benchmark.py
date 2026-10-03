@@ -843,7 +843,7 @@ def run_benchmark(
                         agent_not_installed_message(
                             "The email throughput benchmark needs the email agent",
                             "gaia-agent-email",
-                            next_step=f"Original import error: {exc}",
+                            error=exc,
                         )
                     ) from exc
 

@@ -558,7 +558,7 @@ def _default_detector(
             agent_not_installed_message(
                 "The follow-up detection eval needs the email agent",
                 "gaia-agent-email",
-                next_step=f"Original import error: {exc}",
+                error=exc,
             )
         ) from exc
     return check_followups_impl(backend, window_days=window_days, now_ms=now_ms)

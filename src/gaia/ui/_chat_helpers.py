@@ -2096,6 +2096,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 "The chat agent is not installed",
                                 "gaia-agent-chat",
                                 next_step="Then restart the server.",
+                                error=e,
                             )
                         ) from e
 
