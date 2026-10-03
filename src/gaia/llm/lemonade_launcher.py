@@ -57,11 +57,6 @@ _DOWNLOAD_URL = "https://lemonade-server.ai"
 
 _VERSION_RE = re.compile(r"(\d+\.\d+\.\d+)")
 
-#: Set on every Lemonade GAIA starts. llama.cpp's Vulkan cooperative-matrix
-#: path crashes llama-server as it loads an embedding model on AMD Radeon iGPUs
-#: (8060S / gfx1151), which leaves memory and document search dead (#1831).
-LLAMACPP_ENV = {"GGML_VK_DISABLE_COOPMAT": "1"}
-
 
 @dataclass
 class LemonadeTooling:
@@ -266,18 +261,15 @@ def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> St
             "LEMONADE_SERVER_PATH to an existing binary."
         )
 
-    # macOS runs llama.cpp on Metal, so the Vulkan workaround is noise there.
-    llamacpp_env = {} if platform.system() == "Darwin" else dict(LLAMACPP_ENV)
-
     if tooling.kind == "modern":
         env = {"LEMONADE_CTX_SIZE": str(ctx_size)} if ctx_size is not None else {}
         launcher = tooling.server_launcher or ""
         if launcher.lower().endswith(".exe"):
-            return StartSpec(argv=[launcher, "--silent"], env={**llamacpp_env, **env})
+            return StartSpec(argv=[launcher, "--silent"], env=env)
         if tooling.source == "env":
             # Explicit LEMONADE_SERVER_PATH override — run the named binary
             # verbatim rather than silently rerouting to systemctl.
-            return StartSpec(argv=[launcher], env={**llamacpp_env, **env})
+            return StartSpec(argv=[launcher], env=env)
         if platform.system() == "Darwin":
             # No systemd on macOS — start the daemon directly.
             if not launcher:
@@ -296,7 +288,7 @@ def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> St
             argv.append("--no-tray")
         if ctx_size is not None:
             argv.extend(["--ctx-size", str(ctx_size)])
-        return StartSpec(argv=argv, env=llamacpp_env)
+        return StartSpec(argv=argv, env={})
 
     raise ValueError(
         f"Unknown Lemonade tooling kind {tooling.kind!r} "
@@ -352,6 +344,20 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     ``lemonade-server serve`` CLI is only ever named when a legacy install
     was actually resolved.
     """
+    from gaia.llm.lemonade_client import configured_lemonade_url
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    # `gaia init` installs GAIA's own server, and GAIA uses it unless
+    # LEMONADE_BASE_URL names another -- mirror LemonadeManager's guard.
+    if not configured_lemonade_url() and EmbeddedLemonade().is_installed():
+        return StartHint(
+            instruction=(
+                "GAIA starts its Lemonade Server when it needs it. To start it "
+                "now, run: gaia lemonade embedded start"
+            ),
+            command="gaia lemonade embedded start",
+        )
+
     tooling = resolve_lemonade()
     system = platform.system()
 

@@ -90,16 +90,14 @@ func TestServiceManagedLauncherGetsNoContextWindow(t *testing.T) {
 	}
 }
 
-func TestStartEnvDisablesVulkanCoopmat(t *testing.T) {
-	// Without it the embedder crashes on first load on a Radeon 8060S, and
-	// memory and document search never come up (#1831).
+func TestStartEnvLeavesVulkanCoopmatOn(t *testing.T) {
+	// Disabling it halves prompt speed for every model; GAIA loads only the
+	// embedder on the CPU backend instead (#1831).
+	const coopmatOff = "GGML_VK_DISABLE_COOPMAT=1"
 	for _, l := range []launcher{{CtxSize: 65536}, {}} {
-		if !hasEnv(startEnv(l), vulkanCoopmatEnv) {
-			t.Fatalf("%s missing from the child env for %+v", vulkanCoopmatEnv, l)
+		if hasEnv(startEnv(l), coopmatOff) && !hasEnv(os.Environ(), coopmatOff) {
+			t.Fatalf("%s added to the child env for %+v", coopmatOff, l)
 		}
-	}
-	if hasEnv(startEnv(launcher{ServiceManaged: true}), vulkanCoopmatEnv) {
-		t.Fatalf("%s must not be set on a service-managed launcher's client", vulkanCoopmatEnv)
 	}
 }
 

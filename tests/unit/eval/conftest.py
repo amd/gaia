@@ -85,12 +85,12 @@ class FakeLaunch:
         )
         stderr_path.write_text("")
         answer = self.act(Path(cwd))
-        if "gaia.eval.bench.gaia_child" in cmd:
+        if harness.CHILD_BOOTSTRAP in cmd:
             return self._gaia(cmd, answer, stdout_path)
         return self._claude(answer, stdout_path)
 
     def _gaia(self, cmd, answer, stdout_path):
-        spec_path = cmd[cmd.index("gaia.eval.bench.gaia_child") + 1]
+        spec_path = cmd[cmd.index(harness.CHILD_BOOTSTRAP) + 1]
         spec = json.loads(Path(spec_path).read_text())
         tools = [e for e in self.conversation if e.get("role") == "tool"]
         Path(spec["progress"]).write_text(
