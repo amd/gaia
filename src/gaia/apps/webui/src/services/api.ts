@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo, AgentCatalogResponse, InstallStatus, PreflightReport, OnboardingStatusResponse } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport } from '../types';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -57,7 +57,7 @@ function getFriendlyError(status: number, detail: string): string {
  * the Agent UI. Sent on reads too: a few read routes require it, and one
  * unconditional rule is one fewer thing to forget.
  */
-export const UI_HEADER = { 'x-gaia-ui': '1' };
+export const UI_HEADER = { 'x-gaia-ui': '1', 'x-gaia-client': 'agent-ui' };
 
 /** Fetch wrapper with logging, timing, and error handling. */
 async function apiFetch<T>(
@@ -153,92 +153,69 @@ export async function downloadModel(modelName: string, force = false): Promise<{
     return apiFetch('POST', '/system/download-model', { model_name: modelName, force });
 }
 
-// -- Onboarding (first-run wizard, #1726/#1727) --------------------------------
-
-export async function getOnboardingPreflight(): Promise<PreflightReport> {
-    return apiFetch<PreflightReport>('GET', '/onboarding/preflight');
-}
-
-export async function getOnboardingStatus(): Promise<OnboardingStatusResponse> {
-    return apiFetch<OnboardingStatusResponse>('GET', '/onboarding/status');
-}
-
-export async function completeOnboarding(skipped: boolean): Promise<OnboardingStatusResponse> {
-    return apiFetch<OnboardingStatusResponse>('POST', '/onboarding/complete', {
-        skipped,
-        completed_at: new Date().toISOString(),
-    });
-}
-
 // -- Agents --------------------------------------------------------------------
 
 export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number }> {
     return apiFetch('GET', '/agents');
 }
 
-export async function listDiskAgents(): Promise<{ agents: DiskAgentInfo[]; total: number }> {
-    return apiFetch('GET', '/agents/disk', undefined, { 'x-gaia-ui': '1' });
+// -- First-run setup (same `gaia init` the TUI runs) ----------------------------
+
+/** Hardware report (memory, disk, GPU, NPU) shown on the setup screen. */
+export async function getOnboardingPreflight(): Promise<PreflightReport> {
+    return apiFetch<PreflightReport>('GET', '/onboarding/preflight');
 }
 
-// -- Agent Hub: catalog + install lifecycle (issue #1097, backend #1096) --------
-
-/**
- * Fetch the merged Agent Hub catalog (R2 index + local registry + per-agent
- * compatibility). Returns ``offline: true`` when the backend served a cached
- * copy because the remote index was unreachable — the Hub renders a stale-cache
- * banner instead of presenting old data as fresh.
- */
-export async function listCatalog(): Promise<AgentCatalogResponse> {
-    return apiFetch('GET', '/agents/catalog', undefined, { 'x-gaia-ui': '1' });
+export async function checkSetup(skipChatModel = false): Promise<SetupCheck> {
+    return apiFetch('GET', `/setup/check?skip_chat_model=${skipChatModel}`);
 }
 
-/**
- * Kick off an agent install (download → verify → install → hot-register).
- * Returns the initial install status; poll ``getInstallStatus`` for progress.
- * The optional ``device`` selects the per-device package variant when the
- * agent ships more than one. ``trustNative`` must be set to install a
- * non-verified native (C++) agent — the backend refuses (403) otherwise.
- */
-export async function installAgent(
-    agentId: string,
-    device?: string,
-    trustNative?: boolean,
-): Promise<InstallStatus> {
-    return apiFetch(
-        'POST',
-        '/agents/install',
-        {
-            id: agentId,
-            ...(device ? { device } : {}),
-            ...(trustNative ? { trust_native: true } : {}),
-        },
-        { 'x-gaia-ui': '1' },
-    );
+export async function startSetup(skipChatModel: boolean): Promise<SetupRunStatus> {
+    return apiFetch('POST', '/setup/run', { skip_chat_model: skipChatModel });
 }
 
-/** Poll install progress for an in-flight install. */
-export async function getInstallStatus(agentId: string): Promise<InstallStatus> {
-    return apiFetch('GET', `/agents/${encodeURIComponent(agentId)}/install-status`);
+export async function getSetupStatus(): Promise<SetupRunStatus> {
+    return apiFetch('GET', '/setup/status');
 }
 
-/** Uninstall an installed agent (also used to abort an in-flight install). */
-export async function uninstallAgent(agentId: string): Promise<void> {
-    await apiFetch<unknown>(
-        'DELETE',
-        `/agents/${encodeURIComponent(agentId)}`,
-        undefined,
-        { 'x-gaia-ui': '1' },
-    );
+export async function cancelSetup(): Promise<{ cancelled: boolean }> {
+    return apiFetch('POST', '/setup/cancel', {});
 }
 
-/** Roll an agent back to the previous version from its ``.backup/`` snapshot. */
-export async function rollbackAgent(agentId: string): Promise<InstallStatus> {
-    return apiFetch(
-        'POST',
-        `/agents/${encodeURIComponent(agentId)}/rollback`,
-        {},
-        { 'x-gaia-ui': '1' },
-    );
+// -- AI providers and models (the TUI's /provider) -------------------------------
+
+export async function listProviders(): Promise<ProvidersResponse> {
+    return apiFetch('GET', '/providers');
+}
+
+export async function getActiveModel(): Promise<ActiveModel> {
+    return apiFetch('GET', '/providers/active');
+}
+
+/** Register a cloud provider. A blank key keeps the one Lemonade or the OS store already has. */
+export async function connectProvider(
+    provider: string,
+    body: ConnectProviderBody,
+): Promise<ProviderInfo & { remembered: boolean; remember_error: string | null }> {
+    return apiFetch('POST', `/providers/${encodeURIComponent(provider)}/connect`, body);
+}
+
+export async function forgetProviderKey(provider: string): Promise<{ removed: boolean }> {
+    return apiFetch('DELETE', `/providers/${encodeURIComponent(provider)}/key`);
+}
+
+export async function listProviderModels(provider: string): Promise<{ provider: string; models: ProviderModel[] }> {
+    return apiFetch('GET', `/providers/${encodeURIComponent(provider)}/models`);
+}
+
+export async function selectModel(model: string): Promise<ActiveModel> {
+    return apiFetch('POST', '/providers/select', { model });
+}
+
+// -- Skills ----------------------------------------------------------------------
+
+export async function listSkills(): Promise<{ skills: SkillInfo[]; invalid: Record<string, string> }> {
+    return apiFetch('GET', '/skills');
 }
 
 // -- Connections (issue #915) ---------------------------------------------------
@@ -732,9 +709,36 @@ export async function getActiveRuns(): Promise<{ session_ids: string[] }> {
 
 // -- Tool Confirmation ---------------------------------------------------------
 
-/** Confirm or deny a tool execution (simplified API for permission_request events). */
-export async function confirmTool(sessionId: string, approved: boolean): Promise<{ status: string; approved: boolean }> {
-    return apiFetch('POST', '/chat/confirm-tool', { session_id: sessionId, approved });
+/** Answer a tool confirmation: allow once, always allow this call in this chat, or deny. */
+export async function confirmTool(
+    sessionId: string,
+    approved: boolean,
+    options: { always?: boolean; confirmId?: string } = {},
+): Promise<{ status: string; approved: boolean; granted: string | null }> {
+    return apiFetch('POST', '/chat/confirm-tool', {
+        session_id: sessionId,
+        approved,
+        always: options.always ?? false,
+        ...(options.confirmId ? { confirm_id: options.confirmId } : {}),
+    });
+}
+
+export async function getPermissions(sessionId: string): Promise<SessionPermissions> {
+    return apiFetch('GET', `/chat/permissions/${encodeURIComponent(sessionId)}`);
+}
+
+export async function listAllPermissions(): Promise<{ default_mode: PermissionMode; sessions: SessionPermissions[] }> {
+    return apiFetch('GET', '/chat/permissions');
+}
+
+export async function setPermissionMode(sessionId: string, mode: PermissionMode): Promise<SessionPermissions> {
+    return apiFetch('PUT', `/chat/permissions/${encodeURIComponent(sessionId)}`, { mode });
+}
+
+/** Revoke one "always allow" grant, or all of them when `key` is omitted. */
+export async function revokeGrants(sessionId: string, key?: string): Promise<SessionPermissions> {
+    const q = key ? `?key=${encodeURIComponent(key)}` : '';
+    return apiFetch('DELETE', `/chat/permissions/${encodeURIComponent(sessionId)}/grants${q}`);
 }
 
 /** Answer a pending mid-run `needs_input` question (#2595). The agent
@@ -934,29 +938,8 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
 //   - Catalog list   → GET /api/connectors/catalog (filter by type='mcp_server')
 // Only read-only runtime endpoints remain:
 
-export async function listMCPServers(): Promise<{ servers: MCPServerInfo[] }> {
-    return apiFetch('GET', '/mcp/servers');
-}
-
 export async function getMCPRuntimeStatus(): Promise<{ servers: MCPServerStatus[] }> {
     return apiFetch('GET', '/mcp/status');
-}
-
-// -- Agent UI MCP Server (exposes Agent UI as MCP tools for Claude Code etc.) -----------
-
-export async function getAgentMCPServerStatus(): Promise<AgentMCPServerStatus> {
-    return apiFetch('GET', '/mcp/agent-server/status');
-}
-
-export async function startAgentMCPServer(port?: number, backendUrl?: string): Promise<AgentMCPServerStatus & { status: string }> {
-    const body: Record<string, unknown> = {};
-    if (port !== undefined) body.port = port;
-    if (backendUrl !== undefined) body.backend_url = backendUrl;
-    return apiFetch('POST', '/mcp/agent-server/start', Object.keys(body).length ? body : undefined);
-}
-
-export async function stopAgentMCPServer(): Promise<{ status: string; pid?: number }> {
-    return apiFetch('POST', '/mcp/agent-server/stop');
 }
 
 // -- Schedules -----------------------------------------------------------------

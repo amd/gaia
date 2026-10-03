@@ -95,8 +95,11 @@ describe('Chat App Installer Readiness', () => {
       const components = [
         'ChatView',
         'Sidebar',
-        'WelcomeScreen',
+        'NewChat',
+        'Composer',
+        'SetupScreen',
         'MessageBubble',
+        'settings/SettingsDialog',
       ];
 
       components.forEach(component => {

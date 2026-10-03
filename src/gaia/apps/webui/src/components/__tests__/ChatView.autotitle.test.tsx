@@ -26,7 +26,7 @@ const SESSION: Session = {
     system_prompt: null,
     message_count: 0,
     document_ids: [],
-    agent_type: 'doc',
+    agent_type: 'gaia',
 };
 
 const DOC_AGENT: AgentInfo = {
@@ -46,7 +46,6 @@ let capturedCallbacks: api.StreamCallbacks | null = null;
 function setSession(session: Session) {
     useChatStore.setState({
         agents: [DOC_AGENT],
-        activeAgentId: 'doc',
         sessions: [session],
         currentSessionId: session.id,
         messages: [],
@@ -67,6 +66,7 @@ beforeEach(() => {
 
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
     mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+    mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({
         documents: [],
         total: 0,
@@ -92,10 +92,10 @@ describe('ChatView title pinning (#2165)', () => {
         render(<ChatView sessionId={SESSION.id} />);
 
         await act(async () => {
-            fireEvent.change(screen.getByLabelText('Message input'), {
+            fireEvent.change(screen.getByLabelText('Message'), {
                 target: { value: 'what is the capital of france' },
             });
-            fireEvent.click(screen.getByLabelText('Send message'));
+            fireEvent.click(screen.getByLabelText('Send'));
         });
         expect(capturedCallbacks).not.toBeNull();
 
@@ -116,8 +116,8 @@ describe('ChatView title pinning (#2165)', () => {
         setSession({ ...SESSION, title: 'Auto Generated Title' });
         render(<ChatView sessionId={SESSION.id} />);
 
-        fireEvent.click(screen.getByLabelText('Rename task'));
-        const input = screen.getByLabelText('Edit task title');
+        fireEvent.click(screen.getByRole('button', { name: 'Auto Generated Title' }));
+        const input = screen.getByLabelText('Chat title');
         await act(async () => {
             fireEvent.change(input, { target: { value: 'My Research Project' } });
             fireEvent.keyDown(input, { key: 'Enter' });

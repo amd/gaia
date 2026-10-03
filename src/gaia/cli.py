@@ -885,7 +885,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
     from gaia.config import UnsafeGaiaHomeError
 
     try:
-        from gaia.ui.server import create_app
+        from gaia.ui.server import create_app, start_model_server_owner
 
         # Forward --base-url to the UI server via environment variable
         if base_url:
@@ -900,15 +900,12 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print(f"   Open your browser to http://127.0.0.1:{port}")
         print("   Press Ctrl+C to stop")
         print()
-        if not base_url:
-            print("   Prerequisites:")
-            print("     1. Models downloaded  : gaia init  (first time only, ~4 GB)")
-            print(f"     2. Lemonade running   : {describe_start_hint().instruction}")
-            print()
-
         import uvicorn
 
         app = create_app(webui_dist=webui_dist)
+        if not base_url:
+            # First run is set up in the app; the daemon owns the model server.
+            start_model_server_owner()
         uvicorn.run(
             app,
             host="127.0.0.1",

@@ -374,63 +374,6 @@
     flex: 1;
 }
 
-/* ── Toggle switch ────────────────────────────────────────────────── */
-
-.toggle-switch {
-    position: relative;
-    display: inline-block;
-    width: 30px;
-    height: 17px;
-    flex-shrink: 0;
-}
-
-.toggle-switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-    position: absolute;
-}
-
-.toggle-track {
-    position: absolute;
-    inset: 0;
-    background: var(--border);
-    border-radius: 999px;
-    transition: background var(--duration) var(--ease);
-    cursor: pointer;
-}
-
-.toggle-track::before {
-    content: '';
-    position: absolute;
-    width: 13px;
-    height: 13px;
-    left: 2px;
-    top: 2px;
-    background: var(--switch-knob);
-    border-radius: 50%;
-    transition: transform var(--duration) var(--ease);
-    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
-}
-
-.toggle-switch input:checked + .toggle-track {
-    background: var(--accent-blue);
-}
-
-.toggle-switch input:checked + .toggle-track::before {
-    transform: translateX(13px);
-}
-
-.toggle-switch input:focus-visible + .toggle-track {
-    outline: 2px solid var(--accent-blue);
-    outline-offset: 2px;
-}
-
-.toggle-switch input:disabled + .toggle-track {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
 .grant-scope-warning {
     display: flex;
     align-items: center;

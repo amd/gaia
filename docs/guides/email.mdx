@@ -275,13 +275,7 @@ Email-body inference runs on your local Lemonade instance, which `gaia daemon` s
 
 <Tabs>
   <Tab title="Agent UI">
-    Select **Email Triage** from the agent picker in the Agent UI and type your request in the chat input, for example:
-
-    - *Triage my inbox*
-    - *Summarize my unread emails from this week*
-    - *Archive all newsletters from the last month*
-
-    Destructive actions (send, delete, calendar mutations) show a confirmation dialog before executing.
+    The Agent UI has no agent picker, so it cannot start the retired agent. New chats always run the flagship GAIA agent, which covers email through its read-only mail tools and the bundled `inbox-triage` skill (see [Setup](#setup)). Use the CLI tab to run the retired agent.
   </Tab>
   <Tab title="CLI">
     ```bash
@@ -310,7 +304,7 @@ Email-body inference runs on your local Lemonade instance, which `gaia daemon` s
 
 ### Daily-driver pre-scan (Agent UI)
 
-The Agent UI rendering of Email Triage is built around a **pre-scan** view — a structured triage card that surfaces what's worth your attention without making you read prose. Open Agent UI, pick **Email Triage** from the agent picker, and click the **"Run a pre-scan"** conversation starter (or just type it).
+The Agent UI rendering of Email Triage is built around a **pre-scan** view — a structured triage card that surfaces what's worth your attention without making you read prose. The Agent UI no longer has an agent picker — new chats always run the flagship GAIA agent, which covers email through its `inbox-triage` skill — so this card is no longer reachable from the Agent UI.
 
 The card shows three sections:
 

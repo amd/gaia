@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from gaia.config import GaiaConfigError
 
+from .. import permissions as session_permissions
 from .._chat_helpers import (
     _SIDECAR_AGENT_TYPES,
     _agent_type_unknown,
@@ -39,6 +40,7 @@ from ..models import (
     UpdateSessionRequest,
 )
 from ..run_manager import run_manager
+from ..security import flagship_only
 from ..utils import message_to_response, session_to_response
 
 logger = logging.getLogger(__name__)
@@ -161,11 +163,16 @@ async def list_sessions(
 
 @router.post("/api/sessions", response_model=SessionResponse)
 async def create_session(
-    request: CreateSessionRequest, db: ChatDatabase = Depends(get_db)
+    request: CreateSessionRequest,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
 ):
     """Create a new chat session."""
+    request.agent_type = flagship_only(http_request, request.agent_type)
     _reject_unknown_agent_type(request.agent_type)
     try:
+        # Read before the chat exists, so a bad config leaves no chat behind.
+        start_mode = session_permissions.default_mode()
         session = db.create_session(
             title=request.title,
             model=request.model,
@@ -176,6 +183,7 @@ async def create_session(
             device=request.device,
             mail_provider=request.mail_provider,
         )
+        session_permissions.seed_new_session(session["id"], start_mode)
         return session_to_response(session)
     except Exception as e:
         logger.error("Failed to create session: %s", e, exc_info=True)
@@ -333,6 +341,7 @@ async def delete_session(
             raise HTTPException(status_code=404, detail="Session not found")
         session_locks.pop(session_id, None)
         evict_session_agent(session_id)
+        session_permissions.forget_session(session_id)
     return {"deleted": True}
 
 

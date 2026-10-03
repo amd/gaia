@@ -3,7 +3,7 @@
   "version": "0.24.1",
   "type": "module",
   "productName": "GAIA Agent UI",
-  "description": "Privacy-first agentic AI interface with document Q&A - runs 100% locally on AMD Ryzen AI",
+  "description": "Chat with the GAIA agent - local and private by default on AMD Ryzen AI, cloud models when you choose them",
   "author": "AMD AI Group",
   "license": "MIT",
   "repository": {

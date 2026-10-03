@@ -1,0 +1,222 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.setup {
+    flex: 1;
+    overflow-y: auto;
+    padding: 48px 16px;
+    background: var(--bg-primary);
+}
+
+.setup-inner {
+    max-width: 620px;
+    margin: 0 auto;
+}
+
+.setup-title {
+    color: var(--text-primary);
+    font-size: 22px;
+    font-weight: 600;
+}
+
+.setup-lede {
+    margin: 6px 0 24px;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.setup-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    list-style: none;
+}
+
+.setup-step {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.setup-step-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.setup-step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-full);
+    color: var(--text-muted);
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.setup-step-label {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.setup-step-detail {
+    color: var(--text-muted);
+}
+
+.setup-step.is-current .setup-step-label,
+.setup-step.is-active .setup-step-label {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.setup-step.is-done .setup-step-num {
+    border-color: var(--accent-green);
+    color: var(--accent-green);
+}
+
+.setup-step.is-active .setup-step-num {
+    border-color: var(--accent-light);
+    color: var(--accent);
+}
+
+.setup-step.is-failed .setup-step-num,
+.setup-step.is-cancelled .setup-step-num {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+.setup-step-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 10px 0 4px 34px;
+}
+
+.setup-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.setup-choice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    color: var(--text-primary);
+    text-align: left;
+}
+
+.setup-choice svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--text-secondary);
+}
+
+.setup-choice:hover {
+    background: var(--bg-hover);
+}
+
+.setup-choice.is-active {
+    border-color: var(--accent-light);
+    background: var(--accent-dim);
+}
+
+.setup-choice-title {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.setup-choice-note {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.setup-start {
+    align-self: flex-start;
+}
+
+.setup-hint {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.setup-hint code {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+}
+
+.setup-error {
+    color: var(--danger);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.setup-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.setup-row .settings-input {
+    flex: 1;
+    min-width: 200px;
+}
+
+.setup-progress {
+    width: 100%;
+    height: 6px;
+    accent-color: var(--accent-fill);
+}
+
+.setup-log {
+    margin-top: 16px;
+}
+
+.setup-log-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.setup-log-toggle svg {
+    transition: transform var(--duration-fast) var(--ease);
+}
+
+.setup-log-toggle svg.is-open {
+    transform: rotate(90deg);
+}
+
+.setup-log-pre {
+    max-height: 260px;
+    margin-top: 8px;
+    padding: 10px 12px;
+    overflow: auto;
+    background: var(--bg-code);
+    color: var(--text-code);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    white-space: pre-wrap;
+}
+
+.setup-done {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 24px;
+    padding: 14px 16px;
+    border: 1px solid var(--accent-green);
+    border-radius: var(--radius-lg);
+    color: var(--text-primary);
+}

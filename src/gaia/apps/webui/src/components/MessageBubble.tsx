@@ -11,7 +11,6 @@ import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta'
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import gaiaRobot from '../assets/gaia-robot.png';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import './MessageBubble.css';
 
@@ -32,8 +31,6 @@ interface MessageBubbleProps {
     onResend?: (message: Message) => void;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
-    /** Display name of the agent that produced this message (e.g. "Chat Agent"). */
-    agentName?: string;
 }
 
 
@@ -337,20 +334,6 @@ function cleanToolCallContent(content: string, streaming = false): string {
     return cleaned;
 }
 
-/** Format a timestamp as relative time ("2m ago") or absolute for older messages. */
-function formatMsgTime(iso: string): string {
-    if (!iso) return '';
-    const d = new Date(iso);
-    const now = new Date();
-    const diff = now.getTime() - d.getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}
-
 /** Format a full absolute timestamp for the stats tooltip. */
 function formatFullTimestamp(iso: string): string {
     if (!iso) return '';
@@ -366,7 +349,7 @@ function formatLatency(ms: number): string {
     return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, agentName }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
@@ -441,32 +424,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             <div className="msg-inner">
                 <div className="msg-header">
                     <div className="msg-header-left">
-                        {message.role === 'assistant' && (
-                            <>
-                                <div className="msg-avatar msg-avatar-assistant" aria-hidden="true">
-                                    <img src={gaiaRobot} alt="" />
-                                </div>
-                                <span className="msg-role-brand">GAIA</span>
-                                {(() => {
-                                    // Strip a leading "Gaia" / "GAIA" from the agent name so
-                                    // "Gaia Lite" renders as "GAIA Lite" (not "GAIA Gaia Lite").
-                                    // Word-boundary match: "Gaiadocs" (hypothetical) stays intact.
-                                    const trimmed = agentName?.trim() ?? '';
-                                    const stripped = trimmed.replace(/^gaia\b\s*/i, '');
-                                    return stripped ? (
-                                        <span className="msg-role-agent">{stripped}</span>
-                                    ) : null;
-                                })()}
-                                {(isStreaming || message.created_at) && (
-                                    <span className="msg-header-sep">|</span>
-                                )}
-                                {isStreaming && (
-                                    <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} />
-                                )}
-                                {!isStreaming && message.created_at && (
-                                    <span className="msg-timestamp">{formatMsgTime(message.created_at)}</span>
-                                )}
-                            </>
+                        {message.role === 'assistant' && isStreaming && (
+                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} />
                         )}
                     </div>
                     {!isStreaming && (

@@ -42,14 +42,14 @@ const WEBSITE_SRC = resolve(fileURLToPath(new URL('../', import.meta.url)));
  * Website role → the Agent UI role it must equal.
  *
  * The status hues inside the code panel, plus the copper the primary button is
- * painted with. The syntax-only colours (purple, cyan) have no Agent UI
- * counterpart by design, and the surface/text roles differ on purpose: the
- * panels are near-black but not the same near-black.
+ * painted with. The syntax-only colours (purple, cyan) and the info blue have
+ * no Agent UI counterpart by design (the app has no terminal pane to paint
+ * info lines in), and the surface/text roles differ on purpose: the panels are
+ * near-black but not the same near-black.
  */
 const SHARED: Record<string, string> = {
   '--g-code-accent': '--code-accent',
   '--g-code-green': '--code-success',
-  '--g-code-blue': '--code-info',
   '--g-code-amber': '--code-warning',
   '--g-code-danger': '--code-danger',
   // The primary button. Its resting fill, its hover step and the text on top

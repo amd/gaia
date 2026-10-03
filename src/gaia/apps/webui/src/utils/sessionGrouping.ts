@@ -1,43 +1,12 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/**
- * Group sidebar sessions by the agent that runs them (#2106).
- *
- * The session's ``agent_type`` is the source of truth (set at creation and by
- * the per-session agent picker). This read-side helper resolves each agent id
- * to a display name + icon using the loaded agent list, so the sidebar can
- * render one section per agent with its sessions nested underneath.
- */
+/** Group sidebar chats by how recently they were used. */
 
-import type { Session, AgentInfo } from '../types';
+import type { Session } from '../types';
 
-/** Sessions that predate explicit agent selection fall back to the chat agent,
- *  which is the historical default (`agent_type = "chat"` in the backend). */
-export const DEFAULT_AGENT_ID = 'chat';
-
-/** Retired agent ids that `GET /api/agents` no longer returns.
- *
- *  They are hidden, not deleted — stored sessions still carry them — so
- *  without this the sidebar would label years of history with the raw string
- *  `chat` and a fallback icon. Mirrors the registrations in
- *  `hub/agents/chat/python/gaia_agent_chat/__init__.py`. */
-const RETIRED_AGENTS: Record<string, { name: string; icon: string }> = {
-    chat: { name: 'Chat', icon: 'message-circle' },
-    doc: { name: 'Doc Agent', icon: 'file-text' },
-    file: { name: 'File Agent', icon: 'folder-search' },
-};
-
-export interface AgentSessionGroup {
-    /** Resolved agent id (session.agent_type, or the default). */
-    agentId: string;
-    /** Human-readable agent name — falls back to the id when the agent isn't
-     *  in the loaded list (e.g. an uninstalled agent still owns old sessions). */
-    name: string;
-    /** Lucide icon name from the agent metadata, when known. */
-    icon?: string;
-    /** True when the agent id couldn't be resolved to a known agent. */
-    unknown: boolean;
+export interface RecencyGroup {
+    label: 'Today' | 'Yesterday' | 'Previous 7 days' | 'Previous 30 days' | 'Older';
     sessions: Session[];
 }
 
@@ -46,56 +15,26 @@ function updatedAtMs(s: Session): number {
     return Number.isNaN(t) ? 0 : t;
 }
 
-/**
- * Bucket sessions by agent, most-recently-active agent first, and sort each
- * bucket's sessions newest-first. Pure function — no store access — so it is
- * cheap to unit test and safe to memoize in the component.
- */
-export function groupSessionsByAgent(
-    sessions: Session[],
-    agents: AgentInfo[],
-): AgentSessionGroup[] {
-    const byId = new Map<string, AgentInfo>();
-    for (const a of agents) byId.set(a.id, a);
-
-    const buckets = new Map<string, Session[]>();
-    for (const s of sessions) {
-        const key = s.agent_type || DEFAULT_AGENT_ID;
-        const list = buckets.get(key);
-        if (list) list.push(s);
-        else buckets.set(key, [s]);
+/** Newest first, bucketed by calendar day relative to `now`. Empty buckets are dropped. */
+export function groupSessionsByRecency(sessions: Session[], now: Date = new Date()): RecencyGroup[] {
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const day = 24 * 60 * 60 * 1000;
+    const buckets: RecencyGroup[] = [
+        { label: 'Today', sessions: [] },
+        { label: 'Yesterday', sessions: [] },
+        { label: 'Previous 7 days', sessions: [] },
+        { label: 'Previous 30 days', sessions: [] },
+        { label: 'Older', sessions: [] },
+    ];
+    const sorted = [...sessions].sort((a, b) => updatedAtMs(b) - updatedAtMs(a));
+    for (const s of sorted) {
+        const t = updatedAtMs(s);
+        const i = t >= startOfToday ? 0
+            : t >= startOfToday - day ? 1
+            : t >= startOfToday - 7 * day ? 2
+            : t >= startOfToday - 30 * day ? 3
+            : 4;
+        buckets[i].sessions.push(s);
     }
-
-    const groups: AgentSessionGroup[] = [];
-    for (const [agentId, groupSessions] of buckets) {
-        const agent = byId.get(agentId);
-        const retired = RETIRED_AGENTS[agentId];
-        groupSessions.sort((a, b) => updatedAtMs(b) - updatedAtMs(a));
-        groups.push({
-            agentId,
-            name: agent?.name || retired?.name || agentId,
-            icon: agent?.icon || retired?.icon,
-            // A retired agent still resolves by id, so its sessions open and
-            // answer — flagging them "unknown" would be a false warning.
-            unknown: agent === undefined && retired === undefined,
-            sessions: groupSessions,
-        });
-    }
-
-    // Order groups by their most-recent session so the agent you last used
-    // floats to the top — matching the recency the flat list used to have.
-    groups.sort((a, b) => updatedAtMs(b.sessions[0]) - updatedAtMs(a.sessions[0]));
-    return groups;
-}
-
-/** Resolve a session's agent display name (used for the flat/search list chip). */
-export function resolveAgentName(session: Session, agents: AgentInfo[]): string {
-    const id = session.agent_type || DEFAULT_AGENT_ID;
-    return agents.find((a) => a.id === id)?.name || RETIRED_AGENTS[id]?.name || id;
-}
-
-/** Resolve a session's agent icon name (used for the flat/search list chip). */
-export function resolveAgentIcon(session: Session, agents: AgentInfo[]): string | undefined {
-    const id = session.agent_type || DEFAULT_AGENT_ID;
-    return agents.find((a) => a.id === id)?.icon || RETIRED_AGENTS[id]?.icon;
+    return buckets.filter((b) => b.sessions.length > 0);
 }

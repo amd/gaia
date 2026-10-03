@@ -576,6 +576,10 @@ class AttachDocumentRequest(BaseModel):
     ```
 
     **Response:** `SessionResponse`
+
+    From the Agent UI (`X-Gaia-Client: agent-ui`) a chat is always the GAIA
+    agent: an omitted `agent_type` becomes `gaia` and any other value is a
+    **422**. See [Flagship only](#flagship-only).
   </Accordion>
 
   <Accordion title="GET /api/sessions">
@@ -644,6 +648,10 @@ class AttachDocumentRequest(BaseModel):
 <AccordionGroup>
   <Accordion title="POST /api/chat/send">
     Send a message and receive a response. Supports both streaming (SSE) and non-streaming modes.
+
+    From the Agent UI (`X-Gaia-Client: agent-ui`) a non-`gaia` `agent_type` is
+    a **422**, and sending into a chat stored under another agent is a **409**
+    ("start a new chat"). See [Flagship only](#flagship-only).
 
     **Request:**
     ```json
@@ -896,26 +904,10 @@ class AttachDocumentRequest(BaseModel):
     [`plugin-registry`](/spec/plugin-registry) for the registration format.
   </Accordion>
 
-  <Accordion title="GET /api/agents/{agent_id}">
-    Return details for a single registered agent (description, models,
-    conversation starters, `source` = `builtin` or `custom_python`).
-  </Accordion>
-
-  <Accordion title="GET /api/agents/disk">
-    List custom agents present on disk, registered or not — the source list
-    the export/import flow scans.
-  </Accordion>
-
-  <Accordion title="POST /api/agents/export">
-    Export all custom agents as a downloadable zip bundle. Refused while a
-    tunnel is active.
-  </Accordion>
-
-  <Accordion title="POST /api/agents/import">
-    Import a custom agent bundle from an uploaded zip file. Refused while a
-    tunnel is active.
-  </Accordion>
 </AccordionGroup>
+
+To move custom agents between machines, use the `gaia agent export` and
+`gaia agent import` CLI commands — see [Custom Agent](/guides/custom-agent).
 
 ### MCP
 
@@ -982,9 +974,65 @@ Used to reach the UI from a phone.
   <Accordion title="POST /api/chat/confirm-tool">
     Tool-confirmation handshake. When a tool in the agent's
     `confirmation_required_tools()` set (the generic base set merged with the
-    agent's own `CONFIRMATION_REQUIRED_TOOLS`) triggers the agent to pause,
-    the UI prompts the user and posts the outcome (`approve` / `deny`) back on
-    this endpoint.
+    agent's own `CONFIRMATION_REQUIRED_TOOLS`) makes the agent pause, the
+    stream emits a `permission_request` event carrying `confirm_id` and, when
+    "always allow" can be offered, `always_scope` (what the grant would cover,
+    e.g. `gh issue list`). The UI answers here with allow once, always allow,
+    or deny. An unanswered prompt is denied after 600 seconds.
+
+    **Request:**
+    ```json
+    {
+      "session_id": "abc-123",
+      "approved": true,
+      "always": false,
+      "confirm_id": "6f1c…"
+    }
+    ```
+
+    `always` (with `approved: true`) grants this exact invocation for the rest
+    of the chat — see `gaia.agents.base.tool_grants`. `confirm_id` echoes the
+    prompt being answered.
+
+    **Response:** `{"status": "ok", "approved": true, "granted": "gh issue list"}`
+    — `granted` is the new grant's label, or `null`.
+
+    **Errors:** **404** when the chat has no running turn; **409** when
+    `confirm_id` no longer matches the live prompt, or `always` was requested
+    for a call with no scope narrow enough to grant.
+  </Accordion>
+
+  <Accordion title="GET /api/chat/permissions">
+    Every chat in this backend run that has full access on or at least one
+    "always allow" grant, for the Settings → Permissions pane.
+
+    **Response:** `{"default_mode", "sessions": [{"session_id", "mode", "grants": [{"key", "label"}]}]}`
+    — `default_mode` is the mode a new chat starts in: `full_access` when it is
+    set in `~/.gaia/config.json`, otherwise `ask`.
+  </Accordion>
+
+  <Accordion title="GET /api/chat/permissions/{session_id}">
+    One chat's permission mode (`ask` or `full_access`) and its grants. A chat
+    created in this backend run starts in `ask` unless `full_access` is set in
+    `~/.gaia/config.json`; a chat from an earlier run reopens in `ask`.
+    Permission state lives in memory: it ends when the chat is deleted or the
+    backend restarts. **404** when no such chat exists (also for `PUT` and
+    `DELETE` below).
+  </Accordion>
+
+  <Accordion title="PUT /api/chat/permissions/{session_id}">
+    Switch the chat between `ask` (every gated tool prompts) and `full_access`
+    (gated tools run unasked and shell guardrails are lifted, as the TUI's
+    `/full-access`). Takes effect on the next gated tool, including mid-turn.
+
+    **Request:** `{"mode": "full_access"}` — any value other than `ask` or
+    `full_access` is a **422**.
+  </Accordion>
+
+  <Accordion title="DELETE /api/chat/permissions/{session_id}/grants">
+    Revoke one "always allow" grant (`?key=<grant key>`) or, without `key`,
+    all of them. Applies to a running turn too. **404** when `key` names no
+    grant in the chat. Returns the chat's permission view.
   </Accordion>
 </AccordionGroup>
 
@@ -1612,7 +1660,7 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
 
 ### Onboarding
 
-First-run hardware scan and setup-wizard state (issues #1726, #1727).
+First-run hardware scan (issues #1726, #1727).
 
 <AccordionGroup>
   <Accordion title="GET /api/onboarding/preflight">
@@ -1620,22 +1668,117 @@ First-run hardware scan and setup-wizard state (issues #1726, #1727).
     whether this machine can run the first-run model, with a coarse tier
     recommendation.
   </Accordion>
+</AccordionGroup>
 
-  <Accordion title="GET /api/onboarding/status">
-    Whether first-run setup has already completed.
+### Setup
+
+First-run setup. The Agent UI asks and runs the same `gaia init` the TUI does,
+so the two can never disagree about whether GAIA is set up.
+
+<AccordionGroup>
+  <Accordion title="GET /api/setup/check">
+    Runs `gaia init --check --profile gaia --json` and returns its result plus
+    the step list: `{"ready": bool, "stage": ..., "reasons": [...], "steps": [...]}`.
+
+    **Query params:** `skip_chat_model` (the chat runs on a cloud provider, so
+    only the embedding model is needed locally), `load` (also check that the
+    models load).
+
+    **Errors:** **503** when the check could not be answered — a timeout or an
+    unexpected exit. That is never reported as "not set up".
   </Accordion>
 
-  <Accordion title="POST /api/onboarding/complete">
-    Write the `initialized` marker so the wizard never re-triggers.
+  <Accordion title="POST /api/setup/run">
+    Start `gaia init --profile gaia --yes` in the background; follow it with
+    `/api/setup/status`. Body: `{"skip_chat_model": false}`. **409** when setup
+    is already running.
+  </Accordion>
+
+  <Accordion title="GET /api/setup/status">
+    The running (or last) setup: `state` (`running`, `verifying`, `ready`,
+    `failed`, `cancelled`, or `idle` when none has run), the three steps with
+    their status, progress `text` and `percent`, `error`, the equivalent
+    `command`, and the last 40 output lines.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/cancel">
+    Stop a running setup. Anything already downloaded is kept. Returns
+    `{"cancelled": bool}`.
+  </Accordion>
+</AccordionGroup>
+
+### Providers
+
+Where the chat model runs: **Local**, **Fireworks AI**, or the **AMD LLM
+Gateway**, all served through the local Lemonade — the TUI's `/provider`.
+Keys go to the local Lemonade only and, once they discover models, into the OS
+credential store (the slot the TUI uses). A key is never echoed back or logged.
+
+<AccordionGroup>
+  <Accordion title="GET /api/providers">
+    Every provider with its state — `registered`, `key_source` (`environment`,
+    `lemonade`, `stored`, or `null`), `models_discovered` — and the active
+    model. A stored key is handed back to a Lemonade that lost it.
+    `lemonade_error` is set when Lemonade could not be reached.
+  </Accordion>
+
+  <Accordion title="GET /api/providers/active">
+    The model new turns run. On the first call of a backend run it also
+    restores `last_model` from `~/.gaia/config.json`; `restore.status` is
+    `restored`, `failed` (with the reason — another model is never switched in
+    quietly), `none`, or `pending` while the local model server is still
+    starting (not cached; ask again). A saved key is never sent to a Lemonade
+    that is not on this PC.
+  </Accordion>
+
+  <Accordion title="POST /api/providers/{provider}/connect">
+    Register a cloud provider (`fireworks` or `amd`) in Lemonade and give it
+    the key. Body: `{"api_key", "base_url", "auth_header_name",
+    "auth_header_prefix"}`; the last three apply to `amd` only. A blank
+    `api_key` keeps the current key.
+
+    **Errors:** **401** when the provider rejects the key or discovers no
+    models (a key that discovers nothing is removed from Lemonade again);
+    **403** when a key is sent through the mobile tunnel; **409** when an
+    environment key takes precedence or Lemonade is not on this PC.
+  </Accordion>
+
+  <Accordion title="DELETE /api/providers/{provider}/key">
+    Clear the key from Lemonade and from the OS credential store. Returns
+    `{"removed": bool}`.
+  </Accordion>
+
+  <Accordion title="GET /api/providers/{provider}/models">
+    Chat models for a provider (embedding, reranker, speech, and image models
+    are left out). `local` lists downloaded models plus the default model;
+    cloud providers list their own. Recommended models come first with a
+    `rank`, `note`, and the measured `evidence` behind the pick.
+  </Accordion>
+
+  <Accordion title="POST /api/providers/select">
+    Make a model the one new turns run and remember it as `last_model` /
+    `last_provider` in `~/.gaia/config.json` (other keys are kept). Body:
+    `{"model": "fireworks.glm-5p3-flash"}`. **409** when the model cannot run
+    now; **503** while the local model server is still starting. A successful
+    pick clears this run's restore notice.
+  </Accordion>
+</AccordionGroup>
+
+### Skills
+
+<AccordionGroup>
+  <Accordion title="GET /api/skills">
+    The skills the GAIA agent can load, found in the same roots the agent
+    searches. Returns `{"skills": [{"name", "description", "version", "tier",
+    "tools", "path"}], "invalid": {...}}`. **503** when the GAIA agent package
+    is not installed.
   </Accordion>
 </AccordionGroup>
 
 ### Hub
 
-Install, update, and configure agents from the Agent Hub catalog — the
-backend for `gaia hub` and the Agent UI's Hub panel. Registered before the
-`Agents` router's `GET /api/agents/{agent_id}` so its literal paths
-(`catalog`, `setup-status`) win the match.
+Install and uninstall agents from the Agent Hub catalog — the backend for
+the desktop app's `gaia://hub/install/<id>` deep link.
 
 <AccordionGroup>
   <Accordion title="GET /api/agents/catalog">
@@ -1653,36 +1796,6 @@ backend for `gaia hub` and the Agent UI's Hub panel. Registered before the
 
   <Accordion title="DELETE /api/agents/{agent_id}">
     Uninstall a hub-installed agent. Refuses a builtin (400).
-  </Accordion>
-
-  <Accordion title="POST /api/agents/{agent_id}/rollback">
-    Roll an agent back to its pre-update `.backup/` snapshot.
-  </Accordion>
-
-  <Accordion title="GET /api/agents/{agent_id}/config">
-    The persisted per-agent config (`{}` if none set).
-  </Accordion>
-
-  <Accordion title="POST /api/agents/{agent_id}/config">
-    Persist per-agent config (model preference, settings). Merges by
-    default.
-  </Accordion>
-
-  <Accordion title="GET /api/agents/{agent_id}/health">
-    Whether the installed agent loads and its entry point resolves.
-  </Accordion>
-
-  <Accordion title="GET /api/agents/{agent_id}/status">
-    Aggregated status: installed version, health, config summary.
-  </Accordion>
-
-  <Accordion title="POST /api/agents/setup">
-    Start a progressive multi-agent install. Poll `setup-status` for
-    progress.
-  </Accordion>
-
-  <Accordion title="GET /api/agents/setup-status">
-    Resumable per-step progress for a multi-agent install.
   </Accordion>
 </AccordionGroup>
 
@@ -1717,6 +1830,15 @@ those.
 `GAIA_UI_ALLOWED_ORIGINS` and `GAIA_UI_ALLOWED_HOSTS` (comma-separated) opt a
 reverse-proxied or named-host deployment in; neither is populated by
 default.
+
+### Flagship only
+
+The Agent UI frontend sends `X-Gaia-Client: agent-ui` and runs the GAIA agent
+only. With that header, `POST /api/sessions` and `POST /api/chat/send` reject
+any other `agent_type` (**422**), an omitted one becomes `gaia`, and sending
+into a chat stored under another agent is a **409**. Requests without the
+header — the eval harness, the MCP bridge — may still pick any registered
+agent.
 
 ---
 

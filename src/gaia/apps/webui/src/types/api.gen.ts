@@ -16,22 +16,18 @@ export interface ApiSchemas {
   AgentStepResponse: AgentStepResponse;
   AttachDocumentRequest: AttachDocumentRequest;
   AuthorizeRequest: AuthorizeRequest;
-  Body_import_agents_api_agents_import_post: BodyImportAgentsApiAgentsImportPost;
   Body_upload_document_blob_api_documents_upload_post: BodyUploadDocumentBlobApiDocumentsUploadPost;
   Body_upload_file_api_files_upload_post: BodyUploadFileApiFilesUploadPost;
   BrowseResponse: BrowseResponse;
   CancelStreamRequest: CancelStreamRequest;
   ChatRequest: ChatRequest;
   CommandOutputResponse: CommandOutputResponse;
-  CompleteOnboardingRequest: CompleteOnboardingRequest;
-  ConfigRequest: ConfigRequest;
   ConfigureRequest: ConfigureRequest;
+  ConnectRequest: ConnectRequest;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
-  DiskAgentInfo: DiskAgentInfo;
-  DiskAgentListResponse: DiskAgentListResponse;
   DocumentListResponse: DocumentListResponse;
   DocumentResponse: DocumentResponse;
   DocumentUploadRequest: DocumentUploadRequest;
@@ -63,20 +59,21 @@ export interface ApiSchemas {
   MessageListResponse: MessageListResponse;
   MessageResponse: MessageResponse;
   ModelStatus: ModelStatus;
-  OnboardingStatus: OnboardingStatus;
   OpenFileRequest: OpenFileRequest;
   ParseScheduleRequest: ParseScheduleRequest;
   ParseScheduleResponse: ParseScheduleResponse;
+  PermissionModeRequest: PermissionModeRequest;
   PreflightReport: PreflightReport;
   QuickLink: QuickLink;
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
+  SelectModelRequest: SelectModelRequest;
   SessionListResponse: SessionListResponse;
   SessionResponse: SessionResponse;
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
-  SetupRequest: SetupRequest;
+  SetupRunRequest: SetupRunRequest;
   SourceInfo: SourceInfo;
   StartAgentServerRequest: StartAgentServerRequest;
   SystemStatus: SystemStatus;
@@ -224,9 +221,6 @@ export interface AuthorizeRequest {
   grant_agents?: string[];
   scopes?: string[];
 }
-export interface BodyImportAgentsApiAgentsImportPost {
-  bundle: string;
-}
 export interface BodyUploadDocumentBlobApiDocumentsUploadPost {
   file: string;
 }
@@ -277,23 +271,19 @@ export interface ChatRequest {
   session_id: string;
   stream?: boolean;
 }
-export interface CompleteOnboardingRequest {
-  completed_at?: string | null;
-  skipped?: boolean;
-}
-/**
- * Body for ``POST /api/agents/{id}/config``.
- */
-export interface ConfigRequest {
-  config: {
-    [k: string]: unknown | undefined;
-  };
-  replace?: boolean;
-}
 export interface ConfigureRequest {
   config?: {
     [k: string]: unknown | undefined;
   };
+}
+/**
+ * Register a cloud provider in Lemonade; ``api_key`` blank keeps the current key.
+ */
+export interface ConnectRequest {
+  api_key?: string | null;
+  auth_header_name?: string | null;
+  auth_header_prefix?: string | null;
+  base_url?: string | null;
 }
 /**
  * Request to create a new scheduled task.
@@ -340,23 +330,6 @@ export interface DiscoveryCommitItem {
   due_at?: string | null;
   entity?: string | null;
   sensitive?: boolean;
-}
-/**
- * Information about an agent present under ~/.gaia/agents.
- */
-export interface DiskAgentInfo {
-  id: string;
-  name: string;
-  registered: boolean;
-  registered_agent_id?: string | null;
-  source?: string | null;
-}
-/**
- * List of custom agents found on disk.
- */
-export interface DiskAgentListResponse {
-  agents: DiskAgentInfo[];
-  total: number;
 }
 /**
  * List of documents.
@@ -639,11 +612,6 @@ export interface ModelStatus {
   found?: boolean;
   loaded?: boolean;
 }
-export interface OnboardingStatus {
-  completed_at?: string | null;
-  initialized?: boolean;
-  skipped?: boolean;
-}
 /**
  * Request to open a file or folder in the system file explorer.
  */
@@ -672,6 +640,12 @@ export interface ParseScheduleResponse {
   start_hour?: number | null;
   time_of_day?: string | null;
   valid: boolean;
+}
+/**
+ * ``ask`` prompts for every gated tool; ``full_access`` runs them unasked.
+ */
+export interface PermissionModeRequest {
+  mode: string;
 }
 /**
  * Result of the first-run hardware scan.
@@ -726,6 +700,9 @@ export interface ScheduleResponse {
 export interface ScheduleResultsResponse {
   results: unknown[];
   total: number;
+}
+export interface SelectModelRequest {
+  model: string;
 }
 /**
  * List of sessions.
@@ -785,12 +762,10 @@ export interface SettingsUpdateRequest {
   dynamic_tools?: boolean | null;
 }
 /**
- * Body for ``POST /api/agents/setup`` (progressive multi-agent install).
+ * ``skip_chat_model`` when the chat runs on a cloud provider.
  */
-export interface SetupRequest {
-  ids: string[];
-  max_parallel?: number;
-  resume?: boolean;
+export interface SetupRunRequest {
+  skip_chat_model?: boolean;
 }
 export interface StartAgentServerRequest {
   backend_url?: string;
@@ -857,9 +832,15 @@ export interface TaskStatusUpdate {
 }
 /**
  * Request body for the tool confirmation endpoint.
+ *
+ * ``always`` answers "allow" and grants this exact invocation for the rest of
+ * the chat (see ``gaia.agents.base.tool_grants``). ``confirm_id`` echoes the
+ * prompt being answered, so a late click cannot approve a newer prompt.
  */
 export interface ToolConfirmRequest {
+  always?: boolean;
   approved: boolean;
+  confirm_id?: string | null;
   session_id: string;
 }
 /**

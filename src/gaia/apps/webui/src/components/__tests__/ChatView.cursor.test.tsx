@@ -22,7 +22,7 @@ import { useChatStore } from '../../stores/chatStore';
 import type { Message, Session } from '../../types';
 
 const session: Session = {
-    id: 'settled', title: 'Yesterday', model: 'qwen', agent_type: 'chat',
+    id: 'settled', title: 'Yesterday', model: 'qwen', agent_type: 'gaia',
     created_at: '2026-09-11T00:00:00Z', updated_at: '2026-09-11T00:00:00Z',
     system_prompt: null, message_count: 2, document_ids: [],
 };
@@ -44,6 +44,8 @@ beforeEach(() => {
         let body: unknown;
         if (url.pathname === `/api/sessions/${session.id}/messages`) {
             body = { messages, total: messages.length };
+        } else if (url.pathname.startsWith('/api/chat/permissions/')) {
+            body = { session_id: session.id, mode: 'ask', grants: [] };
         } else if (url.pathname === '/api/chat/active') {
             body = { session_ids: [] };
         } else if (url.pathname === '/api/documents') {
@@ -57,7 +59,7 @@ beforeEach(() => {
         configurable: true, value: vi.fn(),
     });
     useChatStore.setState({
-        agents: [], activeAgentId: 'chat', sessions: [session], currentSessionId: session.id,
+        agents: [], sessions: [session], currentSessionId: session.id,
         messages: [], documents: [], isStreaming: false, streamingContent: '', agentSteps: [],
         isLoadingMessages: false, pendingPrompt: null, systemStatus: null, runningSessionIds: [],
     });

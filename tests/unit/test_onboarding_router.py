@@ -11,15 +11,14 @@ from gaia.ui.server import create_app
 
 
 @pytest.fixture
-def marker(tmp_path, monkeypatch):
-    """Redirect the init marker to a temp file so tests never touch ~/.gaia."""
-    path = tmp_path / ".gaia" / "chat" / "initialized"
-    monkeypatch.setattr(onboarding_mod, "_INIT_MARKER", path)
-    return path
+def gaia_home_dir(tmp_path, monkeypatch):
+    """Point GAIA_HOME at a temp dir so tests never touch ~/.gaia."""
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    return tmp_path
 
 
 @pytest.fixture
-def client(marker):  # noqa: ARG001 - marker fixture applies the monkeypatch
+def client(gaia_home_dir):  # noqa: ARG001 - fixture applies the env override
     app = create_app(db_path=":memory:")
     return TestClient(app)
 
@@ -144,47 +143,19 @@ def test_preflight_lemonade_down_leaves_npu_unknown(client, monkeypatch):
     assert any("cannot verify NPU" in w for w in body["warnings"])
 
 
-# ── status / complete ──────────────────────────────────────────────────────
-
-
 @pytest.mark.allow_network
-def test_status_uninitialized(client, marker):
-    assert not marker.exists()
-    body = client.get("/api/onboarding/status").json()
-    assert body["initialized"] is False
-    assert body["skipped"] is False
+def test_preflight_checks_disk_under_gaia_home(client, gaia_home_dir, monkeypatch):
+    monkeypatch.setattr(onboarding_mod, "_probe_lemonade_devices", _stub_devices())
+    real_check = onboarding_mod.check_compatibility
+    seen = {}
 
+    def _spy(reqs, **kwargs):
+        seen["install_dir"] = kwargs["install_dir"]
+        return real_check(reqs, **kwargs)
 
-@pytest.mark.allow_network
-def test_complete_then_status(client, marker):
-    resp = client.post(
-        "/api/onboarding/complete",
-        json={"skipped": False, "completed_at": "2026-07-17T00:00:00Z"},
-    )
-    assert resp.status_code == 200
-    assert marker.exists()
-
-    body = client.get("/api/onboarding/status").json()
-    assert body["initialized"] is True
-    assert body["skipped"] is False
-    assert body["completed_at"] == "2026-07-17T00:00:00Z"
-
-
-@pytest.mark.allow_network
-def test_complete_skipped_records_skip(client, marker):
-    client.post("/api/onboarding/complete", json={"skipped": True})
-    body = client.get("/api/onboarding/status").json()
-    assert body["initialized"] is True
-    assert body["skipped"] is True
-
-
-@pytest.mark.allow_network
-def test_legacy_empty_marker_counts_as_initialized(client, marker):
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("", encoding="utf-8")
-    body = client.get("/api/onboarding/status").json()
-    assert body["initialized"] is True
-    assert body["skipped"] is False
+    monkeypatch.setattr(onboarding_mod, "check_compatibility", _spy)
+    assert client.get("/api/onboarding/preflight").status_code == 200
+    assert seen["install_dir"] == gaia_home_dir
 
 
 def test_detected_npu_flows_into_shared_checker():

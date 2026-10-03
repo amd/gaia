@@ -157,11 +157,10 @@ export function ConnectorsSection() {
     );
 
     return (
-        <section className="settings-section connectors-section">
-            <h4>Connectors</h4>
+        <section className="connectors-section" aria-label="Connectors">
             <p className="settings-help">
-                Connect external accounts and MCP servers so agents can use them on
-                your behalf. Each agent must be granted scopes individually.
+                Connect accounts and MCP servers so GAIA can use them on your behalf.
+                Choose what GAIA may do with each one.
             </p>
 
             {error && (

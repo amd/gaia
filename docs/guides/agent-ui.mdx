@@ -1,10 +1,10 @@
 ---
 title: "Agent UI"
-description: "Your personal AI that lives on your PC — private, fast, and entirely yours"
+description: "One chat window for the GAIA agent: local and private by default, cloud models when you choose them"
 icon: "desktop"
 ---
 
-Ask your PC to find that contract you downloaded last month. Drop in a spreadsheet and get an instant analysis. Search across thousands of files in seconds. GAIA Agent UI puts a local AI agent in your browser — one that sees your files, understands your documents, and never sends a byte to the cloud.
+Ask your PC to find that contract you downloaded last month. Drop in a spreadsheet and get an instant analysis. Search across thousands of files in seconds. GAIA Agent UI is one chat window for the GAIA agent. It runs on your PC by default, and uses a cloud provider (Fireworks AI or the AMD LLM Gateway) only when you pick one of its models.
 
 <Info>
   New to GAIA? Start with the [Quickstart](/quickstart) for first-time setup, then come back here.
@@ -23,7 +23,7 @@ npm install -g @amd-gaia/agent-ui
 gaia-ui
 ```
 
-Everything installs automatically — Python, the AI model, the backend. No accounts, no API keys, no cloud. Just your machine.
+The first time it opens, the app sets itself up: it installs GAIA's local model server, downloads the models and checks they load, with each step shown in the window. No accounts or API keys are needed to run locally.
 
 ---
 
@@ -169,15 +169,10 @@ Pick the install path that fits you best:
       ```
     </Note>
 
-    **Prerequisites (Python path only):**
-
-    The Python CLI path needs the model backend installed first:
-
-    ```bash
-    gaia init                   # Downloads Lemonade Server + models
-    ```
-
-    Use `--profile minimal` for a smaller download (~400 MB).
+    **First run:** no separate setup command is needed. When the app opens on a
+    PC that is not set up yet, it shows the same steps `gaia init` runs (install
+    the local model server, download the models, check they load) and runs them
+    for you. Running `gaia init` yourself beforehand also works.
   </Tab>
 </Tabs>
 
@@ -219,13 +214,74 @@ Pick the install path that fits you best:
 
 ---
 
+## The window
+
+The app opens straight to an empty chat: a message box, the model it will use,
+and where that model runs.
+
+- **Sidebar:** New chat, search, **Memory**, **Scheduled tasks**, **Documents**,
+  then your chats grouped by Today, Yesterday, Previous 7 days and older. At the
+  bottom: where answers are generated right now (for example
+  `Local · Gemma-4-E4B-it-GGUF` or `Fireworks AI · glm-5p3-flash`),
+  notifications, mobile access and Settings. Collapse it with `Ctrl+B`.
+- **Message box:** **+** attaches files (or drag them in), the shield picks the
+  permission mode, the model chip picks the model, and Send turns into Stop
+  while GAIA is working.
+- **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
+  the detail.
+
+Every chat runs the GAIA agent. Chats made by the retired `chat`, `doc` and
+`file` agents stay readable but can't be continued; start a new chat instead.
+
+## Models and where they run
+
+Open **Settings → Model** (or the model chip in the message box):
+
+| Provider | What it needs | Where your chat goes |
+|---|---|---|
+| **Local** | Nothing; pick CPU, GPU or NPU for new chats | Stays on this PC |
+| **Fireworks AI** | An API key | Sent to Fireworks AI (usage may be charged) |
+| **AMD LLM Gateway** | A gateway key (and URL, if not the default) | Sent to your gateway |
+
+- Keys are masked, go only to GAIA's local model server and your OS credential
+  store, and are refused over mobile access. When a key is already set (in the
+  environment or from the TUI) the screen says so; leave the field blank to keep
+  using it. **Forget key** removes it here and for future sessions.
+- Recommended Fireworks models are ranked first, each with the benchmark result
+  behind the pick.
+- The model you choose is remembered across restarts (shared with the TUI). If
+  it can't be restored, a one-line notice says why and asks you to pick one.
+- Switching from a local model to a cloud one shows the privacy note first.
+
+## Permissions
+
+GAIA asks before it changes files, runs commands or uses tools that act for you.
+The question appears above the message box with three answers:
+
+- **Allow once**
+- **Always allow** *this exact action* in this chat (offered only when the action
+  is narrow enough to name, e.g. `write_file on notes.md`)
+- **Deny**
+
+Pick **Full access** from the shield to let a chat run everything without
+asking (you confirm once). **Settings → Permissions** lists every chat with full
+access or "always allow" answers and lets you revoke them. Grants end when GAIA
+restarts.
+
+## Settings
+
+One window with General (appearance: Light, Dark, Match system; shortcuts),
+Model, Permissions, Skills (what GAIA can load, with **Use** to try one),
+Connectors, Memory, Privacy and Advanced (model server status, context size,
+custom model ID, beta options, MCP servers, version and roll back).
+
 ## Roll back to a previous version
 
 If an update introduces a regression, you can roll back to a specific earlier release directly from the app — no need to hunt down an old installer on GitHub.
 
 **How to roll back (desktop installer only):**
 
-1. Open **Settings → About**.
+1. Open **Settings → Advanced**.
 2. Click **"Roll back to a previous version"**.
 3. The app fetches the list of published releases from GitHub and shows them newest-first, with your currently installed version marked.
 4. Click an older release to open a confirmation step.
@@ -257,19 +313,22 @@ Sessions let you organize conversations by topic. They sync between the CLI (`ga
 | `Enter` | Send message |
 | `Shift+Enter` | New line |
 | `Escape` | Stop agent response |
-| `Ctrl+K` | Search across sessions |
+| `Ctrl+K` | Search chats |
+| `Ctrl+Shift+O` | New chat |
+| `Ctrl+B` | Show or hide the sidebar |
+| `Ctrl+,` | Settings |
 
 ---
 
 ## Memory
 
-The agent can remember facts, preferences, and decisions across sessions. Memory is **opt-in (beta)** and disabled by default — see the [Agent Memory guide](/guides/memory) to enable it and learn what the **Brain** icon's dashboard exposes.
+The agent can remember facts, preferences, and decisions across sessions. Memory is **opt-in (beta)** and disabled by default — see the [Agent Memory guide](/guides/memory) to learn more. Turn it on in **Settings → Memory**, and open **Memory** in the sidebar to search, edit or forget what GAIA remembers.
 
 ---
 
 ## Scheduled Tasks
 
-Run a prompt on a recurring schedule — "every morning at 9, summarize my inbox" — without leaving the UI. Click the **Clock** icon in the sidebar to open the Schedule Manager.
+Run a prompt on a recurring schedule — "every morning at 9, summarize my inbox" — without leaving the UI. Click **Scheduled tasks** in the sidebar to open the Schedule Manager.
 
 Describe the schedule in natural language; the parser previews the interpretation live before you create it:
 
@@ -285,7 +344,7 @@ Each schedule runs in its own chat session, so the full history of runs (prompt 
 
 Behavior notes:
 
-- Scheduled runs execute through the local LLM — nothing leaves your machine.
+- Scheduled runs use the GAIA agent and the model you picked; with a local model nothing leaves your machine.
 - Runs are **suspended while mobile access (tunnel) is active**, matching the autonomous agent loop's security posture. Set `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` to override.
 - One run executes at a time; overlapping schedules queue.
 - Per-run timeout defaults to 300 s; override with `GAIA_SCHEDULE_TIMEOUT`.
@@ -339,7 +398,7 @@ The agent supports the **Model Context Protocol** in both directions — connect
     gaia daemon logs --lines 100  # daemon up but no model server — the reason is here
     ```
 
-    The usual cause is that Lemonade isn't installed at all. Run `gaia init --profile minimal` or follow the [Setup Guide](/setup).
+    The usual cause is that GAIA isn't set up yet. The app shows its setup steps in that case; `gaia init` from a terminal does the same.
   </Accordion>
 
   <Accordion title="No model loaded">
