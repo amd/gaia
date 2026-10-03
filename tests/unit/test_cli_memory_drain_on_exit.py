@@ -132,6 +132,29 @@ def test_interactive_chat_runs_the_flagship(chat_agent_stubs, drain):
     )
 
 
+def test_missing_flagship_fails_loudly_and_never_runs_chat_agent(
+    chat_agent_stubs, drain, monkeypatch, capsys
+):
+    """No fallback: without the flagship wheel `gaia chat` exits 1 naming the
+    wheel to install, and never quietly runs the base ChatAgent instead."""
+    from gaia.cli import _launch_interactive_cli
+
+    monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)  # import fails
+    chat_module = types.ModuleType("gaia_agent_chat.agent")
+    chat_module.ChatAgent = MagicMock()
+    chat_module.ChatAgentConfig = MagicMock()
+    monkeypatch.setitem(sys.modules, "gaia_agent_chat.agent", chat_module)
+
+    with pytest.raises(SystemExit) as exc:
+        _launch_interactive_cli()
+
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "The GAIA agent is not installed" in out and "gaia-agent-gaia" in out
+    chat_module.ChatAgent.assert_not_called()
+    chat_agent_stubs.app.interactive_mode.assert_not_called()
+
+
 # ``run_cli`` goes through ``asyncio.run``, whose Windows self-pipe trips the
 # unit-test socket guard; the stubs keep this test off the network.
 @pytest.mark.allow_network

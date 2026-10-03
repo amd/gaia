@@ -726,25 +726,8 @@ async def async_main(action, **kwargs):
             if kwargs.get("no_learned_skills", False):
                 agent._learned_skills_enabled = False
 
-            # Create initial session if not loading one. ``_ensure_tool_loader_reset``
-            # is a ChatAgent method GaiaAgent inherits (#2323); guard with hasattr since
-            # cli.py (core) and the agent wheels (independently versioned) can drift —
-            # an older installed wheel won't have it yet. It logs its own
-            # "Created new session" line, so the fallback branch below does too
-            # (for parity), but the two are not both reachable in one call.
-            if not agent.current_session:
-                if hasattr(agent, "_ensure_tool_loader_reset"):
-                    agent._ensure_tool_loader_reset()
-                else:
-                    agent.current_session = agent.session_manager.create_session()
-                    try:
-                        if hasattr(agent, "tool_loader"):
-                            agent.tool_loader.reset_session()
-                    except Exception as e:
-                        log.debug("Tool loader session reset skipped: %s", e)
-                    log.debug(
-                        f"Created new session: {agent.current_session.session_id}"
-                    )
+            # A session unless one was loaded above.
+            agent._ensure_tool_loader_reset()
 
             # List tools if requested
             if kwargs.get("list_tools", False):
@@ -985,19 +968,7 @@ def _launch_interactive_cli(log=None):
         )
         agent = GaiaAgent(config)
 
-        # ``_ensure_tool_loader_reset`` is a ChatAgent method GaiaAgent inherits
-        # (#2323); guard with hasattr since cli.py (core) and the agent wheels
-        # (independently versioned) can drift — an older wheel won't have it.
-        if not agent.current_session:
-            if hasattr(agent, "_ensure_tool_loader_reset"):
-                agent._ensure_tool_loader_reset()
-            else:
-                agent.current_session = agent.session_manager.create_session()
-                try:
-                    if hasattr(agent, "tool_loader"):
-                        agent.tool_loader.reset_session()
-                except Exception as e:
-                    log.debug("Tool loader session reset skipped: %s", e)
+        agent._ensure_tool_loader_reset()
 
         interactive_mode(agent)
     except KeyboardInterrupt:

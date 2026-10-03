@@ -29,6 +29,9 @@ class _StubChatAgent:
         self.current_session = object()
         self.listed = False
 
+    def _ensure_tool_loader_reset(self):
+        pass  # a session already exists
+
     def list_tools(self, verbose=False):
         self.listed = True
 
