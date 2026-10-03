@@ -159,10 +159,11 @@ foreach ($cfg in @(
 # either way (Python line-buffers stderr). So an empty STDERR log is not a
 # buffering symptom -- it means the server wrote nothing there.
 #
-# GGML_VK_DISABLE_COOPMAT: every OTHER way GAIA starts Lemonade sets it
-# (start-lemonade.ps1/.bat/.sh) and this task was the one launch path that did
-# not, which made the persistent server the only one running the Vulkan
-# cooperative-matrix path. On the eval runner that is the difference between the
+# GGML_VK_DISABLE_COOPMAT: the CI runner scripts (start-lemonade.ps1 and this
+# task) still set it, although GAIA's own launches no longer do -- GAIA now runs
+# the embedder on the CPU backend instead. This task was once the one runner
+# launch path that did not, which made the persistent server the only one
+# running the Vulkan cooperative-matrix path. On the eval runner that is the difference between the
 # job that serves the RAG embedder and the gate that cannot (#3016).
 $InnerCmd  = "`$env:PYTHONUNBUFFERED='1'; " +
              "`$env:GGML_VK_DISABLE_COOPMAT='1'; " +

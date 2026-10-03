@@ -93,17 +93,12 @@ func startEnv(l launcher) []string {
 	if l.ServiceManaged {
 		return os.Environ()
 	}
-	env := append(os.Environ(), vulkanCoopmatEnv)
+	env := os.Environ()
 	if l.CtxSize <= 0 {
 		return env
 	}
 	return append(env, fmt.Sprintf("%s=%d", ctxSizeEnv, l.CtxSize))
 }
-
-// vulkanCoopmatEnv matches LLAMACPP_ENV in gaia/llm/lemonade_launcher.py:
-// llama.cpp's Vulkan cooperative-matrix path crashes llama-server as it loads
-// an embedding model on AMD Radeon iGPUs, so memory and RAG never come up.
-const vulkanCoopmatEnv = "GGML_VK_DISABLE_COOPMAT=1"
 
 // waitForLemonade polls until the server answers or the window closes.
 func waitForLemonade(ctx context.Context, probe func(context.Context) bool) bool {
