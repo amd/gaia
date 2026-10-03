@@ -986,6 +986,14 @@ Used to reach the UI from a phone.
     the UI prompts the user and posts the outcome (`approve` / `deny`) back on
     this endpoint.
   </Accordion>
+
+  <Accordion title="POST /api/eval/scripted-user">
+    **Eval-only**, gated by `GAIA_EVAL_SCRIPTED_USER=1` (403 otherwise).
+    Scripts a user who declines the shell commands in `decline_commands` and
+    answers no questions, so `gaia eval agent` can score what the agent does
+    after a "no". An empty list turns it off. The runner sets it from a
+    scenario's `setup.decline_commands` and clears it afterwards.
+  </Accordion>
 </AccordionGroup>
 
 ### Documents (advanced)

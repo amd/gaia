@@ -45,6 +45,13 @@ the terminal UI meant building it from source.
   once a turn has answered, a tool call on nothing the request touched is not
   run and a second one ends the turn, and a tool that keeps failing with new
   arguments is stopped like an identical repeat.
+- A "no" now covers what an action does, not the one tool it was asked
+  through. After you decline `pytest`, or leave its prompt unanswered, the
+  agent no longer writes `run_tests.py` and runs it with another tool: any
+  call that would run the tests, reach the same host, or change the same file
+  is stopped for the rest of that request. Where the surface can ask, you get
+  the exact command and why, with Allow once / Don't run it; otherwise the
+  agent stops and asks in its reply.
 - `/v1/gaia/query` now honours `provider` on an existing session. It used to
   matter only when the session was created, so `provider: "lemonade"` could keep
   sending a Claude session's conversation to Anthropic, and `provider: "claude"`

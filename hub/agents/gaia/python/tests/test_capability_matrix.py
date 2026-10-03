@@ -264,6 +264,7 @@ def test_eval_surface_state_is_derived_not_asserted(matrix):
         "gaia_media",
         "gaia_memory",
         "gaia_rag",
+        "gaia_resilience",
         "gaia_shell",
         "gaia_skills_capture",
         "gaia_skills_lifecycle",
