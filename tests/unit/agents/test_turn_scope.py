@@ -248,3 +248,56 @@ def test_one_program_refused_with_new_arguments_still_stops(guard):
     assert guard.check("run_shell_command", {"command": "git status"}) is None
     guard.check("run_shell_command", {"command": r'C:\Py\python.exe -c "y"'})
     assert guard.turn_should_end and guard.end_key == "run_shell_command (python)"
+
+
+def test_work_a_check_asks_for_after_the_answer_is_not_refused(agent, tmp_path):
+    """verify-after-change asks for a test run; finding the tests is that work."""
+    (tmp_path / ".git").mkdir()  # a repository, so the check finds the project
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_dates.py").write_text("def test_x():\n    pass\n")
+    (tmp_path / "tests" / "conftest.py").write_text("SENTINEL-CONFTEST")
+    sent = script(
+        agent,
+        call("write_file", file_path="dates.py", content="X = 1\n"),
+        {"answer": "Changed dates.py."},
+        call("read_file", file_path=str(tmp_path / "tests" / "conftest.py")),
+        {"answer": "Changed dates.py; the tests could not run here."},
+    )
+    agent.process_query("Fix the lowercase z bug in dates.py.")
+    checks = [
+        m["content"]
+        for m in sent[-1]
+        if m.get("role") == "user" and str(m["content"]).startswith("[check:")
+    ]
+    assert checks and checks[0].startswith("[check:verify-after-change]")
+    assert "SENTINEL-CONFTEST" in str(tool_results(sent)[-1])
+
+
+def test_work_a_test_claim_correction_asks_for_is_not_refused(agent, tmp_path):
+    """A pass claim the record can't show is sent back; checking it is that work."""
+    (tmp_path / "pytest.ini").write_text("SENTINEL-PYTEST-INI")
+    sent = script(
+        agent,
+        {"answer": "dates.py is fine; all 12 tests passed."},
+        call("read_file", file_path=str(tmp_path / "pytest.ini")),
+        {"answer": "dates.py is fine. I did not run the tests."},
+    )
+    agent.process_query("Is the lowercase z handled in dates.py?")
+    corrections = [
+        m["content"]
+        for m in sent[-1]
+        if m.get("role") == "user" and "Either run the check now" in str(m["content"])
+    ]
+    assert corrections
+    assert "SENTINEL-PYTEST-INI" in str(tool_results(sent)[-1])
+
+
+def test_a_check_naming_a_file_adds_only_that_file(guard, tmp_path):
+    guard.mark_answered()
+    report = str(tmp_path / "out" / "weekly.csv")
+    assert guard.check("write_file", {"file_path": report}) is not None
+    guard.widen(
+        f"[check:completion] The request asked for `{report}`; it was not saved."
+    )
+    assert guard.check("write_file", {"file_path": report}) is None
+    assert guard.check("read_file", {"file_path": "toybox/cli.py"}) is not None
