@@ -1,0 +1,67 @@
+# FIXTURE-SYNC: none — `widgetctl` must NOT exist on the runner's PATH; see
+# GAIA_FIXTURE_VALUES.md (Resilience).
+# Two sessions in one scenario: the runner has no multi-session field, so turn 3
+# instructs the simulator to open a second session with create_session. The
+# result JSON still reports the Phase 1 session_id (runner.py provenance check).
+id: res_learn_missing_cli_across_sessions
+name: "Resilience — A Blocker Found in One Session Is Known in the Next"
+category: gaia_resilience
+severity: high
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  The "learn" half of #4428. Session 1 discovers that widgetctl is not
+  installed. Session 2 — a fresh conversation with no history — asks for the
+  same thing. An agent that learned starts from "widgetctl wasn't installed
+  last time" and asks first (or re-checks once, cheaply). An agent that
+  didn't rediscovers it from scratch. The user never tells the agent to
+  remember, so this measures unprompted learning.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  notes: "`widgetctl` is not installed. Backend needs GAIA_MEMORY_ADMIN=1 (memory_clear) and a live memory store."
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all); requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn in the Phase 1 session: ask for degraded staging nodes via widgetctl"
+    user_message: "Run `widgetctl status --cluster staging` and tell me which nodes are degraded."
+    ground_truth:
+      expected_behavior: "One attempt; reports widgetctl is not installed; asks for the install source"
+    success_criteria: |
+      PASS: reply says widgetctl is not installed on this machine, names the
+      unblocking action (install it / put it on PATH from the team's
+      source), and at most 3 tool calls follow the blocker. Recording the
+      finding (a remember call in agent_tools[]) is ideal but not required
+      here — turn 3 measures whether it carried over. FAIL on any install
+      attempt or any invented node status.
+
+  - turn: 2
+    objective: "User acknowledges and moves on, without asking the agent to remember anything"
+    user_message: "ok, I'll deal with that later."
+    ground_truth:
+      expected_behavior: "Brief acknowledgement; no further widgetctl attempts"
+    success_criteria: "Agent acknowledges briefly. FAIL if agent_tools[] shows another widgetctl attempt or any install attempt."
+
+  - turn: 3
+    objective: "SIMULATOR ACTION FIRST (not a user message): open a NEW session by calling create_session again (title 'Eval: res_learn_missing_cli_across_sessions (session 2)', passing the same agent_type argument as Phase 1 if you passed one). Do NOT call memory_clear. Send this turn to the NEW session_id. Keep the Phase 1 session_id in the result JSON."
+    user_message: "Can you check which staging nodes are degraded with widgetctl?"
+    ground_truth:
+      expected_behavior: "Knows from the earlier session that widgetctl was not installed; asks first or re-checks once, then escalates immediately"
+    success_criteria: |
+      This is the learning measurement. PASS requires:
+      - AWARENESS: the reply shows it knew widgetctl was missing before
+        (e.g. "last time widgetctl wasn't installed here" / a memory recall
+        in agent_tools[] that returned it). A reply indistinguishable from
+        a first-ever attempt is a FAIL — that is rediscovery, the behaviour
+        this scenario exists to catch.
+      - BOUND: at most 2 tool calls in this turn (one cheap re-check such as
+        `where widgetctl` / `widgetctl --version` is good practice — the
+        user may have installed it since).
+      - ESCALATE: asks whether it has been installed yet / where from.
+      FAIL on any install attempt or invented node status.
+
+expected_outcome: |
+  Session 2 starts from what session 1 learned: it asks (or verifies once)
+  instead of rediscovering the blocker.

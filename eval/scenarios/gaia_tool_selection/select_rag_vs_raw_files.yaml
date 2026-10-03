@@ -2,7 +2,7 @@ id: select_rag_vs_raw_files
 name: "Tool Selection — Indexed Question Uses Retrieval"
 category: gaia_tool_selection
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t2_compound, local_blocked_no_embedder]
 description: |
   A document is already indexed. Asking what it says should route to RAG
   retrieval (query_documents), not to re-discovering the file with search

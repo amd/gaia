@@ -28,6 +28,16 @@ import pytest
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "gaia"
 FAKE_GH = FIXTURES / "fake_gh" / "gh.py"
 REPO = "acme-labs/widgetworks"
+#: The fixture hub catalog, exactly (GAIA_FIXTURE_VALUES.md "Fixture hub" plus
+#: the tier-expansion additions under "Skills, web and tool selection").
+HUB_CATALOG = {
+    "github-triage",
+    "rss-digest",
+    "experimental-notes",
+    "unit-convert",
+    "tampered-notes",
+    "power-helper",
+}
 
 
 def _gh(*args: str) -> subprocess.CompletedProcess:
@@ -219,11 +229,17 @@ def _stop(server, thread):
 
 @pytest.fixture()
 def prepared_hub(tmp_path):
-    """A per-run signed hub (experimental-notes left unsigned, per contract)."""
+    """A per-run signed hub (experimental-notes unsigned, tampered-notes
+    tampered after signing, per contract)."""
     prepare = _fixtures_import("prepare_fixture_hub").prepare
     skills_root = tmp_path / "skills"
     hub_dir = tmp_path / "prepared_hub"
-    summaries = prepare(skills_root, hub_dir, frozenset({"experimental-notes"}))
+    summaries = prepare(
+        skills_root,
+        hub_dir,
+        frozenset({"experimental-notes"}),
+        tampered=frozenset({"tampered-notes"}),
+    )
     return skills_root, hub_dir, summaries
 
 
@@ -260,7 +276,7 @@ def test_routed_layout_matches_the_scenario_urls(prepared_hub, monkeypatch):
         with urllib.request.urlopen(f"{base}/fixture_hub/index.json") as response:
             index = json.loads(response.read())
         ids = {e["id"] for e in index["agents"] if e.get("type") == "skill"}
-        assert ids == {"github-triage", "rss-digest", "experimental-notes"}
+        assert ids == HUB_CATALOG
 
         with pytest.raises(urllib.error.HTTPError) as excinfo:
             urllib.request.urlopen(f"{base}/no_such_page.html")
@@ -272,7 +288,7 @@ def test_routed_layout_matches_the_scenario_urls(prepared_hub, monkeypatch):
 def test_prepared_hub_signs_per_the_contract(prepared_hub):
     skills_root, hub_dir, summaries = prepared_hub
 
-    assert set(summaries) == {"github-triage", "rss-digest", "experimental-notes"}
+    assert set(summaries) == HUB_CATALOG
     assert summaries["github-triage"]["signed"] is True
     assert summaries["rss-digest"]["signed"] is True
     assert summaries["experimental-notes"]["signed"] is False

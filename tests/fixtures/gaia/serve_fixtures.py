@@ -11,6 +11,10 @@ Default mode serves the ROUTED layout the scenario corpus assumes
                           (built per run by prepare_fixture_hub.py)
     /capture/...        → tests/fixtures/gaia/capture/...
                           (raw SKILL.md fixtures for the capture scenarios)
+    /resilience/<page>  → a fixed 429/503 (STATUS_ROUTES; bodies under
+                          tests/fixtures/gaia/tiers_resilience/http/)
+    /tiers_skills_web/... → tests/fixtures/gaia/tiers_skills_web/...
+                          (skills/web/tool-selection tier fixtures)
 
 Eval runs bind **port 8765** — scenarios hardcode http://127.0.0.1:8765 —
 with GAIA_HUB_URL=http://127.0.0.1:8765/fixture_hub:
@@ -28,6 +32,7 @@ tests that serve one prepared hub directly.
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -40,8 +45,31 @@ ROUTES: tuple[tuple[str, Path], ...] = (
     ("/rss", FIXTURES_ROOT / "rss"),
     ("/fixture_hub", FIXTURES_ROOT / "fixture_hub" / "_prepared"),
     ("/capture", FIXTURES_ROOT / "capture"),
+    ("/tiers_skills_web", FIXTURES_ROOT / "tiers_skills_web"),
     ("", FIXTURES_ROOT / "web"),
 )
+
+_HTTP_ERRORS = FIXTURES_ROOT / "tiers_resilience" / "http"
+
+#: Exact paths answered with an error status (resilience scenarios):
+#: path -> (status, extra headers, body file).
+STATUS_ROUTES: dict[str, tuple[int, dict[str, str], Path]] = {
+    "/resilience/rate_limited.html": (
+        429,
+        {"Retry-After": "3600"},
+        _HTTP_ERRORS / "rate_limited.html",
+    ),
+    "/resilience/summit_tent.html": (
+        503,
+        {"Retry-After": "120"},
+        _HTTP_ERRORS / "unavailable.html",
+    ),
+    "/resilience/status_board.html": (
+        503,
+        {"Retry-After": "600"},
+        _HTTP_ERRORS / "status_board_injected.html",
+    ),
+}
 
 
 class _QuietHandler(SimpleHTTPRequestHandler):
@@ -53,6 +81,21 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 
 class _RoutedHandler(_QuietHandler):
     """Map the contract's root-relative URL layout onto the fixture dirs."""
+
+    def send_head(self):
+        clean = self.path.split("?", 1)[0].split("#", 1)[0]
+        route = STATUS_ROUTES.get(clean)
+        if route is None:
+            return super().send_head()
+        status, headers, body_file = route
+        body = body_file.read_bytes()
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.end_headers()
+        return io.BytesIO(body)
 
     def translate_path(self, path: str) -> str:
         clean = path.split("?", 1)[0].split("#", 1)[0]

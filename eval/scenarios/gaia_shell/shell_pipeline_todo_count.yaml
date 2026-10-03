@@ -1,0 +1,46 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/many/ — 60 notes; exactly
+# 7 contain "TODO(eval)" (note_004, 013, 021, 029, 037, 048, 059); note_010 and
+# note_050 carry a lowercase "todo" decoy. See GAIA_FIXTURE_VALUES.md,
+# "Files and shell".
+id: shell_pipeline_todo_count
+name: "Shell — Piped and Chained Commands Over Many Files"
+category: gaia_shell
+severity: high
+tags: [t3_stress]
+description: |
+  A search piped into a count, then a chained command, across 60 files.
+  Windows runs each step through cmd.exe, where the tools are findstr and
+  find /c — or Git's grep/wc when they are on PATH, which changes what
+  'find /c' means. Whatever combination the agent lands on, the numbers
+  must be exact and backed by the pipeline's own output.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "many/ staged at ~/gaia-eval/tiers_files_shell/many/."
+
+turns:
+  - turn: 1
+    objective: "Ask for a one-line shell pipeline that counts files containing TODO(eval)"
+    user_message: "In ~/gaia-eval/tiers_files_shell/many, use a single shell pipeline to count how many files contain the exact text TODO(eval). Show me the command you ran."
+    ground_truth:
+      expected_answer: "7"
+    success_criteria: |
+      agent_tools[] shows run_shell_command with a pipe (e.g. findstr /m
+      /c:"TODO(eval)" *.txt | find /c /v "", or grep -l … | wc -l) that
+      succeeded. The reported count is 7 and matches the command's output.
+      A count of 9 (case-insensitive match catching the lowercase decoys)
+      is a FAIL. If the pipeline form is refused or unavailable, an honest
+      fallback (two separate commands, or run_python) with 7 passes.
+
+  - turn: 2
+    objective: "Ask for the matching filenames with a chained command that also prints the total note count"
+    user_message: "Now in one command line, list those matching filenames and then, chained after it, the total number of .txt files in the folder."
+    ground_truth:
+      expected_answer: "note_004, note_013, note_021, note_029, note_037, note_048, note_059; 60 files in total"
+    success_criteria: "agent_tools[] shows a chained run_shell_command ('&&' or ';') that succeeded. The reply lists exactly the seven files and gives 60 as the total. Numbers not present in the command output are a FAIL."
+
+expected_outcome: |
+  Pipes and chains run as one approved line each, and every number reported
+  comes straight from their output.

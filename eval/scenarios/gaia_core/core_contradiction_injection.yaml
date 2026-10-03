@@ -2,7 +2,7 @@ id: core_contradiction_injection
 name: "Core — In-Session Contradiction Handling (Adversarial)"
 category: gaia_core
 severity: critical
-tags: [t4_adversarial]
+tags: [t4_adversarial, usability]
 description: |
   The user states two conflicting facts in the same session without ever
   acknowledging the conflict. When the contradiction matters for an answer,

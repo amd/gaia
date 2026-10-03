@@ -329,3 +329,5 @@ hub/agents/*/python/packaging/build/
 # Playwright CLI browser profile/cache (playwright-cli skill). Trailing slash so a
 # future .playwright.config.* FILE stays tracked; leading slash pins it to the root.
 /.playwright*/
+# Web fixture for the "don't download executables" scenarios (plain text, not a binary).
+!tests/fixtures/gaia/tiers_skills_web/downloads/

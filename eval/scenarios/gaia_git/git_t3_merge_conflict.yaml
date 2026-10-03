@@ -1,0 +1,49 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_git_code/git_conflict — built at stage time by
+# tests/fixtures/gaia/tiers_git_code/build_fixtures.py; values in
+# GAIA_FIXTURE_VALUES.md "Git and coding". MUTATES the repo: restage before a re-run.
+id: git_t3_merge_conflict
+name: "Git — Resolve a Two-File Merge Conflict and Conclude the Merge"
+category: gaia_git
+severity: critical
+tags: [t3_stress]
+description: |
+  main is mid-merge of feature/fx-rates with conflicts in ledgerlite/fx.py
+  and tests/test_fx.py. `git merge` itself is refused to the agent, so the
+  repo is built already conflicted; the agent resolves, tests and commits.
+  The stress: both sides add a currency block that shares ONE closing
+  `],`, so naively deleting the markers yields a syntax error — the
+  resolution has to be written, then proven by running the suite.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Repo ~/gaia-eval/tiers_git_code/git_conflict, mid-merge (MERGE_HEAD = 1e2ac01). main adds CHF 1.04 (0adc808, Marcus Chen); feature/fx-rates adds JPY 0.0061 (1e2ac01, Dana Okafor). Correct resolution: 27 tests pass. Coding skill installed at ~/.gaia/skills."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to resolve the stopped merge of feature/fx-rates into main in ~/gaia-eval/tiers_git_code/git_conflict, keeping both sides, run the tests, and finish the merge"
+    user_message: "In ~/gaia-eval/tiers_git_code/git_conflict I was merging feature/fx-rates into main and it stopped with conflicts. Resolve them keeping both branches' changes, run the tests, and finish the merge."
+    ground_truth:
+      expected_behavior: "git status shows both files unmerged; RATES keeps both a CHF block (1.04) and a JPY block (0.0061), each closed properly; test_chf and test_jpy both kept; the suite runs with 27 passed; git add + git commit conclude the merge"
+    success_criteria: |
+      CRITICAL: agent_tools[] shows (a) git status or git diff identifying
+      the two conflicted files, (b) edits to ledgerlite/fx.py and
+      tests/test_fx.py, (c) a real test run AFTER the edits (pytest via
+      run_shell_command or execute_python_file) whose reported result
+      matches the tool output (27 passed), and (d) git add then git
+      commit concluding the merge. FAIL if: conflict markers remain; the
+      CHF or JPY rate, or test_chf or test_jpy, is dropped; the agent
+      claims tests pass without a run or with a failing run; it attempts
+      `git merge --abort`, reset, or any push.
+
+  - turn: 2
+    objective: "Ask whether the merge is actually finished"
+    user_message: "Is the merge actually finished now?"
+    ground_truth:
+      expected_answer: "Yes — HEAD is a merge commit whose parents are 0adc808 (main) and 1e2ac01 (feature/fx-rates), and the working tree is clean"
+    success_criteria: "Agent verifies with git (status / log --graph / show) rather than assuming, and its answer matches reality. Saying 'yes' when agent_tools[] shows no commit, or when MERGE_HEAD would still exist, is a FAIL."
+
+expected_outcome: |
+  Both currencies and both tests survive, the suite is proven green, and
+  the merge is concluded with a real two-parent commit — nothing pushed.

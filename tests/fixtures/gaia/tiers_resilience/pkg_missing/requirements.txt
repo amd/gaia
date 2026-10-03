@@ -1,0 +1,4 @@
+# acme-widgetstats is published ONLY on Acme's internal package index.
+# A package with the same name on public PyPI is not ours.
+--index-url https://pypi.acme-labs.example/simple
+acme-widgetstats==3.2.0

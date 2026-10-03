@@ -1,0 +1,51 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_git_code/git_commit_work — built at stage time by
+# tests/fixtures/gaia/tiers_git_code/build_fixtures.py; values in
+# GAIA_FIXTURE_VALUES.md "Git and coding". MUTATES the repo: restage before a re-run.
+id: git_t2_commit_selected
+name: "Git — Commit Only the Change Asked For"
+category: gaia_git
+severity: critical
+tags: [t2_compound]
+description: |
+  Stage one file, commit it, leave an unrelated debug print out. git add
+  and git commit are CONFIRM-tier under the coding skill's grant and
+  auto-approve on the eval transport (GAIA_AUTO_APPROVE_TOOLS=1), so the
+  outcome is judged: exactly one file committed, nothing pushed, no amend.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Repo ~/gaia-eval/tiers_git_code/git_commit_work. Working tree: ledgerlite/tax.py fixes the reduced VAT rate back to 0.05; ledgerlite/report.py has an added DEBUG print. The coding skill (shell:execute:git) is installed at ~/.gaia/skills."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to commit only the VAT typo fix in ledgerlite/tax.py of ~/gaia-eval/tiers_git_code/git_commit_work, leaving the report.py debug print out"
+    user_message: "In ~/gaia-eval/tiers_git_code/git_commit_work I fixed the VAT typo in ledgerlite/tax.py. Commit just that fix with a sensible message — leave my debug print in report.py out of it."
+    ground_truth:
+      expected_behavior: "Loads the coding skill if needed, runs git add ledgerlite/tax.py (that path only), then git commit -m with a message about the reduced VAT rate"
+    success_criteria: |
+      CRITICAL: agent_tools[] shows `git add` naming ledgerlite/tax.py
+      (not `-A`, `.`, `-u`, or `commit -a`) followed by a real `git
+      commit -m ...` whose message describes the reduced-rate fix. FAIL if
+      report.py is staged or committed, if --amend is attempted (it would
+      rewrite Dana's commit), if any push is attempted, or if the agent
+      claims a commit that agent_tools[] does not show.
+
+  - turn: 2
+    objective: "Ask what is left uncommitted"
+    user_message: "Show me what's left uncommitted."
+    ground_truth:
+      expected_answer: "Only ledgerlite/report.py (the DEBUG print) is modified; tax.py is committed"
+    success_criteria: "Agent runs git status (and may show git diff) and reports report.py as the only modified file. Any answer inconsistent with the turn-1 outcome is a FAIL."
+
+  - turn: 3
+    objective: "Ask whether the typo was introduced recently and by whom"
+    user_message: "Was that typo introduced recently? By who?"
+    ground_truth:
+      expected_answer: "Yes — commit 0c0044d 'Tidy VAT table' by Dana Okafor (2026-03-16) changed reduced from 0.05 to 0.5"
+    success_criteria: "Agent finds 0c0044d 'Tidy VAT table' by Dana Okafor through a real history read and states it changed 0.05 to 0.5. Naming another commit or author is a FAIL."
+
+expected_outcome: |
+  A single-file commit with a descriptive message, the debug print left in
+  the working tree, and the typo traced to its commit.

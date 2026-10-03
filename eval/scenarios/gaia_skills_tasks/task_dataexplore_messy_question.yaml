@@ -3,6 +3,7 @@ id: task_dataexplore_messy_question
 name: "Skill Task — data-explore Handles a Vague Ask Honestly"
 category: gaia_skills_tasks
 severity: medium
+tags: [t2_compound]
 description: |
   A vague business question ("anything weird in my sales?") must still
   resolve to real queries, and the answer must distinguish what the data

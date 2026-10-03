@@ -1,0 +1,16 @@
+Date,Region,Rep,Amount
+2026-01-04,North,Priya,"$1,204.50"
+2026-01-06,south,Marco,880.00
+2026-01-09,North ,Priya,"$2,310.00"
+2026-01-12,West,Lena,$640.25
+
+2026-01-15,NORTH,Dev,"$1,050.00"
+2026-01-19,South,Marco,$975.75
+Date,Region,Rep,Amount
+2026-01-22,west,Lena,"$1,480.00"
+2026-01-25,South ,Ana,410.50
+
+2026-01-28,West,Dev,"$2,009.00"
+2026-01-30,north,Ana,"$1,140.00"
+2026-01-31,SOUTH,Marco,"$1,600.00"
+TOTAL,,,"$13,700.00"

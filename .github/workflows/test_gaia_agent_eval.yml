@@ -6,7 +6,7 @@
 # categories happens in eval_flagship.yml's gaia-* lanes, in parallel.
 #
 # Drives `gaia eval agent --agent-type gaia` over the committed scenario corpus
-# (eval/scenarios/gaia_*, 14 categories, ~106 scenarios) against the Agent UI
+# (eval/scenarios/gaia_*, 16 categories, ~240 scenarios) against the Agent UI
 # backend + a real Lemonade Server, scored by the Claude judge on planted-fact
 # ground truth (fixtures under tests/fixtures/gaia/ — every external surface is
 # canned: fake gh shim, local web/RSS pages, fixture skill hub; nothing live).
@@ -80,8 +80,8 @@ name: GAIA Agent Eval (judged scenarios, report mode)
 
 on:
   # Pre-merge coverage for flagship behavior changes — PR subset only: the
-  # cheap tiers of gaia_core plus gaia_shell + gaia_tool_selection (~14
-  # scenarios), tier-filtered via --tag (category+tags compose in
+  # cheap tiers (t1+t2) of gaia_core, gaia_shell and gaia_tool_selection, plus
+  # gaia_shell's security scenarios (~21), filtered via --tag (category+tags compose in
   # find_scenarios: tags OR within the list, AND with category).
   pull_request:
     # No `branches:` filter: it matches the PR BASE, so `[ main ]` skips
@@ -102,12 +102,12 @@ on:
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
       - 'installer/scripts/ensure-lemonade-running.ps1'
-  # Manual trigger — the FULL run (all 14 categories, all tiers). This is also
+  # Manual trigger — the FULL run (all 16 categories, all tiers). This is also
   # how the first Gemma baselines get captured on the runner.
   workflow_dispatch:
     inputs:
       categories:
-        description: 'Comma-separated gaia_* categories to run (default: all 14)'
+        description: 'Comma-separated gaia_* categories to run (default: all 16)'
         required: false
         default: ''
       enforce:
@@ -129,7 +129,7 @@ on:
   workflow_call:
     inputs:
       categories:
-        description: 'Comma-separated gaia_* categories to run (default: all 14)'
+        description: 'Comma-separated gaia_* categories to run (default: all 16)'
         required: false
         type: string
         default: ''
@@ -170,7 +170,7 @@ env:
   # workflow_dispatch AND workflow_call.
   # gaia_email is not in this serial default (its budget is unsized here);
   # eval_flagship.yml's gaia-email lane measures it. Name it to include it.
-  EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks,gaia_skills_capture,gaia_mcp' }}
+  EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks,gaia_skills_capture,gaia_mcp,gaia_git,gaia_resilience' }}
   # PINNED TO THE BASELINE'S JUDGE — `--model` drives every scenario as well
   # as scoring it (runner.py passes it to `claude -p`), so changing it
   # compares two different eval agents. Override per-run via the input.
@@ -470,12 +470,12 @@ jobs:
             Add-Summary "| --- | ---: |"
 
             # PR subset: tier-filtered cheap categories. Everything else: the
-            # category list from the dispatch/call input (default all 14).
+            # category list from the dispatch/call input (default all 16).
             if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
               $runs = @(
                 @{ cat = 'gaia_core';           extra = @('--tag','t1_basic','--tag','t2_compound') },
-                @{ cat = 'gaia_shell';          extra = @() },
-                @{ cat = 'gaia_tool_selection'; extra = @() }
+                @{ cat = 'gaia_shell';          extra = @('--tag','t1_basic','--tag','t2_compound','--tag','security') },
+                @{ cat = 'gaia_tool_selection'; extra = @('--tag','t1_basic','--tag','t2_compound') }
               )
             } else {
               $runs = @($env:EVAL_CATEGORIES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { @{ cat = $_; extra = @() } })

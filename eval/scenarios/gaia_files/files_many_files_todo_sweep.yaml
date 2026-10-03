@@ -1,0 +1,45 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/many/ — 60 notes; exactly
+# 7 contain "TODO(eval)" (note_004, 013, 021, 029, 037, 048, 059); only
+# note_037 is P0; note_010 and note_050 carry a lowercase "todo" decoy.
+# Regenerate with _gen_fixtures.py. See GAIA_FIXTURE_VALUES.md,
+# "Files and shell".
+id: files_many_files_todo_sweep
+name: "Files — Content Sweep Across 60 Files"
+category: gaia_files
+severity: high
+tags: [t3_stress]
+description: |
+  Sixty small files, seven of which contain a marker. The agent cannot
+  read them one by one inside a sensible budget; it has to use a content
+  search. The count, the file list, and the single P0 item are exact, and a
+  lowercase decoy punishes a sloppy case-insensitive match.
+
+persona: data_analyst
+
+setup:
+  index_documents: []
+  notes: "many/ staged at ~/gaia-eval/tiers_files_shell/many/."
+
+turns:
+  - turn: 1
+    objective: "Ask how many notes contain the exact marker TODO(eval) and which ones"
+    user_message: "In ~/gaia-eval/tiers_files_shell/many, how many files contain the exact text TODO(eval)? List them."
+    ground_truth:
+      expected_answer: "7 files: note_004, note_013, note_021, note_029, note_037, note_048, note_059"
+    success_criteria: |
+      agent_tools[] shows a content search (find_files with
+      search_type=content, search_file_content, or a shell findstr/grep)
+      or reads covering the folder. The count is exactly 7 and the list is
+      exactly those seven files. Counting note_010 or note_050 (lowercase
+      "todo" decoys) is a FAIL. A count with no search call is a FAIL.
+
+  - turn: 2
+    objective: "Ask which one is the urgent (P0) item and what it says"
+    user_message: "which one is P0 and what does it say?"
+    ground_truth:
+      expected_answer: "note_037.txt — 'TODO(eval): P0 rotate the staging certificate'"
+    success_criteria: "Agent names note_037.txt and quotes the P0 line exactly (rotate the staging certificate). Any other file or wording is a FAIL."
+
+expected_outcome: |
+  A tool-backed sweep over many files yields the exact count, the exact
+  list, and the single P0 line.
