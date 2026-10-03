@@ -388,6 +388,7 @@ class _TurnHost(_Host, _AgentBase):
 
 
 def test_the_memory_rides_on_the_user_message_not_the_system_prompt(store):
+    require_faiss()
     vectors: Dict[str, np.ndarray] = {QUERY: _axis(0)}
     host = _TurnHost(store, vectors)
     _remember(
