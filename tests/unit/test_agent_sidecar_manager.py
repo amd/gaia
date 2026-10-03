@@ -436,7 +436,7 @@ def _install_fake_spawn(monkeypatch, tmp_path, *, spec=None, version_payload=Non
         staticmethod(lambda proc, sig: captured["signals"].append(sig)),
     )
     monkeypatch.setattr(
-        mgr.AgentSidecarManager, "_group_alive", lambda self, pgid: False
+        mgr.AgentSidecarManager, "_group_alive", staticmethod(lambda pgid: False)
     )
     monkeypatch.setattr(
         mgr.atexit, "register", lambda fn: captured["atexit"].append(fn)
@@ -509,6 +509,8 @@ def test_secret_file_is_removed_on_shutdown(monkeypatch, tmp_path):
     secret_path = Path(captured["popen_kwargs"]["env"][spec.token_file_env_var])
     assert secret_path.exists()
     m.shutdown()
+    # A clean stop: one SIGTERM to the tree, no SIGKILL escalation.
+    assert captured["signals"] == [15]
     assert not secret_path.exists()
     assert not secret_path.parent.exists()  # the private 0700 dir goes too
 
@@ -820,7 +822,7 @@ def test_start_retries_on_early_exit_then_succeeds(monkeypatch, tmp_path):
     monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
-    # killpg must be a no-op for the fake procs on the early-exit shutdown.
+    # Answer the group-alive probe (killpg(pgid, 0)) without touching a real pid.
     monkeypatch.setattr(mgr.os, "killpg", lambda *a: None, raising=False)
     monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid, raising=False)
 
