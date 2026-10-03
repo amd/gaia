@@ -3531,13 +3531,20 @@ Do NOT wrap conversational replies in JSON.
         """
         if isinstance(reason, ToolCallTruncated):
             # The generic advice sent the same oversized edit back three times.
-            return (
+            prompt = (
                 f"Your last tool call was cut off at the {reason.cap}-token output "
                 "limit before its arguments were finished, so nothing ran. Send "
-                "much shorter arguments: for edit_file, put only the few lines "
-                "that change in old_content and new_content, never the whole "
-                "file; write a long file in several smaller parts."
+                "much shorter arguments."
             )
+            # write_file replaces the whole file, so a long file is built with edits.
+            if "edit_file" in self._tools_registry:
+                prompt += (
+                    " For edit_file, put only the few lines that change in "
+                    "old_content and new_content, never the whole file; to create "
+                    "a long file, write_file a short first part, then add the rest "
+                    "with edit_file in small pieces."
+                )
+            return prompt
         return (
             f"Your last tool call could not be used: {reason}\n"
             "Please try again. Emit exactly ONE tool call as raw JSON — no code "

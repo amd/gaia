@@ -77,7 +77,15 @@ def test_the_recovery_turn_asks_for_shorter_arguments(agent):
     recovery = sent[1][-1]["content"]
     assert "cut off" in recovery and "nothing ran" in recovery
     assert "only the few lines" in recovery
+    assert "write_file a short first part" in recovery
     assert "enum values" not in recovery
+
+
+def test_an_agent_without_edit_file_is_not_told_to_use_it(agent):
+    agent._instance_tools = {}
+    prompt = agent._tool_call_retry_prompt(ToolCallTruncated("m", 8192))
+    assert "much shorter arguments" in prompt
+    assert "edit_file" not in prompt
 
 
 def test_the_truncation_is_its_own_error_type():
