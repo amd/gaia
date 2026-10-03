@@ -593,6 +593,7 @@ async def async_main(action, **kwargs):
                     "The chat agent is not installed",
                     "gaia-agent-chat",
                     next_step="Then re-run `gaia chat`.",
+                    error=e,
                 )
             ) from e
 
@@ -979,6 +980,7 @@ def _launch_interactive_cli(log=None):
                     "The chat agent is not installed",
                     "gaia-agent-chat",
                     next_step="Then re-run `gaia chat`.",
+                    error=e,
                 )
             ) from e
 
@@ -5598,6 +5600,7 @@ def handle_email_command(args):
                     "The email agent is not installed",
                     "gaia-agent-email",
                     next_step="Then re-run `gaia email --spec`.",
+                    error=e,
                 )
             ) from e
 

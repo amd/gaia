@@ -418,6 +418,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                             "The chat agent is not installed",
                             "gaia-agent-chat",
                             next_step="Then re-run the scheduled chat task.",
+                            error=e,
                         )
                     ) from e
 
