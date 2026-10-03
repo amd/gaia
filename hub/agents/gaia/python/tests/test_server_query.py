@@ -220,18 +220,12 @@ def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built)
     client, agents = built
     session_id = f"s-{uuid.uuid4()}"
 
-    assert (
-        client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code
-        == 200
-    )
+    assert client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code == 200
 
     r = client.post(f"/v1/gaia/sessions/{session_id}/bypass", json={"enabled": True})
     assert r.status_code == 200, r.text
 
-    assert (
-        client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code
-        == 200
-    )
+    assert client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code == 200
 
     console = agents[0].console
     assert console.auto_approve_gated_tools is True, "bypass must stop the prompts"
@@ -862,9 +856,7 @@ def test_a_claude_model_without_a_provider_builds_a_claude_agent(built):
     """
     client, agents = built
 
-    r = client.post(
-        "/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5")
-    )
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5"))
 
     assert r.status_code == 200, r.text
     assert len(agents) == 1
@@ -882,9 +874,7 @@ def test_a_claude_model_without_a_provider_agrees_on_new_and_live_sessions(
     client, agents = built
     client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
 
-    r = client.post(
-        "/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5")
-    )
+    r = client.post("/v1/gaia/query", json=_body(session_id="s-1", model="claude-opus-5"))
 
     assert r.status_code == 200, r.text
     assert switched_backend == [("claude-opus-5",)]

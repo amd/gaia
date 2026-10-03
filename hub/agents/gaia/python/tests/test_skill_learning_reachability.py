@@ -35,9 +35,7 @@ def _agent(*, loaded: dict | None = None, learning: bool = True) -> GaiaAgent:
 
 
 def test_a_loaded_skill_puts_the_tool_in_reach():
-    assert (
-        TOOL in _agent(loaded={"transcribe-meeting": object()})._recalled_skill_tools()
-    )
+    assert TOOL in _agent(loaded={"transcribe-meeting": object()})._recalled_skill_tools()
 
 
 def test_no_loaded_skill_leaves_the_signal_untouched():
@@ -105,8 +103,6 @@ def test_the_signal_admits_it_when_semantics_never_would(loader):
 def test_a_name_absent_from_the_registry_is_dropped_not_raised(loader):
     """Agents other than the flagship never register it."""
     assert TOOL not in (
-        loader.select(
-            "anything", {"remember": {"description": "x"}}, skill_tools=[TOOL]
-        )
+        loader.select("anything", {"remember": {"description": "x"}}, skill_tools=[TOOL])
         or []
     )
