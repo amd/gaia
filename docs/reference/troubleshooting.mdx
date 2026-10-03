@@ -449,7 +449,7 @@ icon: "bug"
   <Accordion title="Embedding model downloaded but won't load (memory and document search off)" icon="triangle-exclamation">
     You see `Memory is unavailable this session: the embedding model ... is downloaded but would not load`, or indexing fails with `model_load_error` / `llama-server failed to start`.
 
-    On AMD Radeon GPUs using the Vulkan backend (seen on the Radeon 8060S in Ryzen AI MAX+ 395), llama.cpp's cooperative-matrix path crashes as it loads an embedding model. Lemonade has to start with `GGML_VK_DISABLE_COOPMAT=1` in its environment. GAIA sets it on every server it starts, so restart GAIA's own server:
+    On AMD Radeon GPUs using the Vulkan backend (seen on the Radeon 8060S in Ryzen AI MAX+ 395), llama.cpp's cooperative-matrix path crashes as it loads an embedding model. GAIA avoids it by running its small embedding model on llama.cpp's CPU backend while chat models stay on the GPU. GAIA's own server records that choice when it starts, so a server started by an older GAIA needs a restart:
 
     ```bash
     gaia lemonade embedded stop
@@ -459,9 +459,9 @@ icon: "bug"
     gaia lemonade embedded start
     ```
 
-    If you run Lemonade yourself, set `GGML_VK_DISABLE_COOPMAT=1` for that process before it starts, then restart the agent. For the Linux systemd service, run `systemctl --user edit lemond`, add `Environment=GGML_VK_DISABLE_COOPMAT=1` under `[Service]`, then `systemctl --user restart lemond`. For the Windows tray app, set it as a user environment variable and restart the tray app.
+    If you run Lemonade yourself, GAIA loads the embedder on the CPU backend before its first embedding request and saves that choice in Lemonade, so Lemonade's own later loads of it use the CPU too. Other tools that embed with it should load it the same way (`POST /api/v1/load` with `llamacpp_backend` set to `cpu` and `save_options` set to `true`). Starting Lemonade with `GGML_VK_DISABLE_COOPMAT=1` also avoids the crash, but it slows prompt processing for every model: Qwen3 30B A3B on the 8060S drops from about 1,290 to 680 tokens/s. Generation speed is unchanged.
 
-    `llama-server failed to start` has other causes too (out of memory, a context size the model can't take). If you're not on a Radeon GPU with Vulkan, or the setting doesn't help, Lemonade's server log has llama-server's own error. The setting costs chat about 12% in prompt-processing speed on the 8060S; generation speed is unchanged.
+    `llama-server failed to start` has other causes too (out of memory, a context size the model can't take). If you're not on a Radeon GPU with Vulkan, Lemonade's server log has llama-server's own error.
   </Accordion>
 </AccordionGroup>
 
