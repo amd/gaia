@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import os
 import sys
 import threading
 import types
@@ -64,7 +65,9 @@ def test_launch_agent_ui_starts_the_owner_only_for_a_local_server(
     import gaia.cli as gaia_cli
 
     monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    # _launch_agent_ui exports --base-url into os.environ; don't leak it.
     with (
+        patch.dict(os.environ),
         patch.object(gaia_cli, "_ensure_webui_built"),
         patch("gaia.ui.server.create_app"),
         patch("gaia.ui.server.start_model_server_owner") as owner,
