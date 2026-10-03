@@ -776,9 +776,8 @@ class CompletionEvidence:
 def incomplete_answer(gaps: list[str]) -> str:
     """Framework-owned result; never repeat the unsupported candidate answer."""
     return (
-        "I couldn't verify completion.\n\n"
-        + "\n".join(f"- {gap}" for gap in gaps)
-        + (
-            "\n\nThe task is incomplete. Complete the missing work and read back the output before relying on it."
-        )
+        "I can't confirm this is done:\n\n"
+        + "\n".join(f"- {gap[:1].upper()}{gap[1:]}" for gap in gaps)
+        + "\n\nTreat it as unfinished — ask me to pick it up and I'll finish "
+        "the missing parts."
     )
