@@ -264,9 +264,9 @@ def load_instances(
             )
         for instance_id in missing:
             inst = _normalize(fetched[instance_id])
-            # The gold patch is the answer. A full-access agent can read any
-            # file on the machine, so it never sits on disk during a run;
-            # gold_patches() fetches it for the judge afterwards.
+            # The gold patch is the answer and a full-access agent can read any
+            # file, so this cache never holds it; gold_patches() fetches it for
+            # the judge afterwards. (The `datasets` package's own HF cache still does.)
             del inst["patch"]
             (cache_dir / f"{instance_id}.json").write_text(
                 json.dumps(inst, indent=2), encoding="utf-8"

@@ -102,10 +102,9 @@ def test_an_older_cache_has_its_gold_patch_removed(tmp_path):
     assert "patch" not in (cache / f"{REQUESTS}.json").read_text()
 
 
-def test_the_judge_fetches_the_gold_patch_without_writing_it(tmp_path):
+def test_the_judge_fetches_the_gold_patch():
     gold = swebench.gold_patches([REQUESTS], _stub(_row()))
     assert gold[REQUESTS].endswith("+fix\n")
-    assert list(tmp_path.iterdir()) == []
     with pytest.raises(swebench.SweBenchError, match="no instance"):
         swebench.gold_patches(["nope__x-1"], _stub(_row()))
 
