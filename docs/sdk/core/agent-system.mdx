@@ -1028,6 +1028,32 @@ and then failed after an edit reads `ran and did not pass`. Only a rerun of the
 same command replaces an earlier run: if `pytest tests/` failed and
 `pytest tests/test_cart.py` then passed, the line still reports the failure.
 
+### Grounding checks
+
+Three more checks compare the answer with the turn's tool record
+(`gaia.agents.base.grounding`). They exist because small local models answer
+without looking and report work they never did:
+
+| Check | Fires when |
+|-------|------------|
+| look | The request names a file (that exists) or a lowercase snake_case symbol such as `parse_updated()`, and no successful read named it — a failed read, or the name appearing in a directory listing, does not count; the correction says where the file is on disk. A symbol only counts in a turn about the project (a named file exists or a tool ran), so "what does `max_tokens` do?" is not a lookup request. Or, in such a turn, the answer says something "does not exist" with no search, listing or read on record. |
+| content | The answer presents data — a table or an untagged/CSV/JSON code block — and its values (with any decimals, dates and percentages in the surrounding prose) appear in no tool output, tool argument, or earlier user or tool message. A value one arithmetic step from two grounded values the answer shows (a sum, a difference, an average of two, a ratio) counts as grounded; small whole numbers, versions and estimates are not judged. |
+| action | The answer says it searched, read, ran, tested, verified or documented something, and no tool of that kind ran. Negated clauses ("I did not run the tests"), advice ("once you have run it") and descriptions ("it is tested on every pull request") are not claims. |
+
+Each check asks for at most one correction per turn, before the answer is
+marked answered, so the lookup it asks for is not refused as off-request work.
+An answer that already admits the gap ("I haven't opened it", "these figures
+are unverified") is not corrected. If a gap survives its correction, or no step
+is left, the answer is kept as written and ends with one line naming what is
+unsupported:
+
+```text
+Unverified: no tool read `toybox/dates.py` this turn.
+```
+
+Unlike an unsupported test claim, the answer is not replaced: these checks read
+prose and can be wrong, so they flag rather than rewrite.
+
 ### Saved output and cleanup evidence
 
 File completion is checked separately from the test/lint/build footer. A save
