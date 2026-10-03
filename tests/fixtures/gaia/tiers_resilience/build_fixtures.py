@@ -46,11 +46,12 @@ def build(dest: Path) -> Path:
         )
     # Nesting a repo inside any enclosing one (the checkout, or a dotfiles
     # repo at $HOME) would make it uncommittable.
-    if _git(dest, "rev-parse", "--show-toplevel").returncode == 0:
+    toplevel = _git(dest, "rev-parse", "--show-toplevel")
+    if toplevel.returncode == 0:
         raise SystemExit(
-            f"{dest} is inside a git repository (the checkout, or an enclosing "
-            "one such as a dotfiles repo at $HOME). --dest must not be inside any "
-            "git repository."
+            f"{dest} is inside the git repository at {toplevel.stdout.strip()} "
+            "(the checkout, or an enclosing one such as a dotfiles repo at "
+            "$HOME). --dest must not be inside any git repository."
         )
 
     _checked_git(journal, "init", "--quiet")
