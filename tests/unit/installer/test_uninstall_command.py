@@ -917,35 +917,38 @@ class TestLemonadePythonResolution:
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"#!/opt/venvs/lemon/bin/python\n# rest\n")
 
-        monkeypatch.setattr("sys.platform", "linux")
+        # Keep the linux platform patch inside a context so it is undone before
+        # pyfakefs teardown. Otherwise reset_ids() calls os.getuid() on Windows.
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
-
-        assert uc._resolve_lemonade_python() == "/opt/venvs/lemon/bin/python"
+        with monkeypatch.context() as m:
+            m.setattr("sys.platform", "linux")
+            assert uc._resolve_lemonade_python() == "/opt/venvs/lemon/bin/python"
 
     def test_resolves_env_shebang_posix(self, fake_home, monkeypatch):
         lemonade = fake_home / "bin" / "lemonade-server"
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"#!/usr/bin/env python3\n# rest\n")
 
-        monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
-
-        assert uc._resolve_lemonade_python() == "python3"
+        with monkeypatch.context() as m:
+            m.setattr("sys.platform", "linux")
+            assert uc._resolve_lemonade_python() == "python3"
 
     def test_not_on_path_returns_none(self, monkeypatch):
-        monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setattr(uc.shutil, "which", lambda name: None)
-        assert uc._resolve_lemonade_python() is None
+        with monkeypatch.context() as m:
+            m.setattr("sys.platform", "linux")
+            assert uc._resolve_lemonade_python() is None
 
     def test_script_without_shebang_returns_none(self, fake_home, monkeypatch):
         lemonade = fake_home / "bin" / "lemonade-server"
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"# no shebang here\nprint('hi')\n")
 
-        monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
-
-        assert uc._resolve_lemonade_python() is None
+        with monkeypatch.context() as m:
+            m.setattr("sys.platform", "linux")
+            assert uc._resolve_lemonade_python() is None
 
 
 # ---------------------------------------------------------------------------
@@ -1489,8 +1492,10 @@ class TestInstallerLeftovers:
         exit_code = uc.run(_ns(purge=True, dry_run=True), printer=captured)
 
         assert exit_code == uc.EXIT_OK, captured.text
+        # Needles use "/"; Windows dry-run output prints backslashes.
+        output = captured.text.replace("\\", "/")
         for needle in (".gaia/bin", ".gaia/host", ".gaia/traces", ".zshrc"):
-            assert needle in captured.text, captured.text
+            assert needle in output, captured.text
         assert (installer_home / ".gaia" / "host" / "instance.json").exists()
         assert zshrc.read_text() == original
 
