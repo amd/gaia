@@ -115,4 +115,15 @@ describe('ChatView model badge', () => {
 
         expect(container.querySelector('.model-badge')?.textContent).toBe('qwen · 64K');
     });
+
+    it('names the model the backend resolves when it differs from the stored one', async () => {
+        useChatStore.setState({
+            sessions: [{ ...SESSION, effective_model: 'my-custom-model' }],
+            systemStatus: { model_loaded: 'my-custom-model', model_context_size: 32768 } as never,
+        });
+        const { container } = render(<ChatView sessionId={SESSION.id} />);
+        await screen.findByRole('heading', { name: 'Doc Agent' });
+
+        expect(container.querySelector('.model-badge')?.textContent).toBe('my-custom-model · 32K');
+    });
 });

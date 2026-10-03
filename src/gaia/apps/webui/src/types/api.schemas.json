@@ -2713,6 +2713,17 @@
         "title": "Document Ids",
         "type": "array"
       },
+      "effective_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Effective Model"
+      },
       "id": {
         "title": "Id",
         "type": "string"

@@ -742,6 +742,7 @@ export interface SessionResponse {
   created_at: string;
   device?: string;
   document_ids?: string[];
+  effective_model?: string | null;
   id: string;
   mail_provider?: string | null;
   message_count?: number;

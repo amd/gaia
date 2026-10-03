@@ -21,6 +21,7 @@ from .._chat_helpers import (
     evict_session_agent,
     get_agent_registry,
     resolve_device_model,
+    resolve_session_model,
 )
 from ..database import (
     SESSION_DEFAULT_MODEL,
@@ -55,6 +56,17 @@ def _reject_if_turn_running(http_request: Request, session_id: str) -> None:
             detail="A chat request is in progress for this session. "
             "Wait for it to finish (or stop it), then try again.",
         )
+
+
+def _session_response(db: ChatDatabase, session: dict) -> SessionResponse:
+    """Session response naming the model a turn would run, not just the stored one."""
+    model_id, _ = resolve_session_model(
+        session,
+        session.get("agent_type") or "chat",
+        db.get_setting("custom_model"),
+        get_agent_registry(),
+    )
+    return session_to_response(session, effective_model=model_id)
 
 
 def _is_gaia_config_error(exc: Exception) -> bool:
@@ -154,7 +166,7 @@ async def list_sessions(
     sessions = db.list_sessions(limit=limit, offset=offset)
     total = db.count_sessions()
     return SessionListResponse(
-        sessions=[session_to_response(s) for s in sessions],
+        sessions=[_session_response(db, s) for s in sessions],
         total=total,
     )
 
@@ -176,7 +188,7 @@ async def create_session(
             device=request.device,
             mail_provider=request.mail_provider,
         )
-        return session_to_response(session)
+        return _session_response(db, session)
     except Exception as e:
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
@@ -234,7 +246,7 @@ async def get_session(session_id: str, db: ChatDatabase = Depends(get_db)):
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    return session_to_response(session)
+    return _session_response(db, session)
 
 
 @router.put("/api/sessions/{session_id}", response_model=SessionResponse)
@@ -308,7 +320,7 @@ async def update_session(
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    return session_to_response(session)
+    return _session_response(db, session)
 
 
 @router.delete("/api/sessions/{session_id}")
@@ -347,7 +359,7 @@ async def toggle_session_privacy(
         raise HTTPException(status_code=404, detail="Session not found")
     current = bool(session.get("private", 0))
     updated = db.update_session(session_id, private=not current)
-    return session_to_response(updated)
+    return _session_response(db, updated)
 
 
 # ── Messages ─────────────────────────────────────────────────────────────────

@@ -991,6 +991,26 @@ class TestSessionEndpoints:
         resp = client.get("/api/sessions/nonexistent-uuid")
         assert resp.status_code == 404
 
+    def test_session_names_the_custom_model_that_answers(self, client):
+        sid = client.post("/api/sessions", json={"model": "Stored-GGUF"}).json()["id"]
+        client.put("/api/settings", json={"custom_model": "My-Override-GGUF"})
+
+        got = client.get(f"/api/sessions/{sid}").json()
+        assert got["model"] == "Stored-GGUF"
+        assert got["effective_model"] == "My-Override-GGUF"
+        listed = client.get("/api/sessions").json()["sessions"][0]
+        assert listed["effective_model"] == "My-Override-GGUF"
+
+    def test_session_names_the_agents_preferred_model(self, client):
+        sid = client.post("/api/sessions", json={"model": "Stored-GGUF"}).json()["id"]
+        registry = MagicMock()
+        registry.resolve_model.return_value = "Preferred-GGUF"
+        with patch(
+            "gaia.ui.routers.sessions.get_agent_registry", return_value=registry
+        ):
+            got = client.get(f"/api/sessions/{sid}").json()
+        assert got["effective_model"] == "Preferred-GGUF"
+
     def test_create_session_default_mail_provider_is_null(self, client):
         # #1596: no pick → null in the API response, so the UI selector shows
         # "no pick" (scan all) instead of a phantom google selection.

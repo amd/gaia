@@ -187,9 +187,10 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const pendingPrompt = useChatStore((s) => s.pendingPrompt);
 
     const session = sessions.find((s) => s.id === sessionId);
-    // The session's model is what answers; Lemonade's model_loaded is only the
-    // server's most recent one (another client's cloud model, say).
-    const badgeModel = session?.model || systemStatus?.model_loaded || null;
+    // The backend names the model a turn runs; Lemonade's model_loaded is only
+    // the server's most recent one (another client's cloud model, say).
+    const badgeModel =
+        session?.effective_model || session?.model || systemStatus?.model_loaded || null;
     const badgeCtx =
         badgeModel && systemStatus?.model_loaded?.toLowerCase() === badgeModel.toLowerCase()
             ? systemStatus.model_context_size
