@@ -14,6 +14,14 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- **Every tool is offered on every turn again, as in the Agent UI.** Per-turn
+  tool selection swapped about a dozen tools in and out at its cap, which broke
+  the local model's prompt cache (17s to first token on a one-line question,
+  0.4s without it) and left out the tool a question needed: a CSV question was
+  given web tools and fetched an unrelated page. `GAIA_DYNAMIC_TOOLS=1` turns
+  selection back on. The registered count is 95: `load_tools`, the selector's
+  escape hatch, registers only while selection is on.
+
 - **The code index is built on first search, not at task start.** In 32
   SWE-bench tasks the agent never searched it, yet every task embedded the whole
   repository in the background: about 2,000 local embedding requests per six
