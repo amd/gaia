@@ -1,0 +1,113 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Code search benchmark: does the code index find the code a real fix changed,
+# what does indexing cost, and does it fail loudly when its cache is damaged?
+# `gaia eval retrieval --component code`; docs/reference/eval.mdx explains it.
+#
+#   pr      - PRs touching the code index. Real embeddings, no LLM, ~30 min.
+#             Gated against tests/fixtures/eval_baselines/code-retrieval/pr.json.
+#   nightly - sampled SWE-bench Verified + SWE-rebench 2026. Gated against
+#             nightly.json.
+#   scale   - five repos from 1.7K to ~97K chunks; most of a day. Weekly,
+#             reported, not gated.
+#
+# The embedder is pinned to the CPU backend (lemonade_client.CPU_BACKEND_MODELS),
+# so throughput and timings depend on the CPU. The baselines were captured on a
+# Strix Halo, hence the strix-halo label; do not widen it.
+name: Code retrieval benchmark
+
+on:
+  schedule:
+    - cron: '23 6 * * *'   # nightly
+    - cron: '41 7 * * 0'   # scale, Sundays
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Suite (pr | nightly | scale)'
+        required: false
+        default: 'pr'
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - 'src/gaia/code_index/**'
+      - 'src/gaia/agents/tools/code_index_tools.py'
+      - 'src/gaia/eval/code_retrieval/**'
+      - 'tests/fixtures/eval_baselines/code-retrieval/**'
+      - '.github/workflows/eval_code_retrieval.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.schedule || github.event.inputs.suite || 'pr' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  retrieval:
+    name: Code retrieval (${{ github.event.schedule == '41 7 * * 0' && 'scale' || (github.event_name == 'schedule' && 'nightly' || (github.event.inputs.suite || 'pr')) }})
+    # Fork PRs never reach the self-hosted pool; drafts wait for ready_for_ci.
+    if: >-
+      (github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.draft == false ||
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))))
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    defaults:
+      run:
+        # Windows PowerShell 5.1 reads BOM-less scripts as ANSI: keep run bodies ASCII.
+        shell: powershell
+    timeout-minutes: ${{ github.event.schedule == '41 7 * * 0' && 720 || 300 }}
+    env:
+      SUITE: ${{ github.event.schedule == '41 7 * * 0' && 'scale' || (github.event_name == 'schedule' && 'nightly' || (github.event.inputs.suite || 'pr')) }}
+      OUT: eval-out/code-retrieval
+      GAIA_BENCH_WORK_ROOT: ${{ runner.temp }}/gaia-bench
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python Environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '-e .[dev,eval,rag]'
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Start Lemonade Server
+        timeout-minutes: 15
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Lemonade server not ready" }
+
+      - name: Run the benchmark
+        # The step owns its timeout so an overrun still reaches the upload below.
+        timeout-minutes: ${{ github.event.schedule == '41 7 * * 0' && 690 || 270 }}
+        run: |
+          $baseline = "tests/fixtures/eval_baselines/code-retrieval/$env:SUITE.json"
+          $gate = @()
+          if (($env:SUITE -ne 'scale') -and (Test-Path $baseline)) { $gate = @('--gate', $baseline) }
+          gaia eval retrieval --component code --suite $env:SUITE --out $env:OUT @gate
+          if ($LASTEXITCODE -ne 0) { throw "code retrieval benchmark failed (exit $LASTEXITCODE); see report.md in the artifact" }
+
+      - name: Summarize
+        if: ${{ !cancelled() }}
+        run: |
+          $report = Join-Path $env:OUT "report.md"
+          if (Test-Path $report) {
+            Get-Content $report -Encoding UTF8 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          } else {
+            "No report: the run did not finish. See the step log." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          }
+
+      - name: Upload results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: code-retrieval-${{ env.SUITE }}-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: warn

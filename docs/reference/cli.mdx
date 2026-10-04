@@ -1891,6 +1891,22 @@ Visualize llama.cpp performance logs:
 gaia perf-vis ./logs/llama-server.log
 ```
 
+Benchmark code search on real repositories (recall vs `git grep`, scale, robustness; no LLM):
+```bash
+gaia eval retrieval --component code --suite pr --gate tests/fixtures/eval_baselines/code-retrieval/pr.json
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--component` | required | `code`: the code index behind semantic code search |
+| `--suite` | `pr` | `pr` (~30 min, gates PRs), `nightly` (sampled), `scale` (big repos, hours) |
+| `--parts` | the suite's | Comma-separated subset of `quality,incremental,robustness,scale` |
+| `--gate BASELINE` | off | Compare with a baseline `results.json`; exit 1 on a regression |
+| `--tolerance` | `0.05` | Largest drop in a quality metric that is not a regression |
+| `--out` | `eval/results/retrieval-code-<suite>-<time>` | Where `results.json` and `report.md` go |
+| `--work-root` | `$GAIA_BENCH_WORK_ROOT` or `<tmp>/gaia-bench` | Repository cache and indexes |
+| `--keep-work` | off | Keep the indexes built during the run |
+
 [→ Full Evaluation Guide](/reference/eval)
 
 ---

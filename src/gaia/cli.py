@@ -2365,6 +2365,71 @@ the suite decides — no LLM judge. A TUI must already be running with
         help="Where to materialize the task projects (default: a temp directory)",
     )
 
+    # Retrieval quality/scale on real code, no LLM: gaia eval retrieval
+    retrieval_eval_parser = eval_subparsers.add_parser(
+        "retrieval",
+        help="Code search benchmark on real repositories: recall, scale, robustness",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  gaia eval retrieval --component code
+  gaia eval retrieval --component code --suite nightly
+  gaia eval retrieval --component code --suite pr \\
+      --gate tests/fixtures/eval_baselines/code-retrieval/pr.json
+  gaia eval retrieval --component code --suite scale
+
+Queries are real issues (SWE-bench Verified, SWE-rebench); the relevant files
+and functions are the ones the merged fix edits. Scored with real embeddings
+and no LLM, against a `git grep` baseline. Needs Lemonade and git.
+""",
+    )
+    retrieval_eval_parser.add_argument(
+        "--component",
+        required=True,
+        choices=["code"],
+        help="What to benchmark (code: the code index behind semantic code search)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--suite",
+        default="pr",
+        choices=["pr", "nightly", "scale"],
+        help="pr: fast, gates PRs; nightly: sampled, larger; scale: big repos (hours)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--parts",
+        default=None,
+        help="Comma-separated subset of quality,incremental,robustness,scale "
+        "(default: everything the suite defines)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/retrieval-<suite>-<timestamp>)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--work-root",
+        default=None,
+        help="Where repositories and indexes live (default: $GAIA_BENCH_WORK_ROOT "
+        "or <tmp>/gaia-bench, shared with `gaia eval tasks`)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--gate",
+        default=None,
+        metavar="BASELINE",
+        help="Compare to a baseline results.json; exit 1 on a regression",
+    )
+    retrieval_eval_parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=0.05,
+        help="Allowed absolute drop in a gated quality metric (default: 0.05)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--keep-work",
+        action="store_true",
+        help="Keep the indexes built during the run (default: deleted at the end)",
+    )
+
     # Outcome-scored tasks for the flagship GaiaAgent, gated in CI: gaia eval tasks
     tasks_eval_parser = eval_subparsers.add_parser(
         "tasks",
@@ -3582,6 +3647,44 @@ def _run_controls(args, judge_model):
         )
         sys.exit(1)
     print("✅ The judge separated honest, fabricated and empty work.")
+
+
+def _handle_eval_retrieval_code(args):
+    """gaia eval retrieval --component code — see gaia.eval.code_retrieval.runner."""
+    import tempfile
+
+    from gaia.eval.bench.config import ENV_WORK_ROOT
+    from gaia.eval.code_retrieval.runner import run
+    from gaia.eval.eval_lock import exclusive_eval
+
+    out_dir = Path(
+        args.out
+        or f"eval/results/retrieval-code-{args.suite}-{time.strftime('%Y%m%d-%H%M%S')}"
+    )
+    work_root = Path(
+        args.work_root
+        or os.environ.get(ENV_WORK_ROOT)
+        or Path(tempfile.gettempdir()) / "gaia-bench"
+    )
+    parts = [p.strip() for p in args.parts.split(",")] if args.parts else None
+    with exclusive_eval(f"gaia eval retrieval --component code --suite {args.suite}"):
+        result = run(
+            args.suite,
+            out_dir,
+            work_root,
+            parts=parts,
+            baseline=Path(args.gate) if args.gate else None,
+            max_drop=args.tolerance,
+            keep_index=args.keep_work,
+        )
+    print(f"[OUTPUT] {(out_dir / 'report.md').resolve()}")
+    regressions = (result.get("comparison") or {}).get("regressions") or []
+    for line in regressions:
+        print(f"[REGRESSION] {line}")
+    if args.gate:
+        print("[GATE] " + ("FAILED" if regressions else "passed"))
+        if regressions:
+            sys.exit(1)
 
 
 def _handle_eval_tasks(args):
@@ -4948,6 +5051,11 @@ Let me know your answer!
                 f"{card['dishonest']} false success claim(s)"
             )
             print(f"[OUTPUT] {report_path.resolve()}")
+            return
+
+        # Code retrieval benchmark: gaia eval retrieval --component code
+        if getattr(args, "eval_command", None) == "retrieval":
+            _handle_eval_retrieval_code(args)
             return
 
         # Flagship agent tasks: gaia eval tasks run|judge|gate
