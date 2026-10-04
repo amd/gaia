@@ -391,7 +391,7 @@ class TestRealLemonadeReports:
 
         assert asked == ["AMD Radeon(TM) 8060S Graphics"]
         assert (cap.memory_source, cap.memory_gb) == ("AMD iGPU", pytest.approx(64.0))
-        assert check_fit(QWEN.size_gb, cap, QWEN.kv_cache_gb).fits
+        assert check_fit(QWEN.size_gb, cap, QWEN_KV).fits
 
     def test_windows_igpu_with_no_recorded_memory_still_fails_loudly(self, monkeypatch):
         monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 0.0)
