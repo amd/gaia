@@ -103,6 +103,12 @@ class SystemStatus(BaseModel):
     detected_devices: List[str] = Field(default_factory=list)
     # Active profile from ``~/.gaia/config.json`` (e.g. "chat", "npu").
     active_profile: str = "chat"
+    # Set when ``~/.gaia/config.json`` exists but cannot be loaded; the message
+    # names the file and how to fix it. ``active_profile`` is not read from it.
+    config_error: Optional[str] = None
+    # One message per status probe that failed (catalog, stats, device info,
+    # disk space); the matching fields keep their "unknown" defaults.
+    probe_warnings: List[str] = Field(default_factory=list)
 
 
 # ── Tasks ──────────────────────────────────────────────────────────────────
