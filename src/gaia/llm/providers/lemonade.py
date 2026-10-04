@@ -18,6 +18,7 @@ from ..lemonade_client import (
     active_profile_ctx_size,
     is_tool_calling_model,
     local_sampling_defaults,
+    requested_thinking,
     resolve_ctx_size,
 )
 from ..lemonade_launcher import describe_client_hint
@@ -598,9 +599,9 @@ class LemonadeProvider(LLMClient):
                 # One slot means one cache anyway; pinning would hang the call.
                 kwargs.pop("id_slot")
             kwargs.setdefault("id_slot", CONVERSATION_SLOT)
-            template_kwargs = kwargs.get("chat_template_kwargs") or {}
             defaults = local_sampling_defaults(
-                effective_model, template_kwargs.get("enable_thinking")
+                effective_model,
+                requested_thinking(effective_model, kwargs.get("chat_template_kwargs")),
             )
             for key, value in defaults.items():
                 kwargs.setdefault(key, value)

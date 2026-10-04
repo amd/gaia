@@ -49,8 +49,21 @@ _background_tasks: set[asyncio.Task] = set()
 
 router = APIRouter(tags=["system"])
 
-# Default model required for GAIA Chat agent
-_DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
+
+def _default_model_name() -> str:
+    """The model this machine runs: config ``default_model`` (which ``gaia init``
+    sets from the hardware), else Gemma — what agents resolve to as well."""
+    from gaia.llm.lemonade_client import resolve_default_chat_model
+
+    return resolve_default_chat_model()
+
+
+def _norm_model_id(model_id: str) -> str:
+    """Lemonade lists a ``user.X`` model as ``X``; compare without the prefix."""
+    lowered = (model_id or "").lower()
+    return lowered[len("user.") :] if lowered.startswith("user.") else lowered
+
+
 # Minimum context window (tokens) needed for reliable agent operation.
 # Sourced from ``gaia.llm.lemonade_client`` to keep the GAIA-wide ctx
 # requirement in a single module (see that module's ``DEFAULT_CONTEXT_SIZE``).
@@ -472,6 +485,22 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     except Exception as exc:  # noqa: BLE001
         logger.warning("system status: could not resolve the start hint: %s", exc)
 
+    # Resolved outside the probe below: its catch-all would report a corrupt
+    # config as "Lemonade not running".
+    from gaia.config import GaiaConfigError
+
+    default_model: Optional[str]
+    try:
+        default_model = _default_model_name()
+    except GaiaConfigError as exc:
+        # The model is unknown until the config is fixed; the UI shows config_error.
+        logger.warning("system status: %s", exc)
+        status.config_error = str(exc)
+        default_model = None
+    # Always named, not only once a model is loaded: the UI's load and download
+    # actions target this. None only when an unreadable config hides it.
+    status.default_model_name = db.get_setting("custom_model") or default_model
+
     # Check Lemonade Server
     # Use a generous timeout (10s) because when the LLM is handling many
     # parallel requests it may take a while to respond to the health check.
@@ -568,32 +597,33 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 # matches the baseline default *or* any registered agent's
                 # preferred model list. This stops Gaia Lite's 4B (or any other
                 # non-default agent model) from tripping a "Wrong model" banner.
-                if status.model_loaded:
+                # With the expected model unknown (config_error) neither check runs.
+                if status.model_loaded and status.default_model_name:
                     custom_model = db.get_setting("custom_model")
-                    loaded_lower = status.model_loaded.lower()
+                    loaded_lower = _norm_model_id(status.model_loaded)
                     if custom_model:
-                        status.expected_model_loaded = (
-                            loaded_lower == custom_model.lower()
+                        status.expected_model_loaded = loaded_lower == _norm_model_id(
+                            custom_model
                         )
                     else:
-                        acceptable = {_DEFAULT_MODEL_NAME.lower()}
+                        acceptable = {_norm_model_id(default_model)}
                         registry = getattr(request.app.state, "agent_registry", None)
                         if registry is not None:
                             for reg in registry.list():
                                 for m in reg.models:
                                     if m:
-                                        acceptable.add(m.lower())
+                                        acceptable.add(_norm_model_id(m))
                         status.expected_model_loaded = loaded_lower in acceptable
                     # Surface the actual expected name in the response so the
                     # frontend can name it precisely in the warning banner.
-                    status.default_model_name = custom_model or _DEFAULT_MODEL_NAME
+                    status.default_model_name = custom_model or default_model
 
                 # When no LLM is loaded, check if the expected model is downloaded.
-                # Respects custom_model override; falls back to the built-in default.
+                # Respects the custom_model override.
                 # Uses show_all=true to see models that are in the catalog but not
                 # yet pulled to disk.
-                if not status.model_loaded:
-                    _target = db.get_setting("custom_model") or _DEFAULT_MODEL_NAME
+                if not status.model_loaded and status.default_model_name:
+                    _target = status.default_model_name
                     try:
                         catalog_resp = await client.get(
                             f"{base_url}/models",
@@ -610,9 +640,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                                 f"{catalog_resp.status_code}.",
                             )
                         else:
-                            default_lower = _target.lower()
+                            default_lower = _norm_model_id(_target)
                             for m in catalog_resp.json().get("data", []):
-                                if m.get("id", "").lower() == default_lower:
+                                if _norm_model_id(m.get("id", "")) == default_lower:
                                     status.model_downloaded = m.get("downloaded", False)
                                     # Capture the catalog size so the
                                     # "not downloaded" banner can show an
@@ -732,7 +762,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         status.lemonade_error = "Lemonade health query failed"
 
     # Active profile from persistent config (#1220)
-    from gaia.config import GaiaConfig, GaiaConfigError
+    # GaiaConfigError already imported above, in this same function.
+    from gaia.config import GaiaConfig
 
     try:
         status.active_profile = GaiaConfig.load().profile
@@ -804,7 +835,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     # Surfaced for whichever model the UI cares about (custom override
     # wins, else the registered default). Looking up by model name keeps
     # us decoupled from concurrent pulls of unrelated models.
-    target_model = db.get_setting("custom_model") or _DEFAULT_MODEL_NAME
+    target_model = db.get_setting("custom_model") or default_model
     progress_dict = _get_download_progress(target_model)
     if progress_dict:
         status.download_progress = DownloadProgress(**progress_dict)
