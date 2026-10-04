@@ -790,6 +790,103 @@ MODELS = {
     ),
 }
 
+# Sampling for a local model with no published profile below: low temperature
+# plus penalties stop small models looping on tables and paragraphs.
+# repeat_penalty / repeat_last_n are llama.cpp-native.
+LOCAL_SAMPLING_DEFAULTS: Dict[str, Any] = {
+    "temperature": 0.1,
+    "frequency_penalty": 0.3,
+    "presence_penalty": 0.1,
+    "repeat_penalty": 1.1,
+    "repeat_last_n": 256,
+}
+
+
+@dataclass(frozen=True)
+class CardSampling:
+    """Sampling a model's card publishes, per thinking mode.
+
+    A mode the model lacks is ``None``. The profile is picked from the request's
+    own ``enable_thinking`` switch, so sampling always matches the mode that runs.
+    """
+
+    thinks_by_default: bool
+    thinking: Optional[Dict[str, Any]] = None
+    non_thinking: Optional[Dict[str, Any]] = None
+
+    def for_mode(self, enable_thinking: Optional[bool]) -> Dict[str, Any]:
+        thinking = (
+            self.thinks_by_default if enable_thinking is None else enable_thinking
+        )
+        chosen = self.thinking if thinking else self.non_thinking
+        # A single-mode model's template ignores the switch, so it keeps its mode.
+        return dict(chosen or self.thinking or self.non_thinking)
+
+
+# https://huggingface.co/Qwen/Qwen3.6-35B-A3B thinks unless the request sends
+# chat_template_kwargs {"enable_thinking": false}. Thinking uses the card's
+# "coding / precise" profile: GAIA's work is tool calls and file edits.
+# repetition_penalty is llama.cpp's repeat_penalty.
+_QWEN3_6_35B_A3B = CardSampling(
+    thinks_by_default=True,
+    thinking={
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 0.0,
+        "repeat_penalty": 1.0,
+    },
+    non_thinking={
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.5,
+        "repeat_penalty": 1.0,
+    },
+)
+
+# A model's own published sampling, keyed by Lemonade model id. A profile here
+# REPLACES ``LOCAL_SAMPLING_DEFAULTS``: penalties the card does not name are not
+# sent. Kept apart from ``MODELS`` because an entry there also pins ctx size.
+# Every value must trace to the model's card. ``min_p`` is always sent because
+# llama.cpp's own default is not 0.
+MODEL_SAMPLING_PROFILES: Dict[str, CardSampling] = {
+    # https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507 "Best Practices":
+    # Temperature=0.7, TopP=0.8, TopK=20, MinP=0; presence_penalty 0-2 against
+    # endless repetition, higher values costing quality. 1.0 is what Unsloth's
+    # guide runs this GGUF with; mid-range, since edits copy text verbatim.
+    "Qwen3-30B-A3B-Instruct-2507-GGUF": CardSampling(
+        thinks_by_default=False,
+        non_thinking={
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 1.0,
+        },
+    ),
+    # The MTP build is the same weights plus a speculative-decoding head.
+    "Qwen3.6-35B-A3B-GGUF": _QWEN3_6_35B_A3B,
+    "Qwen3.6-35B-A3B-MTP-GGUF": _QWEN3_6_35B_A3B,
+}
+
+
+def local_sampling_defaults(
+    model_id: Optional[str], enable_thinking: Optional[bool] = None
+) -> Dict[str, Any]:
+    """Default sampling for a local *model_id*: its card's, else GAIA's generic.
+
+    *enable_thinking* is the request's ``chat_template_kwargs`` switch; ``None``
+    means the model runs in its default mode.
+    """
+    for registered, card in MODEL_SAMPLING_PROFILES.items():
+        if _model_ids_match(registered, model_id):
+            return card.for_mode(enable_thinking)
+    return dict(LOCAL_SAMPLING_DEFAULTS)
+
+
 # Define agent profiles with their model requirements
 AGENT_PROFILES = {
     "chat": AgentProfile(
