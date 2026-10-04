@@ -2991,6 +2991,17 @@
         "title": "Active Profile",
         "type": "string"
       },
+      "config_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Config Error"
+      },
       "context_size_sufficient": {
         "default": true,
         "title": "Context Size Sufficient",
@@ -3100,7 +3111,6 @@
         "type": "boolean"
       },
       "lemonade_url": {
-        "default": "http://localhost:13305",
         "title": "Lemonade Url",
         "type": "string"
       },
@@ -3194,6 +3204,13 @@
           }
         ],
         "title": "Model Size Gb"
+      },
+      "probe_warnings": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Probe Warnings",
+        "type": "array"
       },
       "processor_name": {
         "anyOf": [

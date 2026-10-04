@@ -106,24 +106,17 @@ You should see `(.venv)` in your terminal prompt when activated.
 
 ### Step 5: Install Dependencies
 
-<Warning>
-  **Linux/WSL users:** GAIA's base dependencies (`transformers`, `accelerate`) require PyTorch. Always use `--extra-index-url` to install CPU-only PyTorch and avoid large CUDA packages (the PyTorch download alone drops from ~2 GB to ~200 MB).
-</Warning>
-
 ```bash
-# Linux/WSL - CPU-only PyTorch (required for all installs)
-uv pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cpu
-```
-
-**Windows:**
-```bash
-# Windows - default PyTorch
 uv pip install -e ".[dev]"
 ```
 
+<Warning>
+  **Linux/WSL users:** the base install and `[dev]` have no PyTorch, but the `[ui]` extra does. Whenever you include it, pass `--extra-index-url` to get CPU-only PyTorch instead of the CUDA build.
+</Warning>
+
 **With optional extras:**
 ```bash
-# Linux/WSL - CPU-only PyTorch (required, extras or not)
+# Linux/WSL - CPU-only PyTorch for [ui]
 uv pip install -e ".[dev,talk,rag,ui]" --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Windows
@@ -131,9 +124,8 @@ uv pip install -e ".[dev,talk,rag,ui]"
 ```
 
 <Note>
-On Linux the flag is required for **every** `uv pip install`, with or without
-extras — `accelerate` is an unconditional base dependency, so PyTorch is always
-resolved. There is no config block that removes the need for it: uv's
+On Linux the flag is required for every `uv pip install` that includes `[ui]`,
+which resolves PyTorch. There is no config block that removes the need for it: uv's
 `[tool.uv.sources]` and `[[tool.uv.index]]` apply only to the project interface
 (`uv sync`, `uv lock`, `uv add`), never to `uv pip install`, and `[tool.uv.pip]`
 was rejected for the same reason — see the note in `pyproject.toml`. Omit the
@@ -149,10 +141,9 @@ build, pulling ~18 `nvidia-*` / `cuda-*` packages — a 4.7 GB venv instead of
 | `dev` | Test + lint tooling (pytest, black, isort, mypy, pylint, …) |
 | `ui` | Agent UI backend (FastAPI + uvicorn + SSE); **required for `gaia --ui`** |
 | `api` | OpenAI-compatible API server (`gaia api start`) |
-| `rag` | RAG document Q&A (sentence-transformers, FAISS, pdfplumber, …) |
-| `talk` | Voice ASR/TTS (whisper, sounddevice, kokoro-onnx) |
+| `rag` | RAG document Q&A (FAISS, PyMuPDF, pypdf, Office formats; embeddings come from Lemonade) |
+| `talk` | Microphone and speaker I/O for `gaia talk` (sounddevice); Whisper and Kokoro run in Lemonade |
 | `mcp` | MCP client/server bridge (`gaia mcp start`) |
-| `audio` | Lower-level audio tooling shared by talk |
 | `image` | Terminal image rendering (`term-image`) |
 | `eval` | Evaluation framework (ground-truth generation, batch experiments) |
 | `youtube` | `gaia youtube --download-transcript` |
@@ -293,7 +284,7 @@ python util/lint.py --black       # Code formatting
 python util/lint.py --isort       # Import sorting
 python util/lint.py --pylint      # pylint
 python util/lint.py --flake8      # flake8
-python util/lint.py --mypy        # type checking
+python util/lint.py --mypy        # type checking (blocking only on already-clean modules)
 python util/lint.py --bandit      # security scan
 python util/lint.py --imports     # custom import-cycle check
 python util/lint.py --workflow-triggers # reject on.pull_request.branches filters
@@ -309,6 +300,15 @@ means "only when merging into main" — every PR stacked on a feature branch ski
 workflow, with nothing on its checks page to say so
 ([#2767](https://github.com/amd/gaia/issues/2767)). Scope a workflow with `paths:`
 instead.
+</Note>
+
+<Note>
+`--mypy` runs twice. The full `src/gaia` run is advisory. A second run over
+`MYPY_CLEAN_MODULES` in `util/lint.py` — modules with zero errors — blocks, so a
+clean module can't regress. Add a module to that list once you bring it to zero; fix
+a new error rather than removing a module to get CI green. The mypy version pin in
+`TOOL_VERSIONS` only applies when `uvx` is on your PATH; without it, `lint.py` runs
+whatever `mypy` you have installed, which may disagree with CI.
 </Note>
 
 <Note>

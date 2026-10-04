@@ -14,6 +14,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from gaia.env import child_env
+
 OFFICIAL_REMOTE = "https://github.com/amd/gaia.git"
 
 
@@ -81,7 +83,7 @@ class Repository:
             encoding="utf-8",
             stdin=subprocess.DEVNULL,
             timeout=self.timeout,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            env=child_env({"GIT_TERMINAL_PROMPT": "0"}),
             check=False,
         )
         if result.returncode:

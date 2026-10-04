@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import sqlite3
 import threading
 import uuid
 from datetime import datetime
@@ -267,8 +268,12 @@ def close_store() -> None:
         if _store is not None:
             try:
                 _store.close()
-            except Exception:
-                pass
+            except sqlite3.Error as exc:
+                logger.warning(
+                    "[memory router] closing the memory store failed; its WAL "
+                    "may not be checkpointed until the next open: %s",
+                    exc,
+                )
             finally:
                 _store = None
 
@@ -810,6 +815,7 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
         vectors: List[np.ndarray] = []
         item_map: Dict[str, Any] = {}
         expected_dim: Optional[int] = None
+        undecodable = 0
 
         for item in items:
             try:
@@ -824,8 +830,18 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
                 ids.append(item["id"])
                 vectors.append(vec)
                 item_map[item["id"]] = item
-            except Exception:
-                continue
+            except (ValueError, TypeError, KeyError) as exc:
+                undecodable += 1
+                logger.debug(
+                    "[memory router] skipping item %s: %s", item.get("id"), exc
+                )
+
+        if undecodable:
+            logger.warning(
+                "[memory router] reconcile skipped %d item(s) with an unreadable "
+                "embedding; POST /api/memory/rebuild-embeddings to include them",
+                undecodable,
+            )
 
         if len(vectors) < 2 or expected_dim is None:
             return result

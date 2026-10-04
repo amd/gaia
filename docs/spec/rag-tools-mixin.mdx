@@ -88,7 +88,9 @@ analysis.
 2. **File-Specific Query (query_specific_file)**
    - Fast per-file retrieval
    - Same hybrid search strategy as query_documents
-   - File disambiguation support
+   - File resolution prefers an exact path, then an exact filename / trailing path, then a substring;
+     if several indexed files still match it returns an `Ambiguous filename` error with a `candidates`
+     list instead of guessing (`summarize_document` and `dump_document` resolve files the same way)
 
 3. **Text Search (search_indexed_chunks)**
    - Exact text pattern matching in RAG chunks

@@ -7,7 +7,6 @@
 name: Connectors Demo Agent Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:

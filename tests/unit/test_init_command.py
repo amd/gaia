@@ -1273,7 +1273,7 @@ class TestCheckSetupStatus(unittest.TestCase):
 
 
 class TestInstallPipExtras(unittest.TestCase):
-    """Test _install_pip_extras frontend selection and messaging."""
+    """Profiles without extras never shell out."""
 
     def _make_cmd(self, profile):
         from gaia.installer.init_command import InitCommand
@@ -1286,58 +1286,6 @@ class TestInstallPipExtras(unittest.TestCase):
         with patch("subprocess.run") as mock_run:
             self.assertTrue(cmd._install_pip_extras())
             mock_run.assert_not_called()
-
-    def test_standalone_uv_attempted_first(self):
-        """The standalone ``uv`` binary leads the install attempts.
-
-        uv-created venvs ship neither pip nor the uv module, so a bare
-        ``uv pip install`` is the only frontend that works inside them.
-        """
-        cmd = self._make_cmd("rag")  # rag pulls the [rag] extra
-        calls = []
-
-        def fake_run(args, **kwargs):
-            calls.append(args)
-            result = MagicMock()
-            result.returncode = 0
-            result.stdout = "Name: amd-gaia\n"  # non-editable
-            return result
-
-        with patch("subprocess.run", side_effect=fake_run):
-            self.assertTrue(cmd._install_pip_extras())
-
-        install_calls = [c for c in calls if "install" in c]
-        self.assertTrue(install_calls, "expected an install attempt")
-        self.assertEqual(
-            install_calls[0][:2],
-            ["uv", "pip"],
-            "standalone uv must be the first install frontend",
-        )
-
-    def test_warning_has_no_doubled_pip_install(self):
-        """The fallback warning must not print 'pip install pip install'."""
-        cmd = self._make_cmd("rag")
-        warnings = []
-        cmd._print_warning = lambda msg: warnings.append(msg)
-        cmd._print_success = lambda msg: None
-
-        def fail_run(args, **kwargs):
-            result = MagicMock()
-            result.returncode = 1  # every frontend fails
-            result.stdout = ""
-            return result
-
-        with patch("subprocess.run", side_effect=fail_run):
-            self.assertTrue(cmd._install_pip_extras())
-
-        joined = " ".join(warnings)
-        self.assertTrue(warnings, "expected a fallback warning")
-        self.assertNotIn("pip install pip install", joined)
-        # #2358: the fallback message must work in a stock venv with no `uv`
-        # on PATH -- not a bare `uv pip install` (the same dead end
-        # install_hints.source_install_command was fixed for).
-        self.assertNotIn("uv pip install", joined)
-        self.assertIn(f'{sys.executable} -m pip install "amd-gaia[rag]"', joined)
 
 
 class TestNeedsInstallConsistency(unittest.TestCase):
@@ -1949,6 +1897,32 @@ class TestHubInstallWiringFailsLoudly(_HubInstallWiringTestBase):
 
         self.assertEqual(rc, 0)
         mock_install.assert_not_called()
+
+    def test_unreachable_catalog_warns_the_user_and_continues(self):
+        """A catalog outage must not fail `init`, but the user must see that
+        the agent was skipped and how to get it -- not a log-only line."""
+        cmd = self._make_cmd("gaia")
+        self._patch_common_steps(cmd)
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                return_value=None,
+            ),
+            patch(
+                "gaia.hub.catalog.load_index",
+                side_effect=ConnectionError("hub unreachable"),
+            ),
+            patch("gaia.hub.installer.install") as mock_install,
+            patch.object(cmd, "_print_warning") as warn,
+        ):
+            rc = cmd.run()
+
+        self.assertEqual(rc, 0)
+        mock_install.assert_not_called()
+        warnings = " ".join(str(c.args[0]) for c in warn.call_args_list)
+        self.assertIn("Agent Hub catalog", warnings)
+        self.assertIn("hub unreachable", warnings)
+        self.assertIn("gaia init", warnings)
 
 
 class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):

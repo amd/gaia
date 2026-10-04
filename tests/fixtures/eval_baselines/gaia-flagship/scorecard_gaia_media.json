@@ -1,0 +1,156 @@
+{
+  "run_id": "eval-20261003-101551",
+  "timestamp": "2026-10-03T10:17:13.711882+00:00",
+  "config": {
+    "backend_url": "http://127.0.0.1:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia"
+  },
+  "summary": {
+    "total_scenarios": 2,
+    "passed": 1,
+    "failed": 0,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 1,
+    "errored": 0,
+    "pass_rate": 0.5,
+    "judged_pass_rate": 1.0,
+    "avg_score": 9.9,
+    "by_category": {
+      "gaia_media": {
+        "passed": 1,
+        "failed": 0,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 1,
+        "errored": 0,
+        "avg_score": 9.9
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "media_describe_image_text",
+      "session_id": "2315f2c9-db04-4444-94ee-65cfa309c79f",
+      "status": "PASS",
+      "overall_score": 9.9,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "what does the sign in ~/gaia-eval/media/bakery_sign.png say?",
+          "agent_response": "That bakery sign is advertising **Halvorsen Bakery**. Today's special is a Cardamom Plum Tart for $6.75, and they are closed on Mondays.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "answer_question_about_image"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly invoked answer_question_about_image on the staged .png and read back all three planted facts — shop name, special + price, and closed day — with exact accuracy. Minor personality deduction for the CI hook artifact ('Verification: unverified…') appended to the response.",
+          "performance": {
+            "tokens_per_second": 38.5,
+            "time_to_first_token": 2.498,
+            "input_tokens": 442,
+            "output_tokens": 158,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "how much is the special, and what day are they closed?",
+          "agent_response": "The Cardamom Plum Tart special is **$6.75**, and they are closed on **Mondays**.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly pulled $6.75 and Mondays from conversation context without redundantly re-calling the image tool. Both answers exactly match expected_answer. Same minor personality deduction for the CI hook artifact appended to the response.",
+          "performance": {
+            "tokens_per_second": 38.4,
+            "time_to_first_token": 2.465,
+            "input_tokens": 294,
+            "output_tokens": 183,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.08
+      },
+      "elapsed_s": 82.48358392715454,
+      "category": "gaia_media",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 38.5,
+        "min_tokens_per_second": 38.4,
+        "max_tokens_per_second": 38.5,
+        "avg_time_to_first_token": 2.482,
+        "min_time_to_first_token": 2.465,
+        "max_time_to_first_token": 2.498,
+        "total_input_tokens": 736,
+        "total_output_tokens": 341,
+        "turns_measured": 2,
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "media_transcribe_planted_fact",
+      "category": "gaia_media",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": null,
+      "status": "SKIPPED_NO_MODEL",
+      "skip_reason": "Whisper-Large-v3-Turbo is not downloaded on the Lemonade server (tag requires_asr); ffmpeg is not on PATH (tag requires_asr)",
+      "overall_score": null,
+      "turns": [],
+      "elapsed_s": 0.0,
+      "cost_estimate": {
+        "turns": 0,
+        "estimated_usd": 0.0
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.08
+  },
+  "performance": {
+    "avg_tokens_per_second": 38.5,
+    "avg_time_to_first_token": 2.482,
+    "total_input_tokens": 736,
+    "total_output_tokens": 341,
+    "scenarios_with_data": 1,
+    "flags": []
+  }
+}
