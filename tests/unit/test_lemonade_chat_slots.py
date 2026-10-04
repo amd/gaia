@@ -55,6 +55,18 @@ def test_a_llamacpp_chat_load_gets_two_slots_and_no_ram_cache(client):
         assert flag in sent["llamacpp_args"]
 
 
+def test_each_slot_keeps_the_whole_memory_sized_window(client):
+    # Without --kv-unified llama.cpp splits n_ctx across slots (n_ctx_seq =
+    # n_ctx / n_parallel), silently halving the window the fit math sized.
+    # Unified, both slots share one n_ctx-token pool: each sees the full window
+    # and the KV memory is n_ctx tokens, which is what context_for_capacity charges.
+    sent = _sent_load(client, "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=262144)
+    flags = sent["llamacpp_args"].split()
+    assert int(flags[flags.index("--parallel") + 1]) > 1
+    assert "--kv-unified" in flags
+    assert sent["ctx_size"] == 262144
+
+
 @pytest.mark.parametrize(
     "model, kwargs",
     [
