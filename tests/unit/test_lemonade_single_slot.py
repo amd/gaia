@@ -1,10 +1,12 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""A llama.cpp chat model loads with one slot, whatever Lemonade's default.
+"""A llama.cpp chat model loads with GAIA's slot count, whatever Lemonade's default.
 
-Lemonade before v11.8.0 passed no ``--parallel``, so llama-server picked several
-slots over one unified KV pool, each promised the whole window, and concurrent
-requests failed with "Context size has been exceeded" (lemonade-sdk/lemonade#3276).
+Lemonade before v11.8.0 passed no ``--parallel``, so llama-server picked its own
+slot count over one unified KV pool, each slot promised the whole window, and
+concurrent requests failed with "Context size has been exceeded"
+(lemonade-sdk/lemonade#3276). GAIA names the slots itself and runs one request
+at a time per local model (``test_lemonade_chat_slots.py``).
 """
 
 from unittest.mock import patch
@@ -40,9 +42,10 @@ def _sent_load(client, model, **kwargs):
     return post.call_args.args[1]
 
 
-def test_a_llamacpp_chat_load_pins_one_slot(client):
+def test_a_llamacpp_chat_load_names_its_slot_count(client):
     sent = _sent_load(client, "Qwen3.6-35B-A3B-GGUF", ctx_size=262144)
-    assert sent["llamacpp_args"] == CHAT_LLAMACPP_ARGS == "--parallel 1"
+    assert sent["llamacpp_args"] == CHAT_LLAMACPP_ARGS
+    assert "--parallel 2" in sent["llamacpp_args"]
     assert sent["ctx_size"] == 262144
 
 
@@ -62,7 +65,7 @@ def test_other_loads_keep_their_flags(client, model, kwargs):
     assert sent.get("llamacpp_args") == kwargs.get("llamacpp_args")
 
 
-def test_an_unreadable_catalog_loads_without_the_pin(client, caplog):
+def test_an_unreadable_catalog_loads_without_the_chat_flags(client, caplog):
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
         rsps.add(responses.GET, f"{BASE}/models", status=500, body="boom")
         with patch.object(

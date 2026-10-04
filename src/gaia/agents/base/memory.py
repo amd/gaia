@@ -74,6 +74,7 @@ from gaia.agents.base.verification import check_was_executed
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
+    SIDE_SLOT,
     backend_crash_remedy,
 )
 
@@ -1759,6 +1760,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                     outcome["response"] = self.chat.send_messages(
                         messages=[{"role": "user", "content": prompt}],
                         system_prompt="You are a memory extraction engine. Return valid JSON only.",
+                        # Off the conversation's slot, so its cache survives.
+                        id_slot=SIDE_SLOT,
                         temperature=0.1,
                         max_tokens=EXTRACTION_MAX_TOKENS,
                         **self._side_request_kwargs(),
