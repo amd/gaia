@@ -356,8 +356,14 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                         all_models2 = resp2.json().get("all_models_loaded", [])
                         if any(m.get("type") in ("llm", "vlm") for m in all_models2):
                             return
-                except Exception:
-                    pass  # proceed with load attempt
+                except (httpx.HTTPError, ValueError) as exc:
+                    # The load below reports its own failure if Lemonade is down.
+                    logger.warning(
+                        "Model preload: re-check of loaded models failed (%s); "
+                        "loading %s anyway",
+                        exc,
+                        model_id,
+                    )
 
                 if cloud_model_provider(model_id, None):
                     return  # cloud models are never loaded locally

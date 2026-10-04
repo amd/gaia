@@ -5409,8 +5409,10 @@ class LemonadeClient:
 
         Checks in this order:
         1. Try health check on configured URL (LEMONADE_BASE_URL or default)
-        2. If localhost and health check fails, check if binary is in PATH (for auto-start)
-        3. If remote server and health check fails, return False (can't auto-start)
+        2. Unless LEMONADE_BASE_URL names a server, GAIA's own Lemonade
+           (installed by ``gaia init``) counts as installed
+        3. If localhost and health check fails, check if binary is in PATH (for auto-start)
+        4. If remote server and health check fails, return False (can't auto-start)
 
         Returns:
             True if server is available or can be started, False otherwise
@@ -5424,6 +5426,12 @@ class LemonadeClient:
             get_logger(__name__).debug(
                 "Lemonade health check failed before installation check: %s", exc
             )
+
+        if not configured_lemonade_url():
+            from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+            if EmbeddedLemonade().is_installed():
+                return True
 
         # Health check failed - determine if we can auto-start
         is_localhost = self.host in ("localhost", "127.0.0.1", "::1")
@@ -5578,16 +5586,27 @@ class LemonadeClient:
 
         # Check if lemonade-server is installed
         if not self._check_lemonade_installed():
+            status = LemonadeStatus(url=f"http://{self.host}:{self.port}")
+            status.running = False
+            configured = configured_lemonade_url()
+            if configured:
+                status.error = f"Lemonade Server at {configured} not reachable"
+                if not quiet:
+                    print(f"{_emoji('❌', '[ERROR]')} {status.error}")
+                    print(
+                        "   Start Lemonade on that host, or unset "
+                        "LEMONADE_BASE_URL to use GAIA's own server."
+                    )
+                    print("")
+                return status
             if not quiet:
                 print(f"{_emoji('❌', '[ERROR]')} Lemonade Server is not installed")
                 print("")
-                print(f"{_emoji('📥', '[DOWNLOAD]')} Download and install from:")
-                print("   https://lemonade-server.ai")
+                print(
+                    f"{_emoji('📥', '[DOWNLOAD]')} Install GAIA's Lemonade Server "
+                    "with: gaia init"
+                )
                 print("")
-                print("GAIA will automatically start Lemonade Server once installed.")
-                print("")
-            status = LemonadeStatus(url=f"http://{self.host}:{self.port}")
-            status.running = False
             status.error = "Lemonade Server not installed"
             return status
 

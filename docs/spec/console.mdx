@@ -197,11 +197,6 @@ class OutputHandler(ABC):
         """Print command executing message."""
         ...
 
-    @abstractmethod
-    def print_agent_selected(self, agent_name: str, language: str, project_type: str):
-        """Print agent selected message."""
-        ...
-
     # === Optional Methods (with default no-op implementations) ===
 
     def print_prompt(self, prompt: str, title: str = "Prompt"):
