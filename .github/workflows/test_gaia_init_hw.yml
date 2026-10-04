@@ -51,7 +51,12 @@ permissions:
 jobs:
   first-run:
     name: gaia init --profile ${{ matrix.profile }} (cold)
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    # Same-repo PRs only: fork code must never run on the lab pool.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.draft == false ||
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     timeout-minutes: 60
     strategy:
