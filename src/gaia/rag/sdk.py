@@ -87,7 +87,8 @@ class EmptyPDFError(PDFExtractionError):
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
 # and extracted-text markdown. clear_cache() deletes nothing else.
 _CACHE_OWNED_FILE = re.compile(
-    r"^(?:[0-9a-f]{16}_[0-9a-f]{32}|[0-9a-f]{64}_notfound)\.json(?:\.sig)?$"
+    r"^(?:[0-9a-f]{16}_[0-9a-f]{32}(?:_[0-9a-f]{8})?|[0-9a-f]{64}_notfound)"
+    r"\.json(?:\.sig)?$"
     r"|_extracted\.md$"
 )
 
@@ -426,15 +427,31 @@ class RAGSDK:
 
         return json.loads(json_bytes)
 
+    def _chunking_fingerprint(self) -> str:
+        """Short hash of the settings that shape the chunks a cache entry holds.
+
+        The embedder is deliberately absent: the cache stores text and chunks,
+        never vectors, and every load re-embeds with the configured model.
+        """
+        spec = json.dumps(
+            {
+                "chunk_size": self.config.chunk_size,
+                "chunk_overlap": self.config.chunk_overlap,
+                "use_llm_chunking": bool(self.config.use_llm_chunking),
+            },
+            sort_keys=True,
+        )
+        return hashlib.sha256(spec.encode("utf-8")).hexdigest()[:8]
+
     def _get_cache_path(self, file_path: str) -> str:
         """
         Get cache file path for a document using content-based hashing.
 
-        Uses SHA-256 hash of actual file content for cache key.
-        This ensures proper cache invalidation even for:
-        - Same-size file edits
-        - Files modified within same second (low mtime resolution)
-        - Content changes that preserve size
+        The key combines the absolute path, a SHA-256 of the file content (so
+        same-size edits and sub-second rewrites still invalidate), and
+        :meth:`_chunking_fingerprint` (so changing ``chunk_size``,
+        ``chunk_overlap`` or ``use_llm_chunking`` re-chunks instead of reusing
+        chunks cut to the old settings).
 
         Args:
             file_path: Path to the document
@@ -459,7 +476,9 @@ class RAGSDK:
 
             # Include path in hash to avoid collisions between identical files
             path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
-            cache_key = f"{path_hash}_{content_hash[:32]}"
+            cache_key = (
+                f"{path_hash}_{content_hash[:32]}_{self._chunking_fingerprint()}"
+            )
 
             return os.path.join(self.config.cache_dir, f"{cache_key}.json")
 
@@ -2771,11 +2790,11 @@ These positions indicate where to split the text."""
         # Check cache - the cache key is based on file content hash
         cache_path = self._get_cache_path(file_path)
 
-        # Also check for cached Markdown file with hash-based name
-        # Extract the cache key from the cache path to find matching MD file
-        cache_filename = Path(cache_path).stem  # Remove .json extension
+        # The extracted-text markdown is keyed on content alone (no chunking
+        # fingerprint), matching _save_extracted_markdown.
+        content_key = Path(cache_path).stem.rsplit("_", 1)[0]
         md_cache_path = os.path.join(
-            self.config.cache_dir, f"{cache_filename}_extracted.md"
+            self.config.cache_dir, f"{content_key}_extracted.md"
         )
 
         if os.path.exists(cache_path):
