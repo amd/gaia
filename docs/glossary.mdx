@@ -116,7 +116,7 @@ Generating a unique identifier for document content to detect when files have ch
 Maintaining important information when splitting text across chunks, ensuring coherent answers.
 
 ### Context Size
-The number of tokens allocated for LLM processing. GAIA pins it per device profile (65536 on GPU/CPU, 32768 on NPU) and applies it when the daemon starts Lemonade Server, so you don't set it yourself. Larger values allow processing more input but require more memory. Not the same as Context Window (the model's inherent limit). See also: Context Window, Max Tokens.
+The number of tokens allocated for LLM processing. GAIA picks it per model when it loads one: 65,536 for Gemma and other GPU/CPU models, 32,768 for NPU (FLM) models, and for a model that opts in, the largest window its KV cache fits in this machine's memory, up to the model's native maximum. You don't set it yourself. Larger values allow processing more input but require more memory. Not the same as Context Window (the model's inherent limit). See also: Context Window, Max Tokens.
 
 ### Context Window
 The maximum number of tokens an LLM can process at once, including both input and output. Modern models range from 4K to 1M+ tokens.

@@ -15,6 +15,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   given web tools and fetched an unrelated page. `GAIA_DYNAMIC_TOOLS=1` turns
   selection back on. The registered count is 95: `load_tools`, the selector's
   escape hatch, registers only while selection is on.
+- **GPU models no longer load at 32K on an NPU-profile machine.** The NPU's
+  32,768-token ceiling was applied to every model whenever `default_device` was
+  `npu`, so a GGUF model ran at half its window and long tasks overflowed. It now
+  binds NPU (FLM) models only. A model can also opt in to a window sized to the
+  machine's memory, up to its native maximum.
 - **A stale `GAIA_SKILL_SET` now stops startup.** An undeclared name used to be
   dropped silently, so the agent came up healthy with no skills. The sidecar
   and the stdio entry now exit non-zero before serving, with a message naming

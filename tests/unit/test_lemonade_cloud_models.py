@@ -17,6 +17,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     cloud_model_provider,
     create_lemonade_client,
+    local_sampling_defaults,
 )
 from gaia.llm.providers.lemonade import LemonadeProvider
 
@@ -553,6 +554,114 @@ def test_local_model_request_keeps_repetition_penalties(monkeypatch, stream):
         "repeat_penalty": 1.1,
         "repeat_last_n": 256,
     }
+
+
+def _wire(model, stream, **sampling):
+    """The full request body Lemonade receives for one ``hi`` turn."""
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_completion_tokens": 1000,
+        "stream": stream,
+        **sampling,
+    }
+    if stream:
+        body["stream_options"] = {"include_usage": True}
+    return body
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_gemma_request_body_is_unchanged(monkeypatch, stream):
+    """The committed eval baseline was captured under exactly this sampling."""
+    body = _sent_body(monkeypatch, "Gemma-4-E4B-it-GGUF", stream)
+    assert body == _wire(
+        "Gemma-4-E4B-it-GGUF",
+        stream,
+        temperature=0.1,
+        frequency_penalty=0.3,
+        presence_penalty=0.1,
+        repeat_penalty=1.1,
+        repeat_last_n=256,
+    )
+
+
+_QWEN3_30B = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_qwen3_30b_request_carries_its_model_card_sampling(monkeypatch, stream):
+    """Card: Temperature=0.7, TopP=0.8, TopK=20, MinP=0; presence 0-2; no other penalty."""
+    body = _sent_body(monkeypatch, _QWEN3_30B, stream)
+    assert body == _wire(
+        _QWEN3_30B,
+        stream,
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        min_p=0.0,
+        presence_penalty=1.0,
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_qwen3_30b_request_keeps_explicit_caller_sampling(monkeypatch, stream):
+    body = _sent_body(
+        monkeypatch, _QWEN3_30B, stream, temperature=0.0, presence_penalty=0.0
+    )
+    assert body["temperature"] == 0.0
+    assert body["presence_penalty"] == 0.0
+    assert (body["top_p"], body["top_k"], body["min_p"]) == (0.8, 20, 0.0)
+
+
+_QWEN3_6_THINKING = {
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+    "repeat_penalty": 1.0,
+}
+_QWEN3_6_INSTRUCT = {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 1.5,
+    "repeat_penalty": 1.0,
+}
+
+
+@pytest.mark.parametrize("model", ["Qwen3.6-35B-A3B-GGUF", "Qwen3.6-35B-A3B-MTP-GGUF"])
+@pytest.mark.parametrize(
+    "template_kwargs,expected",
+    [
+        # GAIA sends no switch, so the model thinks: card's coding/precise profile.
+        (None, _QWEN3_6_THINKING),
+        ({"enable_thinking": True}, _QWEN3_6_THINKING),
+        ({"enable_thinking": False}, _QWEN3_6_INSTRUCT),
+    ],
+)
+@pytest.mark.parametrize("stream", [False, True])
+def test_qwen3_6_sampling_follows_the_thinking_mode(
+    monkeypatch, stream, template_kwargs, expected, model
+):
+    kwargs = {"chat_template_kwargs": template_kwargs} if template_kwargs else {}
+    body = _sent_body(monkeypatch, model, stream, **kwargs)
+    assert body == _wire(model, stream, **kwargs, **expected)
+
+
+def test_single_mode_model_ignores_the_thinking_switch():
+    """Qwen3-30B-2507 Instruct cannot think; its template ignores the switch."""
+    assert local_sampling_defaults(
+        _QWEN3_30B, enable_thinking=True
+    ) == local_sampling_defaults(_QWEN3_30B)
+
+
+def test_sampling_defaults_are_a_copy():
+    local_sampling_defaults(_QWEN3_30B)["temperature"] = 2.0
+    local_sampling_defaults("Gemma-4-E4B-it-GGUF")["temperature"] = 2.0
+    assert local_sampling_defaults(_QWEN3_30B)["temperature"] == 0.7
+    assert local_sampling_defaults("Gemma-4-E4B-it-GGUF")["temperature"] == 0.1
 
 
 @pytest.mark.parametrize("stream", [False, True])

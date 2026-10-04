@@ -76,3 +76,27 @@ def test_listed_write_sites_stay_out_of_real_home(tmp_path, monkeypatch):
         assert not (fake_home / ".gaia").exists()
     finally:
         db.close()
+
+
+def test_gaia_home_carries_config_json(tmp_path, monkeypatch):
+    """A run with its own GAIA_HOME must not read or write ~/.gaia/config.json.
+
+    CI's cold `gaia init --profile npu` runs under a scratch GAIA_HOME, yet saved
+    default_device=npu to the runner's real home, where a later job read it.
+    """
+    import importlib
+
+    from gaia import config as config_mod
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "run-home"))
+    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("GAIA_CONFIG_FILE", raising=False)
+    try:
+        config_mod = importlib.reload(config_mod)
+        assert config_mod.GAIA_CONFIG_FILE == tmp_path / "run-home" / "config.json"
+        monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "cfg"))
+        config_mod = importlib.reload(config_mod)
+        assert config_mod.GAIA_CONFIG_FILE == tmp_path / "cfg" / "config.json"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config_mod)
