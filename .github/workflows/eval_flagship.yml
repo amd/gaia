@@ -1981,10 +1981,12 @@ jobs:
           OUTCOMES_FAILED: ${{ needs.flagship-tasks.outputs.failed_suites }}
         run: |
           set -euo pipefail
+          # This job has no checkout, so every gh call names the repo; without it gh
+          # dies with "not a git repository" and the alert is never filed.
           # STABLE DEDUP KEY - do not reword. The lookup below searches this exact
           # title; changing it orphans the open issue and files a duplicate.
           TITLE="Nightly flagship eval did not pass"
-          gh label create eval-failure --color B60205 \
+          gh label create eval-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
             --description "Automated eval failure" --force
           BODY="$(cat <<EOF
           The nightly flagship eval on \`main\` did not pass.
@@ -2006,11 +2008,12 @@ jobs:
           lane that waited out GitHub's 24h queue limit. Re-dispatch the workflow.
           EOF
           )"
-          EXISTING="$(gh issue list --state open --label eval-failure \
+          EXISTING="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label eval-failure \
             --search "${TITLE} in:title" --json number --jq '.[0].number // empty')"
           if [ -n "${EXISTING}" ]; then
-            gh issue comment "${EXISTING}" --body "${BODY}"
+            gh issue comment "${EXISTING}" --repo "$GITHUB_REPOSITORY" --body "${BODY}"
             echo "commented on existing issue #${EXISTING}"
           else
-            gh issue create --title "${TITLE}" --body "${BODY}" --label eval-failure
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "${TITLE}" --body "${BODY}" \
+              --label eval-failure
           fi

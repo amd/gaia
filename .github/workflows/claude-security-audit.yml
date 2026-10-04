@@ -154,9 +154,11 @@ jobs:
   # ---------------------------------------------------------------------------
   audit:
     needs: preflight
-    # The custom `if` drops the implicit needs-succeeded guard, so re-assert the repo
-    # gate — otherwise a fork (where preflight is skipped, leaving skip empty) would run.
-    if: github.repository == 'amd/gaia' && needs.preflight.outputs.skip != 'true'
+    # Explicit status check (#3929): run only after preflight succeeded and chose to
+    # audit. The repo gate keeps a fork, where preflight is skipped, from running.
+    if: >-
+      github.repository == 'amd/gaia' && !cancelled() &&
+      needs.preflight.result == 'success' && needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -339,13 +341,23 @@ jobs:
             echo "::error title=Claude stopped::No execution log was written, so Claude never started. Look at the 'Run Claude' step above for the install or startup error."
             exit 1
           fi
+          # execution_file is ONE pretty-printed JSON array (JSONL is accepted too), so it
+          # must be parsed whole — a line-by-line read finds no result and classifies "".
+          # Reduce it to the terminal result: subtype on stdout, result text to a file.
           subtype=$(python3 -c 'import json,sys
-          for l in open(sys.argv[1],encoding="utf-8",errors="replace"):
-              l=l.strip()
-              if not l.startswith("{"): continue
-              try: e=json.loads(l)
-              except ValueError: continue
-              if e.get("type")=="result": print(e.get("subtype",""))' "$EXECUTION_FILE" | tail -1)
+          raw=open(sys.argv[1],encoding="utf-8",errors="replace").read()
+          try:
+              data=json.loads(raw)
+              events=data if isinstance(data,list) else [data]
+          except ValueError:
+              events=[]
+              for l in raw.splitlines():
+                  try: events.append(json.loads(l))
+                  except ValueError: pass
+          results=[e for e in events if isinstance(e,dict) and e.get("type")=="result"]
+          last=results[-1] if results else {}
+          open(sys.argv[2],"w",encoding="utf-8").write(str(last.get("result") or last.get("subtype") or ""))
+          print(last.get("subtype") or "")' "$EXECUTION_FILE" "$RUNNER_TEMP/claude-result.txt")
           if [ "$subtype" = "error_max_turns" ]; then
             echo "::error title=Claude stopped::The lens hit its --max-turns ceiling and may not have written its findings. If its file is missing, synthesis uploads no SARIF rather than a partial one that would clear alerts the lens never re-checked."
             exit 1
@@ -353,15 +365,6 @@ jobs:
           # Classify only the terminal result, never the transcript: the classifier
           # matches words like "unauthorized" and bare 401/403, which a lens that audits
           # auth writes about constantly — its prose would read as a dead credential.
-          python3 -c 'import json,sys
-          last=""
-          for l in open(sys.argv[1],encoding="utf-8",errors="replace"):
-              l=l.strip()
-              if not l.startswith("{"): continue
-              try: e=json.loads(l)
-              except ValueError: continue
-              if e.get("type")=="result": last=str(e.get("result") or e.get("subtype") or "")
-          open(sys.argv[2],"w",encoding="utf-8").write(last)' "$EXECUTION_FILE" "$RUNNER_TEMP/claude-result.txt"
           python3 util/classify_claude_probe.py --exit-code 1 --format text --text-file "$RUNNER_TEMP/claude-result.txt"
 
       - name: Upload findings
