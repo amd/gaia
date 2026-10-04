@@ -44,40 +44,24 @@ function loadInstaller(platform, localWheel) {
 }
 
 describe("backend installation package sources", () => {
-  test.each(["linux", "darwin"])("%s local wheels keep CPU-only PyTorch dependencies", async (platform) => {
+  // [ui] carries no PyTorch, so no platform needs the CPU wheel index — and
+  // the index pins its own `requests`, which once failed the whole install.
+  test.each(["linux", "darwin", "win32"])("%s installs from PyPI alone", async (platform) => {
     const { installer, spawn } = loadInstaller(platform, "/work/amd_gaia-0.23.1-py3-none-any.whl");
     await installer.installBackend({ skipGaiaInit: true, isPackaged: false });
 
     const [command, args] = spawn.mock.calls.find(([, argv]) => argv[0] === "pip");
     expect(command).toBe("uv");
     expect(args).toContain("/work/amd_gaia-0.23.1-py3-none-any.whl[ui]");
-    // The strategy flag has to travel WITH the extra index: uv gives an
-    // extra index priority over PyPI and, by default, takes a package from
-    // the first index carrying it — which resolved `requests` from the
-    // PyTorch index's pin and failed the whole install.
-    expect(args.slice(-4)).toEqual([
-      "--extra-index-url",
-      "https://download.pytorch.org/whl/cpu",
-      "--index-strategy",
-      "unsafe-best-match",
-    ]);
+    expect(args).not.toContain("--extra-index-url");
+    expect(args).not.toContain("--index-strategy");
   });
 
-  test("Linux PyPI installs retain the CPU-only index", async () => {
+  test("PyPI installs pin the matching backend version", async () => {
     const { installer, spawn } = loadInstaller("linux");
     await installer.installBackend({ version: "0.23.1", skipGaiaInit: true, isPackaged: false });
     const [, args] = spawn.mock.calls.find(([, argv]) => argv[0] === "pip");
     expect(args).toContain("amd-gaia[ui]==0.23.1");
-    expect(args).toContain("https://download.pytorch.org/whl/cpu");
-    expect(args).toContain("unsafe-best-match");
-  });
-
-  test("Windows keeps its existing dependency source", async () => {
-    const { installer, spawn } = loadInstaller("win32", "/work/amd_gaia-0.23.1-py3-none-any.whl");
-    await installer.installBackend({ skipGaiaInit: true, isPackaged: false });
-    const [, args] = spawn.mock.calls.find(([, argv]) => argv[0] === "pip");
-    expect(args).not.toContain("--extra-index-url");
-    // Windows takes no extra index, so it must take no strategy override either.
-    expect(args).not.toContain("--index-strategy");
+    expect(args.join(" ")).not.toContain("download.pytorch.org");
   });
 });

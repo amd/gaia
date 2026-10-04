@@ -7,7 +7,6 @@
 name: Email Agent Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:
@@ -78,9 +77,9 @@ jobs:
         run: |
           # [api] adds fastapi/uvicorn — the email REST-spec tests
           # (test_spec_html.py) import the contract's api_routes module.
-          # [publish] adds the 'build' package (#2934): hub/agents/email/python/tests/
+          # [publish] adds 'build' and setuptools (#2934): hub/agents/email/python/tests/
           # includes the sdist packaging regression test, which builds a real
-          # sdist with --no-isolation and fails loudly without 'build' present.
+          # sdist with --no-isolation and fails loudly without them.
           uv pip install --system -e .[dev,api,publish]
           # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102)
           uv pip install --system -e hub/agents/email/python

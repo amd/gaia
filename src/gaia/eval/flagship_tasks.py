@@ -1497,9 +1497,9 @@ def judge_run(
     tasks = {t.id: t for t in load_suite(card["suite"], tasks_file, instances=ids)}
     scrubber = Scrubber.from_environment(extra=_secret_extras())
     url = card.get("therock_url") or bench_config.DEFAULT_THEROCK_URL
-    # The gold patches, read from the cache the run filled, only now that the
-    # agent has exited.
-    gold = {i["instance_id"]: i["patch"] for i in _swebench_records(card)}
+    # The gold patches, fetched only now that the agent has exited: the run's
+    # cache never holds them, so no agent could have read one.
+    gold = swebench.gold_patches(ids) if ids else {}
     pending = []
     for entry in card["tasks"]:
         task, task_dir = tasks[entry["id"]], run_dir / entry["id"]

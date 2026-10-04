@@ -94,7 +94,6 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     budget_for_ctx,
     is_context_overflow_error,
-    profile_ctx_size,
     truncation_budget,
 )
 from gaia.llm.providers.lemonade import CONNECTION_FAILURE_RE
@@ -151,8 +150,8 @@ CHUNK_TRUNCATION_SIZE = 2500
 # Global default for how many reasoning/tool steps an agent may take before it
 # stops and reports progress. This is the single knob for the whole fleet:
 # change DEFAULT_MAX_STEPS here, or set GAIA_AGENT_MAX_STEPS=<n> at runtime to
-# override every agent at once. Agents that genuinely need more (e.g. CodeAgent
-# for multi-file generation) override it explicitly in their own config.
+# override every agent at once. Agents that genuinely need more override it
+# explicitly in their own config.
 DEFAULT_MAX_STEPS = 50
 
 # Per-reply output caps. A local model's 32K ctx must also hold a ~7.7K-token
@@ -495,6 +494,45 @@ _REPEATED_CALL_ANSWER_PROMPT = (
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
 _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
+
+#: Longest repeating cycle of calls the loop guard recognises (A, B, A, B, …).
+_MAX_LOOP_PERIOD = 3
+
+#: The wait tool (WaitToolsMixin). A cycle through it is polling at a pace the
+#: model chose — "check the build every minute" — not a loop.
+_PACING_TOOLS = frozenset({"sleep"})
+
+
+def _call_tool_name(call: Any) -> Any:
+    return call[0] if isinstance(call, tuple) else call
+
+
+def _repeat_count(history: List[Any], max_period: int = _MAX_LOOP_PERIOD) -> int:
+    """How many times the calls ending at ``history[-1]`` repeated back to back.
+
+    Period 1 is one call over and over. A model alternating a search with a
+    read of the same file never repeats a call twice in a row, so a guard that
+    only looked at period 1 let it run 15 rounds. A longer cycle that includes
+    the wait tool is paced polling and is not counted.
+    """
+    n = len(history)
+    best = 0
+    for period in range(1, max_period + 1):
+        block = history[n - period :]
+        if len(block) < period:
+            break
+        if len(set(block)) < period:
+            continue  # a repeat inside the block is a shorter period
+        if period > 1 and any(_call_tool_name(c) in _PACING_TOOLS for c in block):
+            continue
+        repeats = 0
+        while (
+            n - (repeats + 1) * period >= 0
+            and history[n - (repeats + 1) * period : n - repeats * period] == block
+        ):
+            repeats += 1
+        best = max(best, repeats)
+    return best
 
 
 # Tools that mutate external state (mark read, archive, star, …). A small
@@ -1108,6 +1146,38 @@ def _offer_skill_tools(agent: Any, skill: Any) -> None:
         agent._apply_tool_filter([*current, *missing])
 
 
+def parse_skill_manifest(path: Optional[Path]) -> "SkillSets":
+    """Parse the ``skills:`` / ``skill_sets:`` blocks of an agent manifest.
+
+    Empty (falsy) when *path* is ``None``. Usable without building an agent, so
+    a launcher can validate a skill-set choice before paying for startup.
+
+    Reads the YAML directly rather than going through
+    :func:`gaia.hub.manifest.parse` so a custom agent under
+    ``~/.gaia/agents/<id>/`` — whose manifest need not carry the hub's
+    publishing fields — declares skills the same way a packaged agent does.
+    """
+    from gaia.skills.sets import SkillSets, parse_skill_sets
+
+    if path is None:
+        return SkillSets()
+
+    import yaml
+
+    try:
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise _skill_validation_error(
+            f"Could not read the agent manifest at {path}: {exc}. Fix the "
+            "YAML — an unreadable manifest may be hiding a 'skills:' block, "
+            "so GAIA will not assume the agent declares none."
+        ) from exc
+
+    if data is None:
+        return SkillSets()
+    return parse_skill_sets(data, where=f" in {path}")
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -1149,8 +1219,8 @@ class Agent(abc.ABC):
     _last_tool_schemas: Optional[List[Dict[str, Any]]] = None
     _last_tool_filter: Optional[List[str]] = None
 
-    # Re-entrancy guard for tool timing. A tool body may call another tool
-    # (CodeAgent orchestrates that way); only the outermost call is timed.
+    # Re-entrancy guard for tool timing. A tool body may call another tool;
+    # only the outermost call is timed.
     _tool_timing_depth: int = 0
 
     # Seconds spent waiting on a human confirmation, excluded from tool time.
@@ -1409,7 +1479,7 @@ Do NOT wrap conversational replies in JSON.
             use_claude: If True, uses Claude API (default: False)
             use_chatgpt: Removed option; True raises migration guidance (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
-            base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
+            base_url: Base URL for local LLM server (default: ``resolve_lemonade_base_url()`` — LEMONADE_BASE_URL, else GAIA's own server)
             model_id: The ID of the model to use with LLM server (default for local)
             max_steps: Maximum number of steps the agent can take before terminating.
                 When None, falls back to the global default_max_steps() (env
@@ -1428,7 +1498,7 @@ Do NOT wrap conversational replies in JSON.
                           a repeat after that ends the turn. When the repeats that ran worked, the agent makes one
                           more model call with no tool calls allowed and answers from those results; repeats that
                           errored or were refused report the failure instead.
-            min_context_size: Minimum context size required; unset uses the model/device resolver.
+            min_context_size: Context floor the Lemonade manager enforces; unset uses the device profile's.
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
             skill_set: Explicit skill set to activate (the generic
@@ -1540,9 +1610,10 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
 
         # Resolve the same endpoint as TUI setup, including an isolated runtime.
-        if base_url is None:
-            from gaia.llm.lemonade_client import resolve_lemonade_base_url
+        from gaia.llm.lemonade_client import resolve_lemonade_base_url
 
+        resolve_after_start = base_url is None
+        if resolve_after_start:
             base_url = resolve_lemonade_base_url()
 
         # Lazy Lemonade initialization for local LLM users
@@ -1563,10 +1634,10 @@ Do NOT wrap conversational replies in JSON.
                 # The local manager preloads a chat model even on an idle server.
                 LemonadeClient(base_url=base_url, verbose=False).health_check()
             else:
-                if (
-                    min_context_size is None
-                    or os.environ.get("GAIA_CTX_SIZE", "").strip()
-                ):
+                # Unpinned, the manager checks the device profile's floor. This
+                # model's own (possibly memory-sized) window is applied when it
+                # loads; as a floor it would resize whatever model is resident.
+                if os.environ.get("GAIA_CTX_SIZE", "").strip():
                     min_context_size = resolve_ctx_size(model_id, device)
                 LemonadeManager.ensure_ready(
                     min_context_size=min_context_size,
@@ -1575,6 +1646,9 @@ Do NOT wrap conversational replies in JSON.
                     required_min_device=required_min_device,
                     device=device,
                 )
+                # Starting GAIA's own server picks its port, so follow it.
+                if resolve_after_start:
+                    base_url = resolve_lemonade_base_url()
 
         # Initialize state management
         self.execution_state = self.STATE_PLANNING
@@ -3128,32 +3202,8 @@ Do NOT wrap conversational replies in JSON.
         return self._skill_sets
 
     def _parse_skill_declarations(self, path: Optional[Path]) -> "SkillSets":
-        """Parse the ``skills:`` / ``skill_sets:`` blocks of the manifest at *path*.
-
-        Reads the YAML directly rather than going through
-        :func:`gaia.hub.manifest.parse` so a custom agent under
-        ``~/.gaia/agents/<id>/`` — whose manifest need not carry the hub's
-        publishing fields — declares skills the same way a packaged agent does.
-        """
-        from gaia.skills.sets import SkillSets, parse_skill_sets
-
-        if path is None:
-            return SkillSets()
-
-        import yaml
-
-        try:
-            data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError) as exc:
-            raise _skill_validation_error(
-                f"Could not read the agent manifest at {path}: {exc}. Fix the "
-                "YAML — an unreadable manifest may be hiding a 'skills:' block, "
-                "so GAIA will not assume the agent declares none."
-            ) from exc
-
-        if data is None:
-            return SkillSets()
-        return parse_skill_sets(data, where=f" in {path}")
+        """Parse the ``skills:`` / ``skill_sets:`` blocks of the manifest at *path*."""
+        return parse_skill_manifest(path)
 
     @property
     def active_skill_set(self) -> Optional[str]:
@@ -4968,9 +5018,9 @@ Do NOT wrap conversational replies in JSON.
         )
         recorder = getattr(self, "_turn_recorder", None)
         step_timer = getattr(self, "_step_timer", None)
-        # Only the outermost call is timed. A tool body may call another tool
-        # (CodeAgent's orchestration does); timing both would count the inner
-        # one's seconds twice and push tool_s past the turn's own total.
+        # Only the outermost call is timed. A tool body may call another tool;
+        # timing both would count the inner one's seconds twice and push tool_s
+        # past the turn's own total.
         if (recorder is None and step_timer is None) or not outermost:
             result = self._execute_tool(tool_name, tool_args)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
@@ -5881,8 +5931,8 @@ Do NOT wrap conversational replies in JSON.
 
     def _is_loaded_ctx_too_small(self) -> bool:
         """Probe Lemonade's health endpoint to see whether the active LLM is
-        loaded with a context size smaller than the active device profile's
-        expected window.
+        loaded with a context size smaller than the window GAIA loads that
+        model with (``resolve_ctx_size``).
 
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
@@ -5894,16 +5944,19 @@ Do NOT wrap conversational replies in JSON.
             import httpx
 
             from gaia.llm.lemonade_client import (
+                LemonadeClientError,
                 cloud_model_provider,
                 lemonade_auth_headers,
+                resolve_ctx_size,
                 resolve_lemonade_api_key,
+                resolve_lemonade_base_url,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
 
             if cloud_model_provider(getattr(self, "model_id", None)):
                 return False
 
-            base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
             # ``api/v0/health`` exposes ``all_models_loaded`` with ctx_size.
             # The base_url already ends in /api/v1; strip the v1 suffix to
             # reach the v0 health endpoint.
@@ -5918,23 +5971,21 @@ Do NOT wrap conversational replies in JSON.
             if resp.status_code != 200:
                 return False
             data = resp.json()
-            device = self.device
-            if device is None:
-                # Match the device used by model loading when an agent was
-                # constructed without an explicit device (e.g. email).
-                from gaia.config import GaiaConfig
-
-                device = GaiaConfig.load().default_device
-            expected_ctx = profile_ctx_size(device)
             for m in data.get("all_models_loaded", []):
                 if m.get("type") in ("llm", "vlm"):
                     ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                    # Compare against the active profile: a correctly loaded
-                    # NPU model is 32K, while GPU/CPU profiles are 64K.
+                    # Each model against its own window: an NPU model is right
+                    # at 32K, a memory-sized GPU model may be far above 64K.
+                    expected_ctx = resolve_ctx_size(
+                        model=m.get("model_name"),
+                        device=self.device,
+                        base_url=base_url,
+                    )
                     if 0 < ctx < expected_ctx:
                         return True
             return False
-        except Exception:  # pylint: disable=broad-except
+        except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
+            logger.debug("Loaded-context probe failed: %s", e)
             return False
 
     def _extract_lemonade_user_message(self, exc: BaseException) -> Optional[str]:
@@ -6947,7 +6998,10 @@ Do NOT wrap conversational replies in JSON.
         error_count = 0
         # Malformed replies get their own budget: failed tool calls are ordinary work.
         parse_failures = 0
-        tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
+        tool_call_history = []  # Recent tool calls, for loop detection
+        loop_window = max(
+            5, _MAX_LOOP_PERIOD * getattr(self, "max_consecutive_repeats", 4)
+        )
         # Repeated calls already sent one correction; the next repeat ends the turn.
         loop_corrected_calls: set = set()
         tool_call_log = (
@@ -8259,14 +8313,9 @@ Do NOT wrap conversational replies in JSON.
                     current_call = (tool_name, str(tool_args))
                     tool_call_history.append(current_call)
                     tool_call_log.append(current_call)
-                    if len(tool_call_history) > 5:
+                    if len(tool_call_history) > loop_window:
                         tool_call_history.pop(0)
-                    consecutive_count = 0
-                    for prior in reversed(tool_call_history):
-                        if prior == current_call:
-                            consecutive_count += 1
-                        else:
-                            break
+                    consecutive_count = _repeat_count(tool_call_history)
                     if consecutive_count >= self.max_consecutive_repeats:
                         self.console.stop_progress()
                         # NATIVE path appends results to ``previous_outputs``
@@ -8515,17 +8564,12 @@ Do NOT wrap conversational replies in JSON.
                     current_call
                 )  # Full unbounded log for workflow guards
 
-                # Keep only last 5 calls for loop detection
-                if len(tool_call_history) > 5:
+                # Enough recent calls to see a short cycle repeat to the limit
+                if len(tool_call_history) > loop_window:
                     tool_call_history.pop(0)
 
-                # Count consecutive identical calls
-                consecutive_count = 0
-                for call in reversed(tool_call_history):
-                    if call == current_call:
-                        consecutive_count += 1
-                    else:
-                        break
+                # Back-to-back repeats of this call, or of the cycle it closes
+                consecutive_count = _repeat_count(tool_call_history)
 
                 # Stop after max_consecutive_repeats identical calls
                 if consecutive_count >= self.max_consecutive_repeats:

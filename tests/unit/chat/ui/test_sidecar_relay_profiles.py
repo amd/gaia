@@ -431,6 +431,10 @@ class TestCopyIsAgentSpecific:
         assert "email agent" in EMAIL_PROFILE.lemonade_hint
         assert "email" not in GAIA_PROFILE.lemonade_hint
 
+    def test_the_lemonade_hint_leaves_the_remedy_to_the_start_hint(self):
+        for profile in (GAIA_PROFILE, EMAIL_PROFILE):
+            assert "Start Lemonade" not in profile.lemonade_hint
+
     def test_mutating_status_line_names_the_right_kind_of_change(self):
         handler = _FakeSSEHandler()
         relay_module._dispatch_one(

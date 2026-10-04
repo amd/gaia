@@ -13,7 +13,12 @@ title: "Audio & Voice"
 
 **Detailed Spec:** [spec/audio-client](/spec/audio-client)
 
-**Purpose:** Voice interaction with ASR (Whisper) and TTS (Kokoro).
+**Purpose:** Voice interaction with ASR (Whisper) and TTS (Kokoro). Both models
+run inside Lemonade Server — `/api/v1/audio/transcriptions` and
+`/api/v1/audio/speech` — so the `[talk]` extra installs only `sounddevice` for the
+microphone and speakers. The first use of each model downloads it through
+Lemonade; an unreachable server raises `ConnectionError` with the command that
+starts it, and nothing falls back to a local model.
 
 ## Audio Client
 
@@ -27,7 +32,7 @@ from gaia.audio.audio_client import AudioClient
 
 # Initialize audio client
 audio = AudioClient(
-    whisper_model_size="base",    # ASR model: base, small, medium, large
+    whisper_model_size="base",    # tiny, base, small, medium, large, turbo
     audio_device_index=None,       # Auto-select default input device
     silence_threshold=0.5,         # Seconds of silence before processing speech
     mic_threshold=0.003,           # Microphone energy threshold for voice detection
@@ -75,36 +80,47 @@ retried; it does not report an incomplete result as success.
 </Note>
 
 ```python
+from queue import Empty, Queue
+
 from gaia.audio.whisper_asr import WhisperAsr
-from queue import Queue
 
-# List available audio input devices (inherited from AudioRecorder)
-tmp = WhisperAsr(model_size="base")
-tmp.list_audio_devices()   # prints available input devices with index + name
-
-# Create a dedicated transcription queue
 transcription_queue = Queue()
 
-# Initialize Whisper
+# Pulls the Whisper model through Lemonade if it is not downloaded yet.
 asr = WhisperAsr(
-    model_size="base",              # base, small, medium, large
-    device_index=0,                 # Input device (None = default)
+    model_size="base",              # tiny, base, small, medium, large, turbo
+    device_index=None,              # Input device (None = default)
     transcription_queue=transcription_queue,
-    enable_cuda=False,              # Use CUDA if available
     silence_threshold=0.003,        # Voice-activity energy threshold
     min_audio_length=16000 * 0.5,   # 0.5s minimum at 16kHz to trigger transcription
+    language="en",                  # ISO 639-1 code sent with every utterance
 )
+asr.list_audio_devices()            # available input devices with index + name
 
-# Start streaming recording (runs in a worker thread)
-asr.start_recording_streaming()
+# Each utterance (cut on silence) is sent to Lemonade; text lands on the queue.
+asr.start_recording()
+try:
+    while asr.is_recording:
+        try:
+            print(f"Transcribed: {transcription_queue.get(timeout=0.5)}")
+        except Empty:
+            continue
+finally:
+    asr.stop_recording()
 
-# Consume transcriptions
-while True:
-    if not transcription_queue.empty():
-        text = transcription_queue.get()
-        print(f"Transcribed: {text}")
-        # Process text...
+# If Lemonade fails mid-session, recording stops and the reason is kept here.
+if asr.asr_error:
+    raise RuntimeError(asr.asr_error)
 ```
+
+| `model_size` | Lemonade model |
+|--------------|----------------|
+| `tiny` | `Whisper-Tiny` |
+| `base` | `Whisper-Base` |
+| `small` | `Whisper-Small` |
+| `medium` | `Whisper-Medium` |
+| `large` | `Whisper-Large-v3` |
+| `turbo` | `Whisper-Large-v3-Turbo` |
 
 ---
 
@@ -155,9 +171,11 @@ built on top; see [Transcription & Meeting Notes](/guides/transcription#how-spea
 **Import:** `from gaia.audio.kokoro_tts import KokoroTTS`
 
 ```python
+import queue
+
 from gaia.audio.kokoro_tts import KokoroTTS
 
-# Initialize TTS (voice defaults to "af_bella")
+# Pulls Lemonade's kokoro-v1 model if needed (voice defaults to "af_bella").
 tts = KokoroTTS()
 
 # List available voices
@@ -165,31 +183,27 @@ voices = tts.list_available_voices()
 for voice_id, voice_data in voices.items():
     print(f"{voice_id}: {voice_data['name']} (quality: {voice_data['quality']})")
 
-# Select a voice (must be called before generate_speech)
-tts.set_voice("af_sarah")  # American female voice
+tts.set_voice("af_sarah")  # unknown names raise ValueError
 
-# Generate speech (returns: (audio_samples: list[float], phonemes: str, stats: dict))
+# Returns (samples, stats): 24 kHz float32 PCM in [-1.0, 1.0] plus timing stats.
 text = "Hello! This is a test of the Kokoro text-to-speech system."
-audio_samples, phonemes, stats = tts.generate_speech(text)
+audio_samples, stats = tts.generate_speech(text)
 
-# audio_samples are 24 kHz float32 PCM in the range [-1.0, 1.0].
-# Save to WAV:
-import numpy as np
-import wave
-audio_int16 = (np.array(audio_samples) * 32767).astype(np.int16)
-with wave.open("output.wav", "wb") as wav_file:
-    wav_file.setnchannels(1)
-    wav_file.setsampwidth(2)
-    wav_file.setframerate(24000)
-    wav_file.writeframes(audio_int16.tobytes())
+# Play while it is still being synthesized (needs the [talk] extra's sounddevice).
+text_queue = queue.Queue()
+text_queue.put(text)
+text_queue.put("__END__")
+tts.generate_speech_streaming(text_queue)
+```
 
-# Or play directly using sounddevice
-import sounddevice as sd
-sd.play(np.array(audio_samples), 24000)
-sd.wait()
+To write a WAV file without a speaker, use the Lemonade client directly:
 
-# Streaming synthesis (plays audio as chunks become available)
-tts.generate_speech_streaming(text)
+```python
+from gaia.audio.lemonade_tts import LemonadeTTSClient
+
+client = LemonadeTTSClient()
+client.ensure_model()
+seconds = client.synthesize_to_wav("Hello there.", "hello.wav", voice="am_michael")
 ```
 
 ---

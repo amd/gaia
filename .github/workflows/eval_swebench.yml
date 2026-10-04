@@ -96,6 +96,7 @@ jobs:
         run: uv pip install --python "$(command -v python)" "swebench>=5.0,<6"
 
       - name: Start GAIA's embedded Lemonade
+        id: lemonade
         timeout-minutes: 15
         run: |
           gaia lemonade embedded start --timeout 180
@@ -133,12 +134,26 @@ jobs:
           tasks = json.loads(card.read_text(encoding="utf-8"))["tasks"]
           solved = sum(1 for t in tasks if (t.get("swebench") or {}).get("resolved"))
           mins = sum(t["wall_seconds"] for t in tasks) / 60
+          tokens = sum(t["input_tokens"] + t["output_tokens"] for t in tasks)
+          costs = [t.get("cost_usd") for t in tasks]
+          # A task the rate card could not price leaves the total unknown, not lower.
+          cost = "cost unknown" if None in costs else f"~${sum(costs):.2f} est."
+
+          def usd(c):
+              return "n/a" if c is None else f"${c:.3f}"
+
           print(f"### SWE-bench {os.environ['SUBSET']}: {solved}/{len(tasks)} resolved, "
-                f"{sum(t['steps'] for t in tasks)} steps, {mins:.0f} min\n")
-          print("| Instance | Resolved | Steps | Minutes |\n|---|---|---|---|")
+                f"{sum(t['steps'] for t in tasks)} steps, {mins:.0f} min, "
+                f"{tokens:,} tokens, {cost}\n")
+          print("| Instance | Resolved | Steps | Minutes | Tokens (cached) | Est. cost |\n"
+                "|---|---|---|---|---|---|")
           for t in tasks:
               ok = "yes" if (t.get("swebench") or {}).get("resolved") else "no"
-              print(f"| `{t['id']}` | {ok} | {t['steps']} | {t['wall_seconds'] / 60:.1f} |")
+              tok = t["input_tokens"] + t["output_tokens"]
+              print(f"| `{t['id']}` | {ok} | {t['steps']} | {t['wall_seconds'] / 60:.1f} "
+                    f"| {tok:,} ({t.get('cached_tokens', 0):,}) | {usd(t.get('cost_usd'))} |")
+          print(f"\nEstimated from token counts at Fireworks list prices for `{os.environ['SWE_MODEL']}` "
+                "(rate card in `src/gaia/eval/bench/metering.py`); the Fireworks dashboard is the bill.")
           EOF
 
       - name: Upload results
@@ -150,5 +165,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Stop Lemonade
-        if: always()
+        # Only once a start was attempted: an earlier failure (no key, no install)
+        # leaves no `gaia` on PATH, and a second red step buries the real cause.
+        if: always() && steps.lemonade.outcome != 'skipped'
         run: gaia lemonade embedded stop

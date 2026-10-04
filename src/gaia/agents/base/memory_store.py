@@ -32,7 +32,17 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Union,
+    cast,
+)
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -1883,27 +1893,47 @@ class MemoryStore:
         self.set_embedder_id(model_id)
         return cleared
 
-    def get_items_with_embeddings(
+    def _iter_rows_by_rowid(
         self,
-        category: str | None = None,
-        context: str | None = None,
-        entity: str | None = None,
-        include_sensitive: bool = False,
-        top_k: int = 100,
-        time_from: str | None = None,
-        time_to: str | None = None,
-    ) -> List[Dict]:
-        """Return active knowledge items that have stored embeddings.
-
-        Filters: superseded_by IS NULL, embedding IS NOT NULL, plus optional
-        category, context, entity, sensitive, and time-range filters.
-
-        Returns items with ALL fields INCLUDING the embedding BLOB.
-        Used by MemoryMixin to build/query the FAISS index.
+        table: str,
+        cols: str,
+        conditions: List[str],
+        params: list,
+        batch_size: int,
+    ) -> Iterator[tuple]:
+        """Yield every matching row in rowid order, one locked batch at a time."""
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+        where = " AND ".join(conditions + ["rowid > ?"])
+        sql = f"""
+            SELECT rowid, {cols} FROM {table}
+            WHERE {where}
+            ORDER BY rowid
+            LIMIT ?
         """
+        last_rowid = 0
+        while True:
+            with self._locked():
+                rows = self._conn.execute(
+                    sql, (*params, last_rowid, batch_size)
+                ).fetchall()
+            for row in rows:
+                yield row[1:]
+            if len(rows) < batch_size:
+                return
+            last_rowid = rows[-1][0]
+
+    @staticmethod
+    def _embedded_item_filters(
+        category: str | None,
+        context: str | None,
+        entity: str | None,
+        include_sensitive: bool,
+        time_from: str | None,
+        time_to: str | None,
+    ) -> tuple[List[str], list]:
         conditions = ["superseded_by IS NULL", "embedding IS NOT NULL"]
         params: list = []
-
         if category is not None:
             conditions.append("category = ?")
             params.append(category)
@@ -1921,6 +1951,61 @@ class MemoryStore:
         if time_to is not None:
             conditions.append("created_at <= ?")
             params.append(time_to)
+        return conditions, params
+
+    def iter_items_with_embeddings(
+        self, *, include_sensitive: bool, batch_size: int = 500
+    ) -> Iterator[Dict]:
+        """Stream EVERY active knowledge item that has a stored embedding.
+
+        Unbounded by design: this is the read the vector index is built from,
+        so any cap here makes the items past it unfindable by meaning. Rows are
+        fetched in ``batch_size`` pages so a large store is never held in
+        memory at once and the store lock is released between pages.
+
+        Raises:
+            ValueError: if ``batch_size`` is less than 1.
+        """
+        conditions, params = self._embedded_item_filters(
+            None, None, None, include_sensitive, None, None
+        )
+        for row in self._iter_rows_by_rowid(
+            "knowledge",
+            self._KNOWLEDGE_COLS_WITH_EMBEDDING,
+            conditions,
+            params,
+            batch_size,
+        ):
+            yield self._row_to_knowledge_dict_with_embedding(row)
+
+    def get_items_with_embeddings(
+        self,
+        category: str | None = None,
+        context: str | None = None,
+        entity: str | None = None,
+        include_sensitive: bool = False,
+        top_k: int = 100,
+        time_from: str | None = None,
+        time_to: str | None = None,
+        ids: Sequence[str] | None = None,
+    ) -> List[Dict]:
+        """Return active knowledge items that have stored embeddings.
+
+        Filters: superseded_by IS NULL, embedding IS NOT NULL, plus optional
+        category, context, entity, sensitive, and time-range filters.
+
+        With ``ids``, returns exactly those of the given items that pass the
+        filters and ``top_k`` is ignored. Without ``ids``, returns at most
+        ``top_k`` items by confidence — never use that form to build an index;
+        use ``iter_items_with_embeddings`` instead.
+
+        Returns items with ALL fields INCLUDING the embedding BLOB.
+        """
+        conditions, params = self._embedded_item_filters(
+            category, context, entity, include_sensitive, time_from, time_to
+        )
+        if ids is not None:
+            return self._get_embedded_items_by_ids(conditions, params, list(ids))
 
         where = "WHERE " + " AND ".join(conditions)
         params.append(top_k)
@@ -1937,6 +2022,26 @@ class MemoryStore:
             return [
                 self._row_to_knowledge_dict_with_embedding(r) for r in cursor.fetchall()
             ]
+
+    # Stays well under SQLite's default 999 bound-parameter limit.
+    _ID_CHUNK = 500
+
+    def _get_embedded_items_by_ids(
+        self, conditions: List[str], params: list, ids: List[str]
+    ) -> List[Dict]:
+        items: List[Dict] = []
+        for start in range(0, len(ids), self._ID_CHUNK):
+            chunk = ids[start : start + self._ID_CHUNK]
+            placeholders = ", ".join("?" for _ in chunk)
+            where = " AND ".join(conditions + [f"id IN ({placeholders})"])
+            sql = f"""
+                SELECT {self._KNOWLEDGE_COLS_WITH_EMBEDDING} FROM knowledge
+                WHERE {where}
+            """
+            with self._locked():
+                rows = self._conn.execute(sql, (*params, *chunk)).fetchall()
+            items.extend(self._row_to_knowledge_dict_with_embedding(r) for r in rows)
+        return items
 
     def get_items_without_embeddings(self, limit: int = 100) -> List[Dict]:
         """Return knowledge items where embedding IS NULL.
@@ -3116,6 +3221,24 @@ class MemoryStore:
         if with_embedding:
             return [self._row_to_procedure_dict_with_embedding(r) for r in rows]
         return [self._row_to_procedure_dict(r) for r in rows]
+
+    def iter_skills_with_embeddings(self, batch_size: int = 500) -> Iterator[Dict]:
+        """Stream EVERY enabled, non-superseded procedure that has an embedding.
+
+        Unbounded by design: the procedures vector index is built from this, so
+        a cap would make the procedures past it unfindable by meaning.
+
+        Raises:
+            ValueError: if ``batch_size`` is less than 1.
+        """
+        for row in self._iter_rows_by_rowid(
+            "procedures",
+            self._PROCEDURE_COLS_WITH_EMBEDDING,
+            ["enabled = 1", "superseded_by IS NULL", "embedding IS NOT NULL"],
+            [],
+            batch_size,
+        ):
+            yield self._row_to_procedure_dict_with_embedding(row)
 
     def supersede_skill(self, skill_id: str, superseded_by: str) -> bool:
         """Mark ``skill_id`` as superseded by ``superseded_by`` (Zep-style lineage).

@@ -14,6 +14,7 @@ from typing import Any, Dict
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.tool_cancellation import raise_if_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,48 @@ def _require_rag(host: Any) -> Any:
     truly unbound ``self.rag`` raises.
     """
     return require_host_attr(host, "rag", "RAGToolsMixin", _RAG_HINT, _RAG_DOC_ANCHOR)
+
+
+def _path_parts(path: str) -> list:
+    return [p for p in re.split(r"[\\/]+", path) if p]
+
+
+def _match_indexed_files(indexed_files, *queries: str) -> list:
+    """Resolve requested paths to indexed files, most specific tier first.
+
+    Tiers: exact path, trailing path components (``report.pdf`` or
+    ``docs/report.pdf``), then substring. The first non-empty tier wins, so
+    ``report.pdf`` never resolves to ``q3_report.pdf`` when ``report.pdf`` is
+    itself indexed. More than one result means the request is ambiguous.
+    """
+    files = sorted({str(f) for f in indexed_files})
+    queries = [q for q in queries if q]
+    query_parts = [_path_parts(q) for q in queries]
+
+    exact = [f for f in files if _path_parts(f) in query_parts]
+    if exact:
+        return exact
+
+    suffix = [
+        f
+        for f in files
+        if any(qp and _path_parts(f)[-len(qp) :] == qp for qp in query_parts)
+    ]
+    if suffix:
+        return suffix
+
+    return [f for f in files if any(q in f or str(Path(q)) in f for q in queries)]
+
+
+def _ambiguous_file_error(requested: str, candidates: list) -> Dict[str, Any]:
+    return {
+        "status": "error",
+        "error": (
+            f"Ambiguous filename '{requested}' — multiple indexed documents "
+            f"match: {candidates}. Retry with one of the full paths."
+        ),
+        "candidates": candidates,
+    }
 
 
 def extract_page_from_chunk(chunk_text, chunk_index=-1, all_chunks=None):
@@ -541,23 +584,19 @@ class RAGToolsMixin:
                     else None
                 )
 
-                # Find the file in indexed files (normalize slashes for cross-platform matching)
                 auto_indexed = False
-                norm_path = str(Path(file_path))
-                matching_files = [
-                    f
-                    for f in rag.indexed_files
-                    if norm_path in str(f) or file_path in str(f)
-                ]
+                matching_files = _match_indexed_files(rag.indexed_files, file_path)
 
                 if not matching_files:
                     # Fuzzy basename fallback: agent may pass a guessed absolute path
                     # like "C:\Users\foo\document.md" when only "document.md" is indexed.
                     # Extract the basename and try an exact filename match.
                     basename = Path(file_path).name
-                    matching_files = [
-                        f for f in rag.indexed_files if Path(str(f)).name == basename
-                    ]
+                    matching_files = sorted(
+                        str(f)
+                        for f in rag.indexed_files
+                        if Path(str(f)).name == basename
+                    )
                     if len(matching_files) == 0:
                         # Auto-index the file if it exists on disk instead of failing.
                         # This avoids the slow fail → plan → index → re-query cycle.
@@ -599,14 +638,9 @@ class RAGToolsMixin:
                                 # Re-match after auto-indexing
                                 # Include resolved (absolute) path since index_document
                                 # stores the absolute path, not the relative one passed in.
-                                matching_files = [
-                                    f
-                                    for f in rag.indexed_files
-                                    if norm_path in str(f)
-                                    or file_path in str(f)
-                                    or str(resolved) in str(f)
-                                    or Path(str(f)).name == basename
-                                ]
+                                matching_files = _match_indexed_files(
+                                    rag.indexed_files, resolved, file_path, basename
+                                )
                                 auto_indexed = True
                             else:
                                 return {
@@ -631,12 +665,6 @@ class RAGToolsMixin:
                                 "status": "error",
                                 "error": f"File '{file_path}' not found in indexed documents. Use search_files to find it first.",
                             }
-                    elif len(matching_files) > 1:
-                        ambiguous = [str(f) for f in matching_files]
-                        return {
-                            "status": "error",
-                            "error": f"Ambiguous filename '{basename}' — multiple matches found: {ambiguous}. Use the full path.",
-                        }
                     if auto_indexed:
                         logger.info(
                             f"[query_specific_file] Auto-indexed and resolved '{file_path}' "
@@ -648,8 +676,8 @@ class RAGToolsMixin:
                             f"resolved via basename to: {matching_files[0]}"
                         )
 
-                # For now, use the first match
-                # TODO: Let user disambiguate if multiple matches
+                if len(matching_files) > 1:
+                    return _ambiguous_file_error(file_path, matching_files)
                 target_file = matching_files[0]
 
                 # Generate search keys for better retrieval
@@ -1425,19 +1453,15 @@ class RAGToolsMixin:
                         "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
                     }
 
-                # Find the file in indexed files (normalize slashes for cross-platform matching)
-                norm_path = str(Path(file_path))
-                matching_files = [
-                    f
-                    for f in self.rag.indexed_files
-                    if norm_path in str(f) or file_path in str(f)
-                ]
+                matching_files = _match_indexed_files(self.rag.indexed_files, file_path)
 
                 if not matching_files:
                     return {
                         "status": "error",
                         "error": f"Document '{file_path}' not found in indexed documents. Use index_document first.",
                     }
+                if len(matching_files) > 1:
+                    return _ambiguous_file_error(file_path, matching_files)
 
                 target_file = matching_files[0]
 
@@ -1597,7 +1621,7 @@ Use the {summary_type} style for the content sections."""
                     # Use chat SDK to generate summary
                     try:
                         # Use RAG's chat SDK for summary generation
-                        response = self.rag.chat.send(prompt)
+                        response = self.rag.chat.send(prompt, no_history=True)
                         summary_text = response.text
 
                         return {
@@ -1623,6 +1647,8 @@ Use the {summary_type} style for the content sections."""
                 logger.info(f"Processing {num_sections} sections for summarization")
 
                 for section_num, section_text in enumerate(sections, 1):
+                    # An abandoned summary must stop, not keep the model busy.
+                    raise_if_cancelled()
                     logger.info(
                         f"Summarizing section {section_num}/{num_sections} ({len(section_text.split())} words)"
                     )
@@ -1639,8 +1665,9 @@ CRITICAL GROUNDING RULE: Only summarize information explicitly present in the se
 Generate a summary of this section:"""
 
                     try:
-                        # Use RAG's chat SDK for section summary
-                        response = self.rag.chat.send(section_prompt)
+                        # Each section stands alone: carried history put every
+                        # earlier section into the next request and overflowed.
+                        response = self.rag.chat.send(section_prompt, no_history=True)
                         segment_summary = response.text
 
                         section_summaries.append(
@@ -1697,7 +1724,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 
                 try:
                     # Use RAG's chat SDK for final summary synthesis
-                    response = self.rag.chat.send(final_prompt)
+                    response = self.rag.chat.send(final_prompt, no_history=True)
                     final_summary = response.text
 
                     return {
@@ -1754,17 +1781,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
                     }
 
-                # Find the file in indexed files (normalize slashes for cross-platform matching)
-                norm_name = (
-                    str(Path(file_name))
-                    if ("/" in file_name or "\\" in file_name)
-                    else file_name
-                )
-                matching_files = [
-                    f
-                    for f in self.rag.indexed_files
-                    if norm_name in str(f) or file_name in str(f)
-                ]
+                matching_files = _match_indexed_files(self.rag.indexed_files, file_name)
 
                 if not matching_files:
                     return {
@@ -1772,6 +1789,8 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         "error": f"Document '{file_name}' not found in indexed documents.",
                         "hint": "Use list_indexed_documents to see available documents.",
                     }
+                if len(matching_files) > 1:
+                    return _ambiguous_file_error(file_name, matching_files)
 
                 target_file = matching_files[0]
 

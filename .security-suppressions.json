@@ -50,6 +50,11 @@
       "path": "src/gaia/messaging/bridge.py",
       "rule": "S603",
       "justification": "The agent child's argv is built from a constant default (DEFAULT_AGENT_BINARY) or an operator's --agent-command, split with shlex; a Slack message's text never reaches it. shell=False, so nothing in argv is shell-interpreted."
+    },
+    {
+      "path": "src/gaia/installer/init_command.py",
+      "rule": "S603",
+      "justification": "gaia init's extras install: argv is the resolved pip/uv frontend (a fixed executable plus '--python <this interpreter>') followed by install args built from the profile's pip_extras table. No user string reaches it; shell=False."
     }
   ]
 }

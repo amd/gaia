@@ -158,7 +158,8 @@ class SkillSets:
                 raise SkillSetError(
                     f"Skill set {requested!r} was requested but this agent "
                     "declares no 'skill_sets:' block, so there is nothing to "
-                    "select. Drop the --skill-set argument, or add a "
+                    "select. Drop the skill-set choice (a --skill-set flag, "
+                    "config field or environment variable), or add a "
                     f"'skill_sets:' block to its gaia-agent.yaml. "
                     f"See {_SETS_DOCS_URL}."
                 )

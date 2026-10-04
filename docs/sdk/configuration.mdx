@@ -27,6 +27,17 @@ export GAIA_API_STREAMING="1"  # stream LLM responses over the API
 # environment, so a project .env cannot switch it on.
 export GAIA_AUTO_APPROVE_TOOLS="1"
 
+# Skip loading .env files ("1", "true", "yes" or "on"). For an app that embeds
+# GAIA and supplies its own environment. Read from the startup environment, so
+# a .env file cannot turn it on or off.
+export GAIA_NO_DOTENV="1"
+
+# Variables to withhold from the processes GAIA starts for an agent (shell
+# commands, MCP servers, CLI installers, native hub agents, media tools, the
+# Lemonade server), comma or space separated. GAIA's own internal
+# credentials are always withheld; this adds yours to the list.
+export GAIA_CHILD_ENV_DENY="MY_APP_TOKEN,MY_DB_PASSWORD"
+
 # API Keys (for cloud providers)
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
@@ -36,6 +47,17 @@ GAIA has no `GAIA_LOG_LEVEL` environment variable. Log levels are set
 programmatically through `gaia.logger` (`set_level(name, level)`); the default
 is `INFO`.
 </Note>
+
+`~/.gaia/gaia.log` is size-capped and shared safely by every GAIA process. Two
+variables tune the cap:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GAIA_LOG_MAX_MB` | `10` | Size at which `gaia.log` rotates to `gaia.log.1` |
+| `GAIA_LOG_BACKUPS` | `3` | Rotated copies kept (`gaia.log.1` … `gaia.log.N`) |
+
+Both must be whole numbers of at least 1; any other value stops GAIA at startup
+with an error naming the variable.
 
 ---
 
@@ -52,10 +74,15 @@ subsequent local-model reloads. For example:
 GAIA_CTX_SIZE=131072 gaia chat
 ```
 
-The GPU/CPU profile defaults to 65,536 tokens; unknown local models use the same
-profile default. Registered models retain their own default when no override is
-set. NPU/FLM requests are capped at 32,768 tokens with a warning. Invalid nonempty
-values fail with an actionable error; unset or blank values use the default.
+Without an override, each model gets its own window. GPU/CPU models default to
+65,536 tokens, and unknown local models use the same default. Registered models
+keep their own default, and a registered model that declares its native maximum
+and its KV-cache cost per token is sized to this machine's memory: the largest
+8,192-token step whose KV cache fits beside the weights, the embedder (on shared
+memory) and 10% headroom, up to that maximum and never below its default. NPU
+(FLM) models are capped at 32,768 tokens with a warning; `default_device = npu`
+does not cap a GPU model. Invalid nonempty values fail with an actionable error;
+unset or blank values use the default.
 
 ## Per-request time budget
 

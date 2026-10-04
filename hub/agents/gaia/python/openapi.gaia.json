@@ -1,0 +1,831 @@
+{
+  "components": {
+    "schemas": {
+      "BypassRequest": {
+        "additionalProperties": false,
+        "description": "Body of ``POST /v1/gaia/sessions/{session_id}/bypass``.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "BypassRequest",
+        "type": "object"
+      },
+      "BypassResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "enabled"
+        ],
+        "title": "BypassResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "QueryCancelResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cancelled": {
+            "title": "Cancelled",
+            "type": "boolean"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "cancelled"
+        ],
+        "title": "QueryCancelResponse",
+        "type": "object"
+      },
+      "QueryContextItem": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "QueryContextItem",
+        "type": "object"
+      },
+      "QueryFollowUpRequest": {
+        "additionalProperties": false,
+        "description": "Body of ``POST /v1/gaia/query/{run_id}/followup`` (contract >= 2.15).",
+        "properties": {
+          "text": {
+            "description": "What the user typed while this run was still working. The agent folds it into the running turn at its next step boundary; it does not start a new turn and does not interrupt the current one.",
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "QueryFollowUpRequest",
+        "type": "object"
+      },
+      "QueryFollowUpResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "delivered": {
+            "title": "Delivered",
+            "type": "boolean"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "delivered"
+        ],
+        "title": "QueryFollowUpResponse",
+        "type": "object"
+      },
+      "QueryRequest": {
+        "additionalProperties": false,
+        "description": "``POST /v1/gaia/query`` body (frozen #2015 contract, spec §2.2).",
+        "properties": {
+          "can_answer_questions": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the caller can answer a mid-run question (contract >= 2.6). False for a one-shot run: the agent must not park on needs_input with nobody there to answer, which reads as a hang.",
+            "title": "Can Answer Questions"
+          },
+          "context": {
+            "description": "Transcript slice, pushed in the body. May be empty, never absent.",
+            "items": {
+              "$ref": "#/components/schemas/QueryContextItem"
+            },
+            "title": "Context",
+            "type": "array"
+          },
+          "max_steps": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cap on agent-loop steps for this turn. Omit for the agent's default.",
+            "title": "Max Steps"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model id for this turn. A Claude model id implies provider 'claude' when provider is omitted; otherwise it is served by the local Lemonade backend. Omit to keep a retained session's current model, or to use the backend's default on a new session.",
+            "title": "Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Inference backend for this turn: 'lemonade' (local) or 'claude' (Anthropic's API). Omit to leave a retained session on its current backend, or to infer it from 'model' on a new session.",
+            "title": "Provider"
+          },
+          "query": {
+            "description": "The user's message for this turn.",
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Host-minted UUIDv4 run handle. Cancellation (POST /v1/gaia/query/{run_id}/cancel) keys off it, so the client must mint it before the request rather than learn it from the stream.",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Conversation handle (contract >= 2.12). Threaded to the agent as its UI session so indexed documents survive across turns — without it a document agent forgets what it just indexed.",
+            "title": "Session Id"
+          }
+        },
+        "required": [
+          "query",
+          "run_id",
+          "context"
+        ],
+        "title": "QueryRequest",
+        "type": "object"
+      },
+      "QueryRespondRequest": {
+        "additionalProperties": false,
+        "description": "Body of ``POST /v1/gaia/query/{run_id}/respond`` (spec §5.1).",
+        "properties": {
+          "request_id": {
+            "description": "The 'request_id' from the needs_input event being answered. An answer for a question that is no longer pending is rejected rather than silently dropped.",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "response": {
+            "title": "Response",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "response"
+        ],
+        "title": "QueryRespondRequest",
+        "type": "object"
+      },
+      "QueryRespondResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "delivered": {
+            "title": "Delivered",
+            "type": "boolean"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "request_id",
+          "delivered"
+        ],
+        "title": "QueryRespondResponse",
+        "type": "object"
+      },
+      "ToolDecisionRequest": {
+        "additionalProperties": false,
+        "description": "Body of ``POST /v1/gaia/query/{run_id}/tool_decision``.\n\nThe HTTP twin of the stdio transport's ``tool_decision`` control message —\nthe seam that lets a remote surface answer a confirmation while the agent\nthread is still parked on it.",
+        "properties": {
+          "confirm_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The 'confirm_id' from the needs_confirmation event being answered. Without it a late answer resolves whichever confirmation replaced the one it was typed against.",
+            "title": "Confirm Id"
+          },
+          "decision": {
+            "description": "One of 'allow', 'deny', 'always'. 'always' grants the pending call's scope for the rest of the session.",
+            "title": "Decision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "ToolDecisionRequest",
+        "type": "object"
+      },
+      "ToolDecisionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          },
+          "delivered": {
+            "title": "Delivered",
+            "type": "boolean"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "decision",
+          "delivered"
+        ],
+        "title": "ToolDecisionResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
+    "title": "GAIA Agent API",
+    "version": "2.15"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [],
+        "summary": "Health"
+      }
+    },
+    "/v1/gaia/init": {
+      "get": {
+        "description": "Readiness preflight — the row data the TUI's preflight screen renders.\n\nUnlike ``/health`` (liveness only, never touches the model server) this\nprobes Lemonade, checks its version against the floor, and confirms the\ndefault model is downloaded, so a host can distinguish \"process up\" from\n\"ready to answer\". Read-only: no pull, no load.",
+        "operationId": "init_v1_gaia_init_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Init V1 Gaia Init Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Init",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/memory": {
+      "get": {
+        "description": "The ``/memory`` view's snapshot, for the daemon transport.\n\nSame payload as the stdio ``MEMORY_DUMP_QUERY`` sentinel\n(``gaia_agent.stdio._memory_dump_event`` -> ``build_memory_dump``), just\nwithout that path's JSON-in-a-final-event wrapping — this is a plain GET,\nso the dict is the whole response body. ``*SSEClient.FetchMemory`` decodes\nit straight into ``client.MemoryDump`` (``tui/internal/client/memory.go``).\nA one-shot agent is enough: the memory store lives at ``~/.gaia/memory.db``\nregardless of which agent instance opens it.",
+        "operationId": "memory_v1_gaia_memory_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Memory V1 Gaia Memory Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Memory",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/query": {
+      "post": {
+        "description": "Run the flagship agent loop for one request, streaming canonical SSE.",
+        "operationId": "query_v1_gaia_query_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Query",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/query/{run_id}/cancel": {
+      "post": {
+        "description": "Ask a live run to stop.\n\nUnknown ids report ``cancelled=False``, not 404 — a cancel racing the run's\nown completion is normal, and reporting it stopped something would be a lie.\nThe id is still remembered, so a run that registers *after* this call starts\ncancelled: the caller mints ``run_id`` before it POSTs ``/query``, which\nmakes cancel-arrives-first a real ordering, not a hypothetical one.",
+        "operationId": "cancel_query_v1_gaia_query__run_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryCancelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Cancel Query",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/query/{run_id}/followup": {
+      "post": {
+        "description": "Hand a live run something the user typed after it started.\n\nThe run keeps going on its existing SSE stream — this neither interrupts it\nnor starts a second turn. The agent folds the text in at its next agent-loop\nstep boundary, so a follow-up sent during a five-minute turn is answered in\nthat turn instead of waiting it out.\n\nAn unknown run is a loud 404, not a quiet accept: the caller has to know the\nmessage did not land so it can hold it for the next turn instead of showing\nthe user a message that went nowhere.",
+        "operationId": "followup_to_query_v1_gaia_query__run_id__followup_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryFollowUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryFollowUpResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Followup To Query",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/query/{run_id}/respond": {
+      "post": {
+        "description": "Deliver a user's answer to a mid-run ``needs_input`` question.\n\nThe run continues on its existing SSE stream — this does not open a new one.\nAn unknown run or a question that is no longer pending is a loud 404/409\nrather than a quiet no-op: silently dropping the answer would leave the\nagent blocked until its own timeout, which the user reads as a hang.",
+        "operationId": "respond_to_query_v1_gaia_query__run_id__respond_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRespondRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryRespondResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Respond To Query",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/query/{run_id}/tool_decision": {
+      "post": {
+        "description": "Answer a ``needs_confirmation`` while the agent is still parked on it.\n\nThe HTTP twin of the stdio transport's ``tool_decision`` control message.\nWithout this the daemon transport could not run a gated tool at all — the\nstream refused the confirmation and cancelled the run, because there was\nnowhere for an answer to come from.\n\nA decision for a prompt that is no longer pending is rejected rather than\nsilently dropped: dropping it would leave the caller believing it approved\nsomething that never ran.",
+        "operationId": "tool_decision_v1_gaia_query__run_id__tool_decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolDecisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Tool Decision",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/sessions/{session_id}/bypass": {
+      "post": {
+        "description": "Turn unattended tool approval on or off for a session.\n\nSession-scoped rather than run-scoped because it must outlive any one turn —\nthat is the whole point of bypass — and it takes effect on the very next\ngated tool, including one in a turn already running.\n\nOnly an EXISTING session is accepted: creating one here would build a whole\nagent as a side effect of a settings toggle, and would silently succeed\nagainst a typo'd session id.",
+        "operationId": "set_bypass_v1_gaia_sessions__session_id__bypass_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BypassRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BypassResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Set Bypass",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/version": {
+      "get": {
+        "operationId": "agent_version_v1_gaia_version_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Agent Version V1 Gaia Version Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [],
+        "summary": "Agent Version"
+      }
+    },
+    "/version": {
+      "get": {
+        "operationId": "version_version_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Version Version Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [],
+        "summary": "Version"
+      }
+    }
+  }
+}
