@@ -133,6 +133,7 @@ setup(
         "pyyaml>=6.0.1",
         "numpy>=1.24.0",
         "psutil>=5.9.0",
+        "python-dateutil>=2.8.2",
         "python-dotenv",
         "aiohttp",
         "rich",
