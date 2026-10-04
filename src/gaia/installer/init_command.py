@@ -748,7 +748,30 @@ class InitCommand:
         from gaia.config import gaia_home
 
         name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
-        return (gaia_home() / "bin" / name).is_file()
+        if (gaia_home() / "bin" / name).is_file():
+            return True
+        if sys.platform != "win32":
+            return False
+        install_dir = InitCommand._nsis_install_dir()
+        return install_dir is not None and (install_dir / name).is_file()
+
+    @staticmethod
+    def _nsis_install_dir() -> Optional[Path]:
+        """Where the Windows installer put gaia-tui.exe (installer/nsis/gaia.nsi)."""
+        import winreg
+
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, r"Software\AMD\GAIA", 0, winreg.KEY_READ
+            ) as key:
+                value, _kind = winreg.QueryValueEx(key, "InstallDir")
+            return Path(value)
+        except FileNotFoundError:
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if not local_app_data:
+                return None
+            # The installer's own default InstallDir.
+            return Path(local_app_data) / "Programs" / "GAIA"
 
     def _install_pip_extras(self) -> bool:
         """

@@ -224,3 +224,62 @@ class TestTuiDetection:
         with patch.object(init_command, "RICH_AVAILABLE", False):
             cmd._print_completion()
         assert init_command._INSTALLER_HINT not in "\n".join(printed)
+
+
+class _FakeWinreg:
+    HKEY_CURRENT_USER = object()
+    KEY_READ = 1
+
+    def __init__(self, install_dir=None):
+        self.install_dir = install_dir
+        self.opened = []
+
+    def OpenKey(self, root, path, _reserved, _access):  # noqa: N802
+        self.opened.append(path)
+        if self.install_dir is None:
+            raise FileNotFoundError(path)
+        return self
+
+    def QueryValueEx(self, _key, name):  # noqa: N802
+        assert name == "InstallDir"
+        return str(self.install_dir), 1
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+class TestWindowsInstallerTuiDetection:
+    @pytest.fixture
+    def windows_off_path(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+        monkeypatch.setattr(init_command.shutil, "which", lambda _name: None)
+        win_sys = SimpleNamespace(**{**vars(sys), "platform": "win32"})
+        monkeypatch.setattr(init_command, "sys", win_sys)
+
+    def test_finds_tui_in_registry_install_dir(
+        self, windows_off_path, monkeypatch, tmp_path
+    ):
+        install_dir = tmp_path / "custom"
+        install_dir.mkdir()
+        fake = _FakeWinreg(install_dir)
+        monkeypatch.setitem(sys.modules, "winreg", fake)
+        assert InitCommand._tui_installed() is False
+
+        (install_dir / "gaia-tui.exe").write_text("")
+        assert InitCommand._tui_installed() is True
+        assert fake.opened[-1] == r"Software\AMD\GAIA"
+
+    def test_absent_value_uses_the_installer_default_dir(
+        self, windows_off_path, monkeypatch, tmp_path
+    ):
+        monkeypatch.setitem(sys.modules, "winreg", _FakeWinreg(None))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "lad"))
+        default_dir = tmp_path / "lad" / "Programs" / "GAIA"
+        default_dir.mkdir(parents=True)
+        assert InitCommand._tui_installed() is False
+
+        (default_dir / "gaia-tui.exe").write_text("")
+        assert InitCommand._tui_installed() is True
