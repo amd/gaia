@@ -17,7 +17,6 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 - Modifying triggers, matrix, or jobs in an existing workflow
 - Debugging a failing CI run
 - Optimizing workflow runtime (cache, path filters, parallelism)
-- Wiring a new workflow into the test-summary orchestration
 
 ## When NOT to use
 
@@ -30,7 +29,6 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 ### Orchestration
 | File | Purpose |
 |------|---------|
-| `test_gaia_cli.yml` | Top-level test orchestrator |
 | `lint.yml` | Formatting, imports, security scans |
 | `claude.yml` | Claude auto-review + issue/PR handler (reactive) |
 | `claude-nightly-audit.yml` | Proactive **nightly** audit (10:37 UTC ≈ 3am Pacific; deep sweep on Sundays) — scheduled fan-out (correctness/docs/tests/features; security has its own nightly workflow) → **one issue per defect**, labelled `weekly-audit` (a provenance label, not a cadence one). No per-run triage issue: the run report goes to the job summary. Findings promote to PRs via the `bug`→`auto-fix` path. Reuses the `claude.yml` auth + `claude-auth-canary.yml` canary. See the `weekly-audit-patterns` skill before editing (two-key dedup + private-security invariants). |
@@ -43,7 +41,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 | `test_api.yml` | API server |
 | `test_agent_mcp_server.yml` | Agent-exposed MCP |
 | `test_agent_sdk.yml` | Agent SDK / base |
-| `test_chat_agent.yml`, `test_code_agent.yml` | Per-agent |
+| `test_chat_agent.yml` | Per-agent |
 | `test_rag.yml`, `test_embeddings.yml` | RAG / vector |
 | `test_sd.yml` | Stable Diffusion |
 | `test_eval.yml` | Eval framework |
@@ -73,12 +71,11 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 ### Triggers with path filters and draft handling
 ```yaml
 on:
-  workflow_call:
   push:
     branches: [main]
     paths: ["src/**", "tests/**", ".github/workflows/<self>.yml"]
-  pull_request:
-    branches: [main]
+  pull_request:  # no `branches:` — it filters the BASE branch (util/check_workflow_triggers.py rejects it)
+    paths: ["src/**", "tests/**", ".github/workflows/<self>.yml"]
     types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
   workflow_dispatch:
@@ -103,12 +100,10 @@ strategy:
 ### Reusable workflows
 ```yaml
 jobs:
-  lint:
-    uses: ./.github/workflows/lint.yml
-  test:
-    needs: lint
-    uses: ./.github/workflows/test_gaia_cli_linux.yml
+  review:
+    uses: ./.github/workflows/claude-run.yml
 ```
+Use `workflow_call` only when a real caller exists (e.g. `claude.yml` → `claude-run.yml`). Test workflows are not reused — each triggers itself.
 
 ### Test summary (always-run)
 ```yaml
@@ -138,7 +133,7 @@ test-summary:
 3. Path filters so unrelated changes don't run it
 4. Draft-PR gate unless intentionally running on drafts
 5. Cache pip via `actions/setup-python@v6` `cache: 'pip'`
-6. Add to `test_gaia_cli.yml` + test summary if it's a test workflow
+6. Trigger it on `push`, `pull_request` and `merge_group` — there is no orchestrator, so a test workflow runs only on its own triggers
 
 ## Debugging a failing run
 
@@ -154,5 +149,5 @@ test-summary:
 - **Running on drafts unintentionally** — skipped CI, surprise failures on "ready for review"
 - **No path filter** — every doc change reruns the full suite
 - **Forgetting to cache pip** — 3-minute installs repeated across jobs
-- **Omitting the test from `test_gaia_cli.yml`** — workflow exists but nothing depends on it; easy to miss regressions
+- **A workflow with no trigger that fires** — `workflow_call` with no caller, or `workflow_dispatch` alone, never runs on a PR; it looks like coverage and isn't
 - **Over-permissive `permissions:`** — default to `contents: read`; bump only the specific permission needed

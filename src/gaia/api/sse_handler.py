@@ -129,7 +129,6 @@ class SSEOutputHandler(OutputHandler):
             "checklist",  # Checklist progress from orchestrator
             "checklist_reasoning",  # Checklist reasoning (debug info)
             "message",  # Generic messages from print() calls
-            "agent_selected",  # Agent routing selection notification
             "tool_confirm_denied",  # Gated tool refused — caller must see why
         }
         return event_type in streamable_events
@@ -250,7 +249,7 @@ class SSEOutputHandler(OutputHandler):
             {"steps_taken": steps_taken, "steps_limit": steps_limit, "status": status},
         )
 
-    # === File Preview Methods (Required for Code Agent) ===
+    # === File Preview Methods ===
 
     def start_file_preview(
         self, filename: str, max_lines: int = None, title_prefix: str = ""
@@ -281,17 +280,6 @@ class SSEOutputHandler(OutputHandler):
         """Print command executing message."""
         self._add_event("command_executing", {"command": command})
 
-    def print_agent_selected(self, agent_name: str, language: str, project_type: str):
-        """Print agent selected message."""
-        self._add_event(
-            "agent_selected",
-            {
-                "agent_name": agent_name,
-                "language": language,
-                "project_type": project_type,
-            },
-        )
-
     def print(self, *args, **_kwargs):
         """
         Handle generic print() calls - queue as message event.
@@ -308,7 +296,7 @@ class SSEOutputHandler(OutputHandler):
         if message.strip():
             self._add_event("message", {"text": message})
 
-    # === Checklist Methods (Required for Code Agent Orchestration) ===
+    # === Checklist Methods ===
 
     def print_checklist(self, items: List[Any], current_idx: int) -> None:
         """Print checklist items with current progress."""
@@ -478,12 +466,6 @@ class SSEOutputHandler(OutputHandler):
         elif event_type == "message":
             text = data.get("text", "")
             return f"{text}\n" if text else ""
-
-        elif event_type == "agent_selected":
-            agent_name = data.get("agent_name", "unknown")
-            language = data.get("language", "")
-            project_type = data.get("project_type", "")
-            return f"Agent: {agent_name} ({language}/{project_type})\n"
 
         # For other events in normal mode, don't stream them
         return ""

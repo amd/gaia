@@ -48,6 +48,12 @@ class StubLLMClient:
             return iter(["ok"])
         return "ok"
 
+    def get_last_finish_reason(self):
+        return "stop"
+
+    def get_last_reasoning(self):
+        return None
+
 
 @pytest.fixture
 def stub_llm(monkeypatch):

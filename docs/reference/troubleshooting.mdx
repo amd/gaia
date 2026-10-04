@@ -150,9 +150,10 @@ icon: "bug"
     Procedure recall search would abort this process: 2 OpenMP runtimes are loaded…
     ```
 
-    Keep the two apart in the environment GAIA runs in. `torch` arrives with the
-    `[audio]` and `[ui]` extras; memory recall needs `faiss-cpu`. A virtual
-    environment with only the extras you actually use is the fix.
+    Keep the two apart in the environment GAIA runs in. No GAIA extra installs
+    `torch`, so it arrives from something else in the environment — another
+    package, or code a skill runs in-process. Memory recall needs `faiss-cpu`;
+    a virtual environment holding only GAIA and its extras is the fix.
 
     If your host runs both runtimes together without aborting, set
     `GAIA_ALLOW_FAISS_TORCH_OMP=1` to search anyway. Check it in a throwaway
@@ -317,10 +318,10 @@ icon: "bug"
     gaia daemon status
     ```
 
-    You don't need to set a context size. GAIA pins the context window to your
-    machine's device profile and starts the server with it, so a mismatch means
-    the profile is wrong rather than the flag is missing. Check it with
-    `gaia config get default_device`.
+    You don't need to set a context size. GAIA picks the window for each model
+    when it loads it — 32,768 for NPU (FLM) models, 65,536 or more for GPU
+    models — so a mismatch means something else loaded the model. Run the
+    command again and GAIA reloads it at the right size.
   </Accordion>
 
   <Accordion title="Port already in use" icon="ban">
@@ -417,7 +418,13 @@ icon: "bug"
 
 <AccordionGroup>
   <Accordion title="Missing RAG dependencies" icon="puzzle-piece">
-    Install the RAG extra:
+    `gaia init` installs the RAG extra and fails, showing the installer's error, if that install fails. To install it yourself into the one-line installer's environment (no `pip`, not activated):
+    ```bash
+    uv pip install --python ~/.gaia/venv/bin/python "amd-gaia[rag]"
+    # Windows: uv pip install --python "$env:USERPROFILE\.gaia\venv\Scripts\python.exe" "amd-gaia[rag]"
+    ```
+
+    In an activated virtualenv of your own:
     ```bash
     uv pip install "amd-gaia[rag]"
     ```
@@ -593,6 +600,13 @@ icon: "bug"
       teed to disk so errors are visible even when the app was not launched
       from a terminal.
 
+    `gaia.log` is capped at 10 MB. When it fills, it moves to `gaia.log.1`
+    (older copies shift to `gaia.log.2` and `gaia.log.3`, and the oldest is
+    deleted), so all of GAIA's logs together stay under about 40 MB. Change
+    the cap with `GAIA_LOG_MAX_MB` and the number of copies with
+    `GAIA_LOG_BACKUPS`. A `gaia.log` already larger than the cap is moved to
+    `gaia.log.1` the first time GAIA starts, not deleted.
+
     To inspect all active TCP listeners (the backend uses a dynamic port, not always 4200):
     ```bash
     ss -tlnp
@@ -600,7 +614,8 @@ icon: "bug"
   </Accordion>
 
   <Accordion title="Collecting a diagnostics bundle for bug reports" icon="box-archive">
-    GAIA ships a `gaia diagnostics` command that bundles the logs above
+    GAIA ships a `gaia diagnostics` command that bundles the logs above,
+    including the rotated `gaia.log.1`, `gaia.log.2`, ... copies,
     together with a short system-info snapshot (`uname -a`, distro info,
     relevant environment variables, `ss -tlnp (all TCP listeners)`) into a single
     tarball:

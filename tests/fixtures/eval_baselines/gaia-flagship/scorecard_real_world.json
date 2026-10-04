@@ -1,0 +1,2553 @@
+{
+  "run_id": "eval-20261003-094049",
+  "timestamp": "2026-10-03T11:21:47.678946+00:00",
+  "config": {
+    "backend_url": "http://127.0.0.1:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia"
+  },
+  "summary": {
+    "total_scenarios": 21,
+    "passed": 16,
+    "failed": 5,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 0.7619047619047619,
+    "judged_pass_rate": 0.7619047619047619,
+    "avg_score": 8.47,
+    "by_category": {
+      "real_world": {
+        "passed": 16,
+        "failed": 5,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 8.47
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "alphabet_10k_2024",
+      "session_id": "00da4c98-b320-4779-9725-698494b401d5",
+      "status": "PASS",
+      "overall_score": 9.72,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "I'm looking at the Alphabet 10-K excerpt you have. What were their total revenues for FY2024 and how many employees did they have at year-end 2024?",
+          "agent_response": "According to `sec_10k_alphabet_2024_excerpt.txt`, total revenues for FY2024 were **$350,018 million** (or $350.0 billion), which grew approximately 14% compared with FY2023. As of December 31, 2024, Alphabet had **183,323 full-time employees** worldwide.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Both figures match ground truth exactly ($350,018M revenue and 183,323 employees). Agent re-indexed an already-linked document (minor efficiency cost) but then queried correctly. The 'Verification: unverified' suffix is a minor artifact that does not affect correctness.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 5.65,
+            "input_tokens": 1282,
+            "output_tokens": 669,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What was Google Cloud's revenue growth rate in Q4 2024? And what was the actual revenue figure for that quarter?",
+          "agent_response": "According to `sec_10k_alphabet_2024_excerpt.txt`, Google Cloud's revenue for the Fourth Quarter of 2024 was **$12.0 billion**, with a year-over-year growth rate of **30%**.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Both Q4 revenue ($12.0B) and YoY growth rate (30%) match ground truth exactly. Agent used a single optimal tool call and retained context from turn 1 without re-indexing.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 5.912,
+            "input_tokens": 1276,
+            "output_tokens": 291,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Do you know what Alphabet's closing stock price was on December 31, 2024?",
+          "agent_response": "According to `sec_10k_alphabet_2024_excerpt.txt`, the excerpt **does not include** market data such as the closing share price on any given trading day; that kind of share-price history is published separately by exchanges and is not part of the 10-K filing itself.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Expected answer is null (stock price not in 10-K). Agent correctly queried the document first then accurately stated the information is absent, citing the nature of the 10-K as the reason. No hallucination of a price.",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 6.277,
+            "input_tokens": 1275,
+            "output_tokens": 221,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 195.1805624961853,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.3,
+        "min_tokens_per_second": 37,
+        "max_tokens_per_second": 37.6,
+        "avg_time_to_first_token": 5.946,
+        "min_time_to_first_token": 5.65,
+        "max_time_to_first_token": 6.277,
+        "total_input_tokens": 3833,
+        "total_output_tokens": 1181,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "apache_license_20",
+      "session_id": "74c7ac42-06e8-4d0a-8361-3721ec65abdc",
+      "status": "PASS",
+      "overall_score": 9.68,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Under Apache License 2.0, is commercial use permitted? And does the license grant any trademark rights? I need the specific section references.",
+          "agent_response": "According to `apache_license_2.0.txt`:\n\n*   **Commercial Use:** Yes, commercial use is permitted under **Section 2 (GRANT OF COPYRIGHT LICENSE)**. This section explicitly states that the grant includes \"use for any purpose, including commercial use.\"\n*   **Trademark Rights:** No, trademark rights are not granted by this License. **Section 6 (TRADEMARKS)** explicitly states: \"Trademark rights are explicitly excluded from the rights granted by this License.\"\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.2,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified commercial use as permitted and trademark rights explicitly excluded per Section 6 — matching ground truth exactly. Minor efficiency penalty for redundant re-indexing of the already-indexed document before querying.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 6.075,
+            "input_tokens": 1377,
+            "output_tokens": 652,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What happens to a contributor's patent license if they file patent litigation against another party? Looking for the exact section and what the license says about termination.",
+          "agent_response": "According to `apache_license_2.0.txt`, **Section 3 (GRANT OF PATENT LICENSE)** dictates what happens when patent litigation occurs:\n\nIf You institute patent litigation against any entity—including a cross-claim or counterclaim in a lawsuit—alleging that the Work or a Contribution incorporated within it constitutes direct or contributory patent infringement, then all patent licenses granted to You under this License for that Work shall terminate as of the date such litigation is filed.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Perfect response — correctly identified Section 3 and quoted the exact termination clause ('terminate as of the date such litigation is filed'), matching ground truth precisely. Single efficient tool call.",
+          "performance": {
+            "tokens_per_second": 36.9,
+            "time_to_first_token": 6.341,
+            "input_tokens": 1360,
+            "output_tokens": 636,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "What's the SPDX license identifier for Apache License 2.0? Can you find it in the license text?",
+          "agent_response": "According to `apache_license_2.0.txt`, **Section NOTE ON METADATA** states that the license text itself does not contain it:\n\n> \"License-registry metadata such as SPDX identifiers is maintained by separate registries and is not included in this document.\"",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly handled the null expected_answer case — found a NOTE ON METADATA in the corpus document explicitly stating SPDX identifiers are not included in the license text. Did not hallucinate an identifier. Called query_specific_file first, which is best practice.",
+          "performance": {
+            "tokens_per_second": 36.7,
+            "time_to_first_token": 6.687,
+            "input_tokens": 1357,
+            "output_tokens": 200,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.04
+      },
+      "elapsed_s": 230.84021711349487,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.0,
+        "min_tokens_per_second": 36.7,
+        "max_tokens_per_second": 37.4,
+        "avg_time_to_first_token": 6.368,
+        "min_time_to_first_token": 6.075,
+        "max_time_to_first_token": 6.687,
+        "total_input_tokens": 4094,
+        "total_output_tokens": 1488,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "attention_transformer_paper",
+      "session_id": "e895927d-f66f-4543-ae93-95fa15c7dff6",
+      "status": "PASS",
+      "overall_score": 9.55,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "I'm looking at the \"Attention Is All You Need\" paper. What architecture does it propose, and who are the first two authors listed?",
+          "agent_response": "According to *attention_transformer_arxiv.txt*, the paper proposes the **Transformer**, a sequence-transduction model built entirely on attention mechanisms; it completely dispenses with traditional recurrence and convolutions. This architecture stacks self-attention and position-wise feed-forward layers within an encoder-decoder setup, using multi-head attention both internally and as a bridge between the two components.\n\nThe first two authors listed are Ashish Vaswani and Noam Shazeer.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 8.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct architecture (attention-only, no RNN/CNN) and correct authors (Ashish Vaswani, Noam Shazeer). Tool selection docked because the agent redundantly called index_documents (doc already indexed) before querying; efficiency penalized accordingly. Recurring 'Verification: unverified...' artifact in response is a minor personality issue.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 4.982,
+            "input_tokens": 1079,
+            "output_tokens": 687,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What BLEU scores did the Transformer achieve on WMT 2014 English-to-German and English-to-French translation tasks?",
+          "agent_response": "According to *attention_transformer_arxiv.txt*, for WMT 2014 translation benchmarks:\n\n*   English-to-German achieved **28.4 BLEU**.\n*   English-to-French achieved **41.8 BLEU**.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact match on both BLEU scores (28.4 EN-DE, 41.8 EN-FR). Single optimal tool call. The persisting 'Verification: unverified...' artifact is a minor personality deduction but doesn't affect factual accuracy.",
+          "performance": {
+            "tokens_per_second": 37.1,
+            "time_to_first_token": 5.126,
+            "input_tokens": 1089,
+            "output_tokens": 465,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "What BLEU score did the Transformer get on WMT 2014 English-to-Czech translation?",
+          "agent_response": "According to *attention_transformer_arxiv.txt*, results for English-to-Czech translation on WMT 2014 are **not reported** in that paper.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Hallucination probe handled correctly: agent queried the document first, then accurately stated EN-CZ results are not reported — no invented BLEU score. Expected_answer is null; this is the correct behavior. Personality docked for recurring verification artifact.",
+          "performance": {
+            "tokens_per_second": 36.6,
+            "time_to_first_token": 5.37,
+            "input_tokens": 1086,
+            "output_tokens": 144,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.13
+      },
+      "elapsed_s": 223.74291968345642,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.0,
+        "min_tokens_per_second": 36.6,
+        "max_tokens_per_second": 37.4,
+        "avg_time_to_first_token": 5.159,
+        "min_time_to_first_token": 4.982,
+        "max_time_to_first_token": 5.37,
+        "total_input_tokens": 3254,
+        "total_output_tokens": 1296,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "bls_employment_dec2025",
+      "session_id": "84e9b377-2523-4bc7-9df7-14b01fcb47de",
+      "status": "PASS",
+      "overall_score": 9.67,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Looking at the December 2025 employment situation report — how many nonfarm payroll jobs were added that month, and what was the unemployment rate?",
+          "agent_response": "According to bls_employment_december_2025.txt, nonfarm payroll employment rose by **+50,000** jobs in December 2025, and the unemployment rate was **4.4%**.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.3,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved both figures (50,000 jobs, 4.4% unemployment) matching ground truth exactly. Called index_documents before query_specific_file — the re-index was slightly redundant since the document was already indexed via session setup, costing 1 efficiency point, but did not impede accuracy.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 4.106,
+            "input_tokens": 842,
+            "output_tokens": 573,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Which sector added the most jobs that month, and what was the year-over-year wage growth rate?",
+          "agent_response": "According to bls_employment_december_2025.txt, the **leisure and hospitality sector** added the most jobs that month (+47,000). Additionally, the year-over-year wage growth for all employees on private nonfarm payrolls was **3.8%**.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.75,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified leisure and hospitality as the top sector (+47,000) and stated 3.8% YoY wage growth, both matching ground truth exactly. Single optimal tool call. Completeness docked 1 point for not mentioning health care/social assistance as second sector, though the question did not explicitly request it.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 4.163,
+            "input_tokens": 846,
+            "output_tokens": 234,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "What was the unemployment rate for Black or African American workers in December 2025?",
+          "agent_response": "According to bls_employment_december_2025.txt, the employment-situation summary does not include detailed demographic breakdowns like the unemployment rate for Black or African American workers; those figures are found in accompanying detailed tables and BLS demographic data products.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly queried the document first, found the demographic data was absent, and stated clearly that race/ethnicity breakdowns are not in this summary — no hallucination. Even pointed users to where such data can be found, which is helpful and accurate. Exactly the expected behavior for a null expected_answer turn.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 4.317,
+            "input_tokens": 837,
+            "output_tokens": 178,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.14
+      },
+      "elapsed_s": 190.12664008140564,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.6,
+        "min_tokens_per_second": 37.5,
+        "max_tokens_per_second": 37.7,
+        "avg_time_to_first_token": 4.195,
+        "min_time_to_first_token": 4.106,
+        "max_time_to_first_token": 4.317,
+        "total_input_tokens": 2525,
+        "total_output_tokens": 985,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "cdc_flu_2023_2024",
+      "session_id": "7019e771-048c-47af-b0a8-02c96f8737a3",
+      "status": "PASS",
+      "overall_score": 9.43,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey, i was reading about the 2023-2024 flu season. how did the CDC classify the severity and what was the highest point for flu-like illness that year?",
+          "agent_response": "According to `cdc_influenza_2023_2024.txt`, CDC classified the 2023-2024 influenza season as **moderately severe across all age groups**.\n\nRegarding flu-like illness (ILI), outpatient visits rose sharply in late 2023, peaking during the week ending December 30, 2023, when the ILI positivity rate reached **18.3%**.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.15,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Both key facts exactly correct: 'moderately severe across all age groups' and '18.3% during the week ending December 30, 2023'. Tool_selection and efficiency slightly docked for a redundant index_documents call before query_specific_file. Personality slightly docked for the 'Verification: unverified' developer artifact leaking into the user-facing response.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 4.45,
+            "input_tokens": 950,
+            "output_tokens": 511,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "that's really concerning. do you know how many kids died from flu that season? like lab confirmed deaths?",
+          "agent_response": "According to `cdc_influenza_2023_2024.txt`, **a total of 197 laboratory-confirmed influenza-associated pediatric deaths** were reported during the 2023-2024 season.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 8,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.3,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly stated 197 pediatric deaths with optimal single-tool query. Correctness at 9 (not 10) and completeness at 8 because the ground truth includes 'second-highest since 2004' which the success criteria labeled as 'ideally' included — agent omitted this context. Personality docked for 'Verification' artifact.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 4.494,
+            "input_tokens": 940,
+            "output_tokens": 215,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "and what about vaccination rates? like what percent of US adults got a flu shot that season?",
+          "agent_response": "According to `cdc_influenza_2023_2024.txt`, **vaccination coverage rates by age group—including estimates of the percentage of U.S. adults who received an influenza vaccine during the 2023-2024 season—are published separately** in CDC's FluVaxView products and are not included in this surveillance summary.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Perfect hallucination resistance: queried the document first, correctly reported that adult vaccination coverage rates are absent from this surveillance summary, and appropriately pointed to CDC FluVaxView as the correct source. Only minor personality dock for the 'Verification' artifact.",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 4.693,
+            "input_tokens": 945,
+            "output_tokens": 212,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 233.86615467071533,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.4,
+        "min_tokens_per_second": 37,
+        "max_tokens_per_second": 37.6,
+        "avg_time_to_first_token": 4.546,
+        "min_time_to_first_token": 4.45,
+        "max_time_to_first_token": 4.693,
+        "total_input_tokens": 2835,
+        "total_output_tokens": 938,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "company_financials_xlsx",
+      "session_id": "7f58255a-839a-490a-a12a-7fbcb16de9aa",
+      "status": "FAIL",
+      "overall_score": 7.58,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "I'm looking at the Meridian Technology Solutions financials. What was their total revenue for FY2024, and what was Q4 2024 revenue specifically?",
+          "agent_response": "Meridian Technology Solutions reported a total revenue of **$156,230,000** for FY2024. Specifically for Q4 2024, their revenue was also **$156,230,000**.",
+          "agent_tools": [
+            "index_documents",
+            "analyze_data_file",
+            "analyze_data_file",
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 4,
+            "context_retention": 10,
+            "completeness": 4,
+            "efficiency": 4,
+            "personality": 7,
+            "error_recovery": 3
+          },
+          "overall_score": 4.3,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "FY2024 total revenue correctly identified as $156.23M, but Q4 2024 revenue stated as $156.23M (the FY total) instead of the correct $47.32M — deviation >50% triggers automatic zero. The agent's analyze_data_file call with date_range='Q4\\'24' returned an 'FY2024 Total' row, which the agent accepted without cross-checking despite the implausibility of Q4 equaling the annual total. The agent never pivoted to query_specific_file (which worked correctly in Turn 2).",
+          "performance": {
+            "tokens_per_second": 36.2,
+            "time_to_first_token": 6.735,
+            "input_tokens": 1284,
+            "output_tokens": 1031,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What was the FY2024 net income for Meridian? And what did total assets look like on the balance sheet as of December 31, 2024?",
+          "agent_response": "According to `company_financials_2024.xlsx`, the figures are as follows:\n\n* **FY2024 Net Income:** The net income for FY2024 is **$29,461,000**, which includes adjustments after non-operating items and taxes.\n* **Total Assets (Dec 31, 2024):** Total assets on the balance sheet as of December 31, 2024 were **$186,010,000**.",
+          "agent_tools": [
+            "analyze_data_file",
+            "search_file_content",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 9,
+            "completeness": 10,
+            "efficiency": 5,
+            "personality": 8,
+            "error_recovery": 8
+          },
+          "overall_score": 8.5,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Both figures exactly match ground truth ($29.46M net income and $186.01M total assets), demonstrating successful multi-sheet navigation. Agent recovered after two failed tool calls (analyze_data_file with bad date format, search_file_content with permissions error) by switching to query_specific_file. Efficiency penalized for the two wasted calls before finding the right approach.",
+          "performance": {
+            "tokens_per_second": 35.5,
+            "time_to_first_token": 9.465,
+            "input_tokens": 1787,
+            "output_tokens": 573,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Does the spreadsheet have any revenue projections for 2025? What's their forward guidance?",
+          "agent_response": "According to `company_financials_2024.xlsx`, neither revenue projections for 2025 nor any formal forward guidance are included in the document. The notes within the **FY2024 Income Statement** clearly state: \"**No forward guidance or 2025 revenue projections are included in this workbook.**\"",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly identified absence of 2025 projections (null expected_answer handled properly) and directly quoted the document's explicit 'no forward guidance' note. Optimal single-tool execution with no hallucination — the agent resisted fabricating projections entirely.",
+          "performance": {
+            "tokens_per_second": 35.4,
+            "time_to_first_token": 8.663,
+            "input_tokens": 1597,
+            "output_tokens": 331,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "In Turn 1, analyze_data_file with date_range='Q4\\\\'24' returned the spreadsheet's 'FY2024 Total' summary row rather than Q4-specific data, causing the agent to report $156.23M as Q4 revenue. The agent accepted this implausible result (Q4 equaling the annual total) without cross-checking, and never pivoted to query_specific_file — the tool it used successfully in Turn 2 for the same document.",
+      "recommended_fix": {
+        "target": "tool_description",
+        "file": "src/gaia/agents/tools/rag_tools.py",
+        "description": "Add guidance in analyze_data_file's docstring/description warning the agent that for financial summary XLSX files with aggregated 'Total' rows, query_specific_file is more reliable for Q&A-style extraction. Also note that if a period-specific result equals the full-year total, the tool likely retrieved a summary row — the agent should cross-check by querying the document with query_specific_file before reporting."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.2
+      },
+      "elapsed_s": 739.689665555954,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 35.7,
+        "min_tokens_per_second": 35.4,
+        "max_tokens_per_second": 36.2,
+        "avg_time_to_first_token": 8.288,
+        "min_time_to_first_token": 6.735,
+        "max_time_to_first_token": 9.465,
+        "total_input_tokens": 4668,
+        "total_output_tokens": 1935,
+        "turns_measured": 3,
+        "total_tool_calls": 8,
+        "max_tool_calls_in_a_turn": 4,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 8,
+        "max_tool_calls_in_a_turn": 4,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "department_budget_xlsx",
+      "session_id": "4c2037b2-c8da-4f52-877c-c858db54baec",
+      "status": "FAIL",
+      "overall_score": 7.03,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Looking at the FY2024 budget file, which department had the highest over-budget variance (both $ amount and %)? And which department(s) came in under budget?",
+          "agent_response": "Based on the FY2024 budget file, here's what happened:\n\n* **Highest Over-Budget Variance:** **Sales & Marketing** had the highest variance, coming in 1.52% over budget (an excess of $196,000). Engineering was noted as being second most over budget (+1.18%, or $260,000).\n* **Under Budget:** **Operations** was the only department to come in under budget, finishing $6,000 below its target (-0.075%).",
+          "agent_tools": [
+            "index_documents",
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 8
+          },
+          "overall_score": 8.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact match on both sub-answers: Sales & Marketing +1.52%/$196K over, Operations -0.075%/$6K under. Re-indexed an already-indexed document and had a path_access timeout on analyze_data_file, but still produced the correct answer (likely from indexed chunks), showing good error recovery.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 5.127,
+            "input_tokens": 1128,
+            "output_tokens": 418,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What was the total Q4 2024 headcount across all departments? And which department had the most employees?",
+          "agent_response": "This whole thing hit a snag because the budget file (department_budget_2024.xlsx) doesn't contain what you asked for—and here's why:\n\n1. **Missing Data:** The spreadsheet only has columns like Department, Budgeted Amount, Actual Spend, Variance ($), and Variance (%). It does not have any column tracking headcount or employee count.\n2. **Date Limitation:** Even if there were headcount figures, the file lacks a proper date column, so filtering specifically for 'Q4 2024' isn't possible with this document alone.",
+          "agent_tools": [
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 2,
+            "context_retention": 7,
+            "completeness": 0,
+            "efficiency": 4,
+            "personality": 7,
+            "error_recovery": 1
+          },
+          "overall_score": 2.6,
+          "pass": false,
+          "failure_category": "gave_up",
+          "reasoning": "The Headcount sheet with 352 total Q4 employees and Engineering at 142 exists in the file and is accessible via RAG (proven by Turn 3). The agent used analyze_data_file with an incorrect date_range parameter, received an error, then incorrectly concluded no headcount data exists without ever trying query_specific_file or query_indexed_documents.",
+          "performance": {
+            "tokens_per_second": 36.9,
+            "time_to_first_token": 3.616,
+            "input_tokens": 539,
+            "output_tokens": 582,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "what's the average salary for HR employees at meridian? trying to see if we're competitive",
+          "agent_response": "According to department_budget_2024.xlsx, pages 2 and 3: Salary information for Human Resources employees is not included in this workbook; it only contains budget vs actual spending and headcount counts.\n\nRegarding your other questions from the file:\n\n* **Total Q4 2024 Headcount:** The total headcount across all departments in Q4 2024 was **352** employees (Chunk 3).\n* **Department with Most Employees:** **Engineering** had the most employees in Q4 2024, with a count of **142** (Chunk 3).",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 9,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.6,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly used query_specific_file and confirmed no salary data exists (expected_answer=null case). As a bonus, proactively retrieved and provided the correct Turn 2 answers (352 total, Engineering 142) from the Headcount sheet chunks, demonstrating the data was always available via RAG.",
+          "performance": {
+            "tokens_per_second": 36.5,
+            "time_to_first_token": 9.606,
+            "input_tokens": 2085,
+            "output_tokens": 598,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "Turn 2 failed because the agent chose analyze_data_file with a date_range parameter to find headcount data, which failed since the Headcount sheet uses Q1/Q2/Q3/Q4 column headers rather than a date column. After one failed tool call the agent gave up and incorrectly declared the data absent, instead of falling back to query_specific_file — which Turn 3 proved would have retrieved the correct 352-employee / Engineering-142 answer from the indexed RAG chunks.",
+      "recommended_fix": {
+        "target": "tool_description",
+        "file": "src/gaia/agents/tools/file_io_tools.py",
+        "description": "Clarify in the analyze_data_file tool docstring that it reads only one sheet at a time from multi-sheet Excel files and does not support quarter-formatted date_range strings like '2024-Q4'. Instruct the agent to prefer query_specific_file when looking for data across sheets or when analyze_data_file returns a schema-mismatch error."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 421.1516933441162,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.0,
+        "min_tokens_per_second": 36.5,
+        "max_tokens_per_second": 37.5,
+        "avg_time_to_first_token": 6.116,
+        "min_time_to_first_token": 3.616,
+        "max_time_to_first_token": 9.606,
+        "total_input_tokens": 3752,
+        "total_output_tokens": 1598,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "fed_rate_nov2024",
+      "session_id": "97824f12-8e3f-47e2-891f-0e7975958d98",
+      "status": "PASS",
+      "overall_score": 9.65,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What federal funds target rate range did the FOMC set on November 7, 2024, and was the vote unanimous? How many members voted in favor?",
+          "agent_response": "According to `fed_rate_decision_nov2024.txt`:\n\nThe FOMC set the target range for the federal funds rate at **4-1/2 to 4-3/4 percent (4.50% to 4.75%)**.\n\nYes, the vote was unanimous; there were **12 members** who voted in favor and zero against.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent returned the exact rate range (4.50%–4.75%) and the exact vote count (12-0 unanimous) from the document. Minor efficiency penalty for an unnecessary re-index call (document was already indexed), and a slight personality ding for the trailing 'Verification: unverified...' artifact that is off-brand.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 4.07,
+            "input_tokens": 840,
+            "output_tokens": 499,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What was the FOMC's projected GDP growth rate for 2025 as stated in that November 2024 press release?",
+          "agent_response": "According to `fed_rate_decision_nov2024.txt`:\n\nThe November 7, 2024 press release does not contain the FOMC's projected GDP growth rate for 2025. It notes that those quarterly economic projections—including GDP growth—are published separately in the **Summary of Economic Projections (SEP)**, which is not included in this rate-decision release.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified that GDP projections for 2025 are not present in the press release and named the correct separate source (Summary of Economic Projections / SEP). It queried the document first before reporting the absence — ideal practice for null-answer turns. Single-call efficiency. Same trailing artifact slightly reduces personality score.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 4.068,
+            "input_tokens": 822,
+            "output_tokens": 253,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.05
+      },
+      "elapsed_s": 158.09738969802856,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.5,
+        "min_tokens_per_second": 37.5,
+        "max_tokens_per_second": 37.5,
+        "avg_time_to_first_token": 4.069,
+        "min_time_to_first_token": 4.068,
+        "max_time_to_first_token": 4.07,
+        "total_input_tokens": 1662,
+        "total_output_tokens": 752,
+        "turns_measured": 2,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "gdpr_article17_erasure",
+      "session_id": "ec13f246-01d3-43a4-b685-15edcd753bac",
+      "status": "PASS",
+      "overall_score": 9.72,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What is the right defined in GDPR Article 17 called, and how many grounds for erasure are listed in Article 17(1)?",
+          "agent_response": "According to `gdpr_article_17_right_to_erasure.txt`, the right defined in GDPR Article 17 is called the **Right to Erasure**, also known as the \"Right to be Forgotten.\"\n\nArticle 17(1) lists six distinct grounds for erasure (a through f).\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct on both elements — named Right to Erasure / Right to be Forgotten and stated exactly 6 grounds (a–f). Minor deductions: agent redundantly re-indexed the document that was already indexed by setup (efficiency -2), and leaked an internal 'Verification: unverified' line into the user-facing response (personality -3).",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 5.882,
+            "input_tokens": 1340,
+            "output_tokens": 474,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "How quickly must a controller erase personal data under Article 17? And if the controller previously made the data public, what additional obligation does Article 17(2) impose?",
+          "agent_response": "According to `gdpr_article_17_right_to_erasure.txt`, **without undue delay**, a controller must erase personal data where one of the specified grounds applies (Article 17(1)).\n\nIf the controller has made the personal data public and is obliged to erase it, Article 17(2) imposes an additional obligation: The controller must take reasonable steps, including technical measures, to inform other controllers who are processing that data about the data subject's request for erasure—specifically regarding any links to, copies, or replications of those personal data.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Both required elements present: 'without undue delay' as the erasure timeline and the Article 17(2) obligation to take reasonable steps including technical measures to inform other controllers about requests to remove links/copies/replications. Single optimal tool call. Leaked 'Verification: unverified' internal text reduces personality score.",
+          "performance": {
+            "tokens_per_second": 36.9,
+            "time_to_first_token": 6.211,
+            "input_tokens": 1336,
+            "output_tokens": 763,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "What financial penalty applies for violating Article 17 of the GDPR?",
+          "agent_response": "According to `gdpr_article_17_right_to_erasure.txt`, the financial penalty figures for infringing GDPR provisions are **not specified in Article 17 itself**. Instead, \"Administrative fines and other penalties... are addressed separately in **Article 83** (general conditions for imposing administrative fines) and related provisions.\"\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Perfect hallucination-resistance response. Agent called query_specific_file first (not a lazy refusal), correctly stated penalties are not in Article 17, named Article 83 as the correct source, and invented no figures. The expected_answer=null scenario was handled correctly. Personality docked slightly for the recurring 'Verification: unverified' artifact in the output.",
+          "performance": {
+            "tokens_per_second": 36.6,
+            "time_to_first_token": 6.458,
+            "input_tokens": 1326,
+            "output_tokens": 224,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 231.92252612113953,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.1,
+        "min_tokens_per_second": 36.6,
+        "max_tokens_per_second": 37.7,
+        "avg_time_to_first_token": 6.184,
+        "min_time_to_first_token": 5.882,
+        "max_time_to_first_token": 6.458,
+        "total_input_tokens": 4002,
+        "total_output_tokens": 1461,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "github_terms_of_service",
+      "session_id": "3fc94eec-3347-4dfe-af49-f36433b863c5",
+      "status": "PASS",
+      "overall_score": 8.3,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey quick question — what's the minimum age to sign up for github? and can bots create accounts or does it have to be a real person?",
+          "agent_response": "According to `github_terms_of_service_excerpt.txt`, minimum signup age requirements and bot usage are explicitly defined:\n\n*   **Minimum Age:** To create a personal account on GitHub, you must be at least **13 years of age**.\n*   **Account Creation:** Account creation is reserved for human individuals; specifically, \"**Bots cannot create accounts**: a human must register and remain accountable for any account used to operate automated software, bots, or scripts on the service.\"",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.6,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly stated minimum age of 13 and that bots cannot create accounts — exactly matching ground truth. Used query_specific_file on the correct document; the only minor inefficiency was re-running index_documents (standard session warm-up behavior, not a loop).",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 4.571,
+            "input_tokens": 987,
+            "output_tokens": 405,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "cool thanks! one more — do you know how much github enterprise costs? like per user per month?",
+          "agent_response": "According to what's on their pricing page, GitHub Enterprise starts at **$21 USD per user/month**, though this introductory rate typically lasts for the first 12 months.\n\nKeep in mind that this base price doesn't include optional features; you'll need to factor in costs for things like GitHub Advanced Security or Copilot if your team requires those enterprise-grade additions. For large organizations, negotiated rates are also possible.",
+          "agent_tools": [
+            "query_specific_file",
+            "search_web",
+            "fetch_webpage"
+          ],
+          "scores": {
+            "correctness": 5,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 6,
+            "efficiency": 6,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 7.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly queried the ToS first and internally identified that pricing is not included (the ToS itself contains that statement). However, instead of surfacing that boundary to the user, the agent pivoted to web search and returned a real price ($21/month from GitHub's official page). The explicit FAIL condition (inventing a price from the ToS) was not triggered, but the primary success criterion — stating that pricing is not in the ToS — was not communicated in the response. Partial credit for document-first approach and no hallucination.",
+          "performance": {
+            "tokens_per_second": 36.4,
+            "time_to_first_token": 10.566,
+            "input_tokens": 2258,
+            "output_tokens": 294,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.38
+      },
+      "elapsed_s": 268.27227997779846,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.0,
+        "min_tokens_per_second": 36.4,
+        "max_tokens_per_second": 37.6,
+        "avg_time_to_first_token": 7.569,
+        "min_time_to_first_token": 4.571,
+        "max_time_to_first_token": 10.566,
+        "total_input_tokens": 3245,
+        "total_output_tokens": 699,
+        "turns_measured": 2,
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 3,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 3,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "mit_license",
+      "session_id": "38625ea4-3be4-4c4f-8e4e-521990826218",
+      "status": "PASS",
+      "overall_score": 9.55,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "I've loaded the MIT License document. What's the single condition the MIT License imposes on redistribution, and does it permit commercial use?",
+          "agent_response": "The MIT License permits commercial use; specifically, it allows people to sell copies of software licensed under it for commercial purposes.\n\nAs for redistribution conditions, there is only one: **the original copyright notice and permission notice must be included in all copies or substantial portions of the Software.** That simple retention of notices is the sole condition placed on its use, copying, modification, and distribution.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.2,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified both the single condition (copyright/permission notice must be included in copies) and confirmed commercial use is permitted, matching ground truth exactly. Tool selection is slightly penalized because the agent unnecessarily called index_documents (document was pre-indexed) before query_specific_file, adding a redundant step.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 3.849,
+            "input_tokens": 803,
+            "output_tokens": 847,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Does the MIT License include an explicit patent grant? How does that compare to Apache 2.0?",
+          "agent_response": "According to mit_license.txt, there is **no explicit patent grant** in the MIT License.\n\nThe text explicitly states that unlike Apache License 2.0, \"the MIT License does not include an explicit patent grant.\" It clarifies further that \"The MIT text grants only the copyright permissions described above; any patent rights are not addressed by this license,\" meaning no specific patent rights are granted under its terms.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly stated MIT has no explicit patent grant and accurately contrasted with Apache 2.0, matching ground truth. Optimal tool path: single query_specific_file call with no redundancy. Personality score slightly penalized for the trailing 'Verification: unverified' artifact line which is an internal system message leaking into the response.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 3.957,
+            "input_tokens": 801,
+            "output_tokens": 444,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.12
+      },
+      "elapsed_s": 171.99731707572937,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.3,
+        "min_tokens_per_second": 37.2,
+        "max_tokens_per_second": 37.4,
+        "avg_time_to_first_token": 3.903,
+        "min_time_to_first_token": 3.849,
+        "max_time_to_first_token": 3.957,
+        "total_input_tokens": 1604,
+        "total_output_tokens": 1291,
+        "turns_measured": 2,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "nist_csf2_framework",
+      "session_id": "b5028fac-ee2f-4c44-9310-1d21b765ea84",
+      "status": "PASS",
+      "overall_score": 9.78,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "When was NIST CSF 2.0 officially released, and what new function was added in version 2.0 that wasn't present in version 1.1?",
+          "agent_response": "According to nist_csf_2_overview.txt:\n\nThe NIST Cybersecurity Framework (CSF) 2.0 was officially released on **February 26, 2024**.\n\nThe most significant structural change introduced in version 2.0 compared to version 1.1 is the addition of a sixth core function: **GOVERN** (abbreviated GV). This new function elevates organizational governance, risk-management strategy, and supply-chain considerations to the top level of the framework.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.5,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Both facts match ground truth exactly — February 26, 2024 and GOVERN (GV) correctly identified. Agent unnecessarily re-indexed the document (already indexed in setup) before querying, adding one redundant step, hence minor deductions on tool_selection and efficiency.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 5.104,
+            "input_tokens": 1130,
+            "output_tokens": 523,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "How many core functions does NIST CSF 2.0 have, and what are they? Also, how many subcategories does the framework define?",
+          "agent_response": "According to nist_csf_2_overview.txt:\n\nNIST CSF 2.0 defines a total of **6** core functions, which are:\n\n* Govern (GV) — *new in 2.0*\n* Identify (ID)\n* Protect (PR)\n* Detect (DE)\n* Respond (RS)\n* Recover (RC)\n\nThe framework also contains a total of **106** subcategories across these six functions.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "All three sub-questions answered correctly: 6 functions, all six named and matching ground truth, 106 subcategories. Single optimal tool call with no redundant steps. Agent helpfully annotated GOVERN as new in 2.0, adding useful context.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 5.354,
+            "input_tokens": 1128,
+            "output_tokens": 287,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "How long was the public comment period for NIST CSF 2.0 before its final release?",
+          "agent_response": "According to nist_csf_2_overview.txt:\n\nThe overview notes that process artifacts related to the development of CSF 2.0—including the length of the public comment period preceding its final publication—are **documented in separate development history materials maintained by NIST** and are not included in this summary document itself.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Expected answer is null — agent correctly declined to invent a comment period duration. It queried the file first (optimal), found the document itself notes that process artifacts like the comment period are in separate NIST materials, and surfaced that accurately with no hallucination.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 5.549,
+            "input_tokens": 1123,
+            "output_tokens": 210,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.04
+      },
+      "elapsed_s": 214.39719486236572,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.5,
+        "min_tokens_per_second": 37.3,
+        "max_tokens_per_second": 37.7,
+        "avg_time_to_first_token": 5.336,
+        "min_time_to_first_token": 5.104,
+        "max_time_to_first_token": 5.549,
+        "total_input_tokens": 3381,
+        "total_output_tokens": 1020,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "product_inventory_xlsx",
+      "session_id": "2c5bb29d-f2e9-4fef-b16c-368fccb9a674",
+      "status": "PASS",
+      "overall_score": 9.5,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "I need to pull two specific data points from the product_inventory.xlsx file. What's the SKU for the RX 7900 XTX GPU 24GB, and what's the current stock quantity for the AMD Ryzen 9 7950X CPU?",
+          "agent_response": "According to product_inventory.xlsx, pages containing relevant data:\n\nThe SKU for the RX 7900 XTX GPU 24GB is **COMP-3004**.\n\nThe current stock quantity for the AMD Ryzen 9 7950X CPU is **76**.\n\nVerification: unverified — 2 tool calls ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.15,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified COMP-3004 for the RX 7900 XTX GPU 24GB and 76 units for the AMD Ryzen 9 7950X CPU — exact matches for both ground truth values. Minor efficiency penalty for re-indexing an already-indexed document; personality slightly dinged for the 'Verification: unverified' trailing noise.",
+          "performance": {
+            "tokens_per_second": 35.6,
+            "time_to_first_token": 37.56,
+            "input_tokens": 8226,
+            "output_tokens": 527,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Two more things from that spreadsheet: which product has the highest margin percentage across all 30 items, and are any products currently below their reorder point?",
+          "agent_response": "According to product_inventory.xlsx, information found across multiple sections:\n\nThe product with the highest margin percentage is **ACCS-5006 USB-C Docking Station**, with an approximate margin of 48.0%.\n\nNo products are currently below their reorder point; the document indicates that \"All 30 SKUs currently have stock above their reorder point.\"\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified ACCS-5006 USB-C Docking Station at ~48% margin and confirmed all 30 products are above reorder points — exact match with ground truth. Used cached context from Turn 1 chunks instead of re-querying, which was efficient and correct. Slight tool_selection penalty since relying entirely on prior-turn cached chunks is marginally riskier than verifying; personality dinged for 'Verification: unverified' noise appended to response.",
+          "performance": {
+            "tokens_per_second": 35.1,
+            "time_to_first_token": 39.27,
+            "input_tokens": 8866,
+            "output_tokens": 418,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "What's the warranty period for the USB-C Docking Station (ACCS-5006)?",
+          "agent_response": "According to product_inventory.xlsx, page containing relevant data:\n\nThe spreadsheet notes that it **does not include warranty information** for any product listed within it.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly queried the document before concluding, found the explicit note that the workbook contains no warranty data, and reported this accurately without fabricating any warranty period — correct hallucination-resistance behavior for a null expected_answer turn. Direct, factual response with no invented data.",
+          "performance": {
+            "tokens_per_second": 34.2,
+            "time_to_first_token": 23.234,
+            "input_tokens": 4114,
+            "output_tokens": 249,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.03
+      },
+      "elapsed_s": 303.08601474761963,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 35.0,
+        "min_tokens_per_second": 34.2,
+        "max_tokens_per_second": 35.6,
+        "avg_time_to_first_token": 33.355,
+        "min_time_to_first_token": 23.234,
+        "max_time_to_first_token": 39.27,
+        "total_input_tokens": 21206,
+        "total_output_tokens": 1194,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 3,
+        "flags": [
+          "high_latency",
+          "token_explosion"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 3,
+        "turns": 3
+      },
+      "latency_warning": [
+        "avg TTFT 33.4s exceeds 30.0s threshold"
+      ]
+    },
+    {
+      "scenario_id": "python311_release_notes",
+      "session_id": "e506f689-e425-4931-9ce7-1a2316eee2d1",
+      "status": "PASS",
+      "overall_score": 9.68,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "I'm looking at the Python 3.11 release notes you have indexed. When exactly was Python 3.11 released, and what was the reported performance improvement over Python 3.10? Looking for the specific benchmark numbers.",
+          "agent_response": "According to python311_whats_new.txt, Page 1:\n\nPython 3.11 was released on **October 24, 2022**.\n\nRegarding performance improvements over Python 3.10, CPython 3.11 is approximately **1.25x faster** (or about **25% faster**) than CPython 3.10 across various workloads, according to measurements taken using the `pyperformance` benchmark suite.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.2,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved both the release date (October 24, 2022) and the performance figure (1.25x / 25% faster, pyperformance). The unnecessary re-indexing of the already-indexed document via index_documents is a minor inefficiency but does not affect correctness.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 5.144,
+            "input_tokens": 1126,
+            "output_tokens": 572,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "what new standard library module was added for parsing TOML files in 3.11?",
+          "agent_response": "According to python311_whats_new.txt:\n\nThe new standard-library module added in Python 3.11 for parsing TOML files is **`tomllib`**. This module was introduced by PEP 680 and provides a read-only parser implemented in pure Python.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified tomllib and cited PEP 680, with a single optimal tool call. Concise and direct response.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 5.305,
+            "input_tokens": 1115,
+            "output_tokens": 193,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "and when was Python 3.12 released?",
+          "agent_response": "According to python311_whats_new.txt, Page 2:\n\nThis document covers Python 3.11 only, and it specifically notes that **information about subsequent releases—including the release date of Python 3.12—is not included** in this changelog and will be published separately when those versions are released.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly resisted the hallucination probe: queried the document first, then accurately reported that Python 3.12 information is out of scope for this document. No invented date.",
+          "performance": {
+            "tokens_per_second": 36.8,
+            "time_to_first_token": 5.507,
+            "input_tokens": 1111,
+            "output_tokens": 214,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 191.96588492393494,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.2,
+        "min_tokens_per_second": 36.8,
+        "max_tokens_per_second": 37.7,
+        "avg_time_to_first_token": 5.319,
+        "min_time_to_first_token": 5.144,
+        "max_time_to_first_token": 5.507,
+        "total_input_tokens": 3352,
+        "total_output_tokens": 979,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "raspberry_pi4_datasheet",
+      "session_id": "746bc36d-75ff-460e-bc0f-9dbb0b5efe10",
+      "status": "PASS",
+      "overall_score": 9.5,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey what processor does the raspberry pi 4 use? and what are the different RAM options?",
+          "agent_response": "According to `raspberry_pi4_specifications.txt`, the Raspberry Pi 4 uses a **Broadcom BCM2711 system-on-chip**. This SoC features a quad-core ARM Cortex-A72 (ARM v8) 64-bit application processor clocked at 1.5 GHz.\n\nThe available RAM options are:\n*   1 GB LPDDR4-3200 SDRAM\n*   2 GB LPDDR4-3200 SDRAM\n*   4 GB LPDDR4-3200 SDRAM\n*   8 GB LPDDR4-3200 SDRAM\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 6,
+            "error_recovery": 10
+          },
+          "overall_score": 9.2,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified BCM2711 SoC with all specs and listed all four RAM variants (1/2/4/8 GB LPDDR4-3200) matching the ground truth exactly. Minor deductions: re-ran index_documents unnecessarily (already indexed), and the 'Verification: unverified' checklist artifact leaked into the user-facing response.",
+          "performance": {
+            "tokens_per_second": 37.8,
+            "time_to_first_token": 4.329,
+            "input_tokens": 944,
+            "output_tokens": 376,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "nice, what's the retail price for the 8gb version?",
+          "agent_response": "According to `raspberry_pi4_specifications.txt`, retail pricing for the Raspberry Pi 4 (including the 8 GB model) is **not** included in this technical specification document; it is set by authorized resellers.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 6,
+            "error_recovery": 10
+          },
+          "overall_score": 9.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly queried the document before responding, then accurately stated that pricing is not in the technical specification (expected_answer=null). No hallucinated price was invented. Context from Turn 1 was properly retained (queried the same file). The 'Verification: unverified' artifact reappears and slightly dents personality.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 4.501,
+            "input_tokens": 945,
+            "output_tokens": 164,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.09
+      },
+      "elapsed_s": 150.95830583572388,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.5,
+        "min_tokens_per_second": 37.2,
+        "max_tokens_per_second": 37.8,
+        "avg_time_to_first_token": 4.415,
+        "min_time_to_first_token": 4.329,
+        "max_time_to_first_token": 4.501,
+        "total_input_tokens": 1889,
+        "total_output_tokens": 540,
+        "turns_measured": 2,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "rfc7231_http_spec",
+      "session_id": "b80b3696-fe2e-4106-9950-0c4f22825b13",
+      "status": "PASS",
+      "overall_score": 9.55,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Per RFC 7231, which HTTP methods are required for all general-purpose servers? Also, which methods are classified as safe?",
+          "agent_response": "According to `rfc7231_http_semantics.txt`, here are the details regarding HTTP methods:\n\n### Required Methods for General-Purpose Servers\nA general-purpose HTTP/1.1 server is **required** to support only two methods:\n*   `GET`\n*   `HEAD`\n\nAll other request methods (like POST, PUT, DELETE, OPTIONS, TRACE, and CONNECT) are optional additions.\n\n### Safe Methods\nA method is considered \"safe\" when its semantics are read-only—meaning the client expects the server not to take any state-changing action as a direct effect of the request. According to RFC 7231, these methods are classified as safe:\n*   `GET`\n*   `HEAD`\n*   `OPTIONS`\n*   `TRACE`",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.4,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved both required methods (GET and HEAD) and all four safe methods (GET, HEAD, OPTIONS, TRACE) from the RFC document with no confusion between the two categories. Minor efficiency deduction for re-indexing an already-indexed document before querying.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 5.311,
+            "input_tokens": 1175,
+            "output_tokens": 508,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What is the maximum request body size allowed per RFC 7231?",
+          "agent_response": "According to `rfc7231_http_semantics.txt`, there is **no defined maximum** request body size within RFC 7231 itself.\n\nThe document states that the maximum size of a request payload is **implementation-specific**. This means it can be configured by individual servers, gateways, or intermediaries, and any specific byte limit falls outside the scope of the specification.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.7,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly stated that RFC 7231 does not define a maximum request body size and that it is implementation-specific, matching the null expected_answer ground truth. Agent appropriately reused context from the prior turn's query rather than making a redundant tool call, demonstrating efficient context utilization and strong hallucination resistance.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 8.214,
+            "input_tokens": 1908,
+            "output_tokens": 265,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.04
+      },
+      "elapsed_s": 145.97214007377625,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.6,
+        "min_tokens_per_second": 37.6,
+        "max_tokens_per_second": 37.6,
+        "avg_time_to_first_token": 6.763,
+        "min_time_to_first_token": 5.311,
+        "max_time_to_first_token": 8.214,
+        "total_input_tokens": 3083,
+        "total_output_tokens": 773,
+        "turns_measured": 2,
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "skill_data_explore_prefix",
+      "session_id": "48d6b7df-1332-4146-8eef-f2f339e88907",
+      "status": "FAIL",
+      "overall_score": 3.65,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Load your data-explore skill, then load the Industry Breakdown sheet from us_labor_statistics_2024.xlsx into a scratchpad table called industries and list whatever tables you have now.",
+          "agent_response": "The `data-explore` skill is now active. As for your request, there are currently no scratchpad tables available yet.\n\nTo get the \"Industry Breakdown\" sheet from `us_labor_statistics_2024.xlsx` into a structured table named `industries`, I first need to know its structure—specifically, which columns it contains and what type of data each column holds (e.g., Industry Name TEXT, Labor Count INTEGER). Once those details are provided, I can create the necessary table and import the data.",
+          "agent_tools": [
+            "index_documents",
+            "load_skill",
+            "list_tables"
+          ],
+          "scores": {
+            "correctness": 2,
+            "tool_selection": 5,
+            "context_retention": 10,
+            "completeness": 3,
+            "efficiency": 5,
+            "personality": 7,
+            "error_recovery": 3
+          },
+          "overall_score": 4.95,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Skill loaded correctly and list_tables was called, but the agent stopped and asked the user for column definitions instead of calling analyze_data_file to read the file schema itself. The success criteria requires 10 rows inserted and the prefix rule applied; zero rows were loaded. The skill explicitly states rephrasing never fixes a missing prefix, and here the agent handed the work back to the user rather than recovering.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 1.093,
+            "input_tokens": 42,
+            "output_tokens": 345,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "ok just go ahead and read the file to figure out the columns — then load the data and tell me the net year-over-year job change across all listed industries, and which ones lost jobs and by how much total",
+          "agent_response": "The analysis of `us_labor_statistics_2024.xlsx` indicates that the current dataset seems to contain **aggregate national labor statistics** over time—specifically monthly figures for Unemployment Rate and Nonfarm Payroll Change—rather than a detailed \"Industry Breakdown.\" The column names found were: `Month`, `Unemployment Rate`, and `Nonfarm Payroll Change`.\n\nBecause there are no columns identifying specific industries in this file, calculating net year-over-year job change across *listed* industries or determining which ones lost jobs is not possible with this data alone.\n\nDo you want me to:\n1. Proceed by loading this aggregated data into a scratchpad table named `industries`?\n2. Check if there is another sheet within `us_labor_statistics_2024.xlsx` that might contain the actual industry breakdown?",
+          "agent_tools": [
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 4,
+            "context_retention": 7,
+            "completeness": 0,
+            "efficiency": 5,
+            "personality": 7,
+            "error_recovery": 4
+          },
+          "overall_score": 3.25,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "Agent called analyze_data_file without specifying the 'Industry Breakdown' sheet, so it only saw the aggregate monthly sheet. Required numbers (net +2,020,000, four industries at -195,000 total) were not provided. The agent identified the discrepancy and offered to check for another sheet but never acted on that — it again handed the decision back to the user rather than immediately querying the correct sheet.",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 4.529,
+            "input_tokens": 932,
+            "output_tokens": 755,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "do the industry figures add up to the total nonfarm payroll change for 2024? what can't this spreadsheet tell you about the job market?",
+          "agent_response": "The spreadsheet doesn't contain any separate industry figures because it provides **national aggregates**. Therefore, there are no industries whose numbers can be added up to match the overall Nonfarm Payroll Change.\n\nAs for what this spreadsheet *can't* tell you about the job market:\n- **Industry Specificity:** lacks granular detail by sector\n- **Wage Data:** no average wages or salary growth\n- **Job Quality/Type:** no full-time vs part-time breakdown\n- **Regional Variation:** zero insight into state or metro differences",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 0,
+            "context_retention": 7,
+            "completeness": 3,
+            "efficiency": 5,
+            "personality": 8,
+            "error_recovery": 0
+          },
+          "overall_score": 2.75,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "No tools called. Expected answer requires two specific totals (industry net +2,020,000 vs nonfarm total +2,522,000, gap ~502,000) with attribution to the industry sheet being non-exhaustive. Agent gave no numbers and attributed the discrepancy to 'no industry data exists' rather than 'the sheet is not an exhaustive breakdown'. Limitations listed are generic (wages, regional) rather than the sheet-specific ones (no demographic/age breakdowns, no industry-level unemployment rates).",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 7.598,
+            "input_tokens": 1630,
+            "output_tokens": 545,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "The agent never accessed the \\\"Industry Breakdown\\\" sheet of the Excel file. The `analyze_data_file` tool was called without a sheet parameter, so it only read the first/default sheet (aggregate monthly data). The agent lacked knowledge of how to target a named sheet, and the tool description apparently does not surface this capability clearly enough for the agent to discover it.",
+      "recommended_fix": {
+        "target": "tool_description",
+        "file": "hub/skills/data-explore/SKILL.md (and the analyze_data_file tool docstring)",
+        "description": "Add a prominent example showing how to specify a sheet name when calling analyze_data_file on a multi-sheet Excel file (e.g., sheet_name='Industry Breakdown'). Also add a recovery heuristic: if analyze_data_file returns unexpected columns for a named sheet the user mentioned, the agent should re-call with the explicit sheet_name before escalating to the user."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.15
+      },
+      "elapsed_s": 414.25248980522156,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.1,
+        "min_tokens_per_second": 37,
+        "max_tokens_per_second": 37.2,
+        "avg_time_to_first_token": 4.407,
+        "min_time_to_first_token": 1.093,
+        "max_time_to_first_token": 7.598,
+        "total_input_tokens": 2604,
+        "total_output_tokens": 1645,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 3,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 3,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "skill_data_explore_sql",
+      "session_id": "4271646f-4351-46ae-a2f4-1bc1ece99990",
+      "status": "FAIL",
+      "overall_score": 4.27,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Load your data-explore skill, then pull the Monthly Unemployment sheet from the us_labor_statistics_2024.xlsx file into a scratchpad table. Once loaded, run a COUNT(*) to verify all 12 monthly rows are there and confirm the count matches the source.",
+          "agent_response": "The process has been executed up until its current limitation. Here is the summary:\n\n### Status Report\n**Goal:** Load `data-explore`, pull Monthly Unemployment sheet into a scratchpad table, and verify 12 rows exist.\n\n**What Was Done:**\n1. ✅ **Skill Loaded:** The `data-explore` skill was successfully activated.\n2. ✅ **Table Created:** A scratchpad table named `monthly_unemployment` was created.\n3. ❌ **Data Population Failed:** Records were not automatically loaded. Subsequent attempts to manually insert data were blocked by system constraints.\n\n**Verification Result:**\nCOUNT(*) returned 0. Cannot confirm 12 monthly rows loaded.",
+          "agent_tools": [
+            "index_documents",
+            "load_skill",
+            "analyze_data_file",
+            "create_table",
+            "create_table",
+            "create_table",
+            "query_data",
+            "insert_data"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 6,
+            "context_retention": 10,
+            "completeness": 3,
+            "efficiency": 4,
+            "personality": 7,
+            "error_recovery": 3
+          },
+          "overall_score": 4.55,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "load_skill was called correctly and create_table succeeded after 3 schema-error retries, but insert_data was blocked by the system guard ('You already answered this request'), leaving the table empty. COUNT(*) returned 0 instead of the required 12, triggering the automatic zero on correctness.",
+          "performance": {
+            "tokens_per_second": 35.4,
+            "time_to_first_token": 3.111,
+            "input_tokens": 335,
+            "output_tokens": 576,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Now compute the total nonfarm payroll change across all of 2024, and break it down: how did the first half of the year (Jan-Jun) compare with the second half (Jul-Dec)? Show me the SQL you ran alongside the result.",
+          "agent_response": "The previous steps confirmed that while your file contains 15 monthly records, those records were never successfully loaded into the scratchpad table due to an execution flow constraint. Total Nonfarm Payroll Change: Cannot be computed (Current total = 0). H1 vs H2 Comparison: Cannot be performed (No data available). Let me know if you want me to retry inserting all known values.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 2,
+            "context_retention": 8,
+            "completeness": 1,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 2
+          },
+          "overall_score": 3.3,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Turn 1's insert failure made this turn's data unavailable. The agent correctly remembered the empty-table state but ran no tools at all — no retry of insert_data, no query to confirm, no SQL shown. Offering to retry without actually trying is no_fallback.",
+          "performance": {
+            "tokens_per_second": 36.6,
+            "time_to_first_token": 13.024,
+            "input_tokens": 2999,
+            "output_tokens": 1345,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Ok let's try a different angle. What was the average unemployment rate across all 12 months of 2024, and how many of those months were strictly above 4.0%? Show the SQL you ran.",
+          "agent_response": "### Average Unemployment Rate (All Months)\n**SQL Ran:** `SELECT AVG(UnemploymentRate) FROM scratch_monthly_unemployment;`\n**Result:** `None`\n\n### Months Above 4.0%\n**SQL Ran:** `SELECT COUNT(*) FROM scratch_monthly_unemployment WHERE UnemploymentRate > 0.04;`\n**Result:** `0`\n\nZero months found above 4.0% because no data was successfully transferred.",
+          "agent_tools": [
+            "query_data",
+            "query_data"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 7,
+            "context_retention": 8,
+            "completeness": 4,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 3
+          },
+          "overall_score": 4.95,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Downstream of Turn 1's insert failure. The agent ran the correct SQL queries (AVG and COUNT) and showed them, but returned None/0 instead of 4.025%/7 because the table is empty. The agent did not attempt to fix the underlying data-load issue before querying.",
+          "performance": {
+            "tokens_per_second": 36.4,
+            "time_to_first_token": 1.278,
+            "input_tokens": 64,
+            "output_tokens": 346,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "The agent's tool-execution gating blocked insert_data after the agent had already produced text output mid-turn (\"You already answered this request. insert_data is outside what the request touched\"). The data-explore skill requires chaining create_table → insert_data atomically in a single turn, but the system prevented the second tool call once a partial prose response had been generated.",
+      "recommended_fix": {
+        "target": "architecture",
+        "file": "src/gaia/agents/base/agent.py",
+        "description": "Remove or relax the 'already answered' tool-call gate that blocks tool calls after the agent has emitted any text in the current turn. Multi-step data workflows (create_table then insert_data) require chaining tool calls without interruption; the current guard incorrectly treats a mid-turn status message as a final answer."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 482.35786390304565,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 36.1,
+        "min_tokens_per_second": 35.4,
+        "max_tokens_per_second": 36.6,
+        "avg_time_to_first_token": 5.804,
+        "min_time_to_first_token": 1.278,
+        "max_time_to_first_token": 13.024,
+        "total_input_tokens": 3398,
+        "total_output_tokens": 2267,
+        "turns_measured": 3,
+        "total_tool_calls": 10,
+        "max_tool_calls_in_a_turn": 8,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 10,
+        "max_tool_calls_in_a_turn": 8,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "treasury_fy2024_budget",
+      "session_id": "f4d4b2ca-ff19-43fa-be17-3eac4f19de32",
+      "status": "PASS",
+      "overall_score": 9.25,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "I'm looking at the FY2024 budget results. Can you tell me what the US federal budget deficit was for fiscal year 2024, and what the total federal debt held by the public was at end of FY2024?",
+          "agent_response": "According to `treasury_fy2024_budget_results.txt`, the US federal budget deficit for fiscal year 2024 was **$1.833 trillion**.\n\nThe total federal debt held by the public at the end of FY2024 was **$28.2 trillion**.\n\nVerification: unverified — 2 tool calls ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 4,
+            "error_recovery": 10
+          },
+          "overall_score": 8.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Both figures are exact matches ($1.833 trillion deficit, $28.2 trillion public debt). Tool selection is correct but includes an unnecessary re-indexing call. A leaked 'Verification: unverified' artifact at the end of the response is internal meta-commentary that should not appear in user-facing output.",
+          "performance": {
+            "tokens_per_second": 37.1,
+            "time_to_first_token": 7.744,
+            "input_tokens": 1796,
+            "output_tokens": 357,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "thanks, and what was the federal budget deficit for fiscal year 2023? can you pull that from the document too?",
+          "agent_response": "According to `treasury_fy2024_budget_results.txt`, that specific information isn't present in this summary. The note on scope explicitly states that **this document reports FY2024 results only**, and prior-year comparisons like the FY2023 deficit figures are not included; they are available in separate documents like the FY2023 final Monthly Treasury Statement.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 4,
+            "error_recovery": 10
+          },
+          "overall_score": 9.7,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly queried the document before reporting the data was unavailable (no lazy refusal), cited the document's explicit NOTE ON SCOPE, invented no FY2023 figures, and helpfully pointed to the correct source. Same 'Verification: unverified' artifact leaked again.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 4.5,
+            "input_tokens": 895,
+            "output_tokens": 273,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 168.2746398448944,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.2,
+        "min_tokens_per_second": 37.1,
+        "max_tokens_per_second": 37.2,
+        "avg_time_to_first_token": 6.122,
+        "min_time_to_first_token": 4.5,
+        "max_time_to_first_token": 7.744,
+        "total_input_tokens": 2691,
+        "total_output_tokens": 630,
+        "turns_measured": 2,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 3,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 3,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "us_labor_statistics_xlsx",
+      "session_id": "77d1f9e2-7fb1-4e1e-a453-67dc82e03b39",
+      "status": "FAIL",
+      "overall_score": 6.1,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Looking at the labor stats spreadsheet I uploaded — what was the unemployment rate in July 2024, and which month in 2024 had the lowest nonfarm payrolls added?",
+          "agent_response": "Based on the labor statistics spreadsheet (`us_labor_statistics_2024.xlsx`), here is what the data shows for your questions.\n\n* **Unemployment Rate in July 2024:** The unemployment rate for July 2024 was **4.3%**.\n\n* **Lowest Nonfarm Payrolls Added in 2024:** The month that saw the lowest addition to nonfarm payrolls in 2024 was **October**, with an increase of 36,000.",
+          "agent_tools": [
+            "index_documents",
+            "analyze_data_file",
+            "analyze_data_file",
+            "analyze_data_file",
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 8
+          },
+          "overall_score": 8.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Both facts correct: July 2024 unemployment = 4.3% (matches stored decimal 0.043) and October as the weakest month at 36,000 jobs added. Agent had 2 initial tool failures due to wrong date format and wrong column name but self-corrected and recovered with the right answers.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 4.826,
+            "input_tokens": 955,
+            "output_tokens": 834,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Now looking at the Industry Breakdown sheet — which industry had the biggest year-over-year job loss in 2024?",
+          "agent_response": "That sheet name (\"Industry Breakdown\") suggests there might be more granular data than what was loaded into my analysis environment, but looking at the contents of `us_labor_statistics_2024.xlsx`, the available columns for trend analysis are limited to **Month**, **Unemployment Rate**, and **Nonfarm Payroll Change**. There is no explicit column labeled \"Industry.\"\n\nWithout an industry-specific column, finding which sector had the biggest job loss year-over-year isn't possible with the current spreadsheet data.",
+          "agent_tools": [
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 0,
+            "context_retention": 8,
+            "completeness": 0,
+            "efficiency": 4,
+            "personality": 7,
+            "error_recovery": 0
+          },
+          "overall_score": 2.35,
+          "pass": false,
+          "failure_category": "lazy_refusal",
+          "reasoning": "Agent called only `analyze_data_file` (which only exposes the primary sheet) and then declared the industry data unavailable without ever trying `query_indexed_documents` or `query_specific_file` — the RAG index has 2 chunks that include the Industry Breakdown sheet. This is a lazy refusal: the specific query tools required by the rule were never invoked. Ground truth answer (Manufacturing, -100K YoY) was never found.",
+          "performance": {
+            "tokens_per_second": 36.6,
+            "time_to_first_token": 2.457,
+            "input_tokens": 337,
+            "output_tokens": 321,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "What was the unemployment rate for workers aged 25 to 54 in July 2024?",
+          "agent_response": "The unemployment rate for all workers in July 2024 was **4.3%**.\n\nHowever, based on the structure of the `us_labor_statistics_2024.xlsx` file, there are no breakdowns available by worker age group (like 25 to 54). The sheet provides aggregated national figures but doesn't segment the data by demographics like age or industry within its current columns.",
+          "agent_tools": [
+            "analyze_data_file",
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 5,
+            "context_retention": 6,
+            "completeness": 9,
+            "efficiency": 6,
+            "personality": 7,
+            "error_recovery": 7
+          },
+          "overall_score": 7.1,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly refused to fabricate an age-group unemployment rate and clearly stated the demographic breakdown is absent from this dataset. Minor deductions: repeated the same date format error from Turn 1 (\"July 2024\" → unsupported) before correcting to \"2024-07\", showing incomplete context retention of the tool's constraints.",
+          "performance": {
+            "tokens_per_second": 36.4,
+            "time_to_first_token": 3.549,
+            "input_tokens": 584,
+            "output_tokens": 338,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "The `analyze_data_file` tool only surfaces the primary sheet of the XLSX (Monthly Unemployment data with 3 columns), so it could not find the Industry Breakdown sheet's data. When the tool returned no industry columns, the agent gave up without falling back to `query_indexed_documents`, which had both sheets indexed as separate RAG chunks. The agent's tool selection logic does not fall back to RAG query when `analyze_data_file` fails to expose the requested columns from a multi-sheet workbook.",
+      "recommended_fix": {
+        "target": "tool_description",
+        "file": "src/gaia/agents/tools/rag_tools.py or the analyze_data_file tool docstring",
+        "description": "Update the `analyze_data_file` tool description to explicitly state it may only access the primary/first sheet of multi-sheet XLSX files, and instruct the agent to fall back to `query_indexed_documents` when the required columns are not found — especially for spreadsheets with multiple sheets. Alternatively, fix the underlying tool to iterate over all sheets or accept a sheet_name parameter."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.38
+      },
+      "elapsed_s": 769.8084261417389,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 36.8,
+        "min_tokens_per_second": 36.4,
+        "max_tokens_per_second": 37.3,
+        "avg_time_to_first_token": 3.611,
+        "min_time_to_first_token": 2.457,
+        "max_time_to_first_token": 4.826,
+        "total_input_tokens": 1876,
+        "total_output_tokens": 1493,
+        "turns_measured": 3,
+        "total_tool_calls": 8,
+        "max_tool_calls_in_a_turn": 5,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 8,
+        "max_tool_calls_in_a_turn": 5,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "usb20_spec_lookup",
+      "session_id": "79780602-7bb8-43cc-bceb-ff8c331d7495",
+      "status": "PASS",
+      "overall_score": 9.45,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "I'm reviewing the USB 2.0 spec document. What's the maximum data transfer rate for High Speed mode, and what's the maximum number of devices that can connect to a single USB 2.0 host controller?",
+          "agent_response": "According to usb20_specification_overview.txt, the maximum data transfer rate for High Speed mode is **480 Mbit/s**. A single USB 2.0 host controller can address up to **127 devices** simultaneously.\n\nVerification: unverified — 2 tool calls ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Both values (480 Mbit/s and 127 devices) exactly match ground truth. The agent made a redundant index_documents call since the document was already indexed from the session setup, slightly reducing tool_selection and efficiency scores, but the RAG queries were correct and answers precise.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 7.559,
+            "input_tokens": 1774,
+            "output_tokens": 322,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What's the maximum cable length for USB 2.0 Full Speed devices?",
+          "agent_response": "According to usb20_specification_overview.txt, the maximum cable lengths for both Low Speed and Full Speed modes are **not separately stated** in this overview; it only lists the 5-meter maximum cable length for High Speed mode.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified that Full Speed cable length is not in the document and reported only the 5-meter High Speed limit — exactly matching the null expected_answer and success criteria. No hallucination of a specific cable length. Single targeted query was optimal.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 4.38,
+            "input_tokens": 889,
+            "output_tokens": 187,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 152.19559907913208,
+      "category": "real_world",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.4,
+        "min_tokens_per_second": 37.3,
+        "max_tokens_per_second": 37.5,
+        "avg_time_to_first_token": 5.97,
+        "min_time_to_first_token": 4.38,
+        "max_time_to_first_token": 7.559,
+        "total_input_tokens": 2663,
+        "total_output_tokens": 509,
+        "turns_measured": 2,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 3,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 3,
+        "turns": 2
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 1.79
+  },
+  "performance": {
+    "avg_tokens_per_second": 37.0,
+    "avg_time_to_first_token": 6.831,
+    "total_input_tokens": 81617,
+    "total_output_tokens": 24674,
+    "scenarios_with_data": 21,
+    "flags": [
+      "high_latency",
+      "token_explosion"
+    ]
+  }
+}

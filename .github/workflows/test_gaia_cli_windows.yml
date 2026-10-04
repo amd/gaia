@@ -8,7 +8,6 @@
 name: GAIA CLI Tests (Windows)
 
 on:
-  workflow_call:
   push:
     branches: ["main"]
     paths:
@@ -58,7 +57,6 @@ jobs:
           python-version: '3.12'
           # Note: 'blender' excluded as bpy requires Blender runtime
           install-package: '.[dev,talk,rag,mcp,api]'
-          extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
@@ -255,24 +253,24 @@ jobs:
           echo.
 
           REM ================================================================
-          REM TEST_TTS.PY
+          REM TEST_LEMONADE_SPEECH.PY
           REM ================================================================
           echo ****************************************************************
-          echo                          TEST_TTS.PY
+          echo                     TEST_LEMONADE_SPEECH.PY
           echo ****************************************************************
-          echo Starting test_tts.py at %TIME%...
+          echo Starting test_lemonade_speech.py at %TIME%...
           echo.
 
-          python tests\unit\test_tts.py
+          python -m pytest tests\unit\test_lemonade_speech.py -v
           set test_tts_exit=%ERRORLEVEL%
 
           echo.
           echo ----------------------------------------------------------------
-          echo test_tts.py completed at %TIME% with exit code: %test_tts_exit%
+          echo test_lemonade_speech.py completed at %TIME% with exit code: %test_tts_exit%
           if %test_tts_exit% equ 0 (
-              echo [SUCCESS] test_tts.py passed
+              echo [SUCCESS] test_lemonade_speech.py passed
           ) else (
-              echo [FAILURE] test_tts.py failed with exit code %test_tts_exit%
+              echo [FAILURE] test_lemonade_speech.py failed with exit code %test_tts_exit%
               echo Full error output displayed above - no truncation
           )
           echo ----------------------------------------------------------------
@@ -286,7 +284,7 @@ jobs:
           echo ================================================================
           echo test_llm.py:  exit code %test_llm_exit%
           echo test_asr.py:  exit code %test_asr_exit%
-          echo test_tts.py:  exit code %test_tts_exit%
+          echo test_lemonade_speech.py:  exit code %test_tts_exit%
           echo ================================================================
 
           REM Calculate total failures
@@ -302,7 +300,7 @@ jobs:
               echo FAILED TESTS:
               if %test_llm_exit% neq 0 echo   - test_llm.py ^(exit code %test_llm_exit%^)
               if %test_asr_exit% neq 0 echo   - test_asr.py ^(exit code %test_asr_exit%^)
-              if %test_tts_exit% neq 0 echo   - test_tts.py ^(exit code %test_tts_exit%^)
+              if %test_tts_exit% neq 0 echo   - test_lemonade_speech.py ^(exit code %test_tts_exit%^)
               echo ================================================================
               echo IMPORTANT: All error messages are displayed in full above
               echo No PowerShell wrapping or truncation - raw Python output preserved

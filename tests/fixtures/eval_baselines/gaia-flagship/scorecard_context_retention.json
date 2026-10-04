@@ -1,0 +1,621 @@
+{
+  "run_id": "eval-20261003-083648",
+  "timestamp": "2026-10-03T08:51:59.842478+00:00",
+  "config": {
+    "backend_url": "http://127.0.0.1:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia"
+  },
+  "summary": {
+    "total_scenarios": 4,
+    "passed": 4,
+    "failed": 0,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 1.0,
+    "judged_pass_rate": 1.0,
+    "avg_score": 9.69,
+    "by_category": {
+      "context_retention": {
+        "passed": 4,
+        "failed": 0,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 9.692499999999999
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "conversation_summary",
+      "session_id": "00e81610-1309-4740-8d2e-62fff17bfea0",
+      "status": "PASS",
+      "overall_score": 9.77,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey what was acme's revenue in q3?",
+          "agent_response": "According to acme_q3_report.md, the revenue for Acme Corp in Q3 2025 was **$14.2 million**. This represents a significant increase of 23% compared to Q3 2024's revenue of $11.5 million, according to the quarterly report summary.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly returned $14.2M matching ground truth exactly. Minor efficiency deduction for re-calling index_documents on an already-indexed doc; tool_selection docked 1 point for same reason. The 'Verification: unverified' artifact is a harmless system note, not a personality violation.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 5.556,
+            "input_tokens": 1250,
+            "output_tokens": 644,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "nice, and how does that compare to the year before?",
+          "agent_response": "According to acme_q3_report.md, page 1: The Q3 2025 revenue of **$14.2 million** is an increase over the year before, as it represents a **+23% growth** compared to Q3 2024's revenue of **$11.5 million**.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly stated 23% growth and $11.5M baseline — exact match. Correctly avoided redundant tool calls by using cached context from turn 1. 'Verification: unverified' artifact slightly reduces personality score but response is otherwise direct and accurate.",
+          "performance": {
+            "tokens_per_second": 38,
+            "time_to_first_token": 8.128,
+            "input_tokens": 1878,
+            "output_tokens": 379,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "what's the ceo saying about q4? any projections?",
+          "agent_response": "According to acme_q3_report.md, page 1:\n\nThe CEO letter indicates that Acme Corp projects **15–18% growth** for Q4. This projected growth is attributed to enterprise segment expansion and three new product launches planned for November.\n\nAdditionally, there are details about these upcoming products in the report:\n*   Widget Pro X v2.1 (enhanced API rate limiting) — scheduled for November 12, 2025\n*   Gadget Plus integration with Salesforce — scheduled for Q4 2025\n*   Mobile app (Android) — scheduled for December 2025\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.75,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified 15-18% projected growth driven by enterprise segment expansion — exact match. Extra details about product launches are additional facts from the document, not contradictions. Minor efficiency deduction for querying when the context might have sufficed for a follow-up question.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 5.689,
+            "input_tokens": 1249,
+            "output_tokens": 215,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "which document has all this info btw?",
+          "agent_response": "All of that information—the Q3 revenue figures and the CEO's Q4 projections—is found in the **`acme_q3_report.md`** document. That's the only report currently indexed here.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified acme_q3_report.md as the source without unnecessary tool calls. Context retention is perfect — agent correctly recalled which document it had been querying throughout the conversation. Concise and direct response.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 14.205,
+            "input_tokens": 3410,
+            "output_tokens": 159,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 5,
+          "user_message": "ok can you summarize what you've told me so far?",
+          "agent_response": "Here's the rundown on Acme Corp so far, pulled entirely from `acme_q3_report.md`:\n\n### **Acme Q3 Performance & Future Outlook**\n\n*   **Q3 Revenue:** The company reported revenue of **$14.2 million** for Q3 2025, which marks a strong **+23% increase** over the previous year's Q3 revenue ($11.5 million).\n*   **Growth Drivers:** This success was driven by enterprise segment expansion and an improvement in Net Promoter Score to **62**.\n*   **Q4 Projection:** The CEO projects continued growth into Q4, forecasting **15–18% growth**, fueled by further enterprise expansion and new product launches.\n*   **Upcoming Launches:** Three key products/features are planned:\n    *   Widget Pro X v2.1 (Nov 12, 2025)\n    *   Gadget Plus integration with Salesforce (Q4 2025)\n    *   Mobile app (Android) (December 2025)\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "All three required facts correctly recalled from conversation history: $14.2M Q3 revenue, 23% YoY growth from $11.5M, and 15-18% Q4 projection. No re-querying of the document — perfect context retention. Well-organized summary with clear formatting.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 1.948,
+            "input_tokens": 86,
+            "output_tokens": 481,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 5,
+        "estimated_usd": 0.4
+      },
+      "elapsed_s": 252.81207180023193,
+      "category": "context_retention",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.6,
+        "min_tokens_per_second": 37.3,
+        "max_tokens_per_second": 38,
+        "avg_time_to_first_token": 7.105,
+        "min_time_to_first_token": 1.948,
+        "max_time_to_first_token": 14.205,
+        "total_input_tokens": 7873,
+        "total_output_tokens": 1878,
+        "turns_measured": 5,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 5
+      }
+    },
+    {
+      "scenario_id": "cross_turn_file_recall",
+      "session_id": "e30451ab-83f9-429e-b44d-04a154489f8a",
+      "status": "PASS",
+      "overall_score": 9.52,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey what docs do i have loaded?",
+          "agent_response": "Got one file indexed right now: `product_comparison.html`. It's an HTML document with 3 chunks of content ready to go.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "list_indexed_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.15,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified product_comparison.html as the loaded document. Slight efficiency deduction: called index_documents (unnecessary re-index of already-cached doc) before list_indexed_documents. The trailing 'Verification: unverified' artifact is cosmetically odd but does not affect correctness.",
+          "performance": {
+            "tokens_per_second": 38.2,
+            "time_to_first_token": 1.348,
+            "input_tokens": 107,
+            "output_tokens": 103,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "how much do the two products cost?",
+          "agent_response": "According to `product_comparison.html`, StreamLine costs **$49 per month** for its standard plan, while ProFlow is priced at **$79 per month**.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Perfect context retention — user did not name the file, but agent queried product_comparison.html directly and returned exact prices ($49/month StreamLine, $79/month ProFlow) matching ground truth. Optimal single tool call.",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 8.382,
+            "input_tokens": 2015,
+            "output_tokens": 487,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "which one is better value for money?",
+          "agent_response": "Value really comes down to what matters most for your workflow—are you prioritizing savings or capability?\n\nAccording to `product_comparison.html`, here's the breakdown:\n\n*   **StreamLine:** If keeping costs low is key, StreamLine ($49/month) offers solid core functionality and is more budget-friendly.\n*   **ProFlow:** If you require extensive integrations (it has 25 compared to StreamLine's 10) and want a higher-rated user experience (4.7 out of 5 stars versus StreamLine's 4.2), ProFlow ($79/month) might be worth absorbing that $30 monthly premium for.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.5,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent synthesized all three required metrics from the document: pricing ($49 vs $79), ratings (4.2 vs 4.7 stars), and integrations (10 vs 25). No hallucinated facts. Correctly used context from the prior turn's query without a redundant re-query. Minor tool_selection deduction since re-querying would be more robust, but reusing context is efficient and correct.",
+          "performance": {
+            "tokens_per_second": 37.1,
+            "time_to_first_token": 11.6,
+            "input_tokens": 2778,
+            "output_tokens": 433,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.15
+      },
+      "elapsed_s": 181.2187306880951,
+      "category": "context_retention",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.4,
+        "min_tokens_per_second": 37,
+        "max_tokens_per_second": 38.2,
+        "avg_time_to_first_token": 7.11,
+        "min_time_to_first_token": 1.348,
+        "max_time_to_first_token": 11.6,
+        "total_input_tokens": 4900,
+        "total_output_tokens": 1023,
+        "turns_measured": 3,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "multi_doc_context",
+      "session_id": "bbd57fa5-a89b-458c-af1f-23763d86fc55",
+      "status": "PASS",
+      "overall_score": 9.7,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "According to the employee handbook, how many PTO days do first-year employees receive?",
+          "agent_response": "According to `employee_handbook.md`, first-year employees receive **15 days** of paid time off (PTO). This accrual begins from their start date at a rate of 1.25 days per month.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent returned the exact answer (15 days) with correct document attribution. Optimal tool path: indexed session documents first, then queried the specific file. Minor efficiency deduction for the unavoidable index step on first turn.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 10.48,
+            "input_tokens": 2474,
+            "output_tokens": 520,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What was Acme Corp's total revenue for Q3 2025?",
+          "agent_response": "According to `C:\\actions-runner-01\\_work\\gaia\\gaia\\eval\\corpus\\documents\\acme_q3_report.md` (Chunk ID 4): Acme Corp's total revenue for Q3 2025 was **$14.2 million**.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct answer ($14.2 million) from the right document. Used query_documents instead of the more targeted query_specific_file (minor tool selection deduction). Citing the full absolute path is verbose for a user-facing response.",
+          "performance": {
+            "tokens_per_second": 36.4,
+            "time_to_first_token": 14.012,
+            "input_tokens": 3021,
+            "output_tokens": 374,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Which document did each of those answers come from — the PTO policy and the Q3 revenue figure?",
+          "agent_response": "The PTO policy details came from the **Employee Handbook**, specifically located at:\n`C:\\actions-runner-01\\_work\\gaia\\gaia\\eval\\corpus\\documents\\employee_handbook.md`\n\nThe Q3 revenue figure came from the **Quarterly Report**, found here:\n`C:\\actions-runner-01\\_work\\gaia\\gaia\\eval\\corpus\\documents\\acme_q3_report.md`\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Perfect attribution: PTO to employee_handbook.md and Q3 revenue to acme_q3_report.md, with no cross-contamination. Answered entirely from conversation context with no unnecessary tool calls. Absolute path citations remain verbose but unambiguous.",
+          "performance": {
+            "tokens_per_second": 36.2,
+            "time_to_first_token": 26.553,
+            "input_tokens": 6216,
+            "output_tokens": 488,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.33
+      },
+      "elapsed_s": 234.90696024894714,
+      "category": "context_retention",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 36.6,
+        "min_tokens_per_second": 36.2,
+        "max_tokens_per_second": 37.3,
+        "avg_time_to_first_token": 17.015,
+        "min_time_to_first_token": 10.48,
+        "max_time_to_first_token": 26.553,
+        "total_input_tokens": 11711,
+        "total_output_tokens": 1382,
+        "turns_measured": 3,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency",
+          "token_explosion"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "pronoun_resolution",
+      "session_id": "45348342-8ed3-48d5-be7a-0fcdd588626d",
+      "status": "PASS",
+      "overall_score": 9.78,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey quick question - how many PTO days do new employees get in their first year?",
+          "agent_response": "According to `employee_handbook.md`: New full-time employees receive **15 days** of paid time off (PTO) during their first year of service (0–12 months). This accrual begins immediately upon start date at a rate of 1.25 days per month.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.65,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly stated 15 PTO days matching the expected answer exactly, used index_documents followed by query_specific_file (optimal path). Minor efficiency ding for the index_documents call (document was cached) and a leaking 'Verification: unverified' artifact in the response that should not be user-visible.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 10.165,
+            "input_tokens": 2401,
+            "output_tokens": 498,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "what about remote work - does it have a policy too?",
+          "agent_response": "According to `employee_handbook.md`: Yes, there is a detailed remote work policy outlined in Section 7. Here's the breakdown:\n\n*   **Standard Remote Work:** Full-time employees may work remotely up to **3 days per week**, provided they have manager approval and it aligns with business needs.\n*   **Fully Remote Arrangements:** Working from home five days per week requires **VP-level approval** and is assessed on a case-by-case basis. Fully remote staff are expected to visit company offices at least once every quarter for team meetings.\n*   **Guidelines:** Employees must maintain availability during core hours (9:00 AM – 3:00 PM local time), use a reliable internet connection, adhere to all data security rules when working remotely, and note that Acme Corp does not cover home office expenses unless specifically authorized by HR.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly resolved 'it' to the employee handbook and answered the remote work policy with the right facts: up to 3 days/week with manager approval and VP approval required for fully remote, matching the expected answer. Single optimal tool call. The 'Verification: unverified' artifact again leaks into the response.",
+          "performance": {
+            "tokens_per_second": 36.6,
+            "time_to_first_token": 12.365,
+            "input_tokens": 2668,
+            "output_tokens": 389,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Are contractors eligible for those benefits?",
+          "agent_response": "According to `employee_handbook.md`: No, contractors are generally **NOT eligible** for company benefits programs because they are engaged through a service agreement, not direct employment.\n\nSpecifically, the handbook notes that:\n*   They are \"NOT eligible for company benefits programs\" (Section 3).\n*   They are specifically excluded from health insurance coverage (\"Contractors are NOT eligible for health benefits\").\n*   They do not qualify for the Employee Assistance Program (EAP) (\"Contractors are NOT eligible for the EAP\").\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly resolved 'those benefits' to company employee benefits and definitively stated contractors are NOT eligible — matching the expected answer. Single optimal tool call. The 'Verification: unverified' artifact leaks into the response again but does not affect factual correctness.",
+          "performance": {
+            "tokens_per_second": 35.6,
+            "time_to_first_token": 12.683,
+            "input_tokens": 2483,
+            "output_tokens": 322,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 242.72292494773865,
+      "category": "context_retention",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 36.5,
+        "min_tokens_per_second": 35.6,
+        "max_tokens_per_second": 37.3,
+        "avg_time_to_first_token": 11.738,
+        "min_time_to_first_token": 10.165,
+        "max_time_to_first_token": 12.683,
+        "total_input_tokens": 7552,
+        "total_output_tokens": 1209,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.88
+  },
+  "performance": {
+    "avg_tokens_per_second": 37.0,
+    "avg_time_to_first_token": 10.742,
+    "total_input_tokens": 32036,
+    "total_output_tokens": 5492,
+    "scenarios_with_data": 4,
+    "flags": [
+      "high_latency",
+      "token_explosion"
+    ]
+  }
+}

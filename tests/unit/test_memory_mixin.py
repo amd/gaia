@@ -3874,37 +3874,6 @@ class TestQueryComplexityClassification:
         assert mixin_host._classify_query_complexity("") == 3
 
 
-class TestCrossEncoderCaching:
-    """Tests for cross-encoder failure caching."""
-
-    def test_cross_encoder_caches_failure(self):
-        """_get_cross_encoder() should not retry after ImportError."""
-        import gaia.agents.base.memory as mem_mod
-
-        # Save original state
-        orig_model = mem_mod._cross_encoder_model
-        orig_unavail = mem_mod._CROSS_ENCODER_UNAVAILABLE
-
-        try:
-            # Reset state
-            mem_mod._cross_encoder_model = None
-            mem_mod._CROSS_ENCODER_UNAVAILABLE = False
-
-            # Mock ImportError
-            with patch.dict("sys.modules", {"sentence_transformers": None}):
-                result1 = mem_mod._get_cross_encoder()
-                assert result1 is None
-                assert mem_mod._CROSS_ENCODER_UNAVAILABLE is True
-
-                # Second call should return None immediately without retrying
-                result2 = mem_mod._get_cross_encoder()
-                assert result2 is None
-        finally:
-            # Restore
-            mem_mod._cross_encoder_model = orig_model
-            mem_mod._CROSS_ENCODER_UNAVAILABLE = orig_unavail
-
-
 try:
     import faiss as _faiss
 
