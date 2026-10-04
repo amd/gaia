@@ -3,8 +3,8 @@ name: "TTS Tool -- Graceful Degradation"
 category: web_system
 severity: low
 description: |
-  Tests that text_to_speech tool is registered. If Kokoro TTS dependencies not installed,
-  the tool should return a graceful error rather than crashing.
+  Tests that text_to_speech tool is registered. Speech comes from Lemonade's kokoro-v1;
+  if Lemonade cannot serve it, the tool should return a clear error rather than crashing.
 
 persona: casual_user
 
@@ -19,10 +19,10 @@ turns:
       expected_behavior: "Agent calls text_to_speech tool and returns file path or graceful error"
     success_criteria: |
       Agent calls text_to_speech with the given text. Either the audio is generated
-      and saved (if Kokoro installed), or a graceful error about missing dependencies
+      and saved, or a clear error naming why Lemonade could not synthesize it
       is returned. PASS if agent attempts text_to_speech regardless of outcome.
       FAIL if agent claims it cannot do TTS at all without trying the tool.
 
 expected_outcome: |
   Agent calls text_to_speech and returns a file path (if TTS available) or
-  a clear error about missing dependencies (kokoro/soundfile not installed).
+  a clear error explaining why Lemonade could not synthesize the speech.

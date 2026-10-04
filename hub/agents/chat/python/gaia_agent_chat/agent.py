@@ -2291,24 +2291,33 @@ No documents are currently indexed.
                 }
 
         # ── Phase 5b: TTS (voice output) ─────────────────────────────────────────
-        # Phase 5a (voice input) OMITTED: WhisperASR requires Lemonade server ASR endpoint.
 
         @tool
         def text_to_speech(
             text: str, output_path: str = "", voice: str = "af_alloy"
         ) -> dict:
-            """Convert text to speech using Kokoro TTS and save to an audio file.
+            """Convert text to speech with a Kokoro voice (served by Lemonade) and save it as a WAV file.
 
             Args:
                 text: Text to convert to speech
                 output_path: File path to save audio (WAV). If empty, saves to ~/.gaia/tts/
-                voice: Voice name to use (default: af_alloy — American English female)
+                voice: Kokoro voice, e.g. af_alloy (American female, default), af_bella, am_michael, bf_emma, bm_george
 
             Returns:
-                Dictionary with status, file_path, and duration_seconds
+                Dictionary with status, file_path, duration_seconds and voice
             """
             import time
 
+            from gaia.audio.lemonade_tts import KOKORO_VOICES, LemonadeTTSClient
+
+            if voice not in KOKORO_VOICES:
+                return {
+                    "status": "error",
+                    "error": (
+                        f"Unknown voice '{voice}'. Choose one of: "
+                        f"{', '.join(KOKORO_VOICES)}."
+                    ),
+                }
             if not output_path:
                 # GAIA's own output folder, not the user's files.
                 tts_dir = Path.home() / ".gaia" / "tts"
@@ -2322,40 +2331,19 @@ No documents are currently indexed.
                     return denied
 
             try:
-                import numpy as np
-
-                from gaia.audio.kokoro_tts import KokoroTTS
-
-                tts = KokoroTTS()
-                audio_data, _, meta = tts.generate_speech(text)
-
-                try:
-                    import soundfile as sf
-
-                    audio_np = (
-                        np.concatenate(audio_data)
-                        if isinstance(audio_data, list)
-                        else np.array(audio_data)
-                    )
-                    sf.write(output_path, audio_np, samplerate=24000)
-                    return {
-                        "status": "success",
-                        "file_path": output_path,
-                        "duration_seconds": meta.get("duration", len(audio_np) / 24000),
-                        "voice": voice,
-                    }
-                except ImportError:
-                    return {
-                        "status": "error",
-                        "error": "soundfile not installed. Run: uv pip install -e '.[talk]'",
-                    }
-            except ImportError as e:
-                return {
-                    "status": "error",
-                    "error": f"TTS dependencies not installed. Run: uv pip install -e '[talk]'. Details: {e}",
-                }
+                client = LemonadeTTSClient(
+                    base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None))
+                )
+                client.ensure_model()
+                duration = client.synthesize_to_wav(text, output_path, voice=voice)
             except Exception as e:
                 return {"status": "error", "error": str(e)}
+            return {
+                "status": "success",
+                "file_path": output_path,
+                "duration_seconds": round(duration, 2),
+                "voice": voice,
+            }
 
         # MCP tools — load from ~/.gaia/mcp_servers.json if configured.
         # Must run last so MCP tools don't bloat context before we know the base count.

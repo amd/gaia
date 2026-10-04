@@ -218,18 +218,11 @@ setup(
             # full chat experience gets reranking out of the box. NOT a RAG dep.
             "sentence-transformers",
             "safetensors",
-            # torch is pinned lower-bound only. The "audio" extra caps
-            # torch<2.4 because torchvision<0.19 / torchaudio require it,
-            # but "ui" ships neither — capping here would force resolver
-            # downgrades for users with torch 2.5+ already installed.
+            # Lower bound only — a cap would force resolver downgrades for users
+            # who already have a newer torch.
             "torch>=2.0.0",
         ],
-        "audio": [
-            "torch>=2.0.0,<2.15",
-            "torchvision<0.30.0",
-            "torchaudio",
-        ],
-        # Speaker diarization. Its own extra, not part of "audio": this is a
+        # Speaker diarization. Its own extra: this is a
         # ~29 MB native wheel (Apache-2.0; the onnxruntime it vendors is MIT)
         # with no torch in it, and the frozen agent needs it BUNDLED — the
         # lazy pip-install path cannot work inside a PyInstaller app, where
@@ -298,17 +291,12 @@ setup(
             # Tool-prompt cost measurement (#1448): tiktoken cl100k_base proxy.
             "tiktoken>=0.7.0,<1.0.0",
         ],
+        # Microphone and speaker I/O for `gaia talk`. Speech recognition
+        # (Whisper) and voice output (Kokoro) both run inside Lemonade Server,
+        # so this extra carries no model runtime — do NOT add torch, whisper or
+        # kokoro back here.
         "talk": [
             "sounddevice",
-            "openai-whisper",
-            "kokoro>=0.3.1",
-            # kokoro leaves transformers unbounded; without this floor the
-            # resolver backtracks to transformers 4.12 / tokenizers 0.10.3,
-            # which has no wheel and fails to build from source.
-            "tokenizers>=0.19",
-            "soundfile",
-            "psutil",
-            "pip",  # Required: spacy model download needs pip in venv (uv omits it)
             # WebSocket transport for the Lemonade Realtime transcription work
             # tracked in #372; #382 stages the packaging dependency first.
             "websockets",
