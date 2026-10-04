@@ -53,10 +53,6 @@ src/gaia/schedule/store.py:tilde_path 1
 src/gaia/scratchpad/service.py:tilde_path 1
 src/gaia/security.py:home_join 1
 src/gaia/skills/manager.py:home_join 1
-src/gaia/ui/agent_loop.py:home_join 1
-src/gaia/ui/routers/agents.py:home_join 2
 src/gaia/ui/routers/mcp.py:home_join 1
-src/gaia/ui/routers/onboarding.py:home_join 2
-src/gaia/ui/routers/system.py:home_join 1
 src/gaia/ui/utils.py:home_join 1
 src/gaia/web/tavily.py:home_join 1
