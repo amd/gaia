@@ -213,14 +213,8 @@ setup(
             "python-docx>=1.1.0",
             "openpyxl>=3.1.0",
             "reportlab>=4.0.0",
-            # Memory cross-encoder reranker (gaia.agents.base.memory) — optional
-            # at runtime (graceful degradation) but bundled with "ui" so the
-            # full chat experience gets reranking out of the box. NOT a RAG dep.
-            "sentence-transformers",
-            "safetensors",
-            # Lower bound only — a cap would force resolver downgrades for users
-            # who already have a newer torch.
-            "torch>=2.0.0",
+            # No torch / sentence-transformers: every model the UI uses is
+            # served by Lemonade, and torch's libomp aborts faiss on macOS.
         ],
         # Speaker diarization. Its own extra: this is a
         # ~29 MB native wheel (Apache-2.0; the onnxruntime it vendors is MIT)
@@ -271,7 +265,7 @@ setup(
             "requests",
             # gaia.connectors runtime deps surfaced in [dev] so that
             # `pip install -e ".[dev]"` is sufficient to run the unit suite
-            # without pulling in the much heavier [ui] extra (faiss, torch).
+            # without pulling in the heavier [ui] extra.
             "httpx>=0.27.0,<0.29.0",
             "respx>=0.21.0,<0.24.0",
             "keyring>=24.0.0,<26.0.0",

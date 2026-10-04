@@ -406,9 +406,6 @@ The agent supports the **Model Context Protocol** in both directions — connect
     The first time you index a document, Lemonade Server pulls the embedding
     model (`user.embeddinggemma-300m-GGUF`, ~334 MB) from `huggingface.co`,
     cached under `~/.cache/huggingface/hub/`. Subsequent runs are offline.
-    (Agent memory adds a small cross-encoder reranker,
-    `cross-encoder/ms-marco-MiniLM-L-6-v2` (~22 MB), fetched via
-    `sentence-transformers` on first hybrid search.)
 
     If your environment blocks `huggingface.co`, pre-seed the cache on a
     machine with internet access and copy it to the target machine, or set
