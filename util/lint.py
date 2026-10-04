@@ -344,7 +344,7 @@ MYPY_CLEAN_MODULES = [
 
 def check_mypy_ratchet() -> CheckResult:
     """Run MyPy on the modules in MYPY_CLEAN_MODULES (blocking)."""
-    print("\n[5/12] Running MyPy on already-clean modules (blocking)...")
+    print("\n[5b/12] Running MyPy on already-clean modules (blocking)...")
     print("-" * 40)
 
     # follow-imports=silent: only errors IN the listed modules block, not
@@ -358,6 +358,15 @@ def check_mypy_ratchet() -> CheckResult:
 
     print(f"[CMD] {' '.join(cmd)}")
     exit_code, output = run_command(cmd)
+
+    if exit_code != 0 and output.startswith("Command not found:"):
+        print(
+            f"\n[BLOCKING] {output.strip()} — mypy is not installed, so the "
+            "clean modules could not be checked. Install uv (lint.py then runs "
+            f"mypy=={TOOL_VERSIONS['mypy']} through uvx) or run "
+            f"`pip install mypy=={TOOL_VERSIONS['mypy']}`."
+        )
+        return CheckResult("MyPy Ratchet (clean modules)", False, False, 1, output)
 
     if exit_code != 0:
         import re

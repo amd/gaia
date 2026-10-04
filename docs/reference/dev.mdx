@@ -315,7 +315,9 @@ instead.
 `--mypy` runs twice. The full `src/gaia` run is advisory. A second run over
 `MYPY_CLEAN_MODULES` in `util/lint.py` — modules with zero errors — blocks, so a
 clean module can't regress. Add a module to that list once you bring it to zero; fix
-a new error rather than removing a module to get CI green.
+a new error rather than removing a module to get CI green. The mypy version pin in
+`TOOL_VERSIONS` only applies when `uvx` is on your PATH; without it, `lint.py` runs
+whatever `mypy` you have installed, which may disagree with CI.
 </Note>
 
 <Note>
