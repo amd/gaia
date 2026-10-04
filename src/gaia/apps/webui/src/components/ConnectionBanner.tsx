@@ -214,6 +214,33 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         );
     }
 
+    // Case 1b: ~/.gaia/config.json exists but could not be loaded
+    if (systemStatus?.config_error) {
+        return (
+            <div className="connection-banner connection-banner--error" role="alert">
+                <div className="connection-banner__icon">
+                    <AlertTriangle size={16} />
+                </div>
+                <div className="connection-banner__text">
+                    GAIA settings could not be loaded.{' '}
+                    <span className="connection-banner__hint">{systemStatus.config_error}</span>
+                </div>
+                {onRetry && (
+                    <button className="connection-banner__retry" onClick={onRetry}>
+                        Check again
+                    </button>
+                )}
+                <button
+                    className="connection-banner__dismiss"
+                    onClick={() => setDismissed(true)}
+                    aria-label="Dismiss"
+                >
+                    <X size={14} />
+                </button>
+            </div>
+        );
+    }
+
     // Case 2: Backend is up but Lemonade Server is not running
     if (systemStatus && !systemStatus.lemonade_running) {
         const queryFailed = Boolean(systemStatus.lemonade_error);

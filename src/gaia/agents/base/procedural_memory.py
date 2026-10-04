@@ -274,7 +274,7 @@ class ProceduralMemoryMixin:
         except Exception as e:
             logger.warning(
                 "[MemoryMixin] procedure recall skipped — embedding the goal "
-                "failed (start lemonade-server to re-enable recall): %s",
+                "failed (recall resumes once Lemonade Server is reachable): %s",
                 e,
             )
             return []

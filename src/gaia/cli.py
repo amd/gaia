@@ -1021,55 +1021,6 @@ def _launch_interactive_cli(log=None):
                 log.warning("Could not finish memory extraction before exit: %s", exc)
 
 
-def _show_interactive_menu(log=None):
-    """Show an interactive menu when `gaia` is run with no arguments."""
-    if log is None:
-        log = get_logger(__name__)
-
-    print()
-    print("========================================")
-    print(f"  GAIA {version}")
-    print("  Build AI Agents That Run Locally")
-    print("========================================")
-    print()
-    print("  [1] Agent UI  — Desktop chat interface (browser)")
-    print("  [2] CLI Chat  — Interactive terminal chat")
-    print("  [3] Help      — Show all commands")
-    print()
-
-    try:
-        choice = input("  Select [1/2/3]: ").strip()
-    except (KeyboardInterrupt, EOFError):
-        print()
-        return
-
-    if choice == "1":
-        _launch_agent_ui(log=log)
-    elif choice == "2":
-        _launch_interactive_cli(log=log)
-    elif choice == "3":
-        print()
-        print("  Usage: gaia [--ui | --cli | <command>]")
-        print()
-        print("  Quick start:")
-        print("    gaia                   Launch Agent UI (default)")
-        print("    gaia --ui              Launch Agent UI (explicit)")
-        print("    gaia --ui-port 8080    Agent UI on custom port")
-        print("    gaia --cli             Interactive CLI chat")
-        print()
-        print("  Commands:")
-        print("    gaia chat              Interactive chat with RAG")
-        print("    gaia chat --ui         Agent UI (alias for gaia --ui)")
-        print('    gaia prompt "Hello"    Single prompt to LLM')
-        print("    gaia talk              Voice interaction")
-        print("    gaia init              Setup Lemonade + models")
-        print()
-        print("  Run 'gaia --help' for the full command list.")
-    else:
-        print(f"  Unknown option: {choice}")
-        print("  Run 'gaia --help' for all commands.")
-
-
 def _compare_benchmark_ctx(current_ctx, baseline, baseline_path):
     """Guard ``gaia eval benchmark --compare`` against cross-ctx comparisons (#1892).
 

@@ -5584,10 +5584,10 @@ class LemonadeClient:
             if not quiet:
                 print(f"{_emoji('❌', '[ERROR]')} Lemonade Server is not installed")
                 print("")
-                print(f"{_emoji('📥', '[DOWNLOAD]')} Download and install from:")
-                print("   https://lemonade-server.ai")
-                print("")
-                print("GAIA will automatically start Lemonade Server once installed.")
+                print(
+                    f"{_emoji('📥', '[DOWNLOAD]')} Install GAIA's Lemonade Server "
+                    "with: gaia init"
+                )
                 print("")
             status = LemonadeStatus(url=f"http://{self.host}:{self.port}")
             status.running = False

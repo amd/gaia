@@ -692,13 +692,13 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         status.lemonade_error = "Lemonade health query failed"
 
     # Active profile from persistent config (#1220)
-    try:
-        from gaia.config import GaiaConfig
+    from gaia.config import GaiaConfig, GaiaConfigError
 
-        gaia_cfg = GaiaConfig.load()
-        status.active_profile = gaia_cfg.profile
-    except Exception:
-        pass  # Keep default "chat"
+    try:
+        status.active_profile = GaiaConfig.load().profile
+    except GaiaConfigError as exc:
+        logger.warning("system status: %s", exc)
+        status.config_error = str(exc)
 
     # Disk space
     # Access shutil through gaia.ui.server so test patches on

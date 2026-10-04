@@ -96,6 +96,31 @@ class TestSystemStatus:
 
         assert data["version"] == __version__
 
+    def test_unreadable_config_is_reported_not_hidden(
+        self, client, tmp_path, monkeypatch
+    ):
+        bad = tmp_path / "config.json"
+        bad.write_text("{not json", encoding="utf-8")
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", bad)
+
+        data = client.get("/api/system/status").json()
+
+        assert data["config_error"] is not None
+        assert str(bad) in data["config_error"]
+        assert "not valid JSON" in data["config_error"]
+
+    def test_valid_config_reports_its_profile_and_no_error(
+        self, client, tmp_path, monkeypatch
+    ):
+        good = tmp_path / "config.json"
+        good.write_text('{"profile": "npu"}', encoding="utf-8")
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", good)
+
+        data = client.get("/api/system/status").json()
+
+        assert data["config_error"] is None
+        assert data["active_profile"] == "npu"
+
     def test_system_status_has_all_fields(self, client):
         resp = client.get("/api/system/status")
         data = resp.json()

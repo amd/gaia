@@ -15,7 +15,6 @@ the profile's min_context_size, which is where that requirement is enforced.
 """
 
 import importlib.util
-import logging
 import os
 import subprocess
 import sys
@@ -37,9 +36,10 @@ except ImportError:
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import source_install_command
 from gaia.installer._stdin import stdin_is_tty
+from gaia.logger import get_logger
 from gaia.ui.build import WebuiBuildStatus
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 def is_embedding_model_id(model_id: str) -> bool:
@@ -974,7 +974,7 @@ class InitCommand:
                 try:
                     config = GaiaConfig.load()
                 except GaiaConfigError as e:
-                    log.warning(f"Resetting corrupt config: {e}")
+                    self._print_warning(f"Resetting unreadable config: {e}")
                     config = GaiaConfig()
                 config.profile = self.profile
                 config.default_device = "npu" if self.profile == "npu" else "gpu"
@@ -1825,11 +1825,11 @@ class InitCommand:
                 agent.get("id") == agent_id for agent in catalog_result.agents
             )
         except Exception as exc:  # noqa: BLE001 - catalog reachability, not install
-            log.warning(
-                "Could not check the Agent Hub catalog for '%s': %s -- "
-                "treating as not-yet-published (non-fatal)",
-                agent_id,
-                exc,
+            log.debug("Agent Hub catalog check failed", exc_info=True)
+            self._print_warning(
+                f"Could not reach the Agent Hub catalog to install the "
+                f"'{agent_id}' agent ({exc}). Setup continues without it; "
+                f"re-run `gaia init` once you are online."
             )
             published = False
 
