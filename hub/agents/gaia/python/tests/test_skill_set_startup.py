@@ -102,6 +102,30 @@ def test_agent_build_no_longer_drops_the_env_value(monkeypatch):
         agent.load_skill_set()
 
 
+def test_agent_refuses_the_env_value_when_no_manifest_is_found(monkeypatch):
+    """An unpackaged checkout has no manifest; the value must still be refused."""
+    monkeypatch.setenv(SKILL_SET_ENV, "research")
+    monkeypatch.setattr(GaiaAgent, "SKILL_MANIFEST", None)
+    monkeypatch.setattr(GaiaAgent, "_resolve_skill_manifest", lambda self, *_: None)
+    agent = GaiaAgent.__new__(GaiaAgent)
+    agent.config = GaiaAgentConfig()
+    agent._requested_skill_set = None
+    agent._skill_sets = None
+    with pytest.raises(SkillSetError, match="GAIA_SKILL_SET='research'"):
+        agent.load_declared_skills()
+
+
+def test_no_manifest_and_no_env_loads_nothing(monkeypatch):
+    monkeypatch.delenv(SKILL_SET_ENV, raising=False)
+    monkeypatch.setattr(GaiaAgent, "SKILL_MANIFEST", None)
+    monkeypatch.setattr(GaiaAgent, "_resolve_skill_manifest", lambda self, *_: None)
+    agent = GaiaAgent.__new__(GaiaAgent)
+    agent.config = GaiaAgentConfig()
+    agent._requested_skill_set = None
+    agent._skill_sets = None
+    assert agent.load_declared_skills() == {}
+
+
 def test_sidecar_exits_non_zero_before_binding_a_port(served, monkeypatch, capsys):
     monkeypatch.setenv(SKILL_SET_ENV, "research")
     assert server_mod.serve_http(["--port", "8149"]) != 0

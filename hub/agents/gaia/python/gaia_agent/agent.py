@@ -607,6 +607,18 @@ class GaiaAgent(
         name, _origin = _user_skill_set(self.config)
         return name
 
+    def load_declared_skills(self, manifest_path=None, *, manager=None):
+        """Load declared skills, refusing a user-named set even with no manifest.
+
+        The base returns ``{}`` early when no manifest is found, before
+        :meth:`load_skill_set` can reject the config/env name — so an unpackaged
+        checkout would silently drop ``GAIA_SKILL_SET`` that the transport
+        pre-check already rejects.
+        """
+        if manifest_path is None and _user_skill_set(self.config)[0] is not None:
+            return self.load_skill_set(manager=manager)
+        return super().load_declared_skills(manifest_path, manager=manager)
+
     def load_skill_set(self, requested: Optional[str] = None, *, manager=None):
         """Load skills, treating the config/env skill set as an explicit request.
 
