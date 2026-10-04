@@ -1898,6 +1898,32 @@ class TestHubInstallWiringFailsLoudly(_HubInstallWiringTestBase):
         self.assertEqual(rc, 0)
         mock_install.assert_not_called()
 
+    def test_unreachable_catalog_warns_the_user_and_continues(self):
+        """A catalog outage must not fail `init`, but the user must see that
+        the agent was skipped and how to get it -- not a log-only line."""
+        cmd = self._make_cmd("gaia")
+        self._patch_common_steps(cmd)
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                return_value=None,
+            ),
+            patch(
+                "gaia.hub.catalog.load_index",
+                side_effect=ConnectionError("hub unreachable"),
+            ),
+            patch("gaia.hub.installer.install") as mock_install,
+            patch.object(cmd, "_print_warning") as warn,
+        ):
+            rc = cmd.run()
+
+        self.assertEqual(rc, 0)
+        mock_install.assert_not_called()
+        warnings = " ".join(str(c.args[0]) for c in warn.call_args_list)
+        self.assertIn("Agent Hub catalog", warnings)
+        self.assertIn("hub unreachable", warnings)
+        self.assertIn("gaia init", warnings)
+
 
 class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
     """AC: only profiles whose declared agent is in ``HUB_INSTALL_AGENTS``

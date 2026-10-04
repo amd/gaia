@@ -712,7 +712,7 @@ async def health_check():
                     "status": "ready",
                     "backend": "lemonade",
                     "model": "Gemma-4-E4B-it-GGUF",
-                    "url": "http://localhost:13305/api/v1"
+                    "url": "http://localhost:<port>/api/v1"
                 },
                 "rag": {"status": "not_configured"}
             }
