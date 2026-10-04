@@ -7,7 +7,6 @@
 name: Email Agent Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:

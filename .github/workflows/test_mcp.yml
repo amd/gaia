@@ -8,7 +8,6 @@
 name: MCP Bridge Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:
