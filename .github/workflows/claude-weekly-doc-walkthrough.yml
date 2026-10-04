@@ -192,7 +192,10 @@ jobs:
   # findings already captured from guides that finished first.
   walkthrough:
     needs: discover
-    if: github.repository == 'amd/gaia' && needs.discover.outputs.docs != '[]'
+    # Explicit status check (#3929) instead of the implicit success() a bare needs.* ref gets.
+    if: >-
+      github.repository == 'amd/gaia' && !cancelled() &&
+      needs.discover.result == 'success' && needs.discover.outputs.docs != '[]'
     # Expression-wrapped 'stx' (not a bare literal) to match the rest of the repo's
     # self-hosted-runner workflows and stay actionlint-clean (a literal label isn't
     # in actionlint's default known-labels list; an expression sidesteps that
@@ -507,6 +510,7 @@ jobs:
           # bash `jq -s '[.. | objects | select(has("is_error")) | .is_error] | .[-1]'`
           # claude-nightly-audit.yml uses on ubuntu.
           $ok = $false
+          $said = "(no result text)"
           if ($env:EXEC_FILE -and (Test-Path $env:EXEC_FILE)) {
             $raw = Get-Content -Raw $env:EXEC_FILE
             $hits = [regex]::Matches($raw, '"is_error"\s*:\s*(true|false)')
@@ -514,6 +518,13 @@ jobs:
               $ok = $hits[$hits.Count - 1].Groups[1].Value -eq 'false'
             } else {
               Write-Host "::warning::No is_error in $env:EXEC_FILE -- treating as a crash."
+            }
+            # The CLI's terminal result text is the only place a rejection (usage limit,
+            # dead credential, unknown model) is named; without it every outage reads the same.
+            $texts = [regex]::Matches($raw, '"result"\s*:\s*"((?:[^"\\]|\\.)*)"')
+            if ($texts.Count -gt 0) {
+              $said = $texts[$texts.Count - 1].Groups[1].Value
+              if ($said.Length -gt 300) { $said = $said.Substring(0, 300) }
             }
           }
           $transcriptExists = Test-Path "$env:RUN_DIR\transcript.md"
@@ -527,7 +538,7 @@ jobs:
             "- **Executor:** ❌ reported success but wrote no transcript" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
             exit 1
           } else {
-            Write-Host "::error title=Executor did not complete cleanly (${{ matrix.doc.path }})::log: $env:EXEC_FILE"
+            Write-Host "::error title=Executor did not complete cleanly (${{ matrix.doc.path }})::CLI reported: $said | log: $env:EXEC_FILE"
             "- **Executor:** ❌ did not complete cleanly" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
             exit 1
           }
@@ -650,6 +661,7 @@ jobs:
           # Same whole-text scan as "Report executor status" above -- see the note there
           # for why line-by-line parsing misreads this file.
           $ok = $false
+          $said = "(no result text)"
           if ($env:EXEC_FILE -and (Test-Path $env:EXEC_FILE)) {
             $raw = Get-Content -Raw $env:EXEC_FILE
             $hits = [regex]::Matches($raw, '"is_error"\s*:\s*(true|false)')
@@ -658,12 +670,17 @@ jobs:
             } else {
               Write-Host "::warning::No is_error in $env:EXEC_FILE -- treating as a crash."
             }
+            $texts = [regex]::Matches($raw, '"result"\s*:\s*"((?:[^"\\]|\\.)*)"')
+            if ($texts.Count -gt 0) {
+              $said = $texts[$texts.Count - 1].Groups[1].Value
+              if ($said.Length -gt 300) { $said = $said.Substring(0, 300) }
+            }
           }
           $findingsFile = "findings-walkthrough-${{ matrix.doc.slug }}.json"
           if ($ok) {
             Write-Host "✅ Judge completed."
           } else {
-            Write-Host "::warning title=Judge did not complete cleanly (${{ matrix.doc.path }})::log: $env:EXEC_FILE"
+            Write-Host "::warning title=Judge did not complete cleanly (${{ matrix.doc.path }})::CLI reported: $said | log: $env:EXEC_FILE"
           }
           if (Test-Path $findingsFile) {
             $findingsObj = Get-Content $findingsFile -Raw | ConvertFrom-Json
