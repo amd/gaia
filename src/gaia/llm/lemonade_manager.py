@@ -20,13 +20,12 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
-    configured_lemonade_url,
     is_llm_model_entry,
     resolve_ctx_size,
     resolve_effective_ctx_size,
     resolve_lemonade_base_url,
 )
-from gaia.llm.lemonade_launcher import describe_start_hint
+from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
 from gaia.logger import get_logger
 
 
@@ -38,19 +37,6 @@ def _is_cloud_entry(entry: dict) -> bool:
     """
     return entry.get("recipe") == CLOUD_RECIPE or "cloud" in (entry.get("labels") or [])
 
-
-# Allow-list mapping from detected device -> Lemonade recipe
-# TODO: Confirm full recipe vocabulary with the Lemonade specialist
-# (@kovtcharov-amd). Currently we map hybrid-capable devices to
-# 'oga-hybrid'. Before wiring recipe -> startup (dispatch), verify whether
-# device-specific recipes exist (e.g., 'oga-npu', 'oga-dgpu') and update
-# this allow-list accordingly.
-_RECIPE_BY_DEVICE = {
-    "amd_npu": "oga-hybrid",
-    "amd_igpu": "oga-hybrid",
-    "amd_dgpu": "oga-hybrid",
-    "cpu": "oga-cpu",
-}
 
 # Device capability priority (high -> low)
 _DEVICE_PRIORITY = ["amd_npu", "amd_igpu", "amd_dgpu", "cpu"]
@@ -318,7 +304,9 @@ class LemonadeManager:
 
     @classmethod
     def is_lemonade_installed(cls) -> bool:
-        """Check if Lemonade server is installed."""
+        """Check if Lemonade server is installed (GAIA's own or a system one)."""
+        if gaia_runs_lemonade():
+            return True
         client = LemonadeClient(verbose=False)
         return client.get_lemonade_version() is not None
 
@@ -337,12 +325,11 @@ class LemonadeManager:
         Raises:
             DaemonError: The daemon could not start it; the message names why.
         """
-        if configured_lemonade_url():
+        if not gaia_runs_lemonade():
             return False
         from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
-        embedded = EmbeddedLemonade()
-        if not embedded.is_installed() or embedded.status().running:
+        if EmbeddedLemonade().status().running:
             return False
         from gaia.daemon.client import ensure_lemonade
 
@@ -371,23 +358,16 @@ class LemonadeManager:
                 "📥 Lemonade server is not installed on your system.", file=sys.stderr
             )
             print("", file=sys.stderr)
-            print("To install Lemonade server:", file=sys.stderr)
-            print("  1. Visit: https://lemonade-server.ai", file=sys.stderr)
-            print("  2. Download the installer for your platform", file=sys.stderr)
-            print("  3. Run the installer and follow prompts", file=sys.stderr)
+            print("To install GAIA's Lemonade Server, run:", file=sys.stderr)
+            print("  gaia init", file=sys.stderr)
             print("", file=sys.stderr)
-            print("After installation, try your command again.", file=sys.stderr)
+            print("Then try your command again.", file=sys.stderr)
         else:
             print("Lemonade server is installed but not running.", file=sys.stderr)
             print("", file=sys.stderr)
+            print("To start it:", file=sys.stderr)
             print(
-                "GAIA will automatically start Lemonade Server if installed.",
-                file=sys.stderr,
-            )
-            print("If auto-start fails, you can start it manually by:", file=sys.stderr)
-            print("  • Double-clicking the desktop shortcut, or", file=sys.stderr)
-            print(
-                f"  • {describe_start_hint(min_context_size).instruction}",
+                f"  {describe_start_hint(min_context_size).instruction}",
                 file=sys.stderr,
             )
             print("", file=sys.stderr)
@@ -565,10 +545,7 @@ class LemonadeManager:
             else len(_DEVICE_PRIORITY) - 1
         )
         if detected_idx <= req_idx:
-            recipe = _RECIPE_BY_DEVICE.get(highest, _RECIPE_BY_DEVICE.get("cpu"))
-            cls._log.debug(
-                f"Hardware requirement satisfied: {highest} -> recipe={recipe}"
-            )
+            cls._log.debug(f"Hardware requirement satisfied: {highest}")
         else:
             raise HardwareRequirementError(
                 _format_device_error(device, required_min_device, detected)
@@ -855,20 +832,6 @@ class LemonadeManager:
 
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
 
-            if base_url is None and host is None and port is None:
-                from gaia.daemon.errors import DaemonError
-
-                try:
-                    cls.start_embedded_if_stopped()
-                except DaemonError as e:
-                    cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
-                    if not quiet:
-                        print(
-                            f"❌ Could not start GAIA's Lemonade Server: {e}",
-                            file=sys.stderr,
-                        )
-                    return False
-
             try:
                 # When base_url is provided, pass it directly to LemonadeClient
                 # so it preserves the full URL (including https:// for ngrok, etc.)
@@ -886,6 +849,24 @@ class LemonadeManager:
                         keep_alive=True,
                         verbose=not quiet,
                     )
+
+                pinned = base_url is not None or host is not None or port is not None
+                if gaia_runs_lemonade(client.base_url if pinned else None):
+                    from gaia.daemon.errors import DaemonError
+
+                    try:
+                        cls.start_embedded_if_stopped()
+                    except DaemonError as e:
+                        cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
+                        if not quiet:
+                            print(
+                                f"❌ Could not start GAIA's Lemonade Server: {e}",
+                                file=sys.stderr,
+                            )
+                        return False
+                    # Its port is chosen at start, so re-resolve instead of
+                    # keeping the stopped-state default the caller passed.
+                    client = LemonadeClient(keep_alive=True, verbose=not quiet)
 
                 # Just check server status - no agent profile required
                 status = client.get_status()

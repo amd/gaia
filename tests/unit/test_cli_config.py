@@ -93,6 +93,18 @@ class TestDefaultModelConfig:
             GaiaConfig.load()
         assert str(a_dir) in str(exc.value)
 
+    def test_load_non_utf8_raises(self, tmp_path, monkeypatch):
+        from gaia import config as config_mod
+        from gaia.config import GaiaConfig, GaiaConfigError
+
+        config_file = tmp_path / "config.json"
+        config_file.write_bytes(b'{"profile": "\xff\xfe"}')
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
+
+        with pytest.raises(GaiaConfigError) as exc:
+            GaiaConfig.load()
+        assert str(config_file) in str(exc.value)
+
     def test_empty_default_model_resolves_to_builtin(self):
         # An empty string is falsy and must not shadow the built-in default.
         from gaia.config import GaiaConfig

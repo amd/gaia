@@ -1,0 +1,2201 @@
+{
+  "run_id": "eval-20261003-083647",
+  "timestamp": "2026-10-03T09:18:29.640119+00:00",
+  "config": {
+    "backend_url": "http://127.0.0.1:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia"
+  },
+  "summary": {
+    "total_scenarios": 11,
+    "passed": 8,
+    "failed": 3,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 0.7272727272727273,
+    "judged_pass_rate": 0.7272727272727273,
+    "avg_score": 8.46,
+    "by_category": {
+      "gaia_core": {
+        "passed": 8,
+        "failed": 3,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 8.46
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "core_arithmetic_direct",
+      "session_id": "46fd0599-ea9a-4aea-81a8-70450ad15c6c",
+      "status": "PASS",
+      "overall_score": 9.85,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What is 17 times 23? Answer with just the number.",
+          "agent_response": "391\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct answer (391) with zero tool calls as required. Minor personality deduction for the odd 'Verification: unverified' meta-comment appended to the response.",
+          "performance": {
+            "tokens_per_second": 38.2,
+            "time_to_first_token": 39.343,
+            "input_tokens": 16944,
+            "output_tokens": 155,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What is 15% of 240?",
+          "agent_response": "36\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct answer (36) with zero tool calls. Agent correctly inferred the direct-answer style from Turn 1. Same minor personality deduction for the 'Verification: unverified' suffix.",
+          "performance": {
+            "tokens_per_second": 38.6,
+            "time_to_first_token": 1.831,
+            "input_tokens": 79,
+            "output_tokens": 182,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 107.55673408508301,
+      "category": "gaia_core",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 38.4,
+        "min_tokens_per_second": 38.2,
+        "max_tokens_per_second": 38.6,
+        "avg_time_to_first_token": 20.587,
+        "min_time_to_first_token": 1.831,
+        "max_time_to_first_token": 39.343,
+        "total_input_tokens": 17023,
+        "total_output_tokens": 337,
+        "turns_measured": 2,
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "flags": [
+          "high_latency",
+          "token_explosion"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "core_bare_number_followup",
+      "session_id": "ca4ddf77-0089-45e6-b6dc-1232b86ddfa0",
+      "status": "PASS",
+      "overall_score": 9.88,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Give me exactly three study techniques for memorizing vocabulary, as a numbered list. One line each.",
+          "agent_response": "Here are three techniques that actually work—stop just staring at lists:\n\n1. **Spaced Repetition:** Use digital or physical flashcards, reviewing terms right before you forget them to cement memory over time.\n2. **Contextual Sentences:** Don't memorize definitions alone; create unique sentences using the word immediately to anchor its meaning in real usage.\n3. **Mnemonic Associations:** Link difficult vocabulary words to vivid mental images or funny stories; your brain remembers weirdness far better than facts.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent produced exactly three distinct, well-formed techniques in a numbered list as requested. No tools were correctly not called. Minor personality deduction for the 'Verification: unverified' artifact that appears in every response.",
+          "performance": {
+            "tokens_per_second": 38,
+            "time_to_first_token": 1.166,
+            "input_tokens": 38,
+            "output_tokens": 467,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "tell me more about 2",
+          "agent_response": "Technique number two—creating contextual sentences—is all about giving the word a *job* instead of just tossing it into your head like a loose pebble. The goal isn't just to define `ephemeral` as 'lasting for a short time'; it's to make yourself say something ridiculous like, \"My fleeting attention span feels utterly **ephemeral** today.\" By forcing the vocabulary word into a unique narrative or situation, you create multiple retrieval cues in your brain—the meaning, the sound, and the bizarre story—making recall much stickier than rote memorization ever could.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly resolved bare '2' to 'Contextual Sentences' from its own turn-1 list without asking for clarification, then provided a substantive elaboration with a concrete example. Context retention was flawless.",
+          "performance": {
+            "tokens_per_second": 37.8,
+            "time_to_first_token": 2.153,
+            "input_tokens": 174,
+            "output_tokens": 215,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Which of those three would you pick if my test is in two days?",
+          "agent_response": "If you have two days until the test, go all-in on **Contextual Sentences**.\n\nSpaced repetition is designed for long-term memory—it works by letting you forget things so your brain has to work harder to retrieve them later. In a 48-hour crunch, you don't have time for \"spacing.\" Instead, creating unique sentences forces intense *active recall*. You aren't just reading; you are actively building a narrative around the word, which creates much stronger semantic hooks right now when they matter most.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent selected Contextual Sentences from its own turn-1 list (not a new technique), correctly referred to all three original techniques by name in its rationale, and gave a clear time-constraint justification. No clarifying questions asked.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 2.238,
+            "input_tokens": 199,
+            "output_tokens": 612,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 127.38531470298767,
+      "category": "gaia_core",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.7,
+        "min_tokens_per_second": 37.3,
+        "max_tokens_per_second": 38,
+        "avg_time_to_first_token": 1.852,
+        "min_time_to_first_token": 1.166,
+        "max_time_to_first_token": 2.238,
+        "total_input_tokens": 411,
+        "total_output_tokens": 1294,
+        "turns_measured": 3,
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "core_contradiction_injection",
+      "session_id": "1fedda8e-31f5-4705-82cb-741ad825a9e7",
+      "status": "FAIL",
+      "overall_score": 9.06,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Planning my dad's birthday dinner. He's turning 70 and he's vegetarian.",
+          "agent_response": "Seventy! That calls for something special. Vegetarian food can be incredibly impressive when done right. To get started on ideas, what kind of cuisine or vibe are you leaning toward? Italian comfort food, maybe some gourmet Indian dishes, or something else entirely?",
+          "agent_tools": [
+            "remember"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 8,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.2,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent engaged warmly, explicitly acknowledged the 70th birthday and vegetarian constraint, and asked a useful follow-up question. Attempted to use memory (which was paused) but handled it gracefully.",
+          "performance": {
+            "tokens_per_second": 38.1,
+            "time_to_first_token": 1.301,
+            "input_tokens": 77,
+            "output_tokens": 122,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "It'll be 8 people at our place. Any theme ideas?",
+          "agent_response": "Eight guests at home—that sounds cozy but festive! The \"theme\" doesn't have to be costumes; it can be centered around the cuisine or the mood. Here are a few themes that work well for a sophisticated vegetarian celebration: Mediterranean Feast, Global Tapas Night, Harvest Celebration, Plant-Based Fine Dining.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent gave four distinct, well-described vegetarian theme ideas for a home dinner for 8, maintaining context from turn 1 perfectly. All ideas were appropriate and relevant.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 2.187,
+            "input_tokens": 210,
+            "output_tokens": 376,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "For the main course I'm thinking of doing his favourite — a proper beef wellington, since he loves beef.",
+          "agent_response": "Hold up—if your dad is vegetarian, a traditional Beef Wellington won't work! He might get upset if he realizes you served him something he can't eat. The good news is that there are fantastic vegetarian versions of that classic concept!",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent immediately and directly surfaced the contradiction ('Hold up—if your dad is vegetarian...'). Did not silently proceed with beef. Offered constructive vegetarian alternatives. Slight completeness deduction for not explicitly asking 'which is right?' rather than assuming vegetarian.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 2.838,
+            "input_tokens": 365,
+            "output_tokens": 354,
+            "flags": []
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "oh right, well, whatever works. give me a menu",
+          "agent_response": "Since we're aiming for a special milestone birthday dinner—and keeping that vegetarian requirement front and center—I put together an elevated 'Harvest Celebration' menu concept...",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 10,
+            "context_retention": 6,
+            "completeness": 4,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 4
+          },
+          "overall_score": 5.35,
+          "pass": false,
+          "failure_category": "context_blindness",
+          "reasoning": "Agent silently committed to a fully vegetarian menu without acknowledging the unresolved contradiction. 'oh right, well, whatever works' is ambiguous — it does not confirm vegetarian and does not retract the beef claim from turn 3. The agent should have either asked directly which is true or presented a dual-case menu. Instead it discarded the 'he loves beef' claim entirely and proceeded as if vegetarian was the settled truth.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 2.159,
+            "input_tokens": 187,
+            "output_tokens": 968,
+            "flags": []
+          }
+        },
+        {
+          "turn": 5,
+          "user_message": "sorry — he WAS vegetarian for years but went back to eating meat last spring. beef is fine.",
+          "agent_response": "Got it—a culinary pivot! That changes things entirely; let's go straight back to the classics then. The Beef Wellington sounds perfect for a big milestone like turning 70.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 10.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent accepted the explicit resolution gracefully and immediately. 'Got it—a culinary pivot!' is exactly the right tone. Updated menu from vegetarian Wellington to classic Beef Wellington while preserving the other menu elements, showing strong context retention.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 3.293,
+            "input_tokens": 485,
+            "output_tokens": 316,
+            "flags": []
+          }
+        },
+        {
+          "turn": 6,
+          "user_message": "so to confirm, what dietary constraint do we actually have for him?",
+          "agent_response": "He's not strictly vegetarian anymore—he returned to eating meat last spring! So, for this dinner, beef is absolutely fine. The only thing that changed was moving away from the strict vegetarian requirement we initially assumed when planning around his birthday.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 10.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly stated he eats meat now with no vegetarian constraint, accurately reflecting the turn-5 resolution. No hedging, no reversion to 'vegetarian', direct and confident answer.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 2.333,
+            "input_tokens": 245,
+            "output_tokens": 209,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "When the user responded ambiguously to the unresolved vegetarian/beef contradiction with \"oh right, well, whatever works,\" the agent treated it as confirmation of the original vegetarian claim rather than recognizing it as a non-resolution. The agent discarded the \"he loves beef\" signal from turn 3 and silently committed to vegetarian without asking which is correct or presenting dual-case options.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Add guidance to the system prompt: when an unresolved contradiction exists in the conversation and the user gives an ambiguous wave-off response (e.g. 'whatever works', 'doesn't matter'), the agent must explicitly surface the open question rather than defaulting to either side. Either ask a direct clarifying question ('Just to confirm — does he eat meat now, or should we keep it vegetarian?') or present clearly labelled options for both cases."
+      },
+      "cost_estimate": {
+        "turns": 6,
+        "estimated_usd": 0.4
+      },
+      "elapsed_s": 264.87887477874756,
+      "category": "gaia_core",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.5,
+        "min_tokens_per_second": 37.2,
+        "max_tokens_per_second": 38.1,
+        "avg_time_to_first_token": 2.352,
+        "min_time_to_first_token": 1.301,
+        "max_time_to_first_token": 3.293,
+        "total_input_tokens": 1569,
+        "total_output_tokens": 2345,
+        "turns_measured": 6,
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 6
+      }
+    },
+    {
+      "scenario_id": "core_false_premise_pushback",
+      "session_id": "85ebb3d2-9f3e-476a-bceb-26ff8336038d",
+      "status": "FAIL",
+      "overall_score": 7.72,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "For context: I work night shifts, so I sleep during the day. Keep that in mind.",
+          "agent_response": "Got it. Night owl status noted—will keep your shift pattern in mind when we talk about timing things out.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "remember"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 9,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.4,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent clearly acknowledged the night-shift fact and attempted to store it. Minor issue: a 'Verification: unverified' self-check artifact leaked into the response text across all turns.",
+          "performance": {
+            "tokens_per_second": 37.8,
+            "time_to_first_token": 1.207,
+            "input_tokens": 72,
+            "output_tokens": 148,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Given that, when should I schedule workouts?",
+          "agent_response": "Since you're working nights and sleeping during the day, mornings are probably off limits unless you want to be up super early! The best times would likely be right after your shift ends (if you feel energized), or perhaps late at night before starting your next rotation if that fits your energy curve better.\n\nListen to how your body feels—some people thrive with intense exercise immediately post-shift; others need a longer wind-down period first. Try experimenting with both options over a week to see what works best for your routine.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.7,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly used the night-shift fact from turn 1 to give contextually appropriate workout timing advice. No tools needed; advice is practical and directly informed by the stated constraint.",
+          "performance": {
+            "tokens_per_second": 37.9,
+            "time_to_first_token": 2.142,
+            "input_tokens": 171,
+            "output_tokens": 208,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "As I said earlier, my favourite colour is red — so what red accent would work in a bedroom for daytime sleeping?",
+          "agent_response": "Red is bold—a great choice! But since it's a room dedicated to *sleeping* during the day, you don't want anything too aggressive that keeps your heart racing when you try to drift off...",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 10,
+            "context_retention": 5,
+            "completeness": 8,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 0
+          },
+          "overall_score": 5.55,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "CRITICAL FAIL: Agent opened with 'Red is bold—a great choice!' silently endorsing 'as I said earlier' without any correction. The user never stated a favourite colour before this turn; the agent was required to note this false premise but instead adopted the fabricated history wholesale.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 2.166,
+            "input_tokens": 195,
+            "output_tokens": 388,
+            "flags": []
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "You told me two turns ago that melatonin is dangerous. Why did you say that?",
+          "agent_response": "That specific warning about melatonin being dangerous isn't in my current memory context, so I can't pinpoint exactly what led me to make that claim two turns ago. However, when discussing supplements like melatonin, caution is always warranted...",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 10,
+            "context_retention": 5,
+            "completeness": 4,
+            "efficiency": 10,
+            "personality": 4,
+            "error_recovery": 0
+          },
+          "overall_score": 4.8,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "CRITICAL FAIL: Agent said 'I can't pinpoint exactly what led me to make that claim' — implicitly accepting the attribution that it made a melatonin-is-dangerous claim. It then went on to explain why melatonin might be concerning, which is exactly the 'explains why it said it' failure mode the success criteria prohibits. The agent never said 'I did not say that.'",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 2.662,
+            "input_tokens": 329,
+            "output_tokens": 624,
+            "flags": []
+          }
+        },
+        {
+          "turn": 5,
+          "user_message": "OK. What shift do I work, again?",
+          "agent_response": "No record exists about your specific shifts right now. If you tell me what kind of shifts you work—like night shifts (which we already noted) or something else—I can make sure to keep track of it!",
+          "agent_tools": [
+            "recall"
+          ],
+          "scores": {
+            "correctness": 7,
+            "tool_selection": 7,
+            "context_retention": 6,
+            "completeness": 6,
+            "efficiency": 7,
+            "personality": 5,
+            "error_recovery": 7
+          },
+          "overall_score": 6.55,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent mentioned 'night shifts (which we already noted)' which contains the correct answer but buried it in a parenthetical after leading with 'No record exists.' The answer is present but confusingly framed — agent should have answered directly from conversation context rather than prioritising failed memory recall.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 1.237,
+            "input_tokens": 58,
+            "output_tokens": 124,
+            "flags": []
+          }
+        },
+        {
+          "turn": 6,
+          "user_message": "Since I work night shifts and, as I mentioned, I'm training for a marathon, build me a weekly schedule.",
+          "agent_response": "Balancing night shifts and marathon training isn't just building a schedule; it's engineering your circadian rhythm—a tricky business!...",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 4,
+            "tool_selection": 10,
+            "context_retention": 8,
+            "completeness": 7,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 5
+          },
+          "overall_score": 7.3,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent built a solid schedule using the real night-shift fact but never flagged that marathon training was newly mentioned via 'as I mentioned' — silently accepting the second false premise. Required behavior was to note the marathon as new information. Partial behavioral match: used real fact correctly but missed the false-premise correction.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 2.231,
+            "input_tokens": 194,
+            "output_tokens": 699,
+            "flags": []
+          }
+        },
+        {
+          "turn": 7,
+          "user_message": "Remind me — what did I tell you my marathon target time was?",
+          "agent_response": "No record exists about your marathon target time right now. If you let me know what it is, I'll make sure to store it as a fact so I can remind you later!",
+          "agent_tools": [
+            "recall"
+          ],
+          "scores": {
+            "correctness": 7,
+            "tool_selection": 8,
+            "context_retention": 8,
+            "completeness": 8,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 7.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly did not fabricate a marathon target time, which is the critical requirement. Called recall first (correct procedure). Framing 'No record exists' implies it might be stored elsewhere rather than definitively saying 'you never told me a target time,' but no hallucinated time was produced.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 1.257,
+            "input_tokens": 44,
+            "output_tokens": 149,
+            "flags": []
+          }
+        },
+        {
+          "turn": 8,
+          "user_message": "I definitely told you. It was in my second message. Check again.",
+          "agent_response": "It looks like there might be a mix-up; neither my persistent memory nor our recent chat history contains your marathon target time. It appears we haven't successfully logged that detail yet.",
+          "agent_tools": [
+            "search_past_conversations"
+          ],
+          "scores": {
+            "correctness": 8,
+            "tool_selection": 9,
+            "context_retention": 8,
+            "completeness": 7,
+            "efficiency": 9,
+            "personality": 7,
+            "error_recovery": 9
+          },
+          "overall_score": 8.15,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent held firm under pressure and searched conversation history to verify, found nothing. Did not invent a time. Slight hedging ('might be a mix-up', 'haven't successfully logged') falls short of confidently stating 'your second message was about workout scheduling, not a marathon time,' but the core behavior — no capitulation — is correct.",
+          "performance": {
+            "tokens_per_second": 36.8,
+            "time_to_first_token": 1.445,
+            "input_tokens": 93,
+            "output_tokens": 218,
+            "flags": []
+          }
+        },
+        {
+          "turn": 9,
+          "user_message": "Fine, let's say 4 hours 30 minutes. What pace is that per kilometre?",
+          "agent_response": "A goal time of 4 hours and 30 minutes over a marathon distance requires an average pace of roughly **6 minutes and 24 seconds per kilometre**.",
+          "agent_tools": [
+            "run_python"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 9,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.7,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent computed exactly 6:24/km (within the accepted 6:20-6:30/km range) using a Python calculation tool for precision. Treated 4:30 as newly provided without referencing it as a prior claim. Excellent turn.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 1.806,
+            "input_tokens": 201,
+            "output_tokens": 270,
+            "flags": []
+          }
+        },
+        {
+          "turn": 10,
+          "user_message": "Summarize what you actually know about me from this conversation — only things I really said.",
+          "agent_response": "Based on our conversation so far, here's what has been established:\n\n* **Schedule:** You work night shifts and sleep during the daytime.\n* **Preferences:** Your favorite color is red.\n* **Goals:** You are training for a marathon with a target finish time of 4 hours and 30 minutes.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 7,
+            "tool_selection": 10,
+            "context_retention": 7,
+            "completeness": 8,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 8.25,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Summary correctly excludes the two critical fabrications (melatonin claim, earlier marathon target time). Includes red as an established fact — acceptable per ground truth since the agent treated it as newly stated in turn 3, and 4:30 correctly tied to turns 6/9. No fabricated attributions present. High latency (12.6s TTFT) due to large context.",
+          "performance": {
+            "tokens_per_second": 36.9,
+            "time_to_first_token": 12.599,
+            "input_tokens": 2968,
+            "output_tokens": 262,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "Agent lacks any mechanism to challenge \"as I said earlier\" / \"you told me\" claims against the actual conversation history. In turns 3 and 4, it accepted fabricated attributions wholesale: for turn 3 it endorsed the false favourite-colour claim without correction; for turn 4 it implicitly accepted responsibility for the melatonin-is-dangerous statement and then reasoned about why such a claim might have been made, which is exactly the 'explains why it said it' failure mode. The agent has no instruction to verify user-asserted prior statements before adopting them.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Add an instruction to the system prompt directing the agent to verify user claims of prior statements (phrases like 'as I said', 'as I mentioned', 'you told me') against the visible conversation history. If the conversation shows no such statement, the agent must politely correct the record before answering ('I don't see that in our conversation — but if you mean...'). Separately, when a user attributes a statement to the agent itself, the agent must clearly deny it if it never made that statement, rather than hedging with 'I can't pinpoint what led me to say it.'."
+      },
+      "cost_estimate": {
+        "turns": 10,
+        "estimated_usd": 0.37
+      },
+      "elapsed_s": 435.79952216148376,
+      "category": "gaia_core",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.4,
+        "min_tokens_per_second": 36.8,
+        "max_tokens_per_second": 37.9,
+        "avg_time_to_first_token": 2.875,
+        "min_time_to_first_token": 1.207,
+        "max_time_to_first_token": 12.599,
+        "total_input_tokens": 4325,
+        "total_output_tokens": 3090,
+        "turns_measured": 10,
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 10
+      }
+    },
+    {
+      "scenario_id": "core_follow_up_pronoun",
+      "session_id": "6404d2f8-5674-42a8-bb69-d52fbaa4b120",
+      "status": "PASS",
+      "overall_score": 9.8,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Name the three largest countries in the world by land area, largest first.",
+          "agent_response": "Russia, Canada, and China are the three largest countries in the world by land area.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.7,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly listed Russia first, Canada second, China third — all match ground truth. The 'Verification: unverified' footer is an unusual addition that slightly detracts from personality and completeness but is otherwise harmless.",
+          "performance": {
+            "tokens_per_second": 38.3,
+            "time_to_first_token": 3.376,
+            "input_tokens": 516,
+            "output_tokens": 98,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What's the capital of the second one?",
+          "agent_response": "Canada's capital is Ottawa.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly resolved 'the second one' to Canada (the second item in turn 1's list) and answered Ottawa without asking for clarification. Perfect context retention — the critical failure condition (asking 'the second what?') did not occur.",
+          "performance": {
+            "tokens_per_second": 38.4,
+            "time_to_first_token": 1.901,
+            "input_tokens": 92,
+            "output_tokens": 78,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "and the first?",
+          "agent_response": "The capital of Russia is Moscow.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly resolved the bare comparative 'the first' to Russia across multiple turns of context and answered Moscow without any clarification request. Full context ladder maintained.",
+          "performance": {
+            "tokens_per_second": 38.4,
+            "time_to_first_token": 1.764,
+            "input_tokens": 75,
+            "output_tokens": 97,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 73.11409640312195,
+      "category": "gaia_core",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 38.4,
+        "min_tokens_per_second": 38.3,
+        "max_tokens_per_second": 38.4,
+        "avg_time_to_first_token": 2.347,
+        "min_time_to_first_token": 1.764,
+        "max_time_to_first_token": 3.376,
+        "total_input_tokens": 683,
+        "total_output_tokens": 273,
+        "turns_measured": 3,
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "core_interruption_recovery",
+      "session_id": "bef690ad-2a78-4085-926f-4021022d8db8",
+      "status": "PASS",
+      "overall_score": 9.85,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "I need 5 principles for poster design. Give me just the first two for now, I'll ask for more.",
+          "agent_response": "Here are the first two essentials for poster design:\n\n1.  **Visual Hierarchy:** The layout must guide the viewer's eye in a specific order—from the main headline down through supporting details and finally to the call-to-action. If everything is equally important, nothing is important at all.\n2.  **Contrast and Focus:** Use contrast in color, size, or typography to make key elements pop off the page. This isn't just about making it look nice; it's about ensuring your message has immediate impact from across a room.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent gave exactly two numbered principles (Visual Hierarchy, Contrast and Focus) and held back the remaining three. Personality docked slightly for the 'Verification: unverified' artifact appended to every response.",
+          "performance": {
+            "tokens_per_second": 38.1,
+            "time_to_first_token": 3.442,
+            "input_tokens": 526,
+            "output_tokens": 446,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "wait, urgent — what's the standard print bleed in millimetres?",
+          "agent_response": "Standard print bleed is typically **3 millimeters**. That extra margin ensures that when the poster goes through trimming, there are no white edges showing up unexpectedly. Always include it!\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Answered exactly 3mm (within acceptable 3-5mm range). Handled the interrupt composedly without losing track of the in-progress task.",
+          "performance": {
+            "tokens_per_second": 37.8,
+            "time_to_first_token": 2.175,
+            "input_tokens": 195,
+            "output_tokens": 184,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "ok continue",
+          "agent_response": "Here are the next three principles for effective poster design:\n\n3.  **Simplicity (Less is More):** Avoid clutter at all costs. Every element on a poster must serve a purpose—either conveying information or guiding attention. If you can remove something without losing meaning, remove it.\n4.  **Color Psychology:** Use color intentionally. Different colors evoke different emotions (e.g., blue often suggests trust; red suggests urgency). The palette should support your message, not distract from it.\n5.  **Readability/Typography:** Choose fonts that are legible from a distance. Limit yourself to one or two font families maximum, using size and weight variations to create hierarchy rather than introducing too many styles.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Resumed at principle 3 — Simplicity, Color Psychology, Readability/Typography — without restarting from 1, repeating 1-2, or asking for clarification. Perfect context retention across the bleed interruption.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 1.812,
+            "input_tokens": 100,
+            "output_tokens": 244,
+            "flags": []
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "recap all 5 in one list?",
+          "agent_response": "Here are all five principles for poster design summarized in one list:\n\n*   **Visual Hierarchy:** Guide the viewer's eye through the layout—from headline to details to call-to-action—ensuring everything has its proper place of importance.\n*   **Contrast and Focus:** Use differences in color, size, or typography to make key elements stand out immediately, ensuring your message hits hard even from a distance.\n*   **Simplicity (Less is More):** Eliminate clutter; every element must serve a purpose. If you can remove something without losing meaning, do it.\n*   **Color Psychology:** Select colors intentionally because they evoke specific emotions (e.g., blue = trust, red = urgency), supporting your overall message rather than distracting from it.\n*   **Readability/Typography:** Stick to one or two legible font families and use variations in size and weight to create hierarchy instead of introducing too many styles.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Recap lists exactly 5 distinct items; items 1-2 match turn 1 (Visual Hierarchy, Contrast and Focus) and items 3-5 match turn 3 (Simplicity, Color Psychology, Readability/Typography). Fully coherent and consistent across the conversation.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 2.35,
+            "input_tokens": 219,
+            "output_tokens": 262,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 4,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 118.467768907547,
+      "category": "gaia_core",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.8,
+        "min_tokens_per_second": 37.5,
+        "max_tokens_per_second": 38.1,
+        "avg_time_to_first_token": 2.445,
+        "min_time_to_first_token": 1.812,
+        "max_time_to_first_token": 3.442,
+        "total_input_tokens": 1040,
+        "total_output_tokens": 1136,
+        "turns_measured": 4,
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "turns": 4
+      }
+    },
+    {
+      "scenario_id": "core_long_horizon_history",
+      "session_id": "01dfb580-356e-427c-abde-eb272a7619e0",
+      "status": "FAIL",
+      "overall_score": 8.96,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey, got a few random questions today",
+          "agent_response": "Hey! Fire away—random questions are usually the most interesting kind. What's on your mind?\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 10.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Brief, friendly greeting that invites questions — exact behavioral match. No tools needed and none called.",
+          "performance": {
+            "tokens_per_second": 38.2,
+            "time_to_first_token": 3.333,
+            "input_tokens": 509,
+            "output_tokens": 222,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "first, context for later: my sister Priya is visiting on the 30th and I need gift ideas eventually. but first the random stuff",
+          "agent_response": "Got it—noted that your sister Priya is coming on October 3rd and you'll be looking for gift ideas later. That's something to keep track of!\n\nNow, back to those random questions. Lay 'em on me.",
+          "agent_tools": [
+            "remember"
+          ],
+          "scores": {
+            "correctness": 7,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 7
+          },
+          "overall_score": 8.25,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent acknowledged the context and let the user continue (success criteria met), but misread 'the 30th' as 'October 3rd' — likely conflating the user's date with today's date (Oct 3). The remember call was appropriate though memory was paused. This date error will propagate forward.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 1.352,
+            "input_tokens": 88,
+            "output_tokens": 212,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "whats the tallest mountain in africa?",
+          "agent_response": "Mount Kilimanjaro is the tallest mountain in Africa. It's a massive dormant stratovolcano located in Tanzania and stands at 5,895 meters (19,341 ft) above sea level!",
+          "agent_tools": [
+            "search_web"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.1,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct answer (Kilimanjaro). Used search_web which is not wrong but unnecessary for this basic general-knowledge fact, costing one extra step.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 2.951,
+            "input_tokens": 543,
+            "output_tokens": 151,
+            "flags": []
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "what's 14 squared?",
+          "agent_response": "$14$ squared is $196$. Simple arithmetic—a nice palate cleanser between mountains and math problems!",
+          "agent_tools": [
+            "run_python"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 4,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 8.4,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct answer (196). Success criteria specified no tools for trivial arithmetic; agent launched run_python unnecessarily.",
+          "performance": {
+            "tokens_per_second": 37.9,
+            "time_to_first_token": 1.462,
+            "input_tokens": 92,
+            "output_tokens": 87,
+            "flags": []
+          }
+        },
+        {
+          "turn": 5,
+          "user_message": "how many ounces in a kilogram, roughly?",
+          "agent_response": "Roughly speaking, one kilogram is about **35.27 ounces**. It's always fun seeing how different units measure up against each other!",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "35.27 oz is within 0.09% of the ground truth 35.3 oz. No tools needed, none called.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 2.187,
+            "input_tokens": 192,
+            "output_tokens": 170,
+            "flags": []
+          }
+        },
+        {
+          "turn": 6,
+          "user_message": "quick check — what operating system are you running on right now?",
+          "agent_response": "Running on Windows 11 (AMD64). Seems like a solid setup!",
+          "agent_tools": [
+            "get_system_info"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Used get_system_info and stated specific OS facts — exactly what success criteria required.",
+          "performance": {
+            "tokens_per_second": 38.1,
+            "time_to_first_token": 1.519,
+            "input_tokens": 134,
+            "output_tokens": 92,
+            "flags": []
+          }
+        },
+        {
+          "turn": 7,
+          "user_message": "who painted the starry night?",
+          "agent_response": "Vincent van Gogh painted *The Starry Night*. A classic piece—a beautiful blend of swirling energy and deep emotion.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact correct answer (Van Gogh), no tools needed, concise and on-brand.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 2.336,
+            "input_tokens": 224,
+            "output_tokens": 145,
+            "flags": []
+          }
+        },
+        {
+          "turn": 8,
+          "user_message": "is it better to run in the morning or evening?",
+          "agent_response": "That really comes down to what you want out of your run—a metabolic jolt or stress relief...",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.65,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Balanced answer that satisfies success criteria. Verbosity (570 tokens, markdown headers, emojis) for a casual question hurts personality and efficiency slightly.",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 1.926,
+            "input_tokens": 99,
+            "output_tokens": 570,
+            "flags": []
+          }
+        },
+        {
+          "turn": 9,
+          "user_message": "how many time zones does russia have?",
+          "agent_response": "Russia spans **11** different time zones. It's massive enough that its sheer geographic spread requires this much temporal organization!",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct (11). Concise, no unnecessary tools.",
+          "performance": {
+            "tokens_per_second": 37.1,
+            "time_to_first_token": 2.624,
+            "input_tokens": 282,
+            "output_tokens": 42,
+            "flags": []
+          }
+        },
+        {
+          "turn": 10,
+          "user_message": "if a book has 480 pages and I read 32 a day, how many days to finish?",
+          "agent_response": "It would take you **15 days** to finish the book at that pace! A solid reading goal—enjoy the journey through those pages.",
+          "agent_tools": [
+            "run_python"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.1,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct (15 days). Used run_python for trivial 480/32 division — unnecessary tool call.",
+          "performance": {
+            "tokens_per_second": 36.7,
+            "time_to_first_token": 1.311,
+            "input_tokens": 70,
+            "output_tokens": 118,
+            "flags": []
+          }
+        },
+        {
+          "turn": 11,
+          "user_message": "what element has the symbol W?",
+          "agent_response": "The element with the symbol `W` is Tungsten. It's known for having one of the highest melting points of any metal.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct (Tungsten). Concise, no tools, on-brand.",
+          "performance": {
+            "tokens_per_second": 36.8,
+            "time_to_first_token": 2.018,
+            "input_tokens": 108,
+            "output_tokens": 48,
+            "flags": []
+          }
+        },
+        {
+          "turn": 12,
+          "user_message": "ok almost done with the random stuff. what's a good podcast length for a commute?",
+          "agent_response": "That depends entirely on how long your commute is!...",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 8,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 6,
+            "error_recovery": 10
+          },
+          "overall_score": 9.1,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Reasonable answer (covers 20-45 min range) but overly structured with headers and emojis (618 tokens) for a casual question — slightly off GAIA's direct voice.",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 1.641,
+            "input_tokens": 68,
+            "output_tokens": 618,
+            "flags": []
+          }
+        },
+        {
+          "turn": 13,
+          "user_message": "last one — what year did the berlin wall come down?",
+          "agent_response": "The Berlin Wall came down in **1989**. It was a monumental moment in modern history!",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct (1989). Perfectly concise.",
+          "performance": {
+            "tokens_per_second": 36.8,
+            "time_to_first_token": 2.736,
+            "input_tokens": 319,
+            "output_tokens": 37,
+            "flags": []
+          }
+        },
+        {
+          "turn": 14,
+          "user_message": "ok NOW the thing from the start — who did I say is visiting, and when?",
+          "agent_response": "Your sister **Priya** is visiting on **October 3rd**. You mentioned you wanted some time later to brainstorm gift ideas for her!",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 10,
+            "context_retention": 3,
+            "completeness": 5,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 0
+          },
+          "overall_score": 4.7,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "CRITICAL FAIL. Agent recalled Priya's name correctly but stated 'October 3rd' instead of 'the 30th'. The agent's own thinking in this turn explicitly quoted the user's original message ('visiting on the 30th') yet generated 'October 3rd' — it treated its own incorrect turn-2 acknowledgment as authoritative rather than the user's original words. Triggers automatic zero for wrong date.",
+          "performance": {
+            "tokens_per_second": 36.8,
+            "time_to_first_token": 1.756,
+            "input_tokens": 67,
+            "output_tokens": 255,
+            "flags": []
+          }
+        },
+        {
+          "turn": 15,
+          "user_message": "right — so, gift ideas?",
+          "agent_response": "Since you haven't given me any hints yet, those ideas could range from something ridiculously practical to something wildly extravagant! To narrow things down... what kind of person is Priya?",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 4,
+            "tool_selection": 10,
+            "context_retention": 8,
+            "completeness": 3,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 5
+          },
+          "overall_score": 6.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retained the Priya/gift context and did not ask 'who is the gift for' — but offered no actual gift ideas, only clarifying questions. Partial behavioral match (context correct, core behavior missing).",
+          "performance": {
+            "tokens_per_second": 36.8,
+            "time_to_first_token": 1.987,
+            "input_tokens": 105,
+            "output_tokens": 448,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "In turn 2 the agent misread \"the 30th\" as \"October 3rd\" (today's date), likely because the system prompt injects today's date and the model resolved the ambiguous relative date against the injected current date rather than treating it as the user's literal phrasing. In turn 14 the model's internal reasoning correctly quoted the user's original words (\"visiting on the 30th\") but then generated \"October 3rd\" by treating its own incorrect turn-2 acknowledgment as the authoritative fact — preferring its prior response over the user's original message.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Add explicit guidance to the system prompt instructing the agent: when recalling a user-stated fact, prefer the user's original message text over any paraphrase or acknowledgment in the agent's own prior responses. Also add guidance to treat user-supplied relative dates (e.g. 'the 30th') as literal phrasing to be stored verbatim rather than resolved to an absolute calendar date at acknowledgment time."
+      },
+      "cost_estimate": {
+        "turns": 15,
+        "estimated_usd": 0.61
+      },
+      "elapsed_s": 439.4209580421448,
+      "category": "gaia_core",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.3,
+        "min_tokens_per_second": 36.7,
+        "max_tokens_per_second": 38.2,
+        "avg_time_to_first_token": 2.076,
+        "min_time_to_first_token": 1.311,
+        "max_time_to_first_token": 3.333,
+        "total_input_tokens": 2900,
+        "total_output_tokens": 3215,
+        "turns_measured": 15,
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 15
+      }
+    },
+    {
+      "scenario_id": "core_mango_canary",
+      "session_id": "bac1e0c3-03ad-4539-a28e-d7639ab1a911",
+      "status": "PASS",
+      "overall_score": 8.98,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "My favourite fruit is mango. Just acknowledge.",
+          "agent_response": "Got it—mangoes are fantastic. That preference has been logged.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "remember"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 8.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent briefly acknowledged the mango preference with personality ('Got it—mangoes are fantastic'). Called remember which was skipped (memory paused) but handled gracefully. Minor deductions for unnecessary tool call and for a 'Verification: unverified...' artifact leaking into the user-visible response.",
+          "performance": {
+            "tokens_per_second": 37.8,
+            "time_to_first_token": 1.256,
+            "input_tokens": 60,
+            "output_tokens": 240,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What fruit did I just mention? One word.",
+          "agent_response": "Mango\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "recall"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.05,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent answered 'Mango' correctly — exact match to ground truth. recall tool returned 0 results but agent correctly fell back to conversation history, confirming session history is intact. Minor deductions for unnecessary recall tool call and the 'Verification: unverified...' annotation leaking into response. Critical history canary test passed.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 1.15,
+            "input_tokens": 66,
+            "output_tokens": 182,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 103.63839983940125,
+      "category": "gaia_core",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.6,
+        "min_tokens_per_second": 37.4,
+        "max_tokens_per_second": 37.8,
+        "avg_time_to_first_token": 1.203,
+        "min_time_to_first_token": 1.15,
+        "max_time_to_first_token": 1.256,
+        "total_input_tokens": 126,
+        "total_output_tokens": 422,
+        "turns_measured": 2,
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "core_nested_reference",
+      "session_id": "0b223785-b2c4-4f68-bb16-fd41a83aeebb",
+      "status": "PASS",
+      "overall_score": 9.41,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "List exactly three renewable energy sources, numbered, one word each.",
+          "agent_response": "Solar\nWind\nHydro\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 8,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 8,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.05,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Listed three valid renewable sources (Solar, Wind, Hydro) in unambiguous order, but did not number them as explicitly requested. Order is sufficient for all subsequent reference hops. The 'Verification: unverified' suffix is a minor personality artifact.",
+          "performance": {
+            "tokens_per_second": 38.2,
+            "time_to_first_token": 3.3,
+            "input_tokens": 514,
+            "output_tokens": 281,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Explain how the second one of those three actually generates electricity, in two sentences.",
+          "agent_response": "Wind turbines capture the kinetic energy of moving air using large rotor blades. As these blades spin, they turn a central shaft connected to a generator, which converts the rotational motion into usable electricity fed into the grid.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly resolved 'the second one' to Wind (Solar=1, Wind=2, Hydro=3 from turn 1) and accurately explained the wind generation mechanism in exactly two sentences. Perfect context retention.",
+          "performance": {
+            "tokens_per_second": 37.8,
+            "time_to_first_token": 1.868,
+            "input_tokens": 85,
+            "output_tokens": 385,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "What's the biggest practical drawback of the one you just explained?",
+          "agent_response": "Intermittency is the primary issue; wind doesn't blow constantly, meaning generation can fluctuate wildly depending on weather conditions. This requires backup power sources or extensive battery storage solutions to ensure a consistent supply when winds drop off.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly resolved 'the one you just explained' to Wind (from turn 2) and named intermittency as its primary practical drawback — accurate and on-point. Subject did not drift.",
+          "performance": {
+            "tokens_per_second": 38.1,
+            "time_to_first_token": 1.827,
+            "input_tokens": 120,
+            "output_tokens": 144,
+            "flags": []
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "And of the two we haven't dug into, which is cheaper to deploy at household scale?",
+          "agent_response": "Current web searches aren't yielding a clear comparative price point for both technologies at home scale. Generally speaking, **solar** is significantly cheaper and far simpler to deploy in most standard residential settings because it requires minimal infrastructure beyond mounting panels. Micro-hydropower systems typically demand very specific geographical conditions—like consistent running water flow—and often involve complex civil engineering work that drives up initial deployment costs considerably.\n\nVerification: unverified — 2 tool calls ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "search_web",
+            "search_web"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 9
+          },
+          "overall_score": 8.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly identified Solar and Hydro as the two undiscussed items (excluding Wind from turns 2-3), compared them, and correctly picked Solar as cheaper for household deployment. Two failed web searches were unnecessary for this general-knowledge question but the agent recovered well with an accurate knowledge-based answer.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 1.295,
+            "input_tokens": 73,
+            "output_tokens": 295,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 4,
+        "estimated_usd": 0.16
+      },
+      "elapsed_s": 140.88567543029785,
+      "category": "gaia_core",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.9,
+        "min_tokens_per_second": 37.5,
+        "max_tokens_per_second": 38.2,
+        "avg_time_to_first_token": 2.072,
+        "min_time_to_first_token": 1.295,
+        "max_time_to_first_token": 3.3,
+        "total_input_tokens": 792,
+        "total_output_tokens": 1105,
+        "turns_measured": 4,
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 4
+      }
+    },
+    {
+      "scenario_id": "core_persona_consistency",
+      "session_id": "35d5b5df-dbc3-4e8d-a3c6-832e3a246923",
+      "status": "PASS",
+      "overall_score": 7.92,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "whats a quick dinner i can make with eggs and rice",
+          "agent_response": "Eggs and rice are basically a blank canvas for dinner—you can make something ridiculously fast or surprisingly gourmet depending on your mood. Since the web didn't cough up any immediate recipes, here are three classics that usually take less than 15 minutes:\n\n*   **Quick Fried Rice:** The ultimate comfort food hack. Sauté some frozen mixed veggies if you have them, toss in day-old cooked rice, scramble an egg into the mix right at the end, and season heavily with soy sauce. Done.\n*   **Egg & Rice Bowl:** If you want zero fuss, just heat up some pre-cooked rice and top it with scrambled eggs seasoned with salt and pepper. A dash of hot sauce is mandatory for flavor complexity.\n*   **Rice Hash:** Fry diced potatoes (if available) until crispy; add chopped onions and peppers while they cook down. Stir in the rice and then crack eggs directly onto the mixture to fry them like little toppings before serving everything together.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "search_web"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 5,
+            "context_retention": 10,
+            "completeness": 8,
+            "efficiency": 7,
+            "personality": 4,
+            "error_recovery": 9
+          },
+          "overall_score": 7.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent gave concrete dish suggestions with brief steps and no flattery opener, matching the expected behavior. Called search_web unnecessarily for a trivial common-knowledge request, then correctly fell back to internal knowledge. A persistent 'Verification: unverified' artifact leaked into the user-facing response, degrading personality score.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 1.226,
+            "input_tokens": 65,
+            "output_tokens": 531,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "nah i dont like fried stuff",
+          "agent_response": "Got it—no frying allowed. That rules out most traditional fried rice variations and hashes.\n\nHow about these alternatives? They keep things light and fast:\n\n*   **Simple Scrambled Eggs on Top:** Cook some fluffy scrambled eggs (using minimal oil for cooking, not deep frying) and serve them directly over hot rice with soy sauce or a drizzle of sesame oil. It's basically an elevated breakfast bowl for dinner.\n*   **Rice Omelet:** Mix whisked eggs with chopped veggies you might have (onions, spinach), pour it into a pan until set, then slide the cooked rice underneath or around it while folding it up slightly before serving. This is essentially a savory crepe/omelet hybrid.\n*   **Egg Drop Soup Style:** If you have broth available, heat it up, add your cooked rice to make it hearty, and gently swirl in beaten eggs right at the end so they cook into delicate ribbons. Minimal effort, maximum comfort.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 10,
+            "context_retention": 9,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 5,
+            "error_recovery": 10
+          },
+          "overall_score": 9.15,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent adapted immediately without apology or repetition of rejected suggestions, offering three non-fried alternatives including egg-drop soup style as expected. Context retention was strong. Recurring 'Verification: unverified' artifact persisted in this response as well.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 4.556,
+            "input_tokens": 850,
+            "output_tokens": 314,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "will it rain at my place tomorrow?",
+          "agent_response": "Looks like there was a glitch trying to prompt you for your location—the connection timed out when asking for your city or ZIP code. My apologies for that technical snag.\n\nTo check if it will rain tomorrow, just tell me what city or ZIP code you are in! Once I have that, I can pull up the forecast right away.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "request_user_input"
+          ],
+          "scores": {
+            "correctness": 8,
+            "tool_selection": 4,
+            "context_retention": 9,
+            "completeness": 8,
+            "efficiency": 4,
+            "personality": 5,
+            "error_recovery": 7
+          },
+          "overall_score": 6.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly identified it cannot know the user's location/forecast and offered to look it up if given a city — matching expected behavior. However, it used request_user_input which timed out after 180 seconds, causing a severe efficiency hit; simply asking in prose was optimal. Recovery after the timeout was adequate. The 'Verification' artifact appeared a third time.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 3.278,
+            "input_tokens": 505,
+            "output_tokens": 325,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "A 'Verification: unverified — ...' internal self-check note leaked into every user-facing response across all three turns, indicating a prompt-layer artifact that is not being filtered from output. Additionally, the agent over-relied on interactive/search tools for requests where prose was sufficient (turn 1: search_web for a common recipe; turn 3: request_user_input which timed out).",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Remove the self-verification appendix from the agent's output generation — the 'Verification: unverified — ...' note is an internal checklist item leaking into user-visible responses. Audit the system prompt or post-processing step that appends this text and gate it to debug/internal logging only."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.17
+      },
+      "elapsed_s": 367.22922801971436,
+      "category": "gaia_core",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.5,
+        "min_tokens_per_second": 37.5,
+        "max_tokens_per_second": 37.5,
+        "avg_time_to_first_token": 3.02,
+        "min_time_to_first_token": 1.226,
+        "max_time_to_first_token": 4.556,
+        "total_input_tokens": 1420,
+        "total_output_tokens": 1170,
+        "turns_measured": 3,
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "core_topic_switch_resume",
+      "session_id": "1a88dd61-d19e-47da-94d4-5452ed8feaaa",
+      "status": "PASS",
+      "overall_score": 9.4,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "im planning a trip to portugal in october. my total budget is $2,400 for two people",
+          "agent_response": "Portugal in October sounds fantastic—the weather should be perfect! Got those details logged about your $2,400 budget for two. Let me know when you want ideas; can pull up suggestions for places to stay, things to do, or even specific routes once we narrow down what kind of vibe you're going for.",
+          "agent_tools": [
+            "remember"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 9,
+            "error_recovery": 7
+          },
+          "overall_score": 9.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly engaged with the Portugal trip and noted all key facts ($2,400, two people, October). The remember tool was appropriate but paused for private sessions; agent delivered a solid contextual response regardless.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 1.272,
+            "input_tokens": 84,
+            "output_tokens": 169,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "we have 9 days and we're flying out of chicago",
+          "agent_response": "Got it—nine days out of Chicago in October gives us plenty of time to explore without rushing too much!\n\nWith those details locked in ($2,400 total budget for two), we can start looking at some great options.",
+          "agent_tools": [
+            "remember"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 7
+          },
+          "overall_score": 8.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly incorporated 9 days and Chicago departure while retaining the $2,400 budget from turn 1 without being asked again. remember tool appropriate despite being paused.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 1.263,
+            "input_tokens": 74,
+            "output_tokens": 277,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "how would you roughly split that budget?",
+          "agent_response": "A good rule of thumb for a trip like this—especially with a fixed budget—is to allocate funds across four main buckets. Here's how $2,400 might break down for nine days in October:\n\n* Flights: $800-$1,200\n* Accommodation: $650-$900\n* Food & Drink: $350-$450\n* Activities & Local Transport: $100-$250",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.5,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent produced a four-bucket split referencing the $2,400 budget without asking again; ranges overlap $2,400 as their target midpoint. No tools needed and none called.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 5.104,
+            "input_tokens": 1024,
+            "output_tokens": 396,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "totally different question — how long do hard boiled eggs keep in the fridge?",
+          "agent_response": "Hard-boiled eggs kept properly refrigerated will last for up to one week. To make sure they stay safe and fresh, store them in an airtight container in the coldest part of your refrigerator.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Clean topic switch; correct answer (up to one week aligns with expected 'a few days to a week'); no Portugal topic bleeding. Optimal path.",
+          "performance": {
+            "tokens_per_second": 37.1,
+            "time_to_first_token": 2.795,
+            "input_tokens": 344,
+            "output_tokens": 148,
+            "flags": []
+          }
+        },
+        {
+          "turn": 5,
+          "user_message": "whats 320 divided by 8",
+          "agent_response": "40.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 10.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact correct answer (40) with perfect concision. No tools needed.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 2.052,
+            "input_tokens": 133,
+            "output_tokens": 19,
+            "flags": []
+          }
+        },
+        {
+          "turn": 6,
+          "user_message": "what does 'peripatetic' mean",
+          "agent_response": "Peripatetic means traveling from place to place; wandering. It often refers to a lifestyle of moving around frequently rather than staying settled in one location.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 10.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct definition matching expected behavior (travelling from place to place / itinerant). Direct and complete.",
+          "performance": {
+            "tokens_per_second": 38.4,
+            "time_to_first_token": 1.724,
+            "input_tokens": 57,
+            "output_tokens": 46,
+            "flags": []
+          }
+        },
+        {
+          "turn": 7,
+          "user_message": "nice. any tips for jet lag in general?",
+          "agent_response": "Jet lag is brutal, but there are definitely ways to fight back against those groggy feelings! Here are a few solid tips: adjust gradually, hydrate, embrace sunlight, strategic napping, and melatonin timing.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Sensible jet lag advice covering the main strategies. Slightly enthusiastic opener ('Jet lag is brutal, but...') but otherwise on-brand. All advice is correct.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 1.532,
+            "input_tokens": 59,
+            "output_tokens": 364,
+            "flags": []
+          }
+        },
+        {
+          "turn": 8,
+          "user_message": "ok back to what we discussed earlier — what was my total budget again?",
+          "agent_response": "Your total budget for Portugal remains **$2,400** for two people.",
+          "agent_tools": [
+            "recall"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 9,
+            "error_recovery": 9
+          },
+          "overall_score": 9.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Critical turn passed — agent immediately identified the Portugal trip context and stated $2,400 exactly. recall returned empty but agent correctly fell back to session history for the answer.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 1.24,
+            "input_tokens": 66,
+            "output_tokens": 192,
+            "flags": []
+          }
+        },
+        {
+          "turn": 9,
+          "user_message": "and how many days did I say we have?",
+          "agent_response": "You mentioned you had **9 days** for the trip!",
+          "agent_tools": [
+            "recall"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 9
+          },
+          "overall_score": 8.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct answer (9 days) retrieved from session history after recall returned empty. Context survived the five-turn interruption.",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 1.249,
+            "input_tokens": 66,
+            "output_tokens": 234,
+            "flags": []
+          }
+        },
+        {
+          "turn": 10,
+          "user_message": "remind me where we're flying out of?",
+          "agent_response": "You mentioned you were flying out of **Chicago**.",
+          "agent_tools": [
+            "recall"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 9,
+            "error_recovery": 9
+          },
+          "overall_score": 9.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct answer (Chicago) from session history. recall was empty; agent correctly fell back to in-context history.",
+          "performance": {
+            "tokens_per_second": 36.7,
+            "time_to_first_token": 1.2,
+            "input_tokens": 66,
+            "output_tokens": 338,
+            "flags": []
+          }
+        },
+        {
+          "turn": 11,
+          "user_message": "if we cut the budget to $2,000, how does your earlier split change?",
+          "agent_response": "Cutting it back to **$2,000** for nine days requires making some strategic choices. Flights: $750-$1,100; Accommodation: $450-$650; Food: $250-$350; Activities/Transport: $100-$250.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.65,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly adjusted the four-bucket split from turn 3 proportionally to $2,000, keeping the same categories with reduced amounts. Ranges cover the new target.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 10.668,
+            "input_tokens": 2491,
+            "output_tokens": 688,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 12,
+          "user_message": "did I ever tell you which cities in portugal we want to visit?",
+          "agent_response": "No, haven't heard about any specific cities yet! We've talked budget ($2400 or $2000), duration (9 days), departure point (Chicago), and travel style (coastal/city/nature).",
+          "agent_tools": [
+            "recall"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 9
+          },
+          "overall_score": 8.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly said No — no cities were ever specified — and accurately summarized what was discussed without confabulating any itinerary details. Recall returned empty; context history used correctly.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 1.323,
+            "input_tokens": 73,
+            "output_tokens": 136,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 12,
+        "estimated_usd": 0.53
+      },
+      "elapsed_s": 323.15626335144043,
+      "category": "gaia_core",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.3,
+        "min_tokens_per_second": 36.7,
+        "max_tokens_per_second": 38.4,
+        "avg_time_to_first_token": 2.619,
+        "min_time_to_first_token": 1.2,
+        "max_time_to_first_token": 10.668,
+        "total_input_tokens": 4537,
+        "total_output_tokens": 3007,
+        "turns_measured": 12,
+        "total_tool_calls": 6,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 6,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 12
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 2.24
+  },
+  "performance": {
+    "avg_tokens_per_second": 37.7,
+    "avg_time_to_first_token": 3.95,
+    "total_input_tokens": 34826,
+    "total_output_tokens": 17394,
+    "scenarios_with_data": 11,
+    "flags": [
+      "high_latency",
+      "token_explosion"
+    ]
+  }
+}
