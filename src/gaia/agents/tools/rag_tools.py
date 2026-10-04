@@ -664,8 +664,6 @@ class RAGToolsMixin:
                                 "status": "error",
                                 "error": f"File '{file_path}' not found in indexed documents. Use search_files to find it first.",
                             }
-                    if len(matching_files) > 1:
-                        return _ambiguous_file_error(file_path, matching_files)
                     if auto_indexed:
                         logger.info(
                             f"[query_specific_file] Auto-indexed and resolved '{file_path}' "

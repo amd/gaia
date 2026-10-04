@@ -131,3 +131,14 @@ class TestDumpDocument:
 
         assert result["status"] == "error"
         assert result["candidates"] == [Q3, "/docs/q3_summary.pdf"]
+
+
+class TestSummarizeDocument:
+    def test_ambiguous_request_returns_candidates(self):
+        rag = _fake_rag({Q3, "/docs/q3_summary.pdf"})
+        _make_host(rag)
+
+        result = _tool("summarize_document")(file_path="q3_")
+
+        assert result["status"] == "error"
+        assert result["candidates"] == [Q3, "/docs/q3_summary.pdf"]
