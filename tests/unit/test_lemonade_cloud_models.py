@@ -19,6 +19,7 @@ from gaia.llm.lemonade_client import (
     cloud_model_provider,
     create_lemonade_client,
     local_sampling_defaults,
+    no_thinking_kwargs,
 )
 from gaia.llm.providers.lemonade import LemonadeProvider
 
@@ -698,6 +699,38 @@ def test_turning_the_default_non_thinking_flips_switch_and_sampling_together(
         chat_template_kwargs={"enable_thinking": False},
         **_QWEN3_6_INSTRUCT,
     )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_side_request_reaches_lemonade_with_thinking_off(monkeypatch, stream):
+    """GAIA forces thinking on for Qwen3.6; a side call's switch must win on the wire."""
+    body = _sent_body(monkeypatch, _QWEN3_6, stream, **no_thinking_kwargs(_QWEN3_6))
+    assert body == _wire(
+        _QWEN3_6,
+        stream,
+        chat_template_kwargs={"enable_thinking": False},
+        **_QWEN3_6_INSTRUCT,
+    )
+
+
+@pytest.mark.parametrize(
+    "model_id,expected",
+    [
+        (_QWEN3_6, {"chat_template_kwargs": {"enable_thinking": False}}),
+        (
+            "user.Qwen3.6-35B-A3B-GGUF",
+            {"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        # No thinking switch registered: the template's own mode, nothing sent.
+        ("Gemma-4-E4B-it-GGUF", {}),
+        (_QWEN3_30B, {}),
+        # Cloud providers do not take llama.cpp template kwargs.
+        ("fireworks.deepseek-v4p1-flash", {}),
+        (None, {}),
+    ],
+)
+def test_no_thinking_kwargs(model_id, expected):
+    assert no_thinking_kwargs(model_id) == expected
 
 
 def test_single_mode_model_ignores_the_thinking_switch():

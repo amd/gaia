@@ -34,8 +34,10 @@ logger = logging.getLogger(__name__)
 
 _SUMMARY_CHAR_CAP = 300
 
-#: Seconds the agent thread waits for a tool-confirm response from the frontend.
-TOOL_CONFIRM_TIMEOUT_SECONDS = 60
+#: Seconds the agent thread waits for a tool-confirm response before denying.
+#: Matches the TUI's ``DeliverableConfirmationTimeout`` so a prompt waits as
+#: long on every surface.
+TOOL_CONFIRM_TIMEOUT_SECONDS = 10 * 60
 
 #: Sentinel for "the caller did not pass a timeout". Distinct from ``None``,
 #: which is a caller explicitly asking to wait for the human indefinitely.
@@ -214,6 +216,9 @@ class SSEOutputHandler(OutputHandler):
     #: the user was actually shown rather than the whole tool.
     _confirm_args: Optional[Dict[str, Any]] = None
 
+    #: Outcome of the last ``tool_result``, echoed by the ``tool_end`` after it.
+    _last_tool_success: bool = True
+
     def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
@@ -373,10 +378,11 @@ class SSEOutputHandler(OutputHandler):
 
     def print_tool_complete(self):
         self._tool_start_time = None  # Reset in case tool_result was skipped
+        success, self._last_tool_success = self._last_tool_success, True
         self._emit(
             {
                 "type": "tool_end",
-                "success": True,
+                "success": success,
             }
         )
 
@@ -405,13 +411,13 @@ class SSEOutputHandler(OutputHandler):
 
         # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
+        success = data.get("status") != "error" if isinstance(data, dict) else True
+        self._last_tool_success = success
         event = {
             "type": "tool_result",
             "title": title,
             "summary": summary,
-            "success": (
-                data.get("status") != "error" if isinstance(data, dict) else True
-            ),
+            "success": success,
         }
         # String-returning tools (notably email envelopes) are summarized by a
         # hard character cap. Tell downstream classifiers that an unparsable
@@ -1204,7 +1210,9 @@ class SSEOutputHandler(OutputHandler):
             logger.debug("email relay: failed to close active response", exc_info=True)
 
     def awaiting_user_input(self) -> bool:
-        """True while a ``request_user_input`` question is waiting on the user."""
+        """True while a question or a tool confirmation is waiting on the user."""
+        if self._confirm_id is not None:
+            return True
         with self._user_input_lock:
             return bool(self._user_input_queue)
 
@@ -1474,6 +1482,8 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
     if "num_chunks" in data or "chunk_count" in data:
         chunks = data.get("num_chunks", data.get("chunk_count", 0))
         filename = data.get("filename", data.get("file_path", ""))
+        if data.get("already_indexed"):
+            return f"Already indexed ({chunks} chunks)"
         if filename:
             return f"Indexed {filename} ({chunks} chunks)"
         return f"Indexed document ({chunks} chunks)"
