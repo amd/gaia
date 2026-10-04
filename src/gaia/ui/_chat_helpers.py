@@ -306,12 +306,13 @@ async def _generate_session_title(
     """Call Lemonade chat completions to produce a short tab-style title.
 
     Returns the cleaned title (≤ 64 chars, no quotes, no trailing
-    punctuation) or None on any failure.  Times out at 30 s so a hung
+    punctuation) or None on an HTTP or parse failure.  Times out at 30 s so a hung
     LLM doesn't keep the background task alive forever.
     """
     import httpx  # pylint: disable=import-outside-toplevel
 
     from gaia.llm.lemonade_client import (
+        find_model_requirement,
         lemonade_auth_headers,
         resolve_lemonade_api_key,
     )
@@ -324,18 +325,23 @@ async def _generate_session_title(
         f"Assistant: {(assistant_msg or '')[:200]}\n"
         "Title:"
     )
+    body = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 24,
+        # Low temperature: titles should be deterministic-ish
+        # for the same conversation.
+        "temperature": 0.3,
+    }
+    mr = find_model_requirement(model_id)
+    if mr is not None and mr.thinking is not None:
+        # A thinking model would spend all 24 tokens reasoning and title nothing.
+        body["chat_template_kwargs"] = {"enable_thinking": False}
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 f"{base_url}/chat/completions",
-                json={
-                    "model": model_id,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 24,
-                    # Low temperature: titles should be deterministic-ish
-                    # for the same conversation.
-                    "temperature": 0.3,
-                },
+                json=body,
                 headers=lemonade_auth_headers(
                     resolve_lemonade_api_key(base_url=base_url)
                 ),
@@ -358,7 +364,7 @@ async def _generate_session_title(
                 if title.lower().startswith(prefix):
                     title = title[len(prefix) :].strip()
             return title[:64] if title else None
-    except Exception as exc:  # pylint: disable=broad-except
+    except (httpx.HTTPError, ValueError, LookupError, AttributeError) as exc:
         logger.debug("Auto-title LLM call failed: %s", exc)
         return None
 
