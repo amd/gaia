@@ -58,15 +58,32 @@ def _reject_if_turn_running(http_request: Request, session_id: str) -> None:
         )
 
 
-def _session_response(db: ChatDatabase, session: dict) -> SessionResponse:
-    """Session response naming the model a turn would run, not just the stored one."""
-    model_id, _ = resolve_session_model(
-        session,
-        session.get("agent_type") or "chat",
-        db.get_setting("custom_model"),
-        get_agent_registry(),
-    )
-    return session_to_response(session, effective_model=model_id)
+async def _session_responses(
+    db: ChatDatabase, sessions: list[dict]
+) -> list[SessionResponse]:
+    """Session responses naming the model a turn would run, not just the stored one.
+
+    Resolved off the event loop: the agent's preferred model can need a blocking
+    Lemonade lookup (2 s while it is unreachable), and the UI polls the list.
+    """
+    custom_model = db.get_setting("custom_model")
+    registry = get_agent_registry()
+
+    def resolve() -> list[str | None]:
+        return [
+            resolve_session_model(
+                s, s.get("agent_type") or "chat", custom_model, registry
+            )[0]
+            for s in sessions
+        ]
+
+    models = await asyncio.to_thread(resolve)
+    return [session_to_response(s, effective_model=m) for s, m in zip(sessions, models)]
+
+
+async def _session_response(db: ChatDatabase, session: dict) -> SessionResponse:
+    """``_session_responses`` for one session."""
+    return (await _session_responses(db, [session]))[0]
 
 
 def _is_gaia_config_error(exc: Exception) -> bool:
@@ -166,7 +183,7 @@ async def list_sessions(
     sessions = db.list_sessions(limit=limit, offset=offset)
     total = db.count_sessions()
     return SessionListResponse(
-        sessions=[_session_response(db, s) for s in sessions],
+        sessions=await _session_responses(db, sessions),
         total=total,
     )
 
@@ -188,7 +205,7 @@ async def create_session(
             device=request.device,
             mail_provider=request.mail_provider,
         )
-        return _session_response(db, session)
+        return await _session_response(db, session)
     except Exception as e:
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
@@ -246,7 +263,7 @@ async def get_session(session_id: str, db: ChatDatabase = Depends(get_db)):
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    return _session_response(db, session)
+    return await _session_response(db, session)
 
 
 @router.put("/api/sessions/{session_id}", response_model=SessionResponse)
@@ -320,7 +337,7 @@ async def update_session(
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    return _session_response(db, session)
+    return await _session_response(db, session)
 
 
 @router.delete("/api/sessions/{session_id}")
@@ -359,7 +376,7 @@ async def toggle_session_privacy(
         raise HTTPException(status_code=404, detail="Session not found")
     current = bool(session.get("private", 0))
     updated = db.update_session(session_id, private=not current)
-    return _session_response(db, updated)
+    return await _session_response(db, updated)
 
 
 # ── Messages ─────────────────────────────────────────────────────────────────
