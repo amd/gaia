@@ -3089,7 +3089,6 @@
         "type": "boolean"
       },
       "lemonade_url": {
-        "default": "http://localhost:13305",
         "title": "Lemonade Url",
         "type": "string"
       },

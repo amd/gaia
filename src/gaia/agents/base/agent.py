@@ -1408,7 +1408,7 @@ Do NOT wrap conversational replies in JSON.
             use_claude: If True, uses Claude API (default: False)
             use_chatgpt: Removed option; True raises migration guidance (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
-            base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
+            base_url: Base URL for local LLM server (default: ``resolve_lemonade_base_url()`` — LEMONADE_BASE_URL, else GAIA's own server)
             model_id: The ID of the model to use with LLM server (default for local)
             max_steps: Maximum number of steps the agent can take before terminating.
                 When None, falls back to the global default_max_steps() (env
@@ -5892,13 +5892,14 @@ Do NOT wrap conversational replies in JSON.
                 cloud_model_provider,
                 lemonade_auth_headers,
                 resolve_lemonade_api_key,
+                resolve_lemonade_base_url,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
 
             if cloud_model_provider(getattr(self, "model_id", None)):
                 return False
 
-            base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
             # ``api/v0/health`` exposes ``all_models_loaded`` with ctx_size.
             # The base_url already ends in /api/v1; strip the v1 suffix to
             # reach the v0 health endpoint.

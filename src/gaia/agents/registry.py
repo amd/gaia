@@ -125,26 +125,68 @@ def resolve_preferred_model(
     return None
 
 
-def get_lemonade_models(base_url: str, timeout: float = 2.0) -> Optional[List[str]]:
+def get_lemonade_models(
+    base_url: Optional[str] = None, timeout: float = 2.0
+) -> List[str]:
     """Query Lemonade's ``/models`` endpoint directly (no cache, no backoff).
 
-    Returns the list of installed model ids on a 2xx response — an empty list
-    means Lemonade is reachable but nothing is loaded/installed. Returns
-    ``None`` when the request could not be completed at all (connection
-    error, timeout, non-2xx, malformed response). Callers must not conflate
-    the two: "unreachable" and "reachable but nothing installed" call for
-    different messages and different remediation.
-    """
-    try:
-        import requests
+    Sends the request to the resolved Lemonade URL with its API key — GAIA's
+    embedded server picks its port at start and rejects keyless requests.
 
-        resp = requests.get(f"{base_url}/models", timeout=timeout)
-        if resp.status_code == 200:
-            data = resp.json()
-            return [m["id"] for m in data.get("data", [])]
-    except Exception:
-        pass
-    return None
+    Returns the installed model ids; an empty list means Lemonade answered but
+    has nothing installed. Never returns a placeholder for a failed lookup:
+    raises :class:`LemonadeNetworkError` when the server cannot be reached and
+    :class:`LemonadeError` when it answers with an error or an unreadable body,
+    each naming the URL and what to do next.
+    """
+    import requests
+
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+        resolve_lemonade_base_url,
+    )
+    from gaia.llm.providers.lemonade import LemonadeError, LemonadeNetworkError
+
+    url = resolve_lemonade_base_url(base_url)
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=url))
+    try:
+        resp = requests.get(f"{url}/models", timeout=timeout, headers=headers)
+    except requests.RequestException as e:
+        from gaia.llm.lemonade_launcher import describe_start_hint
+
+        hint = describe_start_hint().instruction.rstrip(".")
+        raise LemonadeNetworkError(
+            user_message=(
+                f"Couldn't reach Lemonade Server at {url} ({type(e).__name__}). "
+                f"{hint}. Or set LEMONADE_BASE_URL to a running server."
+            )
+        ) from e
+
+    if resp.status_code == 401:
+        raise LemonadeError(
+            user_message=(
+                f"Lemonade Server at {url} rejected GAIA's API key (HTTP 401). "
+                "Set LEMONADE_API_KEY to that server's key, or unset "
+                "LEMONADE_BASE_URL so GAIA uses its own server."
+            )
+        )
+    if resp.status_code != 200:
+        raise LemonadeError(
+            user_message=(
+                f"Lemonade Server at {url} answered /models with HTTP "
+                f"{resp.status_code}. Check Lemonade's server log, then retry."
+            )
+        )
+    try:
+        return [m["id"] for m in resp.json().get("data", [])]
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise LemonadeError(
+            user_message=(
+                f"Lemonade Server at {url} returned an unreadable /models "
+                f"response ({e!r}). Update Lemonade with `gaia init`, then retry."
+            )
+        ) from e
 
 
 # Session-level kwargs that constrain the agent's effective sandbox. If
@@ -1461,14 +1503,13 @@ class AgentRegistry:
         ):
             return []
 
-        from gaia.llm.lemonade_client import resolve_lemonade_base_url
+        from gaia.llm.providers.lemonade import LemonadeError
 
-        base_url = resolve_lemonade_base_url()
-        models = get_lemonade_models(base_url)
-        if models is not None:
-            self._lemonade_models = models
-            return self._lemonade_models
-
-        # Record failure timestamp; do NOT cache models so we retry after the interval.
-        self._lemonade_models_last_fail = time.monotonic()
-        return []
+        try:
+            self._lemonade_models = get_lemonade_models()
+        except LemonadeError as e:
+            # Not cached, so the lookup retries after the interval.
+            logger.warning("registry: Lemonade model lookup failed: %s", e)
+            self._lemonade_models_last_fail = time.monotonic()
+            return []
+        return self._lemonade_models

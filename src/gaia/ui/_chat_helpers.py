@@ -395,9 +395,10 @@ async def _maybe_update_session_title(
         _AUTO_TITLE_LAST_AT[session_id] = now
 
     # Use the same Lemonade endpoint the chat just used.
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
     from gaia.llm.lemonade_manager import LemonadeManager
 
-    base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+    base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
     new_title = await _generate_session_title(
         base_url=base_url,
         model_id=model_id,
@@ -1411,10 +1412,11 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
             lemonade_auth_headers,
             resolve_ctx_size,
             resolve_lemonade_api_key,
+            resolve_lemonade_base_url,
         )
         from gaia.llm.lemonade_manager import LemonadeManager
 
-        base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+        base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
         if resp.status_code != 200:
@@ -2778,12 +2780,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 from gaia.llm.lemonade_client import (
                     lemonade_auth_headers,
                     resolve_lemonade_api_key,
+                    resolve_lemonade_base_url,
                 )
                 from gaia.llm.lemonade_manager import LemonadeManager
 
-                base_url = (
-                    LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
-                )
+                base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
                 _auth = lemonade_auth_headers(
                     resolve_lemonade_api_key(base_url=base_url)
                 )

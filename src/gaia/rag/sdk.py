@@ -110,7 +110,8 @@ class RAGConfig:
     cache_dir: str = field(default_factory=default_rag_cache_dir)
     show_stats: bool = False
     use_local_llm: bool = True
-    base_url: str = "http://localhost:13305/api/v1"  # Lemonade server API URL
+    # Lemonade API URL; None resolves at use (LEMONADE_BASE_URL, else GAIA's own).
+    base_url: Optional[str] = None
     # Memory management settings
     max_indexed_files: int = 100  # Maximum number of files to keep indexed
     max_total_chunks: int = 10000  # Maximum total chunks across all files

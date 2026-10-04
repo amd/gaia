@@ -896,21 +896,28 @@ class TestBuilderModelPreferences:
             "Qwen3.5-35B-A3B-GGUF",
         ]
 
-    def test_get_lemonade_models_none_means_unreachable_not_empty(self):
-        """None (unreachable) and [] (reachable, zero models) are distinct —
+    def test_get_lemonade_models_unreachable_raises_not_empty(self):
+        """[] (reachable, zero models) is a result; unreachable is an error —
         callers must be able to tell them apart."""
+        import requests
+
         from gaia.agents.registry import get_lemonade_models
+        from gaia.llm.providers.lemonade import LemonadeNetworkError
 
         mock_response = SimpleNamespace(status_code=200, json=lambda: {"data": []})
         with patch("requests.get", return_value=mock_response):
             reachable_empty = get_lemonade_models("http://localhost:13305/api/v1")
 
-        with patch("requests.get", side_effect=ConnectionError("refused")):
-            unreachable = get_lemonade_models("http://localhost:13305/api/v1")
+        with (
+            patch(
+                "requests.get",
+                side_effect=requests.exceptions.ConnectionError("refused"),
+            ),
+            pytest.raises(LemonadeNetworkError),
+        ):
+            get_lemonade_models("http://localhost:13305/api/v1")
 
         assert reachable_empty == []
-        assert unreachable is None
-        assert reachable_empty is not unreachable
 
     def test_builder_registration_models_is_builder_preferred_models(self):
         """The real builtin 'builder' registration must carry the new
