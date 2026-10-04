@@ -465,12 +465,14 @@ jobs:
       # reader sees in the checks list, so the cause has to be in the name. !cancelled()
       # so a superseded run doesn't report spuriously.
       #
-      # Only `require_comment` callers FAIL here. That is deliberate and unchanged from
-      # before: pr-review must not silently pass without a review, while an outage on the
-      # optional lanes must not red-X a contributor's PR (see the attempt-1 comment).
-      # `ok` also asserts the model: the CLI bills helper models (Haiku) into the usage
-      # map, so the pinned `--model` must be AMONG them. Its absence means another model
-      # did the work — a silent downgrade unless this step goes red.
+      # Only `require_comment` callers FAIL on a missing or errored run. That is deliberate
+      # and unchanged from before: pr-review must not silently pass without a review, while
+      # an outage on the optional lanes must not red-X a contributor's PR (see the attempt-1
+      # comment). `ok` also asserts the model, and a mismatch fails EVERY lane — a
+      # substituted model is not an outage. The CLI bills helper models (Haiku) into the
+      # usage map, so the pinned `--model` must be AMONG them. Its absence means another
+      # model did the work — a silent downgrade unless this step goes red. The comment is
+      # already posted by then; the red check is what flags it.
       - name: Claude run completed on the requested model
         if: "!cancelled() && steps.harness.outputs.status == 'ok'"
         env:
