@@ -317,10 +317,10 @@ icon: "bug"
     gaia daemon status
     ```
 
-    You don't need to set a context size. GAIA pins the context window to your
-    machine's device profile and starts the server with it, so a mismatch means
-    the profile is wrong rather than the flag is missing. Check it with
-    `gaia config get default_device`.
+    You don't need to set a context size. GAIA picks the window for each model
+    when it loads it — 32,768 for NPU (FLM) models, 65,536 or more for GPU
+    models — so a mismatch means something else loaded the model. Run the
+    command again and GAIA reloads it at the right size.
   </Accordion>
 
   <Accordion title="Port already in use" icon="ban">

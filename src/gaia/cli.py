@@ -182,19 +182,12 @@ def initialize_lemonade_for_agent(
         get_logger(__name__).debug(
             "Initializing %s with context size %d", agent, required_ctx
         )
+        # No floor passed: ensure_ready resolves the same one, and then also
+        # seeds an idle server with the default model at its own window.
         if base_url:
-            success = LemonadeManager.ensure_ready(
-                min_context_size=required_ctx,
-                quiet=quiet,
-                base_url=base_url,
-            )
+            success = LemonadeManager.ensure_ready(quiet=quiet, base_url=base_url)
         else:
-            success = LemonadeManager.ensure_ready(
-                min_context_size=required_ctx,
-                quiet=quiet,
-                host=host,
-                port=port,
-            )
+            success = LemonadeManager.ensure_ready(quiet=quiet, host=host, port=port)
     except LemonadeClientError as e:
         print(f"❌ Error: {e}", file=sys.stderr)
         return False, None
