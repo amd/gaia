@@ -305,6 +305,10 @@ setup(
             "sounddevice",
             "openai-whisper",
             "kokoro>=0.3.1",
+            # kokoro leaves transformers unbounded; without this floor the
+            # resolver backtracks to transformers 4.12 / tokenizers 0.10.3,
+            # which has no wheel and fails to build from source.
+            "tokenizers>=0.19",
             "soundfile",
             "psutil",
             "pip",  # Required: spacy model download needs pip in venv (uv omits it)
@@ -348,6 +352,8 @@ setup(
         # install with 'pip install "amd-gaia[publish]"' to package an agent.
         "publish": [
             "build>=1.0.0",
+            # Agent pyprojects build with setuptools; `build --no-isolation` needs it here.
+            "setuptools>=61.0",
             "twine>=5.0.0",
         ],
         # NOTE: no 'agent-<id>' / 'agents' extras here -- see
