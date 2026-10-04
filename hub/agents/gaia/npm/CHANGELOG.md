@@ -27,6 +27,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chat: the agent starts, loads its model and reads its system prompt there,
   step by step. New stdio sentinel `warm_up` (answers `warmed_up`, or
   `warm_up_skipped` for a remote model).
+- The default chat model now follows the hardware. On a PC whose GPU has
+  ~27 GB for models — a 64 GB+ Strix Halo or a 32 GB GPU; the 23.3 GB model also
+  needs its context cache — `gaia init` sets up Qwen3.6 35B A3B (a 23 GB Lemonade
+  built-in MoE, run with thinking on) and records it as `default_model`; the
+  agent and its `GET /v1/gaia/init` readiness check use it for chat. Gemma 4 E4B
+  is still downloaded for vision. Every other PC, including a CPU-only one, keeps
+  Gemma alone.
+- **Qwen3.6 gets the longest context this PC's memory holds.** Up to its native
+  262,144 tokens on a Strix Halo (a 5.4 GB KV cache), about 152K on a 32 GB GPU,
+  never under 64K. Gemma stays at 64K.
+- Qwen3.8 Flash Next (82 GB, multimodal) is a supported manual option on
+  128 GB-class PCs — not auto-selected. Switch with
+  `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`.
 - **Bypass permissions is now called full access, everywhere.** `--full-access`
   and `/full-access` replace `--bypass-permissions` and `/bypass`; the old names
   fail with a message naming the new one. `/full-access always` (or

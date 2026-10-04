@@ -803,7 +803,7 @@ export interface SystemStatus {
   active_profile?: string;
   config_error?: string | null;
   context_size_sufficient?: boolean;
-  default_model_name?: string;
+  default_model_name?: string | null;
   default_model_size_gb?: number | null;
   detected_devices?: string[];
   disk_space_gb?: number;
