@@ -165,6 +165,52 @@ def gaia_extras_install_args(extras: Sequence[str]) -> List[str]:
     return [f"amd-gaia[{joined}]"]
 
 
+_EXTRA_MARKER = re.compile(r"""^extra\s*==\s*["']([^"']+)["']$""")
+
+
+def gaia_extra_requirements(extras: Sequence[str]) -> List[str]:
+    """Return the requirements ``extras`` add to the installed GAIA.
+
+    Installing these, rather than ``amd-gaia[...]``, never reinstalls GAIA
+    itself: on Windows the running ``gaia.exe`` cannot be replaced, so an
+    editable checkout's ``gaia init`` failed while adding its own extras.
+
+    Raises:
+        RuntimeError: GAIA's install record is missing, names no requirement
+            for an extra, or marks one with a condition this cannot evaluate.
+    """
+    try:
+        declared = importlib.metadata.requires("amd-gaia")
+    except importlib.metadata.PackageNotFoundError as e:
+        raise RuntimeError(
+            "amd-gaia is not installed in this Python, so its extras cannot be "
+            "added. Reinstall GAIA (https://amd-gaia.ai/docs/guides/install)."
+        ) from e
+    wanted = set(extras)
+    found = set()
+    requirements = []
+    for line in declared or []:
+        requirement, _, marker = line.partition(";")
+        if "extra" not in marker:
+            continue
+        match = _EXTRA_MARKER.match(marker.strip())
+        if match is None:
+            raise RuntimeError(
+                f"amd-gaia declares {line!r}, a condition GAIA cannot evaluate "
+                f"while adding extras. Run: {pip_install_hint(*gaia_extras_install_args(extras))}"
+            )
+        if match.group(1) in wanted:
+            found.add(match.group(1))
+            requirements.append(requirement.strip())
+    missing = wanted - found
+    if missing:
+        raise RuntimeError(
+            f"amd-gaia declares no extra {sorted(missing)}. Reinstall GAIA "
+            "(https://amd-gaia.ai/docs/guides/install)."
+        )
+    return list(dict.fromkeys(requirements))
+
+
 def pip_install_hint(*args: str) -> str:
     """Return a command a user can paste to install ``args`` into this Python.
 

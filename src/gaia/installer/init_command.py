@@ -39,7 +39,7 @@ from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import (
     PackageInstallerUnavailableError,
     format_command,
-    gaia_extras_install_args,
+    gaia_extra_requirements,
     resolve_pip_frontend,
     source_install_command,
 )
@@ -924,7 +924,7 @@ class InitCommand:
             return True
 
         extras_str = ",".join(pip_extras)
-        install_args = gaia_extras_install_args(pip_extras)
+        install_args = gaia_extra_requirements(pip_extras)
         try:
             frontend = resolve_pip_frontend()
         except PackageInstallerUnavailableError as e:
