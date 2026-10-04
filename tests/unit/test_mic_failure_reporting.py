@@ -164,6 +164,9 @@ class TestTheGuideMatchesTheCode:
     def test_it_tells_users_to_say_stop(self):
         assert 'Say **"stop"**' in self._guide()
 
+    def test_it_tells_users_to_say_restart(self):
+        assert 'Say **"restart"**' in self._guide()
+
     def test_it_does_not_advertise_enter_to_interrupt(self):
         assert "Press **Enter** during audio" not in self._guide()
 
@@ -444,22 +447,3 @@ class TestTheLivePlaybackPathIsBounded:
             await asyncio.wait_for(client.speak_text("one two three"), timeout=30)
 
         asyncio.run(run())
-
-
-class TestTheTalkReadmeMatchesTheCode:
-    @staticmethod
-    def _readme() -> str:
-        from pathlib import Path
-
-        root = Path(__file__).resolve().parents[2]
-        return (root / "src" / "gaia" / "talk" / "README.md").read_text(
-            encoding="utf-8"
-        )
-
-    def test_it_does_not_advertise_enter_to_interrupt(self):
-        assert "Press Enter" not in self._readme()
-
-    def test_it_still_documents_the_words_that_work(self):
-        readme = self._readme()
-        assert '"stop"' in readme
-        assert '"restart"' in readme

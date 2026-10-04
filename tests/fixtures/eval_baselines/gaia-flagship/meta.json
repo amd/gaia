@@ -1,0 +1,17 @@
+{
+  "agent_type": "gaia",
+  "model": "Gemma-4-E4B-it-GGUF",
+  "eval_model": "claude-sonnet-4-6",
+  "commit": "4a75953383259e45922a0d1f09d157d7f04443bd",
+  "date": "2026-10-03",
+  "source_run": "https://github.com/amd/gaia/actions/runs/37110051697",
+  "event": "schedule",
+  "runner_pool": "[self-hosted, Windows, devlab-dispatch, strix-halo]",
+  "iterations": 1,
+  "categories": 27,
+  "scenarios": 218,
+  "passed": 128,
+  "pass_rate": 0.587,
+  "target_pass_rate": 0.8,
+  "purpose": "First flagship baseline: each scorecard_<category>.json is copied unedited from the lane artifact of the source run. A single iteration, so a lone flip against it can be noise."
+}

@@ -276,6 +276,19 @@ class GaiaAgentConfig(ChatAgentConfig):
     fast: bool = False
 
 
+def _code_search_start(allowed: List[str]) -> str:
+    """Where code search starts when the session is not inside a project.
+
+    ``allowed_paths`` also holds attached document FILES and GAIA's own
+    documents folder, which may not exist yet; taking the first entry started
+    code search in that folder and every search failed with "repo_path does not
+    exist". A repository wins, then any folder that exists.
+    """
+    folders = [p for p in allowed if Path(p).is_dir()]
+    repos = [p for p in folders if is_code_repository(p)]
+    return (repos or folders or allowed)[0]
+
+
 def _apply_fast_mode(config: GaiaAgentConfig) -> None:
     """Rewrite *config* in place into the fast conversational path (#4103).
 
@@ -449,7 +462,7 @@ class GaiaAgent(
             allowed = getattr(self.config, "allowed_paths", None) or [str(Path.home())]
             # Through the mixin, so both read the one cached resolution and can
             # never end up describing two different trees.
-            index_root = self._project_map_root() or allowed[0]
+            index_root = self._project_map_root() or _code_search_start(allowed)
             # The project root is where code search STARTS; allowed_paths is how far
             # it may reach. Passing one value for both locked a session that began
             # inside a repo to that repo (#3544).
