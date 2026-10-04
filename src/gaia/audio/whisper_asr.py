@@ -14,16 +14,6 @@ try:
 except ImportError:
     sd = None
 
-try:
-    import torch
-except ImportError:
-    torch = None
-
-try:
-    import whisper
-except ImportError:
-    whisper = None
-
 from gaia.audio.audio_recorder import AudioRecorder
 
 # First-party imports
@@ -42,7 +32,17 @@ class WhisperAsr(AudioRecorder):
         silence_threshold=None,  # Custom silence threshold
         min_audio_length=None,  # Custom minimum audio length
     ):
-        # Check for required dependencies
+        # Imported here, not at module load: torch's bundled libomp disables
+        # faiss memory recall for the rest of the process on macOS.
+        try:
+            import torch
+        except ImportError:
+            torch = None
+        try:
+            import whisper
+        except ImportError:
+            whisper = None
+
         missing = []
         if sd is None:
             missing.append("sounddevice")
@@ -71,6 +71,7 @@ class WhisperAsr(AudioRecorder):
         self.log = self.__class__.log
 
         # Initialize Whisper model with optimized settings
+        self._torch = torch
         self.log.debug(f"Loading Whisper model: {model_size}")
         self.model = whisper.load_model(model_size)
 
@@ -237,7 +238,7 @@ class WhisperAsr(AudioRecorder):
                             f"Processing batch {processed_count} with {len(self.audio_buffer)} segments..."
                         )
 
-                        with torch.inference_mode():
+                        with self._torch.inference_mode():
                             # Process batch of audio segments with better quality settings
                             results = [
                                 self.model.transcribe(

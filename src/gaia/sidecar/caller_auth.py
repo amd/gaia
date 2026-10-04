@@ -260,6 +260,63 @@ class HostOriginMiddleware:
         await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send)
 
 
+# HTTP methods FastAPI/OpenAPI ever attach an operation to under a path item.
+_OPENAPI_METHODS: FrozenSet[str] = frozenset(
+    {"get", "post", "put", "patch", "delete", "options", "head", "trace"}
+)
+
+
+def openapi_security_extension(
+    spec: dict, *, exempt_paths: FrozenSet[str] = frozenset()
+) -> dict:
+    """Overlay the bearer-token gate onto a generated OpenAPI document (#4605).
+
+    The token check is a plain ``Request``-typed dependency, by design — it
+    must not risk behaviour drift in the live auth path — so FastAPI's schema
+    generator never sees it and emits no ``securitySchemes``/``security`` at
+    all. This documents the REAL posture instead: the gate is skipped entirely
+    when a sidecar has no token configured (local dev), so every gated
+    operation declares ``security: [{"bearerAuth": []}, {}]`` — bearer OR
+    none — never a false "always required" claim. ``exempt_paths`` routes get
+    an explicit empty requirement (``security: []``) so they read as
+    deliberately public, not merely undocumented. Mutates and returns ``spec``.
+    """
+    schemes = spec.setdefault("components", {}).setdefault("securitySchemes", {})
+    schemes["bearerAuth"] = {"type": "http", "scheme": "bearer"}
+    for path, operations in spec.get("paths", {}).items():
+        requirement = [] if path in exempt_paths else [{"bearerAuth": []}, {}]
+        for method, operation in operations.items():
+            if method in _OPENAPI_METHODS:
+                operation["security"] = requirement
+    return spec
+
+
+def install_openapi_security(
+    app, *, exempt_paths: FrozenSet[str] = frozenset()
+) -> None:
+    """Wire :func:`openapi_security_extension` onto ``app.openapi()`` (#4605).
+
+    Shared by a sidecar's real server app and its OpenAPI export app, so the
+    bearer-gate overlay is defined once and the two documents can never drift
+    apart. Delegates to the app's own ``app.openapi`` (FastAPI's default
+    schema builder) rather than calling ``fastapi.openapi.utils.get_openapi``
+    directly — the default already forwards everything ``FastAPI.__init__``
+    was given (``servers``, ``openapi_tags``, etc.), so nothing set on the app
+    can silently drop out of the published spec.
+    """
+    base_openapi = app.openapi
+
+    def _openapi() -> dict:
+        if app.openapi_schema:
+            return app.openapi_schema
+        app.openapi_schema = openapi_security_extension(
+            base_openapi(), exempt_paths=exempt_paths
+        )
+        return app.openapi_schema
+
+    app.openapi = _openapi
+
+
 __all__ = [
     "LOOPBACK_HOSTS",
     "CallerAuthConfig",
@@ -271,4 +328,6 @@ __all__ = [
     "config_from_env",
     "is_exempt_path",
     "token_ok",
+    "openapi_security_extension",
+    "install_openapi_security",
 ]

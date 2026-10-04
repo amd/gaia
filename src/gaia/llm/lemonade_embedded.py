@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 
+from gaia.env import child_env
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
 from gaia.version import LEMONADE_VERSION
@@ -946,8 +947,7 @@ class EmbeddedLemonade:
         port = port or _free_port()
         api_key = secrets.token_urlsafe(32)
 
-        env = dict(os.environ)
-        env["LEMONADE_API_KEY"] = api_key
+        env = child_env({"LEMONADE_API_KEY": api_key})
 
         argv = [
             str(self.daemon_path),
@@ -1196,8 +1196,7 @@ class EmbeddedLemonade:
                 f"re-record it."
             )
 
-        env = dict(os.environ)
-        env["LEMONADE_API_KEY"] = api_key
+        env = child_env({"LEMONADE_API_KEY": api_key})
         try:
             result = subprocess.run(
                 [

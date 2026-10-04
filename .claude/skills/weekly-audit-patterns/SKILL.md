@@ -58,7 +58,7 @@ prompt, and the synthesis picks up its `findings-<dim>.json` automatically.
 Published agents are the shop window — the prompt makes every lens double-check them and
 **bump any gap up one severity** (never 🟡; a default-path break is 🔴). Detect them by a
 `release_agent_<id>.yml`, a shipped `SCORECARD.md`, or a released `version:` in
-`gaia-agent.yaml` — currently only the **email agent**. The bar: in-sync high-quality
+`gaia-agent.yaml` — currently the **email agent** and the **gaia flagship agent**. The bar: in-sync high-quality
 README/SPEC.md/SKILL.md/CHANGELOG.md (+ any contract spec) with a **real** eval `SCORECARD.md`
 (gated by `gaia.eval.scorecard_gate`, never hand-authored) linked from the README; bulletproof
 runtime code (no stubs/silent-fallbacks); solid #1655-grade tests. When a new agent publishes,

@@ -1062,6 +1062,7 @@ class FileSearchToolsMixin:
             Searches actual file contents on disk, not RAG indexed documents.
             """
             try:
+                directory = os.path.expanduser(directory)
                 # Enforce the --allowed-paths sandbox before the existence probe
                 # so out-of-sandbox paths can't be used as a directory-existence
                 # oracle (mirrors read_file / get_file_info). Grepping file
@@ -1811,7 +1812,7 @@ class FileSearchToolsMixin:
                 if directory_path is None:
                     directory_path = str(Path.home())
 
-                dir_path = Path(directory_path).resolve()
+                dir_path = Path(directory_path).expanduser().resolve()
 
                 if not dir_path.exists():
                     return {
@@ -1958,7 +1959,7 @@ class FileSearchToolsMixin:
                 Dictionary with file metadata and optional preview
             """
             try:
-                fp = Path(file_path)
+                fp = Path(file_path).expanduser()
 
                 # Enforce the --allowed-paths sandbox: get_file_info returns a
                 # content preview, so it must honor the same read boundary.
@@ -2133,7 +2134,7 @@ class FileSearchToolsMixin:
                 Dictionary with analysis results based on the requested type
             """
             try:
-                fp = Path(file_path)
+                fp = Path(file_path).expanduser()
 
                 def _resolve_indexed_basename(target: Path):
                     """Return an already-indexed document Path whose basename

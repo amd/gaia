@@ -33,7 +33,7 @@
 # the repo's private Security > Code scanning tab via SARIF, and the full JSON
 # reports go to a workflow artifact. `--show-snippets` is never passed anywhere
 # in CI, so the offending source text stays out of every shared channel. This is
-# CLAUDE.md's Security Handling Protocol applied to an automated reviewer.
+# CLAUDE.md's never-disclose-publicly security rule applied to an automated reviewer.
 #
 # READ-ONLY: the Claude job runs --allowedTools Read,Grep,Glob,Bash — no
 # Edit/Write, and it never executes skill code (same rule as claude.yml).
@@ -494,7 +494,8 @@ jobs:
             print your findings to STDOUT only. The run log is the channel.
 
             ## First actions
-            1. Read `CLAUDE.md` — especially the Security Handling Protocol.
+            1. Read `CLAUDE.md` — especially "Issue Response Guidelines" (never discuss
+               vulnerability details publicly).
             2. Read `skill-audit-reports/skill-dirs.txt` — the deterministic list of skill
                directories this PR touched. Review EVERY one; do not sample.
             3. For each directory, read its `SKILL.md` (frontmatter AND instruction body) and
