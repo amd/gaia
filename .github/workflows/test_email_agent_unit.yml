@@ -131,10 +131,10 @@ jobs:
           # [dev] covers the email + eval unit tests (pytest, pytest-mock,
           # respx, keyring, httpx). [api] adds fastapi/uvicorn, which the
           # tests/unit/connectors/ router tests import via the UI connectors
-          # router. [publish] adds the 'build' package (#2934): the sdist
+          # router. [publish] adds 'build' and setuptools (#2934): the sdist
           # packaging regression test builds a real sdist with --no-isolation
-          # against this env's already-installed setuptools, so it needs
-          # 'build' present but never touches the network. The in-memory
+          # against this env's setuptools, so it needs 'build' and
+          # setuptools present but never touches the network. The in-memory
           # keyring backend in tests/conftest.py avoids the SecretService
           # daemon prerequisite on Linux runners. The email hub package is
           # installed so the REST-contract + OpenAPI-conformance tests can

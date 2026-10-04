@@ -106,24 +106,17 @@ You should see `(.venv)` in your terminal prompt when activated.
 
 ### Step 5: Install Dependencies
 
-<Warning>
-  **Linux/WSL users:** GAIA's base dependencies (`transformers`, `accelerate`) require PyTorch. Always use `--extra-index-url` to install CPU-only PyTorch and avoid large CUDA packages (the PyTorch download alone drops from ~2 GB to ~200 MB).
-</Warning>
-
 ```bash
-# Linux/WSL - CPU-only PyTorch (required for all installs)
-uv pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cpu
-```
-
-**Windows:**
-```bash
-# Windows - default PyTorch
 uv pip install -e ".[dev]"
 ```
 
+<Warning>
+  **Linux/WSL users:** the base install and `[dev]` have no PyTorch, but the `[talk]`, `[audio]` and `[ui]` extras do. Whenever you include any of them, pass `--extra-index-url` to get CPU-only PyTorch instead of the CUDA build.
+</Warning>
+
 **With optional extras:**
 ```bash
-# Linux/WSL - CPU-only PyTorch (required, extras or not)
+# Linux/WSL - CPU-only PyTorch for [talk] / [audio] / [ui]
 uv pip install -e ".[dev,talk,rag,ui]" --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Windows
@@ -131,9 +124,8 @@ uv pip install -e ".[dev,talk,rag,ui]"
 ```
 
 <Note>
-On Linux the flag is required for **every** `uv pip install`, with or without
-extras — `accelerate` is an unconditional base dependency, so PyTorch is always
-resolved. There is no config block that removes the need for it: uv's
+On Linux the flag is required for every `uv pip install` that includes `[talk]`,
+`[audio]` or `[ui]` — all three resolve PyTorch. There is no config block that removes the need for it: uv's
 `[tool.uv.sources]` and `[[tool.uv.index]]` apply only to the project interface
 (`uv sync`, `uv lock`, `uv add`), never to `uv pip install`, and `[tool.uv.pip]`
 was rejected for the same reason — see the note in `pyproject.toml`. Omit the
