@@ -102,8 +102,10 @@ def _augment_error_detail(detail: str, profile: RelayProfile = EMAIL_PROFILE) ->
     """Append (never substitute) an actionable hint to connection-shaped
     error text — boundary translation, not a fallback: the original detail
     is preserved verbatim at the front."""
-    if _CONNECTION_SHAPED_RE.search(detail):
-        return detail + profile.lemonade_hint
+    if profile.lemonade_hint and _CONNECTION_SHAPED_RE.search(detail):
+        from gaia.llm.lemonade_launcher import describe_start_hint
+
+        return f"{detail}{profile.lemonade_hint} {describe_start_hint().instruction}"
     return detail
 
 

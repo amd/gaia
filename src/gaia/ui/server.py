@@ -317,11 +317,12 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 lemonade_auth_headers,
                 resolve_ctx_size,
                 resolve_lemonade_api_key,
+                resolve_lemonade_base_url,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
             from gaia.ui._chat_helpers import model_load_lock
 
-            base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
             _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             # Check if a chat model is already loaded.
@@ -355,8 +356,14 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                         all_models2 = resp2.json().get("all_models_loaded", [])
                         if any(m.get("type") in ("llm", "vlm") for m in all_models2):
                             return
-                except Exception:
-                    pass  # proceed with load attempt
+                except (httpx.HTTPError, ValueError) as exc:
+                    # The load below reports its own failure if Lemonade is down.
+                    logger.warning(
+                        "Model preload: re-check of loaded models failed (%s); "
+                        "loading %s anyway",
+                        exc,
+                        model_id,
+                    )
 
                 if cloud_model_provider(model_id, None):
                     return  # cloud models are never loaded locally

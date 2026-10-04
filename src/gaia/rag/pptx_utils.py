@@ -17,6 +17,8 @@ import os
 import platform
 import subprocess
 
+from gaia.env import child_env
+
 logger = logging.getLogger(__name__)
 
 # Shared constants (same as pdf_utils.py)
@@ -333,11 +335,7 @@ def convert_pptx_to_pdf(pptx_path: str, output_dir: str) -> str | None:
     pdf_name = Path(pptx_path).stem + ".pdf"
     pdf_abs = str(Path(output_dir).resolve() / pdf_name)
 
-    ps_env = {
-        **os.environ,
-        PPTX_IN_ENV_VAR: pptx_abs,
-        PDF_OUT_ENV_VAR: pdf_abs,
-    }
+    ps_env = child_env({PPTX_IN_ENV_VAR: pptx_abs, PDF_OUT_ENV_VAR: pdf_abs})
 
     try:
         result = subprocess.run(

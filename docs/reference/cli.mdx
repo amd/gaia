@@ -839,6 +839,8 @@ on stderr.
 | `--ui-port` | integer | 4200 | Port for the Agent UI server (used with `--ui`) |
 | `--ui-dist` | path | - | Serve an alternative prebuilt Agent UI bundle (e.g., a PR preview) instead of the one shipped in the package |
 
+**Exit codes:** `--query` exits `0` when the agent answered, `1` when the query or the agent failed, and `130` when interrupted with Ctrl+C — so `gaia chat --query "..." && next-step` only runs next-step on success.
+
 **Examples:**
 
 <CodeGroup>
@@ -922,6 +924,8 @@ gaia prompt "MESSAGE" [OPTIONS]
 | `--claude-model` | string | `claude-sonnet-5` | Claude model used with `--use-claude`; `--model` is ignored then |
 | `--config` | path | `~/.gaia/config.json` | GAIA config file used to resolve `default_model` (or `$GAIA_CONFIG_FILE`) |
 | `--stats` | flag | false | Show performance statistics |
+
+With `--stats`, the command exits `1` if the stats cannot be fetched after the answer has printed.
 
 **Examples:**
 
@@ -1661,7 +1665,7 @@ gaia download [OPTIONS]
 | `--clear-cache` | flag | false | Delete all downloaded GAIA models to free up disk space |
 
 **Available Agents:**
-chat, code, talk, rag, blender, jira, docker, vlm, minimal, mcp
+chat, talk, rag, vlm, minimal, mcp
 
 **Examples:**
 
@@ -1689,7 +1693,7 @@ gaia download
 Download for specific agent:
 <CodeGroup>
 ```bash Download Agent Models
-gaia download --agent code
+gaia download --agent chat
 ```
 </CodeGroup>
 
@@ -1714,17 +1718,13 @@ gaia download --agent code
 
 ---
 
-### Pull Command
+### Pulling a single model
 
-To download individual models, use the Lemonade Server CLI directly:
-
-```bash
-lemonade-server pull MODEL_NAME [OPTIONS]
-```
-
-<Tip>
-Use `lemonade-server list` to see all available models and their download status.
-</Tip>
+`gaia download` takes no model name; it fetches every model an agent needs. To
+pull one model, use the client that ships with your Lemonade install — on a
+current Lemonade that is `lemonade pull MODEL_NAME`. When a GAIA command finds a
+model missing, its error names the exact command for your machine, so you never
+have to guess which client you have.
 
 ---
 
@@ -2166,6 +2166,7 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
 
     **Output includes:**
     - Knowledge entries by category (fact, preference, error, skill) and context
+    - Search-vector coverage, and how many entries are **Without vector** (saved while the embedding model was unavailable, so only keyword recall finds them) with how to re-embed them
     - Conversation count and session history
     - Tool call success rates and error counts
     - Upcoming and overdue time-sensitive items
@@ -2898,6 +2899,8 @@ View performance statistics from the most recent model run.
 gaia stats [OPTIONS]
 ```
 
+Exits `0` and says so when no run has recorded stats yet. If the stats cannot be fetched — for example, the LLM server is unreachable — it prints the cause to stderr and exits `1`.
+
 ---
 
 ### Test Commands
@@ -3076,7 +3079,7 @@ contract; every route needs `Authorization: Bearer <token>` from
 |-------|---------|
 | `GET /daemon/v1/status` | pid / port / uptime / API version |
 | `POST /daemon/v1/lemonade/ensure` | Start GAIA's embedded Lemonade Server if stopped and return where it listens (409 if not managed, 503 on a start failure). Host API ≥ 1.2 |
-| `POST /daemon/v1/lemonade/start` | Start or attach the local model server; returns 503 with actionable detail on refusal. Host API ≥ 1.3 |
+| `POST /daemon/v1/lemonade/start` | Start or attach the local model server — GAIA's embedded one when `gaia init` installed it and `LEMONADE_BASE_URL` is unset, otherwise the system install; returns 503 with actionable detail on refusal. Host API ≥ 1.3 |
 | `GET /daemon/v1/lemonade/status` | Whether this daemon supervises a server, its PID, and its log path. Host API ≥ 1.3 |
 | `POST /daemon/v1/shutdown` | graceful drain + exit |
 | `GET /daemon/v1/agents` | registered sidecars — never the bearer token |

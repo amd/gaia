@@ -230,7 +230,7 @@ A 5-minute clip is proportionally quicker — about 90 seconds.
 | Speakers all come back as one | Speaker identification could not start; the reply says why |
 | Nothing happens for 60–90 s on the first question | Model loading. Only the first turn pays this |
 | "ffmpeg is required..." | Run the command it prints, then retry |
-| "Lemonade Server is not reachable" | `lemonade-server serve`, or re-run `gaia init --profile gaia` |
+| "Lemonade Server is not reachable" | Run `gaia daemon start` (it starts and supervises the server), or re-run `gaia init --profile gaia` |
 | Everything grey, no colour | Launched outside Windows Terminal — see §5 |
 | One speaker on a short clip | Expected. Try a longer recording |
 

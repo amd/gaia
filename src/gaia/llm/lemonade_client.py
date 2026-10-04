@@ -27,14 +27,15 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import openai  # For exception types
 import requests
-from dotenv import load_dotenv
 
 # Import OpenAI client for internal use
 from openai import OpenAI
 
+from gaia.env import child_env, load_env
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
+    gaia_runs_lemonade,
     get_installed_version,
     resolve_lemonade,
 )
@@ -51,7 +52,7 @@ from gaia.version import parse_version
 log = get_logger(__name__)
 
 # Load environment variables from .env file
-load_dotenv()
+load_env()
 
 # =========================================================================
 # Server Configuration Defaults
@@ -1407,6 +1408,19 @@ class LemonadeAuthError(LemonadeClientError):
     """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
 
 
+class LemonadeVersionError(LemonadeClientError):
+    """Raised when Lemonade Server is older than the oldest version GAIA supports."""
+
+    def __init__(self, found_version: str, min_version: str):
+        self.found_version = found_version
+        self.min_version = min_version
+        super().__init__(
+            f"Lemonade Server {found_version} is older than {min_version}, the "
+            "oldest version GAIA supports. Run `gaia init --force-reinstall` to "
+            "install a supported version."
+        )
+
+
 class ModelDownloadCancelledError(LemonadeClientError):
     """Raised when a model download is cancelled by user."""
 
@@ -2031,6 +2045,31 @@ class LemonadeClient:
         self._stop_listeners(stoppable)
         return foreign
 
+    def _start_gaia_lemonade(self) -> None:
+        """Have the daemon start GAIA's own server, then point this client at it.
+
+        Raises:
+            LemonadeClientError: the daemon could not start it. There is no
+                retry against a system install.
+        """
+        from urllib.parse import urlparse
+
+        from gaia.daemon.client import ensure_lemonade
+        from gaia.daemon.errors import DaemonError
+
+        self.log.info("Asking the GAIA daemon to start GAIA's Lemonade Server...")
+        try:
+            served = ensure_lemonade()
+        except DaemonError as e:
+            raise LemonadeClientError(
+                f"Could not start GAIA's Lemonade Server: {e}"
+            ) from e
+        self.base_url = served["base_url"]
+        parsed = urlparse(self.base_url)
+        self.host = parsed.hostname or DEFAULT_HOST
+        self.port = parsed.port or DEFAULT_PORT
+        self.api_key = _embedded_lemonade_api_key(self.base_url)
+
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
         Launch the Lemonade server using subprocess.
@@ -2048,11 +2087,15 @@ class LemonadeClient:
 
         This method follows the approach in test_lemonade_server.py.
 
+        Where ``gaia init`` installed GAIA's own server, the daemon starts that
+        one instead and this client is re-pointed at the port it binds;
+        ``log_level``, ``background`` and ``ctx_size`` do not apply to it.
+
         Raises:
             LemonadeClientError: this client is pointed at a server on another
-                host. Launching is a local act — it frees a local port and
-                starts a local process — so it can only ever satisfy a local
-                client (#3558).
+                host — launching is a local act (it frees a local port and
+                starts a local process), so it can only ever satisfy a local
+                client (#3558) — or the daemon could not start GAIA's own server.
         """
         if not self._targets_this_machine():
             raise LemonadeClientError(
@@ -2062,6 +2105,10 @@ class LemonadeClient:
                 "server the client would not talk to. Start Lemonade on that "
                 "host, or unset LEMONADE_BASE_URL to use a local one."
             )
+
+        if gaia_runs_lemonade(self.base_url):
+            self._start_gaia_lemonade()
+            return
 
         self.log.info("Starting Lemonade server...")
 
@@ -2116,7 +2163,7 @@ class LemonadeClient:
 
         # Merge — never replace — the parent environment; the child loses
         # PATH/LOCALAPPDATA otherwise and LemonadeServer.exe breaks.
-        popen_env = {**os.environ, **spec.env}
+        popen_env = child_env(spec.env)
         # Own process group, so terminate_server's group kill can't reach the caller.
         session = {} if sys.platform.startswith("win") else {"start_new_session": True}
 
@@ -5406,20 +5453,6 @@ class LemonadeClient:
             url += "?verbose=true"
         return self._send_request("get", url, timeout=timeout)
 
-    def ready(self) -> bool:
-        """
-        Check if the client is ready for use.
-
-        Returns:
-            bool: True if the client exists and the server is healthy, False otherwise
-        """
-        try:
-            # Check if client exists and server is healthy
-            health = self.health_check()
-            return health.get("status") == "ok"
-        except Exception:
-            return False
-
     def validate_context_size(
         self,
         required_tokens: int = 32768,
@@ -5534,7 +5567,13 @@ class LemonadeClient:
                 catalog_by_id = {
                     m.get("id"): m for m in self.list_models().get("data", [])
                 }
-            except Exception:  # pylint: disable=broad-except
+            except LemonadeClientError as exc:
+                # Loaded models still report; only their labels/recipe go blank.
+                self.log.warning(
+                    "Lemonade model catalog lookup failed; loaded models are "
+                    "listed without labels or recipe: %s",
+                    exc,
+                )
                 catalog_by_id = {}
 
             loaded_enriched = []
@@ -5745,8 +5784,9 @@ class LemonadeClient:
 
         Checks in this order:
         1. Try health check on configured URL (LEMONADE_BASE_URL or default)
-        2. If localhost and health check fails, check if binary is in PATH (for auto-start)
-        3. If remote server and health check fails, return False (can't auto-start)
+        2. If GAIA's own server (``gaia init``) is the one to start, True
+        3. If localhost and health check fails, check if binary is in PATH (for auto-start)
+        4. If remote server and health check fails, return False (can't auto-start)
 
         Returns:
             True if server is available or can be started, False otherwise
@@ -5760,6 +5800,9 @@ class LemonadeClient:
             get_logger(__name__).debug(
                 "Lemonade health check failed before installation check: %s", exc
             )
+
+        if gaia_runs_lemonade(self.base_url):
+            return True
 
         # Health check failed - determine if we can auto-start
         is_localhost = self.host in ("localhost", "127.0.0.1", "::1")
@@ -5796,74 +5839,66 @@ class LemonadeClient:
         expected_version: str,
         actual_version: Optional[str] = None,
         quiet: bool = False,
-    ) -> bool:
-        """
-        Check if the lemonade-server version is compatible.
-
-        Checks against ``LEMONADE_MIN_VERSION`` (the oldest Lemonade Server
-        GAIA supports) for hard incompatibility, and warns on any mismatch
-        with ``expected_version`` that's still at or above that floor.
+    ) -> Optional[bool]:
+        """Check a Lemonade Server version against ``LEMONADE_MIN_VERSION``.
 
         Args:
-            expected_version: Expected version string (e.g., "10.0.0")
-            actual_version: Actual version string. If None, detected from
-                            the local ``lemonade-server --version`` CLI.
-            quiet: Suppress warning output
+            expected_version: The version GAIA installs (e.g. ``LEMONADE_VERSION``);
+                a supported version that differs only gets a note.
+            actual_version: The version to check. If None, detected from the
+                local Lemonade CLI.
+            quiet: Suppress console output (the log still records it).
 
         Returns:
-            True if compatible (or version check failed), False if below
-            the minimum supported version
+            True when the version meets the floor; None when it cannot be
+            determined, after a warning — an unknown version is never reported
+            as compatible.
+
+        Raises:
+            LemonadeVersionError: The version is below the floor.
         """
+        from gaia.version import LEMONADE_MIN_VERSION
+
         if actual_version is None:
             actual_version = self.get_lemonade_version()
 
-        if not actual_version:
-            # Can't determine version, assume compatible (don't block)
-            return True
+        found = parse_version(actual_version)
+        if found is None:
+            reported = (
+                f"an unrecognised version ({actual_version!r})"
+                if actual_version
+                else "no version"
+            )
+            message = (
+                f"Lemonade Server reported {reported}, so GAIA cannot confirm it "
+                f"is at least {LEMONADE_MIN_VERSION}. If requests fail, run "
+                "`gaia init --force-reinstall`."
+            )
+            self.log.warning(message)
+            if not quiet:
+                print(f"{_emoji('⚠️', '[WARN]')}  {message}")
+            return None
 
-        from gaia.version import LEMONADE_MIN_VERSION
+        if found < parse_version(LEMONADE_MIN_VERSION):
+            raise LemonadeVersionError(actual_version, LEMONADE_MIN_VERSION)
 
-        try:
+        if actual_version != expected_version and not quiet:
+            print(
+                f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version: "
+                f"v{actual_version} (expected v{expected_version})"
+            )
+            print("   Consider updating: https://lemonade-server.ai")
+        return True
 
-            def _version_tuple(v: str) -> tuple:
-                parsed = parse_version(v)
-                if parsed is None:
-                    raise ValueError(f"unparseable version {v!r}")
-                return parsed
-
-            actual_tuple = _version_tuple(actual_version)
-            min_tuple = _version_tuple(LEMONADE_MIN_VERSION)
-
-            if actual_tuple < min_tuple:
-                if not quiet:
-                    print("")
-                    print(f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version too old!")
-                    print(f"   Installed version: {actual_version}")
-                    print(f"   Minimum supported: {LEMONADE_MIN_VERSION}")
-                    print("")
-                    print(
-                        "   This version is not supported and will cause failures. "
-                        f"Please upgrade Lemonade Server to at least {LEMONADE_MIN_VERSION}:"
-                    )
-                    print("   https://lemonade-server.ai")
-                    print("")
-
-                return False
-
-            # Above the floor but not the expected pin – low-key note only
-            if actual_version != expected_version:
-                if not quiet:
-                    print(
-                        f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version: "
-                        f"v{actual_version} (expected v{expected_version})"
-                    )
-                    print("   Consider updating: https://lemonade-server.ai")
-
-            return True
-
-        except Exception:
-            # If parsing fails, assume compatible (don't block)
-            return True
+    def _version_error_status(
+        self, status: LemonadeStatus, error: LemonadeVersionError, quiet: bool
+    ) -> LemonadeStatus:
+        """Report a too-old server on ``status`` and the console."""
+        self.log.error(str(error))
+        if not quiet:
+            print(f"{_emoji('❌', '[ERROR]')} {error}")
+        status.error = str(error)
+        return status
 
     def initialize(
         self,
@@ -5922,26 +5957,31 @@ class LemonadeClient:
 
         # Check if lemonade-server is installed
         if not self._check_lemonade_installed():
+            status = LemonadeStatus(url=f"http://{self.host}:{self.port}")
+            status.running = False
+            configured = configured_lemonade_url()
+            if configured:
+                status.error = f"Lemonade Server at {configured} not reachable"
+                if not quiet:
+                    print(f"{_emoji('❌', '[ERROR]')} {status.error}")
+                    print(
+                        "   Start Lemonade on that host, or unset "
+                        "LEMONADE_BASE_URL to use GAIA's own server."
+                    )
+                    print("")
+                return status
             if not quiet:
                 print(f"{_emoji('❌', '[ERROR]')} Lemonade Server is not installed")
                 print("")
-                print(f"{_emoji('📥', '[DOWNLOAD]')} Download and install from:")
-                print("   https://lemonade-server.ai")
+                print(
+                    f"{_emoji('📥', '[DOWNLOAD]')} Install GAIA's Lemonade Server "
+                    "with: gaia init"
+                )
                 print("")
-                print("GAIA will automatically start Lemonade Server once installed.")
-                print("")
-            status = LemonadeStatus(url=f"http://{self.host}:{self.port}")
-            status.running = False
             status.error = "Lemonade Server not installed"
             return status
 
-        # Check version compatibility (warning only, not fatal)
         from gaia.version import LEMONADE_VERSION
-
-        cli_version = self.get_lemonade_version()
-        self._check_version_compatibility(
-            LEMONADE_VERSION, actual_version=cli_version, quiet=quiet
-        )
 
         # Check current status
         status = self.get_status()
@@ -5953,14 +5993,14 @@ class LemonadeClient:
                     print(f"   Server version: {status.version}")
                 print(f"   Current context size: {status.context_size}")
 
-            # Check running server version against expected (warning only).
-            # Skip if the server reports the same version the CLI already checked.
-            if status.version and status.version != cli_version:
+            # The running server's version is the one that matters; the CLI's
+            # is only consulted when the server does not report one.
+            try:
                 self._check_version_compatibility(
-                    LEMONADE_VERSION,
-                    actual_version=status.version,
-                    quiet=quiet,
+                    LEMONADE_VERSION, actual_version=status.version, quiet=quiet
                 )
+            except LemonadeVersionError as e:
+                return self._version_error_status(status, e, quiet)
 
             # Check context size (warning only, not fatal)
             if status.context_size < required_ctx:
@@ -5985,6 +6025,12 @@ class LemonadeClient:
                 print(f"   {self._start_command_hint(required_ctx)}")
             status.error = "Server not running"
             return status
+
+        # Refuse to start a server already known to be below the floor.
+        try:
+            self._check_version_compatibility(LEMONADE_VERSION, quiet=quiet)
+        except LemonadeVersionError as e:
+            return self._version_error_status(status, e, quiet)
 
         # Auto-start server
         if not quiet:
@@ -6348,71 +6394,3 @@ def print_agent_profiles():
 
     for key, model in MODELS.items():
         print(f"{key:<20} {model.model_id:<40} {model.model_type.value}")
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
-    # Show agent profiles
-    print_agent_profiles()
-    print("\n" + "=" * 80 + "\n")
-
-    # Use the new factory function instead of direct instantiation
-    client = create_lemonade_client(
-        model=DEFAULT_MODEL_NAME,
-        auto_start=True,
-        auto_load=True,
-        verbose=True,
-    )
-
-    try:
-        # Check server health
-        try:
-            health = client.health_check()
-            print(f"Server health: {health}")
-        except Exception as e:
-            print(f"Health check failed: {e}")
-
-        # List available models
-        try:
-            print("\nListing available models:")
-            models_list = client.list_models()
-            print(json.dumps(models_list, indent=2))
-        except Exception as e:
-            print(f"Failed to list models: {e}")
-
-        # Example: Using chat completions
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "What is the capital of France?"},
-        ]
-
-        try:
-            print("\nNon-streaming response:")
-            response = client.chat_completions(
-                model=DEFAULT_MODEL_NAME, messages=messages, timeout=30
-            )
-            print(response["choices"][0]["message"]["content"])
-        except Exception as e:
-            print(f"Chat completion failed: {e}")
-
-        try:
-            print("\nStreaming response:")
-            for chunk in client.chat_completions(
-                model=DEFAULT_MODEL_NAME, messages=messages, stream=True, timeout=30
-            ):
-                # The last chunk carries usage and no choices.
-                if not chunk.get("choices"):
-                    continue
-                if chunk["choices"][0].get("delta", {}).get("content"):
-                    print(chunk["choices"][0]["delta"]["content"], end="", flush=True)
-        except Exception as e:
-            print(f"Streaming chat completion failed: {e}")
-
-        print("\n\nDone!")
-
-    except Exception as e:
-        print(f"Error occurred: {e}")
-    finally:
-        # Make sure to terminate the server when done
-        client.terminate_server()

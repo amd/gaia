@@ -79,9 +79,10 @@ jobs:
           # falling back to an older 3-part tag when the real latest is a 4-part hotfix
           # would compute the next version from the wrong baseline.
           # `|| true`: pipefail would abort on a non-matching grep before the
-          # actionable message below ever prints.
+          # actionable message below ever prints. `sed -n 1p`, not `head -1`: under
+          # pipefail a reader that exits early SIGPIPEs the writer (exit 141, #4462).
           PREV=$(git tag --sort=-v:refname --list 'v[0-9]*.[0-9]*.[0-9]*' \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1 || true)
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$' | sed -n 1p || true)
           if [ -z "$PREV" ]; then
             echo "::error::Could not find a previous release tag (expected vX.Y.Z)."
             exit 1
@@ -252,9 +253,13 @@ jobs:
           # Dependabot GitHub Actions bump quoting upstream's own "BREAKING CHANGE:" note).
           FEAT_COUNT=$(git log "$PREV..HEAD" --oneline | grep -cE '^[a-f0-9]+ feat(\(|:)' || true)
           BREAKING_COUNT=0
+          # No pipes in this loop: awk stops at `<details>` and `grep -q` at the first
+          # match, and under pipefail either one SIGPIPEs a long commit body's writer —
+          # exit 141 aborts the job (#4462), or inside the `if` hides a breaking marker.
           while IFS= read -r sha; do
-            head_part=$(git log -1 --format='%B' "$sha" | awk '/<details>/{exit} {print}')
-            if echo "$head_part" | grep -qE '^[a-zA-Z]+(\([a-zA-Z0-9_.-]+\))?!:|^BREAKING CHANGE:'; then
+            body=$(git log -1 --format='%B' "$sha")
+            head_part=$(awk '/<details>/{exit} {print}' <<< "$body")
+            if grep -qE '^[a-zA-Z]+(\([a-zA-Z0-9_.-]+\))?!:|^BREAKING CHANGE:' <<< "$head_part"; then
               BREAKING_COUNT=$((BREAKING_COUNT + 1))
             fi
           done < <(git log "$PREV..HEAD" --format='%H')

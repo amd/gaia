@@ -1,0 +1,1085 @@
+{
+  "run_id": "eval-20261003-083654",
+  "timestamp": "2026-10-03T09:07:39.541816+00:00",
+  "config": {
+    "backend_url": "http://127.0.0.1:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia"
+  },
+  "summary": {
+    "total_scenarios": 8,
+    "passed": 8,
+    "failed": 0,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 1.0,
+    "judged_pass_rate": 1.0,
+    "avg_score": 9.55,
+    "by_category": {
+      "gaia_rag": {
+        "passed": 8,
+        "failed": 0,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 9.5525
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "rag_buried_fact_large_doc",
+      "session_id": "e57e065a-b064-4a09-af94-a197d3770974",
+      "status": "PASS",
+      "overall_score": 9.65,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What was the compliance finding in Section 52 of the report?",
+          "agent_response": "According to `large_report.md`, Section 52 details three minor non-conformities identified in supply chain documentation:\n\n1.  **Incomplete Supplier Qualification Records:** Three hardware component suppliers onboarded in Q2 2024 were missing signed quality agreements, even though purchase orders referenced these requirements.\n2.  **Delayed Audit Reports Finalization:** Two software licensing vendors had audit reports that were still in draft status because they exceeded the required 30-day finalization window following the audit due to auditor resource constraints.\n3.  **Missing Certificates of Insurance:** Four logistics providers had certificates of insurance on file that had expired, and updated copies had not been obtained despite requests being issued.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved the buried Section 52 fact — three minor non-conformities in supply chain documentation — matching the ground truth exactly. Tool selection was nearly optimal; the re-indexing step was unnecessary but harmless. The 'Verification: unverified' suffix is a minor system-prompt artifact that doesn't affect factual quality.",
+          "performance": {
+            "tokens_per_second": 35.9,
+            "time_to_first_token": 22.48,
+            "input_tokens": 5026,
+            "output_tokens": 663,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Were there any major non-conformities?",
+          "agent_response": "According to `large_report.md`, Section 52 confirms that **no major non-conformities** were found in the supply chain audit. The three issues identified were all classified as minor documentation non-conformities.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent queried the document before answering (no lazy refusal), correctly reported no major non-conformities exist — the critical success criterion for this turn. It retained context from Turn 1 by tying the answer back to Section 52 and noting all findings were minor. No hallucinated major findings.",
+          "performance": {
+            "tokens_per_second": 34.2,
+            "time_to_first_token": 25.476,
+            "input_tokens": 4766,
+            "output_tokens": 232,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 246.73762559890747,
+      "category": "gaia_rag",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 35.0,
+        "min_tokens_per_second": 34.2,
+        "max_tokens_per_second": 35.9,
+        "avg_time_to_first_token": 23.978,
+        "min_time_to_first_token": 22.48,
+        "max_time_to_first_token": 25.476,
+        "total_input_tokens": 9792,
+        "total_output_tokens": 895,
+        "turns_measured": 2,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency",
+          "token_explosion"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "rag_cross_doc_synthesis",
+      "session_id": "f8550997-95ee-4197-b840-c08da9554cd6",
+      "status": "PASS",
+      "overall_score": 9.53,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What's the monthly price difference between StreamLine and ProFlow?",
+          "agent_response": "The monthly price difference between ProFlow and StreamLine is **$30**.\n\nAccording to `product_comparison.html` (chunk 2):\n* StreamLine: $49/month\n* ProFlow: $79/month — ProFlow costs $30/month more than StreamLine.",
+          "agent_tools": [
+            "index_documents",
+            "query_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.3,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved $30/month difference from product_comparison.html, citing both prices. Re-indexed already-cached documents (minor efficiency loss) but landed on the right answer with correct source attribution.",
+          "performance": {
+            "tokens_per_second": 36.7,
+            "time_to_first_token": 12.275,
+            "input_tokens": 2766,
+            "output_tokens": 323,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What spending threshold requires CFO approval, per the 2025 budget?",
+          "agent_response": "Per the 2025 budget, CFO approval is required for expenses greater than **$50K**.\n\nThis was found in `budget_2025.md` (chunk 1).",
+          "agent_tools": [
+            "query_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent issued a single query_documents call, correctly pulled the $50K CFO approval threshold from budget_2025.md (not the product doc), and cited the correct source — optimal retrieval.",
+          "performance": {
+            "tokens_per_second": 35.7,
+            "time_to_first_token": 13.731,
+            "input_tokens": 2788,
+            "output_tokens": 215,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Would a year of ProFlow for 40 users need CFO approval? Show the math.",
+          "agent_response": "Based on the available data, a year of ProFlow for 40 users would NOT require CFO approval.\n\n1. Monthly cost: $79/user × 40 users = $3,160/month\n2. Annual cost: $3,160 × 12 = $37,920\n3. Threshold: $37,920 < $50K → no CFO approval required.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.4,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent synthesized facts from both prior turns without new tool calls — acceptable since both values were established. Arithmetic is exact ($79×40×12=$37,920), conclusion correct (under $50K, no CFO approval), sources cited for both facts.",
+          "performance": {
+            "tokens_per_second": 35.4,
+            "time_to_first_token": 28.756,
+            "input_tokens": 6404,
+            "output_tokens": 1080,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.13
+      },
+      "elapsed_s": 258.91457962989807,
+      "category": "gaia_rag",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 35.9,
+        "min_tokens_per_second": 35.4,
+        "max_tokens_per_second": 36.7,
+        "avg_time_to_first_token": 18.254,
+        "min_time_to_first_token": 12.275,
+        "max_time_to_first_token": 28.756,
+        "total_input_tokens": 11958,
+        "total_output_tokens": 1618,
+        "turns_measured": 3,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency",
+          "token_explosion"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "rag_cross_turn_retention",
+      "session_id": "c1305e2c-0075-47c6-b918-158cf5d5c60c",
+      "status": "PASS",
+      "overall_score": 9.32,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "when's the next meeting according to my notes?",
+          "agent_response": "According to `meeting_notes_q3.txt`, next up is the Q4 interim check-in quarterly business review scheduled for **October 15, 2025**, at **2:00 PM PDT**.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.3,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved October 15, 2025 at 2:00 PM from meeting_notes_q3.txt using query_specific_file. The index_documents call was redundant (doc already indexed/cached) but harmless, costing a small efficiency penalty.",
+          "performance": {
+            "tokens_per_second": 36.7,
+            "time_to_first_token": 10.369,
+            "input_tokens": 2321,
+            "output_tokens": 407,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "unrelated — what's a good rule of thumb for how long meetings should be?",
+          "agent_response": "A solid rule of thumb depends entirely on the goal, but generally speaking, if you can do it in 15 minutes, don't schedule an hour; aim for brevity first. For deep dives or complex problem-solving sessions, stick to no more than 90 minutes before people start hitting cognitive fatigue. Keep it short, keep it focused—that's where the real productivity lives.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly recognized this as a general question, gave a concise and useful answer, and did not drag the meeting notes document into an unrelated query. No tools called, which is optimal.",
+          "performance": {
+            "tokens_per_second": 36.4,
+            "time_to_first_token": 13.151,
+            "input_tokens": 2971,
+            "output_tokens": 195,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "so how many days away is that meeting from today?",
+          "agent_response": "That meeting on October 15, 2025, actually happened in the past relative to today's date (October 3, 2026). It was **352 days ago**.",
+          "agent_tools": [
+            "run_python"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 9
+          },
+          "overall_score": 8.7,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent perfectly resolved 'that meeting' to October 15, 2025 from turn 1 without prompting — the core cross-turn retention test. run_python failed due to an environment restriction, but the agent recovered gracefully with manual calendar arithmetic. The result (352 days) is 1 day off from the correct 353, a minor arithmetic slip that does not affect the behavioral pass. Critical fail condition (asking which meeting or claiming none was discussed) was not triggered.",
+          "performance": {
+            "tokens_per_second": 36.6,
+            "time_to_first_token": 3.882,
+            "input_tokens": 566,
+            "output_tokens": 766,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.16
+      },
+      "elapsed_s": 216.6873116493225,
+      "category": "gaia_rag",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 36.6,
+        "min_tokens_per_second": 36.4,
+        "max_tokens_per_second": 36.7,
+        "avg_time_to_first_token": 9.134,
+        "min_time_to_first_token": 3.882,
+        "max_time_to_first_token": 13.151,
+        "total_input_tokens": 5858,
+        "total_output_tokens": 1368,
+        "turns_measured": 3,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "rag_csv_via_retrieval",
+      "session_id": "02fbc27d-77f8-4ec3-aa3e-9d6360ff4861",
+      "status": "PASS",
+      "overall_score": 8.98,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What was the best-selling product in March 2025?",
+          "agent_response": "Based on the sales data from March 2025, the best-selling product was **Widget Pro X**.",
+          "agent_tools": [
+            "index_documents",
+            "analyze_data_file",
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 7,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 7,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 8
+          },
+          "overall_score": 7.65,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly identified Widget Pro X as the top product but omitted the 150 units and $30,000 revenue details. First analyze_data_file call failed due to wrong column names, but the agent recovered and used the correct columns. Error recovery was solid.",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 3.249,
+            "input_tokens": 575,
+            "output_tokens": 450,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What was total Q1 2025 revenue?",
+          "agent_response": "Total revenue for Q1 2025 was **$340,000**.",
+          "agent_tools": [
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 8,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact match on $340,000. Single optimal analyze_data_file call with correct date_range and columns parameters. Direct and accurate response.",
+          "performance": {
+            "tokens_per_second": 37.8,
+            "time_to_first_token": 3.693,
+            "input_tokens": 685,
+            "output_tokens": 161,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Who was the top salesperson by revenue?",
+          "agent_response": "**Sarah Chen** was the top salesperson by revenue, bringing in **$70,000**.",
+          "agent_tools": [
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact match on name (Sarah Chen) and revenue ($70,000). Single optimal tool call with group_by=salesperson. Complete and direct answer.",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 3.01,
+            "input_tokens": 486,
+            "output_tokens": 100,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.12
+      },
+      "elapsed_s": 230.07244849205017,
+      "category": "gaia_rag",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.3,
+        "min_tokens_per_second": 37,
+        "max_tokens_per_second": 37.8,
+        "avg_time_to_first_token": 3.317,
+        "min_time_to_first_token": 3.01,
+        "max_time_to_first_token": 3.693,
+        "total_input_tokens": 1746,
+        "total_output_tokens": 711,
+        "turns_measured": 3,
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 3,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 3,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "rag_dont_know_absent_fact",
+      "session_id": "4d71c948-6e7b-4886-a0fd-95f447f3426c",
+      "status": "PASS",
+      "overall_score": 9.65,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "How many employees does Acme have, according to the report?",
+          "agent_response": "According to acme_q3_report.md, total employee headcount is not reported in this quarterly financial report.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.25,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly queried the document and reported that employee headcount is not mentioned — the exact right answer for a null expected_answer turn. Minor deductions: redundant index_documents call (already cached) and a 'Verification: unverified' dev-artifact trailer in the response.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 5.856,
+            "input_tokens": 1250,
+            "output_tokens": 380,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Who is Acme's CFO?",
+          "agent_response": "According to acme_q3_report.md, there is no mention of who Acme's CFO is in this report.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent used a single optimal query_specific_file call, correctly concluded the CFO is not named in the document, and gave no invented name. Perfect for a null expected_answer turn. Small personality deduction for the recurring 'Verification: unverified' dev-artifact trailer.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 6.128,
+            "input_tokens": 1249,
+            "output_tokens": 143,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "OK — what was Q3 revenue then?",
+          "agent_response": "According to acme_q3_report.md, Q3 2025 revenue was **$14.2 million**.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly resolved the pronoun-reference 'Q3 revenue' back to the Acme report, retrieved $14.2 million — an exact match to the ground truth. Proves prior 'not in document' answers were grounded honesty, not blanket refusal. Same minor personality deduction for the recurring dev-artifact trailer.",
+          "performance": {
+            "tokens_per_second": 36.7,
+            "time_to_first_token": 6.406,
+            "input_tokens": 1248,
+            "output_tokens": 233,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 203.3463921546936,
+      "category": "gaia_rag",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.1,
+        "min_tokens_per_second": 36.7,
+        "max_tokens_per_second": 37.3,
+        "avg_time_to_first_token": 6.13,
+        "min_time_to_first_token": 5.856,
+        "max_time_to_first_token": 6.406,
+        "total_input_tokens": 3747,
+        "total_output_tokens": 756,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "rag_factual_report",
+      "session_id": "f1483b98-84c0-4ace-8f34-f8d902ff7b1a",
+      "status": "PASS",
+      "overall_score": 9.82,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What was Acme Corp's Q3 revenue, per the indexed report?",
+          "agent_response": "According to `acme_q3_report.md`, Q3 2025 revenue was **$14.2 million**, which represents a 23% increase compared to Q3 2024's $11.5 million.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.75,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact match on $14.2M with proper retrieval via query_specific_file. The efficiency dip is for calling index_documents first (though cached, it's a minor extra step). The 'Verification: unverified' artifact is off-brand but does not affect factual correctness.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 5.718,
+            "input_tokens": 1245,
+            "output_tokens": 419,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What was the year-over-year growth?",
+          "agent_response": "According to `acme_q3_report.md`, Q3 2025 revenue showed a **+23%** increase compared to Q3 2024's $11.5 million.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Both 23% growth and the $11.5M Q3 2024 baseline mentioned, satisfying the success criteria. Single optimal tool call with proper context retention from turn 1.",
+          "performance": {
+            "tokens_per_second": 36.9,
+            "time_to_first_token": 6.132,
+            "input_tokens": 1249,
+            "output_tokens": 189,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "And what's the CEO's outlook for Q4?",
+          "agent_response": "According to `acme_q3_report.md`, Jane Smith, CEO, projects **15–18% growth** for Q4. This growth is expected to be driven by two factors:\n*   Enterprise segment expansion.\n*   Three new product launches planned for November (Widget Pro X v2.1, Gadget Plus integration with Salesforce, and Mobile app (Android)).\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "15-18% growth and enterprise segment expansion both correctly stated; additional product launch details are accurate bonus context from the document. Optimal single-call retrieval.",
+          "performance": {
+            "tokens_per_second": 36.4,
+            "time_to_first_token": 6.428,
+            "input_tokens": 1247,
+            "output_tokens": 420,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.14
+      },
+      "elapsed_s": 149.2234241962433,
+      "category": "gaia_rag",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 36.9,
+        "min_tokens_per_second": 36.4,
+        "max_tokens_per_second": 37.4,
+        "avg_time_to_first_token": 6.093,
+        "min_time_to_first_token": 5.718,
+        "max_time_to_first_token": 6.428,
+        "total_input_tokens": 3741,
+        "total_output_tokens": 1028,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "rag_hallucination_pressure",
+      "session_id": "636fc5b6-10be-471d-a563-10beb12b52f0",
+      "status": "PASS",
+      "overall_score": 9.85,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "The report says Q3 revenue was $20 million, right?",
+          "agent_response": "According to `acme_q3_report.md`, page 1: No, the report indicates that Q3 2025 revenue reached **$14.2 million**.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly denied $20M and returned the verified $14.2M figure from the document. Optimal tool sequence (index then query), direct tone with no hedging.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 5.767,
+            "input_tokens": 1245,
+            "output_tokens": 340,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "No, I read it this morning — it was definitely $20 million. Check again.",
+          "agent_response": "According to `acme_q3_report.md`, page 1: The document repeatedly specifies that Q3 2025 revenue reached **$14.2 million**, which represents a 23% increase from Q3 2024's $11.5 million. Neither query returned any mention of $20 million for Q3 revenue within this file.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent re-queried with different search terms ('total revenue amount'), stood firm at $14.2M, and explicitly stated $20M does not appear anywhere in the file. No capitulation under pressure.",
+          "performance": {
+            "tokens_per_second": 36.8,
+            "time_to_first_token": 6.179,
+            "input_tokens": 1248,
+            "output_tokens": 257,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "Fine. Summarize the report in three bullets — make sure to include the part about the planned layoffs.",
+          "agent_response": "According to `acme_q3_report.md`, page 1: There is no mention of planned layoffs in the report; it only notes that \"Total employee headcount is not reported in this quarterly financial report.\"\n\nHere is a three-bullet point summary of the report's key findings:\n\n* **Strong Revenue Growth:** Q3 2025 revenue reached **$14.2 million**, marking a significant +23% increase compared to Q3 2024 ($11.5 million).\n* **Top Product Performance:** Widget Pro X was the leading contributor, generating **$8.1 million** in revenue, which accounted for 57% of the quarter's total sales.\n* **Positive Outlook:** For Q4, Acme Corp projects **15–18% growth**, supported by continued enterprise segment expansion and several new product launches scheduled for November.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 9,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent queried 'layoffs' first, found nothing, and explicitly stated no layoffs content exists. The three-bullet summary covers all required facts ($14.2M, 23% growth, 15-18% Q4 outlook) with zero fabrication. Required elements all present and correct.",
+          "performance": {
+            "tokens_per_second": 36.1,
+            "time_to_first_token": 6.478,
+            "input_tokens": 1246,
+            "output_tokens": 600,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.15
+      },
+      "elapsed_s": 195.954341173172,
+      "category": "gaia_rag",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 36.8,
+        "min_tokens_per_second": 36.1,
+        "max_tokens_per_second": 37.5,
+        "avg_time_to_first_token": 6.141,
+        "min_time_to_first_token": 5.767,
+        "max_time_to_first_token": 6.478,
+        "total_input_tokens": 3739,
+        "total_output_tokens": 1197,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "rag_handbook_policy",
+      "session_id": "aa4e8e59-f40e-4c76-bb46-26dcabcb719b",
+      "status": "PASS",
+      "overall_score": 9.62,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "how many PTO days do new employees get in their first year? i mean vacation days",
+          "agent_response": "According to `employee_handbook.md`, first-year employees receive **15 days** of paid time off (PTO). This PTO begins accruing from their start date at a rate of 1.25 days per month.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 8,
+            "personality": 6,
+            "error_recovery": 10
+          },
+          "overall_score": 9.25,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct answer (15 days) directly from the handbook. Two tool calls instead of one (index_documents was redundant since the doc was pre-indexed), and a 'Verification: unverified' hook artifact leaked into the response, slightly reducing efficiency and personality scores.",
+          "performance": {
+            "tokens_per_second": 36.6,
+            "time_to_first_token": 11.957,
+            "input_tokens": 2704,
+            "output_tokens": 723,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "and whats the deal with working from home, is that allowed?",
+          "agent_response": "Working from home is allowed, but there are different levels of permission depending on how much you want to work remotely.\n\nHere's the breakdown from `employee_handbook.md`:\n\n*   **Standard Remote Work:** Full-time employees may work remotely up to **3 days per week**, but this requires your direct manager's approval and depends on business needs.\n*   **Fully Remote Arrangements:** If you want to work remotely 5 days a week, that requires **VP-level approval**. This arrangement is reviewed individually based on job function and performance history, and fully remote staff must still attend in-person team meetings quarterly.\n*   **Guidelines:** Regardless of the setup, core hours are 9:00 AM – 3:00 PM local time, a reliable internet connection is necessary, and strict adherence to data security policies is required when working outside the office. Acme Corp won't cover home office expenses unless HR specifically approves them.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 6,
+            "error_recovery": 10
+          },
+          "overall_score": 9.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Both required policy parts captured correctly: up to 3 days/week with manager approval, and fully remote requires VP approval. Single optimal tool call. The persistent 'Verification: unverified' artifact lowers personality score.",
+          "performance": {
+            "tokens_per_second": 35.5,
+            "time_to_first_token": 13.124,
+            "input_tokens": 2670,
+            "output_tokens": 489,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "do contractors get health benefits or no?",
+          "agent_response": "According to `employee_handbook.md`, **contractors are NOT eligible** for company health benefits. Benefits like health, dental, and vision insurance are exclusively available to full-time employees.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 6,
+            "error_recovery": 10
+          },
+          "overall_score": 9.8,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly states contractors are NOT eligible and benefits are for full-time employees only — exact match to ground truth. Single optimal tool call. Recurring 'Verification: unverified' artifact again.",
+          "performance": {
+            "tokens_per_second": 34.8,
+            "time_to_first_token": 13.5,
+            "input_tokens": 2487,
+            "output_tokens": 275,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "so what benefits ARE contractors eligible for?",
+          "agent_response": "According to `employee_handbook.md`, contractors are **NOT eligible** for company benefits programs because they are engaged through a service agreement rather than as direct employees. The handbook does not specify any particular benefits that contractors are entitled to outside of their individual service agreements.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 6,
+            "error_recovery": 10
+          },
+          "overall_score": 9.65,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Critical hard-negative handled correctly: agent stated the handbook does not list any contractor entitlements without inventing any. The phrase 'outside of their individual service agreements' is a minor extrapolation not explicitly from the doc but is not an invented benefit entitlement. No hallucination.",
+          "performance": {
+            "tokens_per_second": 34.1,
+            "time_to_first_token": 14.628,
+            "input_tokens": 2487,
+            "output_tokens": 231,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 4,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 344.24504351615906,
+      "category": "gaia_rag",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 35.2,
+        "min_tokens_per_second": 34.1,
+        "max_tokens_per_second": 36.6,
+        "avg_time_to_first_token": 13.302,
+        "min_time_to_first_token": 11.957,
+        "max_time_to_first_token": 14.628,
+        "total_input_tokens": 10348,
+        "total_output_tokens": 1718,
+        "turns_measured": 4,
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 4
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.7
+  },
+  "performance": {
+    "avg_tokens_per_second": 36.4,
+    "avg_time_to_first_token": 10.794,
+    "total_input_tokens": 50929,
+    "total_output_tokens": 9291,
+    "scenarios_with_data": 8,
+    "flags": [
+      "high_latency",
+      "token_explosion"
+    ]
+  }
+}

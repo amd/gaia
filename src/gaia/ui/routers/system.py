@@ -11,16 +11,17 @@ import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
+    DEFAULT_MODEL_NAME,
     lemonade_auth_headers,
     resolve_effective_ctx_size,
     resolve_lemonade_api_key,
+    resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_manager import gpu_display_info
 
@@ -70,13 +71,6 @@ def _norm_model_id(model_id: str) -> str:
 _MIN_CONTEXT_SIZE = DEFAULT_CONTEXT_SIZE
 
 
-def _get_lemonade_base_url() -> str:
-    """Return the Lemonade Server API base URL: configured, else GAIA's own."""
-    from gaia.llm.lemonade_client import resolve_lemonade_base_url
-
-    return resolve_lemonade_base_url()
-
-
 async def _lemonade_post(
     path: str,
     payload: dict,
@@ -88,7 +82,7 @@ async def _lemonade_post(
     try:
         import httpx  # pylint: disable=import-outside-toplevel
 
-        base_url = _get_lemonade_base_url()
+        base_url = resolve_lemonade_base_url()
         headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
@@ -235,7 +229,7 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     """
     import httpx  # pylint: disable=import-outside-toplevel
 
-    base_url = _get_lemonade_base_url()
+    base_url = resolve_lemonade_base_url()
     payload: Dict[str, Any] = {"model_name": model_name, "stream": True}
     if force:
         payload["force"] = True
@@ -454,6 +448,25 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
         evict_task.add_done_callback(_background_tasks.discard)
 
 
+# Last message logged per probe; the UI polls status, so repeats log at debug.
+_last_probe_warning: Dict[str, str] = {}
+
+
+def _probe_failed(status: SystemStatus, probe: str, message: str) -> None:
+    """Record a status probe that could not run, so the UI can show it."""
+    if _last_probe_warning.get(probe) != message:
+        _last_probe_warning[probe] = message
+        logger.warning("system status: %s", message)
+    else:
+        logger.debug("system status: %s", message)
+    status.probe_warnings.append(message)
+
+
+def _probe_ok(probe: str) -> None:
+    """Re-arm the warning, so a failure that returns after recovery warns again."""
+    _last_probe_warning.pop(probe, None)
+
+
 @router.get("/api/system/status", response_model=SystemStatus)
 async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
@@ -475,7 +488,15 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
     # Resolved outside the probe below: its catch-all would report a corrupt
     # config as "Lemonade not running".
-    default_model = _default_model_name()
+    from gaia.config import GaiaConfigError
+
+    try:
+        default_model = _default_model_name()
+    except GaiaConfigError as exc:
+        # Surfaced as config_error; the status still names the built-in model.
+        logger.warning("system status: %s", exc)
+        status.config_error = str(exc)
+        default_model = DEFAULT_MODEL_NAME
     # Always named, not only once a model is loaded: the UI's load and download
     # actions target this, and the schema default is the Gemma floor.
     status.default_model_name = db.get_setting("custom_model") or default_model
@@ -486,16 +507,13 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     try:
         import httpx
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            base_url = _get_lemonade_base_url()
-            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+        # Failures of the supplementary probes below: transport, bad JSON, or
+        # an unexpected payload shape.
+        probe_errors = (httpx.HTTPError, ValueError, TypeError, AttributeError)
 
-            # Derive the Lemonade web UI URL (scheme://host:port without /api/v1)
-            try:
-                _parsed = urlparse(base_url)
-                status.lemonade_url = f"{_parsed.scheme}://{_parsed.netloc}"
-            except Exception:
-                pass  # Keep the default "http://localhost:13305"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            base_url = resolve_lemonade_base_url()
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             # Use /health endpoint to get the actually loaded model
             # (not /models which returns the full catalog of available models)
@@ -604,6 +622,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 # Uses show_all=true to see models that are in the catalog but not
                 # yet pulled to disk.
                 if not status.model_loaded:
+                    _target = db.get_setting("custom_model") or default_model
                     try:
                         catalog_resp = await client.get(
                             f"{base_url}/models",
@@ -611,9 +630,16 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             timeout=5.0,
                             headers=_auth,
                         )
-                        if catalog_resp.status_code == 200:
-                            _custom = db.get_setting("custom_model")
-                            default_lower = _norm_model_id(_custom or default_model)
+                        if catalog_resp.status_code != 200:
+                            _probe_failed(
+                                status,
+                                "catalog",
+                                f"Could not check whether {_target} is downloaded: "
+                                f"Lemonade's model catalog returned HTTP "
+                                f"{catalog_resp.status_code}.",
+                            )
+                        else:
+                            default_lower = _norm_model_id(_target)
                             for m in catalog_resp.json().get("data", []):
                                 if _norm_model_id(m.get("id", "")) == default_lower:
                                     status.model_downloaded = m.get("downloaded", False)
@@ -628,8 +654,13 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             # Model not found in catalog → treat as not downloaded
                             if status.model_downloaded is None:
                                 status.model_downloaded = False
-                    except Exception:
-                        pass  # Don't block status on catalog failure
+                            _probe_ok("catalog")
+                    except probe_errors as exc:
+                        _probe_failed(
+                            status,
+                            "catalog",
+                            f"Could not check whether {_target} is downloaded: {exc}",
+                        )
 
                 # Validate context size sufficiency only when we have a real,
                 # positive reading. A ctx of 0 means "not yet measured" —
@@ -661,8 +692,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                         ttft = stats_data.get("time_to_first_token")
                         if ttft:
                             status.time_to_first_token = round(ttft, 3)
-                except Exception:
-                    pass
+                        _probe_ok("stats")
+                    else:
+                        _probe_failed(
+                            status,
+                            "stats",
+                            "Could not read inference stats: Lemonade returned "
+                            f"HTTP {stats_resp.status_code}.",
+                        )
+                except probe_errors as exc:
+                    _probe_failed(
+                        status, "stats", f"Could not read inference stats: {exc}"
+                    )
 
                 # Fetch GPU/NPU/device info (short timeout — supplementary info)
                 try:
@@ -682,11 +723,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                                 if dev.get("available"):
                                     detected.append("npu")
                         status.detected_devices = detected
-                except Exception as exc:
-                    # Supplementary info — a failure must not fail the whole
-                    # status call, but log it so a payload shape change is
-                    # visible instead of silently blanking the GPU row.
-                    logger.debug("system status: device probe failed: %s", exc)
+                        _probe_ok("devices")
+                    else:
+                        _probe_failed(
+                            status,
+                            "devices",
+                            "Could not read device info: Lemonade returned "
+                            f"HTTP {sysinfo_resp.status_code}.",
+                        )
+                except probe_errors as exc:
+                    _probe_failed(
+                        status, "devices", f"Could not read device info: {exc}"
+                    )
             else:
                 # Fall back to /models if /health isn't available
                 resp = await client.get(f"{base_url}/models", headers=_auth)
@@ -707,18 +755,19 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         # "not responding" banner rather than calling it an ambiguous probe.
         logger.debug("system status: Lemonade is not running: %s", exc)
         status.lemonade_running = False
-    except Exception:
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("system status: Lemonade health query failed: %s", exc)
         status.lemonade_running = False
         status.lemonade_error = "Lemonade health query failed"
 
     # Active profile from persistent config (#1220)
-    try:
-        from gaia.config import GaiaConfig
+    from gaia.config import GaiaConfig, GaiaConfigError
 
-        gaia_cfg = GaiaConfig.load()
-        status.active_profile = gaia_cfg.profile
-    except Exception:
-        pass  # Keep default "chat"
+    try:
+        status.active_profile = GaiaConfig.load().profile
+    except GaiaConfigError as exc:
+        logger.warning("system status: %s", exc)
+        status.config_error = str(exc)
 
     # Disk space
     # Access shutil through gaia.ui.server so test patches on
@@ -728,8 +777,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         _shutil_mod = getattr(_shutil, "shutil", shutil)
         usage = _shutil_mod.disk_usage(Path.home())
         status.disk_space_gb = round(usage.free / (1024**3), 1)
-    except Exception:
-        pass
+        _probe_ok("disk")
+    except OSError as exc:
+        _probe_failed(status, "disk", f"Could not read free disk space: {exc}")
 
     # Memory
     try:
@@ -818,7 +868,7 @@ async def _check_model_status(model_name: str) -> ModelStatus:
     try:
         import httpx
 
-        base_url = _get_lemonade_base_url()
+        base_url = resolve_lemonade_base_url()
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=5.0) as client:
             # Check catalog: is model known and downloaded?

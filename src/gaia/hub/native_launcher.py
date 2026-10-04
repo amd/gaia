@@ -36,7 +36,6 @@ Schema reference: ``docs/spec/agent-hub-restructure.mdx`` (native/C++ agents).
 from __future__ import annotations
 
 import json
-import os
 import platform
 import signal
 import subprocess
@@ -46,6 +45,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Deque, Dict, Mapping, Optional, Union
 
+from gaia.env import child_env
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -360,7 +360,9 @@ class NativeAgentLauncher:
             binary_name: Path to the executable (relative to *agent_dir* or
                 absolute).
             extra_args: Extra CLI args appended after ``--stdio``.
-            env: Extra environment variables merged over ``os.environ``.
+            env: Extra environment variables merged over
+                :func:`gaia.env.child_env` (GAIA's environment minus its
+                internal credentials). A name passed here is always delivered.
             handshake: When True (default), send ``initialize`` and store the
                 server's reply; raise if it fails.
 
@@ -393,10 +395,7 @@ class NativeAgentLauncher:
         if extra_args:
             cmd.extend(str(a) for a in extra_args)
 
-        merged_env = None
-        if env:
-            merged_env = os.environ.copy()
-            merged_env.update(env)
+        merged_env = child_env(env)
 
         if self.debug:
             logger.debug("native-launcher: spawning %s", cmd)

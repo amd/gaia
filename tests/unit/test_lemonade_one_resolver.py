@@ -22,18 +22,66 @@ def own_server(monkeypatch, tmp_path):
     return "http://localhost:51234/api/v1"
 
 
-def test_agent_ui_status_and_onboarding_follow_gaias_server(own_server):
-    from gaia.ui.routers import onboarding, system
+def test_agent_ui_status_links_gaias_server(own_server):
+    from gaia.ui.models import SystemStatus
 
-    assert system._get_lemonade_base_url() == own_server
-    assert onboarding._get_lemonade_base_url() == own_server
+    assert SystemStatus().lemonade_url == "http://localhost:51234"
 
 
 def test_a_configured_server_still_wins(own_server, monkeypatch):
-    from gaia.ui.routers import system
+    from gaia.ui.models import SystemStatus
 
     monkeypatch.setenv("LEMONADE_BASE_URL", "http://gpu-box:13305")
-    assert system._get_lemonade_base_url() == "http://gpu-box:13305/api/v1"
+    assert SystemStatus().lemonade_url == "http://gpu-box:13305"
+
+
+class _Resp:
+    def __init__(self, status_code, payload):
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+def test_registry_model_lookup_asks_gaias_server_with_its_key(own_server, mocker):
+    from gaia.agents.registry import get_lemonade_models
+
+    get = mocker.patch(
+        "requests.get", return_value=_Resp(200, {"data": [{"id": "m1"}]})
+    )
+
+    assert get_lemonade_models() == ["m1"]
+    get.assert_called_once()
+    assert get.call_args.args[0] == f"{own_server}/models"
+    assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer own-key"}
+
+
+def test_chat_preflight_asks_gaias_server_with_its_key(own_server, mocker):
+    from gaia.llm.lemonade_manager import LemonadeManager
+    from gaia.ui import _chat_helpers
+
+    # Nothing initialised the manager: the helper must not guess a port.
+    mocker.patch.object(LemonadeManager, "_base_url", None)
+    mocker.patch.object(_chat_helpers, "_eval_provider_kwargs", return_value={})
+    model = "Gemma-4-E4B-it-GGUF"
+    resident = {
+        "all_models_loaded": [
+            {
+                "model_name": model,
+                "type": "llm",
+                "recipe": "llamacpp",
+                "recipe_options": {"ctx_size": 10**7},
+            }
+        ]
+    }
+    get = mocker.patch("httpx.get", return_value=_Resp(200, resident))
+
+    _chat_helpers._maybe_load_expected_model(model)
+
+    get.assert_called_once()
+    assert get.call_args.args[0] == f"{own_server}/health"
+    assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer own-key"}
 
 
 async def test_api_server_health_asks_gaias_server_with_its_key(

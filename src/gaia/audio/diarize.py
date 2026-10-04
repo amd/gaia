@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from gaia.env import child_env
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
 
@@ -222,6 +223,7 @@ def _ensure_package(say: Callable[[str], None]) -> None:
             # forever waiting for input that cannot arrive until this call
             # returns.
             stdin=subprocess.DEVNULL,
+            env=child_env(),
         )
     except subprocess.CalledProcessError as e:
         raise DiarizationError(

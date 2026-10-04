@@ -30,6 +30,7 @@ from gaia.agents.tools.command_timeouts import (
     terminate_process_tree,
 )
 from gaia.agents.tools.shell_session import ShellSession
+from gaia.env import child_env
 from gaia.tool_cancellation import tool_cancelled
 
 logger = logging.getLogger(__name__)
@@ -1436,12 +1437,13 @@ def _captured_stderr(mode: str, default: Any) -> Any:
 
 
 def _segment_env(assignments: Dict[str, str]) -> Dict[str, str]:
-    """This process's environment plus one segment's assignments.
+    """This process's child environment plus one segment's assignments.
 
     A copy every time: ``os.environ`` itself is never touched, so nothing a
-    command sets outlives it or reaches the agent.
+    command sets outlives it or reaches the agent. GAIA's internal credentials
+    are left out (see ``gaia.env.child_env``).
     """
-    return {**os.environ, **assignments}
+    return child_env(assignments)
 
 
 class _CommandCancelled(Exception):
