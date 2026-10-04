@@ -13,6 +13,7 @@ import responses
 from openai import OpenAI
 
 from gaia.llm.lemonade_client import (
+    CONVERSATION_SLOT,
     LemonadeClient,
     LemonadeClientError,
     cloud_model_provider,
@@ -557,12 +558,13 @@ def test_local_model_request_keeps_repetition_penalties(monkeypatch, stream):
 
 
 def _wire(model, stream, **sampling):
-    """The full request body Lemonade receives for one ``hi`` turn."""
+    """The full request body Lemonade receives for one local ``hi`` turn."""
     body = {
         "model": model,
         "messages": [{"role": "user", "content": "hi"}],
         "max_completion_tokens": 1000,
         "stream": stream,
+        "id_slot": CONVERSATION_SLOT,
         **sampling,
     }
     if stream:
