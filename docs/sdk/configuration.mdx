@@ -27,6 +27,16 @@ export GAIA_API_STREAMING="1"  # stream LLM responses over the API
 # environment, so a project .env cannot switch it on.
 export GAIA_AUTO_APPROVE_TOOLS="1"
 
+# Skip loading .env files ("1", "true", "yes" or "on"). For an app that embeds
+# GAIA and supplies its own environment. Read from the startup environment, so
+# a .env file cannot turn it on or off.
+export GAIA_NO_DOTENV="1"
+
+# Variables to withhold from the processes GAIA starts for an agent (shell
+# commands, MCP servers), comma or space separated. GAIA's own internal
+# credentials are always withheld; this adds yours to the list.
+export GAIA_CHILD_ENV_DENY="MY_APP_TOKEN,MY_DB_PASSWORD"
+
 # API Keys (for cloud providers)
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```

@@ -246,14 +246,9 @@ jobs:
       - name: Stage fixtures + skills + fixture hub
         run: |
           $ErrorActionPreference = "Stop"
-          $stage = Join-Path $env:USERPROFILE "gaia-eval"
-          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-          Copy-Item tests\fixtures\gaia $stage -Recurse
-          $skillsRoot = Join-Path $env:USERPROFILE ".gaia\skills"
-          New-Item -ItemType Directory -Force $skillsRoot | Out-Null
-          Copy-Item hub\skills\* $skillsRoot -Recurse -Force
-          python tests/fixtures/gaia/prepare_fixture_hub.py --skills-root $skillsRoot
-          if ($LASTEXITCODE -ne 0) { throw "prepare_fixture_hub failed" }
+          # Same script as the other gaia_* workflows, so "staged" cannot drift.
+          python tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE"
+          if ($LASTEXITCODE -ne 0) { throw "Staging the gaia_* fixtures failed; the output above says which part." }
 
       - name: Run the gaia eval categories serially (real eval)
         timeout-minutes: 1980
@@ -283,7 +278,7 @@ jobs:
             -NoNewWindow -PassThru
           $backend = Start-Process -FilePath "python" `
             -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
-            -WorkingDirectory $PWD `
+            -WorkingDirectory (Join-Path $env:USERPROFILE "gaia-eval") `
             -RedirectStandardOutput (Join-Path $PWD "eval-out\backend.out.log") `
             -RedirectStandardError (Join-Path $PWD "eval-out\backend.err.log") `
             -NoNewWindow -PassThru
@@ -306,6 +301,22 @@ jobs:
             if (-not $ready) {
               Write-Host "::error::GAIA UI backend did not become healthy in time."
               Get-Content "eval-out\backend.out.log", "eval-out\backend.err.log" -ErrorAction SilentlyContinue
+              exit 1
+            }
+
+            # The Agent UI's own memory switch defaults OFF, and with it off every
+            # `remember` returns "skipped". The runner's preflight refuses to start
+            # a memory scenario while it is off.
+            try {
+              $memory = Invoke-RestMethod -Method Put -Uri "$env:BACKEND_URL/api/memory/settings" `
+                -Headers @{ "X-Gaia-UI" = "1" } -ContentType "application/json" `
+                -Body '{"memory_enabled": true}' -TimeoutSec 30 -ErrorAction Stop
+            } catch {
+              Write-Host "::error::PUT $env:BACKEND_URL/api/memory/settings failed: $($_.Exception.Message). Memory scenarios cannot run with memory off."
+              exit 1
+            }
+            if ($memory.memory_enabled -ne $true) {
+              Write-Host "::error::The backend did not switch memory on (settings: $($memory | ConvertTo-Json -Compress))."
               exit 1
             }
 
