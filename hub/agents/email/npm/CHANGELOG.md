@@ -6,6 +6,12 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **The downloaded binary's memory recalls by meaning again.** The release
+  build left out the vector index library, so the stateful agent started with
+  "vector search disabled" and recalled memories by keyword only. The library
+  is now bundled (the binary grows about 16 MB), and the release build fails if
+  it is missing.
+
 - **The email agent now finds GAIA's own Lemonade Server.** It used to look
   for Lemonade on its default port, so on a PC where `gaia init` set up GAIA's
   own server it reported the model server as missing, or its version as
