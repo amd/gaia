@@ -136,8 +136,9 @@ export function SettingsPage() {
 
     const customModelDirty = customModel.trim() !== savedCustomModel.trim();
 
-    const modelName = status?.default_model_name ?? DEFAULT_MODEL_NAME;
-    const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(modelName);
+    // null: an unreadable config hides the model; the banner shows config_error.
+    const modelName = status ? status.default_model_name : DEFAULT_MODEL_NAME;
+    const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(modelName ?? undefined);
 
     const CTX_PRESETS: Array<{ label: string; value: number }> = [
         { label: '4K', value: 4096 },
@@ -159,7 +160,7 @@ export function SettingsPage() {
     const targetModelForReload = status?.model_loaded ?? modelName;
 
     const applyCtxSize = useCallback(async () => {
-        if (!parsedCtxSize) return;
+        if (!parsedCtxSize || !targetModelForReload) return;
         log.system.info(`Reloading ${targetModelForReload} with ctx_size=${parsedCtxSize}`);
         await loadModel(targetModelForReload, parsedCtxSize);
     }, [parsedCtxSize, targetModelForReload, loadModel]);
@@ -201,7 +202,7 @@ export function SettingsPage() {
     const wrongModel   = !!(status?.lemonade_running && status.model_loaded && status.expected_model_loaded === false);
     const smallContext = !!(status?.lemonade_running && status.model_loaded && status.context_size_sufficient === false);
     const notDownloaded = !!(status?.lemonade_running && !status.model_loaded && status.model_downloaded === false);
-    const needsLoad    = wrongModel || smallContext;
+    const needsLoad    = (wrongModel || smallContext) && modelName !== null;
 
     return (
         <div className="settings-page">
@@ -325,7 +326,7 @@ export function SettingsPage() {
                                 </div>
                             )}
 
-                            {status.lemonade_running && (
+                            {status.lemonade_running && modelName !== null && (
                                 <div className="force-redownload-row">
                                     <span className="force-redownload-label">
                                         If the model file is corrupted:

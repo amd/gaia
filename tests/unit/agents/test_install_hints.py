@@ -228,3 +228,58 @@ class TestAgentNotInstalledMessage:
             "The chat agent is not installed", "gaia-agent-chat"
         )
         assert not message.endswith(" ")
+
+
+class TestGaiaExtraRequirements:
+    """Adding extras installs their requirements, never GAIA itself."""
+
+    DECLARED = [
+        'pywin32; sys_platform == "win32"',
+        "requests>=2",
+        'faiss-cpu>=1.7.0; extra == "rag"',
+        "pypdf; extra == 'rag'",
+        'fastapi; extra == "ui"',
+        'pypdf; extra == "ui"',
+    ]
+
+    def _declare(self, monkeypatch, declared):
+        monkeypatch.setattr(
+            install_hints.importlib.metadata, "requires", lambda _name: declared
+        )
+
+    def test_only_the_extras_requirements_are_returned(self, monkeypatch):
+        self._declare(monkeypatch, self.DECLARED)
+        assert install_hints.gaia_extra_requirements(["rag", "ui"]) == [
+            "faiss-cpu>=1.7.0",
+            "pypdf",
+            "fastapi",
+        ]
+
+    def test_gaia_itself_is_never_reinstalled(self, monkeypatch):
+        self._declare(monkeypatch, self.DECLARED)
+        args = install_hints.gaia_extra_requirements(["rag"])
+        assert not any("amd-gaia" in a or a == "-e" for a in args)
+
+    def test_an_unknown_extra_is_loud(self, monkeypatch):
+        self._declare(monkeypatch, self.DECLARED)
+        with pytest.raises(RuntimeError, match="no extra"):
+            install_hints.gaia_extra_requirements(["nope"])
+
+    def test_a_condition_it_cannot_evaluate_is_loud(self, monkeypatch):
+        self._declare(monkeypatch, ['x; extra == "rag" and sys_platform == "win32"'])
+        with pytest.raises(RuntimeError, match="cannot evaluate"):
+            install_hints.gaia_extra_requirements(["rag"])
+
+    def test_gaia_not_installed_is_loud(self, monkeypatch):
+        def missing(_name):
+            raise install_hints.importlib.metadata.PackageNotFoundError("amd-gaia")
+
+        monkeypatch.setattr(install_hints.importlib.metadata, "requires", missing)
+        with pytest.raises(RuntimeError, match="not installed"):
+            install_hints.gaia_extra_requirements(["rag"])
+
+    def test_this_install_declares_every_init_profile_extra(self):
+        from gaia.installer.init_command import INIT_PROFILES
+
+        extras = {e for p in INIT_PROFILES.values() for e in p.get("pip_extras", [])}
+        assert install_hints.gaia_extra_requirements(sorted(extras))
