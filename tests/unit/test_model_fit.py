@@ -365,6 +365,63 @@ class TestRealLemonadeReports:
         with pytest.raises(ModelFitError, match="not its memory"):
             capacity_from_system_info(info)
 
+    _WINDOWS_STRIX_HALO = {
+        "Physical Memory": "128.00 GB",
+        "devices": {
+            "amd_gpu": [
+                {
+                    "available": True,
+                    "family": "gfx1151",
+                    "integrated": True,
+                    "name": "AMD Radeon(TM) 8060S Graphics",
+                }
+            ]
+        },
+    }
+
+    def test_windows_igpu_is_sized_from_its_driver_carve_out(self, monkeypatch):
+        """Lemonade 2026.40 on Windows reports this iGPU with no memory."""
+        asked = []
+        monkeypatch.setattr(
+            model_fit,
+            "_windows_adapter_memory_gb",
+            lambda name: asked.append(name) or 64.0,
+        )
+        cap = capacity_from_system_info(self._WINDOWS_STRIX_HALO)
+
+        assert asked == ["AMD Radeon(TM) 8060S Graphics"]
+        assert (cap.memory_source, cap.memory_gb) == ("AMD iGPU", pytest.approx(64.0))
+        assert check_fit(QWEN.size_gb, cap, QWEN_KV).fits
+
+    def test_windows_igpu_from_the_driver_loads_qwen_at_its_native_window(
+        self, monkeypatch
+    ):
+        # The driver's carve-out feeds the same sizing the load uses, not just the fit.
+        info = self._WINDOWS_STRIX_HALO
+        monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 64.0)
+        monkeypatch.setattr(
+            lc.LemonadeClient, "get_system_info", lambda self, timeout=None: info
+        )
+        monkeypatch.setattr(lc, "_CAPACITY_CACHE", {})
+        monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
+
+        url = "http://windows-strix-halo.test:13305/api/v1"
+        assert lc.resolve_ctx_size(lc.LARGE_DEFAULT_MODEL_NAME, base_url=url) == 262144
+
+    def test_windows_igpu_with_no_recorded_memory_still_fails_loudly(self, monkeypatch):
+        monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 0.0)
+        with pytest.raises(ModelFitError, match="not its memory"):
+            capacity_from_system_info(self._WINDOWS_STRIX_HALO)
+
+    def test_a_discrete_gpu_never_reads_the_driver_carve_out(self, monkeypatch):
+        monkeypatch.setattr(
+            model_fit,
+            "_windows_adapter_memory_gb",
+            lambda name: pytest.fail("asked about a discrete GPU"),
+        )
+        with pytest.raises(ModelFitError, match="not its memory"):
+            capacity_from_system_info(_fixture("lemonade11_amd_dgpu_windows.json"))
+
     def test_legacy_amd_igpu_key_is_read(self):
         info = {
             "devices": {

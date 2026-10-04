@@ -96,8 +96,15 @@ func capacityFrom(info systemInfo) (Capacity, error) {
 		}
 	}
 	for _, g := range gpus {
-		if g.vendor == "AMD" && g.integrated && g.VRAMGB > 0 {
+		if g.vendor != "AMD" || !g.integrated {
+			continue
+		}
+		if g.VRAMGB > 0 {
 			c.MemoryGB, c.MemorySource = g.VRAMGB+g.VirtualGB, "AMD iGPU"
+			return c, nil
+		}
+		if dedicated := adapterMemoryGB(g.Name); dedicated > 0 {
+			c.MemoryGB, c.MemorySource = dedicated, "AMD iGPU"
 			return c, nil
 		}
 	}
