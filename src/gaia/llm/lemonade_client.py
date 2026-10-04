@@ -1041,6 +1041,15 @@ MODELS = {
     ),
 }
 
+
+def find_model_requirement(model_id: Optional[str]) -> Optional[ModelRequirement]:
+    """The MODELS entry for ``model_id``, tolerating the ``user.`` namespace."""
+    for mr in MODELS.values():
+        if _model_ids_match(mr.model_id, model_id):
+            return mr
+    return None
+
+
 # Sampling for a local model with no published profile below: low temperature
 # plus penalties stop small models looping on tables and paragraphs.
 # repeat_penalty / repeat_last_n are llama.cpp-native.
@@ -1217,14 +1226,6 @@ AGENT_PROFILES = {
         description="Image generation via the SD tool mixin",
     ),
 }
-
-
-def find_model_requirement(model_id: Optional[str]) -> Optional[ModelRequirement]:
-    """The MODELS entry for ``model_id``, tolerating the ``user.`` namespace."""
-    for mr in MODELS.values():
-        if _model_ids_match(mr.model_id, model_id):
-            return mr
-    return None
 
 
 def lemonade_server_version(client: "LemonadeClient") -> Optional[str]:

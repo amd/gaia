@@ -236,7 +236,8 @@ def test_explicit_dev_src_dir_flag_is_passed_to_the_resolver(monkeypatch):
         _RecordingPost(
             200,
             _ensure_payload(
-                mode="dev", dev_src_dir="/checkout-b/hub/agents/toy-dev/python"
+                mode="dev",
+                dev_src_dir=str(Path("/checkout-b/hub/agents/toy-dev/python")),
             ),
         ),
     )
@@ -325,7 +326,7 @@ def test_stale_daemon_omitting_dev_src_dir_is_refused_not_a_false_success(
     # The remedy must name the REPO ROOT (/checkout-b), not the agent source
     # dir (resolved) -- a bare "Python environment" substring check is what
     # let a wrong-path remedy through the first time (real-world evidence).
-    assert "rooted at /checkout-b," in out
+    assert f"rooted at {Path('/checkout-b')}," in out
     assert f"rooted at {resolved}" not in out
 
 
@@ -360,7 +361,7 @@ def test_stale_daemon_returning_a_different_dev_src_dir_is_refused(monkeypatch, 
     # The remedy must name the caller's REPO ROOT (/checkout-b, from the
     # resolved dev_src_dir), not the stale daemon's reported agent subdir
     # (/checkout-a/...) nor the caller's own agent subdir.
-    assert "rooted at /checkout-b," in out
+    assert f"rooted at {Path('/checkout-b')}," in out
     assert f"rooted at {resolved}" not in out
     assert "rooted at /checkout-a/hub/agents/toy-dev/python" not in out
 

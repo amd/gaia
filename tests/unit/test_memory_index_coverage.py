@@ -97,8 +97,7 @@ def test_semantic_recall_reaches_a_memory_past_the_first_hundred(store, count):
     host = _Host(store, vectors)
     host._rebuild_faiss_index()
 
-    with patch("gaia.agents.base.memory._get_cross_encoder", return_value=None):
-        results = host._hybrid_search(query, top_k=3)
+    results = host._hybrid_search(query, top_k=3)
 
     assert results and results[0]["id"] == first_id
 
