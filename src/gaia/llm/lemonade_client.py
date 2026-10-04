@@ -18,7 +18,7 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -403,6 +403,51 @@ DEFAULT_CONTEXT_SIZE = 32768
 # GPU doc-Q&A at 32K and re-open the #1030 context overflow.
 GPU_CTX_SIZE = 65536  # GPU/CPU — Gemma-4-E4B-it-GGUF (llama.cpp)
 NPU_CTX_SIZE = 32768  # NPU — gemma4-it-e2b-FLM (FastFlowLM ceiling)
+
+# llama.cpp flags for a chat model. One slot meant every side request with its
+# own prompt (memory extraction, titles) first saved the conversation's cache to
+# host RAM — ~87s for a 30K-token Qwen3-30B context on a Radeon 8060S. A second
+# slot over one shared KV pool keeps the conversation resident, so the RAM copy
+# buys nothing; the similarity floor keeps a short side prompt off its slot.
+CHAT_LLAMACPP_ARGS = (
+    "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5"
+)
+#: Slots requests are pinned to (llama.cpp ``id_slot``). Left to LRU, a memory
+#: extraction landed on the conversation's slot and overwrote it, and the next
+#: turn re-read 28K tokens (109s). llama.cpp defers a request pinned to a slot
+#: it lacks forever, so the side slot is used only when the load reports it.
+CONVERSATION_SLOT = 0
+SIDE_SLOT = 1
+
+#: One request at a time per local model in this process. With --kv-unified
+#: every slot is promised the whole window from one shared pool, and two active
+#: requests that together outgrow it both fail with "Context size has been
+#: exceeded" (llama.cpp never evicts an active slot). Idle slots are purged
+#: when room is needed, so one active request always fits. The daemon's broker
+#: lease does the same across processes.
+_LOCAL_REQUEST_LOCKS: Dict[str, threading.RLock] = {}
+_LOCAL_REQUEST_LOCKS_GUARD = threading.Lock()
+
+
+def _local_request_lock(model: str) -> threading.RLock:
+    """The lock serializing this process's requests to local *model*."""
+    key = model[len("user.") :] if model.startswith("user.") else model
+    with _LOCAL_REQUEST_LOCKS_GUARD:
+        return _LOCAL_REQUEST_LOCKS.setdefault(key, threading.RLock())
+
+
+def _slots_in_flags(flags: List[str]) -> Optional[int]:
+    """The ``--parallel`` / ``-np`` value in llama-server *flags*, if any."""
+    for i, flag in enumerate(flags):
+        name, _, inline = flag.partition("=")
+        if name not in ("--parallel", "-np"):
+            continue
+        value = inline or (flags[i + 1] if i + 1 < len(flags) else "")
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
 
 
 def profile_ctx_size(device: Optional[str]) -> int:
@@ -1672,6 +1717,9 @@ CONTEXT_OVERFLOW_PHRASES = (
     "exceeds the available context size",
     "got too long",
     "max length reached",
+    # llama.cpp, when active requests together outgrow a unified KV pool.
+    "context size has been exceeded",
+    "failed to find free space in the kv cache",
 )
 
 
@@ -2492,6 +2540,37 @@ class LemonadeClient:
         elif hasattr(self, "server_process") and self.server_process:
             if hasattr(self, "log"):
                 self.log.info("Not terminating server because keep_alive=True")
+
+    def _model_recipe(self, model_name: str) -> Optional[str]:
+        """The catalog's recipe for *model_name* (``llamacpp``, ``flm``, ``cloud``…)."""
+        for model_id, entry in self._model_metadata.items():
+            if entry.get("recipe") and _model_ids_match(model_id, model_name):
+                return entry["recipe"]
+        for model in self.list_models(show_all=True).get("data", []):
+            if _model_ids_match(model.get("id"), model_name):
+                return model.get("recipe")
+        return None
+
+    def slot_count(self, model_name: str) -> int:
+        """How many llama.cpp slots the loaded *model_name* serves.
+
+        Read from ``/health``: the launch command Lemonade actually ran, else
+        the ``llamacpp_args`` it was loaded with. A model that isn't loaded, or
+        names no ``--parallel``, counts as one slot.
+
+        Raises:
+            LemonadeClientError: If the health check fails
+        """
+        for entry in self.health_check().get("all_models_loaded", []):
+            if not _model_ids_match(entry.get("model_name"), model_name):
+                continue
+            launch = entry.get("launch_command") or []
+            args = (entry.get("recipe_options") or {}).get("llamacpp_args") or ""
+            for flags in ([str(f) for f in launch], args.split()):
+                slots = _slots_in_flags(flags)
+                if slots is not None:
+                    return slots
+        return 1
 
     def get_model_info(self, model_name: str) -> Dict[str, Any]:
         """
@@ -4816,9 +4895,10 @@ class LemonadeClient:
         """Hold a host-broker model-slot lease across a load (#2151 / V2-11).
 
         Serializes this load against every other process sharing the
-        single-tenant Lemonade slot. A no-op when the broker is not configured
-        (standalone ``gaia llm`` etc.) — that is the absence of a broker, not a
-        silent fallback. When the broker IS configured but unreachable, the
+        single-tenant Lemonade slot, and every request to a local model against
+        the others in this process (``_local_request_lock``). The broker part is
+        a no-op when the broker is not configured (standalone ``gaia llm`` etc.)
+        — that is the absence of a broker, not a silent fallback. When the broker IS configured but unreachable, the
         underlying context manager raises loudly rather than racing the slot.
 
         Cloud-routed models occupy no slot, so leasing one would stall every
@@ -4849,7 +4929,17 @@ class LemonadeClient:
             except ImportError:
                 print(f"⏳ {reason}")
 
-        return model_lease(model, priority=self.model_lease_priority, on_wait=_on_wait)
+        lease = model_lease(model, priority=self.model_lease_priority, on_wait=_on_wait)
+        lock = _local_request_lock(model)
+
+        @contextmanager
+        def _held():
+            # Broker first: a thread holding the broker lease must never wait on
+            # this lock while its holder waits on the broker.
+            with lease, lock:
+                yield
+
+        return _held()
 
     def _ensure_model_loaded(
         self, model: str, auto_download: bool = True, *, force: bool = False
@@ -5232,6 +5322,29 @@ class LemonadeClient:
             LemonadeClientError: If model loading fails
         """
         self.log.debug(f"Loading {model_name}")
+
+        # A forced-backend load saves its options; never save the chat flags.
+        if (
+            llamacpp_args is None
+            and ctx_size is not None
+            and llamacpp_backend_for(model_name) is None
+        ):
+            # The chat flags are a speed-up; an unreadable catalog must not
+            # block the load itself, which only needs POST /load.
+            try:
+                recipe = self._model_recipe(model_name)
+            except LemonadeAuthError:
+                raise
+            except LemonadeClientError as e:
+                recipe = None
+                self.log.warning(
+                    f"Could not read the model catalog at {self.base_url}/models "
+                    f"to check {model_name}'s recipe ({e}); loading it without "
+                    "the two-slot chat flags, so side requests will evict the "
+                    "conversation cache."
+                )
+            if recipe == "llamacpp":
+                llamacpp_args = CHAT_LLAMACPP_ARGS
 
         request_data = {"model_name": model_name}
         backend = llamacpp_backend_for(model_name)
