@@ -22,6 +22,7 @@ from typing import Optional
 
 from gaia.daemon import paths
 from gaia.daemon.constants import API_PREFIX, AUTH_SCHEME, DAEMON_API_VERSION
+from gaia.daemon.custody.constants import CUSTODY_URL_ENV_VAR
 from gaia.daemon.errors import DaemonError, DaemonStartError, DaemonVersionError
 from gaia.daemon.instance import (
     DaemonInstance,
@@ -120,6 +121,20 @@ def start_or_attach(timeout: float = _START_TIMEOUT) -> DaemonInstance:
         return _spawn_and_wait(timeout)
 
 
+def _daemon_env() -> dict:
+    """The parent's environment minus anything pointing at another daemon.
+
+    The daemon mints its own credentials and serves its own custody endpoint, so
+    a stale ``GAIA_HOST_CUSTODY_URL`` would reach its sidecars without a secret.
+    ``GAIA_CHILD_ENV_DENY`` is not applied: the daemon is GAIA itself.
+    """
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not is_internal_secret(name) and name != CUSTODY_URL_ENV_VAR
+    }
+
+
 def _spawn_and_wait(timeout: float) -> DaemonInstance:
     """Spawn the daemon detached, wait until it registers a live instance.json."""
     paths.ensure_host_dir()
@@ -145,8 +160,7 @@ def _spawn_and_wait(timeout: float) -> DaemonInstance:
             stdin=subprocess.DEVNULL,
             start_new_session=start_new_session,
             creationflags=creationflags,
-            # The daemon mints its own credentials; never inherit a sidecar's.
-            env={k: v for k, v in os.environ.items() if not is_internal_secret(k)},
+            env=_daemon_env(),
         )
     except OSError as e:
         log_file.close()

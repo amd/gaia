@@ -18,6 +18,7 @@ from gaia import env as gaia_env
 # Captured at import, before the unit conftest swaps it for a refusal: the test
 # below mocks Popen, so no daemon is ever started.
 from gaia.daemon.client import _spawn_and_wait as _real_spawn_and_wait
+from gaia.daemon.custody.constants import CUSTODY_URL_ENV_VAR
 
 INTERNAL = {
     "GAIA_GAIA_SIDECAR_TOKEN": "tok-gaia",
@@ -373,6 +374,7 @@ def test_daemon_spawn_drops_internal_credentials_but_keeps_the_deny_listed(
 
     monkeypatch.setenv("APP_SECRET", "kept-for-gaia")
     monkeypatch.setenv(gaia_env.CHILD_ENV_DENY_ENV_VAR, "APP_SECRET")
+    monkeypatch.setenv(CUSTODY_URL_ENV_VAR, "http://127.0.0.1:1")
     popen = Recorder(raises=OSError("stop here"))
     monkeypatch.setattr(client.subprocess, "Popen", popen)
 
@@ -381,3 +383,6 @@ def test_daemon_spawn_drops_internal_credentials_but_keeps_the_deny_listed(
 
     assert_trimmed(popen.env)
     assert popen.env["APP_SECRET"] == "kept-for-gaia"
+    # The daemon serves its own custody endpoint; a stale URL here would reach
+    # its sidecars without the matching secret, and they refuse to start.
+    assert CUSTODY_URL_ENV_VAR not in popen.env
