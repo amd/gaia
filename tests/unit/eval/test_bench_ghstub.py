@@ -175,6 +175,28 @@ def test_what_is_not_served_offline_says_so(gh):
     assert gh("auth", "token").returncode == 1
 
 
+def test_the_sign_in_check_reads_as_ready_to_check_cli_setup(gh):
+    """github-triage starts with check_cli_setup, which reads this exact call."""
+    from gaia.skills.binaries import BINARY_POLICIES
+    from gaia.skills.binary_setup import READY, _classify_auth_status
+
+    policy = BINARY_POLICIES["gh"]
+    proc = gh(*policy.setup.auth_status_argv)
+    assert proc.returncode == 0, proc.stderr
+
+    verdict = _classify_auth_status(policy, policy.setup, proc)
+
+    assert verdict.state == READY, verdict.detail
+    assert gh("auth", "status", "--json", "token").returncode == 1
+
+
+def test_the_sign_in_check_accepts_the_equals_form(gh):
+    proc = gh("auth", "status", "--json=hosts")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["hosts"]["github.com"][0]["login"] == "bench-user"
+    assert gh("auth", "status", "--json=token").returncode == 1
+
+
 def test_every_call_is_logged(gh):
     gh("issue", "list", "-R", "kovtcharov/toybox")
     gh("issue", "close", "1", "-R", "kovtcharov/toybox")
