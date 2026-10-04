@@ -117,9 +117,8 @@ def test_whisper_on_npu(): ...
 ## CI integration
 
 See `.github/workflows/`:
-- `test_gaia_cli.yml` — orchestrator
 - `test_gaia_cli_windows.yml`, `test_gaia_cli_linux.yml` — per-OS runs
-- `test_mcp.yml`, `test_rag.yml`, `test_api.yml`, `test_agent_sdk.yml`, `test_chat_agent.yml`, `test_code_agent.yml`, `test_sd.yml`, `test_eval.yml`, `test_embeddings.yml`, `test_security.yml`, `test_lemonade_server.yml`
+- `test_mcp.yml`, `test_rag.yml`, `test_api.yml`, `test_agent_sdk.yml`, `test_chat_agent.yml`, `test_sd.yml`, `test_eval.yml`, `test_embeddings.yml`, `test_security.yml`, `test_lemonade_server.yml`
 
 Keep test IDs stable — they're referenced by workflow names.
 

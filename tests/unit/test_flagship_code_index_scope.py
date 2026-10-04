@@ -61,3 +61,35 @@ def test_every_allowed_root_is_reachable_not_just_the_first(tmp_path):
     )
 
     assert agent._code_index_ceilings == (str(one), str(two))
+
+
+def test_with_no_project_search_starts_in_a_folder_that_exists(tmp_path):
+    """A UI session's scope sorts GAIA's documents folder (often not created
+    yet) ahead of the working directory; starting there failed every search."""
+    managed = tmp_path / ".gaia" / "documents"  # never created
+    attached = tmp_path / "notes.txt"
+    attached.write_text("x", encoding="utf-8")
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    agent = _register_tools_only(
+        GaiaAgentConfig(
+            allowed_paths=sorted([str(managed), str(attached), str(workdir)])
+        ),
+        None,
+    )
+
+    assert agent._repo_path == str(workdir)
+
+
+def test_with_no_project_a_repository_in_scope_wins(tmp_path):
+    docs = tmp_path / "a-docs"
+    docs.mkdir()
+    repo = tmp_path / "b-repo"
+    (repo / ".git").mkdir(parents=True)
+
+    agent = _register_tools_only(
+        GaiaAgentConfig(allowed_paths=[str(docs), str(repo)]), None
+    )
+
+    assert agent._repo_path == str(repo)

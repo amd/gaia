@@ -364,10 +364,9 @@ jobs:
             exit 1
           }
 
-      # Path-staging contract (tests/fixtures/gaia/README.md): GaiaAgent pins
-      # allowed_paths=[home], so scenario user messages reference
-      # ~/gaia-eval/... — repo paths would be sandbox refusals on a runner
-      # whose workspace is outside home. Skills: pre-seed the starter pack
+      # Path-staging contract (tests/fixtures/gaia/README.md): scenario user
+      # messages reference ~/gaia-eval/..., and the backend runs from there, so
+      # that folder is a session's file scope. Skills: pre-seed the starter pack
       # into the agent's skills root (scenarios that USE skills), then build
       # + sign + trust the fixture hub with a per-run ephemeral key
       # (scenarios ABOUT the install loop).
@@ -420,7 +419,7 @@ jobs:
           $errLog = Join-Path $PWD "eval-out\backend.err.log"
           $backend = Start-Process -FilePath "python" `
             -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
-            -WorkingDirectory $PWD `
+            -WorkingDirectory (Join-Path $env:USERPROFILE "gaia-eval") `
             -RedirectStandardOutput $outLog `
             -RedirectStandardError $errLog `
             -NoNewWindow -PassThru

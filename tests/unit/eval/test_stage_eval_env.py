@@ -35,7 +35,10 @@ def test_stages_fixtures_skills_and_a_trusted_fixture_hub(tmp_path):
 
     staged = tmp_path / "gaia-eval"
     assert (staged / "csv" / "sales.csv").is_file()
-    assert (staged / "mini_repo").is_dir()
+    assert (staged / "mini_repo" / "tempkeeper" / "convert.py").is_file()
+    assert (staged / "media" / "bakery_sign.png").is_file()
+    assert (staged / "capture" / "word-count" / "SKILL.md").is_file()
+    assert (staged / "documents" / "meeting_notes_q3.txt").is_file()
     assert not stale.exists(), "an earlier staging must be replaced, not merged"
 
     assert skills_root == tmp_path / ".gaia" / "skills"
@@ -46,6 +49,20 @@ def test_stages_fixtures_skills_and_a_trusted_fixture_hub(tmp_path):
     assert hub_skills - stage_eval_env.NOT_PRE_INSTALLED <= installed
     assert not stage_eval_env.NOT_PRE_INSTALLED & installed
     assert (skills_root / "trusted-keys.json").is_file()
+
+
+def test_nothing_that_holds_an_answer_is_staged(tmp_path):
+    """The backend runs from the staged folder, so the agent can read all of it."""
+    stage_eval_env.stage(tmp_path)
+    staged = tmp_path / "gaia-eval"
+
+    names = {p.name for p in staged.rglob("*")}
+    assert "ground_truth.json" not in names
+    assert not {n for n in names if n.startswith("_gen_")}
+    for harness in ("fake_gh", "email", "fixture_hub", "web", "rss", "mcp_stub"):
+        assert not (staged / harness).exists(), harness
+    assert not list(staged.glob("*.py")) and not list(staged.glob("*.json"))
+    assert not (staged / "README.md").exists()
 
 
 def test_restaging_clears_read_only_files(tmp_path):

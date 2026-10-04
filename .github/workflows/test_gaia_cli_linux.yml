@@ -8,7 +8,6 @@
 name: GAIA CLI Tests (Linux)
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
   pull_request:

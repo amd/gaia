@@ -6628,6 +6628,25 @@ def _handle_memory_status():
         if k["total"] > 0:
             print(f"    Avg confidence: {k['avg_confidence']:.2f}")
 
+        coverage = store.get_embedding_coverage()
+        if coverage["total_items"] > 0:
+            print(
+                f"    Search vectors: {coverage['with_embedding']} of "
+                f"{coverage['total_items']} active entries"
+            )
+            if coverage["without_embedding"] > 0:
+                print(
+                    f"    Without vector: {coverage['without_embedding']} - recall "
+                    "by meaning misses these until they are re-embedded"
+                )
+                print(
+                    "      Repair: start an agent with the embedding model loaded "
+                    "(re-embeds up to 100 per start),"
+                )
+                print(
+                    "      or use Rebuild Embeddings in the Memory Dashboard (gaia chat --ui)"
+                )
+
         # Conversations section
         c = stats["conversations"]
         print(
