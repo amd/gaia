@@ -64,7 +64,6 @@ jobs:
         with:
           python-version: '3.12'
           install-package: '.[dev,mcp,rag]'
-          extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
       - name: Install pytest-timeout
         run: |
@@ -106,7 +105,6 @@ jobs:
         with:
           python-version: '3.12'
           install-package: '.[dev,mcp,rag]'
-          extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
       - name: Install pytest-timeout
         shell: powershell

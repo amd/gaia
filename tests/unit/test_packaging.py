@@ -239,7 +239,7 @@ class TestBaseDependencies:
         assert not heavy, (
             f"setup.py install_requires contains {sorted(heavy)}, which pull "
             "PyTorch into every `pip install amd-gaia`. Put them in the extra "
-            "that needs them ([talk], [audio] or [ui])."
+            "that needs them."
         )
 
 
@@ -284,15 +284,43 @@ class TestTalkExtra:
         floor += (0,) * (3 - len(floor))
         assert floor >= (1, 58, 0)
 
-    def test_tokenizers_has_a_floor(self):
-        """kokoro leaves transformers unbounded; without a tokenizers floor the
-        resolver picks tokenizers 0.10.3, which has no wheel and won't build."""
-        setup_source = SETUP_PY.read_text(encoding="utf-8")
-        talk_match = re.search(r'"talk"\s*:\s*\[(.*?)\n\s*\],', setup_source, re.DOTALL)
-        assert talk_match, 'Could not find "talk" extra in setup.py'
-        specs = re.findall(r'"([^"]+)"', talk_match.group(1))
-        floor = next((s for s in specs if s.lower().startswith("tokenizers>=")), None)
-        assert floor, f"[talk] must pin a tokenizers floor; got {specs}"
+    def test_talk_carries_no_local_speech_runtime(self):
+        """Whisper and Kokoro run in Lemonade; a local copy drags in PyTorch."""
+        talk = _extra_names("talk")
+        local_runtime = talk & {
+            "torch",
+            "torchaudio",
+            "torchvision",
+            "openai-whisper",
+            "kokoro",
+            "misaki",
+            "spacy",
+            "transformers",
+            "tokenizers",
+            "soundfile",
+        }
+        assert not local_runtime, (
+            f"[talk] declares {sorted(local_runtime)}. `gaia talk` transcribes "
+            "and speaks through Lemonade (gaia.audio.whisper_asr / kokoro_tts); "
+            "a local model runtime is ~1 GB of PyTorch nobody uses."
+        )
+        assert "sounddevice" in talk, "[talk] needs sounddevice for the mic"
+
+    def test_audio_extra_is_gone(self):
+        """[audio] was torch/torchvision/torchaudio with no code importing them."""
+        assert '"audio":' not in _parse_extras_require_block()
+
+
+def _extra_names(extra: str) -> set:
+    """Lower-cased requirement names declared by one setup.py extra."""
+    match = re.search(
+        rf'"{extra}"\s*:\s*\[(.*?)\n\s*\],', _parse_extras_require_block(), re.DOTALL
+    )
+    assert match, f'Could not find "{extra}" extra in setup.py'
+    return {
+        re.split(r"[<>=!~;\[ ]", spec, maxsplit=1)[0].strip().lower()
+        for spec in re.findall(r'"([^"]+)"', match.group(1))
+    }
 
 
 class TestAgentWheelExtras:

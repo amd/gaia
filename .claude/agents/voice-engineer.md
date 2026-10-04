@@ -29,7 +29,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 | File | Purpose |
 |------|---------|
-| `src/gaia/audio/` | ASR (Whisper) + TTS (Kokoro) modules — verify exact filenames |
+| `src/gaia/audio/` | `whisper_asr.py` (live mic → Lemonade Whisper), `kokoro_tts.py` (Lemonade kokoro-v1 playback), `lemonade_asr.py` / `lemonade_tts.py` (HTTP clients) |
 | `src/gaia/talk/` | Talk SDK, voice pipeline |
 | `docs/guides/talk.mdx` | User guide |
 | `docs/sdk/sdks/audio.mdx` | Audio SDK reference |
@@ -68,8 +68,8 @@ Key latencies (targets):
 
 ## Hardware acceleration
 
-- Whisper ASR runs in GAIA's own audio stack (`src/gaia/audio/whisper_asr.py`) — it is **not** served by Lemonade, and FLM (FastFlowLM) is the NPU-native *LLM/embedder* runtime, not a speech backend. Don't route ASR through it.
-- The NPU shows up in the voice pipeline at the LLM step, not ASR/TTS
+- Whisper ASR and Kokoro TTS are both **served by Lemonade** (`/audio/transcriptions`, `/audio/speech`); GAIA ships no local speech model and must not fall back to one. Lemonade's FLM (NPU) Whisper builds return no timestamps, so anything that needs segments (diarization) must use a whispercpp model.
+- Which device runs ASR/TTS is Lemonade's choice per model, not GAIA's
 - TTS is usually CPU-bound; Kokoro is lightweight enough not to matter
 - Use streaming synthesis — never buffer the full utterance before playback
 

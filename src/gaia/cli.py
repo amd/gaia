@@ -1361,8 +1361,8 @@ def build_parser():
         "--whisper-model-size",
         type=str,
         default="base",
-        choices=["tiny", "base", "small", "medium", "large"],
-        help="Size of the Whisper model to use (default: base)",
+        choices=["tiny", "base", "small", "medium", "large", "turbo"],
+        help="Whisper model Lemonade transcribes speech with (default: base)",
     )
     talk_parser.add_argument(
         "--silence-threshold",
@@ -1962,8 +1962,8 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
         "--whisper-model-size",
         type=str,
         default="base",
-        choices=["tiny", "base", "small", "medium", "large"],
-        help="Size of the Whisper model to use (default: base)",
+        choices=["tiny", "base", "small", "medium", "large", "turbo"],
+        help="Whisper model Lemonade transcribes speech with (default: base)",
     )
     test_parser.add_argument(
         "--audio-device-index",
@@ -4326,12 +4326,12 @@ def main():
             try:
                 from gaia.audio.kokoro_tts import KokoroTTS
 
-                tts = KokoroTTS()
+                tts = KokoroTTS(say=print)
                 log.debug("TTS initialized successfully")
             except Exception as e:
                 log.error(f"Failed to initialize TTS: {e}")
                 print(f"❌ Error: Failed to initialize TTS: {e}")
-                return
+                sys.exit(1)
 
             test_text = args.test_text or """
 Let's play a game of trivia. I'll ask you a series of questions on a particular topic,
@@ -4357,64 +4357,65 @@ Let me know your answer!
             elif args.test_type == "tts-audio-file":
                 tts.test_generate_audio_file(test_text, args.output_audio_file)
 
-        elif args.test_type.startswith("asr"):
+        elif args.test_type == "asr-microphone":
             try:
                 from gaia.audio.whisper_asr import WhisperAsr
 
                 asr = WhisperAsr(
                     model_size=args.whisper_model_size,
                     device_index=args.audio_device_index,
+                    say=print,
                 )
                 log.debug("ASR initialized successfully")
-            except ImportError:
-                log.error(
-                    'WhisperAsr not found. Please install voice support with: uv pip install -e ".[talk]"'
-                )
-                raise
             except Exception as e:
                 log.error(f"Failed to initialize ASR: {e}")
                 print(f"❌ Error: Failed to initialize ASR: {e}")
-                return
+                sys.exit(1)
 
-            if args.test_type == "asr-microphone":
-                print(f"\nRecording for {args.recording_duration} seconds...")
-                print("Speak into your microphone...")
+            print(f"\nRecording for {args.recording_duration} seconds...")
+            print("Speak into your microphone...")
 
-                # Setup transcription queue and start recording
-                import queue
+            # Setup transcription queue and start recording
+            import queue
 
-                transcription_queue = queue.Queue()
-                asr.transcription_queue = transcription_queue
-                asr.start_recording()
+            transcription_queue = queue.Queue()
+            asr.transcription_queue = transcription_queue
+            asr.start_recording()
 
-                try:
-                    start_time = time.time()
-                    while time.time() - start_time < args.recording_duration:
-                        try:
-                            text = transcription_queue.get_nowait()
-                            print(f"\nTranscribed: {text}")
-                        except queue.Empty:
-                            time.sleep(0.1)
-                            remaining = args.recording_duration - int(
-                                time.time() - start_time
-                            )
-                            print(f"\rRecording... {remaining}s remaining", end="")
-                finally:
-                    asr.stop_recording()
-                    print("\nRecording stopped.")
+            try:
+                start_time = time.time()
+                while time.time() - start_time < args.recording_duration:
+                    if asr.asr_error or asr.mic_error:
+                        break
+                    try:
+                        text = transcription_queue.get_nowait()
+                        print(f"\nTranscribed: {text}")
+                    except queue.Empty:
+                        time.sleep(0.1)
+                        remaining = args.recording_duration - int(
+                            time.time() - start_time
+                        )
+                        print(f"\rRecording... {remaining}s remaining", end="")
+            finally:
+                asr.stop_recording()
+                print("\nRecording stopped.")
+            failure = asr.asr_error or asr.mic_error
+            if failure:
+                print(f"❌ Error: {failure}")
+                sys.exit(1)
 
-            elif args.test_type == "asr-list-audio-devices":
-                from gaia.audio.audio_recorder import AudioRecorder
+        elif args.test_type == "asr-list-audio-devices":
+            from gaia.audio.audio_recorder import AudioRecorder
 
-                recorder = AudioRecorder()
-                devices = recorder.list_audio_devices()
-                print("\nAvailable Audio Input Devices:")
-                for device in devices:
-                    print(f"Index {device['index']}: {device['name']}")
-                    print(f"    Max Input Channels: {device['max_input_channels']}")
-                    print(f"    Default Sample Rate: {device['default_samplerate']}")
-                    print()
-                return
+            recorder = AudioRecorder()
+            devices = recorder.list_audio_devices()
+            print("\nAvailable Audio Input Devices:")
+            for device in devices:
+                print(f"Index {device['index']}: {device['name']}")
+                print(f"    Max Input Channels: {device['max_input_channels']}")
+                print(f"    Default Sample Rate: {device['default_samplerate']}")
+                print()
+            return
 
         return
 
