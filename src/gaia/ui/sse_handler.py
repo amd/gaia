@@ -717,15 +717,6 @@ class SSEOutputHandler(OutputHandler):
             }
         )
 
-    def print_agent_selected(self, agent_name: str, language: str, project_type: str):
-        self._emit(
-            {
-                "type": "status",
-                "status": "info",
-                "message": f"Agent: {agent_name}",
-            }
-        )
-
     def print_agent_created(self, agent_id: str) -> None:
         """Notify the frontend that a new agent is available in the registry."""
         self._emit({"type": "agent_created", "agent_id": agent_id})
