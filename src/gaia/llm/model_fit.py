@@ -23,6 +23,7 @@ the Go picker; ``tests/unit/test_model_fit.py`` fails if they drift.
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -135,6 +136,48 @@ def _gpu_entries(devices: Dict[str, Any]) -> List[Tuple[str, bool, Dict[str, Any
     return out
 
 
+#: Windows' display-adapter class; each adapter's subkey records its memory.
+_DISPLAY_CLASS_KEY = (
+    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+)
+
+
+def _windows_adapter_memory_gb(name: Any) -> float:
+    """The dedicated memory Windows records for the adapter *name*, or 0.
+
+    Lemonade reports no memory for an integrated AMD GPU on Windows; the
+    driver's ``HardwareInformation.qwMemorySize`` is that GPU's BIOS carve-out,
+    the heap llama.cpp's Vulkan backend loads into.
+    """
+    if sys.platform != "win32" or not isinstance(name, str) or not name:
+        return 0.0
+    import winreg  # pylint: disable=import-error
+
+    try:
+        root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _DISPLAY_CLASS_KEY)
+    except OSError:
+        return 0.0
+    with root:
+        index = 0
+        while True:
+            try:
+                subkey = winreg.EnumKey(root, index)
+            except OSError:
+                return 0.0
+            index += 1
+            try:
+                with winreg.OpenKey(root, subkey) as adapter:
+                    if winreg.QueryValueEx(adapter, "DriverDesc")[0] != name:
+                        continue
+                    size = winreg.QueryValueEx(
+                        adapter, "HardwareInformation.qwMemorySize"
+                    )[0]
+            except OSError:
+                # "Properties" and other non-adapter subkeys refuse the read.
+                continue
+            return int(size) / 1024**3 if isinstance(size, int) else 0.0
+
+
 def _gpu_pool(devices: Dict[str, Any]) -> Optional[Tuple[float, str]]:
     """The memory llama.cpp loads into, or ``None`` when no GPU is reported.
 
@@ -144,11 +187,16 @@ def _gpu_pool(devices: Dict[str, Any]) -> Optional[Tuple[float, str]]:
     """
     entries = _gpu_entries(devices)
     for vendor, integrated, gpu in entries:
-        if vendor == "AMD" and integrated and _num(gpu.get("vram_gb")):
+        if vendor != "AMD" or not integrated:
+            continue
+        if _num(gpu.get("vram_gb")):
             return (
                 _num(gpu.get("vram_gb")) + _num(gpu.get("virtual_mem_gb")),
                 "AMD iGPU",
             )
+        dedicated = _windows_adapter_memory_gb(gpu.get("name"))
+        if dedicated:
+            return dedicated, "AMD iGPU"
     for vendor, _, gpu in entries:
         if _num(gpu.get("vram_gb")):
             return _num(gpu.get("vram_gb")), f"{vendor} GPU"
