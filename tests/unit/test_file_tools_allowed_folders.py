@@ -31,6 +31,7 @@ from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
 from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.agents.tools.screenshot_tools import ScreenshotToolsMixin
 from gaia.security import PathValidator
+from gaia.vlm.mixin import VLMToolsMixin
 
 
 @pytest.fixture(autouse=True)
@@ -569,3 +570,42 @@ class TestAudioTools:
         )
 
         assert "No transcript at" in result["error"]
+
+
+class _VlmHost(VLMToolsMixin):
+    def __init__(self, validator):
+        self.path_validator = validator
+
+
+class TestVlmTools:
+    @pytest.mark.parametrize("form", OUTSIDE_FORMS)
+    def test_analyze_image_outside_is_refused(self, tree, validator, form):
+        image = os.path.join(_outside(tree, form), "secret.txt")
+
+        result = _VlmHost(validator)._analyze_image(image)
+
+        assert result["status"] == "error"
+        assert _refused(result)
+
+    def test_analyze_image_inside_gets_past_the_check(self, tree, validator):
+        result = _VlmHost(validator)._analyze_image(str(tree.allowed / "missing.png"))
+
+        assert "Image not found" in result["error"]
+
+    @pytest.mark.parametrize("form", OUTSIDE_FORMS)
+    def test_answer_question_outside_is_refused(self, tree, validator, form):
+        image = os.path.join(_outside(tree, form), "secret.txt")
+
+        result = _VlmHost(validator)._answer_question_about_image(
+            image, "what is this?"
+        )
+
+        assert result["status"] == "error"
+        assert _refused(result)
+
+    def test_answer_question_inside_gets_past_the_check(self, tree, validator):
+        result = _VlmHost(validator)._answer_question_about_image(
+            str(tree.allowed / "missing.png"), "what is this?"
+        )
+
+        assert "Image not found" in result["error"]

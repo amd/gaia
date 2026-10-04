@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Dict
 
 from gaia.agents.base.errors import require_host_attr
-from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.path_access import (
     read_access_error,
     readable_entry,

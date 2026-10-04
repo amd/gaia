@@ -28,6 +28,7 @@ Example:
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from gaia.agents.tools.path_access import read_access_error
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -112,6 +113,9 @@ class VLMToolsMixin:
             Dict with status, description, and metadata
         """
         path = Path(image_path)
+        denied = read_access_error(self, path)
+        if denied:
+            return denied
         if not path.exists():
             return {
                 "status": "error",
@@ -166,6 +170,9 @@ class VLMToolsMixin:
             Dict with status, question, answer, and metadata
         """
         path = Path(image_path)
+        denied = read_access_error(self, path)
+        if denied:
+            return denied
         if not path.exists():
             return {
                 "status": "error",
