@@ -150,8 +150,8 @@ CHUNK_TRUNCATION_SIZE = 2500
 # Global default for how many reasoning/tool steps an agent may take before it
 # stops and reports progress. This is the single knob for the whole fleet:
 # change DEFAULT_MAX_STEPS here, or set GAIA_AGENT_MAX_STEPS=<n> at runtime to
-# override every agent at once. Agents that genuinely need more (e.g. CodeAgent
-# for multi-file generation) override it explicitly in their own config.
+# override every agent at once. Agents that genuinely need more override it
+# explicitly in their own config.
 DEFAULT_MAX_STEPS = 50
 
 # Per-reply output caps. A local model's 32K ctx must also hold a ~7.7K-token
@@ -1148,8 +1148,8 @@ class Agent(abc.ABC):
     _last_tool_schemas: Optional[List[Dict[str, Any]]] = None
     _last_tool_filter: Optional[List[str]] = None
 
-    # Re-entrancy guard for tool timing. A tool body may call another tool
-    # (CodeAgent orchestrates that way); only the outermost call is timed.
+    # Re-entrancy guard for tool timing. A tool body may call another tool;
+    # only the outermost call is timed.
     _tool_timing_depth: int = 0
 
     # Seconds spent waiting on a human confirmation, excluded from tool time.
@@ -4965,9 +4965,9 @@ Do NOT wrap conversational replies in JSON.
         )
         recorder = getattr(self, "_turn_recorder", None)
         step_timer = getattr(self, "_step_timer", None)
-        # Only the outermost call is timed. A tool body may call another tool
-        # (CodeAgent's orchestration does); timing both would count the inner
-        # one's seconds twice and push tool_s past the turn's own total.
+        # Only the outermost call is timed. A tool body may call another tool;
+        # timing both would count the inner one's seconds twice and push tool_s
+        # past the turn's own total.
         if (recorder is None and step_timer is None) or not outermost:
             result = self._execute_tool(tool_name, tool_args)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
