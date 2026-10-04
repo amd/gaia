@@ -222,6 +222,11 @@ await shutdown(proc);   // tree-kill; auto-cleanup also reaps on exit
   file path); read it from there, don't invent one. A 401 whose `detail` names
   both env vars means you sent the wrong token or none.
 
+  The shell commands and MCP servers the agent starts never inherit this token
+  or GAIA's other internal credentials. To withhold your own variables from
+  them too, list the names in `GAIA_CHILD_ENV_DENY` (comma or space separated);
+  `GAIA_NO_DOTENV=1` stops the sidecar loading `.env` files.
+
 Or skip the code entirely and let the CLI own it:
 
 ```bash

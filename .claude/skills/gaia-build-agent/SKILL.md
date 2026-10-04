@@ -34,15 +34,16 @@ the publish skill).
    gaia agent init my-agent -o hub/agents/ --layout hub
    ```
 
-   Then mirror an existing package (e.g. `analyst`, `browser`) for structure.
+   Then mirror an existing package for structure: `hello-world` or `word-count`
+   for a minimal one, `email` for a full published agent.
 
-2. **Write the `Agent` subclass.** Inherit from `Agent` (or a closer base like the
-   chat/docqa agents). **Leave `model_id` unset** — that inherits the base default,
+2. **Write the `Agent` subclass.** Inherit from `Agent` (or a closer base like
+   `ChatAgent`, which the flagship `GaiaAgent` extends). **Leave `model_id` unset** — that inherits the base default,
    `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`), which is right for nearly every agent.
    Every agent sharing one model is what keeps a single model resident, so switching
    agents never triggers an eviction + cold reload. Only set `model_id` when the agent
-   genuinely needs a different model (e.g. the summarizer's `Qwen3-4B-Instruct-2507-GGUF`),
-   and say why. Keep the constructor thin.
+   genuinely needs a different model (e.g. the email agent picks the NPU model
+   `gemma4-it-e2b-FLM` when one is present and servable), and say why. Keep the constructor thin.
 
 3. **Register tools with `@tool`.** Each `@tool` method is a capability the LLM can
    call; its **docstring is the schema the model sees**, so write it for the model
@@ -73,9 +74,10 @@ the publish skill).
 
 8. **Eval if it touches LLM behavior.** If you wrote/changed a system prompt, tool
    docstrings, the tool schema, the model, or error classification, you MUST run
-   `gaia eval agent` against the relevant category and compare to the committed
-   baseline before calling it done (CLAUDE.md eval rule). Unit tests don't catch LLM
-   regressions.
+   `gaia eval agent` against the relevant category before calling it done, and
+   compare to a baseline only if one is committed for the same agent — none is
+   yet, so report the scores you measured (CLAUDE.md eval rule). Unit tests don't
+   catch LLM regressions.
 
 ## Then publish
 

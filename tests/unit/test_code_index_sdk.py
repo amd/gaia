@@ -784,3 +784,63 @@ class TestWalkBound:
         files, truncated = sdk._discover_files()
         assert len(files) == 5
         assert not truncated
+
+
+class TestAbandonedBuild:
+    def test_a_build_the_agent_stopped_waiting_for_stops_before_persisting(
+        self, tmp_path
+    ):
+        """An abandoned build that ran on raced the next one for the embedder."""
+        import threading
+
+        from gaia.tool_cancellation import ToolCancelled, set_tool_cancel_event
+
+        skip_if_unavailable()
+        sdk = make_sdk(tmp_path)
+        _write_py(tmp_path, "a.py", "def foo(): pass\n")
+        cancelled = threading.Event()
+        cancelled.set()
+
+        with (
+            patch.object(sdk, "_encode_texts_with_sync") as encode,
+            patch.object(sdk, "_save_atomic") as save,
+        ):
+            set_tool_cancel_event(cancelled)
+            try:
+                with pytest.raises(ToolCancelled):
+                    sdk.index_repository()
+            finally:
+                set_tool_cancel_event(None)
+
+        encode.assert_not_called()
+        save.assert_not_called()
+
+    def test_an_embedding_pass_stops_between_batches(self, tmp_path):
+        import threading
+
+        from gaia.tool_cancellation import ToolCancelled, set_tool_cancel_event
+
+        skip_if_unavailable()
+        sdk = make_sdk(tmp_path)
+        calls = []
+        cancelled = threading.Event()
+
+        def first_batch_then_abandoned(batch):
+            calls.append(len(batch))
+            cancelled.set()
+            return [[0.0, 1.0]] * len(batch)
+
+        with (
+            patch.object(sdk, "_load_embedder"),
+            patch.object(
+                sdk, "_embed_batch_resilient", side_effect=first_batch_then_abandoned
+            ),
+        ):
+            set_tool_cancel_event(cancelled)
+            try:
+                with pytest.raises(ToolCancelled):
+                    sdk._encode_texts_with_sync(["x"] * 60, [object()] * 60)
+            finally:
+                set_tool_cancel_event(None)
+
+        assert calls == [25]

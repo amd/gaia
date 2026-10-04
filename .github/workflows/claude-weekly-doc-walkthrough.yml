@@ -857,7 +857,7 @@ jobs:
                and (where the per-guide judges disagreed on a key) its likely siblings in
                this same run. Defects listed as already-filed or suppressed at the bottom
                are **already handled -- do not act on them at all**.
-            2. Read `CLAUDE.md` -> "Issue Response Guidelines" for tone/format.
+            2. Read `CLAUDE.md` -> "How You Communicate" for tone/format.
             3. `synthesis-input.json` has the same data structured, if you need a field
                the dossier elides -- including the full location list when truncated.
             If the dossier reports malformed findings or that the judges barely clustered,
