@@ -145,6 +145,9 @@ class _StubLLM:
     def __init__(self, stats):
         self._stats = stats
 
+    def generate(self, **kwargs):
+        yield "the answer"
+
     def get_performance_stats(self):
         if isinstance(self._stats, Exception):
             raise self._stats
@@ -182,6 +185,19 @@ def test_stats_backend_error_exits_non_zero_with_the_cause(
     captured = capsys.readouterr()
     assert "Lemonade not reachable at http://localhost:1" in captured.err
     assert "No stats" not in captured.out + captured.err
+
+
+def test_prompt_stats_backend_error_exits_non_zero_after_the_answer(
+    stub_llm, monkeypatch, capsys
+):
+    stub_llm(ConnectionError("Lemonade not reachable at http://localhost:1"))
+
+    status = _run_main(monkeypatch, "prompt", "hi", "--stats", "--no-lemonade-check")
+
+    assert status == 1
+    captured = capsys.readouterr()
+    assert "the answer" in captured.out
+    assert "Lemonade not reachable at http://localhost:1" in captured.err
 
 
 def test_stats_with_none_recorded_is_an_empty_state_not_an_error(

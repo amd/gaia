@@ -901,6 +901,8 @@ gaia prompt "MESSAGE" [OPTIONS]
 | `--config` | path | `~/.gaia/config.json` | GAIA config file used to resolve `default_model` (or `$GAIA_CONFIG_FILE`) |
 | `--stats` | flag | false | Show performance statistics |
 
+With `--stats`, the command exits `1` if the stats cannot be fetched after the answer has printed.
+
 **Examples:**
 
 <CodeGroup>
@@ -2876,7 +2878,7 @@ View performance statistics from the most recent model run.
 gaia stats [OPTIONS]
 ```
 
-Exits `0` and says so when no run has recorded stats yet. If the stats cannot be fetched — for example, the LLM server is unreachable — it prints the cause and exits `1`.
+Exits `0` and says so when no run has recorded stats yet. If the stats cannot be fetched — for example, the LLM server is unreachable — it prints the cause to stderr and exits `1`.
 
 ---
 
