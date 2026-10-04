@@ -119,7 +119,7 @@ Returns the **stable frozen prefix** for the system prompt. Always includes proa
 def get_memory_system_prompt(self) -> str
 ```
 
-The output stays frozen for the entire session so the LLM inference engine can reuse its KV cache across turns. **Always returns a non-empty string** — even with zero stored memories, the instructions block is included so the LLM knows it has persistent memory tools. Example output (with stored memories):
+The output stays frozen for the entire session so the LLM inference engine can reuse its KV cache across turns: it is rendered once, after the first turn's memory upkeep, and every later call returns the same text. Memories stored mid-session (extraction, auto-stored tool errors) reach the model through the per-turn context below instead. Three things re-render it: `set_memory_context()`, `reset_memory_session()`, and a `forget` or `update_memory` call on an item it shows — so a forgotten memory leaves the prompt at once. **Always returns a non-empty string** — even with zero stored memories, the instructions block is included so the LLM knows it has persistent memory tools. Example output (with stored memories):
 
 ```
 === MEMORY (Persistent Second Brain) ===
@@ -172,7 +172,7 @@ No memories stored yet. Start building your knowledge base by remembering what t
 
 ### get_memory_dynamic_context()
 
-Returns the **per-turn dynamic context** that is prepended to the user message each turn. Contains the current time, upcoming/overdue items, and the stored memories most relevant to the user's message.
+Returns the **per-turn dynamic context** that is prepended to the user message each turn. Contains the current time, upcoming/overdue items, the stored memories most relevant to the user's message, lessons learned this session, and any learned procedures recalled for this goal.
 
 ```python
 def get_memory_dynamic_context(self) -> str
@@ -194,6 +194,8 @@ Stored memories that may bear on this message:
 ```
 
 Always returns at least the current time.
+
+**Recalled procedures** (procedural memory) ride here too, under a `=== RECALLED PROCEDURES (learned from past successful runs) ===` heading, whenever a stored procedure matches the goal. The matched set changes from turn to turn, so it never goes in the system prompt.
 
 **Relevant memories** come from a vector search on the user's message: at most `TURN_RECALL_TOP_K` (3) items of category fact, preference, note, skill or error, each with cosine similarity of at least `TURN_RECALL_MIN_SIMILARITY` (0.5). Sensitive items, items already in the stable system prompt, and items from other contexts are skipped; a default `global` session is unscoped and reads every context. Lessons (`domain='lesson'`) are skipped here whatever the scope — they are filed as notes but belong to one workspace, and their own path scopes them and frames their raw tool output against injection. Credential-shaped content is masked. Surfacing a memory here does not bump its confidence or use count. If the embedding call fails, the section is left out and a warning is logged. Returns an empty string only if `init_memory()` has not been called.
 
@@ -499,7 +501,7 @@ The system prompt is deliberately split into two parts:
 | Part | Method | Where injected | Changes between turns? |
 |------|--------|----------------|----------------------|
 | **Stable prefix** | `get_memory_system_prompt()` | System prompt via `_get_mixin_prompts()` | No -- frozen for KV-cache reuse |
-| **Dynamic context** | `get_memory_dynamic_context()` | Prepended to user message each turn | Yes -- current time, upcoming items |
+| **Dynamic context** | `get_memory_dynamic_context()` | Prepended to user message each turn | Yes -- current time, upcoming items, relevant memories, recalled procedures |
 
 This design allows LLM inference engines (like Lemonade Server) to cache the attention computations for the system prompt and reuse them across conversation turns. Only the small dynamic section (typically 2-5 lines) changes per turn.
 
