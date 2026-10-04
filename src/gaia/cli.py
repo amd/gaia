@@ -14,7 +14,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.install_hints import agent_not_installed_message
+from gaia.agents.install_hints import (
+    agent_not_installed_message,
+    gaia_extras_install_args,
+    pip_install_hint,
+)
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
@@ -925,9 +929,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print(f"\nMissing dependencies for Agent UI: {e}")
         print("\n   The Agent UI requires extra dependencies that are not installed.")
         print("   Install them with:\n")
-        print('     uv pip install -e ".[ui]"')
-        print("\n   Or if you installed from PyPI:\n")
-        print('     uv pip install "amd-gaia[ui]"')
+        print(f"     {pip_install_hint(*gaia_extras_install_args(['ui']))}")
         print()
         sys.exit(1)
     except OSError as e:
