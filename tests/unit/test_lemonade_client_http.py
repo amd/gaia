@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import unittest
 from io import StringIO
 from unittest.mock import MagicMock, patch
@@ -49,6 +50,13 @@ class TestLemonadeClientMock(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("GAIA_CTX_SIZE", None)
+        # A developer's own embedded Lemonade (its port and API key under
+        # ~/.gaia) would otherwise stand in for the defaults asserted here.
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        os.environ["GAIA_HOME"] = home.name
+        for name in ("LEMONADE_BASE_URL", "LEMONADE_API_KEY", "LEMONADE_PORT"):
+            os.environ.pop(name, None)
         self.client = create_lemonade_client(
             model=TEST_MODEL, host=HOST, port=PORT, verbose=False
         )
