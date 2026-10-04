@@ -182,7 +182,9 @@ jobs:
         run: |
           set -euo pipefail
           uv venv .venv-freeze --python 3.12
-          uv pip install --python .venv-freeze -e ".[api]" -e hub/agents/email/python pyinstaller
+          # faiss-cpu backs the stateful agent's memory index. [api] does not
+          # carry it, and without it the binary boots with semantic recall off.
+          uv pip install --python .venv-freeze -e ".[api]" -e hub/agents/email/python "faiss-cpu>=1.7.0" pyinstaller
 
       # #2590: hub/agents/email/python's declared floor (amd-gaia[api]>=0.22.0)
       # cannot express "needs gaia.connectors.setup_routes" — that module
