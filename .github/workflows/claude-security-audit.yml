@@ -224,7 +224,8 @@ jobs:
             RUN LOG: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
             ## First actions
-            1. Read `CLAUDE.md` (esp. "No Silent Fallbacks" and the Security Handling Protocol).
+            1. Read `CLAUDE.md` (esp. "No Silent Fallbacks" and "Issue Response Guidelines" →
+               never discuss vulnerability details publicly).
             2. Read `security-worklist.txt` — a deterministic list of suppressions, sinks, and
                gate call-sites. Investigate every item relevant to your lens; do not sample.
             3. Investigate with Grep/Glob/Read/Bash (READ-ONLY — never edit, install, or run repo code).
