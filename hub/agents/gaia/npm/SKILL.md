@@ -492,10 +492,12 @@ precedent, because loading several skill bodies into every prompt costs tokens
 and no eval has measured that trade for this agent yet. Re-enabling is
 uncommenting two blocks; no code change.
 
-So today there is nothing for `GAIA_SKILL_SET` to select — leave it unset. Once
-a release declares sets, `GAIA_SKILL_SET` is the selection channel for the
-packaged sidecar (its CLI accepts only `--host` and `--port`), and an undeclared
-name raises naming the valid sets rather than falling back to a default. Beyond
+So today there is nothing for `GAIA_SKILL_SET` to select — leave it unset; any
+value stops the agent at startup (the sidecar exits non-zero before binding its
+port). Once a release declares sets, `GAIA_SKILL_SET` is the selection channel
+for the packaged sidecar (its CLI accepts only `--host` and `--port`), and an
+undeclared name stops startup naming the valid sets rather than falling back to
+a default. Beyond
 `gaia-voice`, do not design around a skill being on by default.
 
 ## 11. The project map — two things it costs you

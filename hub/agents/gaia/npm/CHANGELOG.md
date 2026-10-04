@@ -14,6 +14,10 @@ the terminal UI meant building it from source.
 
 ### Changed
 
+- **A stale `GAIA_SKILL_SET` now stops startup.** An undeclared name used to be
+  dropped silently, so the agent came up healthy with no skills. The sidecar
+  and the stdio entry now exit non-zero before serving, with a message naming
+  the valid sets; leave the variable unset to start without one.
 - **The code index is built on first search, not at task start.** In 32
   SWE-bench tasks the agent never searched it, yet every task embedded the whole
   repository in the background: about 2,000 local embedding requests per six

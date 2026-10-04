@@ -1107,6 +1107,38 @@ def _offer_skill_tools(agent: Any, skill: Any) -> None:
         agent._apply_tool_filter([*current, *missing])
 
 
+def parse_skill_manifest(path: Optional[Path]) -> "SkillSets":
+    """Parse the ``skills:`` / ``skill_sets:`` blocks of an agent manifest.
+
+    Empty (falsy) when *path* is ``None``. Usable without building an agent, so
+    a launcher can validate a skill-set choice before paying for startup.
+
+    Reads the YAML directly rather than going through
+    :func:`gaia.hub.manifest.parse` so a custom agent under
+    ``~/.gaia/agents/<id>/`` — whose manifest need not carry the hub's
+    publishing fields — declares skills the same way a packaged agent does.
+    """
+    from gaia.skills.sets import SkillSets, parse_skill_sets
+
+    if path is None:
+        return SkillSets()
+
+    import yaml
+
+    try:
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise _skill_validation_error(
+            f"Could not read the agent manifest at {path}: {exc}. Fix the "
+            "YAML — an unreadable manifest may be hiding a 'skills:' block, "
+            "so GAIA will not assume the agent declares none."
+        ) from exc
+
+    if data is None:
+        return SkillSets()
+    return parse_skill_sets(data, where=f" in {path}")
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -3125,32 +3157,8 @@ Do NOT wrap conversational replies in JSON.
         return self._skill_sets
 
     def _parse_skill_declarations(self, path: Optional[Path]) -> "SkillSets":
-        """Parse the ``skills:`` / ``skill_sets:`` blocks of the manifest at *path*.
-
-        Reads the YAML directly rather than going through
-        :func:`gaia.hub.manifest.parse` so a custom agent under
-        ``~/.gaia/agents/<id>/`` — whose manifest need not carry the hub's
-        publishing fields — declares skills the same way a packaged agent does.
-        """
-        from gaia.skills.sets import SkillSets, parse_skill_sets
-
-        if path is None:
-            return SkillSets()
-
-        import yaml
-
-        try:
-            data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError) as exc:
-            raise _skill_validation_error(
-                f"Could not read the agent manifest at {path}: {exc}. Fix the "
-                "YAML — an unreadable manifest may be hiding a 'skills:' block, "
-                "so GAIA will not assume the agent declares none."
-            ) from exc
-
-        if data is None:
-            return SkillSets()
-        return parse_skill_sets(data, where=f" in {path}")
+        """Parse the ``skills:`` / ``skill_sets:`` blocks of the manifest at *path*."""
+        return parse_skill_manifest(path)
 
     @property
     def active_skill_set(self) -> Optional[str]:
