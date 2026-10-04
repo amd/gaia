@@ -1492,6 +1492,8 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage: List[Dict[str, Any]] = []
         # Same rationale for the verification-scope log (#3376).
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # Whether a project root has tests, walked once per root per turn.
+        self._has_tests_cache: Dict[Optional[str], bool] = {}
         # Same rationale for the per-turn record of edited files (#3733).
         self._turn_file_edits: List[Dict[str, Any]] = []
         self.conversation_history = (
@@ -6626,10 +6628,9 @@ Do NOT wrap conversational replies in JSON.
 
     def _project_has_tests(self, root: Optional[str]) -> bool:
         """``project_has_tests``, walked once per root per turn."""
-        cache = self.__dict__.setdefault("_has_tests_cache", {})
-        if root not in cache:
-            cache[root] = project_has_tests(root)
-        return cache[root]
+        if root not in self._has_tests_cache:
+            self._has_tests_cache[root] = project_has_tests(root)
+        return self._has_tests_cache[root]
 
     def _unchecked_change(self) -> Tuple[Optional[str], bool]:
         """``(path, has_tests)`` for the last change nothing checked afterwards.
@@ -6987,7 +6988,7 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
-        self._has_tests_cache: Dict[Optional[str], bool] = {}
+        self._has_tests_cache = {}
         self._completion_evidence = CompletionEvidence(
             user_input,
             os.getcwd(),
