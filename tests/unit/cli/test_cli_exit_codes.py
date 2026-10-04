@@ -30,6 +30,9 @@ def _stub_agent_class(outcome):
             self.config = config
             self.current_session = object()
 
+        def _ensure_tool_loader_reset(self):
+            pass  # a session already exists
+
         def process_query(self, query, trace=False):
             if isinstance(outcome, BaseException):
                 raise outcome

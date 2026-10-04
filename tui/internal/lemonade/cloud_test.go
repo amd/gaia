@@ -217,3 +217,18 @@ func TestEvidenceIsTranscribed(t *testing.T) {
 		}
 	}
 }
+
+// The picker groups and labels Fireworks rows from recommended_models.json but
+// ranks them from RecommendedModels; the two must name the same models in the
+// same order, or the ★ group and the #rank labels disagree.
+func TestFireworksRecommendationsMatchTheRanking(t *testing.T) {
+	listed := RecommendedFor("fireworks")
+	if len(listed) != len(RecommendedModels) {
+		t.Fatalf("recommended_models.json lists %d Fireworks models, the ranking %d", len(listed), len(RecommendedModels))
+	}
+	for i, r := range RecommendedModels {
+		if listed[i].ID != r.ID {
+			t.Fatalf("Fireworks entry %d is %s in recommended_models.json but %s in the ranking", i, listed[i].ID, r.ID)
+		}
+	}
+}

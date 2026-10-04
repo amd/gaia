@@ -121,9 +121,10 @@ export function SettingsModal() {
 
     const customModelDirty = customModel.trim() !== savedCustomModel.trim();
 
-    const modelName = status?.default_model_name ?? DEFAULT_MODEL_NAME;
+    // null: an unreadable config hides the model; the banner shows config_error.
+    const modelName = status ? status.default_model_name : DEFAULT_MODEL_NAME;
     const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(
-        modelName,
+        modelName ?? undefined,
         settings?.context_size ?? undefined,
     );
 
@@ -211,7 +212,7 @@ export function SettingsModal() {
     const wrongModel   = !!(status?.lemonade_running && status.model_loaded && status.expected_model_loaded === false);
     const smallContext = !!(status?.lemonade_running && status.model_loaded && status.context_size_sufficient === false);
     const notDownloaded = !!(status?.lemonade_running && !status.model_loaded && status.model_downloaded === false);
-    const needsLoad    = wrongModel || smallContext;
+    const needsLoad    = (wrongModel || smallContext) && modelName !== null;
 
     // Did the user change the ctx preset from what is currently saved?
     const ctxChanged = ctxSize !== (settings?.context_size ?? MIN_CONTEXT_SIZE);
@@ -338,7 +339,7 @@ export function SettingsModal() {
                                 )}
 
                                 {/* Force re-download — always visible when Lemonade is running */}
-                                {status.lemonade_running && (
+                                {status.lemonade_running && modelName !== null && (
                                     <div className="force-redownload-row">
                                         <span className="force-redownload-label">
                                             If the model file is corrupted:

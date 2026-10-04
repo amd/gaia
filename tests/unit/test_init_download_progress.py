@@ -109,3 +109,15 @@ def test_progress_draws_a_bar_and_prints_the_error_reason():
         "disk full", "user.embeddinggemma-300m-GGUF"
     )
     assert progress.reported_error and progress.events == 2
+
+
+def test_a_pull_outlasts_the_servers_silent_hash_check(client):
+    """Lemonade sends nothing while it hashes a finished file; hanging up then
+    cancels the rest of the pull (seen on the 22 GB Qwen3.6 at the 2-minute
+    limit this replaced)."""
+    response = MagicMock(status_code=200)
+    response.iter_lines.return_value = [b"event: complete", b'data: {"percent": 100}']
+    with patch("gaia.llm.lemonade_client.requests.post", return_value=response) as post:
+        list(client.pull_model_stream("Qwen3.6-35B-A3B-GGUF"))
+    _connect, idle = post.call_args.kwargs["timeout"]
+    assert idle >= 15 * 60
