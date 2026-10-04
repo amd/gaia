@@ -26,13 +26,15 @@
 #      wording: that text quotes a moving reset date, embeds a U+00B7, and in the
 #      observed cases (#4080) was absent entirely.
 #      CAVEAT: the retry gate (attempt 2) and this classification both depend on the
-#      `execution_file` output, which is specific to the pinned action SHA (v1.0.184).
+#      `execution_file` output, which is specific to the pinned action SHA.
 #      A Dependabot bump of claude-code-action could rename or drop it and silently
 #      disable both — re-verify this output name when bumping the action.
-#      Re-verified when moving v1.0.183 -> v1.0.184: `execution_file` is still produced
-#      and still gates both paths (live dispatch of claude-auth-canary.yml on this pin,
-#      run 31133078365, green). Keep this line honest on the next bump — if it goes
-#      stale, the retry and the verification quietly stop meaning anything.
+#      Re-verified at v1.0.235: base-action/src/execution-file.ts still sets
+#      `execution_file`, written as ONE pretty-printed JSON array (hence `jq -s` below),
+#      and live reviews on this pin classify as `ok`. Keep this line honest on the next
+#      bump — if it goes stale, the retry and the verification quietly stop meaning anything.
+#   5. model check: a run that completes on a model other than the one `--model` asked
+#      for fails, so a substituted model shows up red rather than as a weaker review.
 #
 # WHY a reusable workflow and not a local composite action: for pull_request_target
 # and issue_comment, GitHub reads workflow files (including a `uses: ./...` reusable
@@ -463,19 +465,42 @@ jobs:
       # reader sees in the checks list, so the cause has to be in the name. !cancelled()
       # so a superseded run doesn't report spuriously.
       #
-      # Only `require_comment` callers FAIL here. That is deliberate and unchanged from
-      # before: pr-review must not silently pass without a review, while an outage on the
-      # optional lanes must not red-X a contributor's PR (see the attempt-1 comment).
-      - name: Claude run completed
+      # Only `require_comment` callers FAIL on a missing or errored run. That is deliberate
+      # and unchanged from before: pr-review must not silently pass without a review, while
+      # an outage on the optional lanes must not red-X a contributor's PR (see the attempt-1
+      # comment). `ok` also asserts the model, and a mismatch fails EVERY lane — a
+      # substituted model is not an outage. The CLI bills helper models (Haiku) into the
+      # usage map, so the pinned `--model` must be AMONG them. Its absence means another
+      # model did the work — a silent downgrade unless this step goes red. The comment is
+      # already posted by then; the red check is what flags it.
+      - name: Claude run completed on the requested model
         if: "!cancelled() && steps.harness.outputs.status == 'ok'"
         env:
           TURNS: ${{ steps.harness.outputs.turns }}
           COST: ${{ steps.harness.outputs.cost }}
           MODELS: ${{ steps.harness.outputs.models }}
+          CLAUDE_ARGS: ${{ inputs.claude_args }}
           KIND: ${{ github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' && 're-review' || 'review') || 'reply' }}
           TARGET: "${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment') && format('PR #{0}', github.event.pull_request.number) || format('#{0}', github.event.issue.number) }}"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          echo "✅ Claude $KIND completed for $TARGET ($TURNS turns, \$$COST, models: $MODELS)"
+          set -euo pipefail
+          requested=$(printf '%s\n' "$CLAUDE_ARGS" \
+            | sed -nE 's/.*--model[= ]+([^[:space:]]+).*/\1/p' | head -n1)
+          if [ -z "$requested" ]; then
+            echo "::error title=No model pinned::claude_args has no --model, so nothing proves which model ran. Every caller in claude.yml must pass --model <id>."
+            exit 1
+          fi
+          while IFS= read -r m; do
+            case "$m" in
+              "$requested"|"$requested"-*|"$requested"\[*)
+                echo "✅ Claude $KIND completed for $TARGET on $requested ($TURNS turns, \$$COST, models: $MODELS)"
+                exit 0
+                ;;
+            esac
+          done < <(printf '%s\n' "$MODELS" | tr ',' '\n')
+          echo "::error title=Claude ran on a different model::The $KIND for $TARGET asked for $requested but the CLI billed only [${MODELS:-none}], so a model this job did not pin wrote it. Check the CLI's model support at the pinned claude-code-action SHA and the subscription's model limits. Log: $RUN_URL"
+          exit 1
 
       - name: Claude errored after reaching the model — a real run went wrong
         if: "!cancelled() && steps.harness.outputs.status == 'errored'"

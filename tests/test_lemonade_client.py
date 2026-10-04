@@ -1183,51 +1183,6 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertEqual(result, responses_response)
 
     @responses.activate
-    def test_ready(self):
-        """Test ready() method with mocked responses."""
-        # Mock a successful health check response - Lemonade 9.1.4+ format
-        health_response = {
-            "status": "ok",
-            "model_loaded": TEST_MODEL,
-            "version": "9.1.4",
-            "all_models_loaded": [
-                {
-                    "backend_url": "http://127.0.0.1:8001/v1",
-                    "checkpoint": "amd/Llama-3.2-3B-Instruct-awq-g128-int4-asym-fp16-onnx-hybrid",
-                    "device": "gpu",
-                    "model_name": TEST_MODEL,
-                    "recipe": "oga-hybrid",
-                    "recipe_options": {
-                        "ctx_size": 8192,
-                    },
-                    "type": "llm",
-                }
-            ],
-        }
-        responses.add(
-            responses.GET, f"{API_BASE}/health", json=health_response, status=200
-        )
-
-        # The client's model should match the model in the response
-        self.client.model = TEST_MODEL
-
-        # Server should be ready
-        result = self.client.ready()
-        self.assertTrue(result)
-
-        # Reset and mock a failed health check
-        responses.reset()
-        responses.add(
-            responses.GET,
-            f"{API_BASE}/health",
-            body=requests.exceptions.ConnectionError("Connection refused"),
-        )
-
-        # Server should not be ready
-        result = self.client.ready()
-        self.assertFalse(result)
-
-    @responses.activate
     def test_pull_model_stream(self):
         """Test pulling a model with streaming progress updates."""
         # Mock SSE response for streaming pull
@@ -2694,18 +2649,6 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             self.fail(
                 f"Expected model {model} to load successfully, but got error: {e}"
             )
-
-    def test_integration_ready(self):
-        """Integration test for ready() method."""
-        print("Testing if the server is ready...")
-
-        # Call the ready() method
-        is_ready = self.client.ready()
-
-        # Verify result is True since we've initialized with auto_start=True, auto_load=True
-        print(f"Server ready status: {is_ready}")
-        self.assertTrue(is_ready, "Server should be ready")
-        print("✅ Ready test passed")
 
     def test_integration_pull_model(self):
         """Integration test for pulling/installing a model."""

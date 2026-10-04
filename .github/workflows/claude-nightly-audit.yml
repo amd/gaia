@@ -329,8 +329,9 @@ jobs:
             touches a published hub agent, review it against this bar explicitly and bump any
             gap up one severity level** (a gap here is never 🟡; a user-facing break on the
             default path is 🔴).
-            - **Which agents are published:** currently the **email agent** — code at
-              `hub/agents/email/python/`, npm client at `hub/agents/email/npm/`. Detect
+            - **Which agents are published:** currently the **email agent** and the **gaia
+              flagship agent** — code at `hub/agents/<id>/python/`, npm client at
+              `hub/agents/<id>/npm/`. Detect
               any *other* published agent generally: it has a `.github/workflows/release_agent_<id>.yml`
               OR a shipped `hub/agents/**/SCORECARD.md` OR a released `version:` in its
               `hub/agents/**/<id>/gaia-agent.yaml`. Apply this bar to every one you find.
@@ -649,7 +650,7 @@ jobs:
                defect, each with its locations and a ranked list of possibly-matching open
                issues. Defects already filed or suppressed are listed at the bottom and are
                **already handled — do not act on them at all**.
-            2. Read `CLAUDE.md` → "Issue Response Guidelines" for the tone to write in.
+            2. Read `CLAUDE.md` → "How You Communicate" for the tone to write in.
             3. `synthesis-input.json` has the same data structured, if you need a field the
                dossier elides — including the full location list when one is truncated.
             If the dossier reports malformed findings or that the lenses barely clustered,
