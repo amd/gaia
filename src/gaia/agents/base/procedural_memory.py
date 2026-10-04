@@ -85,9 +85,7 @@ class ProceduralMemoryMixin:
             self._proc_faiss_id_map = []
             return
 
-        procedures = store.search_skills(
-            enabled_only=True, include_superseded=False, with_embedding=True
-        )
+        procedures = store.iter_skills_with_embeddings()
 
         index = faiss.IndexFlatIP(EMBEDDING_DIM)
         id_map: List[str] = []

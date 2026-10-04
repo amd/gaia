@@ -1309,34 +1309,43 @@ class MemoryMixin(ProceduralMemoryMixin):
             return
 
         store = self._memory_store
-        # Get all active knowledge items that have embeddings
-        items = store.get_items_with_embeddings(include_sensitive=True)
+        items = store.iter_items_with_embeddings(include_sensitive=True)
 
         index = faiss.IndexFlatIP(self._embedding_dim)
         id_map = []
+        unindexed = []
 
         for item in items:
             try:
                 vec = _blob_to_embedding(item["embedding"])
-                if vec.shape[0] != self._embedding_dim:
-                    logger.debug(
-                        "[MemoryMixin] skipping embedding for %s: wrong dim %d",
-                        item["id"],
-                        vec.shape[0],
-                    )
-                    continue
-                # Ensure L2 normalization
-                norm = np.linalg.norm(vec)
-                if norm > 0:
-                    vec = vec / norm
-                index.add(vec.reshape(1, -1))
-                id_map.append(item["id"])
-            except Exception as e:
+            except ValueError as e:
+                logger.debug("[MemoryMixin] unreadable embedding %s: %s", item["id"], e)
+                unindexed.append(item["id"])
+                continue
+            if vec.shape[0] != self._embedding_dim:
                 logger.debug(
-                    "[MemoryMixin] skipping bad embedding for %s: %s",
+                    "[MemoryMixin] embedding %s has dim %d, expected %d",
                     item["id"],
-                    e,
+                    vec.shape[0],
+                    self._embedding_dim,
                 )
+                unindexed.append(item["id"])
+                continue
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+            index.add(vec.reshape(1, -1))
+            id_map.append(item["id"])
+
+        if unindexed:
+            logger.warning(
+                "[MemoryMixin] %d stored embedding(s) are unreadable or the wrong "
+                "dimension (index expects %d) and were left out of the vector "
+                "index; those memories are reachable only by keyword. First: %s",
+                len(unindexed),
+                self._embedding_dim,
+                unindexed[0],
+            )
 
         self._faiss_index = index
         self._faiss_id_map = id_map
@@ -1514,24 +1523,19 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Step 1: Embed the query (HARD REQUIREMENT — no BM25-only fallback)
         query_vec = self._embed_text(query)
 
-        # Step 2: FAISS cosine search → get IDs, then batch-resolve from store
-        # Use get_items_with_embeddings() with filters to pre-load a candidate
-        # pool, then rank by FAISS similarity.  This avoids N individual DB
-        # queries and handles filtering at the SQL level.
+        # Step 2: FAISS cosine search, then resolve exactly the hit IDs with
+        # the filters applied in SQL.
         vector_results = []
         faiss_hits = self._faiss_search(query_vec, oversample)
         if faiss_hits:
-            # Fetch candidate items from store with filters already applied.
-            # We over-fetch (top_k=oversample*2) so filtering by the FAISS hit
-            # set still yields enough items.
             candidate_pool = store.get_items_with_embeddings(
                 category=category,
                 context=context,
                 entity=entity,
                 include_sensitive=include_sensitive,
-                top_k=max(oversample * 2, 200),
                 time_from=time_from,
                 time_to=time_to,
+                ids=[kid for kid, _score in faiss_hits],
             )
             pool_by_id = {item["id"]: item for item in candidate_pool}
 
