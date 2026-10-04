@@ -1197,6 +1197,12 @@ def backend_crash_remedy(model: str) -> str:
     )
 
 
+#: Longest a model pull may send nothing. Lemonade is silent while it hashes a
+#: finished file (~2.5 min for the 22 GB Qwen3.6, ~9 min for 82 GB), and a
+#: client that hangs up then cancels the rest of the pull.
+PULL_IDLE_TIMEOUT_S = 30 * 60
+
+
 class LemonadeClientError(Exception):
     """Base exception for Lemonade client errors."""
 
@@ -3893,14 +3899,8 @@ class LemonadeClient:
 
         url = f"{self.base_url}/pull"
 
-        # Use separate connect and read timeouts to handle SSE streams properly:
-        # - Connect timeout: 30 seconds (fast connection establishment)
-        # - Read timeout: 120 seconds (timeout if no data for 2 minutes)
-        # This detects stuck downloads while still allowing normal long downloads
-        # (as long as bytes keep flowing). The timeout is between receiving chunks,
-        # not total time, so long downloads with steady progress will work fine.
         connect_timeout = 30
-        read_timeout = 120  # Timeout if no data received for 2 minutes
+        read_timeout = PULL_IDLE_TIMEOUT_S
 
         try:
             response = requests.post(
