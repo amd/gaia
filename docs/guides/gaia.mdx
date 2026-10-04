@@ -183,7 +183,7 @@ The browser's acting tools are gated by *situation* rather than by name: clickin
   **Over the sidecar's `/query` stream, a gated tool asks only if you can answer.** Pass a
   `session_id` (and leave `can_answer_questions` at its default, or set it `true`) and the
   stream stays open on the confirmation — answer it with `POST
-  /v1/gaia/query/{run_id}/tool_decision`, `{"decision": "allow" | "deny" | "always"}`. A
+  /v1/gaia/query/{run_id}/tool_decision`, `{"decision": "allow" | "deny" | "always" | "timeout"}` (`timeout` denies and tells the agent nobody answered). A
   one-shot request that cannot be asked stops with a message saying which action it
   declined, rather than running it.
 </Warning>
