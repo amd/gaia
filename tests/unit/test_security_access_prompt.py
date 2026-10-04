@@ -184,3 +184,42 @@ def test_a_folder_that_contains_the_temp_dir_is_never_granted(tmp_path):
     assert validator._unaskable_reason(temp.parent)
     assert not validator.is_path_allowed(str(temp.parent))
     assert asked == []
+
+
+def test_a_denial_names_a_remedy_the_user_has(layout):
+    """Chat users can approve or attach; they cannot restart with allowed_paths."""
+    validator, _ = _validator(layout, False)
+    target = layout["docs"] / "fed_rate.txt"
+
+    for allowed, reason in (
+        validator.validate_read(str(target)),
+        validator.validate_write(str(target)),
+    ):
+        assert not allowed
+        assert reason.startswith(f"Access denied: '{target}' is not in allowed paths.")
+        assert "approve access when prompted" in reason
+        assert "attach the file to this chat" in reason
+        assert "allowed_paths" not in reason.split("allowed paths.", 1)[1]
+
+
+def test_a_path_no_answer_can_grant_says_so(layout):
+    validator, prompt = _validator(layout, True)
+    target = layout["temp"] / "scratch.txt"
+    target.write_text("x", encoding="utf-8")
+
+    allowed, reason = validator.validate_read(str(target))
+
+    assert not allowed
+    assert prompt.asked == []
+    assert "No approval can grant it" in reason
+    assert "approve access" not in reason
+
+
+def test_a_host_that_cannot_ask_points_at_allowed_paths(layout):
+    """The SDK/API host has nobody to ask, so the constructor is the remedy."""
+    validator = PathValidator(allowed_paths=[str(layout["scope"])])
+    with patch.object(validator, "_can_prompt", return_value=False):
+        allowed, reason = validator.validate_read(str(layout["docs"] / "fed_rate.txt"))
+
+    assert not allowed
+    assert "allowed_paths list that covers it" in reason

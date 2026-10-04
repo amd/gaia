@@ -1764,6 +1764,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         id_slot=SIDE_SLOT,
                         temperature=0.1,
                         max_tokens=EXTRACTION_MAX_TOKENS,
+                        **self._side_request_kwargs(),
                     )
                 except BaseException as exc:  # re-raised on the caller's thread
                     outcome["error"] = exc
@@ -1788,6 +1789,20 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             response = outcome["response"]
             raw_text = response.text if hasattr(response, "text") else str(response)
+            if (
+                getattr(response, "finish_reason", None) == "length"
+                and not raw_text.strip()
+            ):
+                logger.error(
+                    "[MemoryMixin] extraction stored nothing: %s spent its whole "
+                    "%d-token budget without writing an answer (reasoning only). "
+                    "Each such call holds the GPU for minutes; if this repeats, "
+                    "the model ignores the thinking switch GAIA sends for side "
+                    "requests — run `gaia diagnostics` and report it.",
+                    getattr(self.chat, "effective_model", "the model"),
+                    EXTRACTION_MAX_TOKENS,
+                )
+                return []
 
             # Strip thinking tags if present (Qwen3.5 models)
             raw_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
@@ -2185,6 +2200,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         system_prompt="You are a conversation summarizer. Return valid JSON only.",
                         temperature=0.1,
                         max_tokens=1024,
+                        **self._side_request_kwargs(),
                     )
 
                     raw_text = (
@@ -2417,6 +2433,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     system_prompt="You are a memory reconciliation engine. Return valid JSON only.",
                     temperature=0.1,
                     max_tokens=256,
+                    **self._side_request_kwargs(),
                 )
 
                 raw_text = response.text if hasattr(response, "text") else str(response)
