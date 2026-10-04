@@ -815,6 +815,8 @@ on stderr.
 | `--ui-port` | integer | 4200 | Port for the Agent UI server (used with `--ui`) |
 | `--ui-dist` | path | - | Serve an alternative prebuilt Agent UI bundle (e.g., a PR preview) instead of the one shipped in the package |
 
+**Exit codes:** `--query` exits `0` when the agent answered, `1` when the query or the agent failed, and `130` when interrupted with Ctrl+C — so `gaia chat --query "..." && next-step` only runs next-step on success.
+
 **Examples:**
 
 <CodeGroup>
@@ -898,6 +900,8 @@ gaia prompt "MESSAGE" [OPTIONS]
 | `--claude-model` | string | `claude-sonnet-5` | Claude model used with `--use-claude`; `--model` is ignored then |
 | `--config` | path | `~/.gaia/config.json` | GAIA config file used to resolve `default_model` (or `$GAIA_CONFIG_FILE`) |
 | `--stats` | flag | false | Show performance statistics |
+
+With `--stats`, the command exits `1` if the stats cannot be fetched after the answer has printed.
 
 **Examples:**
 
@@ -2870,6 +2874,8 @@ View performance statistics from the most recent model run.
 ```bash
 gaia stats [OPTIONS]
 ```
+
+Exits `0` and says so when no run has recorded stats yet. If the stats cannot be fetched — for example, the LLM server is unreachable — it prints the cause to stderr and exits `1`.
 
 ---
 
