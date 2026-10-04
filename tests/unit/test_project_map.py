@@ -708,11 +708,36 @@ _FLAGSHIP_AGENT = (
 )
 
 
+def _load_code_search_start():
+    """The flagship's own ``_code_search_start``, compiled from its source."""
+    tree = ast.parse(_FLAGSHIP_AGENT.read_text(encoding="utf-8"))
+    (func,) = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_code_search_start"
+    ]
+    namespace = {
+        "List": list,
+        "Path": pathlib.Path,
+        "is_code_repository": is_code_repository,
+    }
+    exec(
+        compile(ast.Module(body=[func], type_ignores=[]), str(_FLAGSHIP_AGENT), "exec"),
+        namespace,
+    )
+    return namespace["_code_search_start"]
+
+
+_code_search_start = _load_code_search_start()
+
+
 class _IndexRootAgent(ProjectMapMixin, CodeIndexToolsMixin):
     """Just the flagship's index-root decision, with the real mixins."""
 
     def __init__(self, allowed):
-        self._init_code_index_state(repo_path=self._project_map_root() or allowed[0])
+        self._init_code_index_state(
+            repo_path=self._project_map_root() or _code_search_start(allowed)
+        )
 
 
 def test_the_index_is_not_rooted_at_the_sidecars_own_package(tmp_path, monkeypatch):
@@ -745,6 +770,21 @@ def test_the_index_is_rooted_at_the_project_when_there_is_one(tmp_path, monkeypa
     agent = _IndexRootAgent([str(tmp_path / "elsewhere")])
 
     assert pathlib.Path(agent._repo_path) == project
+
+
+def test_the_index_skips_an_allowed_path_that_does_not_exist(tmp_path, monkeypatch):
+    """GAIA's documents folder may not exist yet; it must not become the root."""
+    _install_gaia_at(monkeypatch, tmp_path / "gaia" / "src" / "gaia")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(cwd)
+
+    agent = _IndexRootAgent([str(tmp_path / "missing-documents"), str(workspace)])
+
+    assert pathlib.Path(agent._repo_path) == workspace
 
 
 def test_the_flagship_still_picks_its_index_root_the_way_this_pins():
