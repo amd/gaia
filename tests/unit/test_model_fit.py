@@ -191,6 +191,43 @@ class TestResolveDefault:
         assert lc.resolve_default_chat_model() == lc.LARGE_DEFAULT_MODEL_NAME
 
 
+DGPU_32 = {
+    "Physical Memory": "64 GB",
+    "devices": {"amd_gpu": [{"available": True, "integrated": False, "vram_gb": 32.0}]},
+    "model_storage": {"free_bytes": 900e9},
+}
+
+
+def _recommend(system_info):
+    """What `gaia init` would pick as the chat model on this machine."""
+    from unittest.mock import MagicMock
+
+    client = MagicMock()
+    client.get_system_info.return_value = system_info
+    client.health_check.return_value = {"status": "ok", "version": "2026.40.0"}
+    model_id, skipped, _ = lc.recommend_default_chat_model(client)
+    return model_id, dict(skipped)
+
+
+class TestDefaultFollowsTheGpu:
+    """Qwen3 30B is the default on any PC whose GPU holds it; Gemma elsewhere."""
+
+    @pytest.mark.parametrize("info", [STRIX_HALO_128, STRIX_HALO_64, DGPU_32])
+    def test_a_gpu_that_holds_it_gets_qwen(self, info):
+        assert _recommend(info)[0] == lc.LARGE_DEFAULT_MODEL_NAME
+
+    def test_a_24gb_gpu_is_too_small_for_its_cache(self):
+        model_id, skipped = _recommend(DGPU)
+        assert model_id == lc.DEFAULT_MODEL_NAME
+        assert "memory" in skipped[lc.LARGE_DEFAULT_MODEL_NAME]
+
+    def test_a_cpu_only_pc_defaults_to_gemma_even_with_the_ram(self):
+        model_id, skipped = _recommend(CPU_ONLY)
+        assert model_id == lc.DEFAULT_MODEL_NAME
+        reason = skipped[lc.LARGE_DEFAULT_MODEL_NAME]
+        assert "GPU" in reason and "gaia config set default_model" in reason
+
+
 class TestRegistry:
     def test_user_prefix_is_tolerated_in_lookups(self):
         listed = lc.FLASH_OPTION_MODEL_NAME[len("user.") :]

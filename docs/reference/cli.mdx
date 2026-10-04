@@ -237,9 +237,9 @@ profile. The default `gaia` profile is a superset, so a bare `gaia init` covers 
 
 <Note>
 For the `gaia`, `chat`, `rag` and `all` profiles the chat model follows the
-hardware. Where Lemonade reports enough memory for it — about 26 GB for models, its
-17.4 GB of weights plus the context cache at GAIA's 64K window, so a 64 GB+ Strix Halo,
-a 32 GB GPU or a CPU-only PC with 32 GB of RAM, but not a 24 GB card —
+hardware. Where Lemonade reports a GPU with enough memory for it — about 26 GB for
+models, its 17.4 GB of weights plus the context cache at GAIA's 64K window, so a
+64 GB+ Strix Halo or a 32 GB GPU, but not a 24 GB card or a CPU-only PC —
 `gaia init` also sets up `Qwen3-30B-A3B-Instruct-2507-GGUF` (a 17 GB Lemonade built-in,
 text only) as the chat model, prints why, and records it as `default_model`. Gemma is
 still downloaded, since vision and document-image extraction load it by name. Every

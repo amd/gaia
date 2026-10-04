@@ -30,6 +30,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 MEMORY_OVERHEAD_FACTOR = 1.05
 #: Fixed headroom for compute buffers and a small KV cache.
 MEMORY_OVERHEAD_GB = 1.0
+#: ``MachineCapacity.memory_source`` when no GPU holds the model.
+SYSTEM_RAM = "System RAM"
 
 
 class ModelFitError(RuntimeError):
@@ -45,6 +47,11 @@ class MachineCapacity:
     memory_source: str
     #: Free space in the model store, or ``None`` when Lemonade did not say.
     disk_free_gb: Optional[float]
+
+    @property
+    def on_gpu(self) -> bool:
+        """The memory pool is a GPU's, not system RAM on a CPU-only PC."""
+        return self.memory_source != SYSTEM_RAM
 
 
 @dataclass(frozen=True)
@@ -172,7 +179,7 @@ def capacity_from_system_info(info: Dict[str, Any]) -> MachineCapacity:
                 "'Physical Memory', so GAIA cannot tell which models fit. "
                 "Update Lemonade (`gaia init`) and retry."
             )
-        pool = (ram, "System RAM")
+        pool = (ram, SYSTEM_RAM)
     storage = info.get("model_storage") or {}
     free = storage.get("free_bytes")
     disk = float(free) / 1e9 if isinstance(free, (int, float)) else None

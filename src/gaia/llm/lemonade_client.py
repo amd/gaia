@@ -275,9 +275,9 @@ def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
 # ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
-# The default on any machine with the memory for it — 17.4 GB of weights plus a
-# ~6.4 GB KV cache at 64K, so a 64 GB+ Strix Halo, a 32 GB GPU or a 32 GB
-# CPU-only box qualifies, far past the 128 GB class Qwen3.8 Flash needed. A Lemonade built-in, 2-5x faster
+# The default on any PC whose GPU holds it — 17.4 GB of weights plus a ~6.4 GB
+# KV cache at 64K, so a 64 GB+ Strix Halo or a 32 GB GPU. A CPU-only PC keeps
+# Gemma: it could fit in RAM but decodes too slowly to be the default. A Lemonade built-in, 2-5x faster
 # decode than Flash on Strix Halo, but text-only. ``gaia init`` picks it only
 # when gaia.llm.model_fit says it fits, and records the pick as
 # ``default_model``.
@@ -1010,6 +1010,18 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
             unsupported.append((model_id, "GAIA does not know its download size"))
             continue
         kv = mr.kv_cache_gb if mr else 0.0
+        if model_id == LARGE_DEFAULT_MODEL_NAME and not capacity.on_gpu:
+            # A product rule, not a fit rule: a CPU-only PC could hold it in
+            # RAM but runs it too slowly to be the default.
+            unsupported.append(
+                (
+                    model_id,
+                    "the default only where a GPU holds it; this PC has no GPU "
+                    f"memory to report. Choose it yourself with "
+                    f"`gaia config set default_model {model_id}`",
+                )
+            )
+            continue
         if model_id != floor and check_fit(size, capacity, kv).fits:
             verdict = check_server_supports(
                 mr.min_lemonade_version if mr else None, server_version
