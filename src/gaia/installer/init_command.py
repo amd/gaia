@@ -493,6 +493,15 @@ def _load_model_once(client, model_id: str) -> "ModelLoad":
     return ModelLoad(model_id, role, size_gb, True)
 
 
+def _hf_hub_cache() -> str:
+    """Where Lemonade keeps downloaded models: the Hugging Face hub cache."""
+    if os.environ.get("HF_HUB_CACHE"):
+        return os.environ["HF_HUB_CACHE"]
+    if os.environ.get("HF_HOME"):
+        return os.path.join(os.environ["HF_HOME"], "hub")
+    return os.path.expanduser("~/.cache/huggingface/hub")
+
+
 class _DownloadProgress:
     """Draws a model pull's streamed events as a live progress bar."""
 
@@ -1526,12 +1535,11 @@ class InitCommand:
                     max_tokens=10,
                     temperature=0,
                 )
-                # Check if we got a valid response
+                # A thinking model spends a short budget on its reasoning; any
+                # generated text proves the model loads and runs.
                 if response and response.get("choices"):
-                    content = (
-                        response["choices"][0].get("message", {}).get("content", "")
-                    )
-                    if content:
+                    message = response["choices"][0].get("message", {})
+                    if message.get("content") or message.get("reasoning_content"):
                         return (True, None)
                     return (False, "Empty response")
                 return (False, "Invalid response format")
@@ -1714,7 +1722,7 @@ class InitCommand:
                 )
 
                 # Show path for each failed model
-                hf_cache = os.path.expanduser("~/.cache/huggingface/hub")
+                hf_cache = _hf_hub_cache()
                 for model_id, error in models_failed:
                     # Find actual model directory (may have org prefix like ggml-org/model-name)
                     # Search for directories containing the model name
