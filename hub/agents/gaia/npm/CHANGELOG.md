@@ -69,6 +69,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`--use-claude` works with the downloaded binary.** The release build left
+  out the Anthropic client, so every Claude launch from the terminal UI, and
+  every `/model` switch to Claude, failed with "The 'anthropic' package is
+  required", which a frozen binary cannot act on. The client is now bundled, and
+  the release build fails if it is missing.
+
 - **Code search works in an Agent UI chat that is not inside a project.** It
   started in GAIA's own documents folder, which usually does not exist yet, so
   every `search_code_index` failed with "repo_path does not exist". It now starts
