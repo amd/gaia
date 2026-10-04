@@ -18,7 +18,8 @@ from gaia.security import PathValidator
 
 @pytest.fixture
 def scratch():
-    path = Path(tempfile.mkdtemp(prefix="gaia-scratch-test-"))
+    # Resolved like set_scratch_dir does: Windows CI's temp is an 8.3 short path.
+    path = Path(tempfile.mkdtemp(prefix="gaia-scratch-test-")).resolve()
     yield path
     shutil.rmtree(path)
 

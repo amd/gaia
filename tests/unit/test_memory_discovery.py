@@ -1594,6 +1594,10 @@ class TestChromiumProfileDiscovery:
 class TestXdgDesktopDirs:
     """A custom-prefix install (Nix, Guix) puts .desktop files nowhere else."""
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="XDG_DATA_DIRS is ':'-separated, so it cannot hold a C:\\ path",
+    )
     def test_xdg_data_dirs_is_honored(self, isolated_disc, tmp_path):
         prefix = tmp_path / "nix" / "profile" / "share" / "applications"
         prefix.mkdir(parents=True)
