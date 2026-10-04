@@ -136,7 +136,7 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 		}
 		kv := 0.0
 		if e.Recommended != nil {
-			kv = e.Recommended.KVCacheGB
+			kv = e.Recommended.KVCacheGB()
 		}
 		e.Fits, e.Reason = capacity.Fit(size, kv)
 		// Version after fit: "upgrade Lemonade" only helps a model that fits.

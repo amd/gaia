@@ -173,7 +173,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Document Library uploads | `~/.gaia/documents/` |
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
-| Logs | `~/.gaia/gaia.log`, `~/.gaia/electron-install.log` |
+| Logs | `~/.gaia/gaia.log` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
 | Terminal hub and agent binaries (one-line installer) | `~/.gaia/bin/` |
 | Agent run traces | `~/.gaia/traces/` |
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |

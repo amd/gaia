@@ -69,8 +69,8 @@ models, not an unused local chat model.
 
 `gaia init` picks the local chat model from the same rule: **Qwen3.6 35B
 A3B** on any PC whose GPU has ~27 GB for models (its 23.3 GB of weights and
-vision projector plus the context cache at GAIA's 64K window — a 64 GB+ Strix
-Halo or a 32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** everywhere
+vision projector plus the context cache at its smallest, 64K window — a 64 GB+
+Strix Halo or a 32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** everywhere
 else, including CPU-only PCs. GAIA runs Qwen3.6 with thinking on, so each step
 reasons before it answers or calls a tool. It records the pick as `default_model` in `~/.gaia/config.json`,
 so the TUI's agent starts on it. Set `gaia config set default_model <id>` to
@@ -83,6 +83,23 @@ Gemma-4-E4B-it-GGUF` before setup. Pressing **p** at the setup screen and
 picking Gemma does the same for that session only: setup then downloads just
 the embedding models, but the next launch asks for the default again unless
 `default_model` is set.
+
+### Context length follows memory
+
+Qwen3.6 35B A3B reads up to 262,144 tokens. Only 10 of its 40 layers keep a
+growing KV cache, about 20 KiB per token, so memory sets the limit rather than
+the model. GAIA loads it with the largest window, in 8,192-token steps, whose
+cache fits beside the weights, leaving 10% of the memory free and, on shared
+memory, room for the embedding model. It never goes below 65,536 tokens.
+
+| PC | Memory for models | Window | KV cache |
+|----|-------------------|--------|----------|
+| Strix Halo 128 GB (96 GB carve-out) | ~112 GB | 262,144 | 5.4 GB |
+| Strix Halo 64 GB | ~48–56 GB | 262,144 | 5.4 GB |
+| 32 GB GPU | 32 GB | 155,648 | 3.2 GB |
+| 24 GB GPU | 24 GB | Qwen3.6 not picked; Gemma at 65,536 | — |
+
+Gemma 4 E4B stays at 65,536 tokens on every PC.
 
 ## What the ranked picks measured
 

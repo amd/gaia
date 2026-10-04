@@ -204,7 +204,7 @@ func (c Capacity) SupportsModel(minVersion string) (bool, string) {
 }
 
 // RequiredMemoryGB is the memory a model of sizeGB weights needs to run.
-// kvCacheGB is its KV cache at GAIA's 64K window when larger than the shared
+// kvCacheGB is its KV cache at its floor window when larger than the shared
 // margin allows for (0 otherwise).
 func RequiredMemoryGB(sizeGB, kvCacheGB float64) float64 {
 	return sizeGB*fitRule.MemoryOverheadFactor + fitRule.MemoryOverheadGB + kvCacheGB

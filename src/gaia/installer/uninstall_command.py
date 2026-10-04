@@ -78,6 +78,7 @@ from gaia.config import (
     unsafe_gaia_home_reason,
 )
 from gaia.installer._stdin import stdin_is_tty
+from gaia.log_rotation import log_family
 
 log = logging.getLogger(__name__)
 
@@ -176,6 +177,8 @@ def _purge_paths(home: Optional[Path] = None) -> List[Path]:
         gaia / "lemonade",
         gaia / "electron-config.json",
         gaia / "gaia.log",
+        *(p for p in log_family(gaia / "gaia.log") if p != gaia / "gaia.log"),
+        gaia / "gaia.log.lock",
         gaia / "electron-install-state.json",
         gaia / "electron-install.log",
         gaia / "bin",

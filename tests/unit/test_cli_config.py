@@ -380,14 +380,16 @@ class TestConfigPathEnvOverride:
             assert target.exists()
             assert config_mod.GaiaConfig.load().default_model == "Env-GGUF"
         finally:
-            # Restore module-level constants for any later tests in the session.
-            monkeypatch.delenv("GAIA_CONFIG_FILE", raising=False)
+            # Rebuild the constants from the session's own environment.
+            monkeypatch.undo()
             importlib.reload(config_mod)
 
     def test_env_dir_override(self, tmp_path, monkeypatch):
         import importlib
 
         monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "cfgdir"))
+        # GAIA_CONFIG_FILE outranks the dir; the root conftest sets it.
+        monkeypatch.delenv("GAIA_CONFIG_FILE", raising=False)
 
         from gaia import config as config_mod
 
@@ -395,7 +397,8 @@ class TestConfigPathEnvOverride:
         try:
             assert config_mod.GAIA_CONFIG_FILE == tmp_path / "cfgdir" / "config.json"
         finally:
-            monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
+            # Rebuild the constants from the session's own environment.
+            monkeypatch.undo()
             importlib.reload(config_mod)
 
 

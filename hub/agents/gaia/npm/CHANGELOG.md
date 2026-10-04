@@ -8,6 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **GPU models no longer load at 32K on an NPU-profile machine.** The NPU's
+  32,768-token ceiling was applied to every model whenever `default_device` was
+  `npu`, so a GGUF model ran at half its window and long tasks overflowed. It now
+  binds NPU (FLM) models only. A model can also opt in to a window sized to the
+  machine's memory, up to its native maximum.
 - **A stale `GAIA_SKILL_SET` now stops startup.** An undeclared name used to be
   dropped silently, so the agent came up healthy with no skills. The sidecar
   and the stdio entry now exit non-zero before serving, with a message naming
@@ -29,6 +34,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   agent and its `GET /v1/gaia/init` readiness check use it for chat. Gemma 4 E4B
   is still downloaded for vision. Every other PC, including a CPU-only one, keeps
   Gemma alone.
+- **Qwen3.6 gets the longest context this PC's memory holds.** Up to its native
+  262,144 tokens on a Strix Halo (a 5.4 GB KV cache), about 152K on a 32 GB GPU,
+  never under 64K. Gemma stays at 64K.
 - Qwen3.8 Flash Next (82 GB, multimodal) is a supported manual option on
   128 GB-class PCs — not auto-selected. Switch with
   `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`.

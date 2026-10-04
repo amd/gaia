@@ -2,14 +2,17 @@
 
 This guide helps diagnose and fix audio-related issues with GAIA's voice features (talk mode, voice chat, etc.).
 
+Speech recognition (Whisper) and voice output (Kokoro) both run inside Lemonade
+Server. GAIA records the microphone, sends each utterance to
+`/api/v1/audio/transcriptions`, and plays what `/api/v1/audio/speech` returns.
+There is no local speech model and no fallback to one.
+
 ## Quick Diagnostics
 
-### Test Whisper ASR Module Directly
-
-Test the Whisper ASR module with streaming:
+### Test Live Transcription
 
 ```bash
-python src/gaia/audio/whisper_asr.py --stream --duration 20
+gaia test --test-type asr-microphone --recording-duration 20
 ```
 
 ## Logging and Verbosity
@@ -18,8 +21,7 @@ python src/gaia/audio/whisper_asr.py --stream --duration 20
 - Use `--logging-level DEBUG` to see low-level audio processing details, including:
   - Audio device selection and stream start
   - Per-chunk enqueue events and energies
-  - Batch processing cycles
-  - Per-segment transcription text
+  - Per-utterance transcription text and Lemonade round-trip time
   - ASR/LLM coordination events during TTS streaming
 - For minimal noise, run with `--logging-level WARNING`.
 
@@ -60,7 +62,7 @@ python src/gaia/audio/whisper_asr.py --stream --duration 20
 **Solutions:**
 1. **Voice Detection Threshold:**
    - The system may be too strict about what counts as "speech"
-  - The internal VAD (amplitude) threshold in `WhisperAsr` defaults to ~0.01, tuned for typical speaking levels (0.02–0.03)
+  - The VAD (amplitude) threshold in `WhisperAsr` comes from `--mic-threshold` (default 0.003)
   - The CLI flag `--silence-threshold` controls pause duration (in seconds) before sending the last heard phrase to the LLM, not the amplitude threshold
   - If detection is unreliable, check the per-chunk energy values in the DEBUG log and reduce background noise
 
@@ -77,7 +79,7 @@ python src/gaia/audio/whisper_asr.py --stream --duration 20
    Look for messages like:
    - `Chunk X: energy=0.00XXXX, is_speech=True/False`
    - `Adding speech to queue: XXXXX samples`
-   - `Transcribed: your text here`
+   - `Transcribed 1.8s of audio in 0.12s: 'your text here'`
 
 ### Issue 3: Poor Transcription Quality
 
@@ -101,10 +103,8 @@ python src/gaia/audio/whisper_asr.py --stream --duration 20
    - Pause briefly between sentences
    - Avoid background noise
 
-3. **Enable CUDA (if available):**
-   ```bash
-   gaia talk --whisper-model-size small --cuda
-   ```
+3. **Try the turbo model:** `gaia talk --whisper-model-size turbo` uses
+   `Whisper-Large-v3-Turbo`, near-large accuracy at a fraction of the cost.
 
 ### Issue 4: TTS Not Working
 
@@ -118,10 +118,11 @@ python src/gaia/audio/whisper_asr.py --stream --duration 20
    gaia talk --no-tts
    ```
 
-2. **Check Kokoro TTS Installation:**
-   - Kokoro TTS loads a model on first use which can be slow
-   - Wait for the model to download (shows progress)
-   - A warning like "Defaulting repo_id to hexgrad/Kokoro-82M" is harmless
+2. **Check the Kokoro model in Lemonade:**
+   - The first `gaia talk` downloads `kokoro-v1` (~350 MB) through Lemonade
+     and prints `Downloading kokoro-v1 through Lemonade` while it does
+   - `gaia test --test-type tts-audio-file` writes speech to a WAV without
+     needing a speaker, which separates a Lemonade problem from an audio-device one
 
 3. **Programmatic TTS (optional):**
    - If needed in code, you can call `AudioClient.speak_text("Hello")` after TTS has been initialized
@@ -136,17 +137,17 @@ gaia talk --no-tts --logging-level DEBUG --whisper-model-size tiny
 
 ### Test Individual Components
 
-**Test Real-time Streaming:**
+**Test live transcription:**
    ```bash
-   # Test the WhisperAsr module directly with streaming
-   python src/gaia/audio/whisper_asr.py --stream --duration 20
+   gaia test --test-type asr-microphone --recording-duration 20
    ```
 
 ## Audio System Architecture
 
 ```
 Microphone → sounddevice → AudioRecorder → Voice Activity Detection →
-Audio Queue → WhisperAsr → Transcription Queue → LLM → Response
+Audio Queue → WhisperAsr → Lemonade Whisper → Transcription Queue → LLM →
+Response → KokoroTTS → Lemonade kokoro-v1 → speakers
 ```
 
 ### Key Components:
@@ -157,9 +158,9 @@ Audio Queue → WhisperAsr → Transcription Queue → LLM → Response
    - Buffers audio segments
 
 2. **WhisperAsr** (`whisper_asr.py`):
-   - Loads OpenAI Whisper model
-   - Processes audio chunks
-   - Returns transcribed text
+   - Pulls the Whisper model through Lemonade on first use
+   - Sends each utterance to Lemonade as a 16 kHz WAV
+   - Returns transcribed text; stops with `asr_error` if Lemonade fails
 
 3. **AudioClient** (`audio_client.py`):
    - Orchestrates recording and transcription
@@ -168,16 +169,14 @@ Audio Queue → WhisperAsr → Transcription Queue → LLM → Response
 
 ## Performance Tips
 
-1. **Model Selection:**
-   - `tiny`: Fastest, ~39MB, good for testing
-   - `base`: Balanced, ~74MB, good quality
-   - `small`: Better accuracy, ~244MB
-   - `medium`: Best accuracy, ~769MB, slower
+1. **Model Selection** (download sizes as Lemonade reports them):
+   - `tiny` (`Whisper-Tiny`): fastest, ~75 MB, good for testing
+   - `base` (`Whisper-Base`): balanced, ~150 MB, the default
+   - `small`, `medium`, `large`, `turbo`: more accurate, larger downloads
 
 2. **Reduce Latency:**
    - Use `--no-tts` to skip text-to-speech
    - Use smaller models (`tiny` or `base`)
-   - Enable CUDA with `--cuda` if you have GPU
 
 3. **Improve Accuracy:**
    - Use larger models (`small` or `medium`)
@@ -188,23 +187,16 @@ Audio Queue → WhisperAsr → Transcription Queue → LLM → Response
 ## Environment Variables
 
 ```bash
-# Set default audio device (optional)
-export GAIA_AUDIO_DEVICE=1
-
-# Set default Whisper model
-export GAIA_WHISPER_MODEL=small
-
-# Enable debug logging globally
-export GAIA_LOG_LEVEL=DEBUG
+# Lemonade Server that transcribes and speaks
+export LEMONADE_BASE_URL=http://localhost:13305/api/v1
 ```
 
 ## Still Having Issues?
 
 1. **Verify Python Environment:**
    ```bash
-   python --version  # Should be 3.8+
-   pip show whisper  # Should be installed
-   pip show sounddevice  # Should be installed
+   python --version  # Should be 3.10+
+   pip show sounddevice  # Should be installed ([talk] extra)
    ```
 
 2. **Check System Audio:**
@@ -214,7 +206,7 @@ export GAIA_LOG_LEVEL=DEBUG
 
 3. **File an Issue:**
    If problems persist, create an issue with:
-   - Output of the Whisper ASR streaming test above
+   - Output of `gaia test --test-type asr-microphone` above
    - Debug logs from `gaia talk --logging-level DEBUG`
    - Your system info (Windows version, Python version)
    - Audio device list from the diagnostic commands

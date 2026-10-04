@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Will a local model fit and run on this machine?
+"""Will a local model fit and run on this machine, and with how large a window?
 
 One rule, read off Lemonade's own ``/system-info``, so GAIA and the TUI agree
 with the server that will actually load the model:
@@ -12,9 +12,11 @@ with the server that will actually load the model:
 * **Disk** is the free space in Lemonade's model store.
 
 A model fits when ``size * MEMORY_OVERHEAD_FACTOR + MEMORY_OVERHEAD_GB`` plus
-its KV cache at GAIA's 64K window fits the memory pool, and its download fits
-the disk. The shared margin covers compute buffers and a small cache; a model
-whose cache is larger declares it (``ModelRequirement.kv_cache_gb``).
+its KV cache fits the memory pool, and its download fits the disk. The KV cache
+grows linearly with the context window, so it is charged at the window the model
+loads with (``ModelRequirement.kv_bytes_per_token``). :func:`largest_context`
+turns the rule around: given the memory left after the weights, how large a
+window the KV cache can take.
 
 ``tui/internal/lemonade/recommended_models.json`` carries the same two constants for
 the Go picker; ``tests/unit/test_model_fit.py`` fails if they drift.
@@ -33,6 +35,11 @@ MEMORY_OVERHEAD_FACTOR = 1.05
 MEMORY_OVERHEAD_GB = 1.0
 #: ``MachineCapacity.memory_source`` when no GPU holds the model.
 SYSTEM_RAM = "System RAM"
+#: Share of the pool a window above a model's floor must leave free: the
+#: desktop and driver, and llama.cpp compute buffers that grow with the window.
+CONTEXT_HEADROOM_FRACTION = 0.10
+#: Windows above the floor are whole multiples of this many tokens.
+CONTEXT_STEP_TOKENS = 8192
 
 
 class ModelFitError(RuntimeError):
@@ -53,6 +60,15 @@ class MachineCapacity:
     def on_gpu(self) -> bool:
         """The memory pool is a GPU's, not system RAM on a CPU-only PC."""
         return self.memory_source != SYSTEM_RAM
+
+    @property
+    def shares_system_ram(self) -> bool:
+        """A model on the CPU backend draws from this same pool.
+
+        True for unified memory (an AMD iGPU, Apple Silicon) and for a CPU-only
+        PC; False for a discrete GPU, whose VRAM the CPU backend never touches.
+        """
+        return self.memory_source in ("AMD iGPU", "Apple GPU", SYSTEM_RAM)
 
 
 @dataclass(frozen=True)
@@ -92,10 +108,41 @@ def check_server_supports(
 def required_memory_gb(size_gb: float, kv_cache_gb: float = 0.0) -> float:
     """Memory a model of ``size_gb`` weights needs to load and run.
 
-    ``kv_cache_gb`` is the model's KV cache at GAIA's 64K window when it is
-    larger than the shared margin allows for.
+    ``kv_cache_gb`` is the model's KV cache at the window it loads with, when it
+    is larger than the shared margin allows for.
     """
     return size_gb * MEMORY_OVERHEAD_FACTOR + MEMORY_OVERHEAD_GB + kv_cache_gb
+
+
+def kv_cache_gb(kv_bytes_per_token: int, ctx_size: int) -> float:
+    """KV cache, in GB, for a window of ``ctx_size`` tokens."""
+    return kv_bytes_per_token * ctx_size / 1e9
+
+
+def largest_context(
+    *,
+    size_gb: float,
+    kv_bytes_per_token: int,
+    min_ctx: int,
+    max_ctx: int,
+    capacity: MachineCapacity,
+    reserve_gb: float = 0.0,
+) -> int:
+    """The largest window in ``[min_ctx, max_ctx]`` this machine can hold.
+
+    The weights and ``reserve_gb`` (models that stay loaded beside this one)
+    come off the pool first; the KV cache may grow into what is left, less
+    ``CONTEXT_HEADROOM_FRACTION`` of the pool. Never below ``min_ctx``: that is
+    the window the model is registered with, which the default-model fit
+    check already judged.
+    """
+    usable = capacity.memory_gb * (1.0 - CONTEXT_HEADROOM_FRACTION)
+    room_gb = usable - reserve_gb - required_memory_gb(size_gb)
+    if kv_bytes_per_token <= 0 or room_gb <= 0:
+        return min_ctx
+    tokens = int(room_gb * 1e9 // kv_bytes_per_token)
+    tokens -= tokens % CONTEXT_STEP_TOKENS
+    return max(min_ctx, min(max_ctx, tokens))
 
 
 def _num(value: Any) -> float:

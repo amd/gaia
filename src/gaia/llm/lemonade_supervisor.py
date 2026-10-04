@@ -54,6 +54,7 @@ from gaia.llm.lemonade_launcher import (
     render_command,
     resolve_lemonade,
 )
+from gaia.log_rotation import rotate_if_oversized
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -335,6 +336,11 @@ class LemonadeSupervisor:
         path = self.log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         self._close_log()
+        # The server's stdout can't be rotated while it runs, so cap it per start.
+        try:
+            rotate_if_oversized(path)
+        except OSError as e:
+            log.warning("Could not rotate %s (%s); appending to it.", path, e)
         self._log_handle = open(path, "a", encoding="utf-8", errors="replace")
         self._log_handle.write(f"\n=== GAIA daemon start: {' '.join(spec.argv)} ===\n")
         self._log_handle.flush()
