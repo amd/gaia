@@ -22,6 +22,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `/full-access` replace `--bypass-permissions` and `/bypass`; the old names
   fail with a message naming the new one. `/full-access always` (or
   `gaia config set full_access true`) keeps it on across launches.
+- **The agent has to read a file before it changes it.** `edit_file`, and
+  `write_file` on an existing file, now refuse a file the agent hasn't read with
+  `read_file` in this session, or one that changed on disk since it did. Benchmark
+  runs caught the agent patching files it had never opened, from a grep snippet
+  or a guess; now it has to look first. A partial read counts, creating a file
+  needs no read, and the refusal comes before any approval prompt. It applies
+  with confirmations bypassed too.
+- **The agent sees every installed skill and loads the one that fits.**
+  Previously a per-turn matcher scored the request against skill descriptions
+  and loaded a skill on 0 of 24 benchmark tasks, so most GitHub requests never
+  learned `gh` was available. The system prompt now lists each installed skill
+  in one line (~1,000 tokens for the starter pack), and refusing a skill-gated
+  CLI names the skill to load. `GAIA_SKILL_DISCOVERY=0` still hides the list.
+  **Removed:** `GAIA_SKILL_DISCOVERY_TAU` is now ignored, and
+  `GaiaAgentConfig(skill_discovery_threshold=…)` raises `TypeError` — drop the
+  argument. See the Agent Skills spec, "Skill catalogue".
+- Contract `apiVersion` is now **2.14** (2.13 added `GET /memory`) for the two new routes and
+  the `claude` provider value. A differing major still raises
+  `VersionMismatchError`; a higher minor is accepted.
+- **Changing `model` on a live `session_id` switches in place** instead of
+  returning 409, so the conversation and any loaded skills survive it. A switch
+  that fails still returns 409 and leaves the session on its previous model.
 
 ### Fixed
 
@@ -204,37 +226,6 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is nothing but a skill-granted CLI runs argv-only, so `>` there is refused
   with an explanation instead of reaching the binary as text. See SPEC §5.5.
 
-### Changed
-
-- **The agent has to read a file before it changes it.** `edit_file`, and
-  `write_file` on an existing file, now refuse a file the agent hasn't read with
-  `read_file` in this session, or one that changed on disk since it did. Benchmark
-  runs caught the agent patching files it had never opened, from a grep snippet
-  or a guess; now it has to look first. A partial read counts, creating a file
-  needs no read, and the refusal comes before any approval prompt. It applies
-  with confirmations bypassed too.
-- **The agent sees every installed skill and loads the one that fits.**
-  Previously a per-turn matcher scored the request against skill descriptions
-  and loaded a skill on 0 of 24 benchmark tasks, so most GitHub requests never
-  learned `gh` was available. The system prompt now lists each installed skill
-  in one line (~1,000 tokens for the starter pack), and refusing a skill-gated
-  CLI names the skill to load. `GAIA_SKILL_DISCOVERY=0` still hides the list.
-  **Removed:** `GAIA_SKILL_DISCOVERY_TAU` is now ignored, and
-  `GaiaAgentConfig(skill_discovery_threshold=…)` raises `TypeError` — drop the
-  argument. See the Agent Skills spec, "Skill catalogue".
-- Contract `apiVersion` is now **2.14** (2.13 added `GET /memory`) for the two new routes and
-  the `claude` provider value. A differing major still raises
-  `VersionMismatchError`; a higher minor is accepted.
-- **Changing `model` on a live `session_id` switches in place** instead of
-  returning 409, so the conversation and any loaded skills survive it. A switch
-  that fails still returns 409 and leaves the session on its previous model.
-
-### Fixed
-
-- **A restart after a hard stop no longer turns full access back on.**
-  The replacement agent is launched in the session's current permission mode
-  instead of from the original flags, and the TUI says what the restart lost.
-
 ### Notes
 
 - Tracks sidecar contract `apiVersion` **2.14**; a differing major raises
@@ -391,6 +382,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   agent a `cancel` control message, so the turn ends and the session keeps its
   loaded skills, "always" grants, history and full access. A second Esc stops
   the whole process tree.
+- **A restart after a hard stop no longer turns full access back on.**
+  The replacement agent is launched in the session's current permission mode
+  instead of from the original flags, and the TUI says what the restart lost.
 
 ### Notes
 
