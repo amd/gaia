@@ -567,7 +567,9 @@ class TestSystemStatus:
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return make_response(200, {"data": []})
-            raise Exception("catalog timeout")
+            import httpx
+
+            raise httpx.ReadTimeout("catalog timeout")
 
         mock_client.get = mock_get
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -580,6 +582,7 @@ class TestSystemStatus:
         assert data["model_loaded"] is None
         # Should stay None — don't report False when we couldn't check
         assert data["model_downloaded"] is None
+        assert any("catalog timeout" in w for w in data["probe_warnings"])
 
     @patch("httpx.AsyncClient")
     def test_system_status_model_name_case_insensitive_match(

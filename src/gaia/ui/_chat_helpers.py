@@ -93,16 +93,17 @@ def _register_agent_memory_ops(agent) -> None:
 
     Safe to call on every agent construction — the router just overwrites the
     previous reference (all agents share the same DB, so any active agent works).
+    Agents without ``MemoryMixin`` have no memory to maintain and are skipped.
     """
-    try:
-        from gaia.ui.routers import memory as _mem_router
+    from gaia.agents.base.memory import MemoryMixin
+    from gaia.ui.routers import memory as _mem_router
 
-        if hasattr(agent, "consolidate_old_sessions"):
-            _mem_router._consolidate_fn = agent.consolidate_old_sessions
-        if hasattr(agent, "reconcile_memory"):
-            _mem_router._reconcile_fn = agent.reconcile_memory
-    except Exception as exc:
-        logger.warning("Could not register agent memory operations: %s", exc)
+    if not isinstance(agent, MemoryMixin):
+        return
+    # Direct attribute access: a renamed method must fail here, not silently
+    # stop memory upkeep.
+    _mem_router._consolidate_fn = agent.consolidate_old_sessions
+    _mem_router._reconcile_fn = agent.reconcile_memory
 
 
 # Active SSE handlers keyed by session_id.  The /api/chat/confirm-tool

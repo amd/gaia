@@ -3195,6 +3195,13 @@
         ],
         "title": "Model Size Gb"
       },
+      "probe_warnings": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Probe Warnings",
+        "type": "array"
+      },
       "processor_name": {
         "anyOf": [
           {
