@@ -844,3 +844,33 @@ class TestAbandonedBuild:
                 set_tool_cancel_event(None)
 
         assert calls == [25]
+
+    def test_a_plain_encode_pass_stops_between_batches(self, tmp_path):
+        import threading
+
+        from gaia.tool_cancellation import ToolCancelled, set_tool_cancel_event
+
+        skip_if_unavailable()
+        sdk = make_sdk(tmp_path)
+        calls = []
+        cancelled = threading.Event()
+
+        def first_batch_then_abandoned(batch):
+            calls.append(len(batch))
+            cancelled.set()
+            return [[0.0, 1.0]] * len(batch)
+
+        with (
+            patch.object(sdk, "_load_embedder"),
+            patch.object(
+                sdk, "_embed_batch_resilient", side_effect=first_batch_then_abandoned
+            ),
+        ):
+            set_tool_cancel_event(cancelled)
+            try:
+                with pytest.raises(ToolCancelled):
+                    sdk._encode_texts(["x"] * 60)
+            finally:
+                set_tool_cancel_event(None)
+
+        assert calls == [25]
