@@ -304,6 +304,22 @@ jobs:
               exit 1
             }
 
+            # The Agent UI's own memory switch defaults OFF, and with it off every
+            # `remember` returns "skipped". The runner's preflight refuses to start
+            # a memory scenario while it is off.
+            try {
+              $memory = Invoke-RestMethod -Method Put -Uri "$env:BACKEND_URL/api/memory/settings" `
+                -Headers @{ "X-Gaia-UI" = "1" } -ContentType "application/json" `
+                -Body '{"memory_enabled": true}' -TimeoutSec 30 -ErrorAction Stop
+            } catch {
+              Write-Host "::error::PUT $env:BACKEND_URL/api/memory/settings failed: $($_.Exception.Message). Memory scenarios cannot run with memory off."
+              exit 1
+            }
+            if ($memory.memory_enabled -ne $true) {
+              Write-Host "::error::The backend did not switch memory on (settings: $($memory | ConvertTo-Json -Compress))."
+              exit 1
+            }
+
             foreach ($category in @($env:EVAL_CATEGORIES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
               Write-Host "==== gaia eval agent --agent-type gaia --category $category ===="
               $global:LASTEXITCODE = 0

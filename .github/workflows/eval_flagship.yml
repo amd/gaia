@@ -1455,6 +1455,27 @@ jobs:
             }
             Write-Host "Default agent '$defaultAgent' is registered. Agents: $($agentIds -join ', ')"
 
+            # GAIA_MEMORY_DISABLED=0 keeps the store alive, but the Agent UI's own
+            # memory switch defaults OFF, and with it off every `remember` returns
+            # "skipped". Flip it for the lanes that measure memory; the runner's
+            # preflight refuses to start a memory scenario while it is still off.
+            if ($env:GAIA_MEMORY_DISABLED -eq '0') {
+              try {
+                $memory = Invoke-RestMethod -Method Put -Uri "$env:BACKEND_URL/api/memory/settings" `
+                  -Headers @{ "X-Gaia-UI" = "1" } -ContentType "application/json" `
+                  -Body '{"memory_enabled": true}' -TimeoutSec 30 -ErrorAction Stop
+              } catch {
+                Write-Host "::error::PUT $env:BACKEND_URL/api/memory/settings failed: $($_.Exception.Message). This lane measures long-term memory and cannot run with it off. Backend log follows."
+                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                exit 1
+              }
+              if ($memory.memory_enabled -ne $true) {
+                Write-Host "::error::The backend did not switch memory on (settings: $($memory | ConvertTo-Json -Compress)). This lane measures long-term memory and cannot run with it off."
+                exit 1
+              }
+              Write-Host "Long-term memory switched on in the backend."
+            }
+
             # Per-category wall clock. The job timeout was guessed once and cost a
             # 148-min run (30869194618) that produced one category out of three;
             # these lines are what replaces the guess with a measurement. Each is
