@@ -5,7 +5,7 @@
 A nested ``.git`` cannot be committed, so this runs once per staging, on the
 staged copy (never on the checkout):
 
-    python ~/gaia-eval/tiers_resilience/build_fixtures.py --dest ~/gaia-eval/tiers_resilience
+    python tests/fixtures/gaia/tiers_resilience/build_fixtures.py --dest ~/gaia-eval/tiers_resilience
 
 The repo's LOCAL config blanks ``user.name`` and ``user.email``. Local config
 beats global, so ``git commit`` there fails with "Author identity unknown" on

@@ -419,7 +419,7 @@ cannot be committed, so the directory holds only `build_fixtures.py`; every
 workspace is **built at stage time, after the copy to `~/gaia-eval/`**:
 
 ```bash
-python ~/gaia-eval/tiers_git_code/build_fixtures.py --dest ~/gaia-eval/tiers_git_code
+python tests/fixtures/gaia/tiers_git_code/build_fixtures.py --dest ~/gaia-eval/tiers_git_code
 ```
 
 Commits carry fixed authors and dates and ignore the machine's git config, so
@@ -525,7 +525,7 @@ contrasts that must NOT be escalated.
 Preconditions beyond the usual gaia_* lane (fixtures staged, fixture server,
 `GAIA_AUTO_APPROVE_TOOLS=1`, memory live with `GAIA_MEMORY_ADMIN=1`):
 
-- **Build step after staging:** `python ~/gaia-eval/tiers_resilience/build_fixtures.py --dest ~/gaia-eval/tiers_resilience`
+- **Build step after staging:** `python tests/fixtures/gaia/tiers_resilience/build_fixtures.py --dest ~/gaia-eval/tiers_resilience`
   turns `journal/` into a git repo whose LOCAL config blanks `user.name` and
   `user.email` (a nested `.git` cannot be committed). `res_git_identity_unset`
   returns SETUP_ERROR if the commit succeeds without an identity.

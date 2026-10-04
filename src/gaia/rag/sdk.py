@@ -87,7 +87,8 @@ class EmptyPDFError(PDFExtractionError):
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
 # and extracted-text markdown. clear_cache() deletes nothing else.
 _CACHE_OWNED_FILE = re.compile(
-    r"^(?:[0-9a-f]{16}_[0-9a-f]{32}|[0-9a-f]{64}_notfound)\.json(?:\.sig)?$"
+    r"^(?:[0-9a-f]{16}_[0-9a-f]{32}|[0-9a-f]{64}_notfound)(?:_[0-9a-f]{8})?"
+    r"\.json(?:\.sig)?$"
     r"|_extracted\.md$"
 )
 
@@ -110,7 +111,8 @@ class RAGConfig:
     cache_dir: str = field(default_factory=default_rag_cache_dir)
     show_stats: bool = False
     use_local_llm: bool = True
-    base_url: str = "http://localhost:13305/api/v1"  # Lemonade server API URL
+    # Lemonade API URL; None resolves at use (LEMONADE_BASE_URL, else GAIA's own).
+    base_url: Optional[str] = None
     # Memory management settings
     max_indexed_files: int = 100  # Maximum number of files to keep indexed
     max_total_chunks: int = 10000  # Maximum total chunks across all files
@@ -426,49 +428,58 @@ class RAGSDK:
 
         return json.loads(json_bytes)
 
-    def _get_cache_path(self, file_path: str) -> str:
+    def _chunking_fingerprint(self) -> str:
+        """Short hash of the settings that shape the chunks a cache entry holds.
+
+        The embedder is deliberately absent: the cache stores text and chunks,
+        never vectors, and every load re-embeds with the configured model.
         """
-        Get cache file path for a document using content-based hashing.
+        spec = json.dumps(
+            {
+                "chunk_size": self.config.chunk_size,
+                "chunk_overlap": self.config.chunk_overlap,
+                "use_llm_chunking": bool(self.config.use_llm_chunking),
+            },
+            sort_keys=True,
+        )
+        return hashlib.sha256(spec.encode("utf-8")).hexdigest()[:8]
 
-        Uses SHA-256 hash of actual file content for cache key.
-        This ensures proper cache invalidation even for:
-        - Same-size file edits
-        - Files modified within same second (low mtime resolution)
-        - Content changes that preserve size
+    def _content_key(self, file_path: str) -> str:
+        """``<path hash>_<content hash>``: the shared stem of a document's cache files.
 
-        Args:
-            file_path: Path to the document
-
-        Returns:
-            Path to cache file
+        The content hash (not mtime/size) makes same-size edits and sub-second
+        rewrites invalidate; the path hash keeps identical files apart. An
+        unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
+        then fails at extraction.
         """
         path = Path(file_path).absolute()
-
         try:
-            # Hash the actual file CONTENT for reliable cache invalidation
-            # This is more reliable than mtime + size
             hasher = hashlib.sha256()
-
-            # Read file in chunks to handle large files efficiently
-            # Use _safe_open to prevent symlink attacks
+            # _safe_open refuses symlinks.
             with self._safe_open(path, "rb") as f:
                 while chunk := f.read(8192):
                     hasher.update(chunk)
-
-            content_hash = hasher.hexdigest()
-
-            # Include path in hash to avoid collisions between identical files
-            path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
-            cache_key = f"{path_hash}_{content_hash[:32]}"
-
-            return os.path.join(self.config.cache_dir, f"{cache_key}.json")
-
-        except (OSError, IOError) as e:
-            # If file doesn't exist or can't be read, use path-based key
-            # This will fail later during indexing anyway
+        except OSError as e:
             self.log.warning(f"Cannot read file for cache key: {e}")
-            file_hash = hashlib.sha256(str(path).encode()).hexdigest()
-            return os.path.join(self.config.cache_dir, f"{file_hash}_notfound.json")
+            return f"{hashlib.sha256(str(path).encode()).hexdigest()}_notfound"
+        path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
+        return f"{path_hash}_{hasher.hexdigest()[:32]}"
+
+    def _get_cache_path(self, file_path: str, content_key: Optional[str] = None) -> str:
+        """Chunk-cache path: :meth:`_content_key` plus :meth:`_chunking_fingerprint`.
+
+        The fingerprint makes a change to ``chunk_size``, ``chunk_overlap`` or
+        ``use_llm_chunking`` re-chunk instead of reusing chunks cut to the old
+        settings. Pass ``content_key`` to skip re-hashing the file.
+        """
+        key = content_key or self._content_key(file_path)
+        return os.path.join(
+            self.config.cache_dir, f"{key}_{self._chunking_fingerprint()}.json"
+        )
+
+    def _extracted_markdown_path(self, content_key: str) -> str:
+        """Extracted text depends on content alone, so no chunking fingerprint."""
+        return os.path.join(self.config.cache_dir, f"{content_key}_extracted.md")
 
     def _load_embedder(self):
         """Load embedding model via Lemonade server for hardware acceleration.
@@ -2769,14 +2780,9 @@ These positions indicate where to split the text."""
                 return stats
 
         # Check cache - the cache key is based on file content hash
-        cache_path = self._get_cache_path(file_path)
-
-        # Also check for cached Markdown file with hash-based name
-        # Extract the cache key from the cache path to find matching MD file
-        cache_filename = Path(cache_path).stem  # Remove .json extension
-        md_cache_path = os.path.join(
-            self.config.cache_dir, f"{cache_filename}_extracted.md"
-        )
+        content_key = self._content_key(file_path)
+        cache_path = self._get_cache_path(file_path, content_key)
+        md_cache_path = self._extracted_markdown_path(content_key)
 
         if os.path.exists(cache_path):
             if self.config.show_stats:
@@ -3041,7 +3047,9 @@ These positions indicate where to split the text."""
                     "metadata": file_metadata,
                 }
                 self._save_cache(cache_path, cache_data)
-                self._save_extracted_markdown(file_path, text, file_metadata)
+                self._save_extracted_markdown(
+                    file_path, text, file_metadata, content_key
+                )
 
                 if self.index is None:
                     self.index = new_index
@@ -3373,7 +3381,7 @@ Answer:"""
         )
 
     def _save_extracted_markdown(
-        self, file_path: str, text: str, metadata: Dict[str, Any]
+        self, file_path: str, text: str, metadata: Dict[str, Any], content_key: str
     ):
         """
         Save extracted text as markdown file in cache directory.
@@ -3386,23 +3394,12 @@ Answer:"""
             file_path: Path to original document
             text: Extracted text content
             metadata: File metadata (num_pages, vlm_pages, etc.)
+            content_key: The document's :meth:`_content_key`
         """
         try:
             from datetime import datetime
 
-            # Calculate file hash for consistency with JSON cache
-            path = Path(file_path).absolute()
-            hasher = hashlib.sha256()
-            with self._safe_open(path, "rb") as f:
-                while chunk := f.read(8192):
-                    hasher.update(chunk)
-            content_hash = hasher.hexdigest()
-
-            # Use hash-based filename similar to JSON cache
-            path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
-            cache_key = f"{path_hash}_{content_hash[:32]}"
-            md_filename = f"{cache_key}_extracted.md"
-            md_path = os.path.join(self.config.cache_dir, md_filename)
+            md_path = self._extracted_markdown_path(content_key)
 
             # Create markdown content with metadata header
             vlm_status = (
@@ -3414,7 +3411,7 @@ Answer:"""
 
 ## Metadata
 **Source File:** {file_path}
-**File Hash (SHA-256):** {content_hash[:32]}
+**Cache Key:** {content_key}
 **Extraction Date:** {datetime.now().isoformat()}
 **Pages:** {metadata.get('num_pages', 'N/A')}
 **VLM Status:** {vlm_status}
@@ -3433,8 +3430,8 @@ Answer:"""
 
             self.log.debug(f"Saved extracted markdown to {md_path}")
 
-        except Exception as e:
-            # Don't fail indexing if markdown save fails
+        except OSError as e:
+            # The markdown is a debugging aid; indexing does not depend on it.
             self.log.warning(
                 f"Failed to save markdown cache for {Path(file_path).name}: {e}"
             )

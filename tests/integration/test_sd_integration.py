@@ -4,7 +4,8 @@
 """Integration tests for SDToolsMixin with real Lemonade Server.
 
 These tests require Lemonade Server running with SD-Turbo model available.
-Tests will be skipped if the server is not accessible.
+Tests are skipped if the server is not accessible, unless GAIA_REQUIRE_SD=1
+(set in CI), which turns that skip into a failure.
 
 Run with:
     pytest tests/integration/test_sd_integration.py -v
@@ -14,6 +15,7 @@ Prerequisites:
     gaia init
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -30,13 +32,18 @@ def _require_lemonade_sd():
     calling LemonadeClient during pytest collection, which closes file
     descriptors and crashes pytest's fd-level capture on Windows.
     """
+    # CI sets GAIA_REQUIRE_SD=1 after `gaia init --profile sd`: a skip there
+    # would be a green run that tested nothing.
+    unavailable = (
+        pytest.fail if os.environ.get("GAIA_REQUIRE_SD") == "1" else pytest.skip
+    )
     try:
         client = LemonadeClient(verbose=False)
         sd_models = client.list_sd_models()
-        if not sd_models:
-            pytest.skip("Lemonade Server has no SD models available")
-    except Exception:
-        pytest.skip("Lemonade Server with SD model not available")
+    except Exception as e:  # any failure here means "no usable SD server"
+        unavailable(f"Lemonade Server with SD model not available: {e!r}")
+    if not sd_models:
+        unavailable("Lemonade Server has no SD models available")
 
 
 class TestSDIntegration:

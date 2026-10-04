@@ -1,7 +1,7 @@
 # Skills, web and tool-selection tier fixtures
 
 Served by `../serve_fixtures.py` at `http://127.0.0.1:8765/tiers_skills_web/...`
-and staged with the rest of `tests/fixtures/gaia` to `~/gaia-eval/tiers_skills_web/`.
+and staged by `../stage_eval_env.py` to `~/gaia-eval/tiers_skills_web/`.
 
 The planted values — and which scenario depends on each — are recorded in
 `eval/scenarios/GAIA_FIXTURE_VALUES.md` under "Skills, web and tool selection".

@@ -680,7 +680,15 @@ class TestSidecarHTTPErrorDetail:
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == detail
 
-    def test_connection_shaped_http_error_detail_gains_hint(self):
+    def test_connection_shaped_http_error_detail_gains_hint(self, monkeypatch):
+        from gaia.llm import lemonade_launcher
+
+        start = "To start it now, run: gaia lemonade embedded start"
+        monkeypatch.setattr(
+            lemonade_launcher,
+            "describe_start_hint",
+            lambda ctx_size=None: lemonade_launcher.StartHint(instruction=start),
+        )
         handler = _FakeHandler()
         detail = "502 local LLM triage failed: connection refused"
         proxy = _ScriptedProxy(
@@ -691,7 +699,9 @@ class TestSidecarHTTPErrorDetail:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == detail + relay.LEMONADE_CONNECTION_HINT
+        assert agent_errors[0]["content"] == (
+            f"{detail}{relay.LEMONADE_CONNECTION_HINT} {start}"
+        )
 
     def test_404_http_error_still_shows_version_upgrade_message(self):
         handler = _FakeHandler()

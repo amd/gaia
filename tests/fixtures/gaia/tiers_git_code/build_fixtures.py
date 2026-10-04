@@ -5,7 +5,7 @@
 A nested ``.git`` cannot be committed, so every repository is built here, at
 stage time, into the staged copy of this directory:
 
-    python ~/gaia-eval/tiers_git_code/build_fixtures.py --dest ~/gaia-eval/tiers_git_code
+    python tests/fixtures/gaia/tiers_git_code/build_fixtures.py --dest ~/gaia-eval/tiers_git_code
 
 Every commit has a fixed author, committer and date, and git's system and
 global config are ignored while building, so each commit hash is the same on

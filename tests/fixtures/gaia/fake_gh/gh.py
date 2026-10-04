@@ -38,14 +38,31 @@ FIXTURE_REPO = "acme-labs/widgetworks"
 
 DEFAULT_HOST = "github.com"
 
-#: Hosts the resilience scenarios need signed out. A sibling fixture dir so the
-#: staged copy (~/gaia-eval/fake_gh -> ~/gaia-eval/tiers_resilience) finds it too.
+#: Hosts the resilience scenarios need signed out. Read from this checkout:
+#: the shim runs from here, and the file is kept out of the staged copy.
 AUTH_STATE_FILE = (
     Path(__file__).resolve().parent.parent / "tiers_resilience" / "fake_gh_auth.json"
 )
 
 #: ``FAKE_GH_AUTH=logged_out`` signs out every host — a local repro of #4428.
 AUTH_ENV = "FAKE_GH_AUTH"
+
+#: ``gh auth status --json hosts`` for the fixture account, in real gh's shape.
+AUTH_STATUS_HOSTS = {
+    "hosts": {
+        DEFAULT_HOST: [
+            {
+                "state": "success",
+                "active": True,
+                "host": DEFAULT_HOST,
+                "login": "fixture-bot",
+                "tokenSource": "keyring",
+                "scopes": "repo, read:org",
+                "gitProtocol": "https",
+            }
+        ]
+    }
+}
 
 #: First tokens of gh commands GAIA's policy REFUSES outright. Reaching this
 #: shim with one of them means the permission gate did not do its job.
@@ -123,26 +140,18 @@ def _auth_required(host: str) -> int:
     return 4
 
 
-def _auth_status(args: list[str]) -> int:
+def _auth_status_hosts(args: list[str]) -> dict:
+    """``auth status --json hosts``; signed-out hosts are absent, as in real gh."""
     flags, _ = _parse_flags(args, {"--hostname", "--json"})
     host = flags.get("--hostname")
-    if "--json" in flags:
-        # The shape GAIA's check_cli_setup parses; signed-out hosts are absent.
-        hosts = {}
-        if (host in (None, DEFAULT_HOST)) and not _is_signed_out(DEFAULT_HOST):
-            hosts[DEFAULT_HOST] = [
-                {
-                    "state": "success",
-                    "active": True,
-                    "host": DEFAULT_HOST,
-                    "login": "fixture-bot",
-                    "tokenSource": "keyring",
-                    "scopes": "repo, read:org",
-                    "gitProtocol": "https",
-                }
-            ]
-        print(json.dumps({"hosts": hosts}, indent=2))
-        return 0
+    if host in (None, DEFAULT_HOST) and not _is_signed_out(DEFAULT_HOST):
+        return AUTH_STATUS_HOSTS
+    return {"hosts": {}}
+
+
+def _auth_status(args: list[str]) -> int:
+    flags, _ = _parse_flags(args, {"--hostname"})
+    host = flags.get("--hostname")
     if isinstance(host, str) and _is_signed_out(host):
         print(f"You are not logged into any accounts on {host}", file=sys.stderr)
         return 1
@@ -422,6 +431,16 @@ def _api(args: list[str]) -> int:
     return 0
 
 
+def _auth_json_field(argv):
+    """The ``--json`` value in either ``--json hosts`` or ``--json=hosts`` form."""
+    for i, arg in enumerate(argv):
+        if arg == "--json":
+            return argv[i + 1] if i + 1 < len(argv) else ""
+        if arg.startswith("--json="):
+            return arg.split("=", 1)[1]
+    return None
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         return _fail(
@@ -440,6 +459,13 @@ def main(argv: list[str]) -> int:
 
     if argv[0] == "--version":
         print("gh version 2.62.0 (2026-01-15) [gaia eval fixture — canned data]")
+        return 0
+    auth_json = _auth_json_field(argv) if head == ("auth", "status") else None
+    if auth_json is not None:
+        # The form check_cli_setup reads before any github-triage step.
+        if auth_json != "hosts":
+            return _fail("auth status --json serves only the 'hosts' field")
+        print(json.dumps(_auth_status_hosts(argv[2:]), indent=2))
         return 0
     if head == ("auth", "status"):
         return _auth_status(argv[2:])
