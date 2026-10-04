@@ -94,7 +94,6 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     budget_for_ctx,
     is_context_overflow_error,
-    profile_ctx_size,
     truncation_budget,
 )
 from gaia.llm.providers.lemonade import CONNECTION_FAILURE_RE
@@ -1499,7 +1498,7 @@ Do NOT wrap conversational replies in JSON.
                           a repeat after that ends the turn. When the repeats that ran worked, the agent makes one
                           more model call with no tool calls allowed and answers from those results; repeats that
                           errored or were refused report the failure instead.
-            min_context_size: Minimum context size required; unset uses the model/device resolver.
+            min_context_size: Context floor the Lemonade manager enforces; unset uses the device profile's.
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
             skill_set: Explicit skill set to activate (the generic
@@ -1633,10 +1632,10 @@ Do NOT wrap conversational replies in JSON.
                 # The local manager preloads a chat model even on an idle server.
                 LemonadeClient(base_url=base_url, verbose=False).health_check()
             else:
-                if (
-                    min_context_size is None
-                    or os.environ.get("GAIA_CTX_SIZE", "").strip()
-                ):
+                # Unpinned, the manager checks the device profile's floor. This
+                # model's own (possibly memory-sized) window is applied when it
+                # loads; as a floor it would resize whatever model is resident.
+                if os.environ.get("GAIA_CTX_SIZE", "").strip():
                     min_context_size = resolve_ctx_size(model_id, device)
                 LemonadeManager.ensure_ready(
                     min_context_size=min_context_size,
@@ -5928,8 +5927,8 @@ Do NOT wrap conversational replies in JSON.
 
     def _is_loaded_ctx_too_small(self) -> bool:
         """Probe Lemonade's health endpoint to see whether the active LLM is
-        loaded with a context size smaller than the active device profile's
-        expected window.
+        loaded with a context size smaller than the window GAIA loads that
+        model with (``resolve_ctx_size``).
 
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
@@ -5941,8 +5940,10 @@ Do NOT wrap conversational replies in JSON.
             import httpx
 
             from gaia.llm.lemonade_client import (
+                LemonadeClientError,
                 cloud_model_provider,
                 lemonade_auth_headers,
+                resolve_ctx_size,
                 resolve_lemonade_api_key,
                 resolve_lemonade_base_url,
             )
@@ -5966,23 +5967,21 @@ Do NOT wrap conversational replies in JSON.
             if resp.status_code != 200:
                 return False
             data = resp.json()
-            device = self.device
-            if device is None:
-                # Match the device used by model loading when an agent was
-                # constructed without an explicit device (e.g. email).
-                from gaia.config import GaiaConfig
-
-                device = GaiaConfig.load().default_device
-            expected_ctx = profile_ctx_size(device)
             for m in data.get("all_models_loaded", []):
                 if m.get("type") in ("llm", "vlm"):
                     ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                    # Compare against the active profile: a correctly loaded
-                    # NPU model is 32K, while GPU/CPU profiles are 64K.
+                    # Each model against its own window: an NPU model is right
+                    # at 32K, a memory-sized GPU model may be far above 64K.
+                    expected_ctx = resolve_ctx_size(
+                        model=m.get("model_name"),
+                        device=self.device,
+                        base_url=base_url,
+                    )
                     if 0 < ctx < expected_ctx:
                         return True
             return False
-        except Exception:  # pylint: disable=broad-except
+        except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
+            logger.debug("Loaded-context probe failed: %s", e)
             return False
 
     def _extract_lemonade_user_message(self, exc: BaseException) -> Optional[str]:

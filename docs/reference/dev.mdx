@@ -110,29 +110,10 @@ You should see `(.venv)` in your terminal prompt when activated.
 uv pip install -e ".[dev]"
 ```
 
-<Warning>
-  **Linux/WSL users:** the base install and `[dev]` have no PyTorch, but the `[ui]` extra does. Whenever you include it, pass `--extra-index-url` to get CPU-only PyTorch instead of the CUDA build.
-</Warning>
-
 **With optional extras:**
 ```bash
-# Linux/WSL - CPU-only PyTorch for [ui]
-uv pip install -e ".[dev,talk,rag,ui]" --extra-index-url https://download.pytorch.org/whl/cpu
-
-# Windows
 uv pip install -e ".[dev,talk,rag,ui]"
 ```
-
-<Note>
-On Linux the flag is required for every `uv pip install` that includes `[ui]`,
-which resolves PyTorch. There is no config block that removes the need for it: uv's
-`[tool.uv.sources]` and `[[tool.uv.index]]` apply only to the project interface
-(`uv sync`, `uv lock`, `uv add`), never to `uv pip install`, and `[tool.uv.pip]`
-was rejected for the same reason — see the note in `pyproject.toml`. Omit the
-flag and PyTorch resolves from PyPI as a CUDA
-build, pulling ~18 `nvidia-*` / `cuda-*` packages — a 4.7 GB venv instead of
-1.5 GB.
-</Note>
 
 **Available extras** (see `setup.py` for the full list):
 
