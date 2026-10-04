@@ -14,9 +14,18 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pytest
 
+from gaia.eval import eval_lock
 from gaia.eval import flagship_tasks as ft
 from gaia.eval.bench import config as bench_config
 from gaia.eval.bench import harness
+
+
+@pytest.fixture(autouse=True)
+def _private_eval_lock(tmp_path, monkeypatch):
+    """Never take the machine-wide eval lock a real ``gaia eval`` holds."""
+    monkeypatch.delenv(eval_lock.BYPASS_ENV, raising=False)
+    monkeypatch.setattr(eval_lock, "LOCK_FILE", tmp_path / "gaia-eval.lock")
+    monkeypatch.setattr(eval_lock, "HOLDER_FILE", tmp_path / "gaia-eval.holder.json")
 
 
 @pytest.fixture
