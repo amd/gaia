@@ -11,10 +11,9 @@ import sys
 import time
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.env import load_env
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
@@ -41,7 +40,7 @@ from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
 from gaia.version import version
 
 # Load environment variables from .env file
-load_dotenv()
+load_env()
 
 # Set debug level for the logger
 logging.getLogger("gaia").setLevel(logging.INFO)
@@ -1019,55 +1018,6 @@ def _launch_interactive_cli(log=None):
                 drain_memory_extraction(agent)
             except Exception as exc:
                 log.warning("Could not finish memory extraction before exit: %s", exc)
-
-
-def _show_interactive_menu(log=None):
-    """Show an interactive menu when `gaia` is run with no arguments."""
-    if log is None:
-        log = get_logger(__name__)
-
-    print()
-    print("========================================")
-    print(f"  GAIA {version}")
-    print("  Build AI Agents That Run Locally")
-    print("========================================")
-    print()
-    print("  [1] Agent UI  — Desktop chat interface (browser)")
-    print("  [2] CLI Chat  — Interactive terminal chat")
-    print("  [3] Help      — Show all commands")
-    print()
-
-    try:
-        choice = input("  Select [1/2/3]: ").strip()
-    except (KeyboardInterrupt, EOFError):
-        print()
-        return
-
-    if choice == "1":
-        _launch_agent_ui(log=log)
-    elif choice == "2":
-        _launch_interactive_cli(log=log)
-    elif choice == "3":
-        print()
-        print("  Usage: gaia [--ui | --cli | <command>]")
-        print()
-        print("  Quick start:")
-        print("    gaia                   Launch Agent UI (default)")
-        print("    gaia --ui              Launch Agent UI (explicit)")
-        print("    gaia --ui-port 8080    Agent UI on custom port")
-        print("    gaia --cli             Interactive CLI chat")
-        print()
-        print("  Commands:")
-        print("    gaia chat              Interactive chat with RAG")
-        print("    gaia chat --ui         Agent UI (alias for gaia --ui)")
-        print('    gaia prompt "Hello"    Single prompt to LLM')
-        print("    gaia talk              Voice interaction")
-        print("    gaia init              Setup Lemonade + models")
-        print()
-        print("  Run 'gaia --help' for the full command list.")
-    else:
-        print(f"  Unknown option: {choice}")
-        print("  Run 'gaia --help' for all commands.")
 
 
 def _compare_benchmark_ctx(current_ctx, baseline, baseline_path):
@@ -6502,7 +6452,7 @@ def handle_cache_command(args):
                 print("✓ Context7 is AVAILABLE (npx found, service working)")
             else:
                 print("✗ Context7 is UNAVAILABLE (npx not found or service failed)")
-                print("  The Code Agent will use embedded knowledge instead.")
+                print("  Library documentation search is unavailable.")
 
             # Show cache and rate limiter status
             cache = Context7Cache()

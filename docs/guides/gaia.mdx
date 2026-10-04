@@ -181,8 +181,10 @@ The browser's acting tools are gated by *situation* rather than by name: clickin
 
 <Warning>
   **Over the sidecar's `/query` stream, a gated tool asks only if you can answer.** Pass a
-  `session_id` and the stream stays open on the confirmation so your client can approve it;
-  a one-shot request that cannot be asked stops with a message saying which action it
+  `session_id` (and leave `can_answer_questions` at its default, or set it `true`) and the
+  stream stays open on the confirmation — answer it with `POST
+  /v1/gaia/query/{run_id}/tool_decision`, `{"decision": "allow" | "deny" | "always"}`. A
+  one-shot request that cannot be asked stops with a message saying which action it
   declined, rather than running it.
 </Warning>
 
@@ -263,15 +265,33 @@ The agent runs as a **sidecar** — a self-contained HTTP service the GAIA daemo
 | `POST /v1/gaia/query/{run_id}/cancel` | Cooperatively cancel a live run. |
 | `POST /v1/gaia/query/{run_id}/respond` | Answer a mid-run `needs_input` question. |
 | `POST /v1/gaia/query/{run_id}/followup` | Add to a turn already running, without interrupting it. |
+| `POST /v1/gaia/query/{run_id}/tool_decision` | Answer a mid-run `needs_confirmation` prompt (contract >= 2.14). |
+| `POST /v1/gaia/sessions/{session_id}/bypass` | Turn unattended tool approval on or off for a session. |
 
-`/query` implements the shared canonical SSE contract (API version **2.15**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically. A few details worth knowing when you write a client:
+The full, **machine-readable** contract — every field, its type, and which are required — is the committed [`openapi.gaia.json`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/openapi.gaia.json), regenerated from the live routes by `python -m gaia_agent.export_openapi` and checked for drift in CI. What follows is the summary a client author needs; the artifact is the source of truth.
 
-- **You mint the `run_id`**, not the server. Cancellation keys off it, so it has to exist before the request rather than arrive in the stream.
-- **Conversation context is pushed in the body**, never pulled. Pass `session_id` too — the agent persists its indexed-document set per session, and without it the agent forgets a document between the turn that indexed it and the next question.
+### The `/query` body
+
+```json
+{
+  "query": "What's in this directory?",
+  "run_id": "5b1f6e2a-7c34-4b4d-9b3e-2b6d9a7a1c3e",
+  "context": [],
+  "session_id": "my-session-1",
+  "can_answer_questions": true
+}
+```
+
+Only **`query`**, **`run_id`**, and **`context`** are required; everything else (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`) is optional. A request missing any of the three, or sending an unrecognized field, is rejected with **422** before the agent ever runs — the model forbids extra fields (`additionalProperties: false`) rather than silently ignoring a typo.
+
+- **`run_id` must be a UUID** (any version `uuid.UUID()` parses) — a plain string like `"my-run-1"` is a 422, not a warning. **You mint it**, not the server: cancellation (`POST /v1/gaia/query/{run_id}/cancel`) keys off it, so it has to exist before the request rather than arrive in the stream.
+- **`context` is pushed in the body**, never pulled, and must be present even when empty (`[]`) — omitting it is itself a 422. Pass `session_id` too — the agent persists its indexed-document set per session, and without it the agent forgets a document between the turn that indexed it and the next question.
 - **Set `can_answer_questions: false` for one-shot runs.** With nobody there to answer, the agent resolves ambiguity itself instead of parking on a question that reads as a hang.
 - **Idle streams emit `: keepalive` comments** every 10 seconds so a long tool call doesn't look like a dead connection.
 - **A user who says something mid-turn doesn't have to wait for it.** `POST /v1/gaia/query/{run_id}/followup` with `{"text": "…"}` hands the running turn their words; the agent folds them in at its next step and answers them alongside the work in progress. Nothing is interrupted and no second turn starts. Because context is pushed rather than pulled, record a delivered follow-up in the `context` you send next turn — between that turn's question and its answer.
-- **Confirmation-gated tools end the run with a refusal** — see [Tools that need your approval](#tools-that-need-your-approval).
+- **Confirmation-gated tools are answered over `POST /v1/gaia/query/{run_id}/tool_decision`** (contract >= 2.14) when there's a session to hold the grant and the caller declared it can answer — see [Tools that need your approval](#tools-that-need-your-approval).
+
+`/query` implements the shared canonical SSE contract (API version **2.15**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically.
 
 ### Authenticating your requests
 
@@ -280,6 +300,8 @@ Binding to loopback is not access control — this agent has shell and file tool
 - **A per-session bearer token.** Every `/v1/gaia/*` request must carry `Authorization: Bearer <token>`; without it you get **401**. The process that spawned the sidecar supplies the token, either as `GAIA_GAIA_SIDECAR_TOKEN_FILE` — a path to a `0600`, owner-only file, so the secret never sits in the environment — or directly as `GAIA_GAIA_SIDECAR_TOKEN`. When the GAIA daemon runs the agent, it mints the token and uses the file channel.
 - **A loopback `Host` allowlist.** A `Host` header that isn't `127.0.0.1`, `localhost`, or `::1` is **400** — this is what defeats DNS rebinding.
 - **Origin rejection.** A request carrying a non-loopback browser `Origin` is **403**. Non-browser clients send no `Origin` and are unaffected.
+
+The shell commands and MCP servers the agent starts never inherit the sidecar token or GAIA's other internal credentials. To withhold your own variables from them as well, list the names in `GAIA_CHILD_ENV_DENY`; `GAIA_NO_DOTENV=1` stops the agent loading `.env` files. Both are described in [Configuration](/sdk/configuration).
 
 `GET /health`, `GET /version`, and `GET /v1/gaia/version` skip the token — they're the probes a host polls before any token is in play, and none of them exposes your data. `Host` and `Origin` still apply to them.
 
@@ -311,5 +333,5 @@ The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<
 
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
-- **No server-side confirmation flow** — over `/query`, every [confirmation-gated tool](#tools-that-need-your-approval) ends the run with a refusal instead of prompting over the stream.
+- **Server-side confirmation needs a session** — over `/query`, a [confirmation-gated tool](#tools-that-need-your-approval) is answered with `POST /v1/gaia/query/{run_id}/tool_decision` when the request carries a `session_id` and can answer; a one-shot request (no `session_id`, or `can_answer_questions: false`) still ends the run with a refusal instead of prompting.
 - **Image generation evicts the chat model** — the SD model has to be resident to draw, so the first reply after an image waits for the chat model to reload. Ask for pictures at a natural pause, not mid-thread.
