@@ -1468,6 +1468,8 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
     if "num_chunks" in data or "chunk_count" in data:
         chunks = data.get("num_chunks", data.get("chunk_count", 0))
         filename = data.get("filename", data.get("file_path", ""))
+        if data.get("already_indexed"):
+            return f"Already indexed ({chunks} chunks)"
         if filename:
             return f"Indexed {filename} ({chunks} chunks)"
         return f"Indexed document ({chunks} chunks)"

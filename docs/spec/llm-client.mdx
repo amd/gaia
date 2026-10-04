@@ -744,7 +744,9 @@ model initialization.
 - `test_llm_client_factory.py`: supported selection and shared interface.
 - `test_removed_llm_providers.py`: rejected legacy names and flags across the
   factory, SDK, base agent and CLI, before model initialization.
-- `test_lemonade_client.py`: supported Lemonade operations.
+- `unit/test_lemonade_client_http.py`: supported Lemonade operations and their
+  request shapes, against mocked HTTP.
+- `test_lemonade_client.py`: the same operations against a live Lemonade Server.
 - `test_lemonade_cloud_models.py`: local/cloud lifecycle separation.
 - `test_parallel_tool_calls.py`: preservation and execution of native calls.
 
