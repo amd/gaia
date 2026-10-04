@@ -1440,11 +1440,11 @@ def _installer_block(dirs: str) -> str:
 
 
 def _current_dirs(home: Path) -> str:
-    return f"{home}/.gaia/venv/bin:{home}/.gaia/bin"
+    return f"{home / '.gaia' / 'venv' / 'bin'}:{home / '.gaia' / 'bin'}"
 
 
 def _legacy_dirs(home: Path) -> str:
-    return f"{home}/.gaia/venv/bin"
+    return str(home / ".gaia" / "venv" / "bin")
 
 
 @pytest.fixture
@@ -1490,8 +1490,9 @@ class TestInstallerLeftovers:
         exit_code = uc.run(_ns(purge=True, dry_run=True), printer=captured)
 
         assert exit_code == uc.EXIT_OK, captured.text
-        for needle in (".gaia/bin", ".gaia/host", ".gaia/traces", ".zshrc"):
-            assert needle in captured.text, captured.text
+        for leftover in ("bin", "host", "traces"):
+            assert str(Path(".gaia") / leftover) in captured.text, captured.text
+        assert ".zshrc" in captured.text, captured.text
         assert (installer_home / ".gaia" / "host" / "instance.json").exists()
         assert zshrc.read_text() == original
 
