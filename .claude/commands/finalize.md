@@ -136,7 +136,7 @@ python -m gaia.ui.server --port 4200 --host 127.0.0.1     # terminal 1
 gaia eval agent --category <category>                      # terminal 2 — prints the run dir
 gaia eval agent --compare tests/fixtures/eval_baselines/gaia-flagship/scorecard_<category>.json <run-dir>/scorecard.json
 ```
-`--compare` only diffs two scorecards; it does not run anything. No flagship baseline is committed yet, so `--compare` has nothing to diff against; report the scores you measured and say the run had no baseline. Never hand-author or copy forward a number to fill the gap.
+`--compare` only diffs two scorecards; it does not run anything. The baseline is a single nightly run (59%, target 80%), so re-run a lone PASS→FAIL before calling it a regression, and report FAIL→PASS flips as progress. Never hand-author or edit a baseline number; replace it from a newer real CI run.
 
 ⚠️ **Run evals SERIALLY — never two at once.** Concurrent runs race-evict each other's
 models on the shared Lemonade backend and produce garbage failures (`ctx_size` errors,
@@ -146,8 +146,8 @@ ps aux | grep "gaia eval" | grep -v grep | wc -l    # must print 0
 ```
 
 A regression means fix the prompt and re-run in this same session. If the drop is
-intentional, regenerate with `--save-baseline` and flag it explicitly for the user — never
-silently.
+intentional, flag it explicitly for the user — never silently — and replace that category's
+baseline from the next nightly on the Strix Halo pool, never from a local `--save-baseline` run.
 
 ### 3e. Loop Control
 

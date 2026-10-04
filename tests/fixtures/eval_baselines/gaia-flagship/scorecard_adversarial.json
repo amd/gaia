@@ -1,0 +1,379 @@
+{
+  "run_id": "eval-20261003-090110",
+  "timestamp": "2026-10-03T09:10:16.789867+00:00",
+  "config": {
+    "backend_url": "http://127.0.0.1:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia"
+  },
+  "summary": {
+    "total_scenarios": 3,
+    "passed": 3,
+    "failed": 0,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 1.0,
+    "judged_pass_rate": 1.0,
+    "avg_score": 9.73,
+    "by_category": {
+      "adversarial": {
+        "passed": 3,
+        "failed": 0,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 9.729999999999999
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "empty_file",
+      "session_id": "f0d8f8b6-edee-4c33-9b02-6a8eff0a6230",
+      "status": "PASS",
+      "overall_score": 9.95,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Please index C:/actions-runner-01/_work/gaia/gaia/eval/corpus/adversarial/empty.txt and tell me what it contains.",
+          "agent_response": "That file is completely empty; there's nothing to index or contain. It has 0 bytes of content.",
+          "agent_tools": [
+            "index_document"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly called index_document on the empty file, received an 'error: File is empty' response, and immediately reported the file has 0 bytes and no indexable content — exactly matching the expected behavior. Minor personality deduction for a 'Verification: unverified' hook artifact appended to the response.",
+          "performance": {
+            "tokens_per_second": 37.9,
+            "time_to_first_token": 2.526,
+            "input_tokens": 307,
+            "output_tokens": 162,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 1,
+        "estimated_usd": 0.07
+      },
+      "elapsed_s": 75.4677906036377,
+      "category": "adversarial",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.9,
+        "min_tokens_per_second": 37.9,
+        "max_tokens_per_second": 37.9,
+        "avg_time_to_first_token": 2.526,
+        "min_time_to_first_token": 2.526,
+        "max_time_to_first_token": 2.526,
+        "total_input_tokens": 307,
+        "total_output_tokens": 162,
+        "turns_measured": 1,
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 1
+      }
+    },
+    {
+      "scenario_id": "large_document",
+      "session_id": "7baa6e2f-ff27-4fa0-8d0a-f327be542173",
+      "status": "PASS",
+      "overall_score": 9.45,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What was the compliance finding in Section 52?",
+          "agent_response": "According to large_report.md: The compliance finding in Section 52 relates to **three minor non-conformities** identified in supply chain documentation. These issues were found during a detailed review of supplier documentation and included:\n\n* **Incomplete Supplier Qualification Records:** Three hardware component suppliers onboarded in Q2 2024 lacked signed quality agreements, even though purchase orders referenced these requirements.\n* **Delayed Audit Reports:** Two software licensing vendors had audit reports that were not finalized within the required 30-day window following their audits due to auditor resource constraints.\n* **Missing Certificates of Insurance:** Four logistics providers had certificates of insurance on file that had expired, and updated copies had not been obtained despite requests being issued.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.4,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved the exact buried fact — three minor non-conformities in supply chain documentation — from Section 52 using query_specific_file. Minor efficiency penalty for redundant index_documents call on an already-indexed document.",
+          "performance": {
+            "tokens_per_second": 36.3,
+            "time_to_first_token": 20.338,
+            "input_tokens": 4747,
+            "output_tokens": 720,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Were there any major non-conformities?",
+          "agent_response": "According to large_report.md: No major non-conformities were found in the supply chain audit (Section 52). The summary finding indicated only three minor non-conformities regarding supplier documentation.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.5,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Expected answer is null — agent correctly stated no major non-conformities exist (only minor ones), correctly reflecting the document's silence on major findings. Lazy-refusal rule does not apply here. Agent efficiently used cached context from Turn 1 without re-querying.",
+          "performance": {
+            "tokens_per_second": 36,
+            "time_to_first_token": 23.105,
+            "input_tokens": 5455,
+            "output_tokens": 315,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.003
+      },
+      "elapsed_s": 201.15866494178772,
+      "category": "adversarial",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 36.1,
+        "min_tokens_per_second": 36,
+        "max_tokens_per_second": 36.3,
+        "avg_time_to_first_token": 21.721,
+        "min_time_to_first_token": 20.338,
+        "max_time_to_first_token": 23.105,
+        "total_input_tokens": 10202,
+        "total_output_tokens": 1035,
+        "turns_measured": 2,
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency",
+          "token_explosion"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "topic_switch",
+      "session_id": "9cf475e1-7e0e-4215-a45f-12fd08c3384c",
+      "status": "PASS",
+      "overall_score": 9.79,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey what's the PTO policy? how many days do we get in the first year?",
+          "agent_response": "The PTO policy provides paid time off (PTO) to full-time employees, which can be used for vacation, personal time, or illness at your discretion.\n\nRegarding your specific question about the first year: Full-time employees are granted **15 days** of paid time off during their first year of service. This starts accruing from your start date at a rate of 1.25 days per month.\n\nAccording to `C:\\actions-runner-01\\_work\\gaia\\gaia\\eval\\corpus\\documents\\employee_handbook.md` (page 4):\n*   **First year (0–12 months)** receives **15 days** of annual PTO.\n*   Unused PTO can be carried over into the next calendar year, up to a maximum of 10 days.",
+          "agent_tools": [
+            "index_documents",
+            "query_documents"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retrieved 15 days PTO for first-year employees from the employee handbook, exactly matching ground truth. Tool path was index_documents then query_documents — functional but slightly less optimal than query_specific_file; slight verbosity (accrual rate, carryover policy) without sycophancy.",
+          "performance": {
+            "tokens_per_second": 36.9,
+            "time_to_first_token": 12.115,
+            "input_tokens": 2879,
+            "output_tokens": 456,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "completely different topic lol -- what was Acme's Q3 revenue?",
+          "agent_response": "According to `C:\\actions-runner-01\\_work\\gaia\\gaia\\eval\\corpus\\documents\\acme_q3_report.md`:\n\nAcme Corp's Q3 2025 revenue was **$14.2 million**. This represents a significant increase of **+23%** compared to Q3 2024's revenue of $11.5 million.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent cleanly switched to acme_q3_report.md and returned exactly $14.2 million. Optimal tool selection (query_specific_file on the correct file). No cross-contamination from handbook. Direct and concise.",
+          "performance": {
+            "tokens_per_second": 36.7,
+            "time_to_first_token": 6.242,
+            "input_tokens": 1245,
+            "output_tokens": 275,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "going back to the HR stuff -- are contractors eligible for benefits?",
+          "agent_response": "According to `C:\\actions-runner-01\\_work\\gaia\\gaia\\eval\\corpus\\documents\\employee_handbook.md`:\n\n**No**, contractors are **NOT eligible** for company benefits programs. They are engaged through a service agreement and are not considered direct employees of Acme Corp. This applies specifically to health insurance, where coverage is available only to full-time employees, and also excludes them from the Employee Assistance Program (EAP).",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly switched back to the employee handbook on the 'HR stuff' cue and stated contractors are NOT eligible for benefits — matching ground truth exactly. Correctly targeted query_specific_file on employee_handbook.md with no confusion from the prior Q3 turn.",
+          "performance": {
+            "tokens_per_second": 35.7,
+            "time_to_first_token": 12.534,
+            "input_tokens": 2506,
+            "output_tokens": 270,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "and what was the CEO's Q4 outlook in that Acme report?",
+          "agent_response": "According to `C:\\actions-runner-01\\_work\\gaia\\gaia\\eval\\corpus\\documents\\acme_q3_report.md`:\n\nIn the CEO letter, Jane Smith projects that Acme Corp expects **15–18% growth** in Q4, which is expected to be driven by enterprise segment expansion and three new product launches scheduled for November.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly resolved 'that Acme report' as a reference to the Q3 report from turn 2, queried it with query_specific_file, and returned the exact CEO Q4 outlook of 15-18% growth driven by enterprise segment expansion — matching ground truth precisely.",
+          "performance": {
+            "tokens_per_second": 35.3,
+            "time_to_first_token": 7.009,
+            "input_tokens": 1247,
+            "output_tokens": 308,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 4,
+        "estimated_usd": 0.19
+      },
+      "elapsed_s": 269.2989110946655,
+      "category": "adversarial",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 36.1,
+        "min_tokens_per_second": 35.3,
+        "max_tokens_per_second": 36.9,
+        "avg_time_to_first_token": 9.475,
+        "min_time_to_first_token": 6.242,
+        "max_time_to_first_token": 12.534,
+        "total_input_tokens": 7877,
+        "total_output_tokens": 1309,
+        "turns_measured": 4,
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 4
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.263
+  },
+  "performance": {
+    "avg_tokens_per_second": 36.7,
+    "avg_time_to_first_token": 11.241,
+    "total_input_tokens": 18386,
+    "total_output_tokens": 2506,
+    "scenarios_with_data": 3,
+    "flags": [
+      "high_latency",
+      "token_explosion"
+    ]
+  }
+}

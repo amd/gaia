@@ -162,9 +162,6 @@ class _MinimalHandler(OutputHandler):
     def print_command_executing(self, command):
         pass
 
-    def print_agent_selected(self, agent_name, language, project_type):
-        pass
-
 
 class TestBaseHandlerDefault:
     """The root cause: a handler that cannot ask a human must not answer."""

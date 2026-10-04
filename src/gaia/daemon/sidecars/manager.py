@@ -517,6 +517,7 @@ class AgentSidecarManager:
         # the inherited env / any cwd already in popen_kwargs — never clobber
         # them. Delivery leg (0600 file vs deprecated bare env) is negotiated
         # pre-spawn (#2149), before the log opens so a refusal leaks nothing.
+        # Not child_env(): a sidecar is GAIA itself and must receive its credentials.
         spawn_env = {**os.environ, **(popen_kwargs.pop("env", None) or {})}
         self._apply_secret_delivery(spawn_env)
         # OAuth forward-out (#2154): when the spec declares a forwarded-mode

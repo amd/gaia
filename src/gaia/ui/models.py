@@ -15,6 +15,16 @@ except ImportError:
 # ── System ──────────────────────────────────────────────────────────────────
 
 
+def _lemonade_web_origin() -> str:
+    """Origin (``scheme://host:port``) of the Lemonade server GAIA talks to."""
+    from urllib.parse import urlparse
+
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+    parsed = urlparse(resolve_lemonade_base_url())
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 class DownloadProgress(BaseModel):
     """Progress of an in-flight Lemonade model download.
 
@@ -89,7 +99,8 @@ class SystemStatus(BaseModel):
     # size hint instead of a hard-coded one (the previous "~25 GB" was a stale
     # remnant from when the default was Qwen3.5-35B).
     default_model_size_gb: Optional[float] = None
-    lemonade_url: str = "http://localhost:13305"  # Lemonade web UI base URL
+    # Lemonade web UI origin; resolved per response (GAIA's server picks its port).
+    lemonade_url: str = Field(default_factory=_lemonade_web_origin)
     expected_model_loaded: bool = True  # False if a different model is loaded
     # Live download progress for ``default_model_name`` (or whatever is
     # currently being pulled). ``None`` when no pull is in flight.
@@ -106,6 +117,9 @@ class SystemStatus(BaseModel):
     # Set when ``~/.gaia/config.json`` exists but cannot be loaded; the message
     # names the file and how to fix it. ``active_profile`` is not read from it.
     config_error: Optional[str] = None
+    # One message per status probe that failed (catalog, stats, device info,
+    # disk space); the matching fields keep their "unknown" defaults.
+    probe_warnings: List[str] = Field(default_factory=list)
 
 
 # ── Tasks ──────────────────────────────────────────────────────────────────

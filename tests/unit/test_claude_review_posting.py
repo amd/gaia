@@ -365,3 +365,66 @@ def _run_classify(classify, tmp_path, log):
         for line in out.read_text(encoding="utf-8").splitlines()
         if "=" in line
     )
+
+
+# --- a review written by a model the job did not pin must not pass as a review ---
+
+_ARGS = "--max-turns 100\n--model claude-opus-5-5\n--allowedTools Read,Bash\n"
+
+
+def _ok_step(runner):
+    step = _step(runner, lambda n: n.startswith("Claude run completed"))
+    assert step is not None, "claude-run.yml lost its `ok` verdict step"
+    return step
+
+
+def test_every_claude_run_caller_pins_a_model(claude):
+    """The model check needs a --model to compare against; no pin, no proof."""
+    callers = [
+        (name, job)
+        for name, job in claude["jobs"].items()
+        if job.get("uses") == "./.github/workflows/claude-run.yml"
+    ]
+    assert callers, "no job calls claude-run.yml any more"
+    for name, job in callers:
+        assert re.search(
+            r"--model\s+claude-\S+", job["with"].get("claude_args", "")
+        ), f"{name} calls claude-run.yml without a --model"
+
+
+@needs_shell
+@pytest.mark.parametrize(
+    "args,models,ok",
+    [
+        (_ARGS, "claude-haiku-4-5-20251001,claude-opus-5-5", True),
+        (_ARGS, "claude-opus-5-5[1m]", True),
+        # The CLI substituted another model: a review exists, but not the pinned one's.
+        (_ARGS, "claude-haiku-4-5-20251001,claude-sonnet-4-6", False),
+        # A shared prefix is not a match.
+        (_ARGS, "claude-opus-5-50", False),
+        (_ARGS, "", False),
+        ("--max-turns 3\n", "claude-opus-5-5", False),
+    ],
+)
+def test_the_ok_verdict_requires_the_pinned_model(runner, tmp_path, args, models, ok):
+    script = tmp_path / "ok.sh"
+    script.write_text(_ok_step(runner)["run"], encoding="utf-8", newline="\n")
+    proc = subprocess.run(
+        [BASH, script.as_posix()],
+        env={
+            "PATH": os.environ["PATH"],
+            "CLAUDE_ARGS": args,
+            "MODELS": models,
+            "KIND": "review",
+            "TARGET": "PR #1",
+            "TURNS": "3",
+            "COST": "0.1",
+            "RUN_URL": "https://example.invalid/run",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (proc.returncode == 0) is ok, proc.stdout + proc.stderr
+    if not ok:
+        assert "::error" in proc.stdout

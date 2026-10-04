@@ -826,6 +826,7 @@ export interface SystemStatus {
   model_labels?: string[] | null;
   model_loaded?: string | null;
   model_size_gb?: number | null;
+  probe_warnings?: string[];
   processor_name?: string | null;
   start_command?: string | null;
   start_instruction?: string | null;
