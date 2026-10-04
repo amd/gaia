@@ -912,14 +912,12 @@ class TestLemonadePythonResolution:
     interpreter by inspecting the lemonade-server console script.
     """
 
-    # Only the module's sys is POSIX: a global sys.platform patch outlives
-    # pyfakefs, whose teardown then calls os.getuid on Windows.
     def test_resolves_direct_shebang_posix(self, fake_home, monkeypatch):
         lemonade = fake_home / "bin" / "lemonade-server"
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"#!/opt/venvs/lemon/bin/python\n# rest\n")
 
-        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
+        monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
 
         assert uc._resolve_lemonade_python() == "/opt/venvs/lemon/bin/python"
@@ -929,13 +927,13 @@ class TestLemonadePythonResolution:
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"#!/usr/bin/env python3\n# rest\n")
 
-        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
+        monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
 
         assert uc._resolve_lemonade_python() == "python3"
 
     def test_not_on_path_returns_none(self, monkeypatch):
-        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
+        monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setattr(uc.shutil, "which", lambda name: None)
         assert uc._resolve_lemonade_python() is None
 
@@ -944,7 +942,7 @@ class TestLemonadePythonResolution:
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"# no shebang here\nprint('hi')\n")
 
-        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
+        monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
 
         assert uc._resolve_lemonade_python() is None
@@ -1469,12 +1467,6 @@ def installer_home(fake_home, monkeypatch):
     return fake_home
 
 
-# install.sh writes these rc blocks; on Windows install.ps1 edits the user PATH.
-_posix_rc_only = pytest.mark.skipif(
-    sys.platform.startswith("win"), reason="shell rc blocks are POSIX-only"
-)
-
-
 class TestInstallerLeftovers:
     def test_purge_removes_bin_host_and_traces(self, installer_home):
         captured = _Capture()
@@ -1497,18 +1489,11 @@ class TestInstallerLeftovers:
         exit_code = uc.run(_ns(purge=True, dry_run=True), printer=captured)
 
         assert exit_code == uc.EXIT_OK, captured.text
-        gaia = Path(".gaia")
-        for needle in (
-            str(gaia / "bin"),
-            str(gaia / "host"),
-            str(gaia / "traces"),
-            ".zshrc",
-        ):
+        for needle in (".gaia/bin", ".gaia/host", ".gaia/traces", ".zshrc"):
             assert needle in captured.text, captured.text
         assert (installer_home / ".gaia" / "host" / "instance.json").exists()
         assert zshrc.read_text() == original
 
-    @_posix_rc_only
     def test_rc_blocks_removed_and_other_lines_byte_identical(self, installer_home):
         home = installer_home
         zshrc = home / ".zshrc"
@@ -1538,7 +1523,6 @@ class TestInstallerLeftovers:
         assert bashrc.read_bytes() == b"export A=1\r\nexport B=2\n"
         assert profile.read_bytes() == profile_bytes
 
-    @_posix_rc_only
     def test_rc_symlink_is_edited_through_not_replaced(self, installer_home, fs):
         home = installer_home
         dotfile = home / "dotfiles" / "zshrc"

@@ -387,18 +387,6 @@ class _FakeProc:
         return 0
 
 
-def _fake_spawns(monkeypatch, popen):
-    """Fake every child the manager starts: the sidecar through *popen*, and
-    the Windows ``taskkill`` its shutdown runs, which would otherwise go through
-    the faked Popen (or, unfaked, kill whatever really owns the fake pid)."""
-    monkeypatch.setattr(mgr.subprocess, "Popen", popen)
-    monkeypatch.setattr(
-        mgr.subprocess,
-        "run",
-        lambda argv, **kw: mgr.subprocess.CompletedProcess(argv, 0),
-    )
-
-
 class _FakeResp:
     def __init__(self, payload, status=200):
         self._payload, self.status_code = payload, status
@@ -422,7 +410,7 @@ def _install_fake_spawn(monkeypatch, tmp_path, *, spec=None, version_payload=Non
         captured["argv"] = argv
         return _FakeProc()
 
-    _fake_spawns(monkeypatch, _fake_popen)
+    monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(
         mgr.atexit, "register", lambda fn: captured["atexit"].append(fn)
     )
@@ -516,7 +504,7 @@ def _install_fake_user_spawn(monkeypatch, tmp_path, *, version):
         captured["argv"] = argv
         return _FakeProc()
 
-    _fake_spawns(monkeypatch, _fake_popen)
+    monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
     m = mgr.AgentSidecarManager(
@@ -612,7 +600,7 @@ def test_version_major_mismatch_raises(monkeypatch, tmp_path):
     monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
     src = tmp_path / "email"
     (src / "packaging").mkdir(parents=True)
-    _fake_spawns(monkeypatch, lambda argv, **kw: _FakeProc())
+    monkeypatch.setattr(mgr.subprocess, "Popen", lambda argv, **kw: _FakeProc())
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
 
     m = mgr.AgentSidecarManager(
@@ -674,7 +662,7 @@ def test_health_rejects_foreign_server_on_port(monkeypatch, tmp_path):
     monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
     src = tmp_path / "email"
     (src / "packaging").mkdir(parents=True)
-    _fake_spawns(monkeypatch, lambda argv, **kw: _FakeProc())
+    monkeypatch.setattr(mgr.subprocess, "Popen", lambda argv, **kw: _FakeProc())
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
     monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
@@ -699,7 +687,7 @@ def test_pinned_version_with_missing_apiversion_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
     src = tmp_path / "email"
     (src / "packaging").mkdir(parents=True)
-    _fake_spawns(monkeypatch, lambda argv, **kw: _FakeProc())
+    monkeypatch.setattr(mgr.subprocess, "Popen", lambda argv, **kw: _FakeProc())
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
     monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
@@ -741,7 +729,7 @@ def test_concurrent_start_spawns_only_one_sidecar(monkeypatch, tmp_path):
         return 50000 + spawn_count["n"]
 
     monkeypatch.setattr(mgr, "find_free_port", _slow_free_port)
-    _fake_spawns(monkeypatch, _fake_popen)
+    monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
     m = mgr.AgentSidecarManager(
@@ -802,7 +790,7 @@ def test_start_retries_on_early_exit_then_succeeds(monkeypatch, tmp_path):
         ports.append(argv[argv.index("--port") + 1])
         return procs.pop(0)
 
-    _fake_spawns(monkeypatch, _fake_popen)
+    monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
     # killpg must be a no-op for the fake procs on the early-exit shutdown.
@@ -839,7 +827,7 @@ def test_start_does_not_retry_on_health_timeout(monkeypatch, tmp_path):
         spawns.append(argv)
         return _FakeProc()
 
-    _fake_spawns(monkeypatch, _fake_popen)
+    monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
     monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)

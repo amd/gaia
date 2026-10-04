@@ -28,7 +28,6 @@ from gaia.agents.base.memory import (
     _embedding_to_blob,
 )
 from gaia.agents.base.memory_store import MemoryStore
-from tests.unit.faiss_support import require_faiss
 
 DIM = 8
 
@@ -83,8 +82,6 @@ QUERY = "why does the toybox test suite fail on CI"
 
 @pytest.fixture
 def host(store):
-    # A refused search surfaces nothing, so the absence checks would pass too.
-    require_faiss()
     vectors: Dict[str, np.ndarray] = {QUERY: _axis(0)}
     h = _Host(store, vectors)
     h.vectors = vectors
@@ -388,7 +385,6 @@ class _TurnHost(_Host, _AgentBase):
 
 
 def test_the_memory_rides_on_the_user_message_not_the_system_prompt(store):
-    require_faiss()
     vectors: Dict[str, np.ndarray] = {QUERY: _axis(0)}
     host = _TurnHost(store, vectors)
     _remember(
