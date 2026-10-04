@@ -9,6 +9,7 @@ import tempfile
 import warnings
 from pathlib import Path
 
+from gaia.log_rotation import SharedRotatingFileHandler
 from gaia.tool_cancellation import AbandonedWorkerLogFilter
 
 #: Env override for the log file of an agent run from the CLI (`gaia chat`).
@@ -123,13 +124,13 @@ class GaiaLogger:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(console_formatter)
 
-        # Configure file handler with UTF-8 encoding.
+        # Size-capped and safe to share across GAIA processes; see gaia.log_rotation.
         # Fall back gracefully if the log file can't be opened for writing
         # (e.g. permission denied, read-only filesystem). We try a couple
         # of fallback locations before giving up and going console-only.
         file_handler = None
         try:
-            file_handler = logging.FileHandler(self.log_file, encoding="utf-8")
+            file_handler = SharedRotatingFileHandler(self.log_file)
             file_handler.setFormatter(file_formatter)
         except (PermissionError, OSError) as primary_err:
             fallback_candidates = []
@@ -151,7 +152,7 @@ class GaiaLogger:
             for candidate in fallback_candidates:
                 try:
                     candidate.parent.mkdir(parents=True, exist_ok=True)
-                    file_handler = logging.FileHandler(candidate, encoding="utf-8")
+                    file_handler = SharedRotatingFileHandler(candidate)
                     file_handler.setFormatter(file_formatter)
                     print(
                         f"[gaia] Writing logs to: {candidate}",
@@ -338,7 +339,7 @@ class GaiaLogger:
         path = Path(path)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            handler = logging.FileHandler(path, encoding="utf-8")
+            handler = SharedRotatingFileHandler(path)
         except OSError as e:
             raise ValueError(
                 f"Cannot write the log file {path} ({e}). "

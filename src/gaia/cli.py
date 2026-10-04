@@ -32,6 +32,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
+from gaia.log_rotation import log_family
 from gaia.logger import get_logger
 from gaia.mcp.ports import (
     AGENT_UI_MCP_PORT,
@@ -7487,6 +7488,10 @@ def _bootstrap_reset_system():
             print("✅ System context collection re-enabled.")
 
 
+#: Per-file ceiling for logs in a diagnostics bundle; larger files keep their tail.
+_DIAG_MAX_LOG_BYTES = 50 * 1024 * 1024
+
+
 def handle_diagnostics_command(args):
     """Handle the 'gaia diagnostics' command.
 
@@ -7494,7 +7499,8 @@ def handle_diagnostics_command(args):
     tarball suitable for attaching to bug reports. Captures:
 
     - ``~/.gaia/electron-install.log``
-    - ``~/.gaia/gaia.log``
+    - ``~/.gaia/gaia.log`` and its rotated files (``gaia.log.1`` ...); a file
+      over 50 MB contributes only its last 50 MB, as ``<name>.tail``
     - ``~/.gaia/electron-main.log`` (if present; emitted by the Electron shell)
     - ``~/.gaia/electron-install-state.json``
     - ``uname -a`` output
@@ -7634,15 +7640,25 @@ def handle_diagnostics_command(args):
                         filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
                     )
 
-            # Log files gated by --no-logs
+            # Log files gated by --no-logs. Rotated backups (gaia.log.1, ...)
+            # ride along; a log from before the size cap keeps only its tail.
             if not args.no_logs:
-                for entry in log_files:
-                    if entry.is_file():
+                for entry in (f for base in log_files for f in log_family(base)):
+                    size = entry.stat().st_size
+                    if size <= _DIAG_MAX_LOG_BYTES:
                         tar.add(
                             str(entry),
                             arcname=entry.name,
                             filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
                         )
+                        continue
+                    with open(entry, "rb") as fh:
+                        fh.seek(size - _DIAG_MAX_LOG_BYTES)
+                        tail = fh.read(_DIAG_MAX_LOG_BYTES)
+                    info = tarfile.TarInfo(name=f"{entry.name}.tail")
+                    info.size = len(tail)
+                    info.mtime = int(entry.stat().st_mtime)
+                    tar.addfile(info, io.BytesIO(tail))
             else:
                 note = b"Log files omitted (--no-logs was passed).\n"
                 info = tarfile.TarInfo(name="LOGS-OMITTED.txt")
