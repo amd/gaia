@@ -9306,6 +9306,16 @@ Do NOT wrap conversational replies in JSON.
                                 "from an earlier turn, say so without claiming you saved it now."
                             )
                         )
+                        refused = set(self._completion_evidence.refused.values())
+                        if artifact_gaps and set(artifact_gaps) <= refused:
+                            # Asking for the write again would re-ask a "no".
+                            correction = (
+                                "[check:completion] "
+                                + " ".join(artifact_gaps)
+                                + " Do not retry that write, here or anywhere "
+                                "else. Say it was not saved, and give your "
+                                "complete answer again."
+                            )
                         messages.append({"role": "user", "content": correction})
                         conversation.append({"role": "user", "content": correction})
                         continue
