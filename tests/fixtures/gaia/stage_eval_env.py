@@ -88,7 +88,9 @@ def install_fake_gh(home: Path) -> Path:
         f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8"
     )
     if sys.platform == "win32":
-        sys.path.insert(0, str(REPO_ROOT / "src"))
+        src = str(REPO_ROOT / "src")
+        if src not in sys.path:
+            sys.path.insert(0, src)
         from gaia.eval.bench.ghstub import _exe_launcher
 
         (bin_dir / "gh.exe").write_bytes(_exe_launcher(sys.executable, script))

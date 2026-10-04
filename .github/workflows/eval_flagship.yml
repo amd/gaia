@@ -1365,8 +1365,8 @@ jobs:
               Write-Host "::error::Could not start tests/fixtures/gaia/serve_fixtures.py - the gaia_* web and skill-hub scenarios depend on it."
               exit 1
             }
-            # live: hits a real external service. local_blocked_win_shim: needs
-            # the fake gh, which cannot win argv resolution on Windows (#4427).
+            # live: hits a real external service. local_blocked_win_shim: kept off
+            # until a CI run confirms the staged gh.exe answers (#4427).
             $extraArgs = @('--exclude-tag', 'live', '--exclude-tag', 'local_blocked_win_shim')
           }
           $backend = Start-Process -FilePath "python" `
