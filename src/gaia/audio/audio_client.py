@@ -26,7 +26,7 @@ class AudioClient:
             return f"You said: {text}"
 
         audio = AudioClient(
-            whisper_model_size="base",       # tiny/base/small/medium/large
+            whisper_model_size="base",       # tiny/base/small/medium/large/turbo
             audio_device_index=None,          # None = default input device
             silence_threshold=0.5,            # seconds of silence before send
             mic_threshold=0.003,              # voice-activity energy floor
@@ -34,6 +34,9 @@ class AudioClient:
         )
         asyncio.run(audio.start_voice_chat(process_message))
         ```
+
+    Speech recognition (Whisper) and voice output (Kokoro) are both served by
+    Lemonade Server; the models are pulled on first use.
 
     To enumerate audio input devices use ``WhisperAsr.list_audio_devices()``
     from ``gaia.audio.whisper_asr`` — ``AudioClient`` itself does not expose
@@ -64,6 +67,7 @@ class AudioClient:
         self.silence_threshold = silence_threshold
         self.mic_threshold = mic_threshold
         self.enable_tts = enable_tts
+        self.base_url = base_url
 
         #: True once the session is stopping on purpose ("stop", Ctrl+C). The
         #: supervisor cannot otherwise tell a requested quit from a dead
@@ -122,6 +126,8 @@ class AudioClient:
                 transcription_queue=self.transcription_queue,
                 silence_threshold=self.mic_threshold,
                 min_audio_length=16000 * 0.5,  # 0.5 second minimum at 16kHz
+                base_url=self.base_url,
+                say=print,
             )
 
             # Log the thresholds being used (reduce verbosity)
@@ -161,7 +167,9 @@ class AudioClient:
                         # Say why, on screen. This used to be a debug-level
                         # warning, so a dead microphone read as an endless
                         # "Listening…" (#3554).
-                        reason = getattr(self.whisper_asr, "mic_error", None)
+                        reason = getattr(
+                            self.whisper_asr, "mic_error", None
+                        ) or getattr(self.whisper_asr, "asr_error", None)
                         if reason:
                             self.log.error(reason)
                             print(f"\n{reason}")
@@ -171,6 +179,9 @@ class AudioClient:
                         break
                     await asyncio.sleep(0.1)
 
+                asr_error = getattr(self.whisper_asr, "asr_error", None)
+                if self._voice_loop_error is None and isinstance(asr_error, str):
+                    self._voice_loop_error = RuntimeError(asr_error)
                 if (
                     self._voice_loop_error is None
                     and self.whisper_asr
@@ -198,7 +209,7 @@ class AudioClient:
 
         except ImportError:
             self.log.error(
-                'WhisperAsr not found. Please install voice support with: uv pip install ".[talk]"'
+                'Voice input needs sounddevice: uv pip install "amd-gaia[talk]"'
             )
             raise
         except Exception as e:
@@ -400,12 +411,13 @@ class AudioClient:
             try:
                 from gaia.audio.kokoro_tts import KokoroTTS
 
-                self.tts = KokoroTTS()
+                self.tts = KokoroTTS(base_url=self.base_url, say=print)
                 self.log.debug("TTS initialized successfully")
             except Exception as e:
                 raise RuntimeError(
-                    f'Failed to initialize TTS:\n{e}\nInstall talk dependencies with: uv pip install ".[talk]"\nYou can also use --no-tts option to disable TTS'
-                )
+                    f"Failed to initialize voice output: {e}\n"
+                    "Use --no-tts to talk without voice output."
+                ) from e
 
     def _start_stdin_listener(self) -> bool:
         """Start the session's single Enter-to-interrupt listener (terminal only)."""

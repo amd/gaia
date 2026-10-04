@@ -432,7 +432,7 @@ gaia eval agent --compare \
   <printed-output-path>/scorecard.json
 ```
 
-**Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), regenerate the baseline with `--save-baseline` and call it out explicitly in the PR description — the reviewer needs to see the diff between baselines, not just the new score.
+**Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), call it out explicitly in the PR description and replace that category's `scorecard_<category>.json` from the next nightly on the Strix Halo pool — never from a local `--save-baseline` run, which writes elsewhere and measures a different machine. The reviewer needs to see the diff between baselines, not just the new score.
 
 Report what you compared: name the baseline run, list scenarios that went PASS→FAIL (regressions) and FAIL→PASS (progress toward 80%) separately, and re-run any lone flip before trusting it.
 

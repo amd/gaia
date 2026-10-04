@@ -110,29 +110,10 @@ You should see `(.venv)` in your terminal prompt when activated.
 uv pip install -e ".[dev]"
 ```
 
-<Warning>
-  **Linux/WSL users:** the base install and `[dev]` have no PyTorch, but the `[talk]`, `[audio]` and `[ui]` extras do. Whenever you include any of them, pass `--extra-index-url` to get CPU-only PyTorch instead of the CUDA build.
-</Warning>
-
 **With optional extras:**
 ```bash
-# Linux/WSL - CPU-only PyTorch for [talk] / [audio] / [ui]
-uv pip install -e ".[dev,talk,rag,ui]" --extra-index-url https://download.pytorch.org/whl/cpu
-
-# Windows
 uv pip install -e ".[dev,talk,rag,ui]"
 ```
-
-<Note>
-On Linux the flag is required for every `uv pip install` that includes `[talk]`,
-`[audio]` or `[ui]` — all three resolve PyTorch. There is no config block that removes the need for it: uv's
-`[tool.uv.sources]` and `[[tool.uv.index]]` apply only to the project interface
-(`uv sync`, `uv lock`, `uv add`), never to `uv pip install`, and `[tool.uv.pip]`
-was rejected for the same reason — see the note in `pyproject.toml`. Omit the
-flag and PyTorch resolves from PyPI as a CUDA
-build, pulling ~18 `nvidia-*` / `cuda-*` packages — a 4.7 GB venv instead of
-1.5 GB.
-</Note>
 
 **Available extras** (see `setup.py` for the full list):
 
@@ -141,10 +122,9 @@ build, pulling ~18 `nvidia-*` / `cuda-*` packages — a 4.7 GB venv instead of
 | `dev` | Test + lint tooling (pytest, black, isort, mypy, pylint, …) |
 | `ui` | Agent UI backend (FastAPI + uvicorn + SSE); **required for `gaia --ui`** |
 | `api` | OpenAI-compatible API server (`gaia api start`) |
-| `rag` | RAG document Q&A (sentence-transformers, FAISS, pdfplumber, …) |
-| `talk` | Voice ASR/TTS (whisper, sounddevice, kokoro-onnx) |
+| `rag` | RAG document Q&A (FAISS, PyMuPDF, pypdf, Office formats; embeddings come from Lemonade) |
+| `talk` | Microphone and speaker I/O for `gaia talk` (sounddevice); Whisper and Kokoro run in Lemonade |
 | `mcp` | MCP client/server bridge (`gaia mcp start`) |
-| `audio` | Lower-level audio tooling shared by talk |
 | `image` | Terminal image rendering (`term-image`) |
 | `eval` | Evaluation framework (ground-truth generation, batch experiments) |
 | `youtube` | `gaia youtube --download-transcript` |

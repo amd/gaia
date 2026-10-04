@@ -16,12 +16,14 @@ the profile's min_context_size, which is where that requirement is enforced.
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import urlparse
 
 # Rich imports for better CLI formatting
 try:
@@ -34,7 +36,13 @@ except ImportError:
     RICH_AVAILABLE = False
 
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.install_hints import source_install_command
+from gaia.agents.install_hints import (
+    PackageInstallerUnavailableError,
+    format_command,
+    gaia_extras_install_args,
+    resolve_pip_frontend,
+    source_install_command,
+)
 from gaia.installer._stdin import stdin_is_tty
 from gaia.llm.model_fit import MachineCapacity
 from gaia.logger import get_logger
@@ -42,6 +50,13 @@ from gaia.ui.build import WebuiBuildStatus
 from gaia.version import LEMONADE_MIN_VERSION
 
 log = get_logger(__name__)
+
+# The terminal UI ships only with the GAIA installer, never with the wheel.
+_INSTALLER_HINT = (
+    "irm https://amd-gaia.ai/install.ps1 | iex"
+    if sys.platform == "win32"
+    else "curl -fsSL https://amd-gaia.ai/install.sh | sh"
+)
 
 
 def is_embedding_model_id(model_id: str) -> bool:
@@ -64,9 +79,10 @@ HUB_INSTALL_AGENTS = frozenset({"gaia"})
 
 # Agent ids a profile's quick-start commands need, whether or not `gaia init`
 # can fetch them. Wider than HUB_INSTALL_AGENTS by exactly `chat`: `--profile
-# chat` and `--profile npu` both lead with `gaia chat`, which resolves through
-# the `gaia-agent-chat` wheel, so reporting "initialization complete" without
-# it would be a false promise even though init cannot install it.
+# chat` and `--profile npu` both lead with `gaia chat`, which imports the
+# flagship's `gaia-agent-gaia` wheel and the `gaia-agent-chat` wheel it builds
+# on, so reporting "initialization complete" without them would be a false
+# promise even though init cannot install them.
 PROFILE_REQUIRED_AGENTS = HUB_INSTALL_AGENTS | {"chat"}
 
 # Hub agent id -> the module a source/pip install of it makes importable. Every
@@ -84,9 +100,9 @@ INIT_PROFILES = {
     "gaia": {
         "description": "The flagship GAIA agent — chat, documents, data, web, memory",
         # Installs the flagship from the Agent Hub, which publishes it as a
-        # native binary (`gaia-agent`), not a wheel -- so this does NOT bring
-        # `gaia-agent-chat` along the way a pip dependency would. `gaia chat`
-        # still needs that wheel separately; the completion message says so.
+        # native binary (`gaia-agent`), not a wheel -- so nothing it installs is
+        # importable. `gaia chat` still needs the `gaia-agent-chat` and
+        # `gaia-agent-gaia` wheels separately; the completion message says so.
         "agent": "gaia",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",
@@ -733,8 +749,6 @@ class InitCommand:
                 "and `gaia init` sets up GAIA's own Lemonade Server."
             )
         if self._lemonade_base_url:
-            from urllib.parse import urlparse
-
             hostname = urlparse(self._lemonade_base_url).hostname or "localhost"
             if hostname not in ("localhost", "127.0.0.1", "::1"):
                 self.remote = True
@@ -861,6 +875,39 @@ class InitCommand:
                 size_str += f"/{total / 1024 / 1024:.1f} MB"
             self._print(f"\r   [{bar}] {percent:.0f}% ({size_str})", end="")
 
+    @staticmethod
+    def _tui_installed() -> bool:
+        """True if gaia-tui is on PATH or in GAIA's own bin dir."""
+        if shutil.which("gaia-tui") is not None:
+            return True
+        from gaia.config import gaia_home
+
+        name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        if (gaia_home() / "bin" / name).is_file():
+            return True
+        if sys.platform != "win32":
+            return False
+        install_dir = InitCommand._nsis_install_dir()
+        return install_dir is not None and (install_dir / name).is_file()
+
+    @staticmethod
+    def _nsis_install_dir() -> Optional[Path]:
+        """Where the Windows installer put gaia-tui.exe (installer/nsis/gaia.nsi)."""
+        import winreg
+
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, r"Software\AMD\GAIA", 0, winreg.KEY_READ
+            ) as key:
+                value, _kind = winreg.QueryValueEx(key, "InstallDir")
+            return Path(value)
+        except FileNotFoundError:
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if not local_app_data:
+                return None
+            # The installer's own default InstallDir.
+            return Path(local_app_data) / "Programs" / "GAIA"
+
     def _install_pip_extras(self) -> bool:
         """
         Install pip extras required by the current profile.
@@ -874,80 +921,47 @@ class InitCommand:
             return True
 
         extras_str = ",".join(pip_extras)
+        install_args = gaia_extras_install_args(pip_extras)
+        try:
+            frontend = resolve_pip_frontend()
+        except PackageInstallerUnavailableError as e:
+            self._print_error(f"Could not install [{extras_str}] extras: {e}")
+            return False
 
-        # Package-manager frontends to try, most-preferred first. The standalone
-        # ``uv`` binary leads because uv-created venvs ship neither ``pip`` nor
-        # the ``uv`` module, so ``python -m uv`` / ``python -m pip`` both fail
-        # there; the standalone binary honours the active VIRTUAL_ENV instead.
-        frontends = [
-            ["uv", "pip"],
-            [sys.executable, "-m", "uv", "pip"],
-            [sys.executable, "-m", "pip"],
-        ]
-
-        # Detect editable vs package install using whichever frontend responds.
-        editable = False
-        location = ""
-        for frontend in frontends:
-            try:
-                result = subprocess.run(
-                    frontend + ["show", "amd-gaia"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-            except (FileNotFoundError, OSError):
-                continue
-            if result.returncode != 0:
-                continue
-            for line in result.stdout.splitlines():
-                if line.startswith("Editable project location:"):
-                    editable = True
-                    location = line.split(":", 1)[1].strip()
-                    break
-            break
-
-        # The fallback message must resolve in a stock venv with no `uv` on
-        # PATH (same reasoning as gaia.agents.install_hints.
-        # source_install_command, #2358) -- this is the frontend the loop
-        # below always ends up trying last, so it's the one the user's
-        # terminal message must actually work with.
-        if editable and location:
-            install_spec = f'{sys.executable} -m pip install -e ".[{extras_str}]"'
-            install_args = ["install", "-e", f"{location}[{extras_str}]"]
-        else:
-            install_spec = f'{sys.executable} -m pip install "amd-gaia[{extras_str}]"'
-            install_args = ["install", f"amd-gaia[{extras_str}]"]
-
+        argv = [*frontend.argv, *install_args]
+        retry = format_command([*frontend.display, *install_args])
         self._print_success(f"Installing extras: {extras_str}")
+        log.debug("Installing extras: %s", argv)
+        try:
+            result = subprocess.run(  # noqa: S603 - argv is constructed, not shell
+                argv, capture_output=True, text=True, check=False, timeout=900
+            )
+        except subprocess.TimeoutExpired:
+            self._print_error(
+                f"Installing [{extras_str}] extras timed out after 15 minutes. "
+                f"Check your network, then run `{retry}` and re-run `gaia init`."
+            )
+            return False
+        except OSError as e:
+            self._print_error(
+                f"Could not run the package installer ({argv[0]}): {e}. "
+                f"Fix it, then run `{retry}` and re-run `gaia init`."
+            )
+            return False
 
-        for frontend in frontends:
-            try:
-                result = subprocess.run(
-                    frontend + install_args,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                    check=False,
-                )
-                if result.returncode == 0:
-                    self._print_success(f"Installed [{extras_str}] dependencies")
-                    return True
-            except (FileNotFoundError, OSError):
-                continue
-            except subprocess.TimeoutExpired:
-                self._print_warning(
-                    f"Pip install timed out. Please run manually: {install_spec}"
-                )
-                return True
-            except Exception:
-                continue
+        if result.returncode != 0:
+            output = (result.stderr or result.stdout or "").strip()
+            tail = "\n".join(output.splitlines()[-20:]) or "(no output)"
+            self._print_error(
+                f"Installing [{extras_str}] extras failed (exit "
+                f"{result.returncode}). Document Q&A needs them.\n"
+                f"{tail}\n"
+                f"Fix the error above, then run `{retry}` and re-run `gaia init`."
+            )
+            return False
 
-        self._print_warning(
-            f"Could not install [{extras_str}] extras automatically. "
-            f"Please run: {install_spec}"
-        )
-        return True  # Warn but don't fail
+        self._print_success(f"Installed [{extras_str}] dependencies")
+        return True
 
     def run(self) -> int:
         """
@@ -1043,15 +1057,15 @@ class InitCommand:
                 self._print_step(
                     step_num, total_steps, "Installing Python dependencies..."
                 )
-                self._install_pip_extras()
+                if not self._install_pip_extras():
+                    return 1
 
             # Ensure the profile's hub agent (chat's standalone wheel) is
             # installed (#2358). Independent of the pip-extras step above:
             # the hub install targets the isolated
             # ~/.gaia/agents/chat/site-packages dir, while [rag] extras
             # target the ACTIVE interpreter — one must not replace or block
-            # the other. Unlike _install_pip_extras (warn-but-continue), a
-            # genuine failure here is allowed to propagate into this
+            # the other. A genuine failure here is allowed to propagate into this
             # method's own top-level `except Exception` below, which already
             # converts it into an actionable non-zero exit — silently
             # continuing would just recreate the "chat isn't installed"
@@ -1094,9 +1108,9 @@ class InitCommand:
             step_num += 1
             self._print("")
             self._print_step(step_num, total_steps, "Verifying setup...")
-            if not self._verify_setup():
-                return 1
+            verify_ok = self._verify_setup()
 
+            # Saved even when verification fails -- the models may be fine.
             # Persist profile choice to ~/.gaia/config.json
             try:
                 from gaia.config import GaiaConfig, GaiaConfigError
@@ -1124,10 +1138,13 @@ class InitCommand:
                 )
                 return 1
 
+            if not verify_ok:
+                return 1
+
             # A hard Agent UI build failure means the profile's UI isn't
-            # usable -- don't report plain success for it. verify_setup and
-            # config persistence above already ran unconditionally, since
-            # neither depends on the frontend build. The build step above
+            # usable -- don't report plain success for it. Config persistence
+            # above already ran, since it doesn't depend on the frontend
+            # build. The build step above
             # already printed the actionable message via warn_fn; don't
             # repeat the full paragraph, just name the outcome.
             if webui_build_result is not None and webui_build_result.status in (
@@ -1620,9 +1637,14 @@ class InitCommand:
                         # Context was set but is too small
                         return (False, f"Context {actual_ctx} < {min_ctx} required")
                     else:
-                        # Context not in recipe_options - should not happen after forced unload/reload
-                        # Mark as unverified but don't fail the test
-                        self._ctx_verified = None  # Explicitly mark as unverified
+                        # Inference still runs, so warn rather than fail.
+                        log.warning(
+                            "Lemonade did not report ctx_size for %s after loading "
+                            "it with ctx_size=%s; context is unverified",
+                            model_id,
+                            min_ctx,
+                        )
+                        self._ctx_verified = None
                 except Exception as e:
                     return (False, f"Context check failed: {str(e)[:50]}")
             else:
@@ -1779,6 +1801,7 @@ class InitCommand:
 
             models_passed = 0
             models_failed = []
+            models_ctx_unverified = []
 
             try:
                 for model_id in model_ids:
@@ -1816,6 +1839,7 @@ class InitCommand:
                             elif self._ctx_verified is None:
                                 # Context could not be verified
                                 ctx_msg = " [yellow]⚠️ Context unverified![/yellow]"
+                                models_ctx_unverified.append(model_id)
 
                         self.console.print(
                             f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]{ctx_msg}"
@@ -1893,7 +1917,28 @@ class InitCommand:
             else:
                 self._print_success(f"All {models_passed} model(s) verified")
 
-            return True  # Don't fail init due to model issues
+            if models_ctx_unverified:
+                self.console.print()
+                self._print_warning(
+                    "Lemonade did not report a context size for "
+                    f"{', '.join(models_ctx_unverified)}, so GAIA cannot confirm "
+                    "long prompts and documents fit. The model answers, but if "
+                    "long chats or documents get truncated, update Lemonade "
+                    f"Server and re-run `gaia init --profile {self.profile} --yes`."
+                )
+
+            if models_failed:
+                self.console.print()
+                failed_ids = ", ".join(m for m, _ in models_failed)
+                self._print_error(
+                    f"Model verification failed for: {failed_ids}. "
+                    "If the error above looks transient (timeout, out of "
+                    "memory), re-run `gaia init` first. Otherwise follow the "
+                    "steps above to re-download them, then re-run `gaia init`."
+                )
+                return False
+
+            return True
 
         except Exception as e:
             self._print_error(f"Verification failed: {e}")
@@ -1926,16 +1971,22 @@ class InitCommand:
         return hub_installer.read_sentinel(agent_id) is not None
 
     @staticmethod
-    def _chat_agent_available() -> bool:
-        """Whether the standalone gaia-agent-chat wheel is importable.
+    def _chat_agent_missing_wheels() -> list:
+        """The wheels ``gaia chat`` imports that are missing, in install order.
 
-        ``gaia chat`` resolves through that wheel (#1102), which no init
-        profile installs (it isn't a pip extra -- #2240). Printing `gaia
-        chat` as a ready next step when it isn't installed is a false
-        promise, so completion messaging checks first. Delegates to
-        ``_is_hub_agent_available``, so a hub install counts too.
+        ``gaia chat`` runs the flagship (``gaia_agent``), which builds on the
+        ``gaia_agent_chat`` wheel. No init profile installs either as a wheel
+        (#2240), and the flagship the hub installs is a binary no import can
+        see -- so only an importable ``gaia_agent`` counts for it, never its
+        hub sentinel. Printing `gaia chat` as a ready next step without both
+        is a false promise, so completion messaging checks first.
         """
-        return InitCommand._is_hub_agent_available("chat")
+        missing = []
+        if not InitCommand._is_hub_agent_available("chat"):
+            missing.append("gaia-agent-chat")
+        if importlib.util.find_spec(_AGENT_IMPORT_NAMES["gaia"]) is None:
+            missing.append("gaia-agent-gaia")
+        return missing
 
     def _profile_agent_available(self) -> bool:
         """Whether the agent THIS profile's quick-start commands need is present.
@@ -1943,11 +1994,14 @@ class InitCommand:
         True for profiles that need none (sd/vlm/minimal/...), so their
         completion headline is never gated on someone else's agent. Keyed on
         ``PROFILE_REQUIRED_AGENTS``, not ``HUB_INSTALL_AGENTS``: `chat` cannot
-        be hub-installed but `--profile chat`/`--profile npu` still need it.
+        be hub-installed but `--profile chat`/`--profile npu` still need it,
+        along with the flagship wheel `gaia chat` runs.
         """
         agent_id = INIT_PROFILES[self.profile].get("agent")
         if agent_id not in PROFILE_REQUIRED_AGENTS:
             return True
+        if agent_id == "chat":
+            return not self._chat_agent_missing_wheels()
         return self._is_hub_agent_available(agent_id)
 
     def _ensure_hub_agent_installed(self) -> None:
@@ -1969,10 +2023,10 @@ class InitCommand:
         * Published but the install itself genuinely fails: this method
           does NOT catch that exception — it propagates into ``run()``'s
           own top-level ``except Exception`` handler, which already turns
-          any unexpected exception into an actionable non-zero exit. Unlike
-          ``_install_pip_extras``, a real hub-install failure must fail
-          loudly, not warn-and-continue (that would just recreate the
-          "agent isn't installed" state this issue exists to close).
+          any unexpected exception into an actionable non-zero exit. A real
+          hub-install failure must fail loudly, not warn-and-continue (that
+          would just recreate the "agent isn't installed" state this issue
+          exists to close).
 
         A catalog-fetch failure (network down, no offline cache) is treated
         the same as "not yet published" — `gaia init` must not hard-fail
@@ -2061,16 +2115,20 @@ class InitCommand:
 
     def _print_completion(self):
         """Print completion message with next steps."""
-        chat_agent_available = self._chat_agent_available()
-        chat_install_note = (
-            "Chat agent not installed yet -- run: "
-            f"{source_install_command('gaia-agent-chat')}"
+        missing_chat_wheels = self._chat_agent_missing_wheels()
+        chat_agent_available = not missing_chat_wheels
+        chat_install_note = "`gaia chat` agent not installed yet -- run: " + (
+            " then ".join(source_install_command(w) for w in missing_chat_wheels)
         )
         # The flagship is a hub BINARY, so its missing-hint names the hub, not a
         # pip command. Pointing at gaia-agent-chat here would answer a headline
         # about the flagship with a different package's install line.
         flagship_install_note = (
             "GAIA agent not installed yet -- run: gaia hub install gaia"
+        )
+        has_tui = self._tui_installed()
+        tui_install_note = (
+            f"Terminal UI (gaia-tui) ships with the installer -- run: {_INSTALLER_HINT}"
         )
         # Scoped per profile -- gating on the chat wheel alone would mark
         # sd/vlm/minimal permanently "incomplete", and would call the flagship
@@ -2101,12 +2159,17 @@ class InitCommand:
                     "agent's SD tools"
                 )
             elif self.profile == "gaia":
-                self.console.print(
-                    "    [cyan]gaia-tui[/cyan]                             Start the GAIA agent (terminal UI)"
-                )
+                if has_tui:
+                    self.console.print(
+                        "    [cyan]gaia-tui[/cyan]                             Start the GAIA agent (terminal UI)"
+                    )
                 self.console.print(
                     "    [cyan]gaia chat --ui[/cyan]                       Launch the Agent UI (browser-based)"
                 )
+                if not has_tui:
+                    self.console.print(
+                        f"    [dim]{rich_escape(tui_install_note)}[/dim]"
+                    )
                 if not self._profile_agent_available():
                     self.console.print(f"    [yellow]{flagship_install_note}[/yellow]")
                 if not chat_agent_available:
@@ -2188,12 +2251,15 @@ class InitCommand:
                     "image generation runs through the agent's SD tools"
                 )
             elif self.profile == "gaia":
-                self._print(
-                    "    gaia-tui                             # Start the GAIA agent (terminal UI)"
-                )
+                if has_tui:
+                    self._print(
+                        "    gaia-tui                             # Start the GAIA agent (terminal UI)"
+                    )
                 self._print(
                     "    gaia chat --ui                       # Launch the Agent UI (browser-based)"
                 )
+                if not has_tui:
+                    self._print(f"    {tui_install_note}")
                 if not self._profile_agent_available():
                     self._print(f"    {flagship_install_note}")
                 if not chat_agent_available:

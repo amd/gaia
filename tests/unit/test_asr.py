@@ -13,15 +13,12 @@ import pytest
 # Skip entire module if audio dependencies not available
 try:
     import sounddevice  # noqa: F401
-    import whisper  # noqa: F401
 
-    from gaia.audio.whisper_asr import WhisperAsr
     from gaia.talk.sdk import TalkConfig, TalkSDK
 
     HAS_AUDIO_DEPS = True
 except (ImportError, OSError):
-    # OSError can occur on Windows when Application Control policies block
-    # native DLLs (e.g. torch_global_deps.dll) from loading.
+    # OSError: PortAudio is missing or blocked from loading.
     HAS_AUDIO_DEPS = False
 
 from gaia.logger import get_logger
@@ -31,57 +28,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@unittest.skipIf(not HAS_AUDIO_DEPS, "Audio dependencies (whisper/torch) not available")
-class TestWhisperAsr(unittest.TestCase):
-    def setUp(self):
-        self.log = get_logger(__name__)
-        self.asr = WhisperAsr(model_size="base")
-
-        # Check for audio devices early and set flag
-        self.devices = self.asr.list_audio_devices()
-        self.has_audio_devices = len(self.devices) > 0
-
-        if not self.has_audio_devices:
-            self.log.warning("No audio devices available - some tests will be skipped")
-
-    def test_list_devices(self):
-        """Test that we can list audio devices."""
-        devices = self.asr.list_audio_devices()
-        self.assertIsInstance(devices, list)
-        # Log devices for debugging
-        self.log.info(f"Found audio devices: {devices}")
-        # This test should always pass, even with no devices
-
-    def test_short_recording(self):
-        """Test a short recording session."""
-        if not self.has_audio_devices:
-            self.skipTest("No audio devices available - skipping recording test")
-            return
-
-        try:
-            self.asr.start_recording(duration=5)  # Record for 5 seconds
-        except OSError as e:
-            if "Invalid device info" in str(e):
-                self.skipTest("No valid audio input device available")
-            else:
-                raise
-        except Exception as e:
-            self.fail(f"Recording failed with error: {str(e)}")
-
-    def test_no_file_transcription_api(self):
-        """WhisperAsr is live-microphone only; file transcription was removed."""
-        self.assertFalse(hasattr(self.asr, "transcribe_file"))
-
-    def tearDown(self):
-        """Clean up resources after tests."""
-        if hasattr(self, "asr"):
-            # Ensure model resources are properly closed
-            if hasattr(self.asr, "model"):
-                del self.asr.model
-        super().tearDown()
-
-
-@unittest.skipIf(not HAS_AUDIO_DEPS, "Audio dependencies (whisper/torch) not available")
+@unittest.skipIf(not HAS_AUDIO_DEPS, "Audio dependencies (sounddevice) not available")
 class TestProcessAudioWrapper(unittest.TestCase):
     """Integration tests for the process_audio_wrapper method in TalkSDK's AudioClient."""
 

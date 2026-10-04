@@ -1290,7 +1290,7 @@ class TestCheckSetupStatus(unittest.TestCase):
 
 
 class TestInstallPipExtras(unittest.TestCase):
-    """Test _install_pip_extras frontend selection and messaging."""
+    """Profiles without extras never shell out."""
 
     def _make_cmd(self, profile):
         from gaia.installer.init_command import InitCommand
@@ -1303,58 +1303,6 @@ class TestInstallPipExtras(unittest.TestCase):
         with patch("subprocess.run") as mock_run:
             self.assertTrue(cmd._install_pip_extras())
             mock_run.assert_not_called()
-
-    def test_standalone_uv_attempted_first(self):
-        """The standalone ``uv`` binary leads the install attempts.
-
-        uv-created venvs ship neither pip nor the uv module, so a bare
-        ``uv pip install`` is the only frontend that works inside them.
-        """
-        cmd = self._make_cmd("rag")  # rag pulls the [rag] extra
-        calls = []
-
-        def fake_run(args, **kwargs):
-            calls.append(args)
-            result = MagicMock()
-            result.returncode = 0
-            result.stdout = "Name: amd-gaia\n"  # non-editable
-            return result
-
-        with patch("subprocess.run", side_effect=fake_run):
-            self.assertTrue(cmd._install_pip_extras())
-
-        install_calls = [c for c in calls if "install" in c]
-        self.assertTrue(install_calls, "expected an install attempt")
-        self.assertEqual(
-            install_calls[0][:2],
-            ["uv", "pip"],
-            "standalone uv must be the first install frontend",
-        )
-
-    def test_warning_has_no_doubled_pip_install(self):
-        """The fallback warning must not print 'pip install pip install'."""
-        cmd = self._make_cmd("rag")
-        warnings = []
-        cmd._print_warning = lambda msg: warnings.append(msg)
-        cmd._print_success = lambda msg: None
-
-        def fail_run(args, **kwargs):
-            result = MagicMock()
-            result.returncode = 1  # every frontend fails
-            result.stdout = ""
-            return result
-
-        with patch("subprocess.run", side_effect=fail_run):
-            self.assertTrue(cmd._install_pip_extras())
-
-        joined = " ".join(warnings)
-        self.assertTrue(warnings, "expected a fallback warning")
-        self.assertNotIn("pip install pip install", joined)
-        # #2358: the fallback message must work in a stock venv with no `uv`
-        # on PATH -- not a bare `uv pip install` (the same dead end
-        # install_hints.source_install_command was fixed for).
-        self.assertNotIn("uv pip install", joined)
-        self.assertIn(f'{sys.executable} -m pip install "amd-gaia[rag]"', joined)
 
 
 class TestNeedsInstallConsistency(unittest.TestCase):
@@ -2407,11 +2355,15 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
 
         cmd = InitCommand(profile=profile, yes=True)
         # Two seams, one scenario ("is the agent this profile needs there?").
-        # _chat_agent_available drives the `gaia chat` hint; the headline goes
+        # _chat_agent_missing_wheels drives the `gaia chat` hint; the headline goes
         # through _profile_agent_available, which is stubbed at its underlying
         # probe so its real "does this profile install an agent at all?"
         # scoping still runs (sd/vlm/minimal must stay unaffected).
-        cmd._chat_agent_available = MagicMock(return_value=chat_available)
+        cmd._chat_agent_missing_wheels = MagicMock(
+            return_value=(
+                [] if chat_available else ["gaia-agent-chat", "gaia-agent-gaia"]
+            )
+        )
         cmd._is_hub_agent_available = MagicMock(return_value=chat_available)
         return cmd
 
@@ -2462,7 +2414,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
 
         out = buf.getvalue()
         self.assertNotIn("GAIA initialization complete!", out)
-        self.assertIn("Chat agent not installed yet -- run:", out)
+        self.assertIn("`gaia chat` agent not installed yet -- run:", out)
 
     def test_ac6_npu_profile_unavailable_rich_suppresses_headline(self):
         from gaia.installer import init_command as ic
@@ -2477,7 +2429,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
 
         out = buf.getvalue()
         self.assertNotIn("GAIA initialization complete!", out)
-        self.assertIn("Chat agent not installed yet -- run:", out)
+        self.assertIn("`gaia chat` agent not installed yet -- run:", out)
 
     def test_ac6_chat_profile_unavailable_non_rich_suppresses_headline(self):
         cmd = self._make_cmd("chat", chat_available=False)
@@ -2490,7 +2442,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
 
         out = mock_stdout.getvalue()
         self.assertNotIn("GAIA initialization complete!", out)
-        self.assertIn("Chat agent not installed yet -- run:", out)
+        self.assertIn("`gaia chat` agent not installed yet -- run:", out)
 
     # -- AC7: chat/npu profile, chat agent available -> unchanged --
 
@@ -2507,7 +2459,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
 
         out = buf.getvalue()
         self.assertIn("GAIA initialization complete!", out)
-        self.assertNotIn("Chat agent not installed yet -- run:", out)
+        self.assertNotIn("`gaia chat` agent not installed yet -- run:", out)
 
     def test_ac7_chat_profile_available_non_rich_unchanged(self):
         cmd = self._make_cmd("chat", chat_available=True)
@@ -2520,7 +2472,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
 
         out = mock_stdout.getvalue()
         self.assertIn("GAIA initialization complete!", out)
-        self.assertNotIn("Chat agent not installed yet -- run:", out)
+        self.assertNotIn("`gaia chat` agent not installed yet -- run:", out)
 
     # -- AC7b: non-chat profile (sd) -> headline always present --
 
@@ -2555,6 +2507,47 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
                     cmd._print_completion()
 
                 self.assertIn("GAIA initialization complete!", mock_stdout.getvalue())
+
+
+class TestChatNeedsTheFlagshipWheel(unittest.TestCase):
+    """`gaia chat` runs the flagship, so the chat wheel alone is not enough."""
+
+    @staticmethod
+    def _find_spec(importable):
+        return lambda name, *a, **k: MagicMock() if name in importable else None
+
+    def test_chat_wheel_without_flagship_wheel_is_not_ready(self):
+        from gaia.installer import init_command as ic
+
+        cmd = ic.InitCommand(profile="chat", yes=True)
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                side_effect=self._find_spec({"gaia_agent_chat"}),
+            ),
+            patch("gaia.hub.installer.read_sentinel", return_value={"id": "gaia"}),
+            patch("gaia.installer.init_command.RICH_AVAILABLE", False),
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            self.assertEqual(cmd._chat_agent_missing_wheels(), ["gaia-agent-gaia"])
+            self.assertFalse(cmd._profile_agent_available())
+            cmd._print_completion()
+
+        out = mock_stdout.getvalue()
+        self.assertNotIn("GAIA initialization complete!", out)
+        self.assertIn("gaia-agent-gaia @ git+", out)
+        self.assertNotIn("gaia-agent-chat @ git+", out)
+
+    def test_both_wheels_importable_is_ready(self):
+        from gaia.installer import init_command as ic
+
+        cmd = ic.InitCommand(profile="chat", yes=True)
+        with patch(
+            "gaia.installer.init_command.importlib.util.find_spec",
+            side_effect=self._find_spec({"gaia_agent_chat", "gaia_agent"}),
+        ):
+            self.assertEqual(cmd._chat_agent_missing_wheels(), [])
+            self.assertTrue(cmd._profile_agent_available())
 
 
 if __name__ == "__main__":

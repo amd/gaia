@@ -260,10 +260,6 @@ Choose your platform and installation type:
 
     ### Step 4: Install GAIA
 
-    <Warning>
-      **Linux users:** the base install has no PyTorch, but the `[talk]`, `[audio]` and `[ui]` extras do. When you add any of them, pass `--extra-index-url https://download.pytorch.org/whl/cpu` to get CPU-only PyTorch instead of the multi-GB CUDA build.
-    </Warning>
-
     ```bash
     uv pip install amd-gaia
     ```
@@ -271,7 +267,7 @@ Choose your platform and installation type:
     <Tip>
       **Optional extras:** Add `[talk,rag]` for voice and document Q&A features:
       ```bash
-      uv pip install "amd-gaia[talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu
+      uv pip install "amd-gaia[talk,rag]"
       ```
     </Tip>
 
@@ -408,10 +404,6 @@ Choose your platform and installation type:
 
     ### Step 4: Install in Editable Mode
 
-    <Warning>
-      **Linux users:** the base install has no PyTorch, but the `[talk]`, `[audio]` and `[ui]` extras do. When you add any of them, pass `--extra-index-url https://download.pytorch.org/whl/cpu` to get CPU-only PyTorch instead of the multi-GB CUDA build.
-    </Warning>
-
     ```bash
     uv pip install -e ".[dev]"
     ```
@@ -419,7 +411,7 @@ Choose your platform and installation type:
     <Tip>
       **With all extras:** Add `[talk,rag]` for voice and document Q&A features:
       ```bash
-      uv pip install -e ".[dev,talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu
+      uv pip install -e ".[dev,talk,rag]"
       ```
     </Tip>
 
