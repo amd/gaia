@@ -27,11 +27,11 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import openai  # For exception types
 import requests
-from dotenv import load_dotenv
 
 # Import OpenAI client for internal use
 from openai import OpenAI
 
+from gaia.env import load_env
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -51,7 +51,7 @@ from gaia.version import parse_version
 log = get_logger(__name__)
 
 # Load environment variables from .env file
-load_dotenv()
+load_env()
 
 # =========================================================================
 # Server Configuration Defaults

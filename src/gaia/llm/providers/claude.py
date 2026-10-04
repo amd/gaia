@@ -157,9 +157,9 @@ class ClaudeProvider(LLMClient):
         sdk = _require_anthropic()
 
         # The repo keeps ANTHROPIC_API_KEY in .env — same load as gaia.eval.claude.
-        from dotenv import load_dotenv  # pylint: disable=import-outside-toplevel
+        from gaia.env import load_env  # pylint: disable=import-outside-toplevel
 
-        load_dotenv()
+        load_env()
 
         key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if not key:
