@@ -11,11 +11,14 @@ only shrink the list.
 
 Two shapes are counted, both outside docstrings:
 
-* ``home_join`` — ``".gaia"`` as a path segment: an operand of ``/`` or an
-  argument to ``os.path.join`` / ``ntpath.join`` / ``.joinpath``.
+* ``home_join`` — ``".gaia"`` as a path segment: an operand of ``/``, an
+  argument to ``os.path.join`` / ``ntpath.join`` / ``.joinpath``, or a
+  non-first argument to a bare ``join`` / ``joinpath`` / ``Path`` /
+  ``PurePath`` call (``Path(Path.home(), ".gaia")``).
 * ``tilde_path`` — a string that *is* a home path, i.e. starts with
   ``~/.gaia`` or ``~\\.gaia`` (``expanduser("~/.gaia/x")``, a default value).
-  Prose that merely mentions ``~/.gaia`` mid-sentence is not counted.
+  Prose that merely mentions ``~/.gaia`` mid-sentence is not counted, except
+  in an f-string, where text right after a ``{...}`` starting ``~/.gaia`` is.
 
 ``src/gaia/config.py`` is exempt: it is the resolver.
 """
@@ -41,6 +44,7 @@ _SKIP_PARTS = {
     "venv",
 }
 _JOIN_FUNCS = {"join", "joinpath"}
+_BARE_JOIN_FUNCS = _JOIN_FUNCS | {"Path", "PurePath"}
 
 Site = Tuple[str, str]  # (relative file, rule)
 
@@ -109,13 +113,16 @@ def _sites_in(path: Path) -> List[Tuple[str, int]]:
                 found.append(("home_join", node.lineno))
         elif isinstance(node, ast.Call):
             func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else None
-            if name in _JOIN_FUNCS:
-                found.extend(
-                    ("home_join", arg.lineno)
-                    for arg in node.args
-                    if _is_gaia_segment(arg)
-                )
+            if isinstance(func, ast.Attribute) and func.attr in _JOIN_FUNCS:
+                segments = node.args
+            elif isinstance(func, ast.Name) and func.id in _BARE_JOIN_FUNCS:
+                # A leading ".gaia" is relative to the cwd, not the home dir.
+                segments = node.args[1:]
+            else:
+                segments = []
+            found.extend(
+                ("home_join", arg.lineno) for arg in segments if _is_gaia_segment(arg)
+            )
         elif _is_tilde_path(node) and id(node) not in docstrings:
             found.append(("tilde_path", node.lineno))
     return found
@@ -202,13 +209,20 @@ def test_scanner_catches_each_shape(tmp_path):
         'c = Path.home().joinpath(".gaia/x")\n'
         'd = os.path.expanduser("~/.gaia/schedules.toml")\n'
         'e = "Settings live in ~/.gaia, see the docs"\n'
-        'f = Path(".gaia/cache")\n',
+        'f = Path(".gaia/cache")\n'
+        'g = Path(Path.home(), ".gaia")\n'
+        'h = join(home, ".gaia", "tui")\n'
+        'i = PurePath(home, ".gaia")\n'
+        'j = join(".gaia", "x")\n',
         encoding="utf-8",
     )
     assert sorted(_sites_in(sample)) == [
         ("home_join", 4),
         ("home_join", 5),
         ("home_join", 6),
+        ("home_join", 10),
+        ("home_join", 11),
+        ("home_join", 12),
         ("tilde_path", 7),
     ]
 
