@@ -455,6 +455,11 @@ def _probe_failed(status: SystemStatus, probe: str, message: str) -> None:
     status.probe_warnings.append(message)
 
 
+def _probe_ok(probe: str) -> None:
+    """Re-arm the warning, so a failure that returns after recovery warns again."""
+    _last_probe_warning.pop(probe, None)
+
+
 @router.get("/api/system/status", response_model=SystemStatus)
 async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
@@ -631,6 +636,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             # Model not found in catalog → treat as not downloaded
                             if status.model_downloaded is None:
                                 status.model_downloaded = False
+                            _probe_ok("catalog")
                     except probe_errors as exc:
                         _probe_failed(
                             status,
@@ -668,6 +674,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                         ttft = stats_data.get("time_to_first_token")
                         if ttft:
                             status.time_to_first_token = round(ttft, 3)
+                        _probe_ok("stats")
                     else:
                         _probe_failed(
                             status,
@@ -698,6 +705,14 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                                 if dev.get("available"):
                                     detected.append("npu")
                         status.detected_devices = detected
+                        _probe_ok("devices")
+                    else:
+                        _probe_failed(
+                            status,
+                            "devices",
+                            "Could not read device info: Lemonade returned "
+                            f"HTTP {sysinfo_resp.status_code}.",
+                        )
                 except probe_errors as exc:
                     _probe_failed(
                         status, "devices", f"Could not read device info: {exc}"
@@ -744,6 +759,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         _shutil_mod = getattr(_shutil, "shutil", shutil)
         usage = _shutil_mod.disk_usage(Path.home())
         status.disk_space_gb = round(usage.free / (1024**3), 1)
+        _probe_ok("disk")
     except OSError as exc:
         _probe_failed(status, "disk", f"Could not read free disk space: {exc}")
 

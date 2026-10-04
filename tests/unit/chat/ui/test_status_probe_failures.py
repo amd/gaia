@@ -169,6 +169,39 @@ def test_repeated_probe_failure_logs_warning_once(caplog):
     assert levels.count(logging.WARNING) == 1
 
 
+@pytest.mark.allow_network
+def test_device_http_error_is_reported(status_with):
+    body = status_with(
+        {
+            "/health": _LOADED,
+            "/models": {"data": []},
+            "/stats": {},
+            "/system-info": _Resp({}, status_code=500),
+        }
+    ).json()
+
+    assert any("device info" in w and "HTTP 500" in w for w in body["probe_warnings"])
+    assert body["lemonade_running"] is True
+
+
+@pytest.mark.allow_network
+def test_failure_that_returns_after_recovery_warns_again(status_with, caplog):
+    healthy = {
+        "/health": _LOADED,
+        "/models": {"data": []},
+        "/stats": {"tokens_per_second": 42.0},
+        "/system-info": {"devices": {}},
+    }
+    failing = {**healthy, "/stats": httpx.ReadTimeout("timed out")}
+
+    with caplog.at_level(logging.WARNING, logger="gaia.ui.routers.system"):
+        for routes in (failing, healthy, failing):
+            status_with(routes)
+
+    warned = [r for r in caplog.records if "inference stats" in r.getMessage()]
+    assert len(warned) == 2
+
+
 # ── memory upkeep wiring ─────────────────────────────────────────────────
 
 
