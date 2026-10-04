@@ -203,7 +203,11 @@ breaking.
 time: each instance is read from the Hugging Face dataset (the `datasets` package
 when it is installed, the datasets-server REST API otherwise) and cached as one
 JSON file under the work root (`$GAIA_BENCH_WORK_ROOT/swebench/`), which `--fence`
-keeps out of the agent's reach. `--instances a,b,c` names the instances; without
+keeps out of the agent's reach. That cache never holds the gold patch: the judge
+fetches the patches again after the agent exits, so re-judging a run needs the
+network too. The `datasets` package keeps its own copy of the whole split, gold
+patches included, in the Hugging Face cache in your home folder, where a
+full-access agent can read it; run without `datasets` installed when that matters. `--instances a,b,c` names the instances; without
 it the run is the five-instance pilot: `psf__requests-1921`, `psf__requests-5414`,
 `pallets__flask-5014`, `pylint-dev__pylint-4970`, `sphinx-doc__sphinx-8721`.
 `--sample N` draws a seeded random N of all 500 instead (`--seed S` picks another
