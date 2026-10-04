@@ -215,8 +215,13 @@ class TurnScopeGuard:
             text = args.get(key)
             if isinstance(text, str) and any(
                 # Not \b: the scratchpad's own prefix (scratch_<name>) is joined
-                # with an underscore, which \b treats as part of the word.
-                re.search(rf"(?<![a-z0-9]){re.escape(table)}(?![a-z0-9_])", text, re.I)
+                # with an underscore, which \b treats as part of the word; that
+                # prefix is the only one allowed.
+                re.search(
+                    rf"(?<![a-z0-9_])(?:scratch_)?{re.escape(table)}(?![a-z0-9_])",
+                    text,
+                    re.I,
+                )
                 for table in self.tables
             ):
                 return True
