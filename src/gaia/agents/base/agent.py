@@ -495,6 +495,34 @@ _REPEATED_CALL_ANSWER_PROMPT = (
 # accounts for every id the model asked for.
 _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
 
+#: Longest repeating cycle of calls the loop guard recognises (A, B, A, B, …).
+_MAX_LOOP_PERIOD = 3
+
+
+def _repeat_count(history: List[Any], max_period: int = _MAX_LOOP_PERIOD) -> int:
+    """How many times the calls ending at ``history[-1]`` repeated back to back.
+
+    Period 1 is one call over and over. A model alternating a search with a
+    read of the same file never repeats a call twice in a row, so a guard that
+    only looked at period 1 let it run 15 rounds.
+    """
+    n = len(history)
+    best = 0
+    for period in range(1, max_period + 1):
+        block = history[n - period :]
+        if len(block) < period:
+            break
+        if len(set(block)) < period:
+            continue  # a repeat inside the block is a shorter period
+        repeats = 0
+        while (
+            n - (repeats + 1) * period >= 0
+            and history[n - (repeats + 1) * period : n - repeats * period] == block
+        ):
+            repeats += 1
+        best = max(best, repeats)
+    return best
+
 
 # Tools that mutate external state (mark read, archive, star, …). A small
 # model that loses track of sequential state may re-issue an identical
@@ -6900,7 +6928,10 @@ Do NOT wrap conversational replies in JSON.
         error_count = 0
         # Malformed replies get their own budget: failed tool calls are ordinary work.
         parse_failures = 0
-        tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
+        tool_call_history = []  # Recent tool calls, for loop detection
+        loop_window = max(
+            5, _MAX_LOOP_PERIOD * getattr(self, "max_consecutive_repeats", 4)
+        )
         # Repeated calls already sent one correction; the next repeat ends the turn.
         loop_corrected_calls: set = set()
         tool_call_log = (
@@ -8211,14 +8242,9 @@ Do NOT wrap conversational replies in JSON.
                     current_call = (tool_name, str(tool_args))
                     tool_call_history.append(current_call)
                     tool_call_log.append(current_call)
-                    if len(tool_call_history) > 5:
+                    if len(tool_call_history) > loop_window:
                         tool_call_history.pop(0)
-                    consecutive_count = 0
-                    for prior in reversed(tool_call_history):
-                        if prior == current_call:
-                            consecutive_count += 1
-                        else:
-                            break
+                    consecutive_count = _repeat_count(tool_call_history)
                     if consecutive_count >= self.max_consecutive_repeats:
                         self.console.stop_progress()
                         # NATIVE path appends results to ``previous_outputs``
@@ -8467,17 +8493,12 @@ Do NOT wrap conversational replies in JSON.
                     current_call
                 )  # Full unbounded log for workflow guards
 
-                # Keep only last 5 calls for loop detection
-                if len(tool_call_history) > 5:
+                # Enough recent calls to see a short cycle repeat to the limit
+                if len(tool_call_history) > loop_window:
                     tool_call_history.pop(0)
 
-                # Count consecutive identical calls
-                consecutive_count = 0
-                for call in reversed(tool_call_history):
-                    if call == current_call:
-                        consecutive_count += 1
-                    else:
-                        break
+                # Back-to-back repeats of this call, or of the cycle it closes
+                consecutive_count = _repeat_count(tool_call_history)
 
                 # Stop after max_consecutive_repeats identical calls
                 if consecutive_count >= self.max_consecutive_repeats:

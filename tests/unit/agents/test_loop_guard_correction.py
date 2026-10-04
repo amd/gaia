@@ -381,3 +381,45 @@ def test_summary_uses_the_last_stderr_line_when_there_is_no_error_key(agent):
 def test_summary_falls_back_to_the_return_code(agent):
     summary = _summary(agent, {"return_code": 2, "stderr": "  \n"})
     assert "exited with return code 2" in summary
+
+
+# ---------------------------------------------------------------------------
+# Short cycles: A, B, A, B, … never repeats one call twice in a row
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "history,expected",
+    [
+        (["a", "a", "a"], 3),
+        (["x", "a", "b", "a", "b", "a", "b"], 3),
+        (["a", "b", "c", "a", "b", "c"], 2),
+        (["a", "b", "a", "c"], 1),
+        (["a", "b", "b"], 2),
+        ([], 0),
+    ],
+)
+def test_repeat_count_sees_a_repeating_cycle(history, expected):
+    from gaia.agents.base.agent import _repeat_count
+
+    assert _repeat_count(history) == expected
+
+
+def _legacy_call_with(command: str) -> str:
+    return json.dumps(
+        {"thought": "look again", "tool": _TOOL, "tool_args": {"command": command}}
+    )
+
+
+def test_alternating_between_two_calls_is_a_loop(agent):
+    """A model alternated find_files and read_file of the same file 15 times."""
+    agent.results = [{"status": "success", "content": "same"}]
+    cycle = [_legacy_call_with("find"), _legacy_call_with("read")] * 3
+    sent = _stub_chat(agent, *cycle, _answer("answered from what it had"))
+
+    result = agent.process_query("fix it", max_steps=20)
+
+    assert result["result"].startswith("answered from what it had")
+    # Rounds one and two ran; the third round's closing call was corrected.
+    assert agent.calls == 5
+    assert len(_corrections(sent)) == 1
