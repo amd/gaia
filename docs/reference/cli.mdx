@@ -774,7 +774,7 @@ The lemonade server must be running. If not available, the command will provide 
 
 ### Chat Command
 
-Start an interactive conversation or send a single message with conversation history.
+Talk to the flagship GAIA agent (the same agent the TUI and Agent UI run): start an interactive conversation, or send a single message and exit.
 
 ```bash
 gaia chat [MESSAGE] [OPTIONS]
@@ -795,7 +795,7 @@ on stderr.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
-| `--model` | string | auto-selected by agent | Override the model used by `ChatAgent` (`None` means let the agent pick; see `ChatAgentConfig.model_id`). Falls back to `default_model` from config — see [Configuration](#configuration) |
+| `--model` | string | auto-selected by agent | Override the model the GAIA agent uses (`None` means let the agent pick; see `GaiaAgentConfig.model_id`). Falls back to `default_model` from config — see [Configuration](#configuration) |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
 | `--chunk-size` | integer | 500 | Document chunk size for RAG |
@@ -1004,13 +1004,13 @@ gaia talk [OPTIONS]
 | `--base-url` | string | `LEMONADE_BASE_URL` or `http://localhost:13305/api/v1` | Lemonade server URL |
 | `--no-tts` | flag | false | Disable text-to-speech |
 | `--audio-device-index` | integer | auto-detect | Audio input device index |
-| `--whisper-model-size` | string | base | Whisper model [tiny, base, small, medium, large] |
+| `--whisper-model-size` | string | base | Whisper model Lemonade transcribes with [tiny, base, small, medium, large, turbo] |
 | `--silence-threshold` | float | 0.5 | Seconds of silence that end your turn |
 | `--mic-threshold` | float | 0.003 | Microphone amplitude threshold for voice detection (lower = more sensitive) |
 | `--stats`, `--show-stats` | flag | false | Print performance statistics after each reply |
 | `--index, -i` | path | - | PDF document for voice Q&A |
 
-The microphone is muted while GAIA speaks. Say "stop" or press Ctrl+C to end the session; `gaia talk` exits non-zero if the voice loop or microphone fails.
+Speech recognition (Whisper) and voice output (Kokoro) run in the same Lemonade Server as the chat model, at `--base-url`; the first run downloads both models through it. The microphone is muted while GAIA speaks. Say "stop" or press Ctrl+C to end the session; `gaia talk` exits non-zero if the voice loop, the microphone or Lemonade's transcription fails.
 
 **Examples:**
 
@@ -2926,7 +2926,7 @@ gaia test --test-type TYPE [OPTIONS]
     **Options:**
     - `--recording-duration` - Recording duration (default: 10s)
     - `--audio-device-index` - Audio input device index
-    - `--whisper-model-size` - Whisper model size (default: base)
+    - `--whisper-model-size` - Whisper model Lemonade transcribes with (default: base)
 
     <Note>
       These test the **live microphone** path. To transcribe a file you already have, ask the GAIA agent — see [Transcription & Meeting Notes](/guides/transcription).
@@ -3575,7 +3575,7 @@ gaia diagnostics --output /tmp/my-bundle.tgz
 The bundle includes:
 - System info snapshot (`uname -a`, distro, relevant env vars, all TCP listeners via `ss -tlnp`)
 - State files from `~/.gaia/` (config, session data — no chat content)
-- Log files: `~/.gaia/gaia.log` and `~/.gaia/electron-main.log` (omitted with `--no-logs`)
+- Log files: `~/.gaia/gaia.log` with its rotated copies (`gaia.log.1`, `gaia.log.2`, ...) and `~/.gaia/electron-main.log`, omitted with `--no-logs`. A log over 50 MB is bundled as its last 50 MB, named `<file>.tail`.
 
 ---
 

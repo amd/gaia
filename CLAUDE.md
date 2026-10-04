@@ -432,7 +432,7 @@ gaia eval agent --compare \
   <printed-output-path>/scorecard.json
 ```
 
-**Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), regenerate the baseline with `--save-baseline` and call it out explicitly in the PR description — the reviewer needs to see the diff between baselines, not just the new score.
+**Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), call it out explicitly in the PR description and replace that category's `scorecard_<category>.json` from the next nightly on the Strix Halo pool — never from a local `--save-baseline` run, which writes elsewhere and measures a different machine. The reviewer needs to see the diff between baselines, not just the new score.
 
 Report what you compared: name the baseline run, list scenarios that went PASS→FAIL (regressions) and FAIL→PASS (progress toward 80%) separately, and re-run any lone flip before trusting it.
 
@@ -668,7 +668,7 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 - `gaia llm` default: `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME` in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)). ChatAgent explicitly uses it too.
 - Agents that leave `model_id` unset fall back to `Gemma-4-E4B-it-GGUF` — the base `Agent.__init__` default (`model_id or DEFAULT_MODEL_NAME`). That covers GaiaAgent, ChatAgent, BuilderAgent, and the example templates. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
 - **EmailTriageAgent is the one exception.** With no explicit `model_id` it calls `resolve_default_email_model()` (`hub/agents/email/python/gaia_agent_email/model_select.py`), which returns `gemma4-it-e2b-FLM` when an NPU is present *and* that model is already servable, and `DEFAULT_MODEL_NAME` in every other case.
-- Context window is pinned per device profile, not per agent: `GPU_CTX_SIZE` (65536, GPU/CPU) and `NPU_CTX_SIZE` (32768, the FLM ceiling) in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py). A machine runs one profile, so the ctx size is fixed machine-wide; the NPU email model above is the only case where a second model id enters the picture.
+- Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` in `MODELS` ([`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)) gets the largest window that fits the GPU memory Lemonade reports (`largest_context` in [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py)), and the fit check charges the KV cache at that same window. Every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). `NPU_CTX_SIZE` (32768, the FLM ceiling) applies only to models that run on the NPU, never to a GPU model on a machine whose `default_device` is `npu`. Gemma-4-E4B stays at 65536 because the eval baseline was captured there.
 - Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported, and is the RAG SDK's `vlm_model` default (`src/gaia/rag/sdk.py`)
 - Image generation (SD): `SDXL-Turbo`
 

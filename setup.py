@@ -213,23 +213,10 @@ setup(
             "python-docx>=1.1.0",
             "openpyxl>=3.1.0",
             "reportlab>=4.0.0",
-            # Memory cross-encoder reranker (gaia.agents.base.memory) — optional
-            # at runtime (graceful degradation) but bundled with "ui" so the
-            # full chat experience gets reranking out of the box. NOT a RAG dep.
-            "sentence-transformers",
-            "safetensors",
-            # torch is pinned lower-bound only. The "audio" extra caps
-            # torch<2.4 because torchvision<0.19 / torchaudio require it,
-            # but "ui" ships neither — capping here would force resolver
-            # downgrades for users with torch 2.5+ already installed.
-            "torch>=2.0.0",
+            # No torch / sentence-transformers: every model the UI uses is
+            # served by Lemonade, and torch's libomp aborts faiss on macOS.
         ],
-        "audio": [
-            "torch>=2.0.0,<2.15",
-            "torchvision<0.30.0",
-            "torchaudio",
-        ],
-        # Speaker diarization. Its own extra, not part of "audio": this is a
+        # Speaker diarization. Its own extra: this is a
         # ~29 MB native wheel (Apache-2.0; the onnxruntime it vendors is MIT)
         # with no torch in it, and the frozen agent needs it BUNDLED — the
         # lazy pip-install path cannot work inside a PyInstaller app, where
@@ -278,7 +265,7 @@ setup(
             "requests",
             # gaia.connectors runtime deps surfaced in [dev] so that
             # `pip install -e ".[dev]"` is sufficient to run the unit suite
-            # without pulling in the much heavier [ui] extra (faiss, torch).
+            # without pulling in the heavier [ui] extra.
             "httpx>=0.27.0,<0.29.0",
             "respx>=0.21.0,<0.24.0",
             "keyring>=24.0.0,<26.0.0",
@@ -298,17 +285,12 @@ setup(
             # Tool-prompt cost measurement (#1448): tiktoken cl100k_base proxy.
             "tiktoken>=0.7.0,<1.0.0",
         ],
+        # Microphone and speaker I/O for `gaia talk`. Speech recognition
+        # (Whisper) and voice output (Kokoro) both run inside Lemonade Server,
+        # so this extra carries no model runtime — do NOT add torch, whisper or
+        # kokoro back here.
         "talk": [
             "sounddevice",
-            "openai-whisper",
-            "kokoro>=0.3.1",
-            # kokoro leaves transformers unbounded; without this floor the
-            # resolver backtracks to transformers 4.12 / tokenizers 0.10.3,
-            # which has no wheel and fails to build from source.
-            "tokenizers>=0.19",
-            "soundfile",
-            "psutil",
-            "pip",  # Required: spacy model download needs pip in venv (uv omits it)
             # WebSocket transport for the Lemonade Realtime transcription work
             # tracked in #372; #382 stages the packaging dependency first.
             "websockets",
@@ -317,8 +299,7 @@ setup(
             "llama-index-readers-youtube-transcript",
         ],
         "rag": [
-            # RAG embeds via Lemonade, not sentence-transformers — do NOT add it
-            # here. It is only needed for the optional memory reranker (see "ui").
+            # RAG embeds via Lemonade, not sentence-transformers — do NOT add it.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",

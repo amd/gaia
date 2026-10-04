@@ -34,9 +34,7 @@ except ImportError:
 # at import. Treat that the same as "not installed" so a bad install can't crash
 # every module that transitively imports RAG; the loud, actionable error is
 # deferred to RAGSDK._check_dependencies() at point of use.
-# NOTE: RAG embeds via Lemonade (self.embedder.embeddings), NOT sentence-transformers.
-# sentence-transformers is intentionally NOT imported or required here — it is only
-# an optional dep of the memory cross-encoder reranker (gaia.agents.base.memory).
+# RAG embeds via Lemonade (self.embedder.embeddings); never sentence-transformers.
 try:
     import faiss
 except Exception:  # pylint: disable=broad-except
