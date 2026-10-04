@@ -70,6 +70,11 @@ class AgentResponse:
     reasoning: Optional[str] = None  # the model's reasoning, kept apart from `text`
 ```
 
+A reasoning model (Gemma-4, Qwen3) can spend the whole `max_tokens` budget
+thinking. The reply then has empty `text`, `finish_reason == "length"`, and the
+partial thought in `reasoning`, and the SDK logs a warning naming the budget. Raise
+`max_tokens` when that happens.
+
 ### SimpleChat
 
 Lightweight wrapper for basic chat without complex configuration. Perfect for getting started quickly.
