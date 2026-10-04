@@ -129,6 +129,19 @@ class TestQuerySpecificFile:
         assert build is not None
         assert _TOOL_REGISTRY["query_specific_file"]["timeout"] == build
 
+    def test_a_text_file_is_not_cited_with_the_previous_pdfs_page(self):
+        pdf, txt = "/docs/handbook.pdf", "/docs/fed.txt"
+        rag = _fake_rag({pdf, txt})
+        rag.chunks = ["[Page 1667] end of the handbook", "Fed decision text"]
+        rag.chunk_to_file = {0: pdf, 1: txt}
+        rag._retrieve_chunks_from_file.return_value = (["Fed decision text"], [0.9])
+        _make_host(rag)
+
+        result = _tool("query_specific_file")(file_path="fed.txt", query="rate")
+
+        assert result["chunks"][0]["content"] == "Fed decision text"
+        assert "page" not in result["chunks"][0]
+
 
 class TestDumpDocument:
     def test_ambiguous_request_returns_candidates(self):
