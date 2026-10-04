@@ -2554,6 +2554,59 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestModelSmokeTest:
+    """The verification chat proves the model runs; a thinking model's short
+    reply is all reasoning, which is still generated text."""
+
+    def _cmd(self):
+        from gaia.installer.init_command import InitCommand
+
+        return InitCommand(profile="minimal", yes=True)
+
+    def _client(self, message):
+        client = MagicMock()
+        client.check_model_loaded.return_value = False
+        client.list_models.return_value = {
+            "data": [
+                {"id": "Qwen3.6-35B-A3B-GGUF", "recipe_options": {"ctx_size": 1 << 20}}
+            ]
+        }
+        client.chat_completions.return_value = {"choices": [{"message": message}]}
+        return client
+
+    def test_reasoning_only_reply_passes(self):
+        ok, error = self._cmd()._test_model_inference(
+            self._client({"content": "", "reasoning_content": "The user wants"}),
+            "Qwen3.6-35B-A3B-GGUF",
+        )
+        assert (ok, error) == (True, None)
+
+    def test_an_empty_reply_still_fails(self):
+        ok, error = self._cmd()._test_model_inference(
+            self._client({"content": "", "reasoning_content": ""}),
+            "Qwen3.6-35B-A3B-GGUF",
+        )
+        assert (ok, error) == (False, "Empty response")
+
+
+class TestHfHubCache:
+    def test_hf_hub_cache_wins(self, monkeypatch):
+        from gaia.installer.init_command import _hf_hub_cache
+
+        monkeypatch.setenv("HF_HUB_CACHE", "/x/hub-cache")
+        monkeypatch.setenv("HF_HOME", "/y")
+        assert _hf_hub_cache() == "/x/hub-cache"
+
+    def test_hf_home_is_honoured(self, monkeypatch):
+        import os
+
+        from gaia.installer.init_command import _hf_hub_cache
+
+        monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+        monkeypatch.setenv("HF_HOME", "/y")
+        assert _hf_hub_cache() == os.path.join("/y", "hub")
+
+
 # Lemonade /system-info for a 128 GB Strix Halo (96 GB carve-out + shared GTT).
 STRIX_HALO_128 = {
     "Physical Memory": "128 GB",
