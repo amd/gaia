@@ -11,7 +11,6 @@ import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -21,6 +20,7 @@ from gaia.llm.lemonade_client import (
     lemonade_auth_headers,
     resolve_effective_ctx_size,
     resolve_lemonade_api_key,
+    resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_manager import gpu_display_info
 
@@ -57,13 +57,6 @@ _DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 _MIN_CONTEXT_SIZE = DEFAULT_CONTEXT_SIZE
 
 
-def _get_lemonade_base_url() -> str:
-    """Return the Lemonade Server API base URL: configured, else GAIA's own."""
-    from gaia.llm.lemonade_client import resolve_lemonade_base_url
-
-    return resolve_lemonade_base_url()
-
-
 async def _lemonade_post(
     path: str,
     payload: dict,
@@ -75,7 +68,7 @@ async def _lemonade_post(
     try:
         import httpx  # pylint: disable=import-outside-toplevel
 
-        base_url = _get_lemonade_base_url()
+        base_url = resolve_lemonade_base_url()
         headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
@@ -222,7 +215,7 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     """
     import httpx  # pylint: disable=import-outside-toplevel
 
-    base_url = _get_lemonade_base_url()
+    base_url = resolve_lemonade_base_url()
     payload: Dict[str, Any] = {"model_name": model_name, "stream": True}
     if force:
         payload["force"] = True
@@ -490,12 +483,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         probe_errors = (httpx.HTTPError, ValueError, TypeError, AttributeError)
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            base_url = _get_lemonade_base_url()
+            base_url = resolve_lemonade_base_url()
             _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
-
-            # Derive the Lemonade web UI URL (scheme://host:port without /api/v1)
-            _parsed = urlparse(base_url)
-            status.lemonade_url = f"{_parsed.scheme}://{_parsed.netloc}"
 
             # Use /health endpoint to get the actually loaded model
             # (not /models which returns the full catalog of available models)
@@ -850,7 +839,7 @@ async def _check_model_status(model_name: str) -> ModelStatus:
     try:
         import httpx
 
-        base_url = _get_lemonade_base_url()
+        base_url = resolve_lemonade_base_url()
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=5.0) as client:
             # Check catalog: is model known and downloaded?

@@ -472,6 +472,8 @@ def _probe_lemonade() -> Dict[str, Any]:
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_NAME,
         configured_lemonade_url,
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
         resolve_lemonade_base_url,
     )
 
@@ -479,6 +481,8 @@ def _probe_lemonade() -> Dict[str, Any]:
     base = resolve_lemonade_base_url(
         configured_lemonade_url() or getattr(GaiaAgentConfig(), "base_url", None)
     ).rstrip("/")
+    # GAIA's own server rejects keyless requests, which would read as "unreachable".
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base))
     model_id = DEFAULT_MODEL_NAME
 
     out: Dict[str, Any] = {
@@ -490,7 +494,7 @@ def _probe_lemonade() -> Dict[str, Any]:
         "model_id": model_id,
     }
     try:
-        r = requests.get(f"{base}/models", timeout=5)
+        r = requests.get(f"{base}/models", timeout=5, headers=headers)
         r.raise_for_status()
         out["reachable"] = True
         data = r.json().get("data") or []
@@ -503,16 +507,19 @@ def _probe_lemonade() -> Dict[str, Any]:
                 if isinstance(ctx, int):
                     out["ctx_size"] = ctx
                 break
-    except Exception:  # noqa: BLE001 - reachability probe; the caller reports it
+    except (requests.RequestException, ValueError, AttributeError, TypeError) as exc:
+        # The caller reports "not reachable"; the log keeps the actual cause.
+        logger.warning("Lemonade probe of %s/models failed: %s", base, exc)
         return out
 
     try:
-        rv = requests.get(f"{base}/health", timeout=5)
-        if rv.ok:
-            payload = rv.json()
-            out["version"] = payload.get("version") or payload.get("server_version")
-    except Exception:  # noqa: BLE001 - an absent version is indeterminate, not fatal
-        pass
+        rv = requests.get(f"{base}/health", timeout=5, headers=headers)
+        rv.raise_for_status()
+        payload = rv.json()
+        out["version"] = payload.get("version") or payload.get("server_version")
+    except (requests.RequestException, ValueError, AttributeError, TypeError) as exc:
+        # An absent version is indeterminate (rendered as unknown), not fatal.
+        logger.warning("Lemonade version probe of %s/health failed: %s", base, exc)
     return out
 
 
