@@ -8,7 +8,6 @@ Maps OutputHandler method calls (thinking, tool calls, steps, etc.)
 to JSON events that the streaming endpoint sends to the frontend.
 """
 
-import _socket
 import json
 import logging
 import math
@@ -22,6 +21,8 @@ import uuid
 from collections import deque
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
+
+import _socket
 
 from gaia.agents.base.console import OutputHandler
 from gaia.agents.base.tool_grants import grant_scope
