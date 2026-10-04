@@ -485,7 +485,7 @@ export interface SystemStatus {
     // LLM configuration health
     context_size_sufficient: boolean;
     model_downloaded: boolean | null;
-    default_model_name: string;
+    default_model_name: string | null;
     /**
      * Catalog-reported size of ``default_model_name`` (GB). Used by the
      * "model not downloaded" banner so the size hint stays in sync with

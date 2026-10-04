@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
-    DEFAULT_MODEL_NAME,
     lemonade_auth_headers,
     resolve_effective_ctx_size,
     resolve_lemonade_api_key,
@@ -490,15 +489,16 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     # config as "Lemonade not running".
     from gaia.config import GaiaConfigError
 
+    default_model: Optional[str]
     try:
         default_model = _default_model_name()
     except GaiaConfigError as exc:
-        # Surfaced as config_error; the status still names the built-in model.
+        # The model is unknown until the config is fixed; the UI shows config_error.
         logger.warning("system status: %s", exc)
         status.config_error = str(exc)
-        default_model = DEFAULT_MODEL_NAME
+        default_model = None
     # Always named, not only once a model is loaded: the UI's load and download
-    # actions target this, and the schema default is the Gemma floor.
+    # actions target this. None only when an unreadable config hides it.
     status.default_model_name = db.get_setting("custom_model") or default_model
 
     # Check Lemonade Server
@@ -597,7 +597,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 # matches the baseline default *or* any registered agent's
                 # preferred model list. This stops Gaia Lite's 4B (or any other
                 # non-default agent model) from tripping a "Wrong model" banner.
-                if status.model_loaded:
+                # With the expected model unknown (config_error) neither check runs.
+                if status.model_loaded and status.default_model_name:
                     custom_model = db.get_setting("custom_model")
                     loaded_lower = _norm_model_id(status.model_loaded)
                     if custom_model:
@@ -618,11 +619,11 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                     status.default_model_name = custom_model or default_model
 
                 # When no LLM is loaded, check if the expected model is downloaded.
-                # Respects custom_model override; falls back to the built-in default.
+                # Respects the custom_model override.
                 # Uses show_all=true to see models that are in the catalog but not
                 # yet pulled to disk.
-                if not status.model_loaded:
-                    _target = db.get_setting("custom_model") or default_model
+                if not status.model_loaded and status.default_model_name:
+                    _target = status.default_model_name
                     try:
                         catalog_resp = await client.get(
                             f"{base_url}/models",

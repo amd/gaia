@@ -126,6 +126,8 @@ class TestSystemStatus:
         assert data["config_error"] is not None
         assert str(bad) in data["config_error"]
         assert "not valid JSON" in data["config_error"]
+        # The config names the model, so an unreadable one leaves it unknown.
+        assert data["default_model_name"] is None
 
     def test_valid_config_reports_its_profile_and_no_error(
         self, client, tmp_path, monkeypatch
