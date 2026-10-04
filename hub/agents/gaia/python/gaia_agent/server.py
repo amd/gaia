@@ -509,7 +509,7 @@ def _probe_lemonade() -> Dict[str, Any]:
                 if isinstance(ctx, int):
                     out["ctx_size"] = ctx
                 break
-    except (requests.RequestException, ValueError) as exc:
+    except (requests.RequestException, ValueError, AttributeError, TypeError) as exc:
         # The caller reports "not reachable"; the log keeps the actual cause.
         logger.warning("Lemonade probe of %s/models failed: %s", base, exc)
         return out
@@ -519,7 +519,7 @@ def _probe_lemonade() -> Dict[str, Any]:
         rv.raise_for_status()
         payload = rv.json()
         out["version"] = payload.get("version") or payload.get("server_version")
-    except (requests.RequestException, ValueError) as exc:
+    except (requests.RequestException, ValueError, AttributeError, TypeError) as exc:
         # An absent version is indeterminate (rendered as unknown), not fatal.
         logger.warning("Lemonade version probe of %s/health failed: %s", base, exc)
     return out

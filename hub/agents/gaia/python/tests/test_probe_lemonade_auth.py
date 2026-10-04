@@ -64,3 +64,29 @@ def test_probe_sends_every_request_to_gaias_server_with_its_key(own_server, mock
     assert probe["reachable"] is True
     assert probe["present"] is True
     assert probe["version"] == "10.3.0"
+
+
+_MODELS_OK = {"data": [{"id": "Gemma-4-E4B-it-GGUF"}]}
+
+
+@pytest.mark.parametrize(
+    "models_body, health_body, present",
+    [
+        ([], {"version": "10.3.0"}, False),
+        ({"data": ["not-a-dict"]}, {"version": "10.3.0"}, False),
+        (_MODELS_OK, ["not-a-dict"], True),
+    ],
+    ids=["models-is-a-list", "model-entry-not-a-dict", "health-is-a-list"],
+)
+def test_an_odd_body_is_reported_instead_of_crashing_init(
+    own_server, mocker, models_body, health_body, present
+):
+    def fake_get(url, timeout=None, headers=None):
+        return _Resp(models_body if url.endswith("/models") else health_body)
+
+    mocker.patch("requests.get", side_effect=fake_get)
+
+    probe = server_mod._probe_lemonade()
+
+    assert probe["present"] is present
+    assert probe["version"] is None

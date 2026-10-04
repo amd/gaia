@@ -1508,8 +1508,14 @@ class AgentRegistry:
         try:
             self._lemonade_models = get_lemonade_models()
         except LemonadeError as e:
-            # Not cached, so the lookup retries after the interval.
-            logger.warning("registry: Lemonade model lookup failed: %s", e)
+            # Not cached, so the lookup retries after the interval; warn once per outage.
+            log = (
+                logger.warning
+                if self._lemonade_models_last_fail is None
+                else logger.debug
+            )
+            log("registry: Lemonade model lookup failed: %s", e)
             self._lemonade_models_last_fail = time.monotonic()
             return []
+        self._lemonade_models_last_fail = None
         return self._lemonade_models
