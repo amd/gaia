@@ -15,9 +15,10 @@ resolves on a ``MemoryMixin`` host via the MRO.
 Spec: docs/plans/skill-synthesis.mdx
 """
 
+import functools
 import threading
 import time
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -31,6 +32,7 @@ from gaia.agents.base.skill_synthesis import (
     load_synthesis_config,
     reconcile_and_store,
 )
+from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -518,6 +520,10 @@ class ProceduralMemoryMixin:
     # Skill Synthesis (procedural memory, #887)
     # ==================================================================
 
+    def _side_request_kwargs(self) -> Dict[str, Any]:
+        """Thinking off for this agent's model on a short JSON side call."""
+        return no_thinking_kwargs(getattr(self.chat, "effective_model", None))
+
     def start_skill_synthesis(
         self, *, force: bool = False
     ) -> Optional[threading.Thread]:
@@ -741,7 +747,12 @@ class ProceduralMemoryMixin:
             # pass loudly (no smaller-model fallback), per the off-state table.
             # The cluster stays unmarked, so the next pass retries it.
             try:
-                candidate = distill_cluster(cluster, self.chat.send_messages)
+                candidate = distill_cluster(
+                    cluster,
+                    functools.partial(
+                        self.chat.send_messages, **self._side_request_kwargs()
+                    ),
+                )
             except Exception as e:
                 logger.warning(
                     "[MemoryMixin] skill synthesis pass aborted — distillation LLM "

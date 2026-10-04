@@ -385,8 +385,8 @@ class CliSetupToolsMixin:
         Consent was taken before the flow started; asking again would be asking
         the user to *report* their progress, and every confirmation channel is
         the wrong shape for that. The Agent UI expires a prompt after
-        ``TOOL_CONFIRM_TIMEOUT_SECONDS`` — a minute, against a flow that needs a
-        browser, a password and 2FA — and the terminal's is a bare ``input()``
+        ``TOOL_CONFIRM_TIMEOUT_SECONDS`` — a fixed bound, against a flow that
+        needs a browser, a password and 2FA — and the terminal's is a bare ``input()``
         that never returns if the user walks away, stranding the polling child
         past the tool watchdog that cannot kill this thread. Watching the child
         avoids both, and is the better signal anyway: it observes GitHub

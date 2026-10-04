@@ -513,10 +513,7 @@ class CanonicalTranslator:
         if self._summary_renderer is not None:
             return self._summary_renderer(tool, args)
         if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(args.get("path"), str):
-            return (
-                f"Allow GAIA to use {args['path']} (and anything inside it, "
-                "including changes) for this session?"
-            )
+            return _path_access_question(args)
         label = self._action_labels.get(tool, f"Run {tool!r}")
         detail = render_invocation(args)
         if not detail:
@@ -542,6 +539,17 @@ class CanonicalTranslator:
         "agent_created": _on_agent_created,
         # tool_args is handled before dispatch (merges into the pending tool_call).
     }
+
+
+def _path_access_question(args: Dict[str, Any]) -> str:
+    """The question an ``allow_path_access`` prompt asks, worded for its kind."""
+    path = args.get("path")
+    kind = args.get("kind")
+    if kind == "folder":
+        return f"Allow GAIA to use the folder {path} and everything in it for this session?"
+    if kind == "file":
+        return f"Allow GAIA to use the file {path} for this session?"
+    return f"Allow GAIA to use {path} for this session?"
 
 
 def _normalize_options(event: Dict[str, Any]) -> List[Dict[str, str]]:
