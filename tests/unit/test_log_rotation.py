@@ -259,6 +259,15 @@ def test_huge_existing_log_held_open_is_not_copied(
     assert "cannot rotate" in capsys.readouterr().err
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "models a bare os.replace() by another writer, which Windows itself "
+        "refuses while this handler has the file open (WinError 32) -- the "
+        "same refusal the copy+truncate path exists for, covered instead by "
+        "test_rename_refused_falls_back_to_copy_truncate"
+    ),
+)
 def test_handler_follows_a_rotation_done_by_another_writer(tmp_path, handlers):
     log = tmp_path / "gaia.log"
     h = SharedRotatingFileHandler(log, max_bytes=10_000, backup_count=3)

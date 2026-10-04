@@ -177,7 +177,7 @@ def _purge_paths(home: Optional[Path] = None) -> List[Path]:
         gaia / "lemonade",
         gaia / "electron-config.json",
         gaia / "gaia.log",
-        *log_family(gaia / "gaia.log")[1:],
+        *(p for p in log_family(gaia / "gaia.log") if p != gaia / "gaia.log"),
         gaia / "gaia.log.lock",
         gaia / "electron-install-state.json",
         gaia / "electron-install.log",
