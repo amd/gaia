@@ -124,6 +124,10 @@ class ChatAgent:
         self.current_session = None
         self.session_manager = _DummySessionManager()
 
+    def _ensure_tool_loader_reset(self):
+        if not self.current_session:
+            self.current_session = self.session_manager.create_session()
+
     def process_query(self, query, trace=False):
         # Deliberately fails PAST the import/construction gate -- proves the
         # cross-process import + construction worked, distinct from the
