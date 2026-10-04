@@ -117,7 +117,7 @@ Exercise cross-component behaviour through the **real CLI a user runs** — neve
      <printed-output-path>/scorecard.json
    ```
 
-   No flagship baseline is committed yet, so `--compare` has nothing to diff against; report the scores you measured and say the run had no baseline. Never hand-author or copy forward a number to fill the gap.
+   The baseline is a single nightly run (59%, target 80%), so re-run a lone PASS→FAIL before calling it a regression, and report FAIL→PASS flips as progress. Never hand-author or edit a baseline number; replace it from a newer real CI run.
 3. **Regression rule:** a category dropping materially below baseline (beyond run-to-run noise) blocks; an *intentional* capability removal must be re-baselined (`--save-baseline`) and called out in the report. An invalid run (concurrent eval, wrong ctx, mid-run model swap) is "invalid — re-run", not a result.
 4. **Stop this backend before Phase 5** (kill the :4200 process) so the real-world tier brings up its own clean instance rather than inheriting integration-tier state.
 

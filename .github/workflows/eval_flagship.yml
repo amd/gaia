@@ -107,12 +107,10 @@
 # and unread. Nothing else is softened — tool_selection's own non-measurements
 # still fail. Remove the exception when #3016 closes. See the gate step below.
 #
-# TIME REGRESSIONS ARE NOT COMPARABLE TO THIS BASELINE. `--compare` folds a >2x
-# per-scenario wall-clock delta into the same exit 2 as a quality regression, but
-# the committed baseline was captured against a REMOTE Lemonade over ngrok
-# (see meta.json) on different hardware and an older Lemonade. Treat a time-only
-# regression here as a hardware artifact, not a defect, until the baselines are
-# regenerated on the runner itself.
+# TIME REGRESSIONS. `--compare` folds a >2x per-scenario wall-clock delta into
+# the same exit 2 as a quality regression. The baseline was captured on this
+# pool, so a time regression is comparable, but it comes from one run: re-run a
+# lone time-only flip before treating it as a defect.
 #
 # SEQUENCING. `--compare` only DIFFS two scorecards — it does NOT run an eval.
 # So each category is evaluated first, the ABSOLUTE run directory is parsed from
@@ -257,13 +255,10 @@ permissions:
   contents: read
 
 env:
-  # NOTHING IS COMMITTED HERE YET, and the steps below say so loudly rather than
-  # passing by default. The previous baselines were recorded against the `doc`
-  # ChatAgent profile; every scenario now scores the flagship, and
-  # `compare_scorecards` keys on scenario_id alone, so diffing the two would
-  # report "improved/regressed" across two different agents. They were deleted
-  # rather than reinterpreted. This path is where the first flagship baseline
-  # goes, captured by a real run on this hardware.
+  # One scorecard per ci_lanes.json category, copied unedited from a real nightly
+  # on this pool (meta.json names the run). Captured under EVAL_MODEL below; a
+  # run under any other driver is not comparable to it. Replace the files from a
+  # newer nightly; never edit a number in them.
   BASELINE_DIR: tests/fixtures/eval_baselines/gaia-flagship
   # THE LANE MAP IS THE SOURCE OF TRUTH: eval/ci_lanes.json. The `lanes` job below
   # reads it, checks it, and hands each lane its own category list as
@@ -313,13 +308,12 @@ env:
   ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.pull_request.title, '[eval-enforce]') && 'true') || 'false' }}
   # PINNED, and that is not a stale value to bump. `--model` is not a judge-only
   # knob: runner.py passes it to `claude -p`, which DRIVES every scenario as well
-  # as scoring it. So the driver is part of the agent under test, and the first
-  # flagship baseline will be recorded under whatever is set here. Changing it
-  # after that point compares two different agents and folds the new driver's
-  # wall clock into the same >2x time verdict. #2859 moved every Claude workflow
-  # to Opus 5; this one value stays put so the baseline about to be captured and
-  # every run compared to it share a driver. Override per-run via the dispatch
-  # input above.
+  # as scoring it. So the driver is part of the agent under test, and the
+  # committed baseline was recorded under this value. Changing it compares two
+  # different agents and folds the new driver's wall clock into the same >2x
+  # time verdict, so change it only together with a re-captured baseline.
+  # #2859 moved every other Claude workflow to Opus 5. Override per-run via the
+  # dispatch input above.
   EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
   # Deep ladder is opt-in. Its rungs purge the embedder from disk and unload every
   # resident model, which is fine while investigating and wrong to repeat on every

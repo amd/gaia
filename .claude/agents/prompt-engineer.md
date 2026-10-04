@@ -110,7 +110,7 @@ gaia eval agent --compare \
   <run-dir>/scorecard.json          # --compare only DIFFS; it does not run an eval
 ```
 
-No flagship baseline is committed yet, so `--compare` has nothing to diff against; report the scores you measured and say the run had no baseline. Never hand-author or copy forward a number to fill the gap.
+The baseline is a single nightly run (59%, target 80%), so re-run a lone PASS→FAIL before calling it a regression, and report FAIL→PASS flips as progress. Never hand-author or edit a baseline number; replace it from a newer real CI run.
 
 - **Run evals serially.** Never two `gaia eval agent` processes at once — they race-evict each other's models. Precheck: `ps aux | grep "gaia eval" | grep -v grep | wc -l` must print `0`.
 - **A regression gets fixed before you commit.** Re-run after the fix.
