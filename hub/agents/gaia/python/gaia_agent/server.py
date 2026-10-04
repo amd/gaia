@@ -36,6 +36,7 @@ import contextlib
 import json
 import os
 import queue
+import sys
 import threading
 import time
 import uuid
@@ -1360,6 +1361,18 @@ def serve_http(argv: List[str]) -> int:
     parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
     args = parser.parse_args(argv)
+
+    # The warm-up swallows agent-build errors, so a stale GAIA_SKILL_SET would
+    # otherwise leave a healthy-looking sidecar with no skills.
+    from gaia_agent.agent import check_skill_set_selection
+
+    from gaia.skills.errors import SkillSetError
+
+    try:
+        check_skill_set_selection()
+    except SkillSetError as exc:
+        print(f"gaia-agent: {exc}", file=sys.stderr)
+        return 2
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0

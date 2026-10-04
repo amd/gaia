@@ -37,6 +37,7 @@ INTERNAL = {
     "GAIA_MODEL_BROKER_TOKEN": "tok-broker",
     "GAIA_MODEL_BROKER_TOKEN_FILE": "/tmp/tok-broker-file",
     "GAIA_HOST_CUSTODY_SECRET": "tok-custody",
+    "GAIA_ENGINEERING_TOKEN": "tok-engineering",
 }
 
 PYTHON = shutil.which("python3") or shutil.which("python")
@@ -82,8 +83,10 @@ def test_the_names_match_the_daemon_constants():
     from gaia.daemon.constants import BROKER_TOKEN_ENV_VAR, BROKER_TOKEN_FILE_ENV_VAR
     from gaia.daemon.custody.constants import CUSTODY_SECRET_ENV_VAR
     from gaia.daemon.sidecars import spec
+    from gaia.engineering.handoff import ENGINEERING_TOKEN_ENV_VAR
 
     names = [
+        ENGINEERING_TOKEN_ENV_VAR,
         BROKER_TOKEN_ENV_VAR,
         BROKER_TOKEN_FILE_ENV_VAR,
         CUSTODY_SECRET_ENV_VAR,

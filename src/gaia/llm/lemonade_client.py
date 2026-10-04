@@ -31,10 +31,11 @@ import requests
 # Import OpenAI client for internal use
 from openai import OpenAI
 
-from gaia.env import load_env
+from gaia.env import child_env, load_env
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
+    gaia_runs_lemonade,
     get_installed_version,
     resolve_lemonade,
 )
@@ -1744,6 +1745,31 @@ class LemonadeClient:
         self._stop_listeners(stoppable)
         return foreign
 
+    def _start_gaia_lemonade(self) -> None:
+        """Have the daemon start GAIA's own server, then point this client at it.
+
+        Raises:
+            LemonadeClientError: the daemon could not start it. There is no
+                retry against a system install.
+        """
+        from urllib.parse import urlparse
+
+        from gaia.daemon.client import ensure_lemonade
+        from gaia.daemon.errors import DaemonError
+
+        self.log.info("Asking the GAIA daemon to start GAIA's Lemonade Server...")
+        try:
+            served = ensure_lemonade()
+        except DaemonError as e:
+            raise LemonadeClientError(
+                f"Could not start GAIA's Lemonade Server: {e}"
+            ) from e
+        self.base_url = served["base_url"]
+        parsed = urlparse(self.base_url)
+        self.host = parsed.hostname or DEFAULT_HOST
+        self.port = parsed.port or DEFAULT_PORT
+        self.api_key = _embedded_lemonade_api_key(self.base_url)
+
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
         Launch the Lemonade server using subprocess.
@@ -1761,11 +1787,15 @@ class LemonadeClient:
 
         This method follows the approach in test_lemonade_server.py.
 
+        Where ``gaia init`` installed GAIA's own server, the daemon starts that
+        one instead and this client is re-pointed at the port it binds;
+        ``log_level``, ``background`` and ``ctx_size`` do not apply to it.
+
         Raises:
             LemonadeClientError: this client is pointed at a server on another
-                host. Launching is a local act — it frees a local port and
-                starts a local process — so it can only ever satisfy a local
-                client (#3558).
+                host — launching is a local act (it frees a local port and
+                starts a local process), so it can only ever satisfy a local
+                client (#3558) — or the daemon could not start GAIA's own server.
         """
         if not self._targets_this_machine():
             raise LemonadeClientError(
@@ -1775,6 +1805,10 @@ class LemonadeClient:
                 "server the client would not talk to. Start Lemonade on that "
                 "host, or unset LEMONADE_BASE_URL to use a local one."
             )
+
+        if gaia_runs_lemonade(self.base_url):
+            self._start_gaia_lemonade()
+            return
 
         self.log.info("Starting Lemonade server...")
 
@@ -1829,7 +1863,7 @@ class LemonadeClient:
 
         # Merge — never replace — the parent environment; the child loses
         # PATH/LOCALAPPDATA otherwise and LemonadeServer.exe breaks.
-        popen_env = {**os.environ, **spec.env}
+        popen_env = child_env(spec.env)
         # Own process group, so terminate_server's group kill can't reach the caller.
         session = {} if sys.platform.startswith("win") else {"start_new_session": True}
 
@@ -5409,8 +5443,7 @@ class LemonadeClient:
 
         Checks in this order:
         1. Try health check on configured URL (LEMONADE_BASE_URL or default)
-        2. Unless LEMONADE_BASE_URL names a server, GAIA's own Lemonade
-           (installed by ``gaia init``) counts as installed
+        2. If GAIA's own server (``gaia init``) is the one to start, True
         3. If localhost and health check fails, check if binary is in PATH (for auto-start)
         4. If remote server and health check fails, return False (can't auto-start)
 
@@ -5427,11 +5460,8 @@ class LemonadeClient:
                 "Lemonade health check failed before installation check: %s", exc
             )
 
-        if not configured_lemonade_url():
-            from gaia.llm.lemonade_embedded import EmbeddedLemonade
-
-            if EmbeddedLemonade().is_installed():
-                return True
+        if gaia_runs_lemonade(self.base_url):
+            return True
 
         # Health check failed - determine if we can auto-start
         is_localhost = self.host in ("localhost", "127.0.0.1", "::1")

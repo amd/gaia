@@ -390,13 +390,9 @@ class GaiaCliClient:
             yield error_message
 
     def get_stats(self):
-        try:
-            stats = self.llm_client.get_performance_stats()
-            self.log.debug(f"Stats received: {stats}")
-            return stats
-        except Exception as e:
-            self.log.error(f"Error while fetching stats: {str(e)}")
-            return None
+        stats = self.llm_client.get_performance_stats()
+        self.log.debug(f"Stats received: {stats}")
+        return stats
 
     async def prompt(self, message):
         async for chunk in self.send_message(message):
@@ -771,11 +767,11 @@ async def async_main(action, **kwargs):
 
         except KeyboardInterrupt:
             print("\n\nInterrupted by user", file=sys.stderr)
-            return
+            return 130
         except Exception as e:
             log.error(f"Error in chat: {e}", exc_info=True)
             print(f"❌ Error: {e}", file=sys.stderr)
-            return
+            return 1
         finally:
             # Cleanup. The drain is here rather than beside the one-shot
             # return so interactive, Ctrl-C and error exits land the last
@@ -842,9 +838,8 @@ async def async_main(action, **kwargs):
         stats = client.get_stats()
         if stats:
             return {"stats": stats}
-        log.error("No stats available.")
-        print("❌ Error: No stats available.")
-        sys.exit(1)
+        print("No stats yet — run `gaia prompt` or `gaia chat` first.")
+        return
     else:
         log.error(f"Unknown action specified: {action}")
         print(f"❌ Error: Unknown action specified: {action}")
@@ -4307,12 +4302,19 @@ def main():
         log.debug(f"Executing {args.action} with parameters: {kwargs}")
         try:
             result = run_cli(args.action, **kwargs)
-            if result:
-                print(result)
         except Exception as e:
-            log.error(f"Error executing {args.action}: {e}")
-            print(f"❌ Error: {e}")
+            log.debug(f"gaia {args.action} failed", exc_info=True)
+            print(f"❌ Error: gaia {args.action} failed: {e}", file=sys.stderr)
+            print(
+                "   Rerun with --logging-level DEBUG for the full traceback.",
+                file=sys.stderr,
+            )
             sys.exit(1)
+        # An int is an exit status, never output to print.
+        if isinstance(result, int):
+            sys.exit(result)
+        if result:
+            print(result)
         return
 
     # Handle utility commands

@@ -434,11 +434,12 @@ mints a per-session token and passes it as `GAIA_GAIA_SIDECAR_TOKEN_FILE`
 (`gaia.daemon.sidecars.spec` mirrors both names as plain strings so core never
 imports this wheel).
 
-**Child processes.** Shell commands and MCP servers the agent starts never
-inherit the sidecar token or GAIA's other internal credentials (the model-broker
-token and custody secret): their environment comes from `gaia.env.child_env`,
-which also drops any name listed in `GAIA_CHILD_ENV_DENY` (comma or space
-separated). User credentials such as `GH_TOKEN` pass through unchanged.
+**Child processes.** The programs the agent starts — shell commands, MCP
+servers, CLI installs and sign-ins, native hub agents, media tools, the Lemonade
+server — never inherit the sidecar token or GAIA's other internal credentials
+(the model-broker token, custody secret and engineering pairing token): their
+environment comes from `gaia.env.child_env`, which also drops any name listed
+in `GAIA_CHILD_ENV_DENY` (comma or space separated). User credentials such as `GH_TOKEN` pass through unchanged.
 `GAIA_NO_DOTENV=1` in the sidecar's launch environment stops it loading `.env`
 files; a `.env` file cannot set that switch itself.
 

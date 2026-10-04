@@ -46,7 +46,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, FrozenSet, List, Optional
+from typing import ClassVar, FrozenSet, List, Optional, Tuple
 
 from gaia_agent.connectors import MAILBOX_REQUIREMENTS
 from gaia_agent.engineering_tools import (
@@ -57,6 +57,7 @@ from gaia_agent.engineering_tools import (
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 from gaia_agent_chat.profiles import get_profile_spec
 
+from gaia.agents.base.agent import parse_skill_manifest
 from gaia.agents.base.project_map import ProjectMapMixin, is_code_repository
 from gaia.agents.base.skill_catalog import catalog_env_override
 from gaia.agents.base.skill_loader import (
@@ -70,6 +71,7 @@ from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
+from gaia.skills.errors import SkillSetError
 
 logger = get_logger(__name__)
 
@@ -615,16 +617,85 @@ class GaiaAgent(
         (which ships unset). Returning ``None`` means load no skills — the base
         class treats that as a deliberate choice, not a missing value.
         """
-        explicit = getattr(self.config, "skill_set", None)
-        if explicit:
-            return explicit
-        return os.environ.get(SKILL_SET_ENV) or None
+        name, _origin = _user_skill_set(self.config)
+        return name
+
+    def load_declared_skills(self, manifest_path=None, *, manager=None):
+        """Load declared skills, refusing a user-named set even with no manifest.
+
+        The base returns ``{}`` early when no manifest is found, before
+        :meth:`load_skill_set` can reject the config/env name — so an unpackaged
+        checkout would silently drop ``GAIA_SKILL_SET`` that the transport
+        pre-check already rejects.
+        """
+        if manifest_path is None and _user_skill_set(self.config)[0] is not None:
+            return self.load_skill_set(manager=manager)
+        return super().load_declared_skills(manifest_path, manager=manager)
+
+    def load_skill_set(self, requested: Optional[str] = None, *, manager=None):
+        """Load skills, treating the config/env skill set as an explicit request.
+
+        The base class consults :meth:`select_skill_set` only when the manifest
+        declares sets, so a user-supplied name would be dropped silently while
+        none are declared. Passing it as *requested* makes every undeclared name
+        raise, naming the valid sets.
+        """
+        if requested is not None or (self._requested_skill_set or "").strip():
+            return super().load_skill_set(requested, manager=manager)
+        name, origin = _user_skill_set(self.config)
+        try:
+            return super().load_skill_set(name, manager=manager)
+        except SkillSetError as exc:
+            if name is None:
+                raise
+            raise SkillSetError(_bad_skill_set_message(name, origin, exc)) from exc
+
+
+def _user_skill_set(config: Optional[GaiaAgentConfig]) -> Tuple[Optional[str], str]:
+    """The skill set the user asked for and where it came from, or ``None``."""
+    explicit = (getattr(config, "skill_set", None) or "").strip()
+    if explicit:
+        return explicit, "GaiaAgentConfig.skill_set"
+    from_env = (os.environ.get(SKILL_SET_ENV) or "").strip()
+    if from_env:
+        return from_env, SKILL_SET_ENV
+    return None, ""
+
+
+def _bad_skill_set_message(name: str, origin: str, exc: SkillSetError) -> str:
+    return (
+        f"{origin}={name!r} cannot be used: {exc} Unset {origin} to start "
+        "GAIA without a skill set."
+    )
+
+
+def check_skill_set_selection(config: Optional[GaiaAgentConfig] = None) -> None:
+    """Fail now if the requested skill set is not one this agent declares.
+
+    Cheap — it reads only the manifest, not the model or the tool stack — so a
+    transport can call it before it binds a port or opens its wire. Resolution
+    goes through the same :class:`~gaia.skills.sets.SkillSets` the agent uses,
+    so the two can never disagree about what is valid.
+
+    Raises:
+        SkillSetError: ``GAIA_SKILL_SET`` (or ``config.skill_set``) names a set
+            the manifest does not declare; the message lists the valid sets.
+    """
+    name, origin = _user_skill_set(config)
+    if name is None:
+        return
+    declarations = parse_skill_manifest(GaiaAgent.SKILL_MANIFEST)
+    try:
+        declarations.resolve(requested=name)
+    except SkillSetError as exc:
+        raise SkillSetError(_bad_skill_set_message(name, origin, exc)) from exc
 
 
 __all__ = [
     "GaiaAgent",
     "GaiaAgentConfig",
     "SKILL_SET_ENV",
+    "check_skill_set_selection",
     "FAST_ENV",
     "fast_env_override",
 ]
