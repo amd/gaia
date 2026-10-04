@@ -104,6 +104,22 @@ def test_unreachable_backend_is_named(monkeypatch):
     assert "could not reach http://127.0.0.1:1" in error
 
 
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        (b"<html>proxy error</html>", "non-JSON response"),
+        (b'["memory_enabled"]', "expected a JSON object"),
+    ],
+)
+def test_malformed_settings_body_is_a_preflight_error(monkeypatch, body, expected):
+    monkeypatch.setattr("urllib.request.urlopen", lambda url, timeout=None: _Resp(body))
+
+    error = runner._probe_memory_enabled("http://127.0.0.1:4200")
+
+    assert expected in error
+    assert "http://127.0.0.1:4200/api/memory/settings" in error
+
+
 def test_preflight_probes_memory_only_when_a_scenario_needs_it(monkeypatch):
     probed = []
     monkeypatch.setattr(

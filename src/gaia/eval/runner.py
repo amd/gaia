@@ -1347,6 +1347,13 @@ def _probe_memory_enabled(backend_url: str) -> Optional[str]:
             f"Memory settings probe could not reach {backend_url}: {e}. "
             "Is the Agent UI backend running?"
         )
+    except json.JSONDecodeError as e:
+        return f"Memory settings probe got a non-JSON response from {url}: {e}"
+    if not isinstance(settings, dict):
+        return (
+            f"Memory settings probe expected a JSON object from {url}, "
+            f"got {type(settings).__name__}"
+        )
     if settings.get("memory_enabled") is True:
         return None
     return (
