@@ -84,7 +84,7 @@ import logging
 import os
 import re
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
@@ -391,6 +391,10 @@ class BinaryPolicy:
         python_module: The module that runs this CLI as ``python -m <module>``.
             That spelling is then judged as the binary itself — same grant,
             same policy — instead of as an ungranted ``python``.
+        same_program_as: Other names this program is installed under
+            (``python`` / ``python3``). A skill that declares several needs
+            only one on ``PATH``: a missing name is left out of the grant and
+            the model is told which declared name to run instead.
     """
 
     binary: str
@@ -410,6 +414,7 @@ class BinaryPolicy:
     ungranted: frozenset[str] = frozenset()
     setup: BinarySetup | None = None
     python_module: str | None = None
+    same_program_as: frozenset[str] = frozenset()
 
     def unavailable_note(self) -> str:
         """What the model is told when this binary is not on ``PATH``."""
@@ -1745,6 +1750,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
     **{
         name: BinaryPolicy(
             binary=name,
+            same_program_as=frozenset({"python", "python3"}) - {name},
             summary=(
                 f"{name} — runs a Python program that is already in this "
                 "checkout without another prompt under the loaded skill grant. "
@@ -2198,9 +2204,21 @@ def resolve_binary_policies(
     refuse_unpoliced_binaries(permissions, skill_name=skill_name)
 
     policies: list[BinaryPolicy] = []
+    declared = _declared_binaries(permissions)
     for permission in binary_permissions(permissions):
         policy = BINARY_POLICIES[(permission.scope or "").lower()]
         if require_installed and shutil.which(policy.binary) is None:
+            alias = _installed_alias(policy, declared)
+            if alias:
+                logger.warning(
+                    "Skill '%s' loaded without its '%s' grant: '%s' is not on "
+                    "PATH, and its declared '%s' runs the same program.",
+                    skill_name,
+                    policy.binary,
+                    policy.binary,
+                    alias,
+                )
+                continue
             if policy.substitute:
                 logger.warning(
                     "Skill '%s' loaded without its '%s' grant: '%s' is not on "
@@ -2238,16 +2256,39 @@ def unavailable_binaries(permissions: Sequence["Permission"]) -> list[BinaryPoli
     skill's own instructions into a command that cannot run.
     """
     missing: list[BinaryPolicy] = []
+    declared = _declared_binaries(permissions)
     for permission in binary_permissions(permissions):
         policy = BINARY_POLICIES.get((permission.scope or "").lower())
-        if (
-            policy is not None
-            and policy.substitute
-            and shutil.which(policy.binary) is None
-            and policy not in missing
-        ):
+        if policy is None or shutil.which(policy.binary) is not None:
+            continue
+        alias = _installed_alias(policy, declared)
+        if alias:
+            policy = replace(
+                policy,
+                substitute=(
+                    f"`{alias}` is the same program and this skill's grant "
+                    f"covers it, so run `{alias}` wherever it says "
+                    f"`{policy.binary}`."
+                ),
+            )
+        if policy.substitute and policy not in missing:
             missing.append(policy)
     return missing
+
+
+def _declared_binaries(permissions: Sequence["Permission"]) -> frozenset[str]:
+    return frozenset(
+        (permission.scope or "").lower()
+        for permission in binary_permissions(permissions)
+    )
+
+
+def _installed_alias(policy: BinaryPolicy, declared: frozenset[str]) -> str:
+    """A declared other name for *policy*'s program that is on ``PATH``, or ``""``."""
+    for name in sorted(policy.same_program_as & declared):
+        if shutil.which(name) is not None:
+            return name
+    return ""
 
 
 # ---------------------------------------------------------------------------
