@@ -11,10 +11,9 @@ import sys
 import time
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.env import load_env
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
@@ -41,7 +40,7 @@ from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
 from gaia.version import version
 
 # Load environment variables from .env file
-load_dotenv()
+load_env()
 
 # Set debug level for the logger
 logging.getLogger("gaia").setLevel(logging.INFO)

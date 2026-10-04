@@ -85,6 +85,13 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **Shell commands and MCP servers no longer inherit GAIA's internal
+  credentials.** The processes the agent starts get the sidecar's environment
+  minus GAIA's own tokens. Your own variables (`GH_TOKEN` and the like) still pass through, so CLI skills
+  keep working. An embedding app can withhold more names with
+  `GAIA_CHILD_ENV_DENY` (comma or space separated), and can stop GAIA loading
+  `.env` files with `GAIA_NO_DOTENV=1` — read from the real environment, so a
+  `.env` cannot set it.
 - **The agent can drive a real browser.** Pages behind JavaScript or a login
   used to be out of reach — `fetch_page` is one HTTP GET, so a signed-in inbox
   or a dashboard came back empty. Eight new tools open a real Chromium, read

@@ -32,12 +32,11 @@ import sys
 import tempfile
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
-
+from gaia.env import load_env
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
-load_dotenv()
+load_env()
 
 log = get_logger(__name__)
 
