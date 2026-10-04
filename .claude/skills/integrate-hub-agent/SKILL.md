@@ -1,6 +1,6 @@
 ---
 name: "integrate-hub-agent"
-description: "Embeds one of this repo's pre-built hub agents (under hub/agents/) into a developer's own application. Use when a developer wants to integrate, add, embed, or wire a GAIA hub agent into their app, project, or codebase — e.g. 'integrate a hub agent into my app', 'add the <name> agent to my project', 'embed a GAIA agent', 'how do I use the email/analyst/code agent in my code'. Not for authoring a new agent (use gaia-agent-builder) or releasing/publishing one (use agent-hub-release)."
+description: "Embeds one of this repo's pre-built hub agents (under hub/agents/) into a developer's own application. Use when a developer wants to integrate, add, embed, or wire a GAIA hub agent into their app, project, or codebase — e.g. 'integrate a hub agent into my app', 'add the <name> agent to my project', 'embed a GAIA agent', 'how do I use the email/gaia agent in my code'. Not for authoring a new agent (use gaia-agent-builder) or releasing/publishing one (use agent-hub-release)."
 ---
 
 # Integrating a GAIA Hub Agent
@@ -21,23 +21,24 @@ Hub agents are one directory per agent, with a runtime subdir inside:
 changes:
 
 ```bash
-ls hub/agents/                 # one dir per agent (e.g. analyst, code, email, jira, …)
+ls hub/agents/                 # one dir per agent (e.g. gaia, chat, email, …)
 ls hub/agents/email/           # an agent's runtimes (e.g. python, npm; cpp when present)
 ```
 
 Treat whatever the listing returns as authoritative. A missing runtime subdir just
 means the agent doesn't ship that shape today. `hub/agents/README.md` is a useful
 catalog of the python set and the example agents (`hello-world`, `word-count`,
-`doc-search`) if the developer is unsure what's available.
+`connectors-demo`) if the developer is unsure what's available.
 
 ## Step 2 — Identify which agent the developer wants
 
 Pin down a single `<name>/<runtime>` before integrating:
 
-- If the developer named an agent ("the email agent", "analyst"), match it against the
-  listing. Three names can diverge — watch for it: the friendly name, the **directory**
-  (`<name>`), and the registry **`id`** in `gaia-agent.yaml` need not match (the
-  `analyst` directory registers as id `data`). The directory is how you find the
+- If the developer named an agent ("the email agent", "GAIA"), match it against the
+  listing. Several names can diverge — watch for it: the friendly name, the
+  **directory** (`<name>`), the registry **`id`** in `gaia-agent.yaml`, and the
+  package/module names (the flagship's python module is `gaia_agent`, not
+  `gaia_agent_gaia`; its npm package is `@amd-gaia/gaia`). The directory is how you find the
   package; the **`id`** is what you pass when invoking a python agent (Step 3).
 - The same capability can ship in more than one runtime (the email agent is npm
   `agent-email` **and** python `email`). Confirm the runtime, since it picks the shape:
@@ -121,13 +122,12 @@ integration steps from them (don't just list the files back to the developer):
 2. **Runtime manifest** — `gaia-agent.yaml` (and/or `pyproject.toml`) for python,
    `package.json` for npm: the canonical `id`/package name, declared `models`,
    exposed `interfaces`, dependencies, and entry points.
-3. **Source entry point** — the package's entry module (python: `gaia_agent_<id>/__init__.py`
-   `build_registration()` → `agent.py`; npm: the `main`/`exports` entry in
+3. **Source entry point** — the package's entry module (python: `entry_module` /
+   `entry_class` in `gaia-agent.yaml`, usually `gaia_agent_<id>/agent.py`; npm: the `main`/`exports` entry in
    `package.json`): the ground truth when README and manifest leave a gap.
 
 Synthesize these into concrete steps shaped per Step 3 (install → register/configure →
-invoke for python; install → start sidecar → call client → shut down for npm). Most
-python agents are currently in this branch.
+invoke for python; install → start sidecar → call client → shut down for npm).
 
 ## Writing it up
 
