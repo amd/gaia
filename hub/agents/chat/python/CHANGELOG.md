@@ -10,6 +10,11 @@
   approve for the chat is now readable by document indexing too. Symlinks and
   `..` are resolved before the check, and secrets such as `.env` inside an allowed
   folder are no longer indexed.
+- A GPU model now loads at its own context window on a machine whose
+  `default_device` is `npu`. Every model there used to load at the NPU's 32,768
+  tokens, so long tasks overflowed. `ChatAgentConfig.min_context_size` no longer
+  defaults to 32,768: unset, the server is checked against the device profile and
+  each model loads at its own window.
 - `text_to_speech` now synthesizes through Lemonade's `kokoro-v1` model instead of
   a local Kokoro install, so it works without the PyTorch-based `kokoro` and
   `soundfile` packages. The `voice` argument is now honoured (it was ignored) and an

@@ -93,7 +93,9 @@ class SystemStatus(BaseModel):
     # LLM configuration health
     context_size_sufficient: bool = True  # False if loaded ctx < required minimum
     model_downloaded: Optional[bool] = None  # None=unknown, True/False if checked
-    default_model_name: str = "Gemma-4-E4B-it-GGUF"  # Required model for GAIA Chat
+    # Required model for GAIA Chat; None when an unreadable config hides it
+    # (``config_error`` then says why).
+    default_model_name: Optional[str] = "Gemma-4-E4B-it-GGUF"
     # Catalog-reported size of ``default_model_name``. Populated alongside
     # ``model_downloaded`` so the "not downloaded" banner can show an accurate
     # size hint instead of a hard-coded one (the previous "~25 GB" was a stale

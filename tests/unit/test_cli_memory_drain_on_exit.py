@@ -25,7 +25,7 @@ import pytest
 
 @pytest.fixture
 def chat_agent_stubs(monkeypatch):
-    """Stand in for the gaia-agent-chat wheel and the Lemonade pre-flight.
+    """Stand in for the agent wheels and the Lemonade pre-flight.
 
     Returns the module namespace so a test can make ``interactive_mode`` raise.
     """
@@ -37,19 +37,21 @@ def chat_agent_stubs(monkeypatch):
     agent = MagicMock()
     agent.current_session = "session-1"
 
-    agent_module = types.ModuleType("gaia_agent_chat.agent")
-    agent_module.ChatAgent = MagicMock(return_value=agent)
-    agent_module.ChatAgentConfig = MagicMock()
+    agent_module = types.ModuleType("gaia_agent.agent")
+    agent_module.GaiaAgent = MagicMock(return_value=agent)
+    agent_module.GaiaAgentConfig = MagicMock()
 
     app_module = types.ModuleType("gaia_agent_chat.app")
     app_module.interactive_mode = MagicMock()
 
-    package = types.ModuleType("gaia_agent_chat")
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat", package)
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat.agent", agent_module)
+    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
+    monkeypatch.setitem(sys.modules, "gaia_agent.agent", agent_module)
+    monkeypatch.setitem(
+        sys.modules, "gaia_agent_chat", types.ModuleType("gaia_agent_chat")
+    )
     monkeypatch.setitem(sys.modules, "gaia_agent_chat.app", app_module)
 
-    return types.SimpleNamespace(agent=agent, app=app_module)
+    return types.SimpleNamespace(agent=agent, app=app_module, module=agent_module)
 
 
 @pytest.fixture
@@ -116,3 +118,62 @@ def test_a_failure_before_the_agent_exists_is_not_an_error(monkeypatch, drain):
         _launch_interactive_cli()
 
     drain.assert_not_called()
+
+
+def test_interactive_chat_runs_the_flagship(chat_agent_stubs, drain):
+    """`gaia chat` / `gaia --cli` must build GaiaAgent, never the retired ChatAgent."""
+    from gaia.cli import _launch_interactive_cli
+
+    _launch_interactive_cli()
+
+    chat_agent_stubs.module.GaiaAgent.assert_called_once()
+    chat_agent_stubs.app.interactive_mode.assert_called_once_with(
+        chat_agent_stubs.agent
+    )
+
+
+def test_missing_flagship_fails_loudly_and_never_runs_chat_agent(
+    chat_agent_stubs, drain, monkeypatch, capsys
+):
+    """No fallback: without the flagship wheel `gaia chat` exits 1 naming the
+    wheel to install, and never quietly runs the base ChatAgent instead."""
+    from gaia.cli import _launch_interactive_cli
+
+    monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)  # import fails
+    chat_module = types.ModuleType("gaia_agent_chat.agent")
+    chat_module.ChatAgent = MagicMock()
+    chat_module.ChatAgentConfig = MagicMock()
+    monkeypatch.setitem(sys.modules, "gaia_agent_chat.agent", chat_module)
+
+    with pytest.raises(SystemExit) as exc:
+        _launch_interactive_cli()
+
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "The GAIA agent is not installed" in out and "gaia-agent-gaia" in out
+    chat_module.ChatAgent.assert_not_called()
+    chat_agent_stubs.app.interactive_mode.assert_not_called()
+
+
+# ``run_cli`` goes through ``asyncio.run``, whose Windows self-pipe trips the
+# unit-test socket guard; the stubs keep this test off the network.
+@pytest.mark.allow_network
+def test_one_shot_chat_runs_the_flagship(chat_agent_stubs, drain):
+    """`gaia chat -q` must build GaiaAgent and hand it the query."""
+    from gaia.cli import run_cli
+
+    chat_agent_stubs.agent.process_query.return_value = {"status": "success"}
+
+    rc = run_cli(
+        "chat",
+        query="hi",
+        model="stub-model",
+        device="cpu",
+        base_url="http://stub.invalid/api/v1",
+        no_lemonade_check=True,
+    )
+
+    assert rc == 0
+    chat_agent_stubs.module.GaiaAgent.assert_called_once()
+    chat_agent_stubs.agent.process_query.assert_called_once_with("hi", trace=False)
+    drain.assert_called_once_with(chat_agent_stubs.agent)

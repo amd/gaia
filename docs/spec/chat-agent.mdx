@@ -103,7 +103,7 @@ class ChatAgentConfig:
     claude_model: str = "claude-sonnet-4-20250514"
     # None = fall back to LEMONADE_BASE_URL env var, then the default
     base_url: Optional[str] = None
-    model_id: Optional[str] = None  # None = use the default model (Gemma-4-E4B-it-GGUF)
+    model_id: Optional[str] = None  # None = config default_model, else Gemma-4-E4B-it-GGUF
 
     # Execution
     max_steps: int = 10
@@ -411,7 +411,6 @@ def test_session_persistence(tmp_path):
 ```toml
 [project.optional-dependencies]
 rag = [
-    "sentence-transformers>=2.0.0",
     "faiss-cpu>=1.7.0",
     "pypdf>=3.0.0",
 ]

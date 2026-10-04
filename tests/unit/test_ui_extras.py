@@ -4,7 +4,7 @@
 """Regression test for issue #845.
 
 The Agent UI boot path (gaia.ui.server._import_modules) eagerly imports
-faiss + sentence_transformers, and gaia.rag.sdk lazily imports
+faiss, and gaia.rag.sdk lazily imports
 pypdf / numpy / fitz (pymupdf). After AppImage install — which only
 resolves setup.py[ui] — those modules were missing and RAG broke
 silently. This test asserts the [ui] extra in setup.py declares every
@@ -29,7 +29,6 @@ SETUP_PY = Path(__file__).resolve().parents[2] / "setup.py"
 # for diagnostic clarity when the assertion fails.
 REQUIRED_UI_DISTS = {
     "faiss-cpu": "src/gaia/ui/server.py boot import",
-    "sentence-transformers": "src/gaia/ui/server.py boot import",
     "pypdf": "src/gaia/rag/sdk.py PdfReader",
     "pymupdf": "src/gaia/rag/sdk.py fitz",
     "numpy": "src/gaia/rag/sdk.py / faiss",
@@ -70,3 +69,24 @@ def test_ui_extra_declares_rag_runtime_dep(dist: str, reason: str) -> None:
         f"setup.py[ui] is missing distribution '{dist}' (needed by {reason}).\n"
         f"Current [ui] extra: {ui_reqs}"
     )
+
+
+def test_ui_extra_carries_no_local_model_runtime() -> None:
+    """Every model the Agent UI uses is served by Lemonade.
+
+    torch came in only for a memory reranker that faiss already kept switched
+    off, and on macOS its libomp aborts faiss recall outright.
+    """
+    names = {
+        re.split(r"[<>=!~;\[ ]", r, maxsplit=1)[0].lower() for r in _parse_ui_extra()
+    }
+    heavy = names & {
+        "torch",
+        "torchvision",
+        "torchaudio",
+        "sentence-transformers",
+        "transformers",
+        "safetensors",
+        "accelerate",
+    }
+    assert not heavy, f"setup.py[ui] declares {sorted(heavy)}"
