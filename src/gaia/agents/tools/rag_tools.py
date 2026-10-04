@@ -12,12 +12,14 @@ from pathlib import Path
 from typing import Any, Dict
 
 from gaia.agents.base.errors import require_host_attr
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.path_access import (
     read_access_error,
     readable_entry,
     write_access_error,
 )
 from gaia.logger import get_logger
+from gaia.tool_cancellation import raise_if_cancelled
 
 logger = get_logger(__name__)
 
@@ -1592,7 +1594,7 @@ Use the {summary_type} style for the content sections."""
                     # Use chat SDK to generate summary
                     try:
                         # Use RAG's chat SDK for summary generation
-                        response = self.rag.chat.send(prompt)
+                        response = self.rag.chat.send(prompt, no_history=True)
                         summary_text = response.text
 
                         return {
@@ -1618,6 +1620,8 @@ Use the {summary_type} style for the content sections."""
                 logger.info(f"Processing {num_sections} sections for summarization")
 
                 for section_num, section_text in enumerate(sections, 1):
+                    # An abandoned summary must stop, not keep the model busy.
+                    raise_if_cancelled()
                     logger.info(
                         f"Summarizing section {section_num}/{num_sections} ({len(section_text.split())} words)"
                     )
@@ -1634,8 +1638,9 @@ CRITICAL GROUNDING RULE: Only summarize information explicitly present in the se
 Generate a summary of this section:"""
 
                     try:
-                        # Use RAG's chat SDK for section summary
-                        response = self.rag.chat.send(section_prompt)
+                        # Each section stands alone: carried history put every
+                        # earlier section into the next request and overflowed.
+                        response = self.rag.chat.send(section_prompt, no_history=True)
                         segment_summary = response.text
 
                         section_summaries.append(
@@ -1692,7 +1697,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 
                 try:
                     # Use RAG's chat SDK for final summary synthesis
-                    response = self.rag.chat.send(final_prompt)
+                    response = self.rag.chat.send(final_prompt, no_history=True)
                     final_summary = response.text
 
                     return {

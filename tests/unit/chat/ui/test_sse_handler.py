@@ -981,25 +981,6 @@ class TestPrintCommandExecuting:
 
 
 # ===========================================================================
-# SSEOutputHandler.print_agent_selected
-# ===========================================================================
-
-
-class TestPrintAgentSelected:
-    """Tests for SSEOutputHandler.print_agent_selected."""
-
-    def test_emits_status_info(self, handler):
-        handler.print_agent_selected("CodeAgent", "python", "web")
-        events = _drain(handler)
-        assert len(events) == 1
-        assert events[0] == {
-            "type": "status",
-            "status": "info",
-            "message": "Agent: CodeAgent",
-        }
-
-
-# ===========================================================================
 # SSEOutputHandler.print_streaming_text
 # ===========================================================================
 

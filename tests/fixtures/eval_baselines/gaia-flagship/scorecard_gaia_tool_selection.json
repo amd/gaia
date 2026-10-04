@@ -1,0 +1,619 @@
+{
+  "run_id": "eval-20261003-102611",
+  "timestamp": "2026-10-03T10:38:24.788803+00:00",
+  "config": {
+    "backend_url": "http://127.0.0.1:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia"
+  },
+  "summary": {
+    "total_scenarios": 5,
+    "passed": 3,
+    "failed": 2,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 0.6,
+    "judged_pass_rate": 0.6,
+    "avg_score": 7.99,
+    "by_category": {
+      "gaia_tool_selection": {
+        "passed": 3,
+        "failed": 2,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 7.992
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "select_data_bundle",
+      "session_id": "5515f281-884c-4f22-83e4-c820d9ac69b5",
+      "status": "FAIL",
+      "overall_score": 4.6,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What's total revenue in ~/gaia-eval/csv/sales.csv?",
+          "agent_response": "The issue isn't a bug; it's a hard access restriction. Both trying to analyze (analyze_data_file) and simply read (read_file) the file at ~/gaia-eval/csv/sales.csv failed because that path is outside of my allowed workspace boundaries due to security protocols.\n\nTo get you the total revenue, one of two things needs to happen:\n1. Paste the Data: Copy and paste the content of sales.csv directly into our chat session.\n2. Move the File: Move sales.csv into an accessible directory within your home folder (like C:\\Users\\Administrator\\Documents), and then ask me again.",
+          "agent_tools": [
+            "analyze_data_file",
+            "read_file"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 10,
+            "context_retention": 7,
+            "completeness": 2,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 5
+          },
+          "overall_score": 5.05,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Agent correctly selected analyze_data_file (the exact tool named in success criteria) over RAG — tool selection is optimal. However, ~/gaia-eval/csv/sales.csv is outside the agent's allowed_paths, so both tool calls returned Access Denied. The expected $18,600 was never produced, forcing correctness=0.",
+          "performance": {
+            "tokens_per_second": 37.1,
+            "time_to_first_token": 4.925,
+            "input_tokens": 884,
+            "output_tokens": 591,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "How many distinct products are in there?",
+          "agent_response": "That same problem persists. Since I still don't have access to ~/gaia-eval/csv/sales.csv, I can't count anything inside it—products, rows, or revenue.\n\nIf you paste the contents of sales.csv here, or move it into your main Documents folder so I can read it, then counting distinct products will be no problem at all!",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 4,
+            "context_retention": 9,
+            "completeness": 2,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 2
+          },
+          "overall_score": 4.15,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Per PARTIAL INFRASTRUCTURE FAILURE rules: Turn 2 depends on the same inaccessible file from Turn 1. Agent retained context correctly (9) but made no recovery attempt — no tool calls, no alternative path. Expected answer 3 never produced, correctness=0.",
+          "performance": {
+            "tokens_per_second": 37.1,
+            "time_to_first_token": 9.852,
+            "input_tokens": 2300,
+            "output_tokens": 247,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "The CSV fixture at ~/gaia-eval/csv/sales.csv is outside the agent's configured allowed_paths. The agent's tool selection was correct (routed to analyze_data_file, not RAG), but the path restriction blocked every file access attempt and prevented any answer from being produced.",
+      "recommended_fix": {
+        "target": "architecture",
+        "file": "src/gaia/agents/base/agent.py",
+        "description": "Add ~/gaia-eval/ (or the eval fixture root) to the agent's default allowed_paths list for eval environments, or configure the eval runner to pass --allowed-paths covering the staged fixture directories so analyze_data_file and read_file can reach them."
+      },
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 188.3036916255951,
+      "category": "gaia_tool_selection",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.1,
+        "min_tokens_per_second": 37.1,
+        "max_tokens_per_second": 37.1,
+        "avg_time_to_first_token": 7.389,
+        "min_time_to_first_token": 4.925,
+        "max_time_to_first_token": 9.852,
+        "total_input_tokens": 3184,
+        "total_output_tokens": 838,
+        "turns_measured": 2,
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "select_memory_vs_data",
+      "session_id": "20bb4b71-3032-4f6c-8578-f1156db1ff55",
+      "status": "FAIL",
+      "overall_score": 7.26,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Remember that my preferred report format is a one-page summary with a chart.",
+          "agent_response": "Got it. One-page summaries with charts—that makes sense for keeping things concise. It's logged in memory now.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "remember"
+          ],
+          "scores": {
+            "correctness": 8,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 8,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 6
+          },
+          "overall_score": 8.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly called `remember` (right tool for a memory write). The tool was silently skipped due to private session mode, but the agent acknowledged the preference and didn't communicate the failure to the user — minor error_recovery penalty.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 1.213,
+            "input_tokens": 68,
+            "output_tokens": 91,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What's the top product in ~/gaia-eval/csv/sales.csv?",
+          "agent_response": "The system refused to run that analysis because `C:\\Users\\Administrator\\gaia-eval\\csv\\sales.csv` isn't in one of the paths I have permission to read—it's outside my safe working area. Security first, always.\n\nTo find your top product, you'll need to make that CSV available: either paste the contents directly here, or upload/download it into a folder like Documents or Desktop where I can safely access it. Once you do that, we can try running `analyze_data_file` again.",
+          "agent_tools": [
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 2,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 1,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 4
+          },
+          "overall_score": 5.85,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Agent correctly routed to `analyze_data_file` (not memory tools — right selection), but the CSV at ~/gaia-eval/csv/sales.csv was outside allowed paths. Access denied blocked retrieval of 'Gadget Pro ($7,200)'. Agent didn't attempt alternatives (shell, file_io) and couldn't produce the expected answer.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 5.291,
+            "input_tokens": 523,
+            "output_tokens": 395,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "What report format do I prefer?",
+          "agent_response": "A one-page summary with a chart—that's what you specified earlier. Keeps things tight and visual, which makes sense if there are lots of numbers involved!",
+          "agent_tools": [
+            "recall"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 9
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent called `recall` (correct tool), got 0 results because memory was paused, then correctly recovered from conversation context and produced the exact expected answer 'A one-page summary with a chart'. Did not misroute to CSV tools. Excellent context retention and error recovery.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 1.298,
+            "input_tokens": 58,
+            "output_tokens": 497,
+            "flags": []
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "Give me the top-product finding in my preferred format.",
+          "agent_response": "Can't give you that finding just yet—no sales data has been made available to me! Since your preferred format is a one-page summary with a chart, once you get the `sales.csv` into an allowed folder (like Documents or Desktop), we can run the analysis and generate exactly what you want.\n\nMake sure the file is safe for me to read first!",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 5,
+            "context_retention": 9,
+            "completeness": 3,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 3
+          },
+          "overall_score": 4.45,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Cascading failure from Turn 2: the CSV was inaccessible so no Gadget Pro/$7,200 finding was ever retrieved. Agent correctly remembered the preference format and the prior failure, but produced no summary of the top-product finding. Expected behavior required composing both results; only one component (preference format) was available.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 7.679,
+            "input_tokens": 1722,
+            "output_tokens": 239,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "The staged fixture CSV at ~/gaia-eval/csv/sales.csv was outside the agent's allowed file paths, causing Turn 2's analyze_data_file call to return access denied and Turn 4 to cascade as no data was ever retrieved. Memory was also paused in private session mode (Turn 1 write silently skipped), though the agent recovered Turn 3 correctly from conversation history.",
+      "recommended_fix": {
+        "target": "architecture",
+        "file": "src/gaia/agents/tools/file_io_tools.py",
+        "description": "Add ~/gaia-eval/ (C:\\Users\\Administrator\\gaia-eval\\) to the eval agent's allowed file paths so staged fixture CSVs are accessible during eval runs. Separately, investigate why memory writes are silently skipped in private/eval sessions rather than surfacing the failure to the user."
+      },
+      "cost_estimate": {
+        "turns": 4,
+        "estimated_usd": 0.04
+      },
+      "elapsed_s": 232.11802458763123,
+      "category": "gaia_tool_selection",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.5,
+        "min_tokens_per_second": 37.3,
+        "max_tokens_per_second": 37.7,
+        "avg_time_to_first_token": 3.87,
+        "min_time_to_first_token": 1.213,
+        "max_time_to_first_token": 7.679,
+        "total_input_tokens": 2371,
+        "total_output_tokens": 1222,
+        "turns_measured": 4,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 4
+      }
+    },
+    {
+      "scenario_id": "select_no_tools",
+      "session_id": "6506d5d8-3bf8-4011-ad09-9be617f807dd",
+      "status": "PASS",
+      "overall_score": 9.87,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "whats the capital of japan?",
+          "agent_response": "Tokyo. It's where all the action happens in Japan.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Answered Tokyo correctly with zero tool calls. The appended 'Verification: unverified' boilerplate is slightly verbose and adds no value, hence personality capped at 7.",
+          "performance": {
+            "tokens_per_second": 38,
+            "time_to_first_token": 3.933,
+            "input_tokens": 656,
+            "output_tokens": 236,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "whats 12.5% of 640?",
+          "agent_response": "It's **80**. Simple arithmetic—no need for a fancy tool call!\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Computed 80 correctly (12.5% × 640 = 80) with no tools. The unnecessary meta-commentary ('no need for a fancy tool call!') and trailing verification note slightly dilute the GAIA voice.",
+          "performance": {
+            "tokens_per_second": 38,
+            "time_to_first_token": 1.749,
+            "input_tokens": 90,
+            "output_tokens": 147,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "explain the difference between RAM and disk storage in two sentences",
+          "agent_response": "RAM is fast, volatile memory used by your computer while it's running programs; think of it as the desk where you actively work on things right now. Disk storage (like an SSD or HDD) is slower, non-volatile storage where all files are permanently kept when the power is off.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Delivered a correct, concise two-sentence explanation using the volatile/non-volatile distinction and a useful desk analogy, with no tools called. Slightly better personality score here due to the clear analogy; the recurring verification note remains minor noise.",
+          "performance": {
+            "tokens_per_second": 37.9,
+            "time_to_first_token": 1.772,
+            "input_tokens": 93,
+            "output_tokens": 142,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.3
+      },
+      "elapsed_s": 94.67494630813599,
+      "category": "gaia_tool_selection",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 38.0,
+        "min_tokens_per_second": 37.9,
+        "max_tokens_per_second": 38,
+        "avg_time_to_first_token": 2.485,
+        "min_time_to_first_token": 1.749,
+        "max_time_to_first_token": 3.933,
+        "total_input_tokens": 839,
+        "total_output_tokens": 525,
+        "turns_measured": 3,
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "select_rag_vs_raw_files",
+      "session_id": "7c6adfa8-06c5-4724-8acf-47bab4cc3af7",
+      "status": "PASS",
+      "overall_score": 9.55,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What does the indexed handbook say about PTO for first-year employees?",
+          "agent_response": "According to `employee_handbook.md`, first-year employees are entitled to **15 days** of paid time off (PTO). This accrual begins from their start date at a rate of 1.25 days per month.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 9.1,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly answered 15 days via query_specific_file retrieval — exact match to ground truth. Minor inefficiency: called index_documents (redundant re-index) before the retrieval query, where going straight to query_specific_file would have been optimal. No use of raw read_file or search_file, so no severe tool routing penalty.",
+          "performance": {
+            "tokens_per_second": 36.7,
+            "time_to_first_token": 11.608,
+            "input_tokens": 2621,
+            "output_tokens": 401,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "And the remote-work policy, from the same document?",
+          "agent_response": "According to `employee_handbook.md`, here is what it says about the remote work policy:\n\n### Standard Remote Work\nFull-time employees may work remotely **up to 3 days per week**, which requires manager approval and is always subject to business needs.\n\n### Fully Remote Arrangements\nWorking remotely five days per week requires **VP-level approval**...",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 10.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retained 'same document' context from turn 1, called query_specific_file directly (optimal), and returned both required facts: up to 3 days/week with manager approval and VP approval for fully remote — exact match to ground truth.",
+          "performance": {
+            "tokens_per_second": 35.8,
+            "time_to_first_token": 13.14,
+            "input_tokens": 2667,
+            "output_tokens": 437,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.1
+      },
+      "elapsed_s": 139.69333958625793,
+      "category": "gaia_tool_selection",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 36.2,
+        "min_tokens_per_second": 35.8,
+        "max_tokens_per_second": 36.7,
+        "avg_time_to_first_token": 12.374,
+        "min_time_to_first_token": 11.608,
+        "max_time_to_first_token": 13.14,
+        "total_input_tokens": 5288,
+        "total_output_tokens": 838,
+        "turns_measured": 2,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "select_web_bundle",
+      "session_id": "a02038da-3351-4244-9abf-cda658b7514f",
+      "status": "PASS",
+      "overall_score": 9.95,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What does http://127.0.0.1:8765/solarium_a.html say about the project's storage capacity?",
+          "agent_response": "The Solarium Project uses a battery storage system with a capacity of **42 MWh**. It's part of their grid-scale solar-battery pilot located in Nevada.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "fetch_webpage"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent immediately used fetch_webpage on the provided URL and extracted the exact answer '42 MWh', matching ground truth. Optimal single-step execution with direct response.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 1.697,
+            "input_tokens": 189,
+            "output_tokens": 216,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "And when was the project founded, per the same page?",
+          "agent_response": "According to the page, the Solarium Project was founded in **2019**.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly retained the full page content from turn 1 and answered '2019' without a redundant re-fetch, matching ground truth. Success criteria explicitly allows retained content.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 5.014,
+            "input_tokens": 988,
+            "output_tokens": 131,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.05
+      },
+      "elapsed_s": 78.02016496658325,
+      "category": "gaia_tool_selection",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.6,
+        "min_tokens_per_second": 37.5,
+        "max_tokens_per_second": 37.7,
+        "avg_time_to_first_token": 3.356,
+        "min_time_to_first_token": 1.697,
+        "max_time_to_first_token": 5.014,
+        "total_input_tokens": 1177,
+        "total_output_tokens": 347,
+        "turns_measured": 2,
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 2
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.49
+  },
+  "performance": {
+    "avg_tokens_per_second": 37.3,
+    "avg_time_to_first_token": 5.895,
+    "total_input_tokens": 12859,
+    "total_output_tokens": 3770,
+    "scenarios_with_data": 5,
+    "flags": [
+      "high_latency"
+    ]
+  }
+}

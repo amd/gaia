@@ -800,7 +800,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--findings-dir", type=Path, required=True)
     parser.add_argument("--repo", required=True, help="owner/name")
     parser.add_argument("--label", default="weekly-audit")
-    parser.add_argument("--limit", type=int, default=1000)
+    # Keep well above the open-issue count; the guard below fails loudly if it isn't.
+    parser.add_argument("--limit", type=int, default=5000)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dossier", type=Path, required=True)
     parser.add_argument(

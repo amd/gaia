@@ -90,6 +90,9 @@ from gaia.vlm.mixin import VLMToolsMixin
 # yet" and rebuilt on every access.
 _UNSET = object()
 
+#: Longest request_user_input waits for an answer, in seconds.
+USER_INPUT_MAX_WAIT_S = 600
+
 # Tools that create files; an agent with none of them gets no scratch directory.
 _FILE_CREATING_TOOLS = frozenset(
     {"write_file", "write_python_file", "write_markdown_file"}
@@ -2469,7 +2472,9 @@ No documents are currently indexed.
                 msg += f" Next wakeup in {wake_in_seconds}s."
             return msg
 
-        @tool
+        # The tool watchdog must outlast the wait itself, or a slow answer is
+        # dropped and the model is told the tool "may be hung".
+        @tool(timeout=USER_INPUT_MAX_WAIT_S + 30)
         def request_user_input(
             message: str,
             choices: list = None,
@@ -2485,7 +2490,7 @@ No documents are currently indexed.
                 default_if_no_response: Value to use if no response received before
                     timeout. If not set and continue_if_no_response=True, returns
                     "__NO_RESPONSE__". Always check the return value.
-                timeout_seconds: How long to wait (min 10, default 300).
+                timeout_seconds: How long to wait (10 to 600, default 300).
                 continue_if_no_response: If True, continue after timeout.
                     If False, the loop pauses until user re-engages.
 
@@ -2493,6 +2498,7 @@ No documents are currently indexed.
                 User's response, chosen option, or "__NO_RESPONSE__" on timeout.
                 ALWAYS check for "__NO_RESPONSE__" before proceeding.
             """
+            timeout_seconds = min(int(timeout_seconds), USER_INPUT_MAX_WAIT_S)
             console = _agent.console
             if hasattr(console, "request_user_input_blocking"):
                 return console.request_user_input_blocking(

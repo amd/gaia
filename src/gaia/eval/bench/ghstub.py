@@ -42,6 +42,24 @@ MODES = ("offline", "rate_limit", "transient")
 WRITE_GRANTS = ("label",)
 VERSION = "gh version 2.60.0 (offline stand-in for GAIA benchmarks)"
 
+#: ``gh auth status --json hosts`` for the stand-in's offline account, in real
+#: gh's shape. Scopes cover what github-triage needs; writes stay gated below.
+AUTH_STATUS_HOSTS = {
+    "hosts": {
+        "github.com": [
+            {
+                "state": "success",
+                "active": True,
+                "host": "github.com",
+                "login": "bench-user",
+                "tokenSource": "keyring",
+                "scopes": "repo, read:org",
+                "gitProtocol": "https",
+            }
+        ]
+    }
+}
+
 #: Subcommands that change something on GitHub.
 WRITES = {
     "issue": {
@@ -245,6 +263,16 @@ def install(
 # ---------------------------------------------------------------------------
 # The CLI itself
 # ---------------------------------------------------------------------------
+
+
+def _auth_json_field(args: List[str]) -> Optional[str]:
+    """The ``--json`` value in either ``--json hosts`` or ``--json=hosts`` form."""
+    for i, arg in enumerate(args):
+        if arg == "--json":
+            return args[i + 1] if i + 1 < len(args) else ""
+        if arg.startswith("--json="):
+            return arg.split("=", 1)[1]
+    return None
 
 
 class _Exit(Exception):
@@ -472,10 +500,21 @@ class Stub:
             print(VERSION)
             return "local"
         if args[0] == "auth":
+            auth_json = _auth_json_field(args) if args[1:2] == ["status"] else None
+            if auth_json is not None:
+                # The form check_cli_setup reads before any github-triage step.
+                if auth_json != "hosts":
+                    self.fail(
+                        "gh stand-in: `gh auth status --json` serves only the "
+                        "`hosts` field.",
+                        "unsupported",
+                    )
+                print(json.dumps(AUTH_STATUS_HOSTS, indent=2))
+                return "local"
             if args[1:2] == ["status"]:
                 sys.stderr.write(
                     "github.com\n  - Logged in to github.com account bench-user "
-                    "(offline stand-in)\n  - Token scopes: 'repo:read'\n"
+                    "(offline stand-in)\n  - Token scopes: 'repo', 'read:org'\n"
                 )
                 return "local"
             self.fail(
