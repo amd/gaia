@@ -756,7 +756,7 @@ def test_the_flagship_still_picks_its_index_root_the_way_this_pins():
         if isinstance(node, ast.Assign)
         and any(isinstance(t, ast.Name) and t.id == "index_root" for t in node.targets)
     ]
-    assert assigned == ["self._project_map_root() or allowed[0]"]
+    assert assigned == ["self._project_map_root() or _code_search_start(allowed)"]
 
 
 @pytest.mark.parametrize(

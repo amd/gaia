@@ -1206,6 +1206,11 @@ class SSEOutputHandler(OutputHandler):
         except Exception:  # noqa: BLE001 - best-effort cleanup, never fatal
             logger.debug("email relay: failed to close active response", exc_info=True)
 
+    def awaiting_user_input(self) -> bool:
+        """True while a ``request_user_input`` question is waiting on the user."""
+        with self._user_input_lock:
+            return bool(self._user_input_queue)
+
     def request_user_input_blocking(
         self,
         message: str,

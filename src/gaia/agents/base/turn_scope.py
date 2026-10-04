@@ -7,7 +7,8 @@ the model varies its arguments on every call:
 
 * **Work after the answer.** Once the turn has produced an answer, a tool call
   that touches nothing the request touched — no file it named, read, searched
-  or changed, and no test run — is new work the user did not ask for. It is
+  or changed, no scratchpad table it built, and no test run — is new work the
+  user did not ask for. It is
   not run; the model is told to finish and offer the work instead. A second
   such call ends the turn with a closing answer.
 * **The same tool failing with different arguments.** A tool the framework
@@ -66,6 +67,9 @@ _PATH_ARG_KEYS = (
     "destination",
     "output_path",
 )
+#: Arguments naming a scratchpad table — state a turn builds up without a path.
+_TABLE_ARG_KEYS = ("table_name",)
+_SQL_ARG_KEYS = ("sql",)
 #: Reviewing the change just made is part of the request.
 _REVIEW_COMMAND_RE = re.compile(r"^\s*git\s+(?:--no-pager\s+)?(?:diff|status)\b")
 
@@ -168,6 +172,7 @@ class TurnScopeGuard:
         self.last_error: Dict[str, str] = {}
         self.corrected: Set[str] = set()
         self.paths: Set[str] = set()
+        self.tables: Set[str] = set()
 
     def begin_turn(self, query: str, root: str) -> None:
         self.root = root
@@ -180,6 +185,7 @@ class TurnScopeGuard:
         self.last_error = {}
         self.corrected = set()
         self.paths = {_norm(p, root) for p in mentioned_paths(query or "")}
+        self.tables = set()
 
     def mark_answered(self) -> None:
         """The turn has produced an answer; later calls must serve it."""
@@ -194,10 +200,40 @@ class TurnScopeGuard:
             and "\x00" not in value
         }
 
+    @staticmethod
+    def _call_tables(args: Dict[str, Any]) -> Set[str]:
+        return {
+            value.strip().lower()
+            for key in _TABLE_ARG_KEYS
+            if isinstance((value := args.get(key)), str) and value.strip()
+        }
+
+    def _touches_known_table(self, args: Dict[str, Any]) -> bool:
+        if self._call_tables(args) & self.tables:
+            return True
+        for key in _SQL_ARG_KEYS:
+            text = args.get(key)
+            if isinstance(text, str) and any(
+                # Not \b: the scratchpad's own prefix (scratch_<name>) is joined
+                # with an underscore, which \b treats as part of the word; that
+                # prefix is the only one allowed.
+                re.search(
+                    rf"(?<![a-z0-9_])(?:scratch_)?{re.escape(table)}(?![a-z0-9_])",
+                    text,
+                    re.I,
+                )
+                for table in self.tables
+            ):
+                return True
+        return False
+
     def related(self, tool: str, args: Dict[str, Any]) -> bool:
         if tool in _ALWAYS_RELATED or verification_check_label(tool, args):
             return True
         if self._call_paths(args) & self.paths:
+            return True
+        # A table this turn already built is the request's own data.
+        if self._touches_known_table(args):
             return True
         for key in _COMMAND_ARG_KEYS:
             text = args.get(key)
@@ -264,3 +300,4 @@ class TurnScopeGuard:
             self.corrected.clear()
         if not self.answered or self.related(tool, args):
             self.paths |= self._call_paths(args)
+            self.tables |= self._call_tables(args)
