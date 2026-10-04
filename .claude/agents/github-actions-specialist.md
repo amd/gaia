@@ -41,7 +41,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 | `test_api.yml` | API server |
 | `test_agent_mcp_server.yml` | Agent-exposed MCP |
 | `test_agent_sdk.yml` | Agent SDK / base |
-| `test_chat_agent.yml`, `test_code_agent.yml` | Per-agent |
+| `test_chat_agent.yml` | Per-agent |
 | `test_rag.yml`, `test_embeddings.yml` | RAG / vector |
 | `test_sd.yml` | Stable Diffusion |
 | `test_eval.yml` | Eval framework |
