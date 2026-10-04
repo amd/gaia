@@ -8,6 +8,7 @@ Used by CI and can be run locally for consistency.
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -87,6 +88,9 @@ def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
 #: risk; pin it the first time it drifts, with the reformat in that commit.
 TOOL_VERSIONS = {
     "isort": "8.0.1",
+    # Pinned because MYPY_CLEAN_MODULES blocks: a new mypy release must not
+    # fail CI on code nobody touched.
+    "mypy": "2.3.1",
 }
 
 
@@ -324,6 +328,54 @@ def check_mypy() -> CheckResult:
     return CheckResult("Type Checking (MyPy)", True, True, 0, output)
 
 
+#: Modules that are mypy-clean today. The ratchet run BLOCKS on these, so a
+#: clean module cannot regress. Add a module here once it reaches zero errors;
+#: never remove one to make CI pass — fix the new error instead.
+MYPY_CLEAN_MODULES = [
+    "src/gaia/__init__.py",
+    "src/gaia/config.py",
+    "src/gaia/device.py",
+    "src/gaia/logger.py",
+    "src/gaia/perf_analysis.py",
+    "src/gaia/ports.py",
+    "src/gaia/tool_cancellation.py",
+]
+
+
+def check_mypy_ratchet() -> CheckResult:
+    """Run MyPy on the modules in MYPY_CLEAN_MODULES (blocking)."""
+    print("\n[5/12] Running MyPy on already-clean modules (blocking)...")
+    print("-" * 40)
+
+    # follow-imports=silent: only errors IN the listed modules block, not
+    # errors in the not-yet-clean modules they import.
+    cmd = uvx(
+        "mypy",
+        *MYPY_CLEAN_MODULES,
+        "--ignore-missing-imports",
+        "--follow-imports=silent",
+    )
+
+    print(f"[CMD] {' '.join(cmd)}")
+    exit_code, output = run_command(cmd)
+
+    if exit_code != 0:
+        import re
+
+        issues = len(re.findall(r"\.py:\d+: error:", output)) or 1
+        print("\n[BLOCKING] MyPy found type issues in modules that were clean:")
+        print(output.strip())
+        print(
+            "\nThese modules are listed in MYPY_CLEAN_MODULES (util/lint.py) "
+            "because they had zero mypy errors. Fix the new error rather than "
+            "removing the module from the list."
+        )
+        return CheckResult("MyPy Ratchet (clean modules)", False, False, issues, output)
+
+    print("[OK] Clean modules are still mypy-clean!")
+    return CheckResult("MyPy Ratchet (clean modules)", True, False, 0, output)
+
+
 def _import_security_gates():
     """Import util/check_security_gates regardless of how lint.py was invoked."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -421,6 +473,8 @@ def check_imports() -> CheckResult:
         print("    Or run lint via: uv run python util/lint.py --all")
         return CheckResult("Import Validation", False, False, 1, "GAIA not installed")
 
+    hub_optional = os.environ.get("GAIA_REQUIRE_HUB_AGENTS") != "1"
+
     # Comprehensive import tests matching lint.ps1
     tests = [
         # Core CLI
@@ -449,9 +503,10 @@ def check_imports() -> CheckResult:
         ("from", "gaia.agents.base", "MCPAgent", "MCP agent mixin", False),
         ("from", "gaia.agents.base", "tool", "Tool decorator", False),
         # Specialized Agents — optional so a framework-only env (no
-        # gaia-agent-<id> installed) skips rather than fails.
-        ("from", "gaia_agent.agent", "GaiaAgent", "Flagship agent", True),
-        ("from", "gaia_agent_chat", "ChatAgent", "Chat agent", True),
+        # gaia-agent-<id> installed) skips rather than fails. CI installs them
+        # and sets GAIA_REQUIRE_HUB_AGENTS=1 so a broken import fails.
+        ("from", "gaia_agent.agent", "GaiaAgent", "Flagship agent", hub_optional),
+        ("from", "gaia_agent_chat", "ChatAgent", "Chat agent", hub_optional),
         # Database
         ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
         ("from", "gaia.database", "DatabaseMixin", "Database mixin", False),
@@ -983,6 +1038,7 @@ def main():
 
     if args.mypy or run_all:
         results.append(check_mypy())
+        results.append(check_mypy_ratchet())
 
     if args.imports or run_all:
         results.append(check_imports())

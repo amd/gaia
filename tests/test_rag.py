@@ -26,6 +26,13 @@ try:
 
     RAG_AVAILABLE = True
 except ImportError as e:
+    # A lane that installs [rag] sets GAIA_REQUIRE_RAG=1: there a broken import
+    # is a regression, not a missing optional dependency.
+    if os.environ.get("GAIA_REQUIRE_RAG") == "1":
+        raise ImportError(
+            f"GAIA_REQUIRE_RAG=1 but the RAG SDK failed to import: {e}. "
+            "Install the extra with `uv pip install -e .[rag]`, or fix the import."
+        ) from e
     RAG_AVAILABLE = False
     IMPORT_ERROR = str(e)
 
