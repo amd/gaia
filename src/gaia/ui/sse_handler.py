@@ -8,9 +8,11 @@ Maps OutputHandler method calls (thinking, tool calls, steps, etc.)
 to JSON events that the streaming endpoint sends to the frontend.
 """
 
+import _socket
 import json
 import logging
 import math
+import os
 import queue
 import re
 import socket
@@ -1206,6 +1208,10 @@ class SSEOutputHandler(OutputHandler):
         if sock is not None:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
+                if os.name == "nt":
+                    # Windows' select() ignores a local shutdown; only closing the
+                    # handle wakes it. The C-level close leaves the object at fd -1.
+                    _socket.socket.close(sock)
                 return  # reader wakes promptly; the stream owner closes resp
             except OSError:
                 logger.debug(
