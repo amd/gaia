@@ -15,6 +15,7 @@ from ..lemonade_client import (
     LemonadeClientError,
     active_profile_ctx_size,
     is_tool_calling_model,
+    local_sampling_defaults,
     resolve_ctx_size,
 )
 from ..lemonade_launcher import describe_client_hint
@@ -584,17 +585,17 @@ class LemonadeProvider(LLMClient):
                 messages
             )
 
-        # Low temperature and penalties stop local models looping on tables and
-        # paragraphs. Cloud models get neither: near-greedy sampling and the
-        # penalties both send a reasoning model's thinking into a runaway, so
-        # they get the client's standard 0.7. repeat_penalty / repeat_last_n
-        # are llama.cpp-native (sent via extra_body when streaming).
+        # Local models get their card's sampling, else GAIA's low-temperature
+        # anti-looping profile. Cloud models get neither: near-greedy sampling
+        # and the penalties both send a reasoning model's thinking into a
+        # runaway, so they get the client's standard 0.7.
         if not self._backend.cloud_model_provider(effective_model):
-            kwargs.setdefault("temperature", 0.1)
-            kwargs.setdefault("frequency_penalty", 0.3)
-            kwargs.setdefault("presence_penalty", 0.1)
-            kwargs.setdefault("repeat_penalty", 1.1)
-            kwargs.setdefault("repeat_last_n", 256)
+            template_kwargs = kwargs.get("chat_template_kwargs") or {}
+            defaults = local_sampling_defaults(
+                effective_model, template_kwargs.get("enable_thinking")
+            )
+            for key, value in defaults.items():
+                kwargs.setdefault(key, value)
 
         # Tools no longer force non-streaming: ``_handle_stream`` reassembles the
         # tool_call delta frames and emits the same sentinel envelope the
