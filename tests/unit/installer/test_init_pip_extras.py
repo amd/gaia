@@ -23,6 +23,17 @@ from gaia.installer import init_command
 from gaia.installer.init_command import InitCommand
 
 UV = "/home/u/.local/bin/uv"
+# What GAIA's metadata declares for [rag]; init installs these, never GAIA itself.
+RAG_REQS = ["faiss-cpu>=1.7.0", "pymupdf>=1.24.0"]
+
+
+@pytest.fixture(autouse=True)
+def rag_requirements(monkeypatch):
+    def requirements(extras):
+        assert list(extras) == ["rag"]
+        return list(RAG_REQS)
+
+    monkeypatch.setattr(init_command, "gaia_extra_requirements", requirements)
 
 
 @pytest.fixture
@@ -68,24 +79,23 @@ class TestExtrasInstallArgv:
         cmd, _ = _cmd()
         ok, calls = _run_extras(cmd)
         assert ok
-        assert calls == [
-            [UV, "pip", "install", "--python", sys.executable, "amd-gaia[rag]"]
-        ]
+        assert calls == [[UV, "pip", "install", "--python", sys.executable, *RAG_REQS]]
 
     def test_stock_venv_runs_its_own_pip(self, stock_venv):
         cmd, _ = _cmd()
         ok, calls = _run_extras(cmd)
         assert ok
-        assert calls == [[sys.executable, "-m", "pip", "install", "amd-gaia[rag]"]]
+        assert calls == [[sys.executable, "-m", "pip", "install", *RAG_REQS]]
 
-    def test_editable_checkout_reinstalls_itself_with_the_extra(
+    def test_editable_checkout_installs_only_the_extra_not_itself(
         self, installer_venv, monkeypatch, tmp_path
     ):
+        # Reinstalling the checkout fails on Windows: the running gaia.exe is locked.
         monkeypatch.setattr(install_hints, "editable_gaia_root", lambda: str(tmp_path))
         cmd, _ = _cmd()
         _, calls = _run_extras(cmd)
-        assert calls[0][-2:] == ["-e", f"{tmp_path}[rag]"]
-        assert calls[0][3:5] == ["--python", sys.executable]
+        assert calls == [[UV, "pip", "install", "--python", sys.executable, *RAG_REQS]]
+        assert "-e" not in calls[0]
 
     def test_profile_without_extras_runs_nothing(self, installer_venv):
         cmd, _ = _cmd(profile="minimal")
@@ -104,7 +114,12 @@ class TestExtrasInstallFailureIsLoud:
         assert len(calls) == 1, "one installer, no silent retries through others"
         assert "Failed to fetch faiss-cpu" in out
         assert "exit 2" in out
-        assert f'uv pip install --python {sys.executable} "amd-gaia[rag]"' in out
+        assert (
+            init_command.format_command(
+                ["uv", "pip", "install", "--python", sys.executable, *RAG_REQS]
+            )
+            in out
+        )
 
     def test_no_installer_at_all_fails_without_running_anything(
         self, monkeypatch, tmp_path
@@ -136,7 +151,12 @@ class TestExtrasInstallFailureIsLoud:
         assert ok is False
         assert timeouts == [900]
         assert "timed out" in out
-        assert f'uv pip install --python {sys.executable} "amd-gaia[rag]"' in out
+        assert (
+            init_command.format_command(
+                ["uv", "pip", "install", "--python", sys.executable, *RAG_REQS]
+            )
+            in out
+        )
 
     def test_failed_extras_install_fails_init(self, monkeypatch):
         """`gaia init` must exit non-zero, not print "initialization complete"
