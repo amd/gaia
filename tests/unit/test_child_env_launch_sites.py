@@ -27,6 +27,7 @@ INTERNAL = {
     "GAIA_MODEL_BROKER_TOKEN": "tok-broker",
     "GAIA_MODEL_BROKER_TOKEN_FILE": "/tmp/tok-broker-file",
     "GAIA_HOST_CUSTODY_SECRET": "tok-custody",
+    "GAIA_ENGINEERING_TOKEN": "tok-engineering",
 }
 
 
@@ -244,6 +245,22 @@ def test_engineering_app_handoff_is_trimmed(monkeypatch, tmp_path):
     handoff.open_app("claude", "a" * 32, tmp_path)
 
     assert_trimmed(run.env)
+
+
+def test_engineering_pairing_token_reaches_the_coding_app_explicitly(tmp_path):
+    """The coding app starts the engineering MCP server from this config, so the
+    pairing token rides in its ``env`` block rather than through inheritance —
+    and the StdioTransport that would launch it overlays that block on
+    ``child_env``, so an explicit value still arrives."""
+    from gaia.engineering import handoff
+
+    config = handoff.connection_config("claude", "python", tmp_path, "tok-pair")
+    server_env = config["mcpServers"]["gaia-engineering"]["env"]
+
+    assert server_env[handoff.ENGINEERING_TOKEN_ENV_VAR] == "tok-pair"
+    child = gaia_env.child_env(server_env)
+    assert child[handoff.ENGINEERING_TOKEN_ENV_VAR] == "tok-pair"
+    assert handoff.ENGINEERING_TOKEN_ENV_VAR not in gaia_env.child_env()
 
 
 def test_engineering_repository_git_is_trimmed(monkeypatch, tmp_path):

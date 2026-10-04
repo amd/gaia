@@ -8,6 +8,7 @@ import argparse
 import os
 from pathlib import Path
 
+from gaia.engineering.handoff import ENGINEERING_TOKEN_ENV_VAR
 from gaia.engineering.service import EngineeringService
 
 
@@ -103,7 +104,7 @@ def main(argv: list[str] | None = None) -> None:
     server = create_engineering_mcp(
         args.root,
         args.backend,
-        os.environ.get("GAIA_ENGINEERING_TOKEN", ""),
+        os.environ.get(ENGINEERING_TOKEN_ENV_VAR, ""),
         developer_mode=args.developer_mode,
     )
     server.run(transport="stdio")

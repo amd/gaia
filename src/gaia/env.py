@@ -17,13 +17,15 @@ CHILD_ENV_DENY_ENV_VAR = "GAIA_CHILD_ENV_DENY"
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
-# GAIA's own credentials, handed to sidecars by the daemon. Kept in sync with
-# gaia.daemon.constants / gaia.daemon.custody.constants (a unit test pins this).
+# GAIA's own credentials: what the daemon hands its sidecars, plus the
+# engineering MCP pairing token. Kept in sync with gaia.daemon.constants,
+# gaia.daemon.custody.constants and gaia.engineering.handoff (a test pins this).
 _INTERNAL_SECRET_NAMES = frozenset(
     {
         "GAIA_MODEL_BROKER_TOKEN",
         "GAIA_MODEL_BROKER_TOKEN_FILE",
         "GAIA_HOST_CUSTODY_SECRET",
+        "GAIA_ENGINEERING_TOKEN",
     }
 )
 _SIDECAR_TOKEN_RE = re.compile(r"^GAIA_[A-Z0-9_]+_SIDECAR_TOKEN(_FILE)?$")
