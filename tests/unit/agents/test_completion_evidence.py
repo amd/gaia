@@ -11,7 +11,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.agents.base.agent import Agent, _claims_file_write
-from gaia.agents.base.completion import CompletionEvidence, save_obligations
+from gaia.agents.base.completion import (
+    CompletionEvidence,
+    incomplete_answer,
+    save_obligations,
+)
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 
 
@@ -942,3 +946,120 @@ def test_a_scratch_copy_does_not_fulfil_a_bare_named_save(tmp_path):
     write(ledger, draft)
     read(ledger, draft)
     assert "No successful write" in " ".join(gaps(ledger))
+
+
+_DOCUMENTS_REQUEST = (
+    "Create a file ui_notes.txt in my Documents folder containing the line: "
+    "hello from the agent ui"
+)
+
+
+def _documents_ledger(tmp_path):
+    return CompletionEvidence(_DOCUMENTS_REQUEST, str(tmp_path / "cwd"))
+
+
+def _refuse(ledger, path, result):
+    ledger.record("write_file", {"file_path": path}, result, False, executed=False)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"status": "denied", "error": "Tool 'write_file' was denied by the user."},
+        {
+            "executed": False,
+            "status": "error",
+            "error": "Access denied: 'x' is not in allowed paths.",
+        },
+    ],
+)
+def test_a_turned_down_write_is_a_finished_answer(tmp_path, result):
+    ledger = _documents_ledger(tmp_path)
+    _refuse(ledger, str(tmp_path / "Documents" / "ui_notes.txt"), result)
+    answer = (
+        "I can't write to your Documents folder — you denied the permission. "
+        "Want me to try somewhere else, or skip this?"
+    )
+    assert gaps(ledger, answer) == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I saved `ui_notes.txt` to your Documents folder.",
+        "Saved! `ui_notes.txt` is in your Documents folder.",
+        "Done.",
+    ],
+)
+def test_a_save_claim_after_a_denial_names_the_denial(tmp_path, answer):
+    ledger = _documents_ledger(tmp_path)
+    target = str(tmp_path / "Documents" / "ui_notes.txt")
+    _refuse(ledger, target, {"status": "denied"})
+    declined = f"The write to `{target}` was declined, so nothing was saved there."
+    assert gaps(ledger, answer) == [declined]
+    assert incomplete_answer([declined]) == declined
+
+
+def test_a_preflight_refusal_is_not_a_denial(tmp_path):
+    ledger = _documents_ledger(tmp_path)
+    _refuse(
+        ledger,
+        "ui_notes.txt",
+        {"executed": False, "status": "error", "error": "Read the file first."},
+    )
+    assert gaps(ledger, "Here you go.")
+
+
+def test_a_bare_requested_name_is_not_shown_as_a_cwd_path(tmp_path):
+    ledger = _documents_ledger(tmp_path)
+    found = " ".join(gaps(ledger, "Here you go."))
+    assert "`ui_notes.txt`" in found
+    assert str(tmp_path).lower() not in found.lower()
+
+
+def test_a_denied_pathless_save_is_not_reported_missing(tmp_path):
+    ledger = CompletionEvidence("Save the summary to a file", str(tmp_path))
+    _refuse(ledger, "summary.md", {"status": "denied"})
+    assert gaps(ledger, "You declined the write, so I didn't save it.") == []
+
+
+def _deny_writes(agent):
+    agent._tool_requires_confirmation = lambda name, *a, **kw: name == "write_file"
+    agent.console.confirm_tool_execution.return_value = False
+    agent.console.confirmation_denied_reason = None
+
+
+def test_loop_keeps_the_honest_answer_after_a_denied_write(agent, tmp_path):
+    _deny_writes(agent)
+    target = str(tmp_path / "Documents" / "ui_notes.txt")
+    honest = "I can't write to your Documents folder — you denied the permission."
+    sent = script(
+        agent,
+        call("write_file", file_path=target, content="hello from the agent ui"),
+        {"answer": honest},
+    )
+    result = agent.process_query(_DOCUMENTS_REQUEST, max_steps=10)
+    assert result["status"] == "success", result["completion_gaps"]
+    assert result["result"].startswith(honest)
+    assert len(sent) == 2  # no completion correction pushing another write
+    assert not (tmp_path / "ui_notes.txt").exists()
+
+
+def test_loop_still_rejects_a_false_save_after_a_denied_write(agent, tmp_path):
+    _deny_writes(agent)
+    target = str(tmp_path / "Documents" / "ui_notes.txt")
+    lie = {"answer": "Saved! `ui_notes.txt` is in your Documents folder."}
+    sent = script(
+        agent,
+        call("write_file", file_path=target, content="hello from the agent ui"),
+        lie,
+        lie,
+    )
+    result = agent.process_query(_DOCUMENTS_REQUEST, max_steps=10)
+    assert result["status"] == "incomplete"
+    assert lie["answer"] not in result["result"]
+    assert "was declined, so nothing was saved" in result["result"]
+    correction = sent[2][-1]["content"]
+    assert "[check:completion]" in correction
+    assert "Use `write_file`" not in correction
+    assert "Do not retry that write" in correction

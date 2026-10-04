@@ -738,6 +738,33 @@ class PathValidator:
                 )
         return ""
 
+    def access_denied_message(self, path: str) -> str:
+        """The error for an out-of-scope *path*, with a remedy this host offers.
+
+        Args:
+            path: The path that was refused.
+
+        Returns:
+            ``Access denied: '<path>' is not in allowed paths.`` followed by what
+            the user can actually do about it here.
+        """
+        message = f"Access denied: '{path}' is not in allowed paths."
+        real_path = Path(_real_path(path))
+        unaskable = self._unaskable_reason(real_path)
+        if unaskable:
+            remedy = f" No approval can grant it: {unaskable.rstrip('.')}."
+        elif self._access_prompt is not None or self._can_prompt():
+            remedy = (
+                " To use it, ask again and approve access when prompted, or "
+                "attach the file to this chat."
+            )
+        else:
+            remedy = (
+                " Attach the file to this session, or start the agent with an "
+                "allowed_paths list that covers it."
+            )
+        return f"{message}{remedy}{self.scratch_hint(path)}"
+
     def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         """
         Check if a path is allowed. If not, optionally prompt the user.
@@ -932,12 +959,7 @@ class PathValidator:
             Tuple of (is_allowed, reason). If not allowed, reason explains why.
         """
         if not self.is_path_allowed(path, prompt_user=prompt_user):
-            return (
-                False,
-                f"Access denied: '{path}' is not in allowed paths. Attach the "
-                f"file to this session, or start the agent with an "
-                f"allowed_paths list that covers it.{self.scratch_hint(path)}",
-            )
+            return (False, self.access_denied_message(path))
 
         is_blocked, reason = self.is_read_blocked(path)
         if is_blocked:
@@ -1054,11 +1076,7 @@ class PathValidator:
         """
         # 1. Check allowlist
         if not self.is_path_allowed(path, prompt_user=prompt_user):
-            return (
-                False,
-                f"Access denied: '{path}' is not in allowed paths."
-                f"{self.scratch_hint(path)}",
-            )
+            return (False, self.access_denied_message(path))
 
         # 2. Check blocked directories and sensitive files
         is_blocked, reason = self.is_write_blocked(path)

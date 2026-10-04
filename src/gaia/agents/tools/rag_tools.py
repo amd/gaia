@@ -77,7 +77,9 @@ def _ambiguous_file_error(requested: str, candidates: list) -> Dict[str, Any]:
     }
 
 
-def extract_page_from_chunk(chunk_text, chunk_index=-1, all_chunks=None):
+def extract_page_from_chunk(
+    chunk_text, chunk_index=-1, all_chunks=None, chunk_to_file=None
+):
     """
     Extract page number from chunk text or by looking at nearby chunks.
 
@@ -85,6 +87,8 @@ def extract_page_from_chunk(chunk_text, chunk_index=-1, all_chunks=None):
         chunk_text: The chunk text to extract page from
         chunk_index: Global index of this chunk (for looking backwards)
         all_chunks: List of all chunks (for looking backwards)
+        chunk_to_file: Global chunk index -> source file; when given, the
+            backward search stops at another document's chunks
 
     Returns:
         Page number as int, or None if not found
@@ -102,6 +106,11 @@ def extract_page_from_chunk(chunk_text, chunk_index=-1, all_chunks=None):
     # Strategy 3: Look backwards in previous chunks to find most recent page marker
     if chunk_index >= 0 and all_chunks:
         for prev_idx in range(chunk_index - 1, max(-1, chunk_index - 5), -1):
+            if chunk_to_file is not None and chunk_to_file.get(
+                prev_idx
+            ) != chunk_to_file.get(chunk_index):
+                # Indexed after another document: its pages are not this file's.
+                break
             if prev_idx < len(all_chunks):
                 prev_chunk = all_chunks[prev_idx]
                 match = re.search(r"\[Page (\d+)\]", prev_chunk)
@@ -458,6 +467,7 @@ class RAGToolsMixin:
                         chunk,
                         chunk_indices[i] if i < len(chunk_indices) else -1,
                         rag.chunks,
+                        rag.chunk_to_file,
                     )
                     _entry = {
                         "chunk_id": i + 1,  # Sequential for display
@@ -557,6 +567,9 @@ class RAGToolsMixin:
 
         @tool(
             atomic=True,
+            # Indexes the file first when it isn't yet, so it needs index_document's
+            # cap; at the default a big PDF is abandoned mid-index and re-indexed.
+            timeout=600,
         )
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
@@ -976,6 +989,7 @@ class RAGToolsMixin:
                         chunk,
                         chunk_indices[i] if i < len(chunk_indices) else -1,
                         rag.chunks,
+                        rag.chunk_to_file,
                     )
                     _entry = {
                         "chunk_id": i + 1,

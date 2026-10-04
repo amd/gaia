@@ -79,6 +79,15 @@ def _header_row_index(rows: List[tuple]) -> int:
     return 0
 
 
+def _match_column(name: str, columns: List[str]) -> str | None:
+    """The column *name* means: exact, else the one column equal ignoring case."""
+    name = name.strip()
+    if name in columns:
+        return name
+    folded = [c for c in columns if c.strip().casefold() == name.casefold()]
+    return folded[0] if len(folded) == 1 else None
+
+
 def _python_syntax_error(source: str, filename: str) -> str | None:
     """The SyntaxError *source* would raise on import, or None if it is valid.
 
@@ -2310,7 +2319,11 @@ class FileSearchToolsMixin:
                 focus_columns = all_columns
                 if columns:
                     requested = [c.strip() for c in columns.split(",")]
-                    focus_columns = [c for c in requested if c in all_columns]
+                    focus_columns = [
+                        m
+                        for m in (_match_column(c, all_columns) for c in requested)
+                        if m
+                    ]
                     if not focus_columns:
                         return {
                             "status": "error",
@@ -2767,6 +2780,7 @@ class FileSearchToolsMixin:
 
                 # --- GROUP BY aggregation ---
                 if group_by:
+                    group_by = _match_column(group_by, all_columns) or group_by
                     if group_by not in all_columns:
                         result["group_by_error"] = (
                             f"Column '{group_by}' not found. Available: {', '.join(all_columns)}"

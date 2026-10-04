@@ -94,9 +94,13 @@ def test_the_agent_names_the_work_in_the_users_words():
     agent._report_tool_call_progress("edit_file", 3200)
     agent._report_tool_call_progress("custom_tool", 1600)
 
-    assert [c.args[0] for c in agent.console.report_progress.call_args_list] == [
-        "Writing a file edit — 3,200 characters so far",
-        "Preparing custom_tool — 1,600 characters so far",
+    assert [c.args for c in agent.console.report_phase.call_args_list] == [
+        ("tool_call", "Writing a file edit — 3,200 characters so far"),
+        ("tool_call", "Preparing custom_tool — 1,600 characters so far"),
+    ]
+    assert [c.kwargs for c in agent.console.report_phase.call_args_list] == [
+        {"chars": 3200},
+        {"chars": 1600},
     ]
 
 

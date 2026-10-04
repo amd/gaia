@@ -546,7 +546,10 @@ sets one, else GAIA's choice for the model (`ModelRequirement.thinking`). The pr
 the sampling profile from it and `LemonadeClient.chat_completions` sends it as the switch, so
 the sampling always matches the mode the model runs in.
 [`Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) runs with thinking on
-and gets its card's thinking profile for coding and precise work.
+and gets its card's thinking profile for coding and precise work. Memory's short JSON side
+calls (extraction, consolidation, reconciliation, skill distillation) pass
+`no_thinking_kwargs(model)`, which turns thinking off for such a model: reasoning is billed
+against `max_tokens`, so with it on they reason to the cap and return no answer.
 
 Every other local model gets `LOCAL_SAMPLING_DEFAULTS`: `temperature=0.1` plus frequency,
 presence and repeat penalties, so it does not loop on tables and paragraphs. Cloud models get
@@ -744,7 +747,9 @@ model initialization.
 - `test_llm_client_factory.py`: supported selection and shared interface.
 - `test_removed_llm_providers.py`: rejected legacy names and flags across the
   factory, SDK, base agent and CLI, before model initialization.
-- `test_lemonade_client.py`: supported Lemonade operations.
+- `unit/test_lemonade_client_http.py`: supported Lemonade operations and their
+  request shapes, against mocked HTTP.
+- `test_lemonade_client.py`: the same operations against a live Lemonade Server.
 - `test_lemonade_cloud_models.py`: local/cloud lifecycle separation.
 - `test_parallel_tool_calls.py`: preservation and execution of native calls.
 
