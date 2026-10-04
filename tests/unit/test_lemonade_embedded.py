@@ -432,6 +432,11 @@ class TestStatus:
     def test_start_leaves_vulkan_coopmat_on_for_chat_models(self, manager, monkeypatch):
         """The global flag halved chat prompt speed; the embedder runs on CPU instead."""
         monkeypatch.delenv("GGML_VK_DISABLE_COOPMAT", raising=False)
+        # Any GPU but the Strix Halo iGPU (see TestVulkanWorkarounds).
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded._windows_display_adapters",
+            lambda: ["NVIDIA GeForce RTX 4090"],
+        )
         monkeypatch.setattr(manager, "is_installed", lambda: True)
         monkeypatch.setattr(manager, "write_config", lambda: None)
         monkeypatch.setattr(manager, "_health", lambda *a, **k: {"status": "ok"})
@@ -661,3 +666,57 @@ def test_pinned_digests_are_bare_hex_like_the_installer_computes():
     assert EMBEDDABLE_SHA256
     for asset, digest in EMBEDDABLE_SHA256.items():
         assert re.fullmatch(r"[0-9a-f]{64}", digest), f"{asset}: {digest!r}"
+
+
+class TestVulkanWorkarounds:
+    """Strix Halo's Vulkan coopmat path crashed Qwen3.6 and halved Gemma's speed."""
+
+    @pytest.fixture(autouse=True)
+    def _windows(self, monkeypatch):
+        monkeypatch.setattr("gaia.llm.lemonade_embedded.sys.platform", "win32")
+        monkeypatch.delenv("GGML_VK_DISABLE_COOPMAT", raising=False)
+
+    def _adapters(self, monkeypatch, *names):
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded._windows_display_adapters", lambda: list(names)
+        )
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "AMD Radeon(TM) 8060S Graphics",
+            "AMD Radeon(TM) 8050S Graphics",
+            "AMD Radeon(TM) 8040S Graphics",
+        ],
+    )
+    def test_strix_halo_turns_coopmat_off(self, monkeypatch, name):
+        from gaia.llm.lemonade_embedded import vulkan_workarounds
+
+        self._adapters(monkeypatch, "Microsoft Basic Display Adapter", name)
+        assert vulkan_workarounds() == {"GGML_VK_DISABLE_COOPMAT": "1"}
+
+    @pytest.mark.parametrize(
+        "name", ["AMD Radeon(TM) 890M Graphics", "NVIDIA GeForce RTX 4090", ""]
+    )
+    def test_other_gpus_are_left_alone(self, monkeypatch, name):
+        from gaia.llm.lemonade_embedded import vulkan_workarounds
+
+        self._adapters(monkeypatch, name)
+        assert vulkan_workarounds() == {}
+
+    def test_a_value_the_user_set_wins(self, monkeypatch):
+        from gaia.llm.lemonade_embedded import vulkan_workarounds
+
+        self._adapters(monkeypatch, "AMD Radeon(TM) 8060S Graphics")
+        monkeypatch.setenv("GGML_VK_DISABLE_COOPMAT", "0")
+        assert vulkan_workarounds() == {}
+
+    def test_not_windows_reads_nothing(self, monkeypatch):
+        from gaia.llm.lemonade_embedded import vulkan_workarounds
+
+        monkeypatch.setattr("gaia.llm.lemonade_embedded.sys.platform", "linux")
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded._windows_display_adapters",
+            lambda: pytest.fail("read the registry off Windows"),
+        )
+        assert vulkan_workarounds() == {}

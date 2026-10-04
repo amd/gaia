@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import secrets
 import shutil
 import signal
@@ -43,7 +44,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from gaia.env import child_env
 from gaia.logger import get_logger
@@ -207,6 +208,54 @@ def pid_exists(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+#: Display adapters whose Vulkan cooperative-matrix path fails or runs slow
+#: under the llama.cpp Lemonade bundles (b10825, AMD driver 32.0.12078.30):
+#: Qwen3.6 crashed on its first token and Gemma 4 generated at 14 tok/s, not
+#: 34. Strix Halo only — the one GPU this was measured on.
+_COOPMAT_OFF_ADAPTERS = re.compile(r"Radeon\(TM\) 80[4-6]0S", re.IGNORECASE)
+
+#: Windows' display-adapter class; each adapter's subkey names the adapter.
+_DISPLAY_CLASS_KEY = (
+    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+)
+
+
+def _windows_display_adapters() -> List[str]:
+    """``DriverDesc`` of every display adapter Windows records."""
+    import winreg  # pylint: disable=import-error
+
+    names = []
+    try:
+        root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _DISPLAY_CLASS_KEY)
+    except OSError:
+        return names
+    with root:
+        index = 0
+        while True:
+            try:
+                subkey = winreg.EnumKey(root, index)
+            except OSError:
+                return names
+            index += 1
+            try:
+                with winreg.OpenKey(root, subkey) as adapter:
+                    names.append(str(winreg.QueryValueEx(adapter, "DriverDesc")[0]))
+            except OSError:
+                continue  # "Properties" and other non-adapter subkeys
+
+
+def vulkan_workarounds() -> Dict[str, str]:
+    """Environment the embedded Lemonade needs for this machine's GPU.
+
+    A value the user already set is left alone.
+    """
+    if sys.platform != "win32" or "GGML_VK_DISABLE_COOPMAT" in os.environ:
+        return {}
+    if any(_COOPMAT_OFF_ADAPTERS.search(n) for n in _windows_display_adapters()):
+        return {"GGML_VK_DISABLE_COOPMAT": "1"}
+    return {}
 
 
 def gaia_home() -> Path:
@@ -952,7 +1001,7 @@ class EmbeddedLemonade:
         port = port or _free_port()
         api_key = secrets.token_urlsafe(32)
 
-        env = child_env({"LEMONADE_API_KEY": api_key})
+        env = child_env({"LEMONADE_API_KEY": api_key, **vulkan_workarounds()})
 
         argv = [
             str(self.daemon_path),
