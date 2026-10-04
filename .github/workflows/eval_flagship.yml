@@ -977,7 +977,7 @@ jobs:
               Write-Host "::error::enforce=true but no baseline exists at $env:BASELINE_DIR, so there is nothing to enforce against and every category would pass by default. Land a flagship baseline first (run the eval on this hardware and commit the scorecards as $env:BASELINE_DIR\scorecard_<category>.json), or re-run without [eval-enforce]."
               exit 1
             }
-            Write-Host "::warning::NO BASELINE COMMITTED. Regression detection is OFF for this run: the eval still measures every category and uploads its scorecards, but nothing compares them to a known-good run. The previous baselines scored the doc agent, not the flagship, so they were deleted rather than diffed against. First flagship baseline goes in $env:BASELINE_DIR."
+            Write-Host "::warning::NO BASELINE COMMITTED. Regression detection is OFF for this run: the eval still measures every category and uploads its scorecards, but nothing compares them to a known-good run. Restore the flagship baseline in $env:BASELINE_DIR."
             "REGRESSION DETECTION OFF: no baseline at ``$env:BASELINE_DIR``. Scorecards are produced and uploaded; nothing is compared." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           } else {
             foreach ($category in $categories) {

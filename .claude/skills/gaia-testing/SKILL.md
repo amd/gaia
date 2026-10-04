@@ -118,7 +118,7 @@ Exercise cross-component behaviour through the **real CLI a user runs** — neve
    ```
 
    The baseline is a single nightly run (59%, target 80%), so re-run a lone PASS→FAIL before calling it a regression, and report FAIL→PASS flips as progress. Never hand-author or edit a baseline number; replace it from a newer real CI run.
-3. **Regression rule:** a category dropping materially below baseline (beyond run-to-run noise) blocks; an *intentional* capability removal must be re-baselined (`--save-baseline`) and called out in the report. An invalid run (concurrent eval, wrong ctx, mid-run model swap) is "invalid — re-run", not a result.
+3. **Regression rule:** a category dropping materially below baseline (beyond run-to-run noise) blocks; an *intentional* capability removal is called out in the report, and that category's baseline is replaced from the next nightly on the Strix Halo pool — never from a local `--save-baseline` run. An invalid run (concurrent eval, wrong ctx, mid-run model swap) is "invalid — re-run", not a result.
 4. **Stop this backend before Phase 5** (kill the :4200 process) so the real-world tier brings up its own clean instance rather than inheriting integration-tier state.
 
 ## Phase 5 — Tier 3: Real-world (on the chosen machine)
