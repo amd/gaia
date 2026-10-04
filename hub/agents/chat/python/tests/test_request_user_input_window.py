@@ -11,8 +11,6 @@ import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
-gaia_agent_chat = pytest.importorskip("gaia_agent_chat")
-
 
 class _Console:
     def __init__(self):
