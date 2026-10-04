@@ -67,7 +67,7 @@ def test_embedder_does_not_change_the_path(tmp_path, document):
 
 
 def test_new_cache_names_are_ones_clear_cache_owns(tmp_path, document):
-    name = _make(tmp_path)._get_cache_path(document).rsplit("/", 1)[-1]
+    name = os.path.basename(_make(tmp_path)._get_cache_path(document))
     assert _CACHE_OWNED_FILE.search(name)
     assert _CACHE_OWNED_FILE.search(name + ".sig")
 
