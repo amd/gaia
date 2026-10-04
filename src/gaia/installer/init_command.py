@@ -16,12 +16,14 @@ the profile's min_context_size, which is where that requirement is enforced.
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import urlparse
 
 # Rich imports for better CLI formatting
 try:
@@ -34,13 +36,26 @@ except ImportError:
     RICH_AVAILABLE = False
 
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.install_hints import source_install_command
+from gaia.agents.install_hints import (
+    PackageInstallerUnavailableError,
+    format_command,
+    gaia_extras_install_args,
+    resolve_pip_frontend,
+    source_install_command,
+)
 from gaia.installer._stdin import stdin_is_tty
 from gaia.logger import get_logger
 from gaia.ui.build import WebuiBuildStatus
 from gaia.version import LEMONADE_MIN_VERSION
 
 log = get_logger(__name__)
+
+# The terminal UI ships only with the GAIA installer, never with the wheel.
+_INSTALLER_HINT = (
+    "irm https://amd-gaia.ai/install.ps1 | iex"
+    if sys.platform == "win32"
+    else "curl -fsSL https://amd-gaia.ai/install.sh | sh"
+)
 
 
 def is_embedding_model_id(model_id: str) -> bool:
@@ -600,8 +615,6 @@ class InitCommand:
                 "and `gaia init` sets up GAIA's own Lemonade Server."
             )
         if self._lemonade_base_url:
-            from urllib.parse import urlparse
-
             hostname = urlparse(self._lemonade_base_url).hostname or "localhost"
             if hostname not in ("localhost", "127.0.0.1", "::1"):
                 self.remote = True
@@ -728,6 +741,39 @@ class InitCommand:
                 size_str += f"/{total / 1024 / 1024:.1f} MB"
             self._print(f"\r   [{bar}] {percent:.0f}% ({size_str})", end="")
 
+    @staticmethod
+    def _tui_installed() -> bool:
+        """True if gaia-tui is on PATH or in GAIA's own bin dir."""
+        if shutil.which("gaia-tui") is not None:
+            return True
+        from gaia.config import gaia_home
+
+        name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        if (gaia_home() / "bin" / name).is_file():
+            return True
+        if sys.platform != "win32":
+            return False
+        install_dir = InitCommand._nsis_install_dir()
+        return install_dir is not None and (install_dir / name).is_file()
+
+    @staticmethod
+    def _nsis_install_dir() -> Optional[Path]:
+        """Where the Windows installer put gaia-tui.exe (installer/nsis/gaia.nsi)."""
+        import winreg
+
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, r"Software\AMD\GAIA", 0, winreg.KEY_READ
+            ) as key:
+                value, _kind = winreg.QueryValueEx(key, "InstallDir")
+            return Path(value)
+        except FileNotFoundError:
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if not local_app_data:
+                return None
+            # The installer's own default InstallDir.
+            return Path(local_app_data) / "Programs" / "GAIA"
+
     def _install_pip_extras(self) -> bool:
         """
         Install pip extras required by the current profile.
@@ -741,80 +787,47 @@ class InitCommand:
             return True
 
         extras_str = ",".join(pip_extras)
+        install_args = gaia_extras_install_args(pip_extras)
+        try:
+            frontend = resolve_pip_frontend()
+        except PackageInstallerUnavailableError as e:
+            self._print_error(f"Could not install [{extras_str}] extras: {e}")
+            return False
 
-        # Package-manager frontends to try, most-preferred first. The standalone
-        # ``uv`` binary leads because uv-created venvs ship neither ``pip`` nor
-        # the ``uv`` module, so ``python -m uv`` / ``python -m pip`` both fail
-        # there; the standalone binary honours the active VIRTUAL_ENV instead.
-        frontends = [
-            ["uv", "pip"],
-            [sys.executable, "-m", "uv", "pip"],
-            [sys.executable, "-m", "pip"],
-        ]
-
-        # Detect editable vs package install using whichever frontend responds.
-        editable = False
-        location = ""
-        for frontend in frontends:
-            try:
-                result = subprocess.run(
-                    frontend + ["show", "amd-gaia"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-            except (FileNotFoundError, OSError):
-                continue
-            if result.returncode != 0:
-                continue
-            for line in result.stdout.splitlines():
-                if line.startswith("Editable project location:"):
-                    editable = True
-                    location = line.split(":", 1)[1].strip()
-                    break
-            break
-
-        # The fallback message must resolve in a stock venv with no `uv` on
-        # PATH (same reasoning as gaia.agents.install_hints.
-        # source_install_command, #2358) -- this is the frontend the loop
-        # below always ends up trying last, so it's the one the user's
-        # terminal message must actually work with.
-        if editable and location:
-            install_spec = f'{sys.executable} -m pip install -e ".[{extras_str}]"'
-            install_args = ["install", "-e", f"{location}[{extras_str}]"]
-        else:
-            install_spec = f'{sys.executable} -m pip install "amd-gaia[{extras_str}]"'
-            install_args = ["install", f"amd-gaia[{extras_str}]"]
-
+        argv = [*frontend.argv, *install_args]
+        retry = format_command([*frontend.display, *install_args])
         self._print_success(f"Installing extras: {extras_str}")
+        log.debug("Installing extras: %s", argv)
+        try:
+            result = subprocess.run(  # noqa: S603 - argv is constructed, not shell
+                argv, capture_output=True, text=True, check=False, timeout=900
+            )
+        except subprocess.TimeoutExpired:
+            self._print_error(
+                f"Installing [{extras_str}] extras timed out after 15 minutes. "
+                f"Check your network, then run `{retry}` and re-run `gaia init`."
+            )
+            return False
+        except OSError as e:
+            self._print_error(
+                f"Could not run the package installer ({argv[0]}): {e}. "
+                f"Fix it, then run `{retry}` and re-run `gaia init`."
+            )
+            return False
 
-        for frontend in frontends:
-            try:
-                result = subprocess.run(
-                    frontend + install_args,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                    check=False,
-                )
-                if result.returncode == 0:
-                    self._print_success(f"Installed [{extras_str}] dependencies")
-                    return True
-            except (FileNotFoundError, OSError):
-                continue
-            except subprocess.TimeoutExpired:
-                self._print_warning(
-                    f"Pip install timed out. Please run manually: {install_spec}"
-                )
-                return True
-            except Exception:
-                continue
+        if result.returncode != 0:
+            output = (result.stderr or result.stdout or "").strip()
+            tail = "\n".join(output.splitlines()[-20:]) or "(no output)"
+            self._print_error(
+                f"Installing [{extras_str}] extras failed (exit "
+                f"{result.returncode}). Document Q&A needs them.\n"
+                f"{tail}\n"
+                f"Fix the error above, then run `{retry}` and re-run `gaia init`."
+            )
+            return False
 
-        self._print_warning(
-            f"Could not install [{extras_str}] extras automatically. "
-            f"Please run: {install_spec}"
-        )
-        return True  # Warn but don't fail
+        self._print_success(f"Installed [{extras_str}] dependencies")
+        return True
 
     def run(self) -> int:
         """
@@ -910,15 +923,15 @@ class InitCommand:
                 self._print_step(
                     step_num, total_steps, "Installing Python dependencies..."
                 )
-                self._install_pip_extras()
+                if not self._install_pip_extras():
+                    return 1
 
             # Ensure the profile's hub agent (chat's standalone wheel) is
             # installed (#2358). Independent of the pip-extras step above:
             # the hub install targets the isolated
             # ~/.gaia/agents/chat/site-packages dir, while [rag] extras
             # target the ACTIVE interpreter — one must not replace or block
-            # the other. Unlike _install_pip_extras (warn-but-continue), a
-            # genuine failure here is allowed to propagate into this
+            # the other. A genuine failure here is allowed to propagate into this
             # method's own top-level `except Exception` below, which already
             # converts it into an actionable non-zero exit — silently
             # continuing would just recreate the "chat isn't installed"
@@ -1803,10 +1816,10 @@ class InitCommand:
         * Published but the install itself genuinely fails: this method
           does NOT catch that exception — it propagates into ``run()``'s
           own top-level ``except Exception`` handler, which already turns
-          any unexpected exception into an actionable non-zero exit. Unlike
-          ``_install_pip_extras``, a real hub-install failure must fail
-          loudly, not warn-and-continue (that would just recreate the
-          "agent isn't installed" state this issue exists to close).
+          any unexpected exception into an actionable non-zero exit. A real
+          hub-install failure must fail loudly, not warn-and-continue (that
+          would just recreate the "agent isn't installed" state this issue
+          exists to close).
 
         A catalog-fetch failure (network down, no offline cache) is treated
         the same as "not yet published" — `gaia init` must not hard-fail
@@ -1906,6 +1919,10 @@ class InitCommand:
         flagship_install_note = (
             "GAIA agent not installed yet -- run: gaia hub install gaia"
         )
+        has_tui = self._tui_installed()
+        tui_install_note = (
+            f"Terminal UI (gaia-tui) ships with the installer -- run: {_INSTALLER_HINT}"
+        )
         # Scoped per profile -- gating on the chat wheel alone would mark
         # sd/vlm/minimal permanently "incomplete", and would call the flagship
         # profile complete while its own binary is missing.
@@ -1935,12 +1952,17 @@ class InitCommand:
                     "agent's SD tools"
                 )
             elif self.profile == "gaia":
-                self.console.print(
-                    "    [cyan]gaia-tui[/cyan]                             Start the GAIA agent (terminal UI)"
-                )
+                if has_tui:
+                    self.console.print(
+                        "    [cyan]gaia-tui[/cyan]                             Start the GAIA agent (terminal UI)"
+                    )
                 self.console.print(
                     "    [cyan]gaia chat --ui[/cyan]                       Launch the Agent UI (browser-based)"
                 )
+                if not has_tui:
+                    self.console.print(
+                        f"    [dim]{rich_escape(tui_install_note)}[/dim]"
+                    )
                 if not self._profile_agent_available():
                     self.console.print(f"    [yellow]{flagship_install_note}[/yellow]")
                 if not chat_agent_available:
@@ -2022,12 +2044,15 @@ class InitCommand:
                     "image generation runs through the agent's SD tools"
                 )
             elif self.profile == "gaia":
-                self._print(
-                    "    gaia-tui                             # Start the GAIA agent (terminal UI)"
-                )
+                if has_tui:
+                    self._print(
+                        "    gaia-tui                             # Start the GAIA agent (terminal UI)"
+                    )
                 self._print(
                     "    gaia chat --ui                       # Launch the Agent UI (browser-based)"
                 )
+                if not has_tui:
+                    self._print(f"    {tui_install_note}")
                 if not self._profile_agent_available():
                     self._print(f"    {flagship_install_note}")
                 if not chat_agent_available:
