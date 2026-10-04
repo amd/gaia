@@ -299,8 +299,7 @@ setup(
             "llama-index-readers-youtube-transcript",
         ],
         "rag": [
-            # RAG embeds via Lemonade, not sentence-transformers — do NOT add it
-            # here. It is only needed for the optional memory reranker (see "ui").
+            # RAG embeds via Lemonade, not sentence-transformers — do NOT add it.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",
