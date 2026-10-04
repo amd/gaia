@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+from gaia.env import child_env
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -315,7 +316,7 @@ class LemonadeSupervisor:
                 stdout=self._log_handle,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
-                env={**os.environ, **spec.env},
+                env=child_env(spec.env),
                 creationflags=creationflags,
                 start_new_session=start_new_session,
             )

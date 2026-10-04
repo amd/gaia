@@ -85,9 +85,10 @@ the terminal UI meant building it from source.
 
 ### Added
 
-- **Shell commands and MCP servers no longer inherit GAIA's internal
-  credentials.** The processes the agent starts get the sidecar's environment
-  minus GAIA's own tokens. Your own variables (`GH_TOKEN` and the like) still pass through, so CLI skills
+- **Programs the agent starts no longer inherit GAIA's internal credentials.**
+  Shell commands, MCP servers, CLI installs and sign-ins, native hub agents,
+  media tools and the Lemonade server get the sidecar's environment minus
+  GAIA's own tokens. Your own variables (`GH_TOKEN` and the like) still pass through, so CLI skills
   keep working. An embedding app can withhold more names with
   `GAIA_CHILD_ENV_DENY` (comma or space separated), and can stop GAIA loading
   `.env` files with `GAIA_NO_DOTENV=1` — read from the real environment, so a

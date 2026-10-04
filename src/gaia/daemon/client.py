@@ -32,6 +32,7 @@ from gaia.daemon.instance import (
     terminate_instance,
 )
 from gaia.daemon.lock import StartLock
+from gaia.env import is_internal_secret
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -144,6 +145,8 @@ def _spawn_and_wait(timeout: float) -> DaemonInstance:
             stdin=subprocess.DEVNULL,
             start_new_session=start_new_session,
             creationflags=creationflags,
+            # The daemon mints its own credentials; never inherit a sidecar's.
+            env={k: v for k, v in os.environ.items() if not is_internal_secret(k)},
         )
     except OSError as e:
         log_file.close()

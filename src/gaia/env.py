@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Process-environment helpers: ``.env`` loading and child-process environments.
 
-Every ``.env`` load in GAIA goes through :func:`load_env`. Shell steps and MCP
-servers get their environment from :func:`child_env`.
+Every ``.env`` load in GAIA goes through :func:`load_env`. Processes GAIA
+starts for skills and tools get their environment from :func:`child_env`.
 """
 
 import os

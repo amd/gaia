@@ -31,7 +31,7 @@ import requests
 # Import OpenAI client for internal use
 from openai import OpenAI
 
-from gaia.env import load_env
+from gaia.env import child_env, load_env
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -1816,7 +1816,7 @@ class LemonadeClient:
 
         # Merge — never replace — the parent environment; the child loses
         # PATH/LOCALAPPDATA otherwise and LemonadeServer.exe breaks.
-        popen_env = {**os.environ, **spec.env}
+        popen_env = child_env(spec.env)
         # Own process group, so terminate_server's group kill can't reach the caller.
         session = {} if sys.platform.startswith("win") else {"start_new_session": True}
 

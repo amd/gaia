@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlencode
 
+from gaia.env import child_env
+
 _APP_PATHS = {
     "claude": (Path("/Applications/Claude.app"),),
     "codex": (Path("/Applications/Codex.app"), Path("/Applications/ChatGPT.app")),
@@ -86,7 +88,12 @@ def open_app(backend: str, job_id: str, working_directory: Path) -> dict:
     else:
         command = ["open", "-a", app]
     subprocess.run(
-        command, check=True, timeout=15, stdin=subprocess.DEVNULL, capture_output=True
+        command,
+        check=True,
+        timeout=15,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        env=child_env(),
     )
     return {
         "state": "requires_user_action",
