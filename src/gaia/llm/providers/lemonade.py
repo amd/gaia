@@ -584,6 +584,12 @@ class LemonadeProvider(LLMClient):
         # they get the client's standard 0.7. repeat_penalty / repeat_last_n
         # are llama.cpp-native (sent via extra_body when streaming).
         if not self._backend.cloud_model_provider(effective_model):
+            wanted = kwargs.get("id_slot")
+            if wanted not in (None, CONVERSATION_SLOT) and wanted >= (
+                self._backend.slot_count(effective_model)
+            ):
+                # One slot means one cache anyway; pinning would hang the call.
+                kwargs.pop("id_slot")
             kwargs.setdefault("id_slot", CONVERSATION_SLOT)
             kwargs.setdefault("temperature", 0.1)
             kwargs.setdefault("frequency_penalty", 0.3)

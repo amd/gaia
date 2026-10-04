@@ -386,9 +386,24 @@ CHAT_LLAMACPP_ARGS = (
 )
 #: Slots requests are pinned to (llama.cpp ``id_slot``). Left to LRU, a memory
 #: extraction landed on the conversation's slot and overwrote it, and the next
-#: turn re-read 28K tokens (109s). A server with one slot ignores the pin.
+#: turn re-read 28K tokens (109s). llama.cpp defers a request pinned to a slot
+#: it lacks forever, so the side slot is used only when the load reports it.
 CONVERSATION_SLOT = 0
 SIDE_SLOT = 1
+
+
+def _slots_in_flags(flags: List[str]) -> Optional[int]:
+    """The ``--parallel`` / ``-np`` value in llama-server *flags*, if any."""
+    for i, flag in enumerate(flags):
+        name, _, inline = flag.partition("=")
+        if name not in ("--parallel", "-np"):
+            continue
+        value = inline or (flags[i + 1] if i + 1 < len(flags) else "")
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
 
 
 def profile_ctx_size(device: Optional[str]) -> int:
@@ -2012,6 +2027,27 @@ class LemonadeClient:
             if _model_ids_match(model.get("id"), model_name):
                 return model.get("recipe")
         return None
+
+    def slot_count(self, model_name: str) -> int:
+        """How many llama.cpp slots the loaded *model_name* serves.
+
+        Read from ``/health``: the launch command Lemonade actually ran, else
+        the ``llamacpp_args`` it was loaded with. A model that isn't loaded, or
+        names no ``--parallel``, counts as one slot.
+
+        Raises:
+            LemonadeClientError: If the health check fails
+        """
+        for entry in self.health_check().get("all_models_loaded", []):
+            if not _model_ids_match(entry.get("model_name"), model_name):
+                continue
+            launch = entry.get("launch_command") or []
+            args = (entry.get("recipe_options") or {}).get("llamacpp_args") or ""
+            for flags in ([str(f) for f in launch], args.split()):
+                slots = _slots_in_flags(flags)
+                if slots is not None:
+                    return slots
+        return 1
 
     def get_model_info(self, model_name: str) -> Dict[str, Any]:
         """

@@ -150,3 +150,69 @@ def test_memory_extraction_runs_on_the_side_slot():
     assert host._extract_via_llm("My manager is Priya.", "Noted.", []) == []
     assert host.chat.send_messages.call_args.kwargs["id_slot"] == SIDE_SLOT
     assert SIDE_SLOT != CONVERSATION_SLOT
+
+
+def _health(entry):
+    return {"status": "ok", "all_models_loaded": [entry]}
+
+
+@pytest.mark.parametrize(
+    "entry, slots",
+    [
+        (
+            {
+                "model_name": "Qwen3-30B-A3B-Instruct-2507-GGUF",
+                "launch_command": ["llama-server", "--port", "8001", "--parallel", "2"],
+            },
+            2,
+        ),
+        (
+            {
+                "model_name": "Qwen3-30B-A3B-Instruct-2507-GGUF",
+                "recipe_options": {"llamacpp_args": CHAT_LLAMACPP_ARGS},
+            },
+            2,
+        ),
+        (
+            {
+                "model_name": "Qwen3-30B-A3B-Instruct-2507-GGUF",
+                "launch_command": ["llama-server", "-np=3"],
+            },
+            3,
+        ),
+        # Loaded by another client without the chat flags.
+        (
+            {
+                "model_name": "Qwen3-30B-A3B-Instruct-2507-GGUF",
+                "launch_command": ["llama-server", "--port", "8001"],
+                "recipe_options": {"ctx_size": 65536},
+            },
+            1,
+        ),
+        ({"model_name": "Gemma-4-E4B-it-GGUF", "launch_command": ["-np", "2"]}, 1),
+    ],
+)
+def test_slot_count_reads_what_the_loaded_model_was_launched_with(client, entry, slots):
+    with patch.object(client, "health_check", return_value=_health(entry)):
+        assert client.slot_count("Qwen3-30B-A3B-Instruct-2507-GGUF") == slots
+
+
+def _side_request(slots):
+    with patch("gaia.llm.providers.lemonade.LemonadeClient") as backend:
+        backend.return_value.chat_completions.return_value = {
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]
+        }
+        backend.return_value.cloud_model_provider.return_value = None
+        backend.return_value.slot_count.return_value = slots
+        provider = LemonadeProvider(model="Qwen3-30B-A3B-Instruct-2507-GGUF")
+        provider.chat([{"role": "user", "content": "q"}], id_slot=SIDE_SLOT)
+        return backend.return_value.chat_completions.call_args.kwargs
+
+
+def test_a_side_request_uses_the_side_slot_when_the_model_has_one():
+    assert _side_request(2)["id_slot"] == SIDE_SLOT
+
+
+def test_a_side_request_never_pins_a_slot_a_one_slot_model_lacks():
+    # llama.cpp defers a request for a missing slot until the caller gives up.
+    assert _side_request(1)["id_slot"] == CONVERSATION_SLOT
