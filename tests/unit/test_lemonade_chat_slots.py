@@ -88,6 +88,13 @@ def test_other_loads_keep_their_flags(client, model, kwargs):
     assert sent.get("llamacpp_args") == kwargs.get("llamacpp_args")
 
 
+def test_a_forced_backend_load_never_saves_the_chat_flags(client):
+    with patch("gaia.llm.lemonade_client.llamacpp_backend_for", return_value="cpu"):
+        sent = _sent_load(client, "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=8192)
+    assert sent["save_options"] is True
+    assert "llamacpp_args" not in sent
+
+
 def test_an_unreadable_catalog_loads_without_the_chat_flags(client, caplog):
     with responses.RequestsMock() as rsps:
         rsps.add(responses.GET, f"{BASE}/models", status=404)

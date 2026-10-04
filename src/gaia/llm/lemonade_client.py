@@ -5323,7 +5323,12 @@ class LemonadeClient:
         """
         self.log.debug(f"Loading {model_name}")
 
-        if llamacpp_args is None and ctx_size is not None:
+        # A forced-backend load saves its options; never save the chat flags.
+        if (
+            llamacpp_args is None
+            and ctx_size is not None
+            and llamacpp_backend_for(model_name) is None
+        ):
             # The chat flags are a speed-up; an unreadable catalog must not
             # block the load itself, which only needs POST /load.
             try:
