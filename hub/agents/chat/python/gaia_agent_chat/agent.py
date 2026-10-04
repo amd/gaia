@@ -72,8 +72,8 @@ from gaia.llm.inference_location import (
     resolve_inference_location,
 )
 from gaia.llm.lemonade_client import (
-    DEFAULT_MODEL_NAME,
     is_tool_calling_model,
+    resolve_default_chat_model,
     resolve_lemonade_base_url,
 )
 from gaia.mcp.mixin import MCPClientMixin
@@ -369,8 +369,8 @@ class ChatAgent(
         else:
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
-        # Use the configured default model (Gemma) when no explicit model is set
-        effective_model_id = config.model_id or DEFAULT_MODEL_NAME
+        # No explicit model: the machine's default (config default_model, else Gemma)
+        effective_model_id = config.model_id or resolve_default_chat_model()
 
         # Debug logging for model selection
         logger.debug(
@@ -539,11 +539,7 @@ class ChatAgent(
             output_handler=config.output_handler,
             debug=config.debug,
             device=config.device,
-            min_context_size=(
-                config.min_context_size
-                if config.min_context_size is not None
-                else 32768
-            ),
+            min_context_size=config.min_context_size,
             max_output_tokens=config.max_output_tokens,
             context_eviction=config.context_eviction,
             context_eviction_threshold_tokens=config.context_eviction_threshold_tokens,
@@ -988,7 +984,7 @@ class ChatAgent(
             else getattr(config, "model_id", None)
         )
         return resolve_inference_location(
-            model or DEFAULT_MODEL_NAME,
+            model or resolve_default_chat_model(),
             use_claude=use_claude,
             use_openai=bool(getattr(config, "use_chatgpt", False)),
         )

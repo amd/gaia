@@ -182,19 +182,12 @@ def initialize_lemonade_for_agent(
         get_logger(__name__).debug(
             "Initializing %s with context size %d", agent, required_ctx
         )
+        # No floor passed: ensure_ready resolves the same one, and then also
+        # seeds an idle server with the default model at its own window.
         if base_url:
-            success = LemonadeManager.ensure_ready(
-                min_context_size=required_ctx,
-                quiet=quiet,
-                base_url=base_url,
-            )
+            success = LemonadeManager.ensure_ready(quiet=quiet, base_url=base_url)
         else:
-            success = LemonadeManager.ensure_ready(
-                min_context_size=required_ctx,
-                quiet=quiet,
-                host=host,
-                port=port,
-            )
+            success = LemonadeManager.ensure_ready(quiet=quiet, host=host, port=port)
     except LemonadeClientError as e:
         print(f"❌ Error: {e}", file=sys.stderr)
         return False, None
@@ -5291,7 +5284,9 @@ Let me know your answer!
             sys.exit(2)
 
         if args.check:
+            from gaia.config import GaiaConfigError
             from gaia.installer.init_command import check_setup_status
+            from gaia.llm.model_fit import ModelFitError
 
             try:
                 status = check_setup_status(
@@ -5304,6 +5299,11 @@ Let me know your answer!
             except ValueError as e:
                 print(f"Error: {e}", file=sys.stderr)
                 sys.exit(1)
+            except (GaiaConfigError, ModelFitError, LemonadeClientError) as e:
+                # Not "needs setup" (exit 1): setup cannot fix a bad config or a
+                # model that will not fit, so report that the check went unanswered.
+                print(f"Error: could not check setup: {e}", file=sys.stderr)
+                sys.exit(2)
             exit_code = 0 if status.ready else 3 if status.stage == "load" else 1
             if getattr(args, "json", False):
                 print(json.dumps(status.to_json()))
