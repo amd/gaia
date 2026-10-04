@@ -121,6 +121,14 @@ class TestQuerySpecificFile:
         searched = {c.args[1] for c in rag._retrieve_chunks_from_file.call_args_list}
         assert searched == {Q3}
 
+    def test_it_gets_the_window_index_document_gets(self):
+        """It indexes an unindexed file first; capped at the default, a large PDF
+        was abandoned mid-index and the model's retry indexed it a second time."""
+        _make_host(_fake_rag(set()))
+        build = _TOOL_REGISTRY["index_document"]["timeout"]
+        assert build is not None
+        assert _TOOL_REGISTRY["query_specific_file"]["timeout"] == build
+
 
 class TestDumpDocument:
     def test_ambiguous_request_returns_candidates(self):

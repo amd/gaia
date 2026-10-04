@@ -553,6 +553,9 @@ class RAGToolsMixin:
 
         @tool(
             atomic=True,
+            # Indexes the file first when it isn't yet, so it needs index_document's
+            # cap; at the default a big PDF is abandoned mid-index and re-indexed.
+            timeout=600,
         )
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """

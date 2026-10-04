@@ -369,7 +369,7 @@ python -m gaia.mcp.mcp_bridge
 
 2. **Mocks prove "we called it," not "the call is valid."** At any boundary with a contract — HTTP API, subprocess, SQL, file format, IPC — a stub returning a hardcoded success only proves the method was invoked, never that the request would be accepted. Assert the *shape* of the outgoing call (required prefixes, mutually-required fields, allowed value combinations), and where the contract lives in an external service add one real integration test (e.g. `require_lemonade`) that exercises it.
 
-**#1655 is the canonical case for both:** the model-pull sent `recipe=` for a *built-in* Lemonade model, which Lemonade 400s — but only on a *fresh* pull. Every unit test mocked the client, every manual check ran on a box that already had `gemma4-it-e2b-FLM` cached, and the PR's `gaia init --profile npu` test-plan item was checked off against that warm cache. `tests/test_lemonade_client.py::test_pull_model` even documented the correct `user.`-prefix-with-`recipe` pattern, but stubbed the HTTP layer, so it couldn't catch the profile that violated it.
+**#1655 is the canonical case for both:** the model-pull sent `recipe=` for a *built-in* Lemonade model, which Lemonade 400s — but only on a *fresh* pull. Every unit test mocked the client, every manual check ran on a box that already had `gemma4-it-e2b-FLM` cached, and the PR's `gaia init --profile npu` test-plan item was checked off against that warm cache. `test_pull_model` (now in `tests/unit/test_lemonade_client_http.py`) even documented the correct `user.`-prefix-with-`recipe` pattern, but stubbed the HTTP layer, so it couldn't catch the profile that violated it.
 
 ### Tests always run against THIS checkout
 
