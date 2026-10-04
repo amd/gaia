@@ -129,7 +129,18 @@ def test_concurrent_same_document_publishes_once_after_persistence(rag, tmp_path
         results = list(executor.map(rag.index_document, [str(document)] * 2))
     assert all(result["success"] for result in results)
     assert sum(bool(result.get("already_indexed")) for result in results) == 1
+    # The loser of the race reports the document's chunks, not the default 0.
+    assert [result["num_chunks"] for result in results] == [1, 1]
     _assert_documents(rag, {document: "Shared document content."})
+
+
+def test_an_already_indexed_document_reports_its_chunks(rag, tmp_path):
+    document = tmp_path / "again.txt"
+    document.write_text("Indexed twice.", encoding="utf-8")
+    first = rag.index_document(str(document))
+    again = rag.index_document(str(document))
+    assert again["already_indexed"]
+    assert again["num_chunks"] == first["num_chunks"] == 1
 
 
 def test_short_embedding_batch_preserves_existing_document(rag, tmp_path):
