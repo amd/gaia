@@ -94,8 +94,37 @@ EXCLUDES = [
 ]
 
 
+#: ``--collect-all`` targets. PyInstaller only warns when one is not installed,
+#: so ``_verify_collect_targets`` turns that into a build failure.
+#: faiss backs the stateful agent's memory index (#1666) and ships compiled libs
+#: + swig submodules the static analyzer misses.
+COLLECT_ALL = ["faiss"]
+
+
+def _verify_collect_targets() -> None:
+    """Fail the build if a ``--collect-all`` target is not importable here.
+
+    Without faiss the binary boots and passes the smoke test, but the stateful
+    agent's memory logs "vector search disabled" and semantic recall stops
+    working. A frozen app has no interpreter to install it into later.
+    """
+    import importlib.util
+
+    missing = [mod for mod in COLLECT_ALL if importlib.util.find_spec(mod) is None]
+    if missing:
+        raise SystemExit(
+            "freeze: refusing to build -- these modules must be in the binary "
+            f"but are not installed: {', '.join(missing)}.\n"
+            "Install them into the freeze environment the way the "
+            '"Install deps + PyInstaller" step of '
+            ".github/workflows/release_agent_email.yml does, and re-run."
+        )
+
+
 def build(onefile: bool = False, clean: bool = True) -> Path:
     import PyInstaller.__main__
+
+    _verify_collect_targets()
 
     work = HERE / "build"
     dist = HERE / "dist"
@@ -138,11 +167,6 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         # connector provider discovery is dynamic.
         "--collect-submodules",
         "gaia.connectors",
-        # FAISS backs the stateful agent's memory index (#1666). faiss-cpu ships
-        # compiled libs + swig submodules the static analyzer misses, so collect
-        # it wholesale. Lazily imported inside gaia.agents.base.memory.
-        "--collect-all",
-        "faiss",
         # core metadata (importlib.metadata version probes).
         "--copy-metadata",
         "amd-gaia",
@@ -158,6 +182,8 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
                 "sets. Restore the file or update ADD_DATA."
             )
         args += ["--add-data", f"{source}{os.pathsep}{dest}"]
+    for mod in COLLECT_ALL:
+        args += ["--collect-all", mod]
     for mod in EXCLUDES:
         args += ["--exclude-module", mod]
     if onefile:
