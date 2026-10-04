@@ -10,6 +10,8 @@ from typing import Callable, Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
 from ..lemonade_client import (
+    CONTEXT_OVERFLOW_PHRASES,
+    CONVERSATION_SLOT,
     DEFAULT_MODEL_NAME,
     LemonadeClient,
     LemonadeClientError,
@@ -315,9 +317,8 @@ def _classify_lemonade_response(
 
     if "model_not_loaded" in type_blob or "no model loaded" in msg_blob:
         return LemonadeModelNotLoadedError(payload=response), True
-    if (
-        "exceed_context_size" in type_blob
-        or "exceeds the available context size" in msg_blob
+    if any(
+        phrase in type_blob or phrase in msg_blob for phrase in CONTEXT_OVERFLOW_PHRASES
     ):
         # Mark retryable when the model was loaded with an unexpectedly
         # small ctx (typical: 4096 from a pre-restart leftover, or 32K
@@ -423,7 +424,7 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     ):
         m = re.search(r"[Mm]odel ['\"]([^'\"]+)['\"]", raw)
         return LemonadeModelNotFoundError(model_id=m.group(1) if m else None)
-    if "exceed_context_size" in text or "exceeds the available context size" in text:
+    if any(phrase in text for phrase in CONTEXT_OVERFLOW_PHRASES):
         err = LemonadeContextOverflowError()
         m = re.search(r"context size \((\d+) tokens?\)", text)
         if not m:
@@ -591,6 +592,13 @@ class LemonadeProvider(LLMClient):
         # and the penalties both send a reasoning model's thinking into a
         # runaway, so they get the client's standard 0.7.
         if not self._backend.cloud_model_provider(effective_model):
+            wanted = kwargs.get("id_slot")
+            if wanted not in (None, CONVERSATION_SLOT) and wanted >= (
+                self._backend.slot_count(effective_model)
+            ):
+                # One slot means one cache anyway; pinning would hang the call.
+                kwargs.pop("id_slot")
+            kwargs.setdefault("id_slot", CONVERSATION_SLOT)
             defaults = local_sampling_defaults(
                 effective_model,
                 requested_thinking(effective_model, kwargs.get("chat_template_kwargs")),
