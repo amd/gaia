@@ -88,7 +88,7 @@ class _Agent(Agent):
 
     def __init__(self, loader=None):  # pylint: disable=super-init-not-called
         self.chat = _Chat()
-        self.model_id = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+        self.model_id = "Qwen3.6-35B-A3B-GGUF"
         self.tool_loader = loader
         self.applied = []
 
@@ -133,7 +133,7 @@ def test_warm_up_primes_with_the_real_prompt_and_a_one_token_budget():
     assert call["max_tokens"] == 1
     assert steps == [
         "Indexing tools",
-        "Loading Qwen3-30B-A3B-Instruct-2507-GGUF and reading its instructions",
+        "Loading Qwen3.6-35B-A3B-GGUF and reading its instructions",
     ]
     assert "seconds" in result
 

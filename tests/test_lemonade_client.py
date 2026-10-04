@@ -1224,6 +1224,60 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertEqual(events[3]["percent"], 100)
 
     @responses.activate
+    def test_pull_by_name_registers_a_known_user_model(self):
+        """A user. model pulled by name alone (the auto-download path) must carry
+        its registration, or Lemonade has nothing to pull; a built-in must carry
+        none, since a recipe on a built-in pull is a 400 (#1655)."""
+        from gaia.llm.lemonade_client import (
+            DEFAULT_MODEL_NAME,
+            FLASH_OPTION_MODEL_NAME,
+            find_model_requirement,
+        )
+
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            body='event: complete\ndata: {"percent":100}\n\n',
+            status=200,
+            content_type="text/event-stream",
+        )
+        list(self.client.pull_model_stream(model_name=FLASH_OPTION_MODEL_NAME))
+        list(self.client.pull_model_stream(model_name=DEFAULT_MODEL_NAME))
+
+        flash = json.loads(responses.calls[0].request.body)
+        mr = find_model_requirement(FLASH_OPTION_MODEL_NAME)
+        self.assertEqual(flash["model_name"], FLASH_OPTION_MODEL_NAME)
+        self.assertEqual(flash["checkpoint"], mr.checkpoint)
+        self.assertEqual(flash["recipe"], mr.recipe)
+        self.assertEqual(flash["mmproj"], mr.mmproj)
+        self.assertTrue(flash["vision"] and flash["reasoning"])
+
+        builtin = json.loads(responses.calls[1].request.body)
+        self.assertNotIn("checkpoint", builtin)
+        self.assertNotIn("recipe", builtin)
+
+    @responses.activate
+    def test_large_default_pulls_by_name_only(self):
+        """Qwen3.6 35B A3B is a Lemonade built-in: the pull names it and nothing
+        else, because a recipe on a built-in pull is a 400 (#1655)."""
+        from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+
+        self.assertFalse(LARGE_DEFAULT_MODEL_NAME.startswith("user."))
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            body='event: complete\ndata: {"percent":100}\n\n',
+            status=200,
+            content_type="text/event-stream",
+        )
+        list(self.client.pull_model_stream(model_name=LARGE_DEFAULT_MODEL_NAME))
+
+        self.assertEqual(
+            json.loads(responses.calls[0].request.body),
+            {"model_name": LARGE_DEFAULT_MODEL_NAME, "stream": True},
+        )
+
+    @responses.activate
     def test_pull_model_stream_error(self):
         """Test handling errors during streaming model pull."""
         # Mock SSE response with error
@@ -1773,6 +1827,73 @@ class TestLemonadeClientMock(unittest.TestCase):
         )
         self.assertEqual(
             responses.calls[0].request.headers.get("Authorization"), "Bearer abc"
+        )
+
+    def _chat_body(self, model, **kwargs):
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/chat/completions",
+            json={"id": "0", "choices": [{"message": {"content": "hi"}}]},
+            status=200,
+        )
+        client = LemonadeClient(host=HOST, port=PORT, verbose=False)
+        with patch.object(LemonadeClient, "_ensure_model_loaded"):
+            client.chat_completions(
+                model=model, messages=[{"role": "user", "content": "hi"}], **kwargs
+            )
+        return json.loads(responses.calls[-1].request.body)
+
+    @responses.activate
+    def test_large_default_thinks_because_gaia_says_so(self):
+        """The thinking mode is GAIA's choice, sent on every request, not the
+        chat template's default."""
+        from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+
+        body = self._chat_body(LARGE_DEFAULT_MODEL_NAME)
+        self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": True})
+
+    @responses.activate
+    def test_caller_thinking_choice_wins(self):
+        from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+
+        body = self._chat_body(
+            LARGE_DEFAULT_MODEL_NAME,
+            chat_template_kwargs={"enable_thinking": False, "preserve_thinking": True},
+        )
+        self.assertEqual(
+            body["chat_template_kwargs"],
+            {"enable_thinking": False, "preserve_thinking": True},
+        )
+
+    @responses.activate
+    def test_a_model_without_a_thinking_choice_sends_none(self):
+        body = self._chat_body("Gemma-4-E4B-it-GGUF")
+        self.assertNotIn("chat_template_kwargs", body)
+
+    @patch("gaia.llm.lemonade_client.LemonadeClient._ensure_model_loaded")
+    @patch("gaia.llm.lemonade_client.OpenAI")
+    def test_streamed_request_carries_the_thinking_choice(
+        self, mock_openai, _mock_ensure
+    ):
+        from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+
+        mock_client = MagicMock()
+        mock_openai.return_value = mock_client
+        mock_stream = MagicMock()
+        mock_stream.__iter__.return_value = iter([])
+        mock_client.chat.completions.create.return_value = mock_stream
+
+        client = LemonadeClient(host=HOST, port=PORT, verbose=False)
+        list(
+            client.chat_completions(
+                model=LARGE_DEFAULT_MODEL_NAME,
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+            )
+        )
+        sent = mock_client.chat.completions.create.call_args.kwargs
+        self.assertEqual(
+            sent["extra_body"]["chat_template_kwargs"], {"enable_thinking": True}
         )
 
     @responses.activate
