@@ -129,8 +129,10 @@ setup(
         # OpenAI 1.58.0 is the first release with Realtime API support.
         "openai>=1.58.0",
         "pydantic>=2.9.2",
-        "transformers",
-        "accelerate",
+        # Core imports these directly; never rely on a heavier dep pulling them in.
+        "pyyaml>=6.0.1",
+        "numpy>=1.24.0",
+        "psutil>=5.9.0",
         "python-dotenv",
         "aiohttp",
         "rich",
@@ -185,8 +187,8 @@ setup(
             # already a core install_requires dep for `gaia connectors`, #1621).
             "httpx>=0.27.0",
             # The daemon relies on psutil for every liveness check and
-            # _check_daemon_deps refuses to start without it — declare it rather
-            # than rely on accelerate pulling it in transitively.
+            # _check_daemon_deps refuses to start without it. Also core; kept
+            # here so [api] alone still names every daemon dep.
             "psutil>=5.9.0",
         ],
         "ui": [
@@ -262,10 +264,7 @@ setup(
             "pytest-xdist",
             "pytest-rerunfailures",
             "pyfakefs",
-            "memory_profiler",
             "matplotlib",
-            "adjustText",
-            "plotly",
             "black",
             "pylint",
             "isort",
@@ -295,7 +294,6 @@ setup(
         "eval": [
             "anthropic",
             "bs4",
-            "scikit-learn>=1.5.0",
             "numpy>=2.0,<2.3.0",
             "pypdf",
             "reportlab",
