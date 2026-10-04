@@ -1537,9 +1537,10 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
 
         # Resolve the same endpoint as TUI setup, including an isolated runtime.
-        if base_url is None:
-            from gaia.llm.lemonade_client import resolve_lemonade_base_url
+        from gaia.llm.lemonade_client import resolve_lemonade_base_url
 
+        resolve_after_start = base_url is None
+        if resolve_after_start:
             base_url = resolve_lemonade_base_url()
 
         # Lazy Lemonade initialization for local LLM users
@@ -1572,6 +1573,9 @@ Do NOT wrap conversational replies in JSON.
                     required_min_device=required_min_device,
                     device=device,
                 )
+                # Starting GAIA's own server picks its port, so follow it.
+                if resolve_after_start:
+                    base_url = resolve_lemonade_base_url()
 
         # Initialize state management
         self.execution_state = self.STATE_PLANNING

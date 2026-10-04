@@ -333,6 +333,30 @@ def render_command(spec: StartSpec) -> str:
     return _render_command(spec.argv, spec.env)
 
 
+def gaia_runs_lemonade(base_url: Optional[str] = None) -> bool:
+    """Whether the server to start for *base_url* is GAIA's own, not a system install.
+
+    The one decision every start path makes before launching anything: True
+    when ``gaia init`` installed GAIA's embedded server, ``LEMONADE_BASE_URL``
+    names no other, and *base_url* is unset or is the address GAIA resolves on
+    its own. That server is started through the daemon, never by
+    :func:`resolve_lemonade` / :func:`build_start_command`, and binds a port
+    chosen at start time -- so a caller holding the stopped-state default URL
+    must re-resolve after starting it.
+    """
+    from gaia.llm.lemonade_client import (
+        configured_lemonade_url,
+        resolve_lemonade_base_url,
+    )
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    if configured_lemonade_url() or not EmbeddedLemonade().is_installed():
+        return False
+    if base_url is None:
+        return True
+    return resolve_lemonade_base_url(base_url) == resolve_lemonade_base_url()
+
+
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     """Describe how to start Lemonade Server on THIS machine.
 
@@ -344,12 +368,7 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     ``lemonade-server serve`` CLI is only ever named when a legacy install
     was actually resolved.
     """
-    from gaia.llm.lemonade_client import configured_lemonade_url
-    from gaia.llm.lemonade_embedded import EmbeddedLemonade
-
-    # `gaia init` installs GAIA's own server, and GAIA uses it unless
-    # LEMONADE_BASE_URL names another -- mirror LemonadeManager's guard.
-    if not configured_lemonade_url() and EmbeddedLemonade().is_installed():
+    if gaia_runs_lemonade():
         return StartHint(
             instruction=(
                 "GAIA starts its Lemonade Server when it needs it. To start it "

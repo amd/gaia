@@ -20,13 +20,12 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
-    configured_lemonade_url,
     is_llm_model_entry,
     resolve_ctx_size,
     resolve_effective_ctx_size,
     resolve_lemonade_base_url,
 )
-from gaia.llm.lemonade_launcher import describe_start_hint
+from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
 from gaia.logger import get_logger
 
 
@@ -337,12 +336,11 @@ class LemonadeManager:
         Raises:
             DaemonError: The daemon could not start it; the message names why.
         """
-        if configured_lemonade_url():
+        if not gaia_runs_lemonade():
             return False
         from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
-        embedded = EmbeddedLemonade()
-        if not embedded.is_installed() or embedded.status().running:
+        if EmbeddedLemonade().status().running:
             return False
         from gaia.daemon.client import ensure_lemonade
 
@@ -855,20 +853,6 @@ class LemonadeManager:
 
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
 
-            if base_url is None and host is None and port is None:
-                from gaia.daemon.errors import DaemonError
-
-                try:
-                    cls.start_embedded_if_stopped()
-                except DaemonError as e:
-                    cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
-                    if not quiet:
-                        print(
-                            f"❌ Could not start GAIA's Lemonade Server: {e}",
-                            file=sys.stderr,
-                        )
-                    return False
-
             try:
                 # When base_url is provided, pass it directly to LemonadeClient
                 # so it preserves the full URL (including https:// for ngrok, etc.)
@@ -886,6 +870,24 @@ class LemonadeManager:
                         keep_alive=True,
                         verbose=not quiet,
                     )
+
+                pinned = base_url is not None or host is not None or port is not None
+                if gaia_runs_lemonade(client.base_url if pinned else None):
+                    from gaia.daemon.errors import DaemonError
+
+                    try:
+                        cls.start_embedded_if_stopped()
+                    except DaemonError as e:
+                        cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
+                        if not quiet:
+                            print(
+                                f"❌ Could not start GAIA's Lemonade Server: {e}",
+                                file=sys.stderr,
+                            )
+                        return False
+                    # Its port is chosen at start, so re-resolve instead of
+                    # keeping the stopped-state default the caller passed.
+                    client = LemonadeClient(keep_alive=True, verbose=not quiet)
 
                 # Just check server status - no agent profile required
                 status = client.get_status()

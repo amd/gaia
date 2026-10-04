@@ -343,10 +343,15 @@ class TestManagerHook:
         from gaia.llm.lemonade_manager import LemonadeManager
 
         LemonadeManager.reset()
-        with mock.patch.object(
-            LemonadeManager,
-            "start_embedded_if_stopped",
-            side_effect=DaemonError("port taken; read lemond.log"),
+        with (
+            mock.patch(
+                "gaia.llm.lemonade_manager.gaia_runs_lemonade", return_value=True
+            ),
+            mock.patch.object(
+                LemonadeManager,
+                "start_embedded_if_stopped",
+                side_effect=DaemonError("port taken; read lemond.log"),
+            ),
         ):
             assert LemonadeManager.ensure_ready(quiet=False) is False
         assert "port taken; read lemond.log" in capsys.readouterr().err
