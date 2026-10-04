@@ -190,6 +190,13 @@ def test_the_sign_in_check_reads_as_ready_to_check_cli_setup(gh):
     assert gh("auth", "status", "--json", "token").returncode == 1
 
 
+def test_the_sign_in_check_accepts_the_equals_form(gh):
+    proc = gh("auth", "status", "--json=hosts")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["hosts"]["github.com"][0]["login"] == "bench-user"
+    assert gh("auth", "status", "--json=token").returncode == 1
+
+
 def test_every_call_is_logged(gh):
     gh("issue", "list", "-R", "kovtcharov/toybox")
     gh("issue", "close", "1", "-R", "kovtcharov/toybox")

@@ -265,6 +265,16 @@ def install(
 # ---------------------------------------------------------------------------
 
 
+def _auth_json_field(args: List[str]) -> Optional[str]:
+    """The ``--json`` value in either ``--json hosts`` or ``--json=hosts`` form."""
+    for i, arg in enumerate(args):
+        if arg == "--json":
+            return args[i + 1] if i + 1 < len(args) else ""
+        if arg.startswith("--json="):
+            return arg.split("=", 1)[1]
+    return None
+
+
 class _Exit(Exception):
     def __init__(self, code: int, action: str):
         super().__init__(code)
@@ -490,9 +500,10 @@ class Stub:
             print(VERSION)
             return "local"
         if args[0] == "auth":
-            if args[1:2] == ["status"] and "--json" in args:
+            auth_json = _auth_json_field(args) if args[1:2] == ["status"] else None
+            if auth_json is not None:
                 # The form check_cli_setup reads before any github-triage step.
-                if args[args.index("--json") + 1 :][:1] != ["hosts"]:
+                if auth_json != "hosts":
                     self.fail(
                         "gh stand-in: `gh auth status --json` serves only the "
                         "`hosts` field.",
@@ -503,7 +514,7 @@ class Stub:
             if args[1:2] == ["status"]:
                 sys.stderr.write(
                     "github.com\n  - Logged in to github.com account bench-user "
-                    "(offline stand-in)\n  - Token scopes: 'repo:read'\n"
+                    "(offline stand-in)\n  - Token scopes: 'repo', 'read:org'\n"
                 )
                 return "local"
             self.fail(

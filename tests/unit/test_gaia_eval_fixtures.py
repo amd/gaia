@@ -73,6 +73,13 @@ def test_fake_gh_auth_status_json_refuses_fields_it_does_not_serve():
     assert "hosts" in status.stderr
 
 
+def test_fake_gh_auth_status_json_accepts_the_equals_form():
+    status = _gh("auth", "status", "--json=hosts")
+    assert status.returncode == 0, status.stderr
+    assert json.loads(status.stdout)["hosts"]["github.com"][0]["login"] == "fixture-bot"
+    assert _gh("auth", "status", "--json=token").returncode != 0
+
+
 def test_fake_gh_issue_list_matches_the_contract_newest_first():
     result = _gh(
         "issue",
