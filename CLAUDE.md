@@ -181,6 +181,9 @@ This self-review step is mandatory - never skip verification of your output.
 - Feature branches: Use descriptive names (e.g., `kalin/mcp`, `feature/new-agent`)
 - Always check current branch status before making changes
 - Use pull requests for merging changes to main
+- Never `git stash` in a worktree: every worktree of a clone shares one stash
+  list, so `git stash pop` can apply another session's work to yours. Use a
+  temporary commit or a patch file.
 
 ## Development Standards
 
@@ -431,6 +434,12 @@ gaia eval agent --compare \
   tests/fixtures/eval_baselines/gaia-flagship/scorecard_rag_quality.json \
   <printed-output-path>/scorecard.json
 ```
+
+The two-terminal recipe fits non-`gaia_*` categories. A `gaia_*` category scored
+that way is not comparable to CI: those scenarios read staged fixtures, a fixture
+web server and hub, and a fake `gh` that must be first on PATH because their tool
+calls are auto-approved. `python util/run_eval_lane.py --lane <lane>` (or
+`--category <name>`) reproduces a CI lane's setup on this machine.
 
 **Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), call it out explicitly in the PR description and replace that category's `scorecard_<category>.json` from the next nightly on the Strix Halo pool — never from a local `--save-baseline` run, which writes elsewhere and measures a different machine. The reviewer needs to see the diff between baselines, not just the new score.
 
