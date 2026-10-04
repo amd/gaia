@@ -28,6 +28,10 @@ from gaia.chat.sdk import (
 )
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
+# Gemma-4 sometimes reasons for a few hundred tokens before a one-line answer;
+# a smaller budget ends the reply mid-thought with no answer at all.
+ANSWER_BUDGET = 1024
+
 
 class TestAgentSDKIntegration(unittest.TestCase):
     """Integration tests for AgentSDK with real LLM server."""
@@ -92,7 +96,7 @@ class TestAgentSDKIntegration(unittest.TestCase):
 
         config = AgentConfig(
             model=self.model,
-            max_tokens=50,
+            max_tokens=ANSWER_BUDGET,
             show_stats=True,
             logging_level="INFO",
             assistant_name="assistant",
@@ -168,7 +172,7 @@ class TestAgentSDKIntegration(unittest.TestCase):
         print("Testing streaming functionality with real LLM...")
 
         config = AgentConfig(
-            model=self.model, max_tokens=50, assistant_name="assistant"
+            model=self.model, max_tokens=ANSWER_BUDGET, assistant_name="assistant"
         )
         chat = AgentSDK(config)
 
@@ -254,7 +258,7 @@ class TestAgentSDKIntegration(unittest.TestCase):
             model=self.model,
             system_prompt="You are a professional assistant.",
             assistant_name="WorkBot",
-            max_tokens=50,
+            max_tokens=ANSWER_BUDGET,
         )
 
         personal_session = sessions.create_session(
@@ -262,7 +266,7 @@ class TestAgentSDKIntegration(unittest.TestCase):
             model=self.model,
             system_prompt="You are a friendly companion.",
             assistant_name="Buddy",
-            max_tokens=50,
+            max_tokens=ANSWER_BUDGET,
         )
 
         # Test session isolation
@@ -387,9 +391,9 @@ class TestAgentSDKIntegration(unittest.TestCase):
         """Test performance characteristics with real LLM."""
         print("Testing performance characteristics...")
 
-        # Use higher max_tokens to allow for thinking tokens (Qwen3 models may
-        # consume tokens on reasoning before producing visible content)
-        config = AgentConfig(model=self.model, max_tokens=200, show_stats=True)
+        config = AgentConfig(
+            model=self.model, max_tokens=ANSWER_BUDGET, show_stats=True
+        )
         chat = AgentSDK(config)
 
         # Measure response time
@@ -404,13 +408,19 @@ class TestAgentSDKIntegration(unittest.TestCase):
 
         # Basic performance checks
         self.assertLess(response_time, 120.0)  # Allow up to 120s for slow CI runners
-        self.assertGreater(len(response.text), 0)
+        self.assertGreater(
+            len(response.text),
+            0,
+            f"Empty answer (finish_reason={response.finish_reason!r}, "
+            f"reasoning={(response.reasoning or '')[:200]!r})",
+        )
 
         print(f"✅ Response time: {response_time:.2f}s")
         print(f"✅ Stats available: {list(response.stats.keys())}")
 
-        # Test streaming performance - use a separate config with generous token budget
-        stream_config = AgentConfig(model=self.model, max_tokens=200, show_stats=True)
+        stream_config = AgentConfig(
+            model=self.model, max_tokens=ANSWER_BUDGET, show_stats=True
+        )
         stream_chat = AgentSDK(stream_config)
         chunk_count = 0
         total_chunks = 0

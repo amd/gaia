@@ -232,6 +232,16 @@ class TestBaseDependencies:
                 "`pip install amd-gaia` would ship a broken gaia-mcp entry point."
             )
 
+    def test_base_install_does_not_pull_in_pytorch(self):
+        """The core wheel stays torch-free: these drag in multi-GB PyTorch."""
+        base = _parse_setup_install_requires()
+        heavy = base & {"torch", "transformers", "accelerate"}
+        assert not heavy, (
+            f"setup.py install_requires contains {sorted(heavy)}, which pull "
+            "PyTorch into every `pip install amd-gaia`. Put them in the extra "
+            "that needs them."
+        )
+
 
 def _parse_extras_require_block():
     """Extract the raw text inside extras_require={...} from setup.py."""
@@ -273,6 +283,44 @@ class TestTalkExtra:
         floor = tuple(int(part) for part in floor_match.group(1).split("."))
         floor += (0,) * (3 - len(floor))
         assert floor >= (1, 58, 0)
+
+    def test_talk_carries_no_local_speech_runtime(self):
+        """Whisper and Kokoro run in Lemonade; a local copy drags in PyTorch."""
+        talk = _extra_names("talk")
+        local_runtime = talk & {
+            "torch",
+            "torchaudio",
+            "torchvision",
+            "openai-whisper",
+            "kokoro",
+            "misaki",
+            "spacy",
+            "transformers",
+            "tokenizers",
+            "soundfile",
+        }
+        assert not local_runtime, (
+            f"[talk] declares {sorted(local_runtime)}. `gaia talk` transcribes "
+            "and speaks through Lemonade (gaia.audio.whisper_asr / kokoro_tts); "
+            "a local model runtime is ~1 GB of PyTorch nobody uses."
+        )
+        assert "sounddevice" in talk, "[talk] needs sounddevice for the mic"
+
+    def test_audio_extra_is_gone(self):
+        """[audio] was torch/torchvision/torchaudio with no code importing them."""
+        assert '"audio":' not in _parse_extras_require_block()
+
+
+def _extra_names(extra: str) -> set:
+    """Lower-cased requirement names declared by one setup.py extra."""
+    match = re.search(
+        rf'"{extra}"\s*:\s*\[(.*?)\n\s*\],', _parse_extras_require_block(), re.DOTALL
+    )
+    assert match, f'Could not find "{extra}" extra in setup.py'
+    return {
+        re.split(r"[<>=!~;\[ ]", spec, maxsplit=1)[0].strip().lower()
+        for spec in re.findall(r'"([^"]+)"', match.group(1))
+    }
 
 
 class TestAgentWheelExtras:

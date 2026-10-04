@@ -147,6 +147,21 @@ class AgentSDK:
             self.config.system_prompt,
         )
 
+    def _warn_if_budget_exhausted(
+        self, text: Any, finish_reason: Any, max_tokens: Any
+    ) -> None:
+        """Name the cause when the token limit ended the reply before any answer."""
+        if finish_reason != "length" or (isinstance(text, str) and text.strip()):
+            return
+        self.log.warning(
+            "Model %s hit max_tokens=%s before writing any answer, so the reply "
+            "is empty (a reasoning model can spend the whole budget thinking — "
+            "see AgentResponse.reasoning). Raise max_tokens in AgentConfig or "
+            "pass max_tokens=... to this call.",
+            self.effective_model,
+            max_tokens,
+        )
+
     def _generate_conversation(
         self,
         full_prompt: str,
@@ -489,13 +504,17 @@ class AgentSDK:
 
             # Additive (#1891) — no extra call, just an attribute read.
             usage = self.llm_client.get_last_usage()
+            finish_reason = self.llm_client.get_last_finish_reason()
+            self._warn_if_budget_exhausted(
+                response, finish_reason, kwargs["max_tokens"]
+            )
 
             return AgentResponse(
                 text=response,
                 stats=stats,
                 usage=usage,
                 is_complete=True,
-                finish_reason=self.llm_client.get_last_finish_reason(),
+                finish_reason=finish_reason,
                 reasoning=self.llm_client.get_last_reasoning(),
             )
 
@@ -704,8 +723,18 @@ class AgentSDK:
                 else None
             )
 
+            finish_reason = self.llm_client.get_last_finish_reason()
+            self._warn_if_budget_exhausted(
+                response, finish_reason, generate_kwargs["max_tokens"]
+            )
+
             result = AgentResponse(
-                text=response, history=history, stats=stats, is_complete=True
+                text=response,
+                history=history,
+                stats=stats,
+                is_complete=True,
+                finish_reason=finish_reason,
+                reasoning=self.llm_client.get_last_reasoning(),
             )
             completed = True
             return result
@@ -791,7 +820,12 @@ class AgentSDK:
             )
 
             result = AgentResponse(
-                text="", history=history, stats=stats, is_complete=True
+                text="",
+                history=history,
+                stats=stats,
+                is_complete=True,
+                finish_reason=self.llm_client.get_last_finish_reason(),
+                reasoning=self.llm_client.get_last_reasoning(),
             )
             completed = True
             yield result

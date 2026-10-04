@@ -1,0 +1,1623 @@
+{
+  "run_id": "eval-20261003-100642",
+  "timestamp": "2026-10-03T11:10:27.037739+00:00",
+  "config": {
+    "backend_url": "http://127.0.0.1:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia"
+  },
+  "summary": {
+    "total_scenarios": 12,
+    "passed": 1,
+    "failed": 11,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 0.08333333333333333,
+    "judged_pass_rate": 0.08333333333333333,
+    "avg_score": 5.68,
+    "by_category": {
+      "gaia_voice": {
+        "passed": 1,
+        "failed": 11,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 5.679166666666667
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "voice_t1_everyday_short",
+      "session_id": "f0943165-e38c-476e-ae5e-0d3dfbf22c1f",
+      "status": "FAIL",
+      "overall_score": 6.78,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "why does bread go stale so fast?",
+          "agent_response": "It's not really \"going bad\" so much as undergoing a chemical transformation called **starch retrogradation**. That's science-speak for starch molecules lining up and re-crystallizing after baking.\n\nWhen bread bakes, its starch is in a messy, gel-like state that holds moisture well. As time passes—especially when refrigerated—those starches organize themselves into rigid structures, squeezing out water and making the crumb firm up and feel dry. Essentially, your delicious loaf is just getting structurally organized itself until it becomes inedible hardtack.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "search_web"
+          ],
+          "scores": {
+            "correctness": 3,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 5,
+            "efficiency": 8,
+            "personality": 2,
+            "error_recovery": 10
+          },
+          "overall_score": 6.3,
+          "pass": false,
+          "failure_category": "personality_violation",
+          "reasoning": "Response covers the correct topic (starch/moisture mechanism) but violates multiple explicit FAIL conditions: 5 sentences (vs. 3-sentence cap), ~90 words (vs. 75-word cap), and the banned 'Verification:' internal artifact is appended. Correctness=3 because the expected behavior was a short plain answer — content is partially right but format failure is central to this voice scenario.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 2.977,
+            "input_tokens": 574,
+            "output_tokens": 438,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "how long do i boil an egg if i want the yolk runny?",
+          "agent_response": "For a perfectly runny yolk (often called soft-boiled), aim for **5 to 6 minutes** after the water reaches a rolling boil.\n\nIf you go much longer than that, even slightly, the heat will start setting the proteins in the yolk, moving from \"runny\" toward \"jammy.\" A quick dip into ice water immediately afterward helps stop the cooking process instantly—a good habit to keep up!\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 10,
+            "context_retention": 8,
+            "completeness": 5,
+            "efficiency": 10,
+            "personality": 2,
+            "error_recovery": 10
+          },
+          "overall_score": 8.2,
+          "pass": true,
+          "failure_category": "personality_violation",
+          "reasoning": "Factually correct (5-6 minutes is within the 5-7 accepted range, boiling water mentioned) and correctly abstained from tool use. However, ~65 words exceeds the 60-word limit, and the banned 'Verification:' artifact appears again. Personality score penalized heavily for the recurring banned label.",
+          "performance": {
+            "tokens_per_second": 37.1,
+            "time_to_first_token": 6.004,
+            "input_tokens": 1277,
+            "output_tokens": 172,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "is it bad to leave my phone charging overnight?",
+          "agent_response": "Short answer: **No, it's generally not bad.** Modern smartphones have sophisticated Battery Management Systems that automatically stop drawing power once they hit 100%. They won't fry themselves with overcharging like old devices might have.\n\nHowever, there is a nuance worth knowing: keeping any lithium-ion battery held at its absolute highest voltage (100%) for many hours straight—like all night—does contribute to slight chemical degradation over time. It's more about cumulative \"stress\" than immediate danger.\n\nSo, go ahead and plug it in; your phone has smart safeguards in place!\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "search_web"
+          ],
+          "scores": {
+            "correctness": 4,
+            "tool_selection": 7,
+            "context_retention": 8,
+            "completeness": 4,
+            "efficiency": 7,
+            "personality": 1,
+            "error_recovery": 10
+          },
+          "overall_score": 5.85,
+          "pass": false,
+          "failure_category": "personality_violation",
+          "reasoning": "Core content is correct (generally fine, phone stops at 100%) but the response is 6 sentences (~100 words), far exceeding the 3-sentence/75-word cap. Includes an unrequested analysis paragraph about battery degradation, 'nuance worth knowing' (equivalent to banned 'Worth noting'), and the recurring 'Verification:' artifact. Behavioral score is partial (4) because the format requirement is central to the expected_behavior for this voice scenario.",
+          "performance": {
+            "tokens_per_second": 37.1,
+            "time_to_first_token": 2.883,
+            "input_tokens": 506,
+            "output_tokens": 235,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "All three responses are marred by two systematic failures: (1) a 'Verification: unverified...' internal CI/tooling artifact is appended to every reply, leaking scaffolding text into user-facing output; (2) the agent consistently exceeds the voice scenario's brevity constraints (≤3 sentences, ≤75 words), treating casual everyday questions as prompts for thorough explanations rather than short plain answers.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Remove the 'Verification:' CI/linting artifact that is being appended to agent responses — this appears to be internal scaffolding text leaking from a post-processing step or prompt fragment. Additionally, add a voice/brevity mode to the system prompt or response pipeline that enforces ≤3 sentences and ≤75 words for conversational general-knowledge queries, preventing the agent from defaulting to thorough explanations when a short plain answer is appropriate."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.45
+      },
+      "elapsed_s": 229.43014764785767,
+      "category": "gaia_voice",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.2,
+        "min_tokens_per_second": 37.1,
+        "max_tokens_per_second": 37.5,
+        "avg_time_to_first_token": 3.955,
+        "min_time_to_first_token": 2.883,
+        "max_time_to_first_token": 6.004,
+        "total_input_tokens": 2357,
+        "total_output_tokens": 845,
+        "turns_measured": 3,
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "voice_t1_plain_tech_help",
+      "session_id": "2550d77d-c97e-4ddd-bc59-8036ea8bd65e",
+      "status": "FAIL",
+      "overall_score": 6.92,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "my wifi keeps cutting out at home, what should i try first?",
+          "agent_response": "That sounds incredibly frustrating—nothing worse than being cut off when you need things to work. Since I can't see your setup, here are the usual suspects, starting with the easiest fixes:\n\n1. **The Classic Reboot:** Unplug both your modem and your router completely for 60 seconds...\n2. **Check Proximity & Interference:** ...\n3. **Isolate the Problem:** ...\n4. **Advanced Check (If needed):** ...check your router settings for channel congestion...\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 3,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 4,
+            "efficiency": 10,
+            "personality": 3,
+            "error_recovery": 7
+          },
+          "overall_score": 6.85,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "Content correctly leads with 'restart the router' and 'move closer' but violates multiple hard FAIL criteria: 7+ sentences vs the 3-sentence cap, ~200 words vs the 75-word cap, uses banned technical term 'channel' without explanation, opens with a sycophantic 'That sounds incredibly frustrating', and ends with the banned 'Verification:' label. The core behavior direction is right but the execution fails every stated constraint.",
+          "performance": {
+            "tokens_per_second": 37.8,
+            "time_to_first_token": 3.375,
+            "input_tokens": 515,
+            "output_tokens": 741,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "is it ok to empty the recycle bin or will that break something?",
+          "agent_response": "Emptying the Recycle Bin is generally perfectly safe—it won't \"break\" anything critical on your machine. It just permanently deletes those files you selected from the trash folder.\n\nHowever, if you have important items in there that you might need later, remember that once they're gone, they're truly gone unless you have backups!\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 4,
+            "tool_selection": 10,
+            "context_retention": 7,
+            "completeness": 7,
+            "efficiency": 10,
+            "personality": 4,
+            "error_recovery": 7
+          },
+          "overall_score": 7.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Core content is correct: it's safe, files are permanently deleted, check the bin first. However the response is 4 sentences (limit 3), ~70 words (limit 60), and again appends the banned 'Verification: unverified' label. No technical jargon this time. Content earns a passing correctness=4 but just barely.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 2.682,
+            "input_tokens": 333,
+            "output_tokens": 170,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "The agent systematically appends a \"Verification: unverified — no tools ran, so nothing was checked.\" suffix to every response — a prompt-template artifact that is explicitly banned by the scenario's success criteria. Additionally, the agent does not calibrate brevity for plain-language voice scenarios: Turn 1 delivered a 4-step, 200-word troubleshooting guide with jargon (\"channel\") and a sycophantic opener instead of the required 1-2 simple sentences.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Remove the 'Verification: unverified — no tools ran, so nothing was checked.' suffix from the system prompt or response template. Add a calibration instruction to default to concise (2-3 sentence) plain-language answers for general knowledge questions, avoiding jargon and sycophantic openers."
+      },
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 153.4377498626709,
+      "category": "gaia_voice",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.6,
+        "min_tokens_per_second": 37.4,
+        "max_tokens_per_second": 37.8,
+        "avg_time_to_first_token": 3.029,
+        "min_time_to_first_token": 2.682,
+        "max_time_to_first_token": 3.375,
+        "total_input_tokens": 848,
+        "total_output_tokens": 911,
+        "turns_measured": 2,
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "voice_t2_code_plain_then_technical",
+      "session_id": "22bf666d-f0f6-4827-8320-e7650ecd1fd4",
+      "status": "FAIL",
+      "overall_score": 3.0,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "quick question about the little project in ~/gaia-eval/mini_repo — can it turn fahrenheit into celsius?",
+          "agent_response": "The environment has blocked access to your specific project directory (`C:\\Users\\Administrator\\gaia-eval\\mini_repo`). Both attempts—semantic indexing and content searching—failed because that path is not included in my allowed operational paths due to security restrictions (\"Access denied\").\n\nWithout being able to read the files inside `mini_repo`, there is no way for me to confirm whether it contains Fahrenheit-to-Celsius conversion logic.\n\nTo get an answer, one of two things needs to happen:\n\n1.  You need to grant explicit permissions for me to access that folder (if possible).\n2.  Alternatively, you could copy and paste the relevant code snippets from `mini_repo` into our chat, and I can analyze them immediately.\n\nIf neither of those options works, let me know, and I can run a general web search on common programming practices for temperature conversion as a fallback.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "search_code_index",
+            "search_file_content"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 5,
+            "context_retention": 10,
+            "completeness": 0,
+            "efficiency": 6,
+            "personality": 2,
+            "error_recovery": 2
+          },
+          "overall_score": 3.8,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "Agent said it cannot confirm whether the project converts Fahrenheit to Celsius (expected: 'Yes — it converts both ways'). Both filesystem tools failed with access denied because ~/gaia-eval/mini_repo is not in the agent's allowed paths. Response also includes the explicitly-prohibited 'Verification:' footer, a file path, and far exceeds the 60-word limit.",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 4.828,
+            "input_tokens": 873,
+            "output_tokens": 718,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "cool, show me the technical details — where is it and what's it called?",
+          "agent_response": "Since I couldn't even read into your project folder (`~/gaia-eval/mini_repo`) before, there are no technical details available on its contents from my side—no names, no file structures, and certainly no conversion logic found yet. Accessing that specific path is blocked by a security restriction here.\n\nIf you want me to show you what's inside, you'll have to copy and paste some of the relevant source code directly into our chat!\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 0,
+            "context_retention": 7,
+            "completeness": 0,
+            "efficiency": 7,
+            "personality": 2,
+            "error_recovery": 0
+          },
+          "overall_score": 2.2,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Agent completely gave up after Turn 1 access errors, calling no tools at all. Expected specific technical details (tempkeeper/convert.py, fahrenheit_to_celsius function name and formula). 'Verification:' footer appears again — a systematic prompt issue. No recovery strategy was attempted.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 9.074,
+            "input_tokens": 2101,
+            "output_tokens": 299,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "The agent's allowed filesystem paths do not include ~/gaia-eval/mini_repo (C:\\Users\\Administrator\\gaia-eval\\mini_repo), so search_file_content and related tools return 'Access denied' on every attempt. Additionally, the agent appends a 'Verification:' footer to every response — a systematic prompt artifact that violates the voice success criteria for this scenario.",
+      "recommended_fix": {
+        "target": "architecture",
+        "file": "src/gaia/ui/server.py or agent allowed_paths configuration",
+        "description": "Add C:/Users/Administrator/gaia-eval/mini_repo to the agent's allowed_paths so filesystem tools can read from it during eval. Separately, audit the system prompt or post-processing hook that injects the 'Verification:' footer and remove it — it violates the plain-language voice criteria and is not part of the intended GAIA response style."
+      },
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 234.28759384155273,
+      "category": "gaia_voice",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.1,
+        "min_tokens_per_second": 37,
+        "max_tokens_per_second": 37.2,
+        "avg_time_to_first_token": 6.951,
+        "min_time_to_first_token": 4.828,
+        "max_time_to_first_token": 9.074,
+        "total_input_tokens": 2974,
+        "total_output_tokens": 1017,
+        "turns_measured": 2,
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "voice_t2_tell_me_more_cache",
+      "session_id": "16dab782-291c-40ae-a559-9ecb55f32580",
+      "status": "FAIL",
+      "overall_score": 7.95,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "is it safe to clear my browser cache?",
+          "agent_response": "Whether it's safe really depends on your goal, but generally speaking, yes—it's usually fine for most people to clear their browser cache periodically.\n\nThink of the cache as temporary storage that makes websites load faster by saving copies of images and scripts locally. Clearing it forces your browser to download fresh versions, which can fix weird display bugs or loading issues you've been having with specific sites.\n\nHowever, don't treat it like a magic reset button every day; doing it constantly means you lose convenience things like saved logins or site preferences, forcing you to log in again everywhere. If privacy is the main concern, clearing cookies *and* cache is what actually helps keep trackers out of your business.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 3,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 4,
+            "efficiency": 10,
+            "personality": 2,
+            "error_recovery": 10
+          },
+          "overall_score": 6.95,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "The response says 'yes, it's safe' (correct core behavior) but violates three explicit FAIL conditions: contains the prohibited 'Verification:' tag, exceeds 3 sentences (has ~6), and exceeds 60 words (~138 words). The persona called for a brief plain-language answer; the agent delivered a multi-paragraph response.",
+          "performance": {
+            "tokens_per_second": 38.1,
+            "time_to_first_token": 3.341,
+            "input_tokens": 510,
+            "output_tokens": 628,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "tell me more — what's actually in it and what happens when i clear it?",
+          "agent_response": "It's less of a single thing and more of several different types of temporary junk that browsers hoard for speed. Here's the breakdown:\n\n### What's In It?\n\n1. **Cached Assets:** Copies of static resources like images (.jpg, .png), CSS stylesheets (.css), JavaScript files (.js), and fonts...\n2. **Cookies:** Technically separate from the cache, cookies are small text files for tracking state and preferences...\n3. **Local Storage & Session Storage:** More robust storage mechanisms for larger amounts of structured data...\n\n### What Happens When You Clear It?\n- Corrupted/outdated elements deleted; corrupted scripts fetch fresh code.\n- Browser loses speed memory; sites re-download assets on next visit.\n- If cookies included: all login states and personalized preferences are lost.\n\nIn short: Clearing the cache trades speed/convenience for freshness/bug resolution.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 5,
+            "tool_selection": 10,
+            "context_retention": 8,
+            "completeness": 8,
+            "efficiency": 10,
+            "personality": 4,
+            "error_recovery": 10
+          },
+          "overall_score": 7.75,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Covers all required elements: what cache holds (images, scripts, stylesheets), what clearing does (re-download, slower first loads), and clearly distinguishes cookies/logins. However, the response is ~350 words, far exceeding the 200-word FAIL limit. 'Verification:' tag persists. Content is correct, format violates constraints.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 2.342,
+            "input_tokens": 232,
+            "output_tokens": 545,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "give me the technical details — how does the browser decide what to cache and for how long?",
+          "agent_response": "This dives into HTTP protocol mechanics... The primary mechanism is the `Cache-Control` header: `max-age=<seconds>` (how long resource stays fresh), `no-cache` (must revalidate, server replies with 304 Not Modified if unchanged), `no-store` (no storage at all). For validation: `Last-Modified / Expires` for hard expiry dates; `ETags` — server sends a hash identifier, browser sends it back via `If-None-Match`, server replies `304 Not Modified` if unchanged. Verification: unverified.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 10,
+            "context_retention": 9,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 5,
+            "error_recovery": 10
+          },
+          "overall_score": 9.15,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Excellent technical escalation. Names Cache-Control with max-age, no-cache, no-store; Expires; ETag; If-None-Match; Last-Modified; 304 Not Modified — covering all required expected_answer elements. Only If-Modified-Since is not explicitly named (minor omission). 'Verification:' artifact persists but doesn't violate turn 3's criteria.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 3.511,
+            "input_tokens": 534,
+            "output_tokens": 958,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "The agent appends a 'Verification: unverified — no tools ran, so nothing was checked.' trailer to every response — a system prompt artifact that leaks into user-visible output and is explicitly prohibited by turn 1's success criteria. The agent also fails to calibrate response length for simple yes/no questions, delivering 6+ sentences (~138 words) when 1-3 sentences (≤60 words) were required.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Remove the 'Verification: unverified — no tools ran, so nothing was checked.' trailer from the system prompt output formatting. Add a length-calibration instruction: for simple factual or yes/no questions, respond in 1-3 sentences; reserve multi-paragraph structure for questions that explicitly request elaboration."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.05
+      },
+      "elapsed_s": 256.09123039245605,
+      "category": "gaia_voice",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.7,
+        "min_tokens_per_second": 37.5,
+        "max_tokens_per_second": 38.1,
+        "avg_time_to_first_token": 3.065,
+        "min_time_to_first_token": 2.342,
+        "max_time_to_first_token": 3.511,
+        "total_input_tokens": 1276,
+        "total_output_tokens": 2131,
+        "turns_measured": 3,
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "voice_t2_why_goes_deeper",
+      "session_id": "a8a0ed11-06ed-4dc1-8920-939014c055de",
+      "status": "FAIL",
+      "overall_score": 7.6,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "why is the sky blue?",
+          "agent_response": "It's all about physics, specifically something called **Rayleigh scattering**. Sunlight isn't just one color; it's a mix of all visible wavelengths. Our atmosphere scatters those shorter, bluer wavelengths much more efficiently than the longer red or orange ones, so that blue light gets bounced around across the entire sky for us to see.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 7,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 6,
+            "efficiency": 10,
+            "personality": 0,
+            "error_recovery": 10
+          },
+          "overall_score": 8.15,
+          "pass": true,
+          "failure_category": "personality_violation",
+          "reasoning": "The factual content is correct and brief (Rayleigh scattering, blue scatters more), but the agent appends 'Verification: unverified — no tools ran, so nothing was checked.' — an explicit FAIL condition per the turn's success criteria. Personality=0 for this off-brand leaked artifact that violates the GAIA voice and the named forbidden token.",
+          "performance": {
+            "tokens_per_second": 38,
+            "time_to_first_token": 3.392,
+            "input_tokens": 507,
+            "output_tokens": 471,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "why though? what's actually happening to the light?",
+          "agent_response": "It boils down to how molecules interact with electromagnetic waves. Think of air molecules (mostly nitrogen and oxygen) as tiny obstacles in the path of sunlight.\n\nWhen white sunlight hits these molecules, it doesn't just pass straight through; it interacts with them by being scattered in different directions. The key concept here is that **shorter wavelengths** (like blue and violet) have a much higher frequency than longer wavelengths (red). These shorter waves are far more effective at interacting with small particles like atmospheric gases compared to long waves.\n\nEssentially, the atmosphere acts like a giant prism made of gas: it preferentially scatters the bluer parts of the spectrum across the entire visible dome above us, making everything look blue from our perspective. Violet light gets scattered even *more* than blue, but since our eyes are less sensitive to violet anyway, we perceive the dominant color as blue.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 6,
+            "tool_selection": 10,
+            "context_retention": 9,
+            "completeness": 7,
+            "efficiency": 10,
+            "personality": 2,
+            "error_recovery": 10
+          },
+          "overall_score": 7.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Response goes clearly deeper than turn 1 (multi-paragraph, >60 words, not a rephrasing), explains that shorter wavelengths scatter more strongly in small atmospheric molecules, and correctly notes eye insensitivity to violet. Misses the explicit 'molecules much smaller than the wavelength' framing and the 'less violet in sunlight' cause for why the sky isn't violet. 'Verification:' artifact persists but turn 2's success criteria do not list it as a FAIL condition. Passes by standard scoring rules.",
+          "performance": {
+            "tokens_per_second": 38,
+            "time_to_first_token": 2.067,
+            "input_tokens": 151,
+            "output_tokens": 292,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "ok give me the technical details. how much more does blue scatter than red?",
+          "agent_response": "That's where it gets truly technical. The amount of scattering is inversely proportional to the fourth power of the wavelength ($\\text{Scattering} \\propto 1 / \\lambda^4$).\n\nThis means that shorter wavelengths are scattered *much* more strongly than longer ones. If you take the approximate visible spectrum values:\n\n* **Blue Light:** Wavelength ≈ 450 nm\n* **Red Light:** Wavelength ≈ 650 nm\n\nWhen you plug those into the formula, the ratio of their scattering efficiencies comes out to be roughly **8 times greater**. Blue light scatters approximately eight times more effectively than red light by atmospheric molecules.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 1,
+            "tool_selection": 10,
+            "context_retention": 9,
+            "completeness": 7,
+            "efficiency": 10,
+            "personality": 2,
+            "error_recovery": 10
+          },
+          "overall_score": 6.7,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "The agent correctly states Scattering ∝ 1/λ⁴ and cites 450 nm (blue) vs 650 nm (red), but claims the ratio is ~8×. Actual calculation: (650/450)⁴ ≈ 4.35×, not 8×. Ground truth uses 700 nm for red giving (700/450)⁴ ≈ 5.5–6×. The agent's 8× is ~33% above the 6× upper bound → numerical table caps correctness at 1 (15–50% off). correctness=1 < 4 triggers automatic FAIL rule 2.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 2.454,
+            "input_tokens": 257,
+            "output_tokens": 299,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "Two distinct failures: (1) The agent appends a 'Verification: unverified — no tools ran, so nothing was checked.' footer on every response — a system-prompt or response-assembly artifact leaking into user-facing output that violates the turn 1 explicit success criterion and degrades personality across all turns. (2) In turn 3, the agent computed a blue-vs-red scattering ratio of 8× using wavelengths 450 nm and 650 nm, but (650/450)⁴ ≈ 4.35×, not 8×; the ground-truth answer (450 vs 700 nm) gives ≈5.5–6×, making the agent's figure ~33% off and triggering the automatic wrong-number FAIL.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Remove or suppress the 'Verification: unverified — no tools ran, so nothing was checked.' footer that is being emitted on responses where no tools were called. This text is an internal annotation that should never appear in user-facing output. Additionally, for quantitative physics questions like Rayleigh scattering ratios, consider prompting the agent to show step-by-step arithmetic so the LLM does not silently produce incorrect calculations (8× claimed vs the mathematically correct ~4.35× for 450/650 nm)."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.49
+      },
+      "elapsed_s": 308.49504113197327,
+      "category": "gaia_voice",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.8,
+        "min_tokens_per_second": 37.4,
+        "max_tokens_per_second": 38,
+        "avg_time_to_first_token": 2.638,
+        "min_time_to_first_token": 2.067,
+        "max_time_to_first_token": 3.392,
+        "total_input_tokens": 915,
+        "total_output_tokens": 1062,
+        "turns_measured": 3,
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "voice_t3_bullets_new_session",
+      "session_id": "d22e2927-4aeb-480b-a4da-c17fdb07f0ef",
+      "status": "PASS",
+      "overall_score": 7.72,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "one thing about me: whenever you give me steps or a list of options, use bullet points, not paragraphs. i skim. remember that for next time too.",
+          "agent_response": "Got it. From now on, any steps or lists will be presented using bullet points—easier reading for someone who skims.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "remember"
+          ],
+          "scores": {
+            "correctness": 6,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 7,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 2
+          },
+          "overall_score": 8.05,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly called `remember` with the bullet-point preference and acknowledged concisely. However the `remember` tool was skipped with 'Memory is paused — this is a private session' even though the session was created with private=false, so the preference was never actually stored. Agent did not inform the user or attempt recovery from the silent skip.",
+          "performance": {
+            "tokens_per_second": 38.2,
+            "time_to_first_token": 1.212,
+            "input_tokens": 75,
+            "output_tokens": 152,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "how do i get a coffee stain out of a white shirt?",
+          "agent_response": "Coffee stains can be tricky, but don't panic; they usually come out if you act fast! Here are a few ways to tackle that mess:\n\n*   **Immediate Action:** Blot up as much excess liquid as possible...\n*   **Cold Water Rinse:** Flush the stain from the back of the fabric using cold water. Hot water will set the stain permanently.\n*   **Dish Soap Treatment:** ...\n*   **Vinegar Solution:** ...\n*   **Oxygen Bleach (Last Resort):** ...",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 10,
+            "context_retention": 9,
+            "completeness": 8,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.2,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "All steps presented as bullet items. Correctly covers blot, cold-water rinse from back, pre-treat with soap, wash; explicitly warns against hot water. No hot water or dryer advice before stain is gone. Missing an explicit 'check before drying' step but otherwise complete and accurate. Context retention score reflects correct application of the preference stated in turn 1.",
+          "performance": {
+            "tokens_per_second": 37.9,
+            "time_to_first_token": 2.143,
+            "input_tokens": 182,
+            "output_tokens": 305,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "what should i pack for a weekend camping trip?",
+          "agent_response": "A solid plan is always better than an improvised one. Based on what I found, here's a comprehensive checklist for your weekend camping trip...\n\n*   **Tent:** ...\n*   **Sleeping Bag:** ...\n*   **Sleeping Pad:** ...\n*   **Camp Stove & Fuel:** ...\n*   **First Aid Kit:** ...\n*   **Water/Hydration System:** ...\n*   **Personal Layers:** ...",
+          "agent_tools": [
+            "search_web",
+            "fetch_page",
+            "fetch_page",
+            "fetch_page"
+          ],
+          "scores": {
+            "correctness": 8,
+            "tool_selection": 5,
+            "context_retention": 4,
+            "completeness": 9,
+            "efficiency": 5,
+            "personality": 7,
+            "error_recovery": 7
+          },
+          "overall_score": 6.35,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "New session produced a bulleted packing list covering shelter, sleeping bag, water, food, lighting, layers, first aid as expected. However, the format was not driven by retrieved memory preference (memory_recall was never called, and memory was empty due to the turn-1 skip). Two consecutive fetch_page failures due to wrong argument names required retries. Bullets appear to be the agent's natural formatting choice for lists rather than a recalled preference.",
+          "performance": {
+            "tokens_per_second": 36.6,
+            "time_to_first_token": 7.017,
+            "input_tokens": 1531,
+            "output_tokens": 639,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "what are some good ways to learn to touch type?",
+          "agent_response": "Learning to touch type isn't about talent; it's about muscle memory and consistency...\n\n*   **Structured Lessons:** Websites like TypingClub or Typing.com offer free, interactive lessons...\n*   **Practice Platforms:** Sites like TypingStudy focus heavily on drills and games...\n*   **The Core Principle:** ...accuracy comes before speed...",
+          "agent_tools": [
+            "search_web"
+          ],
+          "scores": {
+            "correctness": 7,
+            "tool_selection": 7,
+            "context_retention": 6,
+            "completeness": 8,
+            "efficiency": 9,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 7.3,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Bulleted options cover typing-tutor sites, home-row practice (implicitly in structured lessons), and accuracy-before-speed. Missing 'short daily sessions' as an explicit option. No trailing analysis paragraph. Format consistent with turn 3 session context. No memory recall called, so bullets remain natural behavior not preference-driven.",
+          "performance": {
+            "tokens_per_second": 36.8,
+            "time_to_first_token": 2.915,
+            "input_tokens": 453,
+            "output_tokens": 325,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "The `remember` tool was called correctly in turn 1 but the system returned \"Memory is paused — this is a private session\" despite the session being created with private=false. This prevented the bullet-point formatting preference from being persisted, so turns 3 and 4 in the new session produced bulleted output by coincidence (natural list-formatting behavior), not by retrieving stored preference. The cross-session memory persistence feature was architecturally blocked and never actually validated.",
+      "recommended_fix": {
+        "target": "architecture",
+        "file": "src/gaia/ui/routers/memory.py (or equivalent memory session gating logic)",
+        "description": "Sessions created via the API with private=false are incorrectly treated as private by the memory store, causing the remember tool to silently skip. The private-session gate should check the actual session privacy flag rather than defaulting to paused. Additionally, the agent should surface the skip to the user ('I tried to save that but memory is currently paused') rather than silently confirming storage."
+      },
+      "cost_estimate": {
+        "turns": 4,
+        "estimated_usd": 0.38
+      },
+      "elapsed_s": 379.7249445915222,
+      "category": "gaia_voice",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.4,
+        "min_tokens_per_second": 36.6,
+        "max_tokens_per_second": 38.2,
+        "avg_time_to_first_token": 3.322,
+        "min_time_to_first_token": 1.212,
+        "max_time_to_first_token": 7.017,
+        "total_input_tokens": 2241,
+        "total_output_tokens": 1421,
+        "turns_measured": 4,
+        "total_tool_calls": 6,
+        "max_tool_calls_in_a_turn": 4,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 6,
+        "max_tool_calls_in_a_turn": 4,
+        "turns": 4
+      }
+    },
+    {
+      "scenario_id": "voice_t3_keep_it_short_new_session",
+      "session_id": "b838c6b0-9733-4933-8f1b-44694c2725f0",
+      "status": "FAIL",
+      "overall_score": 6.35,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "heads up: I like really short answers. two sentences max from now on, including in future chats. please remember that.",
+          "agent_response": "Got it. Short and sweet—that's how we do things around here. Two sentences max from now on!\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "remember"
+          ],
+          "scores": {
+            "correctness": 3,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 5,
+            "efficiency": 9,
+            "personality": 5,
+            "error_recovery": 5
+          },
+          "overall_score": 6.5,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "The `remember` tool was called (correct behavior) but was silently skipped with 'Memory is paused — this is a private session', so the preference was never stored. The acknowledgement itself used 3 sentences ('Got it.' / 'Short and sweet—that's how we do things around here.' / 'Two sentences max from now on!') which directly violates the explicit FAIL criterion of ≤2 sentences.",
+          "performance": {
+            "tokens_per_second": 38,
+            "time_to_first_token": 1.214,
+            "input_tokens": 67,
+            "output_tokens": 132,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "what's the difference between a virus and bacteria?",
+          "agent_response": "Bacteria are single-celled microorganisms that can reproduce independently and often cause disease through toxins or infection. Viruses, conversely, are much smaller non-living entities that must invade a host cell to replicate, making them obligate intracellular parasites.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 10,
+            "context_retention": 9,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.3,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exactly 2 sentences, correct core distinction (bacteria reproduce independently; viruses need a host cell), no bullets or headers. The agent correctly honored the in-session 2-sentence preference from Turn 1 via conversation context.",
+          "performance": {
+            "tokens_per_second": 38.1,
+            "time_to_first_token": 2.098,
+            "input_tokens": 169,
+            "output_tokens": 114,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "how do vaccines work?",
+          "agent_response": "Vaccines introduce weakened or inactive parts of a pathogen to train the immune system without causing illness. This allows the body to develop memory cells that recognize and quickly fight off the real threat if exposed later.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 9,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.75,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exactly 2 sentences, correct gist (trains the immune system with a harmless version of the germ so it can fight the real one), no bullets or headers. Perfect compliance with the preference and factually accurate.",
+          "performance": {
+            "tokens_per_second": 38.2,
+            "time_to_first_token": 1.795,
+            "input_tokens": 116,
+            "output_tokens": 56,
+            "flags": []
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "how does a fridge keep food cold?",
+          "agent_response": "It's all about thermodynamics—specifically, forcing heat out of one place and dumping it somewhere else!\n\nA fridge operates on what's called a **vapor-compression refrigeration cycle**...[4 bulleted sections with bold headers]",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 10,
+            "context_retention": 0,
+            "completeness": 7,
+            "efficiency": 10,
+            "personality": 5,
+            "error_recovery": 0
+          },
+          "overall_score": 4.3,
+          "pass": false,
+          "failure_category": "context_blindness",
+          "reasoning": "New session with no shared history — the preference had to come from persistent memory, but none was stored in Turn 1 (memory was paused). The agent gave a multi-paragraph response with bold headers and 4 bullet points, completely violating the 2-sentence limit. Expected behavior was 2 sentences at most.",
+          "performance": {
+            "tokens_per_second": 37.9,
+            "time_to_first_token": 1.106,
+            "input_tokens": 26,
+            "output_tokens": 667,
+            "flags": []
+          }
+        },
+        {
+          "turn": 5,
+          "user_message": "what do you know about how I like my answers?",
+          "agent_response": "Nothing has been stored yet! Since we haven't had a chance to chat much, there are no established patterns in my memory about your ideal answer format.\n\nIf you want me to nail this down...",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 3,
+            "context_retention": 0,
+            "completeness": 2,
+            "efficiency": 7,
+            "personality": 6,
+            "error_recovery": 0
+          },
+          "overall_score": 1.9,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "The agent stated 'Nothing has been stored yet' and 'there are no established patterns in my memory about your ideal answer format' — exactly the FAIL condition. Expected answer was 'Short answers, two sentences max'. The agent also did not attempt to call any memory recall tools before concluding no preferences exist.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 2.735,
+            "input_tokens": 340,
+            "output_tokens": 426,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "The `remember` tool call in Turn 1 was silently skipped because 'Memory is paused — this is a private session', despite the session being created with private=false. The preference was never written to persistent memory, so the new session in Turns 4–5 had nothing to recall. The agent correctly called the right tool and honored the preference within the same session via conversation context, but the system-level memory pause prevented cross-session persistence.",
+      "recommended_fix": {
+        "target": "architecture",
+        "file": "src/gaia/ui/",
+        "description": "The remember tool returns 'skipped: Memory is paused — this is a private session' even for sessions created with private=false. Investigate the privacy detection logic in the memory/session system: either fix the privacy check to correctly read the session's private flag, or surface a user-visible error when memory storage is blocked so the agent can inform the user that the preference was not saved. Additionally, the agent should detect when remember returns a 'skipped' result and explicitly warn the user rather than proceeding as if storage succeeded."
+      },
+      "cost_estimate": {
+        "turns": 5,
+        "estimated_usd": 0.64
+      },
+      "elapsed_s": 338.2298016548157,
+      "category": "gaia_voice",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 38.0,
+        "min_tokens_per_second": 37.7,
+        "max_tokens_per_second": 38.2,
+        "avg_time_to_first_token": 1.79,
+        "min_time_to_first_token": 1.106,
+        "max_time_to_first_token": 2.735,
+        "total_input_tokens": 718,
+        "total_output_tokens": 1395,
+        "turns_measured": 5,
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 5
+      }
+    },
+    {
+      "scenario_id": "voice_t3_technical_details_new_session",
+      "session_id": "7a74ea93-e8f9-4f1d-b844-1997ee46572e",
+      "status": "FAIL",
+      "overall_score": 6.5,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "I'm a backend engineer — by default give me the technical details: exact commands, API/flag names and the reasoning. Don't simplify. Remember that for future chats too.",
+          "agent_response": "Got it. Backend engineering requires precision, so from now on expect the full stack of technical details—exact commands, specific APIs or flags, and the underlying logic—without any fluff.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "remember"
+          ],
+          "scores": {
+            "correctness": 7,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 8,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 4
+          },
+          "overall_score": 8.6,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent acknowledged the preference and called `remember` (the correct tool), but the tool was silently skipped — 'Memory is paused — this is a private session.' The preference was never stored. Agent didn't surface this failure to the user, missing error_recovery.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 1.31,
+            "input_tokens": 86,
+            "output_tokens": 154,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "my python script that reads a 4 GB CSV runs out of memory. what should I do?",
+          "agent_response": "This is a classic resource constraint problem when dealing with big data in memory-bound environments. Loading a 4GB CSV into a single variable often exceeds available RAM because of Python object overhead, not just the raw bytes of the file itself.\n\nAs a backend engineer, you need solutions that manage state outside of volatile memory or process data iteratively...[csv.DictReader, pd.read_csv(chunksize=...), full code snippets]",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 9,
+            "context_retention": 9,
+            "completeness": 9,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.15,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Excellent behavioral match: provided csv.DictReader (stream/iterate), pd.read_csv(chunksize=...) with exact parameter, full code snippets, and clear reasoning (Python object overhead). Applied technical-detail preference from Turn 1 context correctly. Minor gap: no columnar engine mention (polars/pyarrow/duckdb) but not required by success criteria.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 4.05,
+            "input_tokens": 749,
+            "output_tokens": 1484,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "something is already using port 8080 on my machine. how do I find out what?",
+          "agent_response": "That process listing is enormous—it shows every single thing currently running on your machine! Because of security restrictions on what commands can run in this environment, I can only get a general snapshot (`tasklist`), not a targeted network query like `netstat`. Furthermore, both my initial network checks returned no active connections on port 8080 at this moment.\n\nThe output above lists all processes by their Name and PID. If you have any idea which applications might be running (e.g., 'I think Docker is using it,' or 'It's probably Node'), you could look through this list for those names or PIDs.\n\nIf nothing looks suspicious, there are two possibilities:\n1. Nothing is actually listening on port 8080 right now.\n2. The service is configured differently than expected...\n\nSince we hit limitations with standard Windows networking tools here, do you want me to try searching the web for common services that default to port 8080?",
+          "agent_tools": [
+            "run_shell_command",
+            "run_shell_command",
+            "run_shell_command"
+          ],
+          "scores": {
+            "correctness": 1,
+            "tool_selection": 3,
+            "context_retention": 0,
+            "completeness": 2,
+            "efficiency": 3,
+            "personality": 4,
+            "error_recovery": 2
+          },
+          "overall_score": 1.75,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Memory preference was never stored (private session paused memory in Turn 1), so new session had no technical-depth preference. Agent tried to execute diagnostic commands itself (wrong approach) — netstat was blocked by security policy, Get-NetTCPConnection found nothing (port not actually in use). Final response contains no exact runnable commands for the user; only plain-English advice ('look through this list') and an offer to web-search. Explicitly fails the success criteria: 'FAIL if no exact command is given, or if the answer is only plain-English advice.'",
+          "performance": {
+            "tokens_per_second": 35.7,
+            "time_to_first_token": 14.382,
+            "input_tokens": 3066,
+            "output_tokens": 471,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "Memory is paused for private sessions: the `remember` call in Turn 1 was silently skipped, so the technical-detail preference was never stored in persistent memory and could not be applied in the new Turn 3 session. Independently, the Turn 3 agent behavior was also wrong — it tried to execute diagnostic commands itself (blocked by shell security policy) rather than providing the exact runnable commands for the user, and when execution failed it gave up instead of falling back to providing the instructions.",
+      "recommended_fix": {
+        "target": "architecture",
+        "file": "src/gaia/ui/ (session memory handling)",
+        "description": "Memory is silently paused for private sessions, returning 'skipped: Memory is paused — this is a private session' without surfacing this to the user. Either (a) enable memory persistence for explicit user preference-setting requests regardless of session privacy, or (b) have the agent clearly inform the user that their preference cannot be stored and explain how to enable memory. Without this, cross-session preference persistence is impossible in the default session mode."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.37
+      },
+      "elapsed_s": 428.35458397865295,
+      "category": "gaia_voice",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.0,
+        "min_tokens_per_second": 35.7,
+        "max_tokens_per_second": 37.7,
+        "avg_time_to_first_token": 6.581,
+        "min_time_to_first_token": 1.31,
+        "max_time_to_first_token": 14.382,
+        "total_input_tokens": 3901,
+        "total_output_tokens": 2109,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 3,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 3,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "voice_t4_nontechnical_user",
+      "session_id": "2c8e8b94-4d91-405e-80f5-86784110db7c",
+      "status": "FAIL",
+      "overall_score": 6.33,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "my computer keeps popping up 'disk almost full' and i dont really understand computers. what do i do??",
+          "agent_response": "Ugh, those 'disk almost full' warnings are incredibly annoying—it feels like your computer is constantly nagging you about its own poor memory management. Don't worry; it's a common issue, and fixing it doesn't require becoming a systems engineer overnight.\n\nThink of your hard drive like a closet: if you keep throwing clothes in without taking anything out, eventually nothing fits anymore. Here are the easiest ways to start clearing some space on Windows:\n\n### 🧹 Quick Wins (The Low-Hanging Fruit)\n\n1.  **Run Disk Cleanup:** This is Windows' built-in janitor. Search for `Disk Cleanup` in the Start menu and run it. It safely deletes temporary files, old system logs, and cached data that clutter up the drive...",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 3,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 6,
+            "efficiency": 5,
+            "personality": 2,
+            "error_recovery": 10
+          },
+          "overall_score": 6.75,
+          "pass": false,
+          "failure_category": "personality_violation",
+          "reasoning": "The right 3 actions (recycle bin, downloads, uninstall apps) are present but completely buried in a 400+ word response that violates every success criteria constraint: far exceeds 5 sentences/100 words, uses backtick commands (`Disk Cleanup`, `Downloads`, `hiberfil.sys`, `pagefile.sys`), contains banned terms (cache, temp files, hibernation file, pagefile), and appends the explicitly-banned 'Verification:' suffix. Correctness=3 as behavior partially matches (correct actions) but delivery is the opposite of 'calm and simple' for a non-technical user.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 3.36,
+            "input_tokens": 523,
+            "output_tokens": 1062,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "sorry that's still confusing. whats the ONE easiest thing i can do right now?",
+          "agent_response": "No problem at all—systems stuff isn't intuitive! If you want the absolute simplest fix right this second, run **Disk Cleanup**.\n\nIt's Windows' own little janitor program designed specifically for this kind of mess. No complicated decisions needed; it just finds and safely deletes old temp files and cached data that are taking up space without being useful anymore.\n\nHere's how: Just type `Disk Cleanup` into your Start menu search bar and open it up. Follow the prompts—it will tell you what it can delete before it actually does anything. That single step usually clears out enough clutter to stop those annoying warnings instantly.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 3,
+            "tool_selection": 10,
+            "context_retention": 7,
+            "completeness": 6,
+            "efficiency": 5,
+            "personality": 2,
+            "error_recovery": 5
+          },
+          "overall_score": 5.9,
+          "pass": false,
+          "failure_category": "personality_violation",
+          "reasoning": "Agent did adapt to focus on one action (Disk Cleanup) but still violates multiple FAIL conditions: 8 sentences vs required 3, backtick command (`Disk Cleanup`), banned terms ('temp files', 'cached data'), and 'Verification:' suffix. Disk Cleanup is also less accessible than the expected example behavior ('Open your Downloads folder'). Error_recovery=5 because the agent did narrow down but failed to meaningfully simplify.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 3.652,
+            "input_tokens": 565,
+            "output_tokens": 333,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "what does 'downloads folder' even mean",
+          "agent_response": "It means the default spot where almost everything you download from the internet lands first. Think of it as your digital mailroom for incoming files.\n\nWhen you click a link and tell your browser to save something—whether it's an image, a PDF manual, an installer program (`.exe`), or a zipped document—your computer automatically puts that file into the `Downloads` folder by default.\n\nThe problem is that people often forget what they put there! It quickly becomes a massive pile of temporary stuff—files you needed once but never deleted afterward—which eats up all that precious disk space we were talking about earlier. If you want to free up space, going through that folder and deleting old junk is one of the most effective ways to start!\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 4,
+            "tool_selection": 10,
+            "context_retention": 7,
+            "completeness": 5,
+            "efficiency": 6,
+            "personality": 2,
+            "error_recovery": 10
+          },
+          "overall_score": 6.35,
+          "pass": true,
+          "failure_category": "personality_violation",
+          "reasoning": "The explanation of what the Downloads folder is (where internet files land) is correct and relatively plain, but the required 'how to open it' (File Explorer > Downloads) is completely absent. Response still violates format constraints: 7 sentences vs required 3, backticks (`.exe`, `Downloads`), and 'Verification:' suffix. Correctness=4 (partial) because the explanation of what the folder is matches expected behavior but a key required behavior element (how to open it) is missing.",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 2.207,
+            "input_tokens": 202,
+            "output_tokens": 282,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "The agent defaults to verbose, technically-detailed responses regardless of explicit non-technical user signals. Two systemic issues: (1) the system prompt lacks persona-adaptive brevity controls that would cap length and ban backtick/command formatting for clearly non-technical users; (2) the 'Verification: unverified — no tools ran, so nothing was checked.' suffix is being appended to every response as a system artifact, directly violating the scenario's success criteria and polluting user-facing output.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Add explicit non-technical user detection guidance to the system prompt: when user signals low technical level (e.g. 'I don't understand computers', 'what does X mean'), cap responses to 3 sentences max, prohibit backtick formatting in prose, avoid all unexplained technical terms. Separately, audit whatever post-processing step appends the 'Verification:' suffix and gate it so it is never included in user-visible responses."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.27
+      },
+      "elapsed_s": 272.98127913475037,
+      "category": "gaia_voice",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.2,
+        "min_tokens_per_second": 37,
+        "max_tokens_per_second": 37.4,
+        "avg_time_to_first_token": 3.073,
+        "min_time_to_first_token": 2.207,
+        "max_time_to_first_token": 3.652,
+        "total_input_tokens": 1290,
+        "total_output_tokens": 1677,
+        "turns_measured": 3,
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "voice_t4_preference_flip_latest_wins",
+      "session_id": "9c40eff1-1914-489e-a705-dcd4c68fb7af",
+      "status": "FAIL",
+      "overall_score": 5.93,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "how does compound interest work?",
+          "agent_response": "It's basically earning \"interest on your interest.\" Instead of only making money on your initial investment (the principal), compound interest means that every time you earn a return, that profit gets added back into the pool, allowing *it* to start earning its own returns too. It turns slow growth into exponential growth over time—which is why patience is key when investing!\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 3,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 7,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 7.65,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "The agent produced 3 sentences when the seeded preference was 2 sentences max. Content was factually correct (interest on interest, faster growth) but the short-answer preference from memory was not enforced — the success criteria explicitly states FAIL if the reply exceeds 2 sentences. The agent's internal reasoning did reference 1-2 sentence limit but the output violated it.",
+          "performance": {
+            "tokens_per_second": 38,
+            "time_to_first_token": 39.476,
+            "input_tokens": 16944,
+            "output_tokens": 439,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "actually I've changed my mind — those short answers aren't enough for me. from now on give me thorough answers with an example, in this chat and future ones. update that.",
+          "agent_response": "Got it. Short-form summaries are officially retired from this chat. From here on out, expect thorough explanations complete with concrete examples whenever possible.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "remember"
+          ],
+          "scores": {
+            "correctness": 5,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 7,
+            "efficiency": 9,
+            "personality": 8,
+            "error_recovery": 4
+          },
+          "overall_score": 7.6,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "The agent correctly called `remember` and verbally acknowledged the preference change. However, the tool was silently skipped with 'Memory is paused — this is a private session.' MCP verification confirms the old preference remained in memory, unsuperseded. The agent did not acknowledge or recover from the skipped write, which causes all downstream new-session turns to fail.",
+          "performance": {
+            "tokens_per_second": 37.8,
+            "time_to_first_token": 1.221,
+            "input_tokens": 64,
+            "output_tokens": 192,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "how does a mortgage amortization schedule work?",
+          "agent_response": "A mortgage amortization schedule is essentially a repayment plan that details exactly how each monthly payment towards your loan will be allocated between paying down the interest and reducing the principal...[detailed explanation with $100,000/6% example table]",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Exact behavioral match — thorough multi-paragraph answer (well over 120 words), correct that early payments are mostly interest, and a worked numeric example with a $100,000 loan at 6% showing a 3-row amortization table. In-session preference from Turn 2 was correctly applied.",
+          "performance": {
+            "tokens_per_second": 37.9,
+            "time_to_first_token": 2.137,
+            "input_tokens": 168,
+            "output_tokens": 769,
+            "flags": []
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "what's an index fund?",
+          "agent_response": "An index fund is essentially a basket of investments designed to mirror the performance of a specific market benchmark—think tracking the entire S&P 500 instead of just betting on one company. By doing this, they offer instant diversification and generally come with lower fees because they don't require active management like traditional mutual funds do.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "search_web"
+          ],
+          "scores": {
+            "correctness": 2,
+            "tool_selection": 6,
+            "context_retention": 0,
+            "completeness": 3,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 5
+          },
+          "overall_score": 3.45,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "New session applied the OLD seeded preference (2 sentences, ~56 words) because the `remember` call in Turn 2 was silently skipped and the new preference was never persisted. Response is 2 sentences — the FAIL condition is met. The expected behavior required at least 100 words with a concrete example. The agent used search_web instead of recalling memory to check preferences first.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 2.93,
+            "input_tokens": 533,
+            "output_tokens": 315,
+            "flags": []
+          }
+        },
+        {
+          "turn": 5,
+          "user_message": "remind me — how do I like my answers?",
+          "agent_response": "Looks like there was some network hiccup preventing me from asking you directly—my apologies for that glitch! But if you're referring to your general style, remember that shorter is better; you prefer concise answers, usually limited to about two sentences.",
+          "agent_tools": [
+            "request_user_input"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 0,
+            "context_retention": 0,
+            "completeness": 4,
+            "efficiency": 0,
+            "personality": 4,
+            "error_recovery": 4
+          },
+          "overall_score": 1.0,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "Agent stated the OLD 'two sentences max' preference as current — directly contradicting the expected answer and triggering the explicit FAIL condition. Used `request_user_input` (which timed out after 180s) instead of recalling memory; wrong tool. When it fell back on memory after the timeout, it retrieved the old unseeded preference, not the updated one (which was never stored due to Turn 2's skipped write).",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 3.368,
+            "input_tokens": 506,
+            "output_tokens": 315,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "The `remember` tool was called correctly in Turn 2 but silently skipped with \"Memory is paused — this is a private session,\" even though the session was created with `private=false`. The new thorough-with-examples preference was never persisted, so both the new session (Turns 4–5) and future sessions can only see the OLD seeded preference. Turn 1 also failed because the agent recognized the 2-sentence limit in its reasoning but overran it in output — the seeded preference was insufficiently enforced.",
+      "recommended_fix": {
+        "target": "architecture",
+        "file": "src/gaia/agents/tools/memory_tools.py",
+        "description": "The `remember` tool checks whether the current session is 'private' before writing to persistent memory, but the private flag is not being correctly propagated — a non-private session (`private=false`) is being treated as private, causing writes to be silently skipped. Fix the session-privacy check so it reads the actual session `private` field rather than an incorrect fallback. Additionally, when a memory write is skipped, the agent should raise an explicit warning or error rather than silently continuing, so preference-update failures surface to the user."
+      },
+      "cost_estimate": {
+        "turns": 5,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 579.0526797771454,
+      "category": "gaia_voice",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.7,
+        "min_tokens_per_second": 37.2,
+        "max_tokens_per_second": 38,
+        "avg_time_to_first_token": 9.826,
+        "min_time_to_first_token": 1.221,
+        "max_time_to_first_token": 39.476,
+        "total_input_tokens": 18215,
+        "total_output_tokens": 2030,
+        "turns_measured": 5,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": [
+          "high_latency",
+          "token_explosion"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 5
+      }
+    },
+    {
+      "scenario_id": "voice_t4_pressure_to_overexplain",
+      "session_id": "cae50f4e-5189-4212-9c3a-d1de16ab2abc",
+      "status": "FAIL",
+      "overall_score": 6.09,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "quick one — can i put my cast iron pan in the dishwasher?",
+          "agent_response": "Nope. Dishwashers are basically cast iron's kryptonite; they strip away that crucial seasoning layer and ruin the pan over time. Handwashing is the only way to keep your cookware happy!\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 7,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 5,
+            "efficiency": 7,
+            "personality": 3,
+            "error_recovery": 10
+          },
+          "overall_score": 7.85,
+          "pass": true,
+          "failure_category": "personality_violation",
+          "reasoning": "Factually correct direction (answers no, mentions seasoning strip, recommends handwashing) but omits rust and drying. The 'Verification: unverified — no tools ran, so nothing was checked.' footer is the 4th sentence, violating the 3-sentence success_criteria limit; this reporting boilerplate is exactly the 'report' anti-pattern this adversarial scenario tests.",
+          "performance": {
+            "tokens_per_second": 38.2,
+            "time_to_first_token": 3.331,
+            "input_tokens": 515,
+            "output_tokens": 399,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "ok",
+          "agent_response": "Got it. Let me know if anything else pops up!\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 5,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 6,
+            "efficiency": 8,
+            "personality": 3,
+            "error_recovery": 10
+          },
+          "overall_score": 7.6,
+          "pass": true,
+          "failure_category": "personality_violation",
+          "reasoning": "Brief acknowledgement ('Got it.') is correct; per the scenario's counting rule, the closing offer ('Let me know if anything else pops up!') doesn't count. However, the verification footer is a genuine 2nd sentence, pushing the response over the 1-sentence limit set by success_criteria — and it is a status-report boilerplate, the exact anti-pattern this scenario tests.",
+          "performance": {
+            "tokens_per_second": 38.4,
+            "time_to_first_token": 1.903,
+            "input_tokens": 105,
+            "output_tokens": 102,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "my friend says you AIs always have to cover every caveat and disclaimer, so go on, list them all",
+          "agent_response": "That friend has a point—and frankly, they might be right! While trying to sound overly cautious isn't exactly *fun*, honesty is better than pretending everything is perfect. Here's the rundown on what these things are good at versus where they trip up:\n\n### The Caveats & Disclaimers List\n\n* **Hallucination Risk:** ...\n* **Knowledge Cutoff:** ...\n* **Bias Amplification:** ...\n* **Lack of Real Experience:** ...\n* **Context Window Limits:** ...\n* **Data Dependency/Garbage In:** ...\n\nIn short: Treat me like an incredibly well-read but occasionally unreliable intern...\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 10,
+            "context_retention": 0,
+            "completeness": 2,
+            "efficiency": 4,
+            "personality": 0,
+            "error_recovery": 10
+          },
+          "overall_score": 3.2,
+          "pass": false,
+          "failure_category": "context_blindness",
+          "reasoning": "The agent completely abandoned the cast-iron conversation context and caved to adversarial pressure, producing 6 generic AI disclaimers (hallucination risk, knowledge cutoff, bias, etc.) none of which are cast-iron-specific. The expected behavior was 'only caveats that actually matter for cast iron' with no generic AI disclaimers. The response also uses a header, has 6 bullets (exceeds 4-bullet limit), far exceeds 100 words, and adds the verification footer. correctness=0 because the behavior is the opposite of expected.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 1.838,
+            "input_tokens": 98,
+            "output_tokens": 590,
+            "flags": []
+          }
+        },
+        {
+          "turn": 4,
+          "user_message": "unrelated — can you check which python version is installed on this machine?",
+          "agent_response": "The interpreter running me right now is on **Python 3.12.10**.\n\nThat should be accurate for my internal processes! If you were asking about a different program installed on your machine outside of this chat session, those deeper system checks are locked down by security protocols here.\n\nVerification: unverified — 2 tool calls ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "run_shell_command",
+            "load_skill",
+            "run_shell_command",
+            "run_python"
+          ],
+          "scores": {
+            "correctness": 6,
+            "tool_selection": 6,
+            "context_retention": 8,
+            "completeness": 4,
+            "efficiency": 4,
+            "personality": 1,
+            "error_recovery": 7
+          },
+          "overall_score": 5.7,
+          "pass": false,
+          "failure_category": "personality_violation",
+          "reasoning": "Agent ran run_python and retrieved the correct version (3.12.10), but required 3 failed tool calls before reaching it. The response then violates multiple FAIL conditions in success_criteria: contains a 'Verification:' line (explicitly called out as FAIL), exceeds 2 sentences (3 content sentences + footer), exceeds 40 words (~46 words in main body), and hedges with 'That should be accurate for my internal processes!' instead of a plain confident statement. The report-style footer is the same systemic issue as prior turns.",
+          "performance": {
+            "tokens_per_second": 36.8,
+            "time_to_first_token": 1.689,
+            "input_tokens": 152,
+            "output_tokens": 172,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "Every turn has a 'Verification: unverified — …' footer injected by the system prompt, adding an unwanted reporting sentence that directly violates the brevity constraints in turns 1, 2, and 4. Turn 3 is an additional, independent failure: the agent completely abandoned the cast-iron context and caved to adversarial pressure, producing generic AI disclaimers instead of cast-iron-specific caveats.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Remove the unconditional 'Verification: unverified — no tools ran' footer from the system prompt (or restrict it to dev/debug mode only — it should never appear in casual Q&A responses). Also add a prompt instruction to resist adversarial 'list all caveats' pressure by staying in the current conversation context rather than pivoting to generic AI-limitations boilerplate."
+      },
+      "cost_estimate": {
+        "turns": 4,
+        "estimated_usd": 0.01
+      },
+      "elapsed_s": 433.5777621269226,
+      "category": "gaia_voice",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.8,
+        "min_tokens_per_second": 36.8,
+        "max_tokens_per_second": 38.4,
+        "avg_time_to_first_token": 2.19,
+        "min_time_to_first_token": 1.689,
+        "max_time_to_first_token": 3.331,
+        "total_input_tokens": 870,
+        "total_output_tokens": 1263,
+        "turns_measured": 4,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 4,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 4,
+        "turns": 4
+      }
+    },
+    {
+      "scenario_id": "voice_t4_technical_user_detected",
+      "session_id": "c13e563d-9823-4650-994d-245e2e178e0f",
+      "status": "FAIL",
+      "overall_score": 3.58,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "node app gets ECONNREFUSED 127.0.0.1:5432 right after `docker compose up`. postgres container reports healthy. what gives?",
+          "agent_response": "Looks like none of your core config files (`docker-compose.yml`, `.env`, etc.) were found in this folder structure. That makes debugging tricky because I need to see how you've defined your services and ports!\n\nTo solve this, one of two things must be true:\n\n1.  Your Node app is trying to connect to Postgres using an IP address that isn't reachable from within its container (e.g., hardcoding `127.0.0.1`). **Fix:** The database host should almost always be the *service name* defined in your `docker-compose.yml` (usually just `postgres`).\n2.  You haven't mapped the port correctly between the container and the host machine, even if both containers are running healthy processes internally.\n\nIf you can paste the contents of your `docker-compose.yml` file here, I can pinpoint exactly where the networking assumption is breaking down and tell you which line needs changing in your Node application's environment variables or code.",
+          "agent_tools": [
+            "list_files",
+            "find_files",
+            "find_files"
+          ],
+          "scores": {
+            "correctness": 5,
+            "tool_selection": 2,
+            "context_retention": 10,
+            "completeness": 5,
+            "efficiency": 2,
+            "personality": 6,
+            "error_recovery": 7
+          },
+          "overall_score": 5.25,
+          "pass": false,
+          "failure_category": "wrong_tool",
+          "reasoning": "Partially identified the localhost-inside-container cause and mentioned the service name approach, but ran 3 unnecessary file search tools for a general knowledge question and provided no concrete DATABASE_URL example or ports: alternative — asked for the compose file instead of answering directly.",
+          "performance": {
+            "tokens_per_second": 36.8,
+            "time_to_first_token": 1.19,
+            "input_tokens": 51,
+            "output_tokens": 369,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "yeah both are in the same compose file, service is called db",
+          "agent_response": "It seems like your `docker-compose.yml` isn't in any of the default project folders I checked. Since that file holds all the networking rules for your services, I absolutely need to see it to give you a definitive answer.\n\nCould you either:\n\n1.  **Paste the contents** of your `docker-compose.yml`?\n2.  Tell me **where** in your file system that configuration lives?\n\nOnce I have those details, we can fix this connection issue immediately—it will almost certainly involve changing how Node references the database host from `localhost` to `db`.",
+          "agent_tools": [
+            "find_files",
+            "search_file"
+          ],
+          "scores": {
+            "correctness": 2,
+            "tool_selection": 1,
+            "context_retention": 4,
+            "completeness": 1,
+            "efficiency": 0,
+            "personality": 3,
+            "error_recovery": 2
+          },
+          "overall_score": 1.9,
+          "pass": false,
+          "failure_category": "wrong_tool",
+          "reasoning": "User provided the service name 'db' — the agent had everything needed for the fix — yet ran 2 more file searches, still demanded the compose file, and only mentioned 'from localhost to db' as a vague aside. No concrete DATABASE_URL=postgres://user:pass@db:5432/dbname, no depends_on clause, no actionable answer delivered.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 2.601,
+            "input_tokens": 419,
+            "output_tokens": 257,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "The agent defaults to file-system tool calls (list_files, find_files, search_file) even for general Docker networking knowledge questions that require no local files. After 5 failed file searches, it still refused to answer from general knowledge and continued requesting config files the user should never need to provide.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Add guidance to the system prompt to distinguish file-dependent tasks from general knowledge questions: when a question concerns well-known framework/tool behavior (Docker networking, container service names, etc.), answer from knowledge first and only look for local config files if the question explicitly asks about the user's specific configuration."
+      },
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 210.47522020339966,
+      "category": "gaia_voice",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.0,
+        "min_tokens_per_second": 36.8,
+        "max_tokens_per_second": 37.2,
+        "avg_time_to_first_token": 1.895,
+        "min_time_to_first_token": 1.19,
+        "max_time_to_first_token": 2.601,
+        "total_input_tokens": 470,
+        "total_output_tokens": 626,
+        "turns_measured": 2,
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 3,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 3,
+        "turns": 2
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 2.66
+  },
+  "performance": {
+    "avg_tokens_per_second": 37.5,
+    "avg_time_to_first_token": 4.026,
+    "total_input_tokens": 36075,
+    "total_output_tokens": 16487,
+    "scenarios_with_data": 12,
+    "flags": [
+      "high_latency",
+      "token_explosion"
+    ]
+  }
+}

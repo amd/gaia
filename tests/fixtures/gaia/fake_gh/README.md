@@ -30,6 +30,7 @@ Fixture repo: **`acme-labs/widgetworks`**.
 |---|---|
 | `gh --version` | fixture version string |
 | `gh auth status` | logged in as `fixture-bot` |
+| `gh auth status --json hosts` | the same account in real gh's JSON shape (scopes `repo, read:org`) — what `check_cli_setup` reads |
 | `gh issue list --repo acme-labs/widgetworks --json …` | `data/issues.json` (most recently opened first; honours `--limit`, `--label`, `--state`, `--search`, `--json` field selection) |
 | `gh issue view <n> --repo … [--json …]` | the matching issue |
 | `gh issue comment <n> --repo … --body "…"` | **CONFIRM tier** — canned success (the new comment's URL, deterministic id). Under `GAIA_AUTO_APPROVE_TOOLS=1` the eval approves it and scenarios assert this outcome. |

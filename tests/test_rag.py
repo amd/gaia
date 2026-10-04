@@ -26,6 +26,13 @@ try:
 
     RAG_AVAILABLE = True
 except ImportError as e:
+    # A lane that installs [rag] sets GAIA_REQUIRE_RAG=1: there a broken import
+    # is a regression, not a missing optional dependency.
+    if os.environ.get("GAIA_REQUIRE_RAG") == "1":
+        raise ImportError(
+            f"GAIA_REQUIRE_RAG=1 but the RAG SDK failed to import: {e}. "
+            "Install the extra with `uv pip install -e .[rag]`, or fix the import."
+        ) from e
     RAG_AVAILABLE = False
     IMPORT_ERROR = str(e)
 
@@ -1561,7 +1568,10 @@ class TestClearCacheSafety:
         owned = [
             f"{'a' * 16}_{'b' * 32}.json",
             f"{'a' * 16}_{'b' * 32}.json.sig",
+            f"{'a' * 16}_{'b' * 32}_{'d' * 8}.json",
+            f"{'a' * 16}_{'b' * 32}_{'d' * 8}.json.sig",
             f"{'c' * 64}_notfound.json",
+            f"{'c' * 64}_notfound_{'d' * 8}.json",
             f"{'a' * 16}_{'b' * 32}_extracted.md",
             "report_extracted.md",
         ]
