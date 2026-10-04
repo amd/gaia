@@ -540,11 +540,13 @@ A local model whose card publishes sampling settings runs with them. These live 
 `Qwen3-30B-A3B-Instruct-2507-GGUF` gets `temperature=0.7`, `top_p=0.8`, `top_k=20`,
 `min_p=0` and `presence_penalty=1.0`, per its
 [model card](https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507). A card that gives
-separate thinking and non-thinking profiles registers both. The request's
-`chat_template_kwargs={"enable_thinking": ...}` picks the profile, so the sampling always
-matches the mode the model runs in. GAIA sends no switch, so
-[`Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) thinks and gets its
-card's thinking profile for coding and precise work.
+separate thinking and non-thinking profiles registers both. The thinking mode comes from
+`requested_thinking()`: the caller's `chat_template_kwargs={"enable_thinking": ...}` when it
+sets one, else GAIA's choice for the model (`ModelRequirement.thinking`). The provider picks
+the sampling profile from it and `LemonadeClient.chat_completions` sends it as the switch, so
+the sampling always matches the mode the model runs in.
+[`Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) runs with thinking on
+and gets its card's thinking profile for coding and precise work.
 
 Every other local model gets `LOCAL_SAMPLING_DEFAULTS`: `temperature=0.1` plus frequency,
 presence and repeat penalties, so it does not loop on tables and paragraphs. Cloud models get
@@ -554,9 +556,9 @@ keep the client default (0.7). Any sampling argument the caller passes is sent a
 ```python
 # In LemonadeProvider.chat()
 if not self._backend.cloud_model_provider(effective_model):
-    template_kwargs = kwargs.get("chat_template_kwargs") or {}
     defaults = local_sampling_defaults(
-        effective_model, template_kwargs.get("enable_thinking")
+        effective_model,
+        requested_thinking(effective_model, kwargs.get("chat_template_kwargs")),
     )
     for key, value in defaults.items():
         kwargs.setdefault(key, value)

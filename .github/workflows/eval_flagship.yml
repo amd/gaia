@@ -400,7 +400,7 @@ jobs:
   # eval/tasks/expectations/<model>.<suite>.json once they are committed (from
   # `gaia eval tasks propose` over repeated TASK_MODEL runs on this pool); until
   # then the gate reports only. A nightly failure files an issue naming the suite
-  # (nightly-escalation below). PRs also run TASK_MODEL, so its 17 GB download
+  # (nightly-escalation below). PRs also run TASK_MODEL, so its 23 GB download
   # is part of every PR's budget.
   #
   # A lane in everything but the matrix. It stays its own job because its
@@ -431,7 +431,7 @@ jobs:
       TASK_SUITES: ${{ github.event.inputs.task_suite || (github.event_name == 'schedule' && 'everyday therock') || 'core' }}
       # The local model the expectations were measured on. Changing it means
       # measuring and committing new expectations for it first.
-      TASK_MODEL: Qwen3-30B-A3B-Instruct-2507-GGUF
+      TASK_MODEL: Qwen3.6-35B-A3B-GGUF
       TASK_JUDGE_MODEL: claude-opus-5-5
       TASKS_OUT: eval-out\tasks
     steps:
@@ -471,7 +471,7 @@ jobs:
           gaia lemonade embedded status
 
       # This pool is ephemeral, so the model is never cached. Download it here,
-      # or the first task's clock pays for a 17 GB download.
+      # or the first task's clock pays for a 23 GB download.
       - name: Download the task model
         timeout-minutes: 60
         run: |
