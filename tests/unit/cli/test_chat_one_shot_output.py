@@ -22,6 +22,9 @@ class _StubAgent:
         self.config = config
         self.current_session = object()
 
+    def _ensure_tool_loader_reset(self):
+        pass  # a session already exists
+
     def process_query(self, query, trace=False):
         logging.getLogger("gaia.agents.base.skill_loader").info("SKILL_LOADER {}")
         logging.getLogger("gaia.agents.base.tool_loader").info(

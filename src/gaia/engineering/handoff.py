@@ -11,6 +11,10 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlencode
 
+from gaia.env import child_env
+
+ENGINEERING_TOKEN_ENV_VAR = "GAIA_ENGINEERING_TOKEN"
+
 _APP_PATHS = {
     "claude": (Path("/Applications/Claude.app"),),
     "codex": (Path("/Applications/Codex.app"), Path("/Applications/ChatGPT.app")),
@@ -52,7 +56,7 @@ def connection_config(backend: str, python: str, root: Path, client_token: str) 
                     backend,
                 ],
                 "env": {
-                    "GAIA_ENGINEERING_TOKEN": client_token,
+                    ENGINEERING_TOKEN_ENV_VAR: client_token,
                     "GAIA_DEVELOPER_MODE": "1",
                 },
             }
@@ -86,7 +90,12 @@ def open_app(backend: str, job_id: str, working_directory: Path) -> dict:
     else:
         command = ["open", "-a", app]
     subprocess.run(
-        command, check=True, timeout=15, stdin=subprocess.DEVNULL, capture_output=True
+        command,
+        check=True,
+        timeout=15,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        env=child_env(),
     )
     return {
         "state": "requires_user_action",

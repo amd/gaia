@@ -46,12 +46,15 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+from gaia.env import child_env
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
+    gaia_runs_lemonade,
     render_command,
     resolve_lemonade,
 )
+from gaia.log_rotation import rotate_if_oversized
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -116,8 +119,22 @@ def _is_loopback(host: str) -> bool:
 class LemonadeSupervisor:
     """Starts, tracks and reaps the local model server for one machine."""
 
-    def __init__(self, base_url: Optional[str] = None, log_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        log_dir: Optional[Path] = None,
+        embedded=None,
+    ):
+        """
+        Args:
+            embedded: The daemon's
+                :class:`~gaia.daemon.lemonade.EmbeddedLemonadeOwner`. When GAIA's
+                own server is installed it is started through this, never the
+                system launcher. Without one the supervisor manages system
+                installs only.
+        """
         self._base_url = base_url
+        self._embedded = embedded
         self._log_dir = log_dir
         self._lock = threading.Lock()
         self._proc: Optional[subprocess.Popen] = None
@@ -163,6 +180,9 @@ class LemonadeSupervisor:
             LemonadeStartError: it is down and could not be started. The message
                 names what failed, what to do, and where to look.
         """
+        if self._embedded is not None and gaia_runs_lemonade(self._base_url):
+            return self._ensure_embedded()
+
         client = self._client()
         target = client.base_url
 
@@ -221,6 +241,28 @@ class LemonadeSupervisor:
             self._close_log()
 
     # -- internals ---------------------------------------------------------
+
+    def _ensure_embedded(self) -> LemonadeState:
+        """Start GAIA's own server through its owner; a failure is never retried
+        against a system install."""
+        from gaia.daemon.lemonade import LemonadeNotManaged
+        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+        started_at = time.monotonic()
+        try:
+            ensured = self._embedded.ensure()
+        except (LemonadeNotManaged, EmbeddedLemonadeError) as e:
+            raise LemonadeStartError(
+                f"GAIA could not start its own Lemonade Server: {e}\n"
+                "Where to look: `gaia lemonade embedded status`"
+            ) from e
+        return LemonadeState(
+            base_url=ensured.base_url,
+            started=ensured.started,
+            owned=self._embedded.started_pid is not None,
+            pid=self._embedded.started_pid,
+            waited_seconds=time.monotonic() - started_at,
+        )
 
     def _client(self):
         from gaia.llm.lemonade_client import LemonadeClient
@@ -294,6 +336,11 @@ class LemonadeSupervisor:
         path = self.log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         self._close_log()
+        # The server's stdout can't be rotated while it runs, so cap it per start.
+        try:
+            rotate_if_oversized(path)
+        except OSError as e:
+            log.warning("Could not rotate %s (%s); appending to it.", path, e)
         self._log_handle = open(path, "a", encoding="utf-8", errors="replace")
         self._log_handle.write(f"\n=== GAIA daemon start: {' '.join(spec.argv)} ===\n")
         self._log_handle.flush()
@@ -315,7 +362,7 @@ class LemonadeSupervisor:
                 stdout=self._log_handle,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
-                env={**os.environ, **spec.env},
+                env=child_env(spec.env),
                 creationflags=creationflags,
                 start_new_session=start_new_session,
             )

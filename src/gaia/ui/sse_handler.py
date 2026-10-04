@@ -722,15 +722,6 @@ class SSEOutputHandler(OutputHandler):
             }
         )
 
-    def print_agent_selected(self, agent_name: str, language: str, project_type: str):
-        self._emit(
-            {
-                "type": "status",
-                "status": "info",
-                "message": f"Agent: {agent_name}",
-            }
-        )
-
     def print_agent_created(self, agent_id: str) -> None:
         """Notify the frontend that a new agent is available in the registry."""
         self._emit({"type": "agent_created", "agent_id": agent_id})
@@ -1239,6 +1230,11 @@ class SSEOutputHandler(OutputHandler):
             resp.close()
         except Exception:  # noqa: BLE001 - best-effort cleanup, never fatal
             logger.debug("email relay: failed to close active response", exc_info=True)
+
+    def awaiting_user_input(self) -> bool:
+        """True while a ``request_user_input`` question is waiting on the user."""
+        with self._user_input_lock:
+            return bool(self._user_input_queue)
 
     def request_user_input_blocking(
         self,

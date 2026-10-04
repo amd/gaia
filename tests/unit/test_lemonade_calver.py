@@ -7,12 +7,12 @@ Lemonade v2026.39.1 changed the version format from ``X.Y.Z`` to ``YYYY.WW.N``
 that anything parsing or comparing version strings has to be updated.
 
 GAIA compares Lemonade versions through one core implementation,
-:func:`gaia.version.parse_version`, plus two vendored copies: the flagship GAIA
-agent's readiness server and the frozen email sidecar. Those two stay vendored
-because ``freeze.py`` bundles only what is statically reachable and importing
-``gaia.version`` would run an ``importlib.metadata`` lookup a frozen binary
-cannot satisfy — so they are read out of their own source here instead, and
-cannot drift. Two failure modes matter and neither raises:
+:func:`gaia.version.parse_version`, plus one vendored copy in the frozen email
+sidecar. That copy stays vendored because ``freeze.py`` bundles only what is
+statically reachable, so it is read out of its own source here instead, and
+cannot drift. The flagship agent's readiness server already imports
+``gaia.agents.base.readiness``, so it uses the core gate directly. Two failure
+modes matter and neither raises:
 
 * a release CalVer that parses wrong would compare wrong, and
 * a dev CalVer that fails to parse makes the gate return "can't tell", so it
@@ -21,10 +21,10 @@ cannot drift. Two failure modes matter and neither raises:
 These tests pin the real strings the server reports (verified against a live
 v2026.39.1 ``/api/v1/health``), so a future parser "simplification" that drops
 CalVer support fails here instead of in the field. Every entry point is covered
-— the tuple parsers by parametrization, the two that compare instead of
-returning a tuple (the Lemonade client's gate and the flagship agent's) by their
-own cases. The flagship agent's copy was missed on the first pass of exactly
-this change, which is why the core copies were collapsed onto one.
+— the tuple parsers by parametrization, the Lemonade client's gate (which
+compares instead of returning a tuple) by its own cases. The flagship agent's
+former copy was missed on the first pass of exactly this change, which is why
+the core copies were collapsed onto one.
 """
 
 import ast
@@ -34,7 +34,7 @@ import pytest
 
 from gaia.agents.base.readiness import parse_version, version_meets_min
 from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
-from gaia.llm.lemonade_client import LemonadeClient
+from gaia.llm.lemonade_client import LemonadeClient, LemonadeVersionError
 from gaia.llm.lemonade_launcher import _VERSION_RE
 from gaia.version import LEMONADE_MIN_VERSION, LEMONADE_VERSION
 
@@ -117,20 +117,6 @@ def _email_parse(version):
     return parse(version)
 
 
-# The flagship agent's copy compares rather than exposing a tuple, so it is
-# covered by its own tests below instead of the ``PARSERS`` list.
-def _gaia_server_meets_min(version, minimum):
-    """The flagship GAIA agent's readiness gate.
-
-    It reads ``/api/v1/health``'s ``version`` VERBATIM — nothing normalizes the
-    CalVer dev suffix away first — so it must tolerate it itself.
-    """
-    meets = _load_function_from_source(
-        "hub/agents/gaia/python/gaia_agent/server.py", "_version_meets_min"
-    )
-    return meets(version, minimum)
-
-
 @pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
 def test_release_calver_parses_to_its_real_components(parser):
     """``2026.39.1`` must compare as (2026, 39, 1), not fail or truncate."""
@@ -190,39 +176,35 @@ def test_cli_version_regex_extracts_calver(cli_output, expected):
 
 
 # -- the flagship agent's readiness gate ------------------------------------
-# It compares instead of returning a tuple, so it gets its own cases. This is
-# the copy most users actually hit, and the one missed on the first pass.
+# The copy most users actually hit, and the one missed on the first pass. It now
+# calls the core gate; read its source so a re-vendored copy fails here.
 
 
-def test_flagship_agent_accepts_release_calver():
-    assert _gaia_server_meets_min(RELEASE_CALVER, LEMONADE_MIN_VERSION) is True
-
-
-def test_flagship_agent_accepts_dev_calver():
-    """Regression: this returned None, silently disabling the readiness check."""
-    assert _gaia_server_meets_min(DEV_CALVER, LEMONADE_MIN_VERSION) is True
-
-
-def test_flagship_agent_still_rejects_old_versions():
-    assert _gaia_server_meets_min("9.1.4", LEMONADE_MIN_VERSION) is False
-
-
-def test_flagship_agent_reports_garbage_as_indeterminate():
-    assert _gaia_server_meets_min("not-a-version", LEMONADE_MIN_VERSION) is None
-
-
-def test_flagship_agent_accepts_the_pinned_version():
-    assert _gaia_server_meets_min(LEMONADE_VERSION, LEMONADE_MIN_VERSION) is True
+def test_flagship_agent_uses_the_core_gate():
+    path = "hub/agents/gaia/python/gaia_agent/server.py"
+    tree = ast.parse((REPO_ROOT / path).read_text(encoding="utf-8"))
+    defined = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+    imported = {
+        (node.module, alias.name)
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert "_version_meets_min" not in defined
+    assert ("gaia.agents.base.readiness", "version_meets_min") in imported
+    assert ("gaia.version", "LEMONADE_MIN_VERSION") in imported
 
 
 # -- the Lemonade client's compatibility gate -------------------------------
-# Its parser is a closure inside ``_check_version_compatibility``, so it is
-# reached through the public method rather than the ``PARSERS`` list. The method
-# returns False ONLY below the supported floor.
+# Reached through the method rather than the ``PARSERS`` list, because it
+# compares instead of returning a tuple. It raises ONLY below the supported floor.
 
 
 def _client_gate(actual):
+    import logging
+
     client = LemonadeClient.__new__(LemonadeClient)
+    client.log = logging.getLogger("test_lemonade_calver")
     return LemonadeClient._check_version_compatibility(
         client, LEMONADE_VERSION, actual_version=actual, quiet=True
     )
@@ -243,11 +225,13 @@ def test_client_gate_accepts_dev_calver():
 
 def test_client_gate_rejects_an_old_dev_build():
     """The case the pre-fix except-branch got wrong: old AND unparseable."""
-    assert _client_gate("9.1.0~4.deadbee") is False
+    with pytest.raises(LemonadeVersionError):
+        _client_gate("9.1.0~4.deadbee")
 
 
 def test_client_gate_still_rejects_old_releases():
-    assert _client_gate("9.1.4") is False
+    with pytest.raises(LemonadeVersionError):
+        _client_gate("9.1.4")
 
 
 # -- the AST loader's blind spot --------------------------------------------
@@ -257,7 +241,6 @@ def test_client_gate_still_rejects_old_releases():
     "path",
     [
         "hub/agents/email/python/gaia_agent_email/api_routes.py",
-        "hub/agents/gaia/python/gaia_agent/server.py",
     ],
 )
 def test_the_vendored_copies_import_re_themselves(path):
@@ -324,12 +307,14 @@ def test_the_email_sidecar_copy_matches_the_core_parser(version):
     assert _email_parse(version) == canonical(version)
 
 
-@pytest.mark.parametrize("version", DRIFT_CORPUS)
-def test_the_flagship_copy_agrees_with_the_core_parser(version):
-    """It compares rather than returning a tuple, so check the verdict it reaches."""
-    from gaia.version import parse_version as canonical
-
-    floor = LEMONADE_MIN_VERSION
-    parsed = canonical(version)
-    expected = None if parsed is None else parsed >= canonical(floor)
-    assert _gaia_server_meets_min(version, floor) == expected
+def test_the_email_sidecar_floor_matches_the_core_floor():
+    """The frozen sidecar vendors the floor too; it must not drift from core."""
+    path = "hub/agents/email/python/gaia_agent_email/version.py"
+    tree = ast.parse((REPO_ROOT / path).read_text(encoding="utf-8"))
+    values = [
+        node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == "MIN_LEMONADE_VERSION" for t in node.targets)
+    ]
+    assert values == [LEMONADE_MIN_VERSION]

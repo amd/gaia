@@ -27,14 +27,15 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import openai  # For exception types
 import requests
-from dotenv import load_dotenv
 
 # Import OpenAI client for internal use
 from openai import OpenAI
 
+from gaia.env import child_env, load_env
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
+    gaia_runs_lemonade,
     get_installed_version,
     resolve_lemonade,
 )
@@ -51,7 +52,7 @@ from gaia.version import parse_version
 log = get_logger(__name__)
 
 # Load environment variables from .env file
-load_dotenv()
+load_env()
 
 # =========================================================================
 # Server Configuration Defaults
@@ -366,9 +367,8 @@ def is_llm_model_entry(model: Dict[str, Any]) -> bool:
 # thin re-exports so there's nothing to keep in sync.
 DEFAULT_CONTEXT_SIZE = 32768
 
-# Context window per device profile. A machine runs exactly one profile, so
-# pinning one ctx per profile means only one (model, ctx_size) pair is ever
-# resident and agents stop evicting each other.
+# Context window per device profile, for callers that size a window without
+# naming a model. With a model, ``resolve_ctx_size`` reads its MODELS entry.
 #
 # These are deliberately NOT one global number: the NPU's FLM build is
 # registered at 32768 and cannot reach 65536, so collapsing them would cap
@@ -387,24 +387,144 @@ def profile_ctx_size(device: Optional[str]) -> int:
     return NPU_CTX_SIZE if (device or "").strip().lower() == "npu" else GPU_CTX_SIZE
 
 
-def resolve_ctx_size(model: Optional[str] = None, device: Optional[str] = None) -> int:
+def runs_on_npu(model: Optional[str]) -> bool:
+    """Whether Lemonade runs *model* on the NPU (a FastFlowLM ``-FLM`` build).
+
+    Only these carry the NPU's context ceiling. A GGUF model runs on llama.cpp
+    whatever ``default_device`` says, so the ceiling must never reach it.
+    """
+    return bool(model) and str(model).strip().lower().endswith("-flm")
+
+
+#: (base_url, capacity) pairs already read from Lemonade in this process.
+_CAPACITY_CACHE: Dict[str, Any] = {}
+_CAPACITY_LOCK = threading.Lock()
+
+
+def machine_capacity(base_url: Optional[str] = None):
+    """This machine's :class:`~gaia.llm.model_fit.MachineCapacity`, from Lemonade.
+
+    Read once per server per process. Raises :class:`LemonadeClientError` when
+    the server does not answer and :class:`~gaia.llm.model_fit.ModelFitError`
+    when its answer names no memory; neither is cached, so a server that starts
+    later is read then.
+    """
+    from gaia.llm.model_fit import capacity_from_system_info
+
+    url = base_url or resolve_lemonade_base_url()
+    with _CAPACITY_LOCK:
+        if url in _CAPACITY_CACHE:
+            return _CAPACITY_CACHE[url]
+    info = LemonadeClient(base_url=url, verbose=False).get_system_info(timeout=15)
+    capacity = capacity_from_system_info(info)
+    with _CAPACITY_LOCK:
+        _CAPACITY_CACHE[url] = capacity
+    return capacity
+
+
+#: Models GAIA keeps loaded beside the chat model in a normal session, so a
+#: window sized for the chat model must leave room for them.
+CO_RESIDENT_MODELS = (DEFAULT_EMBEDDING_MODEL,)
+
+
+def co_resident_reserve_gb(capacity) -> float:
+    """Memory the ``CO_RESIDENT_MODELS`` take from *capacity*'s pool.
+
+    They run on the CPU backend (``llamacpp_backend_for``), so they only draw on
+    a pool that shares system RAM; a discrete GPU's VRAM is not theirs.
+    """
+    from gaia.llm.model_fit import required_memory_gb
+
+    if not capacity.shares_system_ram:
+        return 0.0
+    total = 0.0
+    for model_id in CO_RESIDENT_MODELS:
+        mr = find_model_requirement(model_id)
+        if mr is not None and mr.size_gb:
+            total += required_memory_gb(mr.size_gb)
+    return total
+
+
+def context_for_capacity(requirement: "ModelRequirement", capacity) -> int:
+    """The window *requirement*'s model loads with on a machine of *capacity*.
+
+    A model that declares ``max_ctx_size`` and ``kv_bytes_per_token`` gets the
+    largest window its KV cache can take after the weights and the co-resident
+    models, from ``min_ctx_size`` up to its native maximum. Any other model
+    loads at ``min_ctx_size``. The default-model fit check and the load both
+    call this, so they charge the same KV cache.
+    """
+    if not requirement.scales_with_memory:
+        return requirement.min_ctx_size
+    from gaia.llm.model_fit import largest_context
+
+    return largest_context(
+        size_gb=requirement.size_gb,
+        kv_bytes_per_token=requirement.kv_bytes_per_token,
+        min_ctx=requirement.min_ctx_size,
+        max_ctx=requirement.max_ctx_size,
+        capacity=capacity,
+        reserve_gb=co_resident_reserve_gb(capacity),
+    )
+
+
+def _model_ctx_size(requirement: "ModelRequirement", base_url: Optional[str]) -> int:
+    """``context_for_capacity`` on this machine, reading its capacity from Lemonade.
+
+    A server that cannot report its memory gets the model's registered floor,
+    logged: the floor is the window GAIA guaranteed before windows scaled.
+    """
+    if not requirement.scales_with_memory:
+        return requirement.min_ctx_size
+    from gaia.llm.model_fit import ModelFitError
+
+    try:
+        capacity = machine_capacity(base_url)
+    except (LemonadeClientError, ModelFitError) as e:
+        get_logger(__name__).warning(
+            "Cannot read this machine's memory from Lemonade (%s); loading %s at "
+            "its %d-token floor instead of sizing the window to memory.",
+            e,
+            requirement.model_id,
+            requirement.min_ctx_size,
+        )
+        return requirement.min_ctx_size
+    return context_for_capacity(requirement, capacity)
+
+
+def resolve_ctx_size(
+    model: Optional[str] = None,
+    device: Optional[str] = None,
+    base_url: Optional[str] = None,
+) -> int:
     """Resolve the requested local window for startup and subsequent reloads.
 
-    An explicit client ``ctx_size_override`` remains a separate exact pin.
-    GPU/CPU profile sizes are defaults, not model capability ceilings.
-    """
-    if device is None:
-        from gaia.config import GaiaConfig
+    With *model*: its MODELS entry decides, sized to this machine's memory when
+    the entry opts in (``context_for_capacity``); an unregistered model gets
+    ``NPU_CTX_SIZE`` on the NPU and ``GPU_CTX_SIZE`` elsewhere. *device* is not
+    consulted then: where a model runs is a property of the model, and a GGUF
+    model on an NPU-profile machine still runs on llama.cpp. Without a model,
+    the *device* profile (default: ``GaiaConfig.default_device``) decides.
 
-        device = GaiaConfig.load().default_device
-    if model and model.lower().endswith("-flm"):
-        device = "npu"
-    ctx = profile_ctx_size(device)
+    ``GAIA_CTX_SIZE`` overrides either. The NPU ceiling applies only to a model
+    that runs on the NPU, or to a model-less request on the NPU profile.
+    *base_url* is the Lemonade asked for this machine's memory.
+    An explicit client ``ctx_size_override`` remains a separate exact pin.
+    """
     if model:
-        for requirement in MODELS.values():
-            if _model_ids_match(requirement.model_id, model):
-                ctx = requirement.min_ctx_size
-                break
+        on_npu = runs_on_npu(model)
+        requirement = find_model_requirement(model)
+        if requirement is not None:
+            ctx = _model_ctx_size(requirement, base_url)
+        else:
+            ctx = NPU_CTX_SIZE if on_npu else GPU_CTX_SIZE
+    else:
+        if device is None:
+            from gaia.config import GaiaConfig
+
+            device = GaiaConfig.load().default_device
+        on_npu = (device or "").strip().lower() == "npu"
+        ctx = profile_ctx_size(device)
 
     override = os.environ.get("GAIA_CTX_SIZE", "").strip()
     if override:
@@ -419,7 +539,7 @@ def resolve_ctx_size(model: Optional[str] = None, device: Optional[str] = None) 
                 "GAIA_CTX_SIZE must be a positive integer (tokens); fix or unset it."
             )
 
-    if (device or "").strip().lower() == "npu" and ctx > NPU_CTX_SIZE:
+    if on_npu and ctx > NPU_CTX_SIZE:
         get_logger(__name__).warning(
             "Requested context %d exceeds the NPU ceiling; using %d tokens.",
             ctx,
@@ -655,6 +775,25 @@ class ModelRequirement:
     # Lemonade applies the ``embeddings`` label explicitly (avoids the #1745
     # auto-label-from-name bug).
     embedding: bool = False
+    # Download size in GB, vision projector included, for memory sizing
+    # (gaia.llm.model_fit).
+    size_gb: Optional[float] = None
+    # The model's native context. With ``kv_bytes_per_token`` and ``size_gb``
+    # it makes the window grow from ``min_ctx_size`` toward this as memory
+    # allows (``context_for_capacity``). None keeps the window at the floor.
+    max_ctx_size: Optional[int] = None
+    # KV cache bytes per token of context, at llama.cpp's f16 cache.
+    kv_bytes_per_token: int = 0
+
+    @property
+    def scales_with_memory(self) -> bool:
+        """The window is sized to this machine's memory, not fixed."""
+        return bool(
+            self.max_ctx_size
+            and self.max_ctx_size > self.min_ctx_size
+            and self.kv_bytes_per_token > 0
+            and self.size_gb
+        )
 
 
 @dataclass
@@ -771,6 +910,8 @@ MODELS = {
         checkpoint=DEFAULT_EMBEDDING_CHECKPOINT,
         recipe="llamacpp",
         embedding=True,
+        # Q8_0 weights; held in memory beside the chat model (CO_RESIDENT_MODELS).
+        size_gb=0.33,
     ),
     # --- NPU-native FLM embedder for the NPU profile (#1744) ---
     # EmbeddingGemma 300M built for the FastFlowLM/NPU backend. On a shared-
@@ -788,6 +929,112 @@ MODELS = {
         tool_calling=False,
     ),
 }
+
+
+def find_model_requirement(model_id: Optional[str]) -> Optional[ModelRequirement]:
+    """The MODELS entry for ``model_id``, tolerating the ``user.`` namespace."""
+    for mr in MODELS.values():
+        if _model_ids_match(mr.model_id, model_id):
+            return mr
+    return None
+
+
+# Sampling for a local model with no published profile below: low temperature
+# plus penalties stop small models looping on tables and paragraphs.
+# repeat_penalty / repeat_last_n are llama.cpp-native.
+LOCAL_SAMPLING_DEFAULTS: Dict[str, Any] = {
+    "temperature": 0.1,
+    "frequency_penalty": 0.3,
+    "presence_penalty": 0.1,
+    "repeat_penalty": 1.1,
+    "repeat_last_n": 256,
+}
+
+
+@dataclass(frozen=True)
+class CardSampling:
+    """Sampling a model's card publishes, per thinking mode.
+
+    A mode the model lacks is ``None``. The profile is picked from the request's
+    own ``enable_thinking`` switch, so sampling always matches the mode that runs.
+    """
+
+    thinks_by_default: bool
+    thinking: Optional[Dict[str, Any]] = None
+    non_thinking: Optional[Dict[str, Any]] = None
+
+    def for_mode(self, enable_thinking: Optional[bool]) -> Dict[str, Any]:
+        thinking = (
+            self.thinks_by_default if enable_thinking is None else enable_thinking
+        )
+        chosen = self.thinking if thinking else self.non_thinking
+        # A single-mode model's template ignores the switch, so it keeps its mode.
+        return dict(chosen or self.thinking or self.non_thinking)
+
+
+# https://huggingface.co/Qwen/Qwen3.6-35B-A3B thinks unless the request sends
+# chat_template_kwargs {"enable_thinking": false}. Thinking uses the card's
+# "coding / precise" profile: GAIA's work is tool calls and file edits.
+# repetition_penalty is llama.cpp's repeat_penalty.
+_QWEN3_6_35B_A3B = CardSampling(
+    thinks_by_default=True,
+    thinking={
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 0.0,
+        "repeat_penalty": 1.0,
+    },
+    non_thinking={
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.5,
+        "repeat_penalty": 1.0,
+    },
+)
+
+# A model's own published sampling, keyed by Lemonade model id. A profile here
+# REPLACES ``LOCAL_SAMPLING_DEFAULTS``: penalties the card does not name are not
+# sent. Kept apart from ``MODELS`` because an entry there also pins ctx size.
+# Every value must trace to the model's card. ``min_p`` is always sent because
+# llama.cpp's own default is not 0.
+MODEL_SAMPLING_PROFILES: Dict[str, CardSampling] = {
+    # https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507 "Best Practices":
+    # Temperature=0.7, TopP=0.8, TopK=20, MinP=0; presence_penalty 0-2 against
+    # endless repetition, higher values costing quality. 1.0 is what Unsloth's
+    # guide runs this GGUF with; mid-range, since edits copy text verbatim.
+    "Qwen3-30B-A3B-Instruct-2507-GGUF": CardSampling(
+        thinks_by_default=False,
+        non_thinking={
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 1.0,
+        },
+    ),
+    # The MTP build is the same weights plus a speculative-decoding head.
+    "Qwen3.6-35B-A3B-GGUF": _QWEN3_6_35B_A3B,
+    "Qwen3.6-35B-A3B-MTP-GGUF": _QWEN3_6_35B_A3B,
+}
+
+
+def local_sampling_defaults(
+    model_id: Optional[str], enable_thinking: Optional[bool] = None
+) -> Dict[str, Any]:
+    """Default sampling for a local *model_id*: its card's, else GAIA's generic.
+
+    *enable_thinking* is the request's ``chat_template_kwargs`` switch; ``None``
+    means the model runs in its default mode.
+    """
+    for registered, card in MODEL_SAMPLING_PROFILES.items():
+        if _model_ids_match(registered, model_id):
+            return card.for_mode(enable_thinking)
+    return dict(LOCAL_SAMPLING_DEFAULTS)
+
 
 # Define agent profiles with their model requirements
 AGENT_PROFILES = {
@@ -1105,6 +1352,19 @@ class LemonadeClientError(Exception):
 
 class LemonadeAuthError(LemonadeClientError):
     """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
+
+
+class LemonadeVersionError(LemonadeClientError):
+    """Raised when Lemonade Server is older than the oldest version GAIA supports."""
+
+    def __init__(self, found_version: str, min_version: str):
+        self.found_version = found_version
+        self.min_version = min_version
+        super().__init__(
+            f"Lemonade Server {found_version} is older than {min_version}, the "
+            "oldest version GAIA supports. Run `gaia init --force-reinstall` to "
+            "install a supported version."
+        )
 
 
 class ModelDownloadCancelledError(LemonadeClientError):
@@ -1731,6 +1991,31 @@ class LemonadeClient:
         self._stop_listeners(stoppable)
         return foreign
 
+    def _start_gaia_lemonade(self) -> None:
+        """Have the daemon start GAIA's own server, then point this client at it.
+
+        Raises:
+            LemonadeClientError: the daemon could not start it. There is no
+                retry against a system install.
+        """
+        from urllib.parse import urlparse
+
+        from gaia.daemon.client import ensure_lemonade
+        from gaia.daemon.errors import DaemonError
+
+        self.log.info("Asking the GAIA daemon to start GAIA's Lemonade Server...")
+        try:
+            served = ensure_lemonade()
+        except DaemonError as e:
+            raise LemonadeClientError(
+                f"Could not start GAIA's Lemonade Server: {e}"
+            ) from e
+        self.base_url = served["base_url"]
+        parsed = urlparse(self.base_url)
+        self.host = parsed.hostname or DEFAULT_HOST
+        self.port = parsed.port or DEFAULT_PORT
+        self.api_key = _embedded_lemonade_api_key(self.base_url)
+
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
         Launch the Lemonade server using subprocess.
@@ -1748,11 +2033,15 @@ class LemonadeClient:
 
         This method follows the approach in test_lemonade_server.py.
 
+        Where ``gaia init`` installed GAIA's own server, the daemon starts that
+        one instead and this client is re-pointed at the port it binds;
+        ``log_level``, ``background`` and ``ctx_size`` do not apply to it.
+
         Raises:
             LemonadeClientError: this client is pointed at a server on another
-                host. Launching is a local act — it frees a local port and
-                starts a local process — so it can only ever satisfy a local
-                client (#3558).
+                host — launching is a local act (it frees a local port and
+                starts a local process), so it can only ever satisfy a local
+                client (#3558) — or the daemon could not start GAIA's own server.
         """
         if not self._targets_this_machine():
             raise LemonadeClientError(
@@ -1762,6 +2051,10 @@ class LemonadeClient:
                 "server the client would not talk to. Start Lemonade on that "
                 "host, or unset LEMONADE_BASE_URL to use a local one."
             )
+
+        if gaia_runs_lemonade(self.base_url):
+            self._start_gaia_lemonade()
+            return
 
         self.log.info("Starting Lemonade server...")
 
@@ -1816,7 +2109,7 @@ class LemonadeClient:
 
         # Merge — never replace — the parent environment; the child loses
         # PATH/LOCALAPPDATA otherwise and LemonadeServer.exe breaks.
-        popen_env = {**os.environ, **spec.env}
+        popen_env = child_env(spec.env)
         # Own process group, so terminate_server's group kill can't reach the caller.
         session = {} if sys.platform.startswith("win") else {"start_new_session": True}
 
@@ -4376,7 +4669,7 @@ class LemonadeClient:
             self._last_model_load_seconds = time.monotonic() - _pin_load_start
             return
 
-        expected_ctx = resolve_ctx_size(model=model)
+        expected_ctx = resolve_ctx_size(model=model, base_url=self.base_url)
 
         # Best-effort pre-flight probe (#2053): skip a redundant /load when the
         # model is already loaded at a sufficient ctx. A probe failure here is
@@ -5023,7 +5316,9 @@ class LemonadeClient:
             stats["model_load_seconds"] = self._last_model_load_seconds
         return stats
 
-    def get_system_info(self, verbose: bool = False) -> Dict[str, Any]:
+    def get_system_info(
+        self, verbose: bool = False, timeout: int = DEFAULT_REQUEST_TIMEOUT
+    ) -> Dict[str, Any]:
         """
         Get system hardware information and device enumeration.
 
@@ -5063,21 +5358,7 @@ class LemonadeClient:
         url = f"{self.base_url}/system-info"
         if verbose:
             url += "?verbose=true"
-        return self._send_request("get", url)
-
-    def ready(self) -> bool:
-        """
-        Check if the client is ready for use.
-
-        Returns:
-            bool: True if the client exists and the server is healthy, False otherwise
-        """
-        try:
-            # Check if client exists and server is healthy
-            health = self.health_check()
-            return health.get("status") == "ok"
-        except Exception:
-            return False
+        return self._send_request("get", url, timeout=timeout)
 
     def validate_context_size(
         self,
@@ -5193,7 +5474,13 @@ class LemonadeClient:
                 catalog_by_id = {
                     m.get("id"): m for m in self.list_models().get("data", [])
                 }
-            except Exception:  # pylint: disable=broad-except
+            except LemonadeClientError as exc:
+                # Loaded models still report; only their labels/recipe go blank.
+                self.log.warning(
+                    "Lemonade model catalog lookup failed; loaded models are "
+                    "listed without labels or recipe: %s",
+                    exc,
+                )
                 catalog_by_id = {}
 
             loaded_enriched = []
@@ -5404,8 +5691,9 @@ class LemonadeClient:
 
         Checks in this order:
         1. Try health check on configured URL (LEMONADE_BASE_URL or default)
-        2. If localhost and health check fails, check if binary is in PATH (for auto-start)
-        3. If remote server and health check fails, return False (can't auto-start)
+        2. If GAIA's own server (``gaia init``) is the one to start, True
+        3. If localhost and health check fails, check if binary is in PATH (for auto-start)
+        4. If remote server and health check fails, return False (can't auto-start)
 
         Returns:
             True if server is available or can be started, False otherwise
@@ -5419,6 +5707,9 @@ class LemonadeClient:
             get_logger(__name__).debug(
                 "Lemonade health check failed before installation check: %s", exc
             )
+
+        if gaia_runs_lemonade(self.base_url):
+            return True
 
         # Health check failed - determine if we can auto-start
         is_localhost = self.host in ("localhost", "127.0.0.1", "::1")
@@ -5455,74 +5746,66 @@ class LemonadeClient:
         expected_version: str,
         actual_version: Optional[str] = None,
         quiet: bool = False,
-    ) -> bool:
-        """
-        Check if the lemonade-server version is compatible.
-
-        Checks against ``LEMONADE_MIN_VERSION`` (the oldest Lemonade Server
-        GAIA supports) for hard incompatibility, and warns on any mismatch
-        with ``expected_version`` that's still at or above that floor.
+    ) -> Optional[bool]:
+        """Check a Lemonade Server version against ``LEMONADE_MIN_VERSION``.
 
         Args:
-            expected_version: Expected version string (e.g., "10.0.0")
-            actual_version: Actual version string. If None, detected from
-                            the local ``lemonade-server --version`` CLI.
-            quiet: Suppress warning output
+            expected_version: The version GAIA installs (e.g. ``LEMONADE_VERSION``);
+                a supported version that differs only gets a note.
+            actual_version: The version to check. If None, detected from the
+                local Lemonade CLI.
+            quiet: Suppress console output (the log still records it).
 
         Returns:
-            True if compatible (or version check failed), False if below
-            the minimum supported version
+            True when the version meets the floor; None when it cannot be
+            determined, after a warning — an unknown version is never reported
+            as compatible.
+
+        Raises:
+            LemonadeVersionError: The version is below the floor.
         """
+        from gaia.version import LEMONADE_MIN_VERSION
+
         if actual_version is None:
             actual_version = self.get_lemonade_version()
 
-        if not actual_version:
-            # Can't determine version, assume compatible (don't block)
-            return True
+        found = parse_version(actual_version)
+        if found is None:
+            reported = (
+                f"an unrecognised version ({actual_version!r})"
+                if actual_version
+                else "no version"
+            )
+            message = (
+                f"Lemonade Server reported {reported}, so GAIA cannot confirm it "
+                f"is at least {LEMONADE_MIN_VERSION}. If requests fail, run "
+                "`gaia init --force-reinstall`."
+            )
+            self.log.warning(message)
+            if not quiet:
+                print(f"{_emoji('⚠️', '[WARN]')}  {message}")
+            return None
 
-        from gaia.version import LEMONADE_MIN_VERSION
+        if found < parse_version(LEMONADE_MIN_VERSION):
+            raise LemonadeVersionError(actual_version, LEMONADE_MIN_VERSION)
 
-        try:
+        if actual_version != expected_version and not quiet:
+            print(
+                f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version: "
+                f"v{actual_version} (expected v{expected_version})"
+            )
+            print("   Consider updating: https://lemonade-server.ai")
+        return True
 
-            def _version_tuple(v: str) -> tuple:
-                parsed = parse_version(v)
-                if parsed is None:
-                    raise ValueError(f"unparseable version {v!r}")
-                return parsed
-
-            actual_tuple = _version_tuple(actual_version)
-            min_tuple = _version_tuple(LEMONADE_MIN_VERSION)
-
-            if actual_tuple < min_tuple:
-                if not quiet:
-                    print("")
-                    print(f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version too old!")
-                    print(f"   Installed version: {actual_version}")
-                    print(f"   Minimum supported: {LEMONADE_MIN_VERSION}")
-                    print("")
-                    print(
-                        "   This version is not supported and will cause failures. "
-                        f"Please upgrade Lemonade Server to at least {LEMONADE_MIN_VERSION}:"
-                    )
-                    print("   https://lemonade-server.ai")
-                    print("")
-
-                return False
-
-            # Above the floor but not the expected pin – low-key note only
-            if actual_version != expected_version:
-                if not quiet:
-                    print(
-                        f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version: "
-                        f"v{actual_version} (expected v{expected_version})"
-                    )
-                    print("   Consider updating: https://lemonade-server.ai")
-
-            return True
-
-        except Exception:
-            # If parsing fails, assume compatible (don't block)
-            return True
+    def _version_error_status(
+        self, status: LemonadeStatus, error: LemonadeVersionError, quiet: bool
+    ) -> LemonadeStatus:
+        """Report a too-old server on ``status`` and the console."""
+        self.log.error(str(error))
+        if not quiet:
+            print(f"{_emoji('❌', '[ERROR]')} {error}")
+        status.error = str(error)
+        return status
 
     def initialize(
         self,
@@ -5581,26 +5864,31 @@ class LemonadeClient:
 
         # Check if lemonade-server is installed
         if not self._check_lemonade_installed():
+            status = LemonadeStatus(url=f"http://{self.host}:{self.port}")
+            status.running = False
+            configured = configured_lemonade_url()
+            if configured:
+                status.error = f"Lemonade Server at {configured} not reachable"
+                if not quiet:
+                    print(f"{_emoji('❌', '[ERROR]')} {status.error}")
+                    print(
+                        "   Start Lemonade on that host, or unset "
+                        "LEMONADE_BASE_URL to use GAIA's own server."
+                    )
+                    print("")
+                return status
             if not quiet:
                 print(f"{_emoji('❌', '[ERROR]')} Lemonade Server is not installed")
                 print("")
-                print(f"{_emoji('📥', '[DOWNLOAD]')} Download and install from:")
-                print("   https://lemonade-server.ai")
+                print(
+                    f"{_emoji('📥', '[DOWNLOAD]')} Install GAIA's Lemonade Server "
+                    "with: gaia init"
+                )
                 print("")
-                print("GAIA will automatically start Lemonade Server once installed.")
-                print("")
-            status = LemonadeStatus(url=f"http://{self.host}:{self.port}")
-            status.running = False
             status.error = "Lemonade Server not installed"
             return status
 
-        # Check version compatibility (warning only, not fatal)
         from gaia.version import LEMONADE_VERSION
-
-        cli_version = self.get_lemonade_version()
-        self._check_version_compatibility(
-            LEMONADE_VERSION, actual_version=cli_version, quiet=quiet
-        )
 
         # Check current status
         status = self.get_status()
@@ -5612,14 +5900,14 @@ class LemonadeClient:
                     print(f"   Server version: {status.version}")
                 print(f"   Current context size: {status.context_size}")
 
-            # Check running server version against expected (warning only).
-            # Skip if the server reports the same version the CLI already checked.
-            if status.version and status.version != cli_version:
+            # The running server's version is the one that matters; the CLI's
+            # is only consulted when the server does not report one.
+            try:
                 self._check_version_compatibility(
-                    LEMONADE_VERSION,
-                    actual_version=status.version,
-                    quiet=quiet,
+                    LEMONADE_VERSION, actual_version=status.version, quiet=quiet
                 )
+            except LemonadeVersionError as e:
+                return self._version_error_status(status, e, quiet)
 
             # Check context size (warning only, not fatal)
             if status.context_size < required_ctx:
@@ -5644,6 +5932,12 @@ class LemonadeClient:
                 print(f"   {self._start_command_hint(required_ctx)}")
             status.error = "Server not running"
             return status
+
+        # Refuse to start a server already known to be below the floor.
+        try:
+            self._check_version_compatibility(LEMONADE_VERSION, quiet=quiet)
+        except LemonadeVersionError as e:
+            return self._version_error_status(status, e, quiet)
 
         # Auto-start server
         if not quiet:
@@ -6007,71 +6301,3 @@ def print_agent_profiles():
 
     for key, model in MODELS.items():
         print(f"{key:<20} {model.model_id:<40} {model.model_type.value}")
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
-    # Show agent profiles
-    print_agent_profiles()
-    print("\n" + "=" * 80 + "\n")
-
-    # Use the new factory function instead of direct instantiation
-    client = create_lemonade_client(
-        model=DEFAULT_MODEL_NAME,
-        auto_start=True,
-        auto_load=True,
-        verbose=True,
-    )
-
-    try:
-        # Check server health
-        try:
-            health = client.health_check()
-            print(f"Server health: {health}")
-        except Exception as e:
-            print(f"Health check failed: {e}")
-
-        # List available models
-        try:
-            print("\nListing available models:")
-            models_list = client.list_models()
-            print(json.dumps(models_list, indent=2))
-        except Exception as e:
-            print(f"Failed to list models: {e}")
-
-        # Example: Using chat completions
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "What is the capital of France?"},
-        ]
-
-        try:
-            print("\nNon-streaming response:")
-            response = client.chat_completions(
-                model=DEFAULT_MODEL_NAME, messages=messages, timeout=30
-            )
-            print(response["choices"][0]["message"]["content"])
-        except Exception as e:
-            print(f"Chat completion failed: {e}")
-
-        try:
-            print("\nStreaming response:")
-            for chunk in client.chat_completions(
-                model=DEFAULT_MODEL_NAME, messages=messages, stream=True, timeout=30
-            ):
-                # The last chunk carries usage and no choices.
-                if not chunk.get("choices"):
-                    continue
-                if chunk["choices"][0].get("delta", {}).get("content"):
-                    print(chunk["choices"][0]["delta"]["content"], end="", flush=True)
-        except Exception as e:
-            print(f"Streaming chat completion failed: {e}")
-
-        print("\n\nDone!")
-
-    except Exception as e:
-        print(f"Error occurred: {e}")
-    finally:
-        # Make sure to terminate the server when done
-        client.terminate_server()

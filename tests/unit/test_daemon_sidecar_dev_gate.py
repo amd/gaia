@@ -17,16 +17,23 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
 
 from tests.unit.test_daemon_agents_routes import _TOY_A, _FakeManager, _make_registry
 
-_CHECKOUT_A = Path("/fake/checkout-a/hub/agents/toy-dev/python")
-_CHECKOUT_B = Path("/fake/checkout-b/hub/agents/toy-dev/python")
-_CHECKOUT_A_REPO_ROOT = Path("/fake/checkout-a")
-_CHECKOUT_B_REPO_ROOT = Path("/fake/checkout-b")
+# An OS-portable absolute root: a bare "/fake/..." literal is absolute on
+# POSIX but NOT on Windows (no drive letter), so `_check_dev_src_dir`'s
+# `Path.is_absolute()` gate correctly rejects it there. Anchoring under the
+# real temp dir gives an absolute path on every platform without requiring
+# anything on disk to actually exist (Path.resolve() tolerates that).
+_FAKE_ROOT = Path(tempfile.gettempdir()) / "gaia-test-dev-gate"
+_CHECKOUT_A = _FAKE_ROOT / "checkout-a" / "hub" / "agents" / "toy-dev" / "python"
+_CHECKOUT_B = _FAKE_ROOT / "checkout-b" / "hub" / "agents" / "toy-dev" / "python"
+_CHECKOUT_A_REPO_ROOT = _FAKE_ROOT / "checkout-a"
+_CHECKOUT_B_REPO_ROOT = _FAKE_ROOT / "checkout-b"
 
 _TOY_DEV = dataclasses.replace(
     _TOY_A,

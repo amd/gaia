@@ -59,10 +59,7 @@ if ! .venv/bin/python -c "import gaia" >/dev/null 2>&1; then
     # exactly the state the probe above catches.
     uv venv .venv --clear --python 3.12
 
-    # --extra-index-url is load-bearing: without the CPU wheel index this
-    # resolves to the CUDA torch build and drags in ~4.7 GB of packages.
-    uv pip install --python .venv/bin/python -e ".[dev]" \
-        --extra-index-url https://download.pytorch.org/whl/cpu
+    uv pip install --python .venv/bin/python -e ".[dev]"
 fi
 
 # SessionStart stdout becomes session context. Without this the session reaches
