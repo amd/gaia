@@ -31,6 +31,11 @@ the terminal UI meant building it from source.
 
 ### Fixed
 
+- **Code search works in an Agent UI chat that is not inside a project.** It
+  started in GAIA's own documents folder, which usually does not exist yet, so
+  every `search_code_index` failed with "repo_path does not exist". It now starts
+  in a repository the chat can reach, else any folder it can reach that exists.
+
 - **`/model` no longer offers speech or other non-chat models as chat
   targets.** Whisper was listed as a "chat-capable" local model; switching to it
   reported success and broke the next turn. Transcription, speech, music,
@@ -85,6 +90,14 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **A committed, machine-readable `/query` contract.** `openapi.gaia.json` in
+  the Python package is generated from the live routes
+  (`python -m gaia_agent.export_openapi`) and checked for drift in CI, so a
+  typed client no longer has to reverse-engineer the body from prose —
+  `query`, `run_id`, and `context` are required, `run_id` must be a UUID, and
+  the bearer-auth posture is declared in the schema. Swagger UI (`/docs`) is
+  disabled on the sidecar — it loads its JS from a CDN, an unexpected network
+  call for an offline embedder — but `/openapi.json` is still served.
 - **Programs the agent starts no longer inherit GAIA's internal credentials.**
   Shell commands, MCP servers, CLI installs and sign-ins, native hub agents,
   media tools and the Lemonade server get the sidecar's environment minus

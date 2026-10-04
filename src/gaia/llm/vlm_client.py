@@ -17,9 +17,6 @@ from gaia.env import load_env
 # Load environment variables from .env file
 load_env()
 
-# Default Lemonade server URL (can be overridden via LEMONADE_BASE_URL env var)
-DEFAULT_LEMONADE_URL = "http://localhost:13305/api/v1"
-
 logger = logging.getLogger(__name__)
 
 # Magic bytes for common image formats

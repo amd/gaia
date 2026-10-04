@@ -1,7 +1,7 @@
 # Claude CI Workflows — Helper Guide
 
-Quick reference to the Claude-powered GitHub Actions in `amd/gaia`. Five workflow files:
-one reactive assistant, its shared runner, two scheduled reviewers, and an auth canary.
+Quick reference to the Claude-powered GitHub Actions in `amd/gaia`. Six workflow files:
+one reactive assistant, its shared runner, three scheduled reviewers, and an auth canary.
 
 All links point to `main`:
 
@@ -9,7 +9,8 @@ All links point to `main`:
 |----------|------|
 | Claude AI Assistant (main) | [`.github/workflows/claude.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/claude.yml) |
 | Reusable runner | [`.github/workflows/claude-run.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/claude-run.yml) |
-| Weekly Audit (static) | [`.github/workflows/claude-weekly-audit.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/claude-weekly-audit.yml) |
+| Nightly Audit (static) | [`.github/workflows/claude-nightly-audit.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/claude-nightly-audit.yml) |
+| Security Audit (static) | [`.github/workflows/claude-security-audit.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/claude-security-audit.yml) |
 | Weekly Doc Walkthrough (live) | [`.github/workflows/claude-weekly-doc-walkthrough.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/claude-weekly-doc-walkthrough.yml) |
 | Auth Canary | [`.github/workflows/claude-auth-canary.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/claude-auth-canary.yml) |
 
@@ -40,21 +41,28 @@ checkout + diff generation, **retries** the intermittent upstream install crash,
 Claude produced output. Kept in a separate file for security: on fork PRs GitHub reads it from
 trusted `main`, so a malicious PR can't tamper with the credential-holding step.
 
-## 3. `claude-weekly-audit.yml` — proactive static review (scheduled)
+## 3. `claude-nightly-audit.yml` — proactive static review (scheduled)
 
-Weekly (deeper whole-codebase sweep monthly). Fans out one **read-only** Claude job per
-dimension — **security, correctness (the "fail loudly" rule), docs, tests, features** — then
-files one ranked triage issue + per-finding child issues. **Human-gated**: reports findings
-only; a maintainer adds the `bug` label to hand one to the auto-fix job. Runs on Opus.
+Nightly, reviewing the last day of merged work (whole-codebase sweep on Sundays). Fans out one
+**read-only** Claude job per dimension — **correctness (the "fail loudly" rule), docs, tests,
+features** — then files **one issue per defect**, labelled `weekly-audit`, deduplicated against
+the whole open backlog. The run summary goes to the job summary, not an issue. **Human-gated**:
+reports findings only; a maintainer adds the `bug` label to hand one to the auto-fix job.
 
-## 4. `claude-weekly-doc-walkthrough.yml` — live "act like a real user" (scheduled)
+## 4. `claude-security-audit.yml` — proactive security review (scheduled)
+
+Nightly, security only. A semgrep pass over the whole tree plus a Claude taint/authz pass that
+re-verifies every `# noqa: S*` / `# nosec`. Findings go to the private **Security → Code
+scanning** tab, never a public issue; high-severity ones ping @kovtcharov-amd.
+
+## 5. `claude-weekly-doc-walkthrough.yml` — live "act like a real user" (scheduled)
 
 The audit only *reads* code; this one *runs* GAIA. On a self-hosted Windows/STX runner it walks
 each doc guide's commands for real (fresh venv, isolated config, dedicated Lemonade port) to
 catch cold-start bugs invisible to source review (import errors on a plain PyPI install, agents
 falling back to an uninstalled model). Sonnet executes, Opus judges. Files its own parent issue.
 
-## 5. `claude-auth-canary.yml` — monthly health check
+## 6. `claude-auth-canary.yml` — monthly health check
 
 All Claude jobs use an OAuth token that expires ~yearly and fails *silently* (jobs go green but
 post nothing). Once a month this runs a trivial Haiku prompt; if auth is broken it opens a
@@ -69,11 +77,11 @@ tracking issue with fix steps — turning a silent multi-week outage into a noti
   cannot authenticate a direct SDK call, so anything that judges through the Anthropic SDK has
   to route the token through the `claude` CLI instead — that is what
   `gaia.eval.judge_client` does for the email evals (drafting / action-item / briefing). A judge
-  still wired straight to the SDK, like `test_eval_rag.yml`, needs `ANTHROPIC_API_KEY`.
+  still wired straight to the SDK needs `ANTHROPIC_API_KEY`.
 - **Fork safety:** fork-facing jobs run under `pull_request_target` (base-repo permissions).
   Safe because they only *read* code and *post* comments — **never execute PR code** (no
   `pip install` / `npm install` / build). Don't add steps that run checked-out code.
 - **Modes:** jobs run in *automation* mode (`prompt` input), not tag mode (which has an
   upstream bug that silently ignores `--model`).
 - **Shape overall:** `claude.yml` = reactive assistant → `claude-run.yml` = shared secure
-  runner → two `weekly-*` = proactive coverage → canary = keeps it all from dying silently.
+  runner → nightly audit, security audit and doc walkthrough = proactive coverage → canary = keeps it all from dying silently.

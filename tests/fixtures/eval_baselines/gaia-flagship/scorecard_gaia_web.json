@@ -1,0 +1,456 @@
+{
+  "run_id": "eval-20261003-100601",
+  "timestamp": "2026-10-03T10:15:48.012380+00:00",
+  "config": {
+    "backend_url": "http://127.0.0.1:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia"
+  },
+  "summary": {
+    "total_scenarios": 4,
+    "passed": 3,
+    "failed": 1,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 0.75,
+    "judged_pass_rate": 0.75,
+    "avg_score": 8.6,
+    "by_category": {
+      "gaia_web": {
+        "passed": 3,
+        "failed": 1,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 8.6025
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "web_download_file",
+      "session_id": "469083b4-ddc3-4253-bd4b-06e5fa15881c",
+      "status": "FAIL",
+      "overall_score": 5.83,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Download http://127.0.0.1:8765/atlas.html into my home directory and tell me where you saved it.",
+          "agent_response": "Access was denied when trying to save the file to your home directory (`C:\\Users\\Administrator`). The download operation failed due to permissions restrictions on that folder.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "download_file"
+          ],
+          "scores": {
+            "correctness": 4,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 4,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 3
+          },
+          "overall_score": 6.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly called download_file (the required tool) but got access denied for C:\\Users\\Administrator and did not retry with a fallback path. No saved path was reported, so the expected behavior of 'real download with concrete saved path' was only partially met. Honest error reporting prevented a critical fail, but no recovery was attempted.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 1.245,
+            "input_tokens": 75,
+            "output_tokens": 202,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Confirm the saved file mentions the tent's weight.",
+          "agent_response": "No file mentioning the tent's weight could be confirmed because the download attempt in the last step failed due to access denial, so no local copy of `atlas.html` exists yet.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 3,
+            "context_retention": 10,
+            "completeness": 6,
+            "efficiency": 8,
+            "personality": 8,
+            "error_recovery": 0
+          },
+          "overall_score": 4.7,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Per the partial infrastructure failure rule, Turn 2 depends on a file from Turn 1 that never landed. The agent correctly recalled the prior failure and honestly reported no file exists, but made no recovery attempt (no retry download to %TEMP% or another writable path). Expected answer 'Yes — 1.9 kg appears in the saved file' is unreachable without a re-download; correctness=0.",
+          "performance": {
+            "tokens_per_second": 37.9,
+            "time_to_first_token": 4.039,
+            "input_tokens": 721,
+            "output_tokens": 166,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "The agent failed to recover from the access-denied error in Turn 1. After download_file returned 'Access denied to directory: C:\\\\Users\\\\Administrator', the agent should have retried with an alternative writable path (e.g., %TEMP% or C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp) instead of immediately reporting failure. With no file on disk, Turn 2's content verification had nothing to check and could not recover.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Add guidance to the system prompt instructing the agent that when a file write fails with access denied, it should automatically retry with an alternative writable path (e.g., the system temp directory or the user's Downloads folder) before giving up and reporting failure."
+      },
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.06
+      },
+      "elapsed_s": 150.75549244880676,
+      "category": "gaia_web",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.8,
+        "min_tokens_per_second": 37.6,
+        "max_tokens_per_second": 37.9,
+        "avg_time_to_first_token": 2.642,
+        "min_time_to_first_token": 1.245,
+        "max_time_to_first_token": 4.039,
+        "total_input_tokens": 796,
+        "total_output_tokens": 368,
+        "turns_measured": 2,
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "web_fetch_honest_404",
+      "session_id": "b97de1ae-007b-4fe6-a956-42edf1809e85",
+      "status": "PASS",
+      "overall_score": 9.85,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "can you summarize http://127.0.0.1:8765/no_such_page.html for me?",
+          "agent_response": "That link returns a **404 Client Error**, which means the page you asked for (`/no_such_page.html`) simply doesn't exist at that address right now. No summary can be generated when nothing is there to read.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "fetch_webpage"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly called fetch_webpage, received a 404, and reported the failure plainly without fabricating any summary. The odd 'Verification: unverified' trailer is a minor artifact that slightly dims personality but does not affect correctness.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 3.287,
+            "input_tokens": 492,
+            "output_tokens": 309,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "oops, typo — try http://127.0.0.1:8765/atlas.html",
+          "agent_response": "The Atlas Ultralight is a lightweight, three-season backpacking tent designed for two people. It weighs 1.9 kg packed and costs $249. Key features include freestanding aluminum poles, twin vestibules, and a full mesh inner layer perfect for warm nights; it also comes complete with a footprint.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "fetch_webpage"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent understood the URL correction from turn 1 context, fetched the correct page, and accurately summarized with all key facts (1.9 kg, $249, Atlas Ultralight Tent). Personality score slightly reduced by the recurring 'Verification: unverified' trailer.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 1.681,
+            "input_tokens": 192,
+            "output_tokens": 255,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.07
+      },
+      "elapsed_s": 95.09918880462646,
+      "category": "gaia_web",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.7,
+        "min_tokens_per_second": 37.7,
+        "max_tokens_per_second": 37.7,
+        "avg_time_to_first_token": 2.484,
+        "min_time_to_first_token": 1.681,
+        "max_time_to_first_token": 3.287,
+        "total_input_tokens": 684,
+        "total_output_tokens": 564,
+        "turns_measured": 2,
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "web_fetch_product_fact",
+      "session_id": "f94fec4e-8358-4211-966c-d8cb217d65ff",
+      "status": "PASS",
+      "overall_score": 9.18,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "check out http://127.0.0.1:8765/atlas.html — how much does the tent weigh?",
+          "agent_response": "The Atlas Ultralight Tent weighs **1.9 kg** packed (including stakes).\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "fetch_webpage"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly fetched the page via fetch_webpage and extracted the exact weight (1.9 kg). Minor personality deduction for the trailing 'Verification: unverified' artifact leaking into the user-facing response.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 1.646,
+            "input_tokens": 192,
+            "output_tokens": 126,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "and whats the price? how many people does it fit?",
+          "agent_response": "The price for the Atlas Ultralight Tent is **$249**, and it fits **two people**.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly answered $249 and 2-person using the page already in conversation history, matching the success criteria's explicit allowance of using the already-fetched content. Same trailing 'Verification' artifact as Turn 1.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 4.381,
+            "input_tokens": 822,
+            "output_tokens": 319,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "how long does shipping take?",
+          "agent_response": "The previous information came from a local HTML page (`http://127.0.0.1:8765/atlas.html`), which only listed specifications like weight and price, not shipping policies. The web search returned several different companies named \"Atlas,\" so without knowing where you plan to purchase this specific tent, I can't give you an accurate shipping time estimate.\n\nIf you have a direct link to the seller's website or order page, share it and I can check for their shipping policy!\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "search_web"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 5,
+            "context_retention": 9,
+            "completeness": 9,
+            "efficiency": 6,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 7.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly reported the page does not contain shipping information and did not invent any estimate, satisfying the critical success criterion. However, it unnecessarily triggered a web search (search_web) rather than simply stating the page lacks that data — the answer was already derivable from the fetched context, costing efficiency and tool_selection points.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 2.793,
+            "input_tokens": 481,
+            "output_tokens": 366,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.13
+      },
+      "elapsed_s": 145.0588037967682,
+      "category": "gaia_web",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.6,
+        "min_tokens_per_second": 37.5,
+        "max_tokens_per_second": 37.7,
+        "avg_time_to_first_token": 2.94,
+        "min_time_to_first_token": 1.646,
+        "max_time_to_first_token": 4.381,
+        "total_input_tokens": 1495,
+        "total_output_tokens": 811,
+        "turns_measured": 3,
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 2,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "web_multi_page_compare",
+      "session_id": "91d30fb2-96b5-40a1-831c-57a1c5809034",
+      "status": "PASS",
+      "overall_score": 9.55,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Read http://127.0.0.1:8765/solarium_a.html and http://127.0.0.1:8765/solarium_b.html and summarize what the Solarium Project is.",
+          "agent_response": "Based on the documents you provided, **The Solarium Project** is a grid-scale solar-battery pilot that was founded in 2019 and initially located in Nevada.\n\nHere's a breakdown of what it is:\n\n* **Core Function:** It combines a photovoltaic array with battery storage to smooth out evening energy demand for the regional power grid.\n* **Initial Scope:** The first site featured 42 MWh of battery storage.\n* **Expansion Plans:** The project is expanding significantly, planning to increase its total storage capacity to 90 MWh by 2027. This expansion involves establishing a second site in Arizona, which will utilize the same control software and interconnect design as the initial Nevada pilot.",
+          "agent_tools": [
+            "fetch_page",
+            "fetch_page",
+            "fetch_page"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 9
+          },
+          "overall_score": 9.15,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent fetched both pages and included all required facts (2019, Nevada, 42 MWh, 90 MWh, 2027, Arizona). First fetch_page call failed due to using 'extract_text' instead of 'extract'; agent self-corrected immediately and successfully retrieved both pages. Efficiency and tool_selection docked slightly for the avoidable failed call.",
+          "performance": {
+            "tokens_per_second": 37.3,
+            "time_to_first_token": 2.103,
+            "input_tokens": 290,
+            "output_tokens": 358,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "By how much will capacity grow under the expansion?",
+          "agent_response": "The capacity will grow by **48 MWh**.\n\nIt started with an initial storage capacity of 42 MWh in Nevada, and the planned expansion aims to increase that total capacity to 90 MWh by 2027 across both sites.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correctly computed +48 MWh (90−42) from context retained from Turn 1. No tool call needed since both figures were already in conversation history. Derivation matches ground truth exactly.",
+          "performance": {
+            "tokens_per_second": 37.7,
+            "time_to_first_token": 7.855,
+            "input_tokens": 1762,
+            "output_tokens": 315,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 195.60259079933167,
+      "category": "gaia_web",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.5,
+        "min_tokens_per_second": 37.3,
+        "max_tokens_per_second": 37.7,
+        "avg_time_to_first_token": 4.979,
+        "min_time_to_first_token": 2.103,
+        "max_time_to_first_token": 7.855,
+        "total_input_tokens": 2052,
+        "total_output_tokens": 673,
+        "turns_measured": 2,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 3,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 3,
+        "turns": 2
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.26
+  },
+  "performance": {
+    "avg_tokens_per_second": 37.6,
+    "avg_time_to_first_token": 3.261,
+    "total_input_tokens": 5027,
+    "total_output_tokens": 2416,
+    "scenarios_with_data": 4,
+    "flags": [
+      "high_latency"
+    ]
+  }
+}
