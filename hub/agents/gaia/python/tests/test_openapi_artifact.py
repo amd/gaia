@@ -102,3 +102,24 @@ def test_docs_url_is_disabled_but_openapi_json_is_reachable():
     app = export_openapi.build_app()
     assert app.docs_url is None
     assert app.openapi_url == "/openapi.json"
+
+
+def test_exported_operations_match_the_real_server(spec, monkeypatch):
+    # The export app copies the probe routes by hand; a route added only to
+    # server.build_app must not be missing from the published contract.
+    from gaia_agent import caller_auth
+    from gaia_agent.server import build_app
+
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
+    caller_auth.reset()
+    try:
+        live = build_app().openapi()
+    finally:
+        caller_auth.reset()
+
+    def operations(doc):
+        return {(path, method) for path, ops in doc["paths"].items() for method in ops}
+
+    assert set(spec["paths"]) == set(live["paths"])
+    assert operations(spec) == operations(live)

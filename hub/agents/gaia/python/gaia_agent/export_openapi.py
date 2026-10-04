@@ -12,10 +12,11 @@ contract — mirroring ``gaia_agent_email.export_openapi`` (#1645).
 
 The spec is built from a minimal FastAPI app that mounts ONLY the gaia router
 plus the three probe routes (``/health``, ``/version``,
-``/v1/gaia/version``) — the same surface ``gaia_agent.server.build_app``
-serves, so the exported spec is byte-for-byte what the frozen sidecar serves,
-built without touching the real caller-auth environment (no token file, no
-live model-server probe wiring).
+``/v1/gaia/version``) — the same operations ``gaia_agent.server.build_app``
+serves (pinned by ``test_openapi_artifact``), built without touching the real
+caller-auth environment (no token file, no live model-server probe wiring).
+Only the ``info`` block differs from the live ``/openapi.json``: its title and
+version are pinned here so regenerating on any machine yields the same bytes.
 
 Usage::
 
