@@ -14,7 +14,7 @@ Valid categories: fact, preference, error, skill, note, reminder, system.
 v2 additions:
 - Embedding pipeline (Lemonade EmbeddingGemma 300M, 768-dim)
 - FAISS IndexFlatIP for cosine similarity search
-- Hybrid search: vector + BM25 + RRF fusion + cross-encoder reranking
+- Hybrid search: vector + BM25 + RRF fusion
 - Complexity-aware recall depth (3/5/10 top_k)
 - Mem0-style LLM extraction (ADD/UPDATE/DELETE/NOOP)
 - Conversation consolidation (old sessions → knowledge)
@@ -189,9 +189,6 @@ EMBEDDING_DIM = 768
 #: ride the first turn of a session and the first turn after this much silence
 #: — a natural pause — never every turn.
 REMINDER_PAUSE_SECONDS = 30 * 60
-
-#: Cross-encoder model for reranking (~22 MB, runs on CPU).
-CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 #: RRF fusion weights: 60% vector, 40% BM25.
 RRF_WEIGHT_VECTOR = 0.6
@@ -389,11 +386,6 @@ _MEMORY_TOOLS = frozenset(
     {"remember", "recall", "update_memory", "forget", "search_past_conversations"}
 )
 
-# Module-level cache for the cross-encoder model (loaded once per process).
-# _CROSS_ENCODER_UNAVAILABLE is a sentinel: once set, we stop retrying.
-_cross_encoder_model = None
-_CROSS_ENCODER_UNAVAILABLE = False
-
 #: Guards the one-time creation of each instance's extraction bookkeeping.
 _EXTRACTION_STATE_LOCK = threading.Lock()
 
@@ -487,12 +479,11 @@ def _loaded_omp_runtimes() -> tuple[str, ...]:
 def assert_faiss_omp_safe(operation: str) -> None:
     """Refuse a faiss call that would SIGABRT this process.
 
-    faiss-cpu and torch each bundle their own ``libomp.dylib``. Both resident
-    means the next OpenMP region — a faiss search, or torch's first parallel
-    op — initialises the second copy and macOS kills the process. That abort is
-    native: no ``except`` can catch it, so the only place to stop it is before
-    the call. ``_get_cross_encoder`` guards the import direction; this guards
-    the search direction, which is fatal whichever library loaded first.
+    faiss-cpu and torch each bundle their own ``libomp.dylib``. GAIA never
+    imports torch, but code sharing the process can (a skill's Python, an
+    embedding host). Both resident means the next faiss search initialises the
+    second copy and macOS kills the process. That abort is native: no
+    ``except`` can catch it, so the only place to stop it is before the call.
 
     Raises:
         RuntimeError: when a second OpenMP runtime is already resident.
@@ -507,8 +498,8 @@ def assert_faiss_omp_safe(operation: str) -> None:
         f"are loaded ({', '.join(runtimes)}). faiss-cpu and torch each bundle "
         "one, and the next faiss search initialises the second — macOS aborts "
         "the process (OMP: Error #15), which no error handler can catch. "
-        "Keep the two out of one process (torch arrives with the [ui] extra; "
-        "memory recall needs faiss-cpu), or set "
+        "Keep the two out of one process (GAIA does not import torch; whatever "
+        "loaded it here did — memory recall needs faiss-cpu), or set "
         f"{_OMP_OVERRIDE_ENV}=1 on a host where the two runtimes coexist. "
         "See src/gaia/agents/base/memory.py:_loaded_omp_runtimes."
     )
@@ -532,55 +523,6 @@ def _validated_faiss_query(
             "`gaia memory` onboarding) so both sides use one embedder."
         )
     return query
-
-
-def _get_cross_encoder():
-    """Lazy-load the cross-encoder reranking model. Cached at module level.
-
-    Returns None (without retrying) if sentence-transformers is not installed
-    or the model failed to load on a previous attempt.
-    """
-    global _cross_encoder_model, _CROSS_ENCODER_UNAVAILABLE
-    if _CROSS_ENCODER_UNAVAILABLE:
-        return None
-    if _cross_encoder_model is not None:
-        return _cross_encoder_model
-    # faiss and torch each link their own OpenMP runtime; whichever loads
-    # second aborts the process with "OMP: Error #15" — a SIGABRT no except
-    # clause can catch, so the guards below would never run. Refuse the import
-    # we know is fatal rather than take the process down mid-conversation.
-    if (
-        "faiss" in sys.modules
-        and "torch" not in sys.modules
-        and not _omp_conflict_override()
-    ):
-        logger.warning(
-            "[MemoryMixin] cross-encoder reranking disabled: faiss is already "
-            "loaded and importing torch alongside it aborts the process "
-            "(OpenMP double-initialisation). Retrieval falls back to vector "
-            "similarity, which is ordered but not reranked. Set "
-            "%s=1 to keep reranking on a host where the two runtimes coexist.",
-            _OMP_OVERRIDE_ENV,
-        )
-        _CROSS_ENCODER_UNAVAILABLE = True
-        return None
-    try:
-        from sentence_transformers import CrossEncoder
-
-        _cross_encoder_model = CrossEncoder(CROSS_ENCODER_MODEL)
-        logger.info("[MemoryMixin] cross-encoder loaded: %s", CROSS_ENCODER_MODEL)
-        return _cross_encoder_model
-    except ImportError:
-        logger.warning(
-            "[MemoryMixin] sentence-transformers not installed; "
-            "cross-encoder reranking disabled"
-        )
-        _CROSS_ENCODER_UNAVAILABLE = True
-        return None
-    except Exception as e:
-        logger.warning("[MemoryMixin] cross-encoder load failed: %s", e)
-        _CROSS_ENCODER_UNAVAILABLE = True
-        return None
 
 
 def _embedding_to_blob(vec: np.ndarray) -> bytes:
@@ -639,7 +581,7 @@ class MemoryMixin(ProceduralMemoryMixin):
     - Working context via system prompt (preferences, facts, errors, upcoming)
     - Auto tool call logging with error learning
     - Conversation persistence with Mem0-style LLM extraction
-    - Hybrid search: FAISS vector + BM25 FTS5 + RRF fusion + cross-encoder reranking
+    - Hybrid search: FAISS vector + BM25 FTS5 + RRF fusion
     - Conversation consolidation for old sessions
     - Background memory reconciliation for conflict detection
     - 5 CRUD tools for the LLM (remember, recall, update_memory, forget, search_past_conversations)
@@ -1609,15 +1551,14 @@ class MemoryMixin(ProceduralMemoryMixin):
         time_from: Optional[str] = None,
         time_to: Optional[str] = None,
     ) -> List[Dict]:
-        """Full hybrid search: vector + BM25 + RRF + cross-encoder reranking.
+        """Full hybrid search: vector + BM25 fused by RRF.
 
         1. Embed the query via _embed_text()
         2. FAISS cosine search: top_k × 4 candidates
         3. FTS5 BM25 via self._memory_store.search(): top_k × 4 candidates
         4. Deduplicate by ID, apply RRF fusion
-        5. Cross-encoder reranking via ms-marco-MiniLM-L-6-v2
-        6. Return final top_k
-        7. Bump confidence + use_count
+        5. Return final top_k
+        6. Bump confidence + use_count
 
         Args:
             query: Search query text.
@@ -1716,30 +1657,12 @@ class MemoryMixin(ProceduralMemoryMixin):
                 RRF_K + b_rank
             )
 
-        # Sort by RRF score descending, take top_k × 2 for reranking
+        # Step 5: Return final top_k by RRF score
         sorted_ids = sorted(rrf_scores, key=rrf_scores.get, reverse=True)
-        rerank_candidates = sorted_ids[: top_k * 2]
-
-        # Step 5: Cross-encoder reranking
-        cross_enc = _get_cross_encoder()
-        if cross_enc is not None and rerank_candidates:
-            try:
-                pairs = [
-                    (query, all_items[kid]["content"]) for kid in rerank_candidates
-                ]
-                ce_scores = cross_enc.predict(pairs)
-                # Re-sort by cross-encoder score
-                scored = list(zip(rerank_candidates, ce_scores))
-                scored.sort(key=lambda x: x[1], reverse=True)
-                rerank_candidates = [kid for kid, _ in scored]
-            except Exception as e:
-                logger.debug("[MemoryMixin] cross-encoder reranking failed: %s", e)
-
-        # Step 6: Return final top_k
-        final_ids = rerank_candidates[:top_k]
+        final_ids = sorted_ids[:top_k]
         results = [all_items[kid] for kid in final_ids]
 
-        # Step 7: Bump confidence + use_count on recalled items.
+        # Step 6: Bump confidence + use_count on recalled items.
         # Only bump items that were NOT already bumped by store.search()
         # (BM25 path).  store.search() internally bumps confidence for its
         # results, so we only bump vector-only items to avoid double-counting.

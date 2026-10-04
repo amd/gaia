@@ -21,10 +21,6 @@ inputs:
     description: 'Optional package specification to install (e.g., ".[dev]" or "package-name")'
     required: false
     default: ''
-  extra-index-url:
-    description: 'Optional extra index URL for pip'
-    required: false
-    default: ''
 
 outputs:
   venv-path:
@@ -202,17 +198,8 @@ runs:
         $env:PATH = "$env:USERPROFILE\.local\bin;$env:PATH"
         $VENV_PATH = "${{ steps.create-venv-windows.outputs.venv-path }}"
 
-        $EXTRA_INDEX = ""
-        if ("${{ inputs.extra-index-url }}" -ne "") {
-          # Without this, uv's default first-index strategy resolves a package
-          # (e.g. idna) only from whichever index lists it first -- here the
-          # pytorch CPU index -- even if that version is too old for another
-          # dependency (e.g. mcp's httpx2>=2.5.0 needs idna>=3.18).
-          $EXTRA_INDEX = "--extra-index-url ${{ inputs.extra-index-url }} --index-strategy unsafe-best-match"
-        }
-
         Write-Host "Installing package: ${{ inputs.install-package }} using uv..."
-        $cmd = "uv pip install ${{ inputs.install-package }} --python `"$VENV_PATH\Scripts\python.exe`" $EXTRA_INDEX"
+        $cmd = "uv pip install ${{ inputs.install-package }} --python `"$VENV_PATH\Scripts\python.exe`""
         Invoke-Expression $cmd
 
     # Install package (Linux/macOS)
@@ -223,14 +210,5 @@ runs:
         export PATH="$HOME/.local/bin:$PATH"
         VENV_PATH="${{ steps.create-venv-linux.outputs.venv-path }}"
 
-        EXTRA_INDEX=""
-        if [ -n "${{ inputs.extra-index-url }}" ]; then
-          # Without this, uv's default first-index strategy resolves a package
-          # (e.g. idna) only from whichever index lists it first -- here the
-          # pytorch CPU index -- even if that version is too old for another
-          # dependency (e.g. mcp's httpx2>=2.5.0 needs idna>=3.18).
-          EXTRA_INDEX="--extra-index-url ${{ inputs.extra-index-url }} --index-strategy unsafe-best-match"
-        fi
-
         echo "Installing package: ${{ inputs.install-package }} using uv..."
-        uv pip install ${{ inputs.install-package }} --python "$VENV_PATH/bin/python" $EXTRA_INDEX
+        uv pip install ${{ inputs.install-package }} --python "$VENV_PATH/bin/python"
