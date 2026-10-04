@@ -208,7 +208,7 @@ install_gaia() {
 
         # --upgrade exits 0 when there is nothing to do, so non-zero is a real
         # failure, not "already current".
-        if ! uv pip install --python "$GAIA_VENV/bin/python" --upgrade "amd-gaia[api]" --extra-index-url https://download.pytorch.org/whl/cpu --quiet; then
+        if ! uv pip install --python "$GAIA_VENV/bin/python" --upgrade "amd-gaia[api]" --quiet; then
             print_error "Failed to update the GAIA package in $GAIA_VENV."
             echo "  Fix:  re-run this installer, or delete $GAIA_HOME to start clean."
             exit 1
@@ -237,12 +237,11 @@ install_gaia() {
     print_success "Virtual environment created"
 
     print_step "Installing GAIA package..."
-    print_warning "  (Using CPU-only PyTorch to avoid large CUDA packages)"
 
     # Target the venv python rather than sourcing bin/activate: that script is
     # not `set -u` clean (it reads $OSTYPE, unset in dash) and noisily half-fails
     # under the documented `curl … | sh`.
-    if ! uv pip install --python "$GAIA_VENV/bin/python" "amd-gaia[api]" --extra-index-url https://download.pytorch.org/whl/cpu; then
+    if ! uv pip install --python "$GAIA_VENV/bin/python" "amd-gaia[api]"; then
         print_error "Failed to install GAIA package"
         exit 1
     fi

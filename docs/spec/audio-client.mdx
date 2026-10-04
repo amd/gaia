@@ -30,7 +30,7 @@ from gaia.audio.kokoro_tts import KokoroTTS
 
 ## Overview
 
-The audio subsystem provides complete voice interaction capabilities including Automatic Speech Recognition (ASR), Text-to-Speech (TTS), and voice chat orchestration. AudioClient coordinates ASR and TTS with LLM generation, while WhisperAsr handles voice-to-text transcription and KokoroTTS provides high-quality speech synthesis.
+The audio subsystem provides complete voice interaction capabilities including Automatic Speech Recognition (ASR), Text-to-Speech (TTS), and voice chat orchestration. AudioClient coordinates ASR and TTS with LLM generation, while WhisperAsr handles voice-to-text transcription and KokoroTTS provides high-quality speech synthesis. Both models are served by Lemonade Server (`/api/v1/audio/transcriptions` and `/api/v1/audio/speech`); GAIA runs no speech model in-process.
 
 **Key Features:**
 - Voice chat with streaming TTS
@@ -38,7 +38,7 @@ The audio subsystem provides complete voice interaction capabilities including A
 - High-quality Kokoro TTS with multiple voices (17+ available)
 - Streaming audio processing with real-time playback
 - Interrupt handling (keyboard and voice)
-- GPU acceleration support
+- Models pulled through Lemonade on first use; Lemonade picks the device
 - Thread-safe operation
 
 ---
@@ -53,14 +53,14 @@ The audio subsystem provides complete voice interaction capabilities including A
 - Queue-based transcription delivery
 
 ### WhisperAsr
-- Real-time speech recognition using Whisper
-- Configurable model sizes (tiny, base, small, medium, large)
+- Real-time speech recognition: each utterance is transcribed by Lemonade's Whisper
+- Configurable model sizes (tiny, base, small, medium, large, turbo)
 - Voice Activity Detection with silence thresholds
 - Pause/resume recording capability
-- GPU acceleration (CUDA support)
+- A Lemonade failure stops recording and is reported on `asr_error`
 
 ### KokoroTTS
-- High-quality speech synthesis
+- High-quality speech synthesis via Lemonade's `kokoro-v1` model
 - Multiple voice options (American/British, male/female)
 - Streaming audio generation
 - Real-time playback
@@ -97,7 +97,7 @@ class AudioClient:
         Initialize audio client.
 
         Args:
-            whisper_model_size: Whisper model size (tiny, base, small, medium, large)
+            whisper_model_size: Whisper model size (tiny, base, small, medium, large, turbo)
             audio_device_index: Audio input device index (None = default)
             silence_threshold: Silence duration before processing (seconds)
             mic_threshold: Microphone amplitude threshold for voice-activity
@@ -163,28 +163,43 @@ class AudioClient:
 from gaia.audio.whisper_asr import WhisperAsr
 
 class WhisperAsr:
-    """Whisper-based Automatic Speech Recognition."""
+    """Live-microphone speech-to-text, transcribed by Lemonade's Whisper."""
 
     def __init__(
         self,
-        model_size="small",
+        model_size="base",
         device_index=None,
         transcription_queue=None,
-        enable_cuda=False,
         silence_threshold=None,
         min_audio_length=None,
+        base_url=None,
+        language="en",
+        client=None,
+        say=None,
     ):
         """
-        Initialize Whisper ASR.
+        Initialize Whisper ASR and pull its Lemonade model if needed.
 
         Args:
-            model_size: Whisper model size (tiny, base, small, medium, large)
+            model_size: tiny, base, small, medium, large or turbo — mapped to
+                Whisper-Tiny … Whisper-Large-v3-Turbo on Lemonade
             device_index: Audio input device index (None = default)
             transcription_queue: Queue to receive transcriptions
-            enable_cuda: Enable GPU acceleration
-            silence_threshold: Custom silence threshold (default: 0.01)
-            min_audio_length: Minimum audio length in samples (default: 16000)
+            silence_threshold: Custom voice-activity energy threshold
+            min_audio_length: Minimum utterance length in samples
+            base_url: Lemonade API root (default: LEMONADE_BASE_URL)
+            language: ISO 639-1 code sent with every utterance
+            client: A ready LemonadeASRClient (tests inject one)
+            say: Called with a line before a model download
+
+        Raises:
+            ConnectionError: Lemonade Server is not reachable
+            LemonadeASRError: Lemonade cannot serve the Whisper model
         """
+        pass
+
+    def transcribe_utterance(self, audio) -> str:
+        """Send one 16 kHz float utterance to Lemonade; return its text."""
         pass
 
     def start_recording(self):
@@ -216,15 +231,19 @@ from gaia.audio.kokoro_tts import KokoroTTS
 class KokoroTTS:
     """Kokoro-based Text-to-Speech synthesis."""
 
-    def __init__(self):
+    def __init__(self, base_url=None, client=None, say=None):
         """
-        Initialize Kokoro TTS.
+        Initialize Kokoro TTS and pull Lemonade's kokoro-v1 model if needed.
 
         Note:
-            - Uses American English by default
             - Default voice: af_bella (A- quality)
             - 17+ voices available
+            - Playback needs sounddevice ([talk] extra); synthesis does not
         """
+        pass
+
+    def generate_speech(self, text, stream_callback=None) -> tuple:
+        """Return (24 kHz float32 samples, stats), synthesized sentence by sentence."""
         pass
 
     def generate_speech_streaming(
@@ -247,7 +266,7 @@ class KokoroTTS:
         """
         pass
 
-    def get_available_voices(self) -> dict:
+    def list_available_voices(self) -> dict:
         """
         Get available voice configurations.
 
@@ -276,14 +295,13 @@ class KokoroTTS:
 # pyproject.toml
 [project.optional-dependencies]
 talk = [
-    "openai-whisper>=20231117",  # ASR
-    "sounddevice>=0.4.6",        # Audio recording & playback
-    "torch>=2.0.0",              # Whisper backend
-    "kokoro>=0.3.1",             # TTS
-    "soundfile>=0.12.1",         # Audio file I/O
-    "psutil",                    # Process management
+    "sounddevice",   # Microphone capture & speaker playback
+    "websockets",    # Staged for Lemonade Realtime transcription (#372)
 ]
 ```
+
+Speech recognition and synthesis need a running Lemonade Server with a Whisper
+model and `kokoro-v1`; both are pulled on first use.
 
 ---
 
@@ -336,9 +354,8 @@ transcription_queue = queue.Queue()
 
 # Initialize ASR
 asr = WhisperAsr(
-    model_size="small",
+    model_size="small",  # Whisper-Small on Lemonade
     transcription_queue=transcription_queue,
-    enable_cuda=True  # Use GPU
 )
 
 # Start recording
