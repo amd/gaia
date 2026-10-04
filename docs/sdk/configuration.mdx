@@ -48,6 +48,17 @@ programmatically through `gaia.logger` (`set_level(name, level)`); the default
 is `INFO`.
 </Note>
 
+`~/.gaia/gaia.log` is size-capped and shared safely by every GAIA process. Two
+variables tune the cap:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GAIA_LOG_MAX_MB` | `10` | Size at which `gaia.log` rotates to `gaia.log.1` |
+| `GAIA_LOG_BACKUPS` | `3` | Rotated copies kept (`gaia.log.1` … `gaia.log.N`) |
+
+Both must be whole numbers of at least 1; any other value stops GAIA at startup
+with an error naming the variable.
+
 ---
 
 ## Local context window

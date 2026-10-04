@@ -12,7 +12,11 @@ import time
 from pathlib import Path
 
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.install_hints import agent_not_installed_message
+from gaia.agents.install_hints import (
+    agent_not_installed_message,
+    gaia_extras_install_args,
+    pip_install_hint,
+)
 from gaia.env import load_env
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
@@ -28,6 +32,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
+from gaia.log_rotation import log_family
 from gaia.logger import get_logger
 from gaia.mcp.ports import (
     AGENT_UI_MCP_PORT,
@@ -919,9 +924,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print(f"\nMissing dependencies for Agent UI: {e}")
         print("\n   The Agent UI requires extra dependencies that are not installed.")
         print("   Install them with:\n")
-        print('     uv pip install -e ".[ui]"')
-        print("\n   Or if you installed from PyPI:\n")
-        print('     uv pip install "amd-gaia[ui]"')
+        print(f"     {pip_install_hint(*gaia_extras_install_args(['ui']))}")
         print()
         sys.exit(1)
     except OSError as e:
@@ -7485,6 +7488,10 @@ def _bootstrap_reset_system():
             print("✅ System context collection re-enabled.")
 
 
+#: Per-file ceiling for logs in a diagnostics bundle; larger files keep their tail.
+_DIAG_MAX_LOG_BYTES = 50 * 1024 * 1024
+
+
 def handle_diagnostics_command(args):
     """Handle the 'gaia diagnostics' command.
 
@@ -7492,7 +7499,8 @@ def handle_diagnostics_command(args):
     tarball suitable for attaching to bug reports. Captures:
 
     - ``~/.gaia/electron-install.log``
-    - ``~/.gaia/gaia.log``
+    - ``~/.gaia/gaia.log`` and its rotated files (``gaia.log.1`` ...); a file
+      over 50 MB contributes only its last 50 MB, as ``<name>.tail``
     - ``~/.gaia/electron-main.log`` (if present; emitted by the Electron shell)
     - ``~/.gaia/electron-install-state.json``
     - ``uname -a`` output
@@ -7632,15 +7640,25 @@ def handle_diagnostics_command(args):
                         filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
                     )
 
-            # Log files gated by --no-logs
+            # Log files gated by --no-logs. Rotated backups (gaia.log.1, ...)
+            # ride along; a log from before the size cap keeps only its tail.
             if not args.no_logs:
-                for entry in log_files:
-                    if entry.is_file():
+                for entry in (f for base in log_files for f in log_family(base)):
+                    size = entry.stat().st_size
+                    if size <= _DIAG_MAX_LOG_BYTES:
                         tar.add(
                             str(entry),
                             arcname=entry.name,
                             filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
                         )
+                        continue
+                    with open(entry, "rb") as fh:
+                        fh.seek(size - _DIAG_MAX_LOG_BYTES)
+                        tail = fh.read(_DIAG_MAX_LOG_BYTES)
+                    info = tarfile.TarInfo(name=f"{entry.name}.tail")
+                    info.size = len(tail)
+                    info.mtime = int(entry.stat().st_mtime)
+                    tar.addfile(info, io.BytesIO(tail))
             else:
                 note = b"Log files omitted (--no-logs was passed).\n"
                 info = tarfile.TarInfo(name="LOGS-OMITTED.txt")

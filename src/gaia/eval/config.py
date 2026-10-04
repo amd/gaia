@@ -11,8 +11,9 @@ This module contains shared configuration constants used across the evaluation f
 #
 # NOTE ON BASELINES: eval scorecards are scored BY this model, so changing it changes
 # what a score means. Baselines committed under a previous judge are not directly
-# comparable to runs under this one — regenerate them (`--save-baseline`) and call the
-# judge change out explicitly, rather than reading a shifted score as a regression.
+# comparable to runs under this one — replace them from the next nightly on the Strix
+# Halo pool and call the judge change out explicitly, rather than reading a shifted
+# score as a regression.
 DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 
 # The agent under test. Every scenario scores the flagship — the agent users

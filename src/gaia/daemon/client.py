@@ -34,6 +34,7 @@ from gaia.daemon.instance import (
 )
 from gaia.daemon.lock import StartLock
 from gaia.env import is_internal_secret
+from gaia.log_rotation import rotate_if_oversized
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -138,6 +139,13 @@ def _daemon_env() -> dict:
 def _spawn_and_wait(timeout: float) -> DaemonInstance:
     """Spawn the daemon detached, wait until it registers a live instance.json."""
     paths.ensure_host_dir()
+    # The daemon's stdout can't be rotated while it runs, so cap it per start.
+    try:
+        rotate_if_oversized(paths.log_path())
+    except OSError as e:
+        logger.warning(
+            "Could not rotate %s (%s); appending to it.", paths.log_path(), e
+        )
     log_file = open(paths.log_path(), "ab")
     # 0600: the daemon log lives beside token-minting code (D-5, #2142) and
     # would otherwise land world-readable under umask 022.
