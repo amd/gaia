@@ -97,6 +97,10 @@ def _debug_enabled_by_env() -> bool:
 #: the same stream once the answer arrives (spec §5.1).
 TERMINAL_TYPES = frozenset({"final", "error"})
 
+#: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
+#: words so far, or characters of a tool call's arguments so far.
+_PHASE_COUNT_FIELDS = ("words", "chars")
+
 
 class CanonicalTranslator:
     """Stateful translator: in-process handler events → canonical wire events.
@@ -304,7 +308,15 @@ class CanonicalTranslator:
         message = str(event.get("message", ""))
         if event.get("channel") == DEBUG_CHANNEL:
             return self._debug_status(message)
-        return self._user_status(message)
+        out = self._user_status(message)
+        phase = event.get("phase")
+        if out and isinstance(phase, str) and phase:
+            out[0]["phase"] = phase
+            for key in _PHASE_COUNT_FIELDS:
+                value = event.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    out[0][key] = value
+        return out
 
     def _on_step(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         step = event.get("step")

@@ -564,6 +564,17 @@ class SSEOutputHandler(OutputHandler):
     def report_progress(self, message: str):
         self._emit({"type": "status", "status": "working", "message": message})
 
+    def report_phase(self, phase: str, message: str, **counts: int):
+        self._emit(
+            {
+                "type": "status",
+                "status": "working",
+                "message": message,
+                "phase": phase,
+                **counts,
+            }
+        )
+
     # === Structured-render map (#2109) ===
 
     # Mapping from tool name to the card "kind" the frontend's render-card
@@ -778,6 +789,9 @@ class SSEOutputHandler(OutputHandler):
                             open_idx + len("<think>") :
                         ]
                         self._in_thinking = True
+                        # Inline <think> carries no word count, but it does
+                        # prove the model has moved on from reading the prompt.
+                        self.report_phase("reasoning", "Reasoning")
                         continue
                     else:
                         break  # No more <think> tags
@@ -1499,6 +1513,22 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         if count > 5:
             result += f" (+{count - 5} more)"
         return result
+
+    # Tabular analysis: what was counted, not how many columns the file has.
+    row_count = data.get("row_count")
+    if (
+        isinstance(row_count, int)
+        and row_count > 0
+        and isinstance(data.get("columns"), list)
+        and data.get("status") != "error"
+    ):
+        rows = format_count(row_count, "rows")
+        groups = data.get("group_by_results")
+        if isinstance(groups, list) and groups and data.get("group_by"):
+            # The tool keeps only the 25 largest groups.
+            top = "top " if len(groups) >= 25 else ""
+            return f"{top}{format_count(len(groups), 'groups')} by {data['group_by']} · {rows}"
+        return f"{rows} · {format_count(len(data['columns']), 'columns')}"
 
     # Status-based results
     if "status" in data:

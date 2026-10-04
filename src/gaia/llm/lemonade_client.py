@@ -2183,6 +2183,11 @@ class LemonadeClient:
         # call so a later warm call never leaks a stale value.
         self._last_model_load_seconds: Optional[float] = None
 
+        # Called as (model, state) around a load this client actually performs:
+        # "downloading" or "loading" before it, "loaded" after it succeeds. A
+        # cold load is the longest silent wait a chat turn has.
+        self.model_load_listener: Optional[Callable[[str, str], None]] = None
+
         # Set logging level based on verbosity
         if not verbose:
             self.log.setLevel(logging.WARNING)
@@ -5155,6 +5160,10 @@ class LemonadeClient:
         # corrupt checkpoint) previously got hidden by a blanket
         # ``except Exception: log.debug(...)``, so the downstream chat call
         # failed generically with no model id, URL, or fix. Surface it loudly.
+        if self.model_load_listener is not None:
+            self.model_load_listener(
+                model, "downloading" if is_downloaded is False else "loading"
+            )
         _load_start = time.monotonic()
         try:
             self.load_model(
@@ -5175,6 +5184,8 @@ class LemonadeClient:
         # raises above and never reaches here, so it can't be misattributed
         # as ttft on a request that never got a response.
         self._last_model_load_seconds = time.monotonic() - _load_start
+        if self.model_load_listener is not None:
+            self.model_load_listener(model, "loaded")
 
         # Print model ready message
         try:
