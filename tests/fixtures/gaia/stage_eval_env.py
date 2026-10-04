@@ -9,12 +9,18 @@ apart on what "staged" means:
 
 It does three things:
 
-1. Copies ``tests/fixtures/gaia`` to ``<home>/gaia-eval`` (replacing any earlier
-   copy), because scenario messages name files like ``~/gaia-eval/csv/sales.csv``
-   and the agent's path sandbox refuses repo paths.
+1. Copies the agent-facing parts of ``tests/fixtures/gaia`` to
+   ``<home>/gaia-eval`` (replacing any earlier copy), because scenario messages
+   name files like ``~/gaia-eval/csv/sales.csv``. The eval backend runs from
+   that folder, so it is the agent's file scope; nothing that holds an answer
+   is copied there.
 2. Copies the starter skills under ``hub/skills`` into ``<home>/.gaia/skills``,
    except those the corpus contract says must start uninstalled.
 3. Builds and trusts the fixture hub with ``prepare_fixture_hub.py``.
+
+``<home>/.gaia-eval-bin`` (the fake ``gh``) must go first on the backend's
+``PATH``; the github-triage scenarios are written against it, never a real
+``gh``.
 
 ``--home`` is required: defaulting to the developer's real home would overwrite
 their installed skills and add a throwaway key to their trust store.
@@ -33,6 +39,19 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 HUB_SKILLS = REPO_ROOT / "hub" / "skills"
+
+#: What the scenarios name under ``~/gaia-eval`` (GAIA_FIXTURE_VALUES.md). Only
+#: these are staged: the agent can be granted that folder, so it must hold the
+#: files a user would have and nothing the scorer knows — no ground truth,
+#: generators, canned gh data or harness scripts.
+AGENT_FACING = ("csv", "mini_repo", "media", "capture")
+_NOT_AGENT_FACING = shutil.ignore_patterns("_gen_*", "ground_truth.json", "__pycache__")
+
+#: Loose files scenarios expect under ``~/gaia-eval``, staged from the corpus.
+_CORPUS_DOCS = REPO_ROOT / "eval" / "corpus" / "documents"
+LOOSE_FILES = {
+    _CORPUS_DOCS / "meeting_notes_q3.txt": Path("documents", "meeting_notes_q3.txt"),
+}
 
 #: Install scenarios download these from the fixture hub, so they must start
 #: uninstalled (GAIA_FIXTURE_VALUES.md, "Environment preconditions").
@@ -60,6 +79,39 @@ def _run(argv: list[str], what: str) -> None:
         )
 
 
+def install_fake_gh(home: Path) -> Path:
+    """Write ``gh`` launchers for the fake gh into ``<home>/.gaia-eval-bin``.
+
+    They run this checkout's ``fake_gh/gh.py``, so its canned answers stay out
+    of the staged ``gaia-eval`` folder the agent may read. The flagship runs a
+    skill-granted CLI as argv, and on Windows CreateProcess then finds only
+    ``gh.exe`` — a ``gh.cmd`` alone loses to the runner's real GitHub CLI — so
+    Windows also gets the bench stand-in's ``.exe`` launcher.
+
+    Returns:
+        The directory to put first on the backend's ``PATH``.
+    """
+    script = HERE / "fake_gh" / "gh.py"
+    bin_dir = home / ".gaia-eval-bin"
+    bin_dir.mkdir(exist_ok=True)
+    sh = bin_dir / "gh"
+    sh.write_text(
+        f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8"
+    )
+    sh.chmod(0o755)
+    (bin_dir / "gh.cmd").write_text(
+        f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8"
+    )
+    if sys.platform == "win32":
+        src = str(REPO_ROOT / "src")
+        if src not in sys.path:
+            sys.path.insert(0, src)
+        from gaia.eval.bench.ghstub import _exe_launcher
+
+        (bin_dir / "gh.exe").write_bytes(_exe_launcher(sys.executable, script))
+    return bin_dir
+
+
 def stage(home: Path) -> Path:
     """Stage fixtures, starter skills and the fixture hub under ``home``.
 
@@ -75,8 +127,13 @@ def stage(home: Path) -> Path:
             shutil.rmtree(fixtures, onexc=_clear_readonly)
         else:
             shutil.rmtree(fixtures, onerror=_clear_readonly)
-    shutil.copytree(HERE, fixtures)
+    for name in AGENT_FACING:
+        shutil.copytree(HERE / name, fixtures / name, ignore=_NOT_AGENT_FACING)
+    for source, dest in LOOSE_FILES.items():
+        (fixtures / dest).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, fixtures / dest)
     print(f"staged fixtures -> {fixtures}")
+    print(f"fake gh -> {install_fake_gh(home)} (prepend it to PATH)")
 
     skills_root = home / ".gaia" / "skills"
     skills_root.mkdir(parents=True, exist_ok=True)

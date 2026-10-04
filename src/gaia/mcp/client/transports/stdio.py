@@ -11,6 +11,7 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional
 
+from gaia.env import child_env
 from gaia.logger import get_logger
 
 from .base import MCPTransport
@@ -94,7 +95,7 @@ class StdioTransport(MCPTransport):
     Args:
         command: Base command to start the MCP server (e.g., "npx" or "python")
         args: Optional list of arguments (e.g., ["-y", "@modelcontextprotocol/server-github"])
-        env: Optional environment variables to merge with system env
+        env: Extra variables for the server, overlaid on the child environment
         timeout: Request timeout in seconds (default: 30)
         debug: Enable debug logging (default: False)
     """
@@ -157,11 +158,9 @@ class StdioTransport(MCPTransport):
             if self.debug:
                 logger.debug(f"Starting MCP server with command: {argv}")
 
-            # Merge environment if provided
-            merged_env = None
-            if self.env:
-                merged_env = os.environ.copy()
-                merged_env.update(self.env)
+            # Never None: an inherited environment would carry GAIA's own
+            # credentials into the server.
+            merged_env = child_env(self.env)
 
             self._process = subprocess.Popen(
                 argv,

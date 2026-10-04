@@ -36,7 +36,6 @@ import contextlib
 import json
 import os
 import queue
-import re
 import threading
 import time
 import uuid
@@ -57,9 +56,10 @@ from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
 
-from gaia.agents.base.readiness import start_advice
+from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
+from gaia.version import LEMONADE_MIN_VERSION
 
 logger = get_logger(__name__)
 
@@ -464,34 +464,6 @@ def build_query_agent(**config_kwargs: Any):
     return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
 
 
-#: Lemonade floor. Kept in lock-step with gaia_agent_email.version and
-#: gaia.installer.init_command — a machine provisioned for one agent must not be
-#: below the floor of another.
-MIN_LEMONADE_VERSION = "10.2.0"
-
-
-def _version_meets_min(version: Optional[str], minimum: str) -> Optional[bool]:
-    """``True``/``False``, or ``None`` when the version cannot be compared.
-
-    ``None`` is *indeterminate*, not a pass — the caller renders it as an
-    unknown row rather than a green one, so an unparseable version never
-    silently reads as compatible.
-    """
-    if not version:
-        return None
-    try:
-        # Leading digits per part: this reads /api/v1/health verbatim, and
-        # Lemonade's CalVer dev builds look like "2026.39.0~12.abc1234".
-        got = tuple(
-            int(re.match(r"\s*(\d+)", p).group(1))
-            for p in str(version).strip().lstrip("v").split(".")[:3]
-        )
-        want = tuple(int(p) for p in minimum.split(".")[:3])
-    except (ValueError, AttributeError):
-        return None
-    return got >= want
-
-
 def _probe_lemonade() -> Dict[str, Any]:
     """Read-only probe of the local model server. Never pulls or loads."""
     import requests
@@ -585,7 +557,7 @@ async def init() -> Dict[str, Any]:
 
     probe = await asyncio.to_thread(_probe_lemonade)
     compatible = (
-        _version_meets_min(probe["version"], MIN_LEMONADE_VERSION)
+        version_meets_min(probe["version"], LEMONADE_MIN_VERSION)
         if probe["reachable"]
         else None
     )
@@ -603,7 +575,8 @@ async def init() -> Dict[str, Any]:
     elif compatible is False:
         hint = (
             f"Lemonade {probe['version']} is older than the required "
-            f"{MIN_LEMONADE_VERSION}. Update it, then re-check."
+            f"{LEMONADE_MIN_VERSION}. Run `gaia init --force-reinstall`, then "
+            "re-check."
         )
     elif not probe["present"]:
         # `gaia download` takes no positional model — argparse exits 2 on it.
@@ -622,7 +595,7 @@ async def init() -> Dict[str, Any]:
             "reachable": probe["reachable"],
             "base_url": probe["base_url"],
             "version": probe["version"],
-            "min_version": MIN_LEMONADE_VERSION,
+            "min_version": LEMONADE_MIN_VERSION,
             "compatible": compatible,
         },
         "model": {

@@ -301,6 +301,8 @@ Binding to loopback is not access control — this agent has shell and file tool
 - **A loopback `Host` allowlist.** A `Host` header that isn't `127.0.0.1`, `localhost`, or `::1` is **400** — this is what defeats DNS rebinding.
 - **Origin rejection.** A request carrying a non-loopback browser `Origin` is **403**. Non-browser clients send no `Origin` and are unaffected.
 
+The shell commands and MCP servers the agent starts never inherit the sidecar token or GAIA's other internal credentials. To withhold your own variables from them as well, list the names in `GAIA_CHILD_ENV_DENY`; `GAIA_NO_DOTENV=1` stops the agent loading `.env` files. Both are described in [Configuration](/sdk/configuration).
+
 `GET /health`, `GET /version`, and `GET /v1/gaia/version` skip the token — they're the probes a host polls before any token is in play, and none of them exposes your data. `Host` and `Origin` still apply to them.
 
 If neither token variable is set, the sidecar starts with the token check off and says so loudly in its log; `Host` and `Origin` stay enforced. That's a **local development** convenience — a sidecar you started by hand — not something to build on. Full details, including how to supply a token when you spawn the sidecar yourself, are in the package's [SPEC.md §5.4](https://github.com/amd/gaia/blob/main/hub/agents/gaia/npm/SPEC.md).
