@@ -42,6 +42,13 @@ _BASE_URL = "http://localhost:13305/api/v1"
 _GET_MODELS_PATCH_TARGET = "gaia.agents.builder.agent.get_lemonade_models"
 
 
+def _unreachable():
+    """What ``get_lemonade_models`` raises when the server can't be reached."""
+    return LemonadeNetworkError(
+        user_message=f"Couldn't reach Lemonade Server at {_BASE_URL} (ConnectionError)."
+    )
+
+
 def _make_agent(config: BuilderAgentConfig, tmp_path) -> BuilderAgent:
     with patch("os.path.expanduser", return_value=str(tmp_path)):
         return BuilderAgent(config)
@@ -89,8 +96,8 @@ class TestSelectBuilderModelFunction:
         assert result != "Qwen3.5-35B-A3B-GGUF"
 
     def test_unreachable_lemonade_raises_network_error(self):
-        """``get_lemonade_models`` returning None means unreachable, not empty."""
-        with patch(_GET_MODELS_PATCH_TARGET, return_value=None):
+        """An unreachable server propagates as a network error, not "empty"."""
+        with patch(_GET_MODELS_PATCH_TARGET, side_effect=_unreachable()):
             with pytest.raises(LemonadeNetworkError):
                 _select_builder_model(_BASE_URL)
 
@@ -111,7 +118,7 @@ class TestSelectBuilderModelFunction:
 
     def test_unreachable_and_no_models_errors_are_distinct(self):
         """The 'can't tell' case and the 'nothing installed' case must not share text."""
-        with patch(_GET_MODELS_PATCH_TARGET, return_value=None):
+        with patch(_GET_MODELS_PATCH_TARGET, side_effect=_unreachable()):
             with pytest.raises(LemonadeNetworkError) as unreachable_exc:
                 _select_builder_model(_BASE_URL)
 
@@ -124,10 +131,23 @@ class TestSelectBuilderModelFunction:
     def test_unreachable_error_does_not_claim_not_installed(self):
         """The unreachable-server message must be connectivity-flavored, not
         imply the model is missing (that's a different, misleading claim)."""
-        with patch(_GET_MODELS_PATCH_TARGET, return_value=None):
+        import requests
+
+        from gaia.llm.lemonade_launcher import StartHint
+
+        with (
+            patch("requests.get", side_effect=requests.exceptions.ConnectionError()),
+            patch(
+                "gaia.llm.lemonade_launcher.describe_start_hint",
+                return_value=StartHint(instruction="Run: gaia lemonade embedded start"),
+            ),
+        ):
             with pytest.raises(LemonadeNetworkError) as excinfo:
                 _select_builder_model(_BASE_URL)
-        assert "not installed" not in excinfo.value.user_message.lower()
+        message = excinfo.value.user_message
+        assert "not installed" not in message.lower()
+        assert _BASE_URL in message
+        assert "gaia lemonade embedded start" in message
 
     def test_error_never_claims_quality_is_reduced(self):
         """No 'quality may be reduced' FUD — rejected in the accepted plan."""
@@ -171,7 +191,7 @@ class TestBuilderAgentModelSelectionOnConstruction:
 
     def test_construction_raises_network_error_when_unreachable(self, tmp_path):
         config = BuilderAgentConfig(base_url=_BASE_URL, model_id=None)
-        with patch(_GET_MODELS_PATCH_TARGET, return_value=None):
+        with patch(_GET_MODELS_PATCH_TARGET, side_effect=_unreachable()):
             with pytest.raises(LemonadeNetworkError):
                 _make_agent(config, tmp_path)
 
@@ -187,7 +207,7 @@ class TestBuilderAgentModelSelectionOnConstruction:
         """Pinning a model_id must succeed even if Lemonade can't be reached —
         the explicit choice is never second-guessed by a live network check."""
         config = BuilderAgentConfig(base_url=_BASE_URL, model_id="My-Pinned-Model")
-        with patch(_GET_MODELS_PATCH_TARGET, return_value=None) as mock_get:
+        with patch(_GET_MODELS_PATCH_TARGET, side_effect=_unreachable()) as mock_get:
             agent = _make_agent(config, tmp_path)
         mock_get.assert_not_called()
         assert agent.model_id == "My-Pinned-Model"
@@ -220,25 +240,59 @@ class TestGetLemonadeModelsRequestShape:
         ), f"expected the /models endpoint, got: {called_url!r}"
         assert result == ["gemma4-it-e2b-FLM", "Qwen3.5-35B-A3B-GGUF"]
 
-    def test_get_lemonade_models_returns_none_on_connection_error(self):
+    def test_get_lemonade_models_raises_network_error_on_connection_error(self):
         import requests
 
         from gaia.agents.registry import get_lemonade_models
 
-        with patch("requests.get", side_effect=requests.exceptions.ConnectionError()):
-            result = get_lemonade_models(_BASE_URL)
-        assert result is None
+        with (
+            patch("requests.get", side_effect=requests.exceptions.ConnectionError()),
+            pytest.raises(LemonadeNetworkError) as excinfo,
+        ):
+            get_lemonade_models(_BASE_URL)
+        assert _BASE_URL in excinfo.value.user_message
 
-    def test_get_lemonade_models_returns_none_on_non_2xx(self):
+    def test_get_lemonade_models_raises_on_non_2xx(self):
         from gaia.agents.registry import get_lemonade_models
 
         mock_response = MagicMock()
         mock_response.status_code = 500
         mock_response.json.return_value = {"data": []}
 
-        with patch("requests.get", return_value=mock_response):
-            result = get_lemonade_models(_BASE_URL)
-        assert result is None
+        with (
+            patch("requests.get", return_value=mock_response),
+            pytest.raises(LemonadeError) as excinfo,
+        ):
+            get_lemonade_models(_BASE_URL)
+        assert not isinstance(excinfo.value, LemonadeNetworkError)
+        assert "HTTP 500" in excinfo.value.user_message
+
+    def test_get_lemonade_models_names_the_key_on_401(self):
+        from gaia.agents.registry import get_lemonade_models
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+
+        with (
+            patch("requests.get", return_value=mock_response),
+            pytest.raises(LemonadeError) as excinfo,
+        ):
+            get_lemonade_models(_BASE_URL)
+        assert "LEMONADE_API_KEY" in excinfo.value.user_message
+
+    def test_get_lemonade_models_raises_on_malformed_body(self):
+        from gaia.agents.registry import get_lemonade_models
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": [{"name": "no-id"}]}
+
+        with (
+            patch("requests.get", return_value=mock_response),
+            pytest.raises(LemonadeError) as excinfo,
+        ):
+            get_lemonade_models(_BASE_URL)
+        assert "unreadable" in excinfo.value.user_message
 
     def test_get_lemonade_models_empty_list_is_not_none(self):
         """Reachable server, zero models installed -> [] not None. These are

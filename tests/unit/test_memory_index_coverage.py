@@ -17,7 +17,12 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from gaia.agents.base.memory import EMBEDDING_DIM, MemoryMixin, _embedding_to_blob
+from gaia.agents.base.memory import (
+    EMBEDDING_DIM,
+    WRITE_FAILURE_INDEX,
+    MemoryMixin,
+    _embedding_to_blob,
+)
 from gaia.agents.base.memory_store import MemoryStore
 
 DIM = 512
@@ -183,8 +188,9 @@ def test_an_unreadable_memory_vector_is_counted_not_fatal(store, caplog):
 
     assert host._faiss_index.ntotal == 2
     assert first_id not in host._faiss_id_map
+    assert host.memory_write_failures() == {WRITE_FAILURE_INDEX: 1}
     assert any(
-        "1 stored embedding(s)" in r.getMessage() and first_id in r.getMessage()
+        "1 stored search vector(s)" in r.getMessage()
         for r in caplog.records
         if r.levelname == "WARNING"
     )
@@ -211,8 +217,9 @@ def test_an_unreadable_or_misshapen_procedure_vector_is_counted(store, caplog):
         host._rebuild_proc_faiss_index()
 
     assert host._proc_faiss_index.ntotal == 1
+    assert host.memory_write_failures() == {WRITE_FAILURE_INDEX: 2}
     assert any(
-        "2 stored procedure embedding(s)" in r.getMessage()
+        "2 stored procedure search vector(s)" in r.getMessage()
         for r in caplog.records
         if r.levelname == "WARNING"
     )

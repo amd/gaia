@@ -48,7 +48,8 @@ class ProceduralMemoryMixin:
     MemoryMixin host via MRO. Relies on host state/methods that
     MemoryMixin.init_memory and MemoryMixin define: self._memory_store,
     self._proc_faiss_index, self._proc_faiss_id_map, self._recalled_skill_prompt,
-    self._recalled_skills, self._embed_text, self.chat, self.rebuild_system_prompt.
+    self._recalled_skills, self._embed_text, self.chat, self.rebuild_system_prompt,
+    self._note_memory_write_failure.
     """
 
     # ==================================================================
@@ -67,7 +68,11 @@ class ProceduralMemoryMixin:
         """
         # Deferred to break the memory <-> procedural_memory import cycle; read at
         # call time, after memory.py has finished loading.
-        from gaia.agents.base.memory import EMBEDDING_DIM, _blob_to_embedding
+        from gaia.agents.base.memory import (
+            EMBEDDING_DIM,
+            WRITE_FAILURE_INDEX,
+            _blob_to_embedding,
+        )
 
         try:
             import faiss
@@ -89,7 +94,7 @@ class ProceduralMemoryMixin:
 
         index = faiss.IndexFlatIP(EMBEDDING_DIM)
         id_map: List[str] = []
-        unindexed: List[str] = []
+        skipped = 0
 
         for proc in procedures:
             blob = proc.get("embedding")
@@ -103,7 +108,7 @@ class ProceduralMemoryMixin:
                     proc["id"],
                     e,
                 )
-                unindexed.append(proc["id"])
+                skipped += 1
                 continue
             if vec.shape[0] != EMBEDDING_DIM:
                 logger.debug(
@@ -112,7 +117,7 @@ class ProceduralMemoryMixin:
                     vec.shape[0],
                     EMBEDDING_DIM,
                 )
-                unindexed.append(proc["id"])
+                skipped += 1
                 continue
             norm = np.linalg.norm(vec)
             if norm > 0:
@@ -120,15 +125,14 @@ class ProceduralMemoryMixin:
             index.add(vec.reshape(1, -1))
             id_map.append(proc["id"])
 
-        if unindexed:
-            logger.warning(
-                "[MemoryMixin] %d stored procedure embedding(s) are unreadable or "
-                "the wrong dimension (index expects %d) and were left out of the "
-                "vector index; those procedures are reachable only by keyword. "
-                "First: %s",
-                len(unindexed),
-                EMBEDDING_DIM,
-                unindexed[0],
+        if skipped:
+            self._note_memory_write_failure(
+                WRITE_FAILURE_INDEX,
+                "[MemoryMixin] %d stored procedure search vector(s) are the wrong "
+                "size or unreadable and were left out of the procedures search "
+                "index, so recall by goal misses those procedures (keyword "
+                "recall still finds them).",
+                skipped,
             )
 
         with _PROC_INDEX_LOCK:
@@ -288,7 +292,7 @@ class ProceduralMemoryMixin:
         except Exception as e:
             logger.warning(
                 "[MemoryMixin] procedure recall skipped — embedding the goal "
-                "failed (start lemonade-server to re-enable recall): %s",
+                "failed (recall resumes once Lemonade Server is reachable): %s",
                 e,
             )
             return []

@@ -293,7 +293,7 @@ python util/lint.py --black       # Code formatting
 python util/lint.py --isort       # Import sorting
 python util/lint.py --pylint      # pylint
 python util/lint.py --flake8      # flake8
-python util/lint.py --mypy        # type checking
+python util/lint.py --mypy        # type checking (blocking only on already-clean modules)
 python util/lint.py --bandit      # security scan
 python util/lint.py --imports     # custom import-cycle check
 python util/lint.py --workflow-triggers # reject on.pull_request.branches filters
@@ -309,6 +309,15 @@ means "only when merging into main" — every PR stacked on a feature branch ski
 workflow, with nothing on its checks page to say so
 ([#2767](https://github.com/amd/gaia/issues/2767)). Scope a workflow with `paths:`
 instead.
+</Note>
+
+<Note>
+`--mypy` runs twice. The full `src/gaia` run is advisory. A second run over
+`MYPY_CLEAN_MODULES` in `util/lint.py` — modules with zero errors — blocks, so a
+clean module can't regress. Add a module to that list once you bring it to zero; fix
+a new error rather than removing a module to get CI green. The mypy version pin in
+`TOOL_VERSIONS` only applies when `uvx` is on your PATH; without it, `lint.py` runs
+whatever `mypy` you have installed, which may disagree with CI.
 </Note>
 
 <Note>

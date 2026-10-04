@@ -396,6 +396,20 @@ _CROSS_ENCODER_UNAVAILABLE = False
 #: Guards the one-time creation of each instance's extraction bookkeeping.
 _EXTRACTION_STATE_LOCK = threading.Lock()
 
+#: Guards each instance's per-session write-failure counts.
+_WRITE_FAILURE_LOCK = threading.Lock()
+
+#: Write-failure kinds counted by ``MemoryMixin._note_memory_write_failure``.
+WRITE_FAILURE_EMBED = "embed"  # row saved, no search vector stored
+WRITE_FAILURE_INDEX = "index"  # vector stored, not in this session's index
+WRITE_FAILURE_STORE = "store"  # row not saved at all
+
+_REEMBED_HINT = (
+    "Agents re-embed missing vectors on startup (up to 100 per start) when the "
+    "embedding model is loaded, or use Rebuild Embeddings in the Memory "
+    "Dashboard (gaia chat --ui); `gaia memory status` shows how many are waiting."
+)
+
 
 def drain_memory_extraction(
     agent: Any, timeout: float = EXTRACTION_EXIT_WAIT_S
@@ -716,6 +730,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # Embedding infrastructure (lazy-init via _get_embedder)
         self._embedder = None
+        self._memory_write_failures: Dict[str, int] = {}
 
         # FAISS index state
         self._faiss_index = None
@@ -929,7 +944,14 @@ class MemoryMixin(ProceduralMemoryMixin):
             try:
                 self._memory_store.delete_by_category("system")
             except Exception as e:
-                logger.debug("[MemoryMixin] failed to clear system context: %s", e)
+                self._note_memory_write_failure(
+                    WRITE_FAILURE_STORE,
+                    "[MemoryMixin] could not clear old system context before "
+                    "refreshing it, so outdated OS/hardware/version facts may "
+                    "sit beside the new ones: %s. Run `gaia memory bootstrap "
+                    "--reset-system` to clear them.",
+                    e,
+                )
 
         # Collect system information
         try:
@@ -954,7 +976,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
                 stored += 1
             except Exception as e:
-                logger.debug("[MemoryMixin] failed to store system fact: %s", e)
+                self._note_memory_write_failure(
+                    WRITE_FAILURE_STORE,
+                    "[MemoryMixin] a system fact (domain=%s) was not saved: %s. "
+                    "Run `gaia memory bootstrap --system` to collect it again.",
+                    fact.get("domain"),
+                    e,
+                )
 
         if stored > 0:
             logger.info("[MemoryMixin] stored %d system context items", stored)
@@ -1268,6 +1296,85 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         return count
 
+    def _note_memory_write_failure(self, kind: str, message: str, *args) -> None:
+        """Count a memory write that lost data; warn once per kind per session.
+
+        Later failures of the same kind log at debug so a dead embedder does not
+        print one warning per stored item.
+        """
+        with _WRITE_FAILURE_LOCK:
+            counts = getattr(self, "_memory_write_failures", None)
+            if counts is None:
+                counts = {}
+                self._memory_write_failures = counts
+            first = kind not in counts
+            counts[kind] = counts.get(kind, 0) + 1
+        if first:
+            logger.warning(
+                message + " (Further '%s' failures this session log at debug.)",
+                *args,
+                kind,
+            )
+        else:
+            logger.debug(message, *args)
+
+    def memory_write_failures(self) -> Dict[str, int]:
+        """Per-kind count of memory writes that lost data this session.
+
+        Keys are ``WRITE_FAILURE_EMBED`` (saved without a search vector),
+        ``WRITE_FAILURE_INDEX`` (vector not in the search index) and
+        ``WRITE_FAILURE_STORE`` (not saved).
+        """
+        with _WRITE_FAILURE_LOCK:
+            return dict(getattr(self, "_memory_write_failures", None) or {})
+
+    def _embed_and_index(
+        self, knowledge_id: str, text: str, what: str, *, replace: bool = False
+    ) -> bool:
+        """Embed an already-saved row and add it to the search index.
+
+        The row is saved either way, so failures are counted and warned about
+        rather than raised; the startup backfill re-embeds a row left without
+        a vector. ``replace`` drops the row's old vector from the index first.
+
+        Returns:
+            True when the vector was stored, False when the row has none.
+        """
+        # Drop the old vector first: the row already holds the new text, so a
+        # failed embed below must not leave recall matching the old one.
+        old_vector_dropped = True
+        if replace:
+            try:
+                self._faiss_remove(knowledge_id)
+            except Exception as e:  # restart rebuilds the index from the DB
+                old_vector_dropped = False
+                self._note_memory_write_failure(
+                    WRITE_FAILURE_INDEX,
+                    "[MemoryMixin] could not replace the search vector of %s %s "
+                    "in this session's index, so recall by meaning may match its "
+                    "old content until the agent restarts: %s",
+                    what,
+                    knowledge_id,
+                    e,
+                )
+        try:
+            vec = self._embed_text(text)
+            self._memory_store.store_embedding(knowledge_id, _embedding_to_blob(vec))
+        except Exception as e:  # the row is saved; only its vector is lost
+            self._note_memory_write_failure(
+                WRITE_FAILURE_EMBED,
+                "[MemoryMixin] %s %s was saved without a search vector, so "
+                "recall by meaning misses it until it is re-embedded (keyword "
+                "recall still finds it): %s. " + _REEMBED_HINT,
+                what,
+                knowledge_id,
+                e,
+            )
+            return False
+        if old_vector_dropped:
+            self._faiss_add(knowledge_id, vec)
+        return True
+
     # ==================================================================
     # FAISS Index Lifecycle
     # ==================================================================
@@ -1313,14 +1420,14 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         index = faiss.IndexFlatIP(self._embedding_dim)
         id_map = []
-        unindexed = []
+        skipped = 0
 
         for item in items:
             try:
                 vec = _blob_to_embedding(item["embedding"])
             except (ValueError, TypeError) as e:  # TypeError: a non-BLOB value
                 logger.debug("[MemoryMixin] unreadable embedding %s: %s", item["id"], e)
-                unindexed.append(item["id"])
+                skipped += 1
                 continue
             if vec.shape[0] != self._embedding_dim:
                 logger.debug(
@@ -1329,7 +1436,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     vec.shape[0],
                     self._embedding_dim,
                 )
-                unindexed.append(item["id"])
+                skipped += 1
                 continue
             norm = np.linalg.norm(vec)
             if norm > 0:
@@ -1337,14 +1444,14 @@ class MemoryMixin(ProceduralMemoryMixin):
             index.add(vec.reshape(1, -1))
             id_map.append(item["id"])
 
-        if unindexed:
-            logger.warning(
-                "[MemoryMixin] %d stored embedding(s) are unreadable or the wrong "
-                "dimension (index expects %d) and were left out of the vector "
-                "index; those memories are reachable only by keyword. First: %s",
-                len(unindexed),
-                self._embedding_dim,
-                unindexed[0],
+        if skipped:
+            self._note_memory_write_failure(
+                WRITE_FAILURE_INDEX,
+                "[MemoryMixin] %d stored search vector(s) are the wrong size or "
+                "unreadable and were left out of the search index, so recall by "
+                "meaning misses those memories (keyword recall still finds "
+                "them). Editing a memory's text re-embeds it.",
+                skipped,
             )
 
         self._faiss_index = index
@@ -1368,8 +1475,15 @@ class MemoryMixin(ProceduralMemoryMixin):
                     vec = vec / norm
                 self._faiss_index.add(vec.reshape(1, -1))
                 self._faiss_id_map.append(knowledge_id)
-            except Exception as e:
-                logger.debug("[MemoryMixin] FAISS add failed: %s", e)
+            except Exception as e:  # vector is stored; restart rebuilds the index
+                self._note_memory_write_failure(
+                    WRITE_FAILURE_INDEX,
+                    "[MemoryMixin] memory %s has a stored search vector but could "
+                    "not be added to this session's index, so recall by meaning "
+                    "misses it until the agent restarts: %s",
+                    knowledge_id,
+                    e,
+                )
 
     def _faiss_remove(self, knowledge_id: str) -> None:
         """Remove a vector from FAISS index by knowledge_id.
@@ -1635,8 +1749,12 @@ class MemoryMixin(ProceduralMemoryMixin):
                     try:
                         store.update_confidence(item["id"], 0.02)
                         item["confidence"] = min(item["confidence"] + 0.02, 1.0)
-                    except Exception:
-                        pass
+                    except Exception as e:  # a missed +0.02 bump loses no data
+                        logger.debug(
+                            "[MemoryMixin] recall confidence bump failed for %s: %s",
+                            item["id"],
+                            e,
+                        )
 
         return results
 
@@ -1953,15 +2071,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         context=target_context,
                     )
                     applied += 1
-                    # Embed the new item
-                    try:
-                        vec = self._embed_text(op["content"])
-                        store.store_embedding(new_id, _embedding_to_blob(vec))
-                        self._faiss_add(new_id, vec)
-                    except Exception as e:
-                        logger.debug(
-                            "[MemoryMixin] embedding new extraction failed: %s", e
-                        )
+                    self._embed_and_index(new_id, op["content"], "extracted memory")
 
                 elif op_type == "update":
                     old_id = op["knowledge_id"]
@@ -1993,16 +2103,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     if new_id != old_id:
                         store.update(old_id, superseded_by=new_id)
                         self._faiss_remove(old_id)
-                    # Embed the new item
-                    try:
-                        vec = self._embed_text(op["content"])
-                        store.store_embedding(new_id, _embedding_to_blob(vec))
-                        self._faiss_add(new_id, vec)
-                    except Exception as e:
-                        logger.debug(
-                            "[MemoryMixin] embedding updated extraction failed: %s",
-                            e,
-                        )
+                    self._embed_and_index(new_id, op["content"], "updated memory")
 
                 elif op_type == "delete":
                     kid = op["knowledge_id"]
@@ -2184,21 +2285,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                             confidence=0.5,
                             context=self._memory_context,
                         )
-                        # Embed the summary
-                        try:
-                            vec = self._embed_text(summary)
-                            store.store_embedding(summary_id, _embedding_to_blob(vec))
-                            self._faiss_add(summary_id, vec)
-                        except Exception as e:
-                            # Non-fatal: the row is stored; the vector is
-                            # backfilled on the next init. Logged so the gap is
-                            # never silent.
-                            logger.debug(
-                                "[MemoryMixin] consolidation summary embed failed "
-                                "(id=%s, backfilled on restart): %s",
-                                summary_id,
-                                e,
-                            )
+                        self._embed_and_index(summary_id, summary, "session summary")
 
                     # Store extracted knowledge items
                     knowledge_items = data.get("knowledge", [])
@@ -2222,24 +2309,16 @@ class MemoryMixin(ProceduralMemoryMixin):
                                 confidence=0.5,
                                 context=self._memory_context,
                             )
-                            # Embed
-                            try:
-                                vec = self._embed_text(ki["content"])
-                                store.store_embedding(kid, _embedding_to_blob(vec))
-                                self._faiss_add(kid, vec)
-                            except Exception as e:
-                                # Non-fatal: row stored; vector backfilled on
-                                # next init. Logged so the gap is not silent.
-                                logger.debug(
-                                    "[MemoryMixin] consolidation item embed "
-                                    "failed (id=%s, backfilled on restart): %s",
-                                    kid,
-                                    e,
-                                )
+                            self._embed_and_index(
+                                kid, ki["content"], "consolidated memory"
+                            )
                             result["extracted_items"] += 1
                         except Exception as e:
-                            logger.debug(
-                                "[MemoryMixin] consolidation knowledge store failed: %s",
+                            self._note_memory_write_failure(
+                                WRITE_FAILURE_STORE,
+                                "[MemoryMixin] a fact distilled from session %s "
+                                "was not saved: %s",
+                                session_id[:8],
                                 e,
                             )
 
@@ -3512,15 +3591,16 @@ class MemoryMixin(ProceduralMemoryMixin):
                 confidence=0.5,
                 metadata={"operation": self._operation_key(tool_name, tool_args)},
             )
-            try:
-                vec = self._embed_text(error_content)
-                self._memory_store.store_embedding(kid, _embedding_to_blob(vec))
-                self._faiss_add(kid, vec)
-            except Exception as embed_exc:
-                logger.debug("[MemoryMixin] could not embed error: %s", embed_exc)
+            self._embed_and_index(kid, error_content, "tool-error memory")
             logger.debug("[MemoryMixin] auto-stored error: %s", error_content[:80])
         except Exception as e:
-            logger.debug("[MemoryMixin] failed to auto-store error: %s", e)
+            self._note_memory_write_failure(
+                WRITE_FAILURE_STORE,
+                "[MemoryMixin] the error from tool '%s' was not saved to memory, "
+                "so the agent will not learn to avoid it: %s",
+                tool_name,
+                e,
+            )
 
     # ------------------------------------------------------------------
     # Hook 4: Post-Query Processing
@@ -3879,15 +3959,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 entity=entity or None,
                 confidence=0.7,  # Explicit remember() calls are high-confidence
             )
-            # Embed the new item
-            try:
-                vec = mixin._embed_text(fact[:MAX_CONTENT_LENGTH])
-                mixin._memory_store.store_embedding(
-                    knowledge_id, _embedding_to_blob(vec)
-                )
-                mixin._faiss_add(knowledge_id, vec)
-            except Exception as e:
-                logger.debug("[MemoryMixin] embedding on remember failed: %s", e)
+            mixin._embed_and_index(
+                knowledge_id, fact[:MAX_CONTENT_LENGTH], "remembered fact"
+            )
 
             msg = f"Remembered: {fact[:80]}"
             if was_truncated:
@@ -4163,18 +4237,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             if success:
                 # Re-embed if content changed
                 if content:
-                    try:
-                        vec = mixin._embed_text(kwargs["content"])
-                        mixin._memory_store.store_embedding(
-                            knowledge_id, _embedding_to_blob(vec)
-                        )
-                        # Replace in FAISS: remove old, add new
-                        mixin._faiss_remove(knowledge_id)
-                        mixin._faiss_add(knowledge_id, vec)
-                    except Exception as e:
-                        logger.debug(
-                            "[MemoryMixin] re-embedding on update failed: %s", e
-                        )
+                    mixin._embed_and_index(
+                        knowledge_id, kwargs["content"], "edited memory", replace=True
+                    )
 
                 result = {"status": "updated", "knowledge_id": knowledge_id}
                 if content_truncated:
