@@ -774,7 +774,7 @@ The lemonade server must be running. If not available, the command will provide 
 
 ### Chat Command
 
-Start an interactive conversation or send a single message with conversation history.
+Talk to the flagship GAIA agent (the same agent the TUI and Agent UI run): start an interactive conversation, or send a single message and exit.
 
 ```bash
 gaia chat [MESSAGE] [OPTIONS]
@@ -795,7 +795,7 @@ on stderr.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
-| `--model` | string | auto-selected by agent | Override the model used by `ChatAgent` (`None` means let the agent pick; see `ChatAgentConfig.model_id`). Falls back to `default_model` from config — see [Configuration](#configuration) |
+| `--model` | string | auto-selected by agent | Override the model the GAIA agent uses (`None` means let the agent pick; see `GaiaAgentConfig.model_id`). Falls back to `default_model` from config — see [Configuration](#configuration) |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
 | `--chunk-size` | integer | 500 | Document chunk size for RAG |

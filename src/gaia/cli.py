@@ -561,7 +561,7 @@ async def async_main(action, **kwargs):
             lemonade_base_url = detected_base_url
             kwargs["base_url"] = detected_base_url
 
-    # Create client for actions that use GaiaCliClient (not chat - it uses ChatAgent)
+    # Create client for actions that use GaiaCliClient (not chat - it uses GaiaAgent)
     client = None
     if action in ["prompt", "stats"]:
         # Pass only what GaiaCliClient accepts; unrelated CLI flags (e.g. --ui)
@@ -582,16 +582,15 @@ async def async_main(action, **kwargs):
                 return {"response": response, "stats": stats}
         return {"response": response}
     elif action == "chat":
-        # Use Chat Agent with RAG, file search, and shell execution.
-        # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+        # `gaia chat` runs the flagship; it ships as the gaia-agent-gaia wheel.
         try:
-            from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+            from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
             from gaia_agent_chat.app import interactive_mode
         except ImportError as e:
             raise RuntimeError(
                 agent_not_installed_message(
-                    "The chat agent is not installed",
-                    "gaia-agent-chat",
+                    "The GAIA agent is not installed",
+                    "gaia-agent-gaia",
                     next_step="Then re-run `gaia chat`.",
                 )
             ) from e
@@ -693,7 +692,7 @@ async def async_main(action, **kwargs):
                 )
 
             # Create configuration with CLI values
-            config = ChatAgentConfig(
+            config = GaiaAgentConfig(
                 use_claude=kwargs.get("use_claude", False),
                 use_chatgpt=kwargs.get("use_chatgpt", False),
                 claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
@@ -719,34 +718,16 @@ async def async_main(action, **kwargs):
                 mcp_tool_limit=kwargs.get("mcp_tool_limit", 50),
             )
 
-            # Create Chat Agent with configuration
-            agent = ChatAgent(config)
+            agent = GaiaAgent(config)
 
-            # Set on the instance, not through ChatAgentConfig: the attribute is
-            # core-owned, but gaia-agent-chat is an independently-versioned
-            # wheel — an unknown config kwarg would crash `gaia chat` outright.
+            # Set on the instance, not through the config: the attribute is
+            # core-owned, but the agent wheels are independently versioned —
+            # an unknown config kwarg would crash `gaia chat` outright.
             if kwargs.get("no_learned_skills", False):
                 agent._learned_skills_enabled = False
 
-            # Create initial session if not loading one. ``_ensure_tool_loader_reset``
-            # is a ChatAgent method (#2323); guard with hasattr since cli.py (core)
-            # and gaia-agent-chat (an independently-versioned hub wheel) can drift —
-            # an older installed wheel won't have it yet. It logs its own
-            # "Created new session" line, so the fallback branch below does too
-            # (for parity), but the two are not both reachable in one call.
-            if not agent.current_session:
-                if hasattr(agent, "_ensure_tool_loader_reset"):
-                    agent._ensure_tool_loader_reset()
-                else:
-                    agent.current_session = agent.session_manager.create_session()
-                    try:
-                        if hasattr(agent, "tool_loader"):
-                            agent.tool_loader.reset_session()
-                    except Exception as e:
-                        log.debug("Tool loader session reset skipped: %s", e)
-                    log.debug(
-                        f"Created new session: {agent.current_session.session_id}"
-                    )
+            # A session unless one was loaded above.
+            agent._ensure_tool_loader_reset()
 
             # List tools if requested
             if kwargs.get("list_tools", False):
@@ -966,38 +947,25 @@ def _launch_interactive_cli(log=None):
         if not success:
             sys.exit(1)
 
-        # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
         try:
-            from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+            from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
             from gaia_agent_chat.app import interactive_mode
         except ImportError as e:
             raise RuntimeError(
                 agent_not_installed_message(
-                    "The chat agent is not installed",
-                    "gaia-agent-chat",
+                    "The GAIA agent is not installed",
+                    "gaia-agent-gaia",
                     next_step="Then re-run `gaia chat`.",
                 )
             ) from e
 
-        config = ChatAgentConfig(
+        config = GaiaAgentConfig(
             base_url=base_url or resolve_lemonade_base_url(),
             silent_mode=True,
         )
-        agent = ChatAgent(config)
+        agent = GaiaAgent(config)
 
-        # ``_ensure_tool_loader_reset`` is a ChatAgent method (#2323); guard with
-        # hasattr since cli.py (core) and gaia-agent-chat (an independently
-        # versioned hub wheel) can drift — an older installed wheel won't have it.
-        if not agent.current_session:
-            if hasattr(agent, "_ensure_tool_loader_reset"):
-                agent._ensure_tool_loader_reset()
-            else:
-                agent.current_session = agent.session_manager.create_session()
-                try:
-                    if hasattr(agent, "tool_loader"):
-                        agent.tool_loader.reset_session()
-                except Exception as e:
-                    log.debug("Tool loader session reset skipped: %s", e)
+        agent._ensure_tool_loader_reset()
 
         interactive_mode(agent)
     except KeyboardInterrupt:
