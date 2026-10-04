@@ -404,6 +404,12 @@ DEFAULT_CONTEXT_SIZE = 32768
 GPU_CTX_SIZE = 65536  # GPU/CPU — Gemma-4-E4B-it-GGUF (llama.cpp)
 NPU_CTX_SIZE = 32768  # NPU — gemma4-it-e2b-FLM (FastFlowLM ceiling)
 
+# llama.cpp flags for a chat model. Lemonade before v11.8.0 passed no slot count,
+# so llama-server picked several slots over one unified KV pool, each promised
+# the whole window; concurrent requests then outgrew the pool and failed with
+# "Context size has been exceeded". One slot makes ctx_size the real window.
+CHAT_LLAMACPP_ARGS = "--parallel 1"
+
 
 def profile_ctx_size(device: Optional[str]) -> int:
     """Context window for *device*'s profile.
@@ -2486,6 +2492,16 @@ class LemonadeClient:
         elif hasattr(self, "server_process") and self.server_process:
             if hasattr(self, "log"):
                 self.log.info("Not terminating server because keep_alive=True")
+
+    def _model_recipe(self, model_name: str) -> Optional[str]:
+        """The catalog's recipe for *model_name* (``llamacpp``, ``flm``, ``cloud``…)."""
+        for model_id, entry in self._model_metadata.items():
+            if entry.get("recipe") and _model_ids_match(model_id, model_name):
+                return entry["recipe"]
+        for model in self.list_models(show_all=True).get("data", []):
+            if _model_ids_match(model.get("id"), model_name):
+                return model.get("recipe")
+        return None
 
     def get_model_info(self, model_name: str) -> Dict[str, Any]:
         """
@@ -5232,6 +5248,24 @@ class LemonadeClient:
             LemonadeClientError: If model loading fails
         """
         self.log.debug(f"Loading {model_name}")
+
+        if llamacpp_args is None and ctx_size is not None:
+            # The slot pin only matters on old Lemonade; an unreadable catalog
+            # must not block the load itself, which only needs POST /load.
+            try:
+                recipe = self._model_recipe(model_name)
+            except LemonadeAuthError:
+                raise
+            except LemonadeClientError as e:
+                recipe = None
+                self.log.warning(
+                    f"Could not read the model catalog at {self.base_url}/models "
+                    f"to check {model_name}'s recipe ({e}); loading it without "
+                    f"{CHAT_LLAMACPP_ARGS!r}, so a Lemonade older than v11.8.0 "
+                    "picks its own slot count."
+                )
+            if recipe == "llamacpp":
+                llamacpp_args = CHAT_LLAMACPP_ARGS
 
         request_data = {"model_name": model_name}
         backend = llamacpp_backend_for(model_name)
