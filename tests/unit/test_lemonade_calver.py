@@ -181,8 +181,6 @@ def test_cli_version_regex_extracts_calver(cli_output, expected):
 
 
 def test_flagship_agent_uses_the_core_gate():
-    import ast
-
     path = "hub/agents/gaia/python/gaia_agent/server.py"
     tree = ast.parse((REPO_ROOT / path).read_text(encoding="utf-8"))
     defined = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
@@ -311,8 +309,6 @@ def test_the_email_sidecar_copy_matches_the_core_parser(version):
 
 def test_the_email_sidecar_floor_matches_the_core_floor():
     """The frozen sidecar vendors the floor too; it must not drift from core."""
-    import ast
-
     path = "hub/agents/email/python/gaia_agent_email/version.py"
     tree = ast.parse((REPO_ROOT / path).read_text(encoding="utf-8"))
     values = [
