@@ -1463,7 +1463,9 @@ def main(argv: Optional[list] = None) -> int:
     out = sys.stdout
     _configure_logging(out, dev=args.dev)
 
-    state = PermissionState(full_access=args.full_access, accept_edits=args.accept_edits)
+    state = PermissionState(
+        full_access=args.full_access, accept_edits=args.accept_edits
+    )
 
     # Built ONCE, before the first query, and kept for the life of the process.
     # A failure here is fatal and must say so on the turn the user actually
