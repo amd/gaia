@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Requires `amd-gaia>=0.25.0` (was 0.22.0), the first core release with
+  `gaia.agents.tools.path_access`, which the agent imports at start. Package
+  version 0.1.1.
 - Every file tool now checks the same allowed-folders rule as `read_file`:
   listing and searching folders (`list_files` included), indexing documents,
   watching folders, and the files `text_to_speech` and the export tools save. A folder you
