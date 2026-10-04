@@ -12,12 +12,8 @@ import logging as _logging
 import os as _os
 import typing as _typing
 
-from dotenv import load_dotenv
-
 # The REAL process environment, captured before ``.env`` is merged in.
 _PRE_DOTENV_ENVIRON = dict(_os.environ)
-
-load_dotenv()
 
 
 def pre_dotenv_env(name: str) -> "_typing.Optional[str]":
@@ -32,9 +28,14 @@ def pre_dotenv_env(name: str) -> "_typing.Optional[str]":
     return _PRE_DOTENV_ENVIRON.get(name)
 
 
+# pylint: disable=wrong-import-position
+from gaia.env import load_env  # noqa: E402
+
+load_env()
+
 # Warn loudly when a ``.env`` tried to grant unattended tool approval. The
 # guarantee comes from ``pre_dotenv_env`` above, not from scrubbing — several
-# modules call ``load_dotenv()`` again on import, which would re-inject it.
+# modules call ``load_env()`` again on import, which would re-inject it.
 # Keep the name in sync with ``gaia.agents.base.console.AUTO_APPROVE_ENV_VAR``
 # (a unit test pins this).
 _AUTO_APPROVE_TOOLS_VAR = "GAIA_AUTO_APPROVE_TOOLS"

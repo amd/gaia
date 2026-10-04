@@ -246,14 +246,9 @@ jobs:
       - name: Stage fixtures + skills + fixture hub
         run: |
           $ErrorActionPreference = "Stop"
-          $stage = Join-Path $env:USERPROFILE "gaia-eval"
-          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-          Copy-Item tests\fixtures\gaia $stage -Recurse
-          $skillsRoot = Join-Path $env:USERPROFILE ".gaia\skills"
-          New-Item -ItemType Directory -Force $skillsRoot | Out-Null
-          Copy-Item hub\skills\* $skillsRoot -Recurse -Force
-          python tests/fixtures/gaia/prepare_fixture_hub.py --skills-root $skillsRoot
-          if ($LASTEXITCODE -ne 0) { throw "prepare_fixture_hub failed" }
+          # Same script as the other gaia_* workflows, so "staged" cannot drift.
+          python tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE"
+          if ($LASTEXITCODE -ne 0) { throw "Staging the gaia_* fixtures failed; the output above says which part." }
 
       - name: Run the gaia eval categories serially (real eval)
         timeout-minutes: 1980
@@ -283,7 +278,7 @@ jobs:
             -NoNewWindow -PassThru
           $backend = Start-Process -FilePath "python" `
             -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
-            -WorkingDirectory $PWD `
+            -WorkingDirectory (Join-Path $env:USERPROFILE "gaia-eval") `
             -RedirectStandardOutput (Join-Path $PWD "eval-out\backend.out.log") `
             -RedirectStandardError (Join-Path $PWD "eval-out\backend.err.log") `
             -NoNewWindow -PassThru
