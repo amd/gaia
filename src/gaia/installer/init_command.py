@@ -960,9 +960,9 @@ class InitCommand:
             step_num += 1
             self._print("")
             self._print_step(step_num, total_steps, "Verifying setup...")
-            if not self._verify_setup():
-                return 1
+            verify_ok = self._verify_setup()
 
+            # Saved even when verification fails -- the models may be fine.
             # Persist profile choice to ~/.gaia/config.json
             try:
                 from gaia.config import GaiaConfig, GaiaConfigError
@@ -989,10 +989,13 @@ class InitCommand:
                 )
                 return 1
 
+            if not verify_ok:
+                return 1
+
             # A hard Agent UI build failure means the profile's UI isn't
-            # usable -- don't report plain success for it. verify_setup and
-            # config persistence above already ran unconditionally, since
-            # neither depends on the frontend build. The build step above
+            # usable -- don't report plain success for it. Config persistence
+            # above already ran, since it doesn't depend on the frontend
+            # build. The build step above
             # already printed the actionable message via warn_fn; don't
             # repeat the full paragraph, just name the outcome.
             if webui_build_result is not None and webui_build_result.status in (
@@ -1748,8 +1751,9 @@ class InitCommand:
                 failed_ids = ", ".join(m for m, _ in models_failed)
                 self._print_error(
                     f"Model verification failed for: {failed_ids}. "
-                    "Follow the steps above to re-download them, then re-run "
-                    "`gaia init`."
+                    "If the error above looks transient (timeout, out of "
+                    "memory), re-run `gaia init` first. Otherwise follow the "
+                    "steps above to re-download them, then re-run `gaia init`."
                 )
                 return False
 

@@ -35,9 +35,10 @@ def _healthy_client():
     return client
 
 
-def _run_init(inference):
+def _run_init(inference, config_cls=None):
     """Run `gaia init --profile minimal --yes` with every step but verification stubbed."""
     cmd = InitCommand(profile="minimal", yes=True)
+    config_cls = config_cls or MagicMock()
     with (
         patch.object(cmd, "_ensure_lemonade_ready", return_value=True),
         patch.object(cmd, "_download_models", return_value=True),
@@ -46,7 +47,7 @@ def _run_init(inference):
             "gaia.ui.build.ensure_webui_built",
             return_value=WebuiBuildResult(status=WebuiBuildStatus.SKIPPED),
         ),
-        patch("gaia.config.GaiaConfig"),
+        patch("gaia.config.GaiaConfig", config_cls),
         patch(
             "gaia.llm.lemonade_client.LemonadeClient", return_value=_healthy_client()
         ),
@@ -69,6 +70,18 @@ def test_failed_model_makes_init_exit_nonzero_with_fix_steps():
     assert "gaia init --profile minimal --yes" in out
     assert "Model verification failed for:" in out
     assert "GAIA initialization complete!" not in out
+
+
+def test_failed_verification_still_saves_the_profile():
+    """A transient verification failure must not leave the user on the default profile."""
+    config_cls = MagicMock()
+    rc, out = _run_init(lambda _client, _model: (False, "timed out"), config_cls)
+
+    assert rc == 1
+    saved = config_cls.load.return_value
+    saved.save.assert_called_once()
+    assert saved.profile == "minimal"
+    assert "re-run `gaia init` first" in out
 
 
 def test_all_models_passing_keeps_init_successful():
