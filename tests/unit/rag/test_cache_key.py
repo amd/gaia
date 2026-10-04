@@ -8,6 +8,7 @@ text and chunks only, and every load re-embeds with the configured model.
 """
 
 import json
+import os
 from unittest.mock import patch
 
 import numpy as np
@@ -95,3 +96,31 @@ def test_cache_holds_no_vectors_and_a_new_embedder_re_embeds(tmp_path, document)
     assert stats.get("from_cache")
     assert switched.encoded_with, "cache load reused vectors instead of re-embedding"
     assert set(switched.encoded_with) == {"user.embedder-b"}
+
+
+def test_chunk_cache_and_markdown_share_one_content_key(tmp_path, document):
+    sdk = _make(tmp_path)
+    assert sdk.index_document(document)["success"]
+    key = sdk._content_key(document)
+    names = sorted(os.listdir(sdk.config.cache_dir))
+    assert f"{key}_extracted.md" in names
+    assert os.path.basename(sdk._get_cache_path(document)) in names
+    assert all(name.startswith(key) for name in names), names
+
+
+def test_an_edit_changes_the_content_key(tmp_path, document):
+    sdk = _make(tmp_path)
+    before = sdk._content_key(document)
+    with open(document, "a", encoding="utf-8") as f:
+        f.write("Moved to Wednesday.")
+    assert sdk._content_key(document) != before
+
+
+def test_unreadable_file_gets_a_name_clear_cache_owns(tmp_path):
+    sdk = _make(tmp_path)
+    missing = str(tmp_path / "gone.txt")
+    key = sdk._content_key(missing)
+    assert key.endswith("_notfound")
+    name = os.path.basename(sdk._get_cache_path(missing))
+    assert _CACHE_OWNED_FILE.search(name)
+    assert _CACHE_OWNED_FILE.search(os.path.basename(sdk._extracted_markdown_path(key)))

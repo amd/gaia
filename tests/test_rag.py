@@ -1564,6 +1564,7 @@ class TestClearCacheSafety:
             f"{'a' * 16}_{'b' * 32}_{'d' * 8}.json",
             f"{'a' * 16}_{'b' * 32}_{'d' * 8}.json.sig",
             f"{'c' * 64}_notfound.json",
+            f"{'c' * 64}_notfound_{'d' * 8}.json",
             f"{'a' * 16}_{'b' * 32}_extracted.md",
             "report_extracted.md",
         ]
