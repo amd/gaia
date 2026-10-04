@@ -12,10 +12,10 @@ import base64
 import logging
 from typing import Optional
 
-from dotenv import load_dotenv
+from gaia.env import load_env
 
 # Load environment variables from .env file
-load_dotenv()
+load_env()
 
 logger = logging.getLogger(__name__)
 

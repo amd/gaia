@@ -464,3 +464,14 @@ class TestLazyIndex:
             out = self._search(tmp_path, sdk)
         assert sdk.index_calls == 0
         assert "home directory" in out["error"]
+
+
+class TestBuildWindow:
+    def test_a_first_search_gets_the_build_window_index_codebase_gets(self, tmp_path):
+        """search_code_index builds the index on first use; capped at the default
+        it was abandoned mid-build and the model's index_codebase started a second."""
+        make_harness(tmp_path)
+
+        build = _TOOL_REGISTRY["index_codebase"]["timeout"]
+        assert build is not None
+        assert _TOOL_REGISTRY["search_code_index"]["timeout"] == build

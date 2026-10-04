@@ -1345,10 +1345,19 @@ jobs:
           # starts so the agents it spawns inherit them.
           $fixture = $null
           $extraArgs = @()
+          $backendCwd = $PWD
           if ($env:GAIA_FIXTURES -eq '1') {
+            # The backend's working directory is a session's file scope when
+            # nothing is attached. The staged fixtures are what the scenarios
+            # name; the checkout holds every scenario's expected answer.
+            $backendCwd = Join-Path $env:USERPROFILE "gaia-eval"
             $env:GAIA_HUB_URL = "http://127.0.0.1:8765/fixture_hub"
             $env:GAIA_WEB_ALLOWED_HOSTS = "127.0.0.1"
             $env:GAIA_AUTO_APPROVE_TOOLS = "1"
+            # The github-triage scenarios are written against the staged fake gh.
+            # Without it first on PATH the agent runs the runner's real gh, and
+            # auto-approved writes are aimed at real GitHub.
+            $env:PATH = (Join-Path $env:USERPROFILE ".gaia-eval-bin") + ";" + $env:PATH
             # gaia_email reads this offline mailbox, never a connected account.
             $env:GAIA_EVAL_MAILBOX = Join-Path $PWD "tests/fixtures/gaia/email/eval_inbox.mbox"
             $fixture = Start-Process -FilePath "python" `
@@ -1361,13 +1370,13 @@ jobs:
               Write-Host "::error::Could not start tests/fixtures/gaia/serve_fixtures.py - the gaia_* web and skill-hub scenarios depend on it."
               exit 1
             }
-            # live: hits a real external service. local_blocked_win_shim: needs
-            # the fake gh, which cannot win argv resolution on Windows (#4427).
+            # live: hits a real external service. local_blocked_win_shim: kept off
+            # until a CI run confirms the staged gh.exe answers (#4427).
             $extraArgs = @('--exclude-tag', 'live', '--exclude-tag', 'local_blocked_win_shim')
           }
           $backend = Start-Process -FilePath "python" `
             -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
-            -WorkingDirectory $PWD `
+            -WorkingDirectory $backendCwd `
             -RedirectStandardOutput $outLog `
             -RedirectStandardError $errLog `
             -NoNewWindow -PassThru
@@ -1972,10 +1981,12 @@ jobs:
           OUTCOMES_FAILED: ${{ needs.flagship-tasks.outputs.failed_suites }}
         run: |
           set -euo pipefail
+          # This job has no checkout, so every gh call names the repo; without it gh
+          # dies with "not a git repository" and the alert is never filed.
           # STABLE DEDUP KEY - do not reword. The lookup below searches this exact
           # title; changing it orphans the open issue and files a duplicate.
           TITLE="Nightly flagship eval did not pass"
-          gh label create eval-failure --color B60205 \
+          gh label create eval-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
             --description "Automated eval failure" --force
           BODY="$(cat <<EOF
           The nightly flagship eval on \`main\` did not pass.
@@ -1997,11 +2008,12 @@ jobs:
           lane that waited out GitHub's 24h queue limit. Re-dispatch the workflow.
           EOF
           )"
-          EXISTING="$(gh issue list --state open --label eval-failure \
+          EXISTING="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label eval-failure \
             --search "${TITLE} in:title" --json number --jq '.[0].number // empty')"
           if [ -n "${EXISTING}" ]; then
-            gh issue comment "${EXISTING}" --body "${BODY}"
+            gh issue comment "${EXISTING}" --repo "$GITHUB_REPOSITORY" --body "${BODY}"
             echo "commented on existing issue #${EXISTING}"
           else
-            gh issue create --title "${TITLE}" --body "${BODY}" --label eval-failure
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "${TITLE}" --body "${BODY}" \
+              --label eval-failure
           fi
