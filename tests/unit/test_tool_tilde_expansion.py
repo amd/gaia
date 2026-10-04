@@ -171,6 +171,56 @@ class TestFileSearchTools:
         _assert_no_literal_tilde_dir()
 
 
+class _SandboxedSearchHost(FileSearchToolsMixin):
+    """Scoped to the fake home, the way a session that was granted it is."""
+
+    def __init__(self, home):
+        self.path_validator = PathValidator(allowed_paths=[str(home)])
+
+
+@pytest.fixture
+def sandboxed_search(home):
+    _SandboxedSearchHost(home).register_file_search_tools()
+
+
+class TestFileSearchReadTools:
+    """The read-side tools a data or code question starts with."""
+
+    def test_analyze_data_file(self, home, sandboxed_search):
+        (home / "sales.csv").write_text("region,revenue\nN,10\nS,5\n", "utf-8")
+
+        result = _tool("analyze_data_file")(file_path="~/sales.csv")
+
+        assert result.get("status") != "error", result
+        assert result["row_count"] == 2
+
+    def test_get_file_info(self, home, sandboxed_search):
+        (home / "notes.txt").write_text("hello", encoding="utf-8")
+
+        result = _tool("get_file_info")(file_path="~/notes.txt")
+
+        assert result.get("status") != "error", result
+        assert result["file_size_bytes"] == 5
+
+    def test_browse_directory(self, home, sandboxed_search):
+        (home / "repo").mkdir()
+        (home / "repo" / "a.py").write_text("", encoding="utf-8")
+
+        result = _tool("browse_directory")(directory_path="~/repo")
+
+        assert result["status"] == "success", result
+        assert [e["name"] for e in result["entries"]] == ["a.py"]
+
+    def test_search_file_content(self, home, sandboxed_search):
+        (home / "repo").mkdir()
+        (home / "repo" / "a.py").write_text("def median():\n", encoding="utf-8")
+
+        result = _tool("search_file_content")(pattern="median", directory="~/repo")
+
+        assert result["status"] == "success", result
+        assert result["total_matches"] == 1
+
+
 class _RagHost(RAGToolsMixin):
     def __init__(self):
         self.rag = MagicMock()
