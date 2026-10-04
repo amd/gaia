@@ -65,7 +65,7 @@ export function pathAccessQuestion(args: unknown): string {
   const target = String(path ?? 'a file');
   const what = kind === 'folder'
     ? `the folder ${target} and everything in it`
-    : kind === 'file' ? `the file ${target}` : target;
+    : kind === 'file' ? `the file ${target}` : `${target} (and anything inside it, including changes)`;
   return `GAIA wants to use ${what}, which this chat cannot reach yet. Allow it for this chat?`;
 }
 

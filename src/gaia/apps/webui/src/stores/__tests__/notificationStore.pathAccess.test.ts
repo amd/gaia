@@ -17,11 +17,11 @@ describe('pathAccessQuestion', () => {
         );
     });
 
-    it('claims neither when the agent did not say which', () => {
+    it('keeps the scope warning when the agent did not say file or folder', () => {
         const question = pathAccessQuestion({ path: 'C:\\Users\\me\\x' });
         expect(question).toBe(
-            'GAIA wants to use C:\\Users\\me\\x, which this chat cannot reach yet. Allow it for this chat?'
+            'GAIA wants to use C:\\Users\\me\\x (and anything inside it, including changes), ' +
+            'which this chat cannot reach yet. Allow it for this chat?'
         );
-        expect(question).not.toMatch(/inside|changes/);
     });
 });
