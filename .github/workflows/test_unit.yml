@@ -355,7 +355,8 @@ jobs:
   unit-tests-macos:
     name: Unit Tests (macOS smoke)
     runs-on: macos-latest
-    timeout-minutes: 30
+    # The full unit suite takes ~33 min here; 30 cut it off at 92%.
+    timeout-minutes: 45
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     continue-on-error: true
     steps:
@@ -405,7 +406,8 @@ jobs:
   unit-tests-windows:
     name: Unit Tests (Windows smoke)
     runs-on: windows-latest
-    timeout-minutes: 30
+    # 15 min reached 6,873 of ~18,000 tests, so a full run is near 40 min.
+    timeout-minutes: 60
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     continue-on-error: true
     steps:
