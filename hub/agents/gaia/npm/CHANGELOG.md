@@ -82,6 +82,11 @@ the terminal UI meant building it from source.
   prompt and deleted when the agent closes; the rest of the temp dir stays denied.
 - Windows npm launchers now find the Python daemon CLI even when npm passes the
   package script as argv[1], preserving unrelated tools in shared PATH directories.
+- Every file tool now checks the same allowed-folders rule as `read_file`:
+  browsing, folder and content search, recent files, document indexing, folder
+  watching, code indexing, and where screenshots, transcripts and exports are
+  saved. A folder outside the scope gets the usual approval prompt, and a folder
+  you approve is readable by document indexing too.
 
 ### Added
 

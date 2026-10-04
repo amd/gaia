@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Every file tool now checks the same allowed-folders rule as `read_file`:
+  listing and searching folders (`list_files` included), indexing documents,
+  watching folders, and the files `text_to_speech` and the export tools save. A folder you
+  approve for the chat is now readable by document indexing too. Symlinks and
+  `..` are resolved before the check, and secrets such as `.env` inside an allowed
+  folder are no longer indexed.
 - File and document tools now expand a leading `~`, so `~/notes.txt` reads from the
   home directory instead of failing with "File not found" or creating a literal `~`
   folder.

@@ -161,9 +161,7 @@ class TestRefusalsAreNotStored:
         mixin = RAGToolsMixin()
         mixin.rag = object()  # truthy; the refusal fires before RAG is touched
         mixin.indexed_files = set()
-        mixin._is_path_allowed = lambda path: validator.is_path_allowed(
-            path, prompt_user=False
-        )
+        mixin.path_validator = validator
         with _registered(mixin, "register_rag_tools") as registry:
             refusal = registry["index_document"]["function"](file_path=str(doc))
         assert refusal["status"] == "error"

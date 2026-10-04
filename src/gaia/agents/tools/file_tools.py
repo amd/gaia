@@ -29,6 +29,7 @@ from gaia.agents.tools.file_edit import (
     read_first_preflight,
     stamp_of,
 )
+from gaia.agents.tools.path_access import read_access_error, readable_entry
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
     is_broad_root,
@@ -212,12 +213,6 @@ class FileSearchToolsMixin:
             )
         return file_list
 
-    def _get_path_validator(self):
-        """Return the host agent's PathValidator, or None if it has none."""
-        return getattr(self, "path_validator", None) or getattr(
-            self, "_path_validator", None
-        )
-
     def _search_roots(self) -> List[Path]:
         """Where a filesystem search should look — see ``search_scope`` (#3576)."""
         return search_roots(self)
@@ -239,13 +234,7 @@ class FileSearchToolsMixin:
         credential file, or ``None`` when the read is permitted (or no
         validator is attached).
         """
-        validator = self._get_path_validator()
-        if validator is None:
-            return None
-        is_allowed, reason = validator.validate_read(path)
-        if not is_allowed:
-            return {**NOT_EXECUTED, "status": "error", "error": reason}
-        return None
+        return read_access_error(self, path)
 
     def register_file_search_tools(self) -> None:
         """Register shared file search tools."""
@@ -578,6 +567,8 @@ class FileSearchToolsMixin:
                         search_location(root, max_depth=root_depth(root, roots))
 
                     # Always also search common locations (Documents, Downloads, etc.)
+                    # Wider than the allowed folders on purpose: a name search only
+                    # returns paths, and opening one goes through the read check.
                     if hasattr(self, "console") and hasattr(
                         self.console, "start_progress"
                     ):
@@ -681,7 +672,8 @@ class FileSearchToolsMixin:
                         }
                     )
 
-                # Phase 2: Deep drive search (only when explicitly requested)
+                # Phase 2: Deep drive search (only when explicitly requested).
+                # Paths only, like phase 1; reading a hit is still checked.
                 reset_budget()
                 walked.clear()
                 if hasattr(self, "console") and hasattr(self.console, "start_progress"):
@@ -765,13 +757,17 @@ class FileSearchToolsMixin:
             Returns list of matching directory paths.
             """
             try:
-                # Default to home directory if no root specified
                 if search_root is None:
-                    search_root = str(Path.home())
+                    roots = self._search_roots()
+                else:
+                    roots = [Path(search_root).expanduser().resolve()]
+                    # Before the existence probe, as in read_file.
+                    denied = self._read_access_error(str(roots[0]))
+                    if denied:
+                        denied["has_errors"] = True
+                        return denied
 
-                search_root = Path(search_root).resolve()
-
-                if not search_root.exists():
+                if search_root is not None and not roots[0].exists():
                     return {
                         "status": "error",
                         "error": f"Search root does not exist: {search_root}",
@@ -779,7 +775,7 @@ class FileSearchToolsMixin:
                     }
 
                 logger.debug(
-                    f"Searching for directory '{directory_name}' from {search_root}"
+                    "Searching for directory '%s' under %s", directory_name, roots
                 )
 
                 matching_dirs = []
@@ -791,20 +787,21 @@ class FileSearchToolsMixin:
 
                     try:
                         for item in current_path.iterdir():
-                            if item.is_dir():
-                                # Check if name matches (case-insensitive)
-                                if directory_name.lower() in item.name.lower():
-                                    matching_dirs.append(str(item.resolve()))
-                                    logger.debug(f"Found matching directory: {item}")
-
-                                # Continue searching subdirectories
-                                if depth < max_depth:
-                                    search_recursive(item, depth + 1)
+                            # A link may point out of the approved folder.
+                            if item.is_symlink() or not item.is_dir():
+                                continue
+                            if directory_name.lower() in item.name.lower():
+                                matching_dirs.append(str(item))
+                                logger.debug(f"Found matching directory: {item}")
+                            if depth < max_depth:
+                                search_recursive(item, depth + 1)
                     except (PermissionError, OSError) as e:
                         # Skip directories we can't access
                         logger.debug(f"Skipping {current_path}: {e}")
 
-                search_recursive(search_root, 0)
+                for root in roots:
+                    if root.exists():
+                        search_recursive(root, 0)
 
                 if matching_dirs:
                     return {
@@ -1062,6 +1059,7 @@ class FileSearchToolsMixin:
             Searches actual file contents on disk, not RAG indexed documents.
             """
             try:
+                directory = os.path.expanduser(directory)
                 # Enforce the --allowed-paths sandbox before the existence probe
                 # so out-of-sandbox paths can't be used as a directory-existence
                 # oracle (mirrors read_file / get_file_info). Grepping file
@@ -1134,6 +1132,9 @@ class FileSearchToolsMixin:
 
                 def search_file(file_path: Path):
                     """Search within a single file."""
+                    # A link out of the folder, or a secret in it, is not grepped.
+                    if not readable_entry(self, file_path):
+                        return True
                     try:
                         with open(
                             file_path, "r", encoding="utf-8", errors="ignore"
@@ -1811,7 +1812,13 @@ class FileSearchToolsMixin:
                 if directory_path is None:
                     directory_path = str(Path.home())
 
-                dir_path = Path(directory_path).resolve()
+                dir_path = Path(directory_path).expanduser().resolve()
+
+                # Before the existence probe, as in read_file.
+                denied = self._read_access_error(str(dir_path))
+                if denied:
+                    denied.update({"has_errors": True, "operation": "browse_directory"})
+                    return denied
 
                 if not dir_path.exists():
                     return {
@@ -1849,7 +1856,7 @@ class FileSearchToolsMixin:
                         if not show_hidden and item.name.startswith("."):
                             continue
 
-                        stat_info = item.stat()
+                        stat_info = item.stat(follow_symlinks=False)
                         is_dir = item.is_dir()
 
                         if is_dir:
@@ -1958,7 +1965,7 @@ class FileSearchToolsMixin:
                 Dictionary with file metadata and optional preview
             """
             try:
-                fp = Path(file_path)
+                fp = Path(file_path).expanduser()
 
                 # Enforce the --allowed-paths sandbox: get_file_info returns a
                 # content preview, so it must honor the same read boundary.
@@ -2133,7 +2140,7 @@ class FileSearchToolsMixin:
                 Dictionary with analysis results based on the requested type
             """
             try:
-                fp = Path(file_path)
+                fp = Path(file_path).expanduser()
 
                 def _resolve_indexed_basename(target: Path):
                     """Return an already-indexed document Path whose basename
@@ -2948,14 +2955,19 @@ class FileSearchToolsMixin:
                 cutoff = datetime.now() - timedelta(days=days)
                 recent_files = []
                 total_found = 0
+                denied_locations = {}
 
                 for scan_dir in dirs_to_scan:
                     if not scan_dir.exists():
                         continue
+                    denied = self._read_access_error(str(scan_dir))
+                    if denied:
+                        denied_locations[scan_dir.name] = denied["error"]
+                        continue
 
                     try:
                         for item in scan_dir.rglob("*"):
-                            if not item.is_file():
+                            if item.is_symlink() or not item.is_file():
                                 continue
 
                             # Skip hidden files
@@ -2999,7 +3011,19 @@ class FileSearchToolsMixin:
                         continue
 
                 shown = [entry[2] for entry in sorted(recent_files, reverse=True)]
-                locations_searched = [d.name for d in dirs_to_scan if d.exists()]
+                locations_searched = [
+                    d.name
+                    for d in dirs_to_scan
+                    if d.exists() and d.name not in denied_locations
+                ]
+                if denied_locations and not locations_searched:
+                    return {
+                        **NOT_EXECUTED,
+                        "status": "error",
+                        "error": " ".join(denied_locations.values()),
+                        "has_errors": True,
+                        "operation": "list_recent_files",
+                    }
                 truncated = total_found > len(shown)
 
                 # Build display_message with collapsible extra files
@@ -3014,8 +3038,13 @@ class FileSearchToolsMixin:
                         f"Showing {len(shown)} of {total_found}; {total_found - len(shown)} "
                         "files omitted. Narrow location, file_types, or days to see other matches."
                     )
+                if denied_locations:
+                    display_parts.append(
+                        "Not searched (outside the allowed folders): "
+                        + ", ".join(denied_locations)
+                    )
 
-                return {
+                result = {
                     "status": "success",
                     "files": shown,
                     "truncated": truncated,
@@ -3025,6 +3054,9 @@ class FileSearchToolsMixin:
                     "days_range": days,
                     "display_message": "\n".join(display_parts),
                 }
+                if denied_locations:
+                    result["locations_not_searched"] = denied_locations
+                return result
 
             except Exception as e:
                 logger.error(f"Error listing recent files: {e}")

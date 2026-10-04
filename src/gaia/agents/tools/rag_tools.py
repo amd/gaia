@@ -6,16 +6,20 @@ RAG Tools Mixin for Chat Agent.
 Provides document retrieval, querying, and evaluation tools.
 """
 
-import logging
 import os
 import re
 from pathlib import Path
 from typing import Any, Dict
 
 from gaia.agents.base.errors import require_host_attr
-from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools.path_access import (
+    read_access_error,
+    readable_entry,
+    write_access_error,
+)
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _RAG_HINT = "Set self.rag = <RAGSDK instance, or None to disable RAG>."
 _RAG_DOC_ANCHOR = "docs/spec/rag-tools-mixin.mdx#host-agent-contract"
@@ -561,17 +565,12 @@ class RAGToolsMixin:
                     if len(matching_files) == 0:
                         # Auto-index the file if it exists on disk instead of failing.
                         # This avoids the slow fail → plan → index → re-query cycle.
-                        if os.path.exists(file_path):
-                            resolved = os.path.realpath(file_path)
-                            # Enforce path restrictions same as index_document does
-                            if hasattr(
-                                self, "_is_path_allowed"
-                            ) and not self._is_path_allowed(resolved):
-                                return {
-                                    **NOT_EXECUTED,
-                                    "status": "error",
-                                    "error": f"Access denied: '{resolved}' is not in allowed paths",
-                                }
+                        disk_path = os.path.expanduser(file_path)
+                        denied = read_access_error(self, disk_path)
+                        if denied:
+                            return denied
+                        if os.path.exists(disk_path):
+                            resolved = os.path.realpath(disk_path)
                             logger.info(
                                 f"[query_specific_file] '{basename}' not indexed — "
                                 f"auto-indexing '{resolved}' before querying"
@@ -1182,6 +1181,11 @@ class RAGToolsMixin:
                         "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
                     }
 
+                # Before the existence probe, as in read_file.
+                denied = read_access_error(self, file_path)
+                if denied:
+                    return denied
+
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
@@ -1208,15 +1212,6 @@ class RAGToolsMixin:
                         "from_cache": True,
                         "total_indexed_files": len(self.indexed_files),
                     }
-
-                # Validate path with ChatAgent's internal logic (which uses allowed_paths)
-                if hasattr(self, "_is_path_allowed"):
-                    if not self._is_path_allowed(real_file_path):
-                        return {
-                            **NOT_EXECUTED,
-                            "status": "error",
-                            "error": f"Access denied: {real_file_path} is not in allowed paths",
-                        }
 
                 # Index the document (now returns dict with stats)
                 # Use real_file_path to ensure consistency in RAG index
@@ -1799,7 +1794,10 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         self.rag.config.cache_dir, output_filename
                     )
                 else:
-                    output_path = str(Path(output_path).resolve())
+                    output_path = str(Path(output_path).expanduser().resolve())
+                    denied = write_access_error(self, output_path)
+                    if denied:
+                        return denied
 
                 # Write markdown file with metadata header
                 markdown_content = f"""# Extracted Text from {Path(target_file).name}
@@ -1870,6 +1868,12 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 
                 dir_path = Path(directory_path).expanduser().resolve()
 
+                # Before the existence probe, as in read_file.
+                denied = read_access_error(self, dir_path)
+                if denied:
+                    denied["has_errors"] = True
+                    return denied
+
                 if not dir_path.exists():
                     return {
                         "status": "error",
@@ -1912,6 +1916,10 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                     files_to_index = [f for f in dir_path.iterdir() if f.is_file()]
 
                 for file_path in files_to_index:
+                    # A link out of the folder, or a secret in it, is not indexed.
+                    if not readable_entry(self, file_path):
+                        skipped_files.append(str(file_path))
+                        continue
                     if file_path.suffix.lower() in supported_extensions:
                         try:
                             # Use the RAG SDK to index the file
