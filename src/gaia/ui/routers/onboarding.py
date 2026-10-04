@@ -24,7 +24,11 @@ from pydantic import BaseModel, Field
 from gaia.config import gaia_home
 from gaia.hub.compatibility import check_compatibility
 from gaia.hub.manifest import Requirements
-from gaia.llm.lemonade_client import lemonade_auth_headers, resolve_lemonade_api_key
+from gaia.llm.lemonade_client import (
+    lemonade_auth_headers,
+    resolve_lemonade_api_key,
+    resolve_lemonade_base_url,
+)
 from gaia.llm.lemonade_manager import gpu_display_info
 from gaia.logger import get_logger
 
@@ -43,12 +47,6 @@ _RECOMMENDED_DISK_GB = 6.0
 # RAM below which the recommended model is likely to swap/fail to load.
 _RECOMMENDED_MEMORY_GB = 8.0
 _LEMONADE_SYSTEM_INFO_ERROR = "Lemonade system-info query failed"
-
-
-def _get_lemonade_base_url() -> str:
-    from gaia.llm.lemonade_client import resolve_lemonade_base_url
-
-    return resolve_lemonade_base_url()
 
 
 async def _probe_lemonade_devices() -> Dict[str, Any]:
@@ -78,7 +76,7 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
     try:
         import httpx  # pylint: disable=import-outside-toplevel
 
-        base_url = _get_lemonade_base_url()
+        base_url = resolve_lemonade_base_url()
         auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{base_url}/system-info", headers=auth)

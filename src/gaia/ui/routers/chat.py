@@ -44,15 +44,21 @@ router = APIRouter(tags=["chat"])
 def _notify_loop(session_id: str) -> None:
     """Notify the AgentLoop that a user message was processed.
 
-    Imported lazily to avoid a circular import at module level.
-    Non-fatal: if the loop is not running, this is a no-op.
+    Imported lazily to avoid a circular import at module level. A failure is
+    logged rather than raised: the user's message is already answered and
+    saved, so the request must not fail over a missed follow-up trigger.
     """
     try:
         from gaia.ui.agent_loop import agent_loop
 
         agent_loop.notify_user_message(session_id)
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001 - logged with context, response already saved
+        logger.warning(
+            "Could not notify the agent loop for session %s; approved goals "
+            "will not continue until the next message",
+            session_id,
+            exc_info=True,
+        )
 
 
 def _server_mod():

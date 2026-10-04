@@ -35,7 +35,6 @@ login driver talks about "the one-time code" rather than about gh.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess  # nosec B404 - argv comes from the policy table, never a caller
@@ -43,8 +42,9 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Callable, Optional, Sequence
 
+from gaia.env import child_env
 from gaia.logger import get_logger
 from gaia.skills.binaries import BinaryPolicy, BinarySetup
 
@@ -185,9 +185,7 @@ class SetupError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-def _run(
-    argv: Sequence[str], *, timeout: float, env: Optional[Mapping[str, str]] = None
-) -> subprocess.CompletedProcess:
+def _run(argv: Sequence[str], *, timeout: float) -> subprocess.CompletedProcess:
     """Run *argv* with no shell and no stdin, returning the completed process.
 
     ``shell=False`` always — argv comes from the policy table, but a setup
@@ -204,7 +202,7 @@ def _run(
         errors="replace",
         timeout=timeout,
         check=False,
-        env=dict(env) if env is not None else None,
+        env=child_env(),
     )
 
 
@@ -696,14 +694,12 @@ def start_device_login(
 def _login_env() -> dict:
     """The environment the sign-in child runs in.
 
-    Inherited as-is but with every browser-launch hook cleared: these name a
-    command the CLI will execute, and a value that arrived from somewhere else
-    in the environment would run under the sign-in rather than open a page.
+    :func:`gaia.env.child_env` with every browser-launch hook also cleared:
+    these name a command the CLI will execute, and a value that arrived from
+    somewhere else in the environment would run under the sign-in rather than
+    open a page.
     ``GH_BROWSER`` outranks ``BROWSER`` in gh's own precedence order, so both go
     — clearing the lower one alone leaves the hook live. The user is given the
     URL and opens it themselves, so nothing is lost.
     """
-    env = os.environ.copy()
-    for name in ("GH_BROWSER", "BROWSER"):
-        env.pop(name, None)
-    return env
+    return child_env(deny=("GH_BROWSER", "BROWSER"))

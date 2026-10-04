@@ -49,7 +49,7 @@ class RAGConfig:
     cache_dir: str = field(default_factory=default_rag_cache_dir)  # ~/.gaia/cache/rag
     show_stats: bool = False
     use_local_llm: bool = True
-    base_url: str = "http://localhost:13305/api/v1"
+    base_url: Optional[str] = None  # LEMONADE_BASE_URL, else GAIA's own Lemonade
 
     # Memory management
     max_indexed_files: int = 100
@@ -331,7 +331,6 @@ def test_remove_document():
 [project]
 dependencies = [
     "pypdf>=3.0",
-    "sentence-transformers",  # For embeddings
     "faiss-cpu",  # Vector search
     "numpy",
     "gaia.chat.sdk",

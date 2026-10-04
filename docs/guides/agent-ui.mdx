@@ -162,10 +162,11 @@ Pick the install path that fits you best:
     </Note>
 
     <Note>
-      If you see a missing dependencies error, install the UI extras:
+      If you see a missing dependencies error, run the install command it prints — it targets the Python that GAIA runs in. For the one-line installer's environment (which has no `pip` and is not activated) that is:
 
       ```bash
-      uv pip install "amd-gaia[ui]"
+      uv pip install --python ~/.gaia/venv/bin/python "amd-gaia[ui]"
+      # Windows: uv pip install --python "$env:USERPROFILE\.gaia\venv\Scripts\python.exe" "amd-gaia[ui]"
       ```
     </Note>
 
@@ -465,9 +466,6 @@ The agent supports the **Model Context Protocol** in both directions — connect
     The first time you index a document, Lemonade Server pulls the embedding
     model (`user.embeddinggemma-300m-GGUF`, ~334 MB) from `huggingface.co`,
     cached under `~/.cache/huggingface/hub/`. Subsequent runs are offline.
-    (Agent memory adds a small cross-encoder reranker,
-    `cross-encoder/ms-marco-MiniLM-L-6-v2` (~22 MB), fetched via
-    `sentence-transformers` on first hybrid search.)
 
     If your environment blocks `huggingface.co`, pre-seed the cache on a
     machine with internet access and copy it to the target machine, or set

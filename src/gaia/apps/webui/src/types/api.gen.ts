@@ -776,6 +776,7 @@ export interface StartAgentServerRequest {
  */
 export interface SystemStatus {
   active_profile?: string;
+  config_error?: string | null;
   context_size_sufficient?: boolean;
   default_model_name?: string;
   default_model_size_gb?: number | null;
@@ -800,6 +801,7 @@ export interface SystemStatus {
   model_labels?: string[] | null;
   model_loaded?: string | null;
   model_size_gb?: number | null;
+  probe_warnings?: string[];
   processor_name?: string | null;
   start_command?: string | null;
   start_instruction?: string | null;

@@ -48,3 +48,17 @@ describe('context window too small', () => {
         expect(container.querySelector('code')).toBeNull();
     });
 });
+
+describe('an unreadable config is surfaced, not hidden', () => {
+    it('shows the backend config error verbatim', () => {
+        const message = 'GAIA config at /home/u/.gaia/config.json is not valid JSON: x. Delete it to reset to defaults.';
+        useChatStore.setState({ systemStatus: {
+            lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF', model_downloaded: true, expected_model_loaded: true,
+            context_size_sufficient: true, config_error: message,
+        } as SystemStatus });
+        render(<ConnectionBanner />);
+        expect(screen.getByRole('alert')).toHaveTextContent('GAIA settings could not be loaded.');
+        expect(screen.getByText(message)).toBeInTheDocument();
+        expect(screen.queryByLabelText('Dismiss')).toBeNull();
+    });
+});

@@ -99,7 +99,7 @@ Items 6–9 are **later**.
 - Run each gated scenario **3×** in the nightly (`--iterations 3`). Keep PR lanes at 1×, but have them report `flaky` instead of `regressed` when the baseline marks a scenario flaky.
 - Teach `compare_scorecards` to read `stability`. Call it a regression only when the baseline was `stable-pass` and the current run is `stable-fail`, or the pass-rate drop is larger than the measured noise floor. Report `flaky` as its own bucket.
 - Add `gaia eval agent noise --runs 5 --category X`. It runs the same config N times and writes the per-scenario pass-rate spread and score stdev to `noise.json`. The gate reads that file instead of the fixed 2.0 threshold.
-- Commit the first flagship baseline only from a ≥ 3-iteration run, and make `--save-baseline` refuse a 1-iteration scorecard.
+- Commit the first flagship baseline only from a ≥ 3-iteration run, and make `--save-baseline` refuse a 1-iteration scorecard. (The first baseline landed from a single nightly so PR runs get a verdict now; replace it once a 3-iteration nightly exists.)
 
 **Files:** `src/gaia/eval/runner.py` (`compare_scorecards`, `summarize_attempts`), `src/gaia/cli.py`, `.github/workflows/eval_flagship.yml`, `tests/fixtures/gaia/quality_gate_thresholds.json`, `docs/reference/eval.mdx`.
 **Measured by:** re-run an unchanged `main` through the nightly 5 times and record how many scenarios flip PASS↔FAIL (the noise floor). After, none of those runs report a regression, while a deliberately broken prompt (for example, the tool list removed) still does.
