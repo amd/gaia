@@ -55,7 +55,7 @@ def test_stages_fixtures_skills_and_a_trusted_fixture_hub(tmp_path):
 @pytest.mark.skipif(sys.platform == "win32", reason="drives the POSIX gh shim")
 def test_staged_fake_gh_answers_ahead_of_any_real_gh(tmp_path):
     stage_eval_env.stage(tmp_path)
-    bin_dir = tmp_path / "gaia-eval" / "fake_gh"
+    bin_dir = tmp_path / ".gaia-eval-bin"
     path = os.pathsep.join([str(bin_dir), os.environ.get("PATH", "")])
 
     assert shutil.which("gh", path=path) == str(bin_dir / "gh")
@@ -82,14 +82,11 @@ def test_on_windows_the_fake_gh_gets_an_exe_launcher(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ghstub, "_exe_launcher", fake_launcher)
     monkeypatch.setattr(stage_eval_env.sys, "platform", "win32")
-    fixtures = tmp_path / "gaia-eval"
-    (fixtures / "fake_gh").mkdir(parents=True)
+    bin_dir = stage_eval_env.install_fake_gh(tmp_path)
 
-    bin_dir = stage_eval_env.install_fake_gh(fixtures)
-
-    assert bin_dir == fixtures / "fake_gh"
+    assert bin_dir == tmp_path / ".gaia-eval-bin"
     assert (bin_dir / "gh.exe").read_bytes() == b"MZ-launcher"
-    assert built == [bin_dir / "gh.py"]
+    assert built == [stage_eval_env.HERE / "fake_gh" / "gh.py"]
 
 
 def test_restaging_clears_read_only_files(tmp_path):

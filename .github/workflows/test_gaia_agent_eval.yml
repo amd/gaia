@@ -419,7 +419,7 @@ jobs:
           # The github-triage scenarios are written against the staged fake gh.
           # Without it first on PATH the agent runs the runner's real gh, and
           # auto-approved writes are aimed at real GitHub.
-          $env:PATH = (Join-Path $env:USERPROFILE "gaia-eval\fake_gh") + ";" + $env:PATH
+          $env:PATH = (Join-Path $env:USERPROFILE ".gaia-eval-bin") + ";" + $env:PATH
 
           $outLog = Join-Path $PWD "eval-out\backend.out.log"
           $errLog = Join-Path $PWD "eval-out\backend.err.log"
