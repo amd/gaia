@@ -273,6 +273,30 @@ the header.
 | `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Run gated tools without asking, for one session (≥ 2.14) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
+#### `/query` request body
+
+The full, machine-readable contract — every field, type, and which are
+required — is the committed
+[`openapi.gaia.json`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/openapi.gaia.json),
+regenerated from the live routes by `python -m gaia_agent.export_openapi` and
+checked for drift in CI — the same pattern as the email agent's own
+`openapi.email.json`. Required: **`query`**, **`run_id`**,
+**`context`** — `additionalProperties: false`, so an unrecognized field or a
+missing required one is `422` before the agent runs. `run_id` must parse as a
+UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
+(`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`) is
+optional.
+
+```json
+{
+  "query": "What's in this directory?",
+  "run_id": "5b1f6e2a-7c34-4b4d-9b3e-2b6d9a7a1c3e",
+  "context": [],
+  "session_id": "my-session-1",
+  "can_answer_questions": true
+}
+```
+
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
 

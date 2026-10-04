@@ -13,12 +13,16 @@ The event translation itself is NOT reimplemented here — it lives in
 so the two agents cannot drift into private dialects of the same contract.
 
 Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
-``/query/{run_id}/cancel`` and ``/query/{run_id}/respond``. ``needs_input`` is
-answered over ``/respond`` on the run's existing stream. ``needs_confirmation``
-is the one gate still unimplemented: it ends the run with a refusal (the
-stateless D1 stub, same as email) rather than pretending to support server-side
-resume. That is additive when a tool needs it; claiming support we haven't built
-would be worse than the honest gap.
+``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
+``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
+2.14) and ``/sessions/{session_id}/bypass``. ``needs_input`` is answered over
+``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
+the same way over ``/tool_decision`` — but only when there is a session to
+hold the grant AND the caller declared it can answer (``can_confirm`` in
+``query()``). A one-shot request (no ``session_id``, or
+``can_answer_questions: false``) still ends such a run with a refusal (the
+stateless D1 stub, same as email) rather than parking a run nobody can
+answer.
 
 :func:`main` also owns the binary's TRANSPORT DISPATCH: ``--serve`` runs this
 HTTP surface, anything else delegates to :mod:`gaia_agent.stdio`. One
@@ -107,7 +111,10 @@ class QueryContextItem(_Strict):
 class QueryRequest(_Strict):
     """``POST /v1/gaia/query`` body (frozen #2015 contract, spec §2.2)."""
 
-    query: str = Field(min_length=1)
+    query: str = Field(
+        min_length=1,
+        description="The user's message for this turn.",
+    )
     run_id: str = Field(
         description=(
             "Host-minted UUIDv4 run handle. Cancellation "
@@ -118,9 +125,28 @@ class QueryRequest(_Strict):
     context: List[QueryContextItem] = Field(
         description="Transcript slice, pushed in the body. May be empty, never absent."
     )
-    model: Optional[str] = None
-    provider: Optional[str] = None
-    max_steps: Optional[int] = Field(default=None, ge=1)
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Model id for this turn. A Claude model id implies provider "
+            "'claude' when provider is omitted; otherwise it is served by the "
+            "local Lemonade backend. Omit to keep a retained session's current "
+            "model, or to use the backend's default on a new session."
+        ),
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "Inference backend for this turn: 'lemonade' (local) or 'claude' "
+            "(Anthropic's API). Omit to leave a retained session on its "
+            "current backend, or to infer it from 'model' on a new session."
+        ),
+    )
+    max_steps: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Cap on agent-loop steps for this turn. Omit for the agent's default.",
+    )
     session_id: Optional[str] = Field(
         default=None,
         description=(
@@ -1251,7 +1277,15 @@ def build_app() -> FastAPI:
         finally:
             task.cancel()
 
-    app = FastAPI(title="GAIA Agent", version=__version__, lifespan=_lifespan)
+    app = FastAPI(
+        title="GAIA Agent",
+        version=__version__,
+        lifespan=_lifespan,
+        # Swagger UI loads its JS from a CDN — an unexpected outbound network
+        # call for an embedder running this sidecar offline. /openapi.json
+        # stays served; only the interactive /docs page is disabled.
+        docs_url=None,
+    )
     app.add_middleware(caller_auth.HostOriginMiddleware)
 
     @app.get("/health", include_in_schema=True)
@@ -1267,6 +1301,11 @@ def build_app() -> FastAPI:
         return {"apiVersion": API_VERSION, "version": __version__, "agent": AGENT_ID}
 
     app.include_router(router, prefix=f"/v1/{AGENT_ID}")
+
+    # require_caller_token is a plain Request dependency (not a
+    # fastapi.security class), so FastAPI never emits securitySchemes for it
+    # (#4605) — overlay the real, conditional (bearer-or-none) posture.
+    caller_auth.install_openapi_security(app)
     return app
 
 
