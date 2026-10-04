@@ -17,6 +17,7 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional
 
+from gaia.env import child_env
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -40,7 +41,7 @@ class ExternalMCPService:
             timeout: Timeout in seconds for subprocess calls
         """
         self.command = command
-        self.env = {**os.environ.copy(), **(env or {})}
+        self.env = child_env(env)
         self.timeout = timeout
         self.process = None
 
