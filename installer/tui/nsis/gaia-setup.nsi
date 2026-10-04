@@ -18,12 +18,12 @@
 ; needs the network once.
 ;
 ; Build:
-;   makensis -DVERSION=0.23.0 \
+;   makensis -DVERSION=<__version__ from src/gaia/version.py> \
 ;            -DPAYLOAD_DIR=<dir with gaia-tui.exe, gaia-agent.exe, LICENSE.md> \
 ;            -DLEMONADE_MSI=<path to lemonade-server-minimal.msi> \
-;            -DLEMONADE_VERSION=11.5.0 \
+;            -DLEMONADE_VERSION=<LEMONADE_VERSION from src/gaia/version.py> \
 ;            -DICON=<path to gaia.ico> \
-;            -DOUTFILE=gaia-0.23.0-win-x64-setup.exe \
+;            -DOUTFILE=gaia-<version>-win-x64-setup.exe \
 ;            installer/tui/nsis/gaia-setup.nsi
 
 Unicode true
@@ -32,7 +32,7 @@ Unicode true
 ; A missing define expands to an empty string, which would silently produce an
 ; installer that ships nothing or ships it under the wrong name.
 !ifndef VERSION
-  !error "VERSION is required: -DVERSION=0.23.0"
+  !error "VERSION is required: -DVERSION=<__version__ from src/gaia/version.py>"
 !endif
 !ifndef PAYLOAD_DIR
   !error "PAYLOAD_DIR is required: the directory holding gaia-tui.exe, gaia-agent.exe and LICENSE.md"

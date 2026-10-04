@@ -11,10 +11,13 @@ import sys
 import time
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.install_hints import agent_not_installed_message
+from gaia.agents.install_hints import (
+    agent_not_installed_message,
+    gaia_extras_install_args,
+    pip_install_hint,
+)
+from gaia.env import load_env
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
@@ -29,6 +32,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
+from gaia.log_rotation import log_family
 from gaia.logger import get_logger
 from gaia.mcp.ports import (
     AGENT_UI_MCP_PORT,
@@ -41,7 +45,7 @@ from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
 from gaia.version import version
 
 # Load environment variables from .env file
-load_dotenv()
+load_env()
 
 # Set debug level for the logger
 logging.getLogger("gaia").setLevel(logging.INFO)
@@ -391,13 +395,9 @@ class GaiaCliClient:
             yield error_message
 
     def get_stats(self):
-        try:
-            stats = self.llm_client.get_performance_stats()
-            self.log.debug(f"Stats received: {stats}")
-            return stats
-        except Exception as e:
-            self.log.error(f"Error while fetching stats: {str(e)}")
-            return None
+        stats = self.llm_client.get_performance_stats()
+        self.log.debug(f"Stats received: {stats}")
+        return stats
 
     async def prompt(self, message):
         async for chunk in self.send_message(message):
@@ -772,11 +772,11 @@ async def async_main(action, **kwargs):
 
         except KeyboardInterrupt:
             print("\n\nInterrupted by user", file=sys.stderr)
-            return
+            return 130
         except Exception as e:
             log.error(f"Error in chat: {e}", exc_info=True)
             print(f"❌ Error: {e}", file=sys.stderr)
-            return
+            return 1
         finally:
             # Cleanup. The drain is here rather than beside the one-shot
             # return so interactive, Ctrl-C and error exits land the last
@@ -843,9 +843,8 @@ async def async_main(action, **kwargs):
         stats = client.get_stats()
         if stats:
             return {"stats": stats}
-        log.error("No stats available.")
-        print("❌ Error: No stats available.")
-        sys.exit(1)
+        print("No stats yet — run `gaia prompt` or `gaia chat` first.")
+        return
     else:
         log.error(f"Unknown action specified: {action}")
         print(f"❌ Error: Unknown action specified: {action}")
@@ -925,9 +924,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print(f"\nMissing dependencies for Agent UI: {e}")
         print("\n   The Agent UI requires extra dependencies that are not installed.")
         print("   Install them with:\n")
-        print('     uv pip install -e ".[ui]"')
-        print("\n   Or if you installed from PyPI:\n")
-        print('     uv pip install "amd-gaia[ui]"')
+        print(f"     {pip_install_hint(*gaia_extras_install_args(['ui']))}")
         print()
         sys.exit(1)
     except OSError as e:
@@ -1019,55 +1016,6 @@ def _launch_interactive_cli(log=None):
                 drain_memory_extraction(agent)
             except Exception as exc:
                 log.warning("Could not finish memory extraction before exit: %s", exc)
-
-
-def _show_interactive_menu(log=None):
-    """Show an interactive menu when `gaia` is run with no arguments."""
-    if log is None:
-        log = get_logger(__name__)
-
-    print()
-    print("========================================")
-    print(f"  GAIA {version}")
-    print("  Build AI Agents That Run Locally")
-    print("========================================")
-    print()
-    print("  [1] Agent UI  — Desktop chat interface (browser)")
-    print("  [2] CLI Chat  — Interactive terminal chat")
-    print("  [3] Help      — Show all commands")
-    print()
-
-    try:
-        choice = input("  Select [1/2/3]: ").strip()
-    except (KeyboardInterrupt, EOFError):
-        print()
-        return
-
-    if choice == "1":
-        _launch_agent_ui(log=log)
-    elif choice == "2":
-        _launch_interactive_cli(log=log)
-    elif choice == "3":
-        print()
-        print("  Usage: gaia [--ui | --cli | <command>]")
-        print()
-        print("  Quick start:")
-        print("    gaia                   Launch Agent UI (default)")
-        print("    gaia --ui              Launch Agent UI (explicit)")
-        print("    gaia --ui-port 8080    Agent UI on custom port")
-        print("    gaia --cli             Interactive CLI chat")
-        print()
-        print("  Commands:")
-        print("    gaia chat              Interactive chat with RAG")
-        print("    gaia chat --ui         Agent UI (alias for gaia --ui)")
-        print('    gaia prompt "Hello"    Single prompt to LLM')
-        print("    gaia talk              Voice interaction")
-        print("    gaia init              Setup Lemonade + models")
-        print()
-        print("  Run 'gaia --help' for the full command list.")
-    else:
-        print(f"  Unknown option: {choice}")
-        print("  Run 'gaia --help' for all commands.")
 
 
 def _compare_benchmark_ctx(current_ctx, baseline, baseline_path):
@@ -1414,8 +1362,8 @@ def build_parser():
         "--whisper-model-size",
         type=str,
         default="base",
-        choices=["tiny", "base", "small", "medium", "large"],
-        help="Size of the Whisper model to use (default: base)",
+        choices=["tiny", "base", "small", "medium", "large", "turbo"],
+        help="Whisper model Lemonade transcribes speech with (default: base)",
     )
     talk_parser.add_argument(
         "--silence-threshold",
@@ -2015,8 +1963,8 @@ Available agents: chat, talk, rag, vlm, minimal, mcp
         "--whisper-model-size",
         type=str,
         default="base",
-        choices=["tiny", "base", "small", "medium", "large"],
-        help="Size of the Whisper model to use (default: base)",
+        choices=["tiny", "base", "small", "medium", "large", "turbo"],
+        help="Whisper model Lemonade transcribes speech with (default: base)",
     )
     test_parser.add_argument(
         "--audio-device-index",
@@ -4357,12 +4305,19 @@ def main():
         log.debug(f"Executing {args.action} with parameters: {kwargs}")
         try:
             result = run_cli(args.action, **kwargs)
-            if result:
-                print(result)
         except Exception as e:
-            log.error(f"Error executing {args.action}: {e}")
-            print(f"❌ Error: {e}")
+            log.debug(f"gaia {args.action} failed", exc_info=True)
+            print(f"❌ Error: gaia {args.action} failed: {e}", file=sys.stderr)
+            print(
+                "   Rerun with --logging-level DEBUG for the full traceback.",
+                file=sys.stderr,
+            )
             sys.exit(1)
+        # An int is an exit status, never output to print.
+        if isinstance(result, int):
+            sys.exit(result)
+        if result:
+            print(result)
         return
 
     # Handle utility commands
@@ -4372,12 +4327,12 @@ def main():
             try:
                 from gaia.audio.kokoro_tts import KokoroTTS
 
-                tts = KokoroTTS()
+                tts = KokoroTTS(say=print)
                 log.debug("TTS initialized successfully")
             except Exception as e:
                 log.error(f"Failed to initialize TTS: {e}")
                 print(f"❌ Error: Failed to initialize TTS: {e}")
-                return
+                sys.exit(1)
 
             test_text = args.test_text or """
 Let's play a game of trivia. I'll ask you a series of questions on a particular topic,
@@ -4403,64 +4358,65 @@ Let me know your answer!
             elif args.test_type == "tts-audio-file":
                 tts.test_generate_audio_file(test_text, args.output_audio_file)
 
-        elif args.test_type.startswith("asr"):
+        elif args.test_type == "asr-microphone":
             try:
                 from gaia.audio.whisper_asr import WhisperAsr
 
                 asr = WhisperAsr(
                     model_size=args.whisper_model_size,
                     device_index=args.audio_device_index,
+                    say=print,
                 )
                 log.debug("ASR initialized successfully")
-            except ImportError:
-                log.error(
-                    'WhisperAsr not found. Please install voice support with: uv pip install -e ".[talk]"'
-                )
-                raise
             except Exception as e:
                 log.error(f"Failed to initialize ASR: {e}")
                 print(f"❌ Error: Failed to initialize ASR: {e}")
-                return
+                sys.exit(1)
 
-            if args.test_type == "asr-microphone":
-                print(f"\nRecording for {args.recording_duration} seconds...")
-                print("Speak into your microphone...")
+            print(f"\nRecording for {args.recording_duration} seconds...")
+            print("Speak into your microphone...")
 
-                # Setup transcription queue and start recording
-                import queue
+            # Setup transcription queue and start recording
+            import queue
 
-                transcription_queue = queue.Queue()
-                asr.transcription_queue = transcription_queue
-                asr.start_recording()
+            transcription_queue = queue.Queue()
+            asr.transcription_queue = transcription_queue
+            asr.start_recording()
 
-                try:
-                    start_time = time.time()
-                    while time.time() - start_time < args.recording_duration:
-                        try:
-                            text = transcription_queue.get_nowait()
-                            print(f"\nTranscribed: {text}")
-                        except queue.Empty:
-                            time.sleep(0.1)
-                            remaining = args.recording_duration - int(
-                                time.time() - start_time
-                            )
-                            print(f"\rRecording... {remaining}s remaining", end="")
-                finally:
-                    asr.stop_recording()
-                    print("\nRecording stopped.")
+            try:
+                start_time = time.time()
+                while time.time() - start_time < args.recording_duration:
+                    if asr.asr_error or asr.mic_error:
+                        break
+                    try:
+                        text = transcription_queue.get_nowait()
+                        print(f"\nTranscribed: {text}")
+                    except queue.Empty:
+                        time.sleep(0.1)
+                        remaining = args.recording_duration - int(
+                            time.time() - start_time
+                        )
+                        print(f"\rRecording... {remaining}s remaining", end="")
+            finally:
+                asr.stop_recording()
+                print("\nRecording stopped.")
+            failure = asr.asr_error or asr.mic_error
+            if failure:
+                print(f"❌ Error: {failure}")
+                sys.exit(1)
 
-            elif args.test_type == "asr-list-audio-devices":
-                from gaia.audio.audio_recorder import AudioRecorder
+        elif args.test_type == "asr-list-audio-devices":
+            from gaia.audio.audio_recorder import AudioRecorder
 
-                recorder = AudioRecorder()
-                devices = recorder.list_audio_devices()
-                print("\nAvailable Audio Input Devices:")
-                for device in devices:
-                    print(f"Index {device['index']}: {device['name']}")
-                    print(f"    Max Input Channels: {device['max_input_channels']}")
-                    print(f"    Default Sample Rate: {device['default_samplerate']}")
-                    print()
-                return
+            recorder = AudioRecorder()
+            devices = recorder.list_audio_devices()
+            print("\nAvailable Audio Input Devices:")
+            for device in devices:
+                print(f"Index {device['index']}: {device['name']}")
+                print(f"    Max Input Channels: {device['max_input_channels']}")
+                print(f"    Default Sample Rate: {device['default_samplerate']}")
+                print()
+            return
 
         return
 
@@ -6502,7 +6458,7 @@ def handle_cache_command(args):
                 print("✓ Context7 is AVAILABLE (npx found, service working)")
             else:
                 print("✗ Context7 is UNAVAILABLE (npx not found or service failed)")
-                print("  The Code Agent will use embedded knowledge instead.")
+                print("  Library documentation search is unavailable.")
 
             # Show cache and rate limiter status
             cache = Context7Cache()
@@ -6627,6 +6583,25 @@ def _handle_memory_status():
             print(f"    Entities:     {k['entity_count']}")
         if k["total"] > 0:
             print(f"    Avg confidence: {k['avg_confidence']:.2f}")
+
+        coverage = store.get_embedding_coverage()
+        if coverage["total_items"] > 0:
+            print(
+                f"    Search vectors: {coverage['with_embedding']} of "
+                f"{coverage['total_items']} active entries"
+            )
+            if coverage["without_embedding"] > 0:
+                print(
+                    f"    Without vector: {coverage['without_embedding']} - recall "
+                    "by meaning misses these until they are re-embedded"
+                )
+                print(
+                    "      Repair: start an agent with the embedding model loaded "
+                    "(re-embeds up to 100 per start),"
+                )
+                print(
+                    "      or use Rebuild Embeddings in the Memory Dashboard (gaia chat --ui)"
+                )
 
         # Conversations section
         c = stats["conversations"]
@@ -7513,6 +7488,10 @@ def _bootstrap_reset_system():
             print("✅ System context collection re-enabled.")
 
 
+#: Per-file ceiling for logs in a diagnostics bundle; larger files keep their tail.
+_DIAG_MAX_LOG_BYTES = 50 * 1024 * 1024
+
+
 def handle_diagnostics_command(args):
     """Handle the 'gaia diagnostics' command.
 
@@ -7520,7 +7499,8 @@ def handle_diagnostics_command(args):
     tarball suitable for attaching to bug reports. Captures:
 
     - ``~/.gaia/electron-install.log``
-    - ``~/.gaia/gaia.log``
+    - ``~/.gaia/gaia.log`` and its rotated files (``gaia.log.1`` ...); a file
+      over 50 MB contributes only its last 50 MB, as ``<name>.tail``
     - ``~/.gaia/electron-main.log`` (if present; emitted by the Electron shell)
     - ``~/.gaia/electron-install-state.json``
     - ``uname -a`` output
@@ -7660,15 +7640,25 @@ def handle_diagnostics_command(args):
                         filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
                     )
 
-            # Log files gated by --no-logs
+            # Log files gated by --no-logs. Rotated backups (gaia.log.1, ...)
+            # ride along; a log from before the size cap keeps only its tail.
             if not args.no_logs:
-                for entry in log_files:
-                    if entry.is_file():
+                for entry in (f for base in log_files for f in log_family(base)):
+                    size = entry.stat().st_size
+                    if size <= _DIAG_MAX_LOG_BYTES:
                         tar.add(
                             str(entry),
                             arcname=entry.name,
                             filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
                         )
+                        continue
+                    with open(entry, "rb") as fh:
+                        fh.seek(size - _DIAG_MAX_LOG_BYTES)
+                        tail = fh.read(_DIAG_MAX_LOG_BYTES)
+                    info = tarfile.TarInfo(name=f"{entry.name}.tail")
+                    info.size = len(tail)
+                    info.mtime = int(entry.stat().st_mtime)
+                    tar.addfile(info, io.BytesIO(tail))
             else:
                 note = b"Log files omitted (--no-logs was passed).\n"
                 info = tarfile.TarInfo(name="LOGS-OMITTED.txt")

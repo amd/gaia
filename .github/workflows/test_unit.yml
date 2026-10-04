@@ -273,6 +273,35 @@ jobs:
           echo "  - DatabaseMixin + Agent: Full agent lifecycle with database"
           echo "  - DatabaseAgent: Auto-registered database tools"
 
+  # setup.py declares python_requires>=3.10, but every other lane runs 3.12, so
+  # 3.11-only syntax or stdlib imports (tomllib, except*, typing.Self) would
+  # ship unnoticed. Importing every module is enough to catch that, in seconds.
+  import-floor-py310:
+    name: Import Every Module (Linux, py3.10)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system pytest pytest-asyncio pytest-timeout
+          uv pip install --system -e ".[api]"
+
+      - name: Import every gaia module on Python 3.10
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: pytest tests/unit/test_import_all_modules.py -v --tb=short
+
   # Integration suites that need no Lemonade, no live account and no AMD
   # hardware. Files are named one by one so util/check_test_lane_coverage.py
   # can see them; a new offline integration file belongs in this list.
@@ -355,7 +384,8 @@ jobs:
   unit-tests-macos:
     name: Unit Tests (macOS smoke)
     runs-on: macos-latest
-    timeout-minutes: 30
+    # The full unit suite takes ~33 min here; 30 cut it off at 92%.
+    timeout-minutes: 45
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     continue-on-error: true
     steps:
@@ -405,7 +435,8 @@ jobs:
   unit-tests-windows:
     name: Unit Tests (Windows smoke)
     runs-on: windows-latest
-    timeout-minutes: 30
+    # 15 min reached 6,873 of ~18,000 tests, so a full run is near 40 min.
+    timeout-minutes: 60
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     continue-on-error: true
     steps:

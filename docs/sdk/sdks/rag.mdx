@@ -298,7 +298,7 @@ rag = RAGSDK(config)
 ```
 
 <Note>
-The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks (content-hashed, independent of the embedder), and vectors are regenerated via Lemonade on every index — so changing `embedding_model` needs no cache clearing.
+The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap` and `use_llm_chunking`, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings.
 </Note>
 
 ### Tuning `max_chunks`
@@ -1088,7 +1088,7 @@ config = RAGConfig(
 config = RAGConfig(
     cache_dir="./my_rag_cache"  # Index persisted here
 )
-# Next run will load existing index instead of re-creating
+# Next run with the same chunking settings loads the cached chunks
 ```
 </Accordion>
 

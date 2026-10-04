@@ -143,6 +143,8 @@ Everything is stored in a single file at `~/.gaia/memory.db` (SQLite with WAL mo
     ```
 
     This shows counts by category (fact, preference, error, skill, note, reminder, profile, system, permission), context (work, personal, global), total conversations, tool call stats, and database size.
+
+    It also shows **Search vectors** -- how many entries can be found by meaning. An entry saved while the embedding model was unavailable is kept, but only keyword recall finds it until it is re-embedded; `status` lists these as **Without vector**. See [Memories saved without a search vector](#memories-saved-without-a-search-vector) to repair them.
   </Step>
 
   <Step title="Start chatting">
@@ -424,12 +426,21 @@ gaia chat --ui
 The dashboard also provides maintenance tools for keeping your memory healthy:
 
 - **Consolidate** -- distill old conversation sessions into durable knowledge notes
-- **Rebuild Embeddings** -- re-embed all knowledge items and rebuild the search index
+- **Rebuild Embeddings** -- embed the knowledge items that have no search vector yet (the ones `gaia memory status` lists as **Without vector**)
 - **Reconcile** -- scan for contradictory facts across sessions and resolve them automatically
 
 <Info>
   To launch the Agent UI with the dashboard: `gaia chat --ui`
 </Info>
+
+### Memories saved without a search vector
+
+If the embedding model is unreachable when a memory is written, the memory is still saved, but recall by meaning cannot find it until it is re-embedded (keyword recall still can). The agent logs one warning per session naming the first affected memory and how to repair it, and `gaia memory status` shows the running total as **Without vector**.
+
+To repair, either:
+
+- Start any memory-enabled agent with the embedding model loaded -- it re-embeds up to 100 missing vectors on every start.
+- Click **Rebuild Embeddings** in the Memory Dashboard (`gaia chat --ui`) to embed up to 500 at a time.
 
 ### Terminal hub: `/memory`
 
@@ -535,7 +546,7 @@ rm ~/.gaia/memory.db
 | `gaia memory bootstrap --reset` | Delete discovery items (with confirmation) |
 | `gaia memory bootstrap --system` | Re-scan and refresh system context (OS, hardware, apps, versions) |
 | `gaia memory bootstrap --reset-system` | Clear system context entries and optionally disable auto-collection |
-| `gaia memory status` | Show memory stats (counts, categories, contexts, synthesized procedures) |
+| `gaia memory status` | Show memory stats (counts, categories, contexts, synthesized procedures, entries without a search vector) |
 
 ### System context (versions, hardware, apps)
 

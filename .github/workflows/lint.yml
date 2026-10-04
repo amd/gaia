@@ -78,8 +78,12 @@ jobs:
         run: |
           # Install project dependencies for import checks
           # Linting tools are auto-downloaded by uvx
-          uv pip install --system -e .
+          # The hub agent packages are installed so Import Validation really
+          # imports GaiaAgent and ChatAgent instead of skipping them.
+          uv pip install --system -e . -e hub/agents/chat/python -e hub/agents/gaia/python
 
       - name: Run lint checks
+        env:
+          GAIA_REQUIRE_HUB_AGENTS: '1'
         run: |
           python util/lint.py --all

@@ -22,6 +22,7 @@ from typing import Optional
 
 from gaia.daemon import paths
 from gaia.daemon.constants import API_PREFIX, AUTH_SCHEME, DAEMON_API_VERSION
+from gaia.daemon.custody.constants import CUSTODY_URL_ENV_VAR
 from gaia.daemon.errors import DaemonError, DaemonStartError, DaemonVersionError
 from gaia.daemon.instance import (
     DaemonInstance,
@@ -32,6 +33,8 @@ from gaia.daemon.instance import (
     terminate_instance,
 )
 from gaia.daemon.lock import StartLock
+from gaia.env import is_internal_secret
+from gaia.log_rotation import rotate_if_oversized
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -119,9 +122,30 @@ def start_or_attach(timeout: float = _START_TIMEOUT) -> DaemonInstance:
         return _spawn_and_wait(timeout)
 
 
+def _daemon_env() -> dict:
+    """The parent's environment minus anything pointing at another daemon.
+
+    The daemon mints its own credentials and serves its own custody endpoint, so
+    a stale ``GAIA_HOST_CUSTODY_URL`` would reach its sidecars without a secret.
+    ``GAIA_CHILD_ENV_DENY`` is not applied: the daemon is GAIA itself.
+    """
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not is_internal_secret(name) and name != CUSTODY_URL_ENV_VAR
+    }
+
+
 def _spawn_and_wait(timeout: float) -> DaemonInstance:
     """Spawn the daemon detached, wait until it registers a live instance.json."""
     paths.ensure_host_dir()
+    # The daemon's stdout can't be rotated while it runs, so cap it per start.
+    try:
+        rotate_if_oversized(paths.log_path())
+    except OSError as e:
+        logger.warning(
+            "Could not rotate %s (%s); appending to it.", paths.log_path(), e
+        )
     log_file = open(paths.log_path(), "ab")
     # 0600: the daemon log lives beside token-minting code (D-5, #2142) and
     # would otherwise land world-readable under umask 022.
@@ -144,6 +168,7 @@ def _spawn_and_wait(timeout: float) -> DaemonInstance:
             stdin=subprocess.DEVNULL,
             start_new_session=start_new_session,
             creationflags=creationflags,
+            env=_daemon_env(),
         )
     except OSError as e:
         log_file.close()
