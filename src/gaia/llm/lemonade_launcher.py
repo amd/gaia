@@ -77,7 +77,7 @@ class StartSpec:
 
     ``env`` contains ONLY the additional variables the server needs; the
     caller must merge it into the parent environment at the Popen call
-    site — ``env={**os.environ, **spec.env}`` — never replace it (a bare
+    site — ``env=child_env(spec.env)`` — never replace it (a bare
     ``env=spec.env`` drops PATH/LOCALAPPDATA and breaks LemonadeServer.exe).
     """
 
