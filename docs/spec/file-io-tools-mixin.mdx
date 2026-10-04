@@ -113,6 +113,9 @@ see [Read before edit](#read-before-edit).
     "file_type": "python" | "markdown" | "binary" | "text",
     "line_count": int,
     "size_bytes": int,
+    # Only for a file with a byte-order mark, which is read as text in that
+    # encoding (PowerShell 5.1 `>` writes UTF-16): "utf-16" | "utf-32" | "utf-8-sig"
+    "encoding": str,
 
     # Python files only
     "is_valid": bool,
@@ -199,6 +202,8 @@ Search for patterns in code files.
         {
             "file": str,
             "matches": [
+                # A line over 200 chars is cut to a window around the
+                # match, with "..." marking each cut.
                 {"line": int, "content": str}
             ]
         }
