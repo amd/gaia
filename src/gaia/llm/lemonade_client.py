@@ -1002,6 +1002,8 @@ def requested_thinking(
         return explicit
     mr = find_model_requirement(model_id)
     return mr.thinking if mr else None
+
+
 # Define agent profiles with their model requirements
 AGENT_PROFILES = {
     "chat": AgentProfile(
