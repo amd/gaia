@@ -232,6 +232,16 @@ class TestBaseDependencies:
                 "`pip install amd-gaia` would ship a broken gaia-mcp entry point."
             )
 
+    def test_base_install_does_not_pull_in_pytorch(self):
+        """The core wheel stays torch-free: these drag in multi-GB PyTorch."""
+        base = _parse_setup_install_requires()
+        heavy = base & {"torch", "transformers", "accelerate"}
+        assert not heavy, (
+            f"setup.py install_requires contains {sorted(heavy)}, which pull "
+            "PyTorch into every `pip install amd-gaia`. Put them in the extra "
+            "that needs them ([talk], [audio] or [ui])."
+        )
+
 
 def _parse_extras_require_block():
     """Extract the raw text inside extras_require={...} from setup.py."""
@@ -273,6 +283,16 @@ class TestTalkExtra:
         floor = tuple(int(part) for part in floor_match.group(1).split("."))
         floor += (0,) * (3 - len(floor))
         assert floor >= (1, 58, 0)
+
+    def test_tokenizers_has_a_floor(self):
+        """kokoro leaves transformers unbounded; without a tokenizers floor the
+        resolver picks tokenizers 0.10.3, which has no wheel and won't build."""
+        setup_source = SETUP_PY.read_text(encoding="utf-8")
+        talk_match = re.search(r'"talk"\s*:\s*\[(.*?)\n\s*\],', setup_source, re.DOTALL)
+        assert talk_match, 'Could not find "talk" extra in setup.py'
+        specs = re.findall(r'"([^"]+)"', talk_match.group(1))
+        floor = next((s for s in specs if s.lower().startswith("tokenizers>=")), None)
+        assert floor, f"[talk] must pin a tokenizers floor; got {specs}"
 
 
 class TestAgentWheelExtras:

@@ -218,7 +218,9 @@ class CodeIndexToolsMixin:
                 logger.error("index_codebase failed: %s", e)
                 return json.dumps({"error": str(e)})
 
-        @tool
+        # The first search runs the same build as index_codebase, so it gets the
+        # same window; the default cap abandoned it mid-build on a large repo.
+        @tool(timeout=900)
         def search_code_index(
             query: str,
             scope: str = "all",

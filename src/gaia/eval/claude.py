@@ -17,12 +17,12 @@ try:
 except ImportError:
     BeautifulSoup = None
 
-from dotenv import load_dotenv
 
+from gaia.env import load_env
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
 from gaia.logger import get_logger
 
-load_dotenv()
+load_env()
 
 
 def first_text_block(blocks, model):

@@ -1,0 +1,110 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# A new user's first run on real AMD hardware: `gaia init` from a cold state,
+# then one real prompt against the model it set up. Unit tests mock the
+# Lemonade client and dev boxes have models cached, so neither can see a pull
+# that only fails on a fresh machine (#1655).
+#
+# Cold state comes from three things: the devlab-dispatch pool provisions a
+# fresh machine per job, GAIA_HOME points at an empty run-scoped directory (so
+# the embedded Lemonade installs from scratch), and --force-models re-downloads
+# every model even if the image happens to cache one.
+#
+# `Windows` is load-bearing: the pool's Halos are mostly Linux and the steps are
+# PowerShell. init and the prompt share ONE step because a Lemonade started in
+# one step does not survive the step boundary (see test_agent_behavior_e2e.yml).
+name: GAIA Init First Run (Hardware)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 * * 1"    # Mondays 09:00 UTC: catches upstream Lemonade/HF drift
+  push:
+    branches: [main]
+    paths:
+      - 'src/gaia/installer/**'
+      - 'src/gaia/llm/lemonade_embedded.py'
+      - 'src/gaia/llm/lemonade_launcher.py'
+      - 'src/gaia/llm/lemonade_manager.py'
+      - 'src/gaia/version.py'
+      - '.github/workflows/test_gaia_init_hw.yml'
+  pull_request:
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/installer/**'
+      - 'src/gaia/llm/lemonade_embedded.py'
+      - 'src/gaia/llm/lemonade_launcher.py'
+      - 'src/gaia/llm/lemonade_manager.py'
+      - 'src/gaia/version.py'
+      - '.github/workflows/test_gaia_init_hw.yml'
+
+# The pool hands out one machine per job; a superseded run would hold hardware.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  first-run:
+    name: gaia init --profile ${{ matrix.profile }} (cold)
+    # Same-repo PRs only: fork code must never run on the lab pool.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.draft == false ||
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The default profile: what a bare `gaia init` gives a new user.
+          - profile: gaia
+            model: Gemma-4-E4B-it-GGUF
+          # Built-in FLM models on the NPU: the #1655 fresh-pull path.
+          - profile: npu
+            model: gemma4-it-e2b-FLM
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[dev]'
+
+      - name: First run - gaia init, then one prompt
+        shell: powershell
+        env:
+          GAIA_HOME: ${{ runner.temp }}\gaia_home
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          NO_PROXY: "localhost,127.0.0.1"
+        run: |
+          if (Test-Path $env:GAIA_HOME) { throw "GAIA_HOME $env:GAIA_HOME already exists - this run would not start cold." }
+
+          & gaia init --profile ${{ matrix.profile }} --force-models --yes --verbose
+          if ($LASTEXITCODE -ne 0) {
+              throw "gaia init --profile ${{ matrix.profile }} exited $LASTEXITCODE on a fresh machine. The init output above names the failing stage; the embedded server log is uploaded as an artifact."
+          }
+
+          # gaia llm exits 0 even when the prompt fails, so check for the
+          # response block it prints only on success, not the exit code.
+          $out = & gaia llm "Reply with the single word OK." --model ${{ matrix.model }} --no-stream --max-tokens 16 | Out-String
+          Write-Host $out
+          if ($out -notmatch "LLM Response:") {
+              throw "gaia init succeeded but gaia llm --model ${{ matrix.model }} returned no response - init left a setup that cannot answer a prompt. The gaia llm output above has the error."
+          }
+
+      - name: Upload Lemonade logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: init-hw-${{ matrix.profile }}-logs
+          path: ${{ runner.temp }}/gaia_home/**/*.log
+          if-no-files-found: warn
