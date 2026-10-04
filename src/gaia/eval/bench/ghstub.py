@@ -42,6 +42,24 @@ MODES = ("offline", "rate_limit", "transient")
 WRITE_GRANTS = ("label",)
 VERSION = "gh version 2.60.0 (offline stand-in for GAIA benchmarks)"
 
+#: ``gh auth status --json hosts`` for the stand-in's offline account, in real
+#: gh's shape. Scopes cover what github-triage needs; writes stay gated below.
+AUTH_STATUS_HOSTS = {
+    "hosts": {
+        "github.com": [
+            {
+                "state": "success",
+                "active": True,
+                "host": "github.com",
+                "login": "bench-user",
+                "tokenSource": "keyring",
+                "scopes": "repo, read:org",
+                "gitProtocol": "https",
+            }
+        ]
+    }
+}
+
 #: Subcommands that change something on GitHub.
 WRITES = {
     "issue": {
@@ -472,6 +490,16 @@ class Stub:
             print(VERSION)
             return "local"
         if args[0] == "auth":
+            if args[1:2] == ["status"] and "--json" in args:
+                # The form check_cli_setup reads before any github-triage step.
+                if args[args.index("--json") + 1 :][:1] != ["hosts"]:
+                    self.fail(
+                        "gh stand-in: `gh auth status --json` serves only the "
+                        "`hosts` field.",
+                        "unsupported",
+                    )
+                print(json.dumps(AUTH_STATUS_HOSTS, indent=2))
+                return "local"
             if args[1:2] == ["status"]:
                 sys.stderr.write(
                     "github.com\n  - Logged in to github.com account bench-user "

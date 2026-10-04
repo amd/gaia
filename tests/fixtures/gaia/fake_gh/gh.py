@@ -31,6 +31,23 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 #: (contract: eval/scenarios/GAIA_FIXTURE_VALUES.md).
 FIXTURE_REPO = "acme-labs/widgetworks"
 
+#: ``gh auth status --json hosts`` for the fixture account, in real gh's shape.
+AUTH_STATUS_HOSTS = {
+    "hosts": {
+        "github.com": [
+            {
+                "state": "success",
+                "active": True,
+                "host": "github.com",
+                "login": "fixture-bot",
+                "tokenSource": "keyring",
+                "scopes": "repo, read:org",
+                "gitProtocol": "https",
+            }
+        ]
+    }
+}
+
 #: First tokens of gh commands GAIA's policy REFUSES outright. Reaching this
 #: shim with one of them means the permission gate did not do its job.
 _REFUSE_TIER = {
@@ -331,6 +348,12 @@ def main(argv: list[str]) -> int:
 
     if argv[0] == "--version":
         print("gh version 2.62.0 (2026-01-15) [gaia eval fixture — canned data]")
+        return 0
+    if head == ("auth", "status") and "--json" in argv:
+        # The form check_cli_setup reads before any github-triage step.
+        if argv[argv.index("--json") + 1 :][:1] != ["hosts"]:
+            return _fail("auth status --json serves only the 'hosts' field")
+        print(json.dumps(AUTH_STATUS_HOSTS, indent=2))
         return 0
     if head == ("auth", "status"):
         # ASCII only: Windows consoles decode cp1252 and choke on check marks.
