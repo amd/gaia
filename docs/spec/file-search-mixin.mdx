@@ -148,7 +148,9 @@ class FileSearchToolsMixin:
         - Python (.py): AST validation + symbol extraction (functions/classes)
         - Markdown (.md): Headers + code blocks + links extraction
         - Binary: Detection with size reporting
-        - Text: Raw content with line count
+        - Text: Raw content with line count. A file with a UTF-16, UTF-32,
+          or UTF-8 byte-order mark is decoded in that encoding and reports
+          it as "encoding".
 
         A successful read, a paged one included, is what lets write_file and
         edit_file change the file afterwards.
@@ -214,7 +216,8 @@ class FileSearchToolsMixin:
                 "matches": List[{
                     "file": str,
                     "line": int,
-                    "content": str  # Max 200 chars
+                    "content": str  # Max 200 chars; a longer line is cut to a
+                                    # window around the match, "..." marking each cut
                 }],
                 "total_matches": int,  # Max 100
                 "files_searched": int,
