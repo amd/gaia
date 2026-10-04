@@ -578,7 +578,6 @@ def parse_ttft_from_scorecard(path: str) -> Dict[str, Any]:
     }
 
 
-DEFAULT_TTFT_BASE_URL = "http://localhost:13305/api/v1"
 DEFAULT_TTFT_MODEL = "Gemma-4-E4B-it-GGUF"
 DEFAULT_TTFT_QUERY = (
     "What does the employee handbook say about remote work? Find and read it."
@@ -601,7 +600,7 @@ def _schemas_for(
 
 def measure_prefill_ttft(
     agent: "ChatAgent",
-    base_url: str = DEFAULT_TTFT_BASE_URL,
+    base_url: Optional[str] = None,
     model: str = DEFAULT_TTFT_MODEL,
     filter_to: Optional[List[str]] = None,
     n_trials: int = 5,
@@ -622,8 +621,16 @@ def measure_prefill_ttft(
     """
     from openai import OpenAI
 
+    from gaia.llm.lemonade_client import (
+        resolve_lemonade_api_key,
+        resolve_lemonade_base_url,
+    )
+
+    base_url = resolve_lemonade_base_url(base_url)
     tools = _schemas_for(agent, filter_to)
-    client = OpenAI(base_url=base_url, api_key="not-needed-for-lemonade")
+    # The OpenAI client needs a non-empty key; an open Lemonade ignores it.
+    api_key = resolve_lemonade_api_key(base_url=base_url) or "not-needed-for-lemonade"
+    client = OpenAI(base_url=base_url, api_key=api_key)
 
     def _one(nonce: int) -> float:
         # Nonce at the START of the system message busts the prefix cache so the
@@ -865,7 +872,7 @@ def _ttft_section(scorecard_path: Optional[str]) -> str:
 
 def _run_live_ttft(
     profile: str,
-    base_url: str,
+    base_url: Optional[str],
     model: str,
     trials: int,
     filter_names: Optional[List[str]] = None,
@@ -876,6 +883,9 @@ def _run_live_ttft(
     subset to measure — e.g. the Part-1 loader's actual selection. Otherwise the
     illustrative ``FIXED_SUBSET_DEFAULT`` is used.
     """
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+    base_url = resolve_lemonade_base_url(base_url)
     subset_names = filter_names if filter_names else list(FIXED_SUBSET_DEFAULT)
     agent = build_doc_agent_skeleton(profile)
     full = measure_prefill_ttft(agent, base_url=base_url, model=model, n_trials=trials)
@@ -934,8 +944,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument(
         "--base-url",
-        default=DEFAULT_TTFT_BASE_URL,
-        help=f"Backend base URL for --live-ttft (default: {DEFAULT_TTFT_BASE_URL})",
+        default=None,
+        help=(
+            "Backend base URL for --live-ttft (default: LEMONADE_BASE_URL, "
+            "else GAIA's own Lemonade)"
+        ),
     )
     parser.add_argument(
         "--model",

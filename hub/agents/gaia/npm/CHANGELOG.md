@@ -4,16 +4,19 @@ All notable changes to `@amd-gaia/gaia` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.1] — unreleased
-
-First working release. `npx @amd-gaia/gaia` is now the single command that gets a
-user running GAIA: it fetches and verifies everything GAIA needs and drops them
-into the terminal UI. Before this there was no packaged path at all — the flagship
-agent had to be run from a repo checkout with a Python environment, and reaching
-the terminal UI meant building it from source.
+## [Unreleased]
 
 ### Changed
 
+- **GPU models no longer load at 32K on an NPU-profile machine.** The NPU's
+  32,768-token ceiling was applied to every model whenever `default_device` was
+  `npu`, so a GGUF model ran at half its window and long tasks overflowed. It now
+  binds NPU (FLM) models only. A model can also opt in to a window sized to the
+  machine's memory, up to its native maximum.
+- **A stale `GAIA_SKILL_SET` now stops startup.** An undeclared name used to be
+  dropped silently, so the agent came up healthy with no skills. The sidecar
+  and the stdio entry now exit non-zero before serving, with a message naming
+  the valid sets; leave the variable unset to start without one.
 - **The code index is built on first search, not at task start.** In 32
   SWE-bench tasks the agent never searched it, yet every task embedded the whole
   repository in the background: about 2,000 local embedding requests per six
@@ -28,15 +31,41 @@ the terminal UI meant building it from source.
   and `/full-access` replace `--bypass-permissions` and `/bypass`; the old names
   fail with a message naming the new one. `/full-access always` (or
   `gaia config set full_access true`) keeps it on across launches.
+- **The agent has to read a file before it changes it.** `edit_file`, and
+  `write_file` on an existing file, now refuse a file the agent hasn't read with
+  `read_file` in this session, or one that changed on disk since it did. Benchmark
+  runs caught the agent patching files it had never opened, from a grep snippet
+  or a guess; now it has to look first. A partial read counts, creating a file
+  needs no read, and the refusal comes before any approval prompt. It applies
+  with confirmations bypassed too.
+- **The agent sees every installed skill and loads the one that fits.**
+  Previously a per-turn matcher scored the request against skill descriptions
+  and loaded a skill on 0 of 24 benchmark tasks, so most GitHub requests never
+  learned `gh` was available. The system prompt now lists each installed skill
+  in one line (~1,000 tokens for the starter pack), and refusing a skill-gated
+  CLI names the skill to load. `GAIA_SKILL_DISCOVERY=0` still hides the list.
+  **Removed:** `GAIA_SKILL_DISCOVERY_TAU` is now ignored, and
+  `GaiaAgentConfig(skill_discovery_threshold=…)` raises `TypeError` — drop the
+  argument. See the Agent Skills spec, "Skill catalogue".
+- Contract `apiVersion` is now **2.14** (2.13 added `GET /memory`) for the two new routes and
+  the `claude` provider value. A differing major still raises
+  `VersionMismatchError`; a higher minor is accepted.
+- **Changing `model` on a live `session_id` switches in place** instead of
+  returning 409, so the conversation and any loaded skills survive it. A switch
+  that fails still returns 409 and leaves the session on its previous model.
 
 ### Fixed
+
+- **Code search works in an Agent UI chat that is not inside a project.** It
+  started in GAIA's own documents folder, which usually does not exist yet, so
+  every `search_code_index` failed with "repo_path does not exist". It now starts
+  in a repository the chat can reach, else any folder it can reach that exists.
 
 - **`/model` no longer offers speech or other non-chat models as chat
   targets.** Whisper was listed as a "chat-capable" local model; switching to it
   reported success and broke the next turn. Transcription, speech, music,
   classification, upscaling and 3D models are excluded; a model labeled `chat`
   still qualifies even if it also transcribes.
-
 - **The agent no longer starts an unrelated job after answering.** A bugfix
   request loaded the `coding` skill, whose "find every call site" tip switched
   on document inventorying; after the fix was done and verified, the agent spent
@@ -87,11 +116,25 @@ the terminal UI meant building it from source.
   out of scope, so the agent wrote throwaway test runners and intermediate files
   into the repository instead. It now gets its own scratch directory, named in its
   prompt and deleted when the agent closes; the rest of the temp dir stays denied.
-- Windows npm launchers now find the Python daemon CLI even when npm passes the
-  package script as argv[1], preserving unrelated tools in shared PATH directories.
 
 ### Added
 
+- **A committed, machine-readable `/query` contract.** `openapi.gaia.json` in
+  the Python package is generated from the live routes
+  (`python -m gaia_agent.export_openapi`) and checked for drift in CI, so a
+  typed client no longer has to reverse-engineer the body from prose —
+  `query`, `run_id`, and `context` are required, `run_id` must be a UUID, and
+  the bearer-auth posture is declared in the schema. Swagger UI (`/docs`) is
+  disabled on the sidecar — it loads its JS from a CDN, an unexpected network
+  call for an offline embedder — but `/openapi.json` is still served.
+- **Programs the agent starts no longer inherit GAIA's internal credentials.**
+  Shell commands, MCP servers, CLI installs and sign-ins, native hub agents,
+  media tools and the Lemonade server get the sidecar's environment minus
+  GAIA's own tokens. Your own variables (`GH_TOKEN` and the like) still pass through, so CLI skills
+  keep working. An embedding app can withhold more names with
+  `GAIA_CHILD_ENV_DENY` (comma or space separated), and can stop GAIA loading
+  `.env` files with `GAIA_NO_DOTENV=1` — read from the real environment, so a
+  `.env` cannot set it.
 - **The agent can drive a real browser.** Pages behind JavaScript or a login
   used to be out of reach — `fetch_page` is one HTTP GET, so a signed-in inbox
   or a dashboard came back empty. Eight new tools open a real Chromium, read
@@ -105,7 +148,6 @@ the terminal UI meant building it from source.
   3,110 tokens of fixed prompt instead of 17,942 — so saying "hi" no longer
   costs as much as a repo search. Session-scoped and one-way: a fast session
   has no documents, files, web or skills and cannot pick them up mid-way.
-
 - **`chat`, `doc` and `file` are no longer offered as agents.** New users saw
   four entries in the picker where only one is the product. The three ids still
   resolve, so existing sessions, `*-lite` aliases and eval scenarios keep
@@ -202,25 +244,6 @@ the terminal UI meant building it from source.
   call, no approval needed, and Stop ends the wait within a second. It joins the
   always-on tool set (about 190 more prompt tokens per call) and the
   `loop_control` bundle (80 tools → 81).
-- **Image generation, reachable out of the box.** "Draw me a red bicycle" now
-  generates a PNG with local Stable Diffusion and reports the path; previously
-  the tools existed behind a flag nothing turned on, so the agent just said it
-  couldn't. Adds `generate_image`, `list_sd_models`, and `get_generation_history`
-  (70 tools → 73) plus an `image_gen` bundle so per-turn selection can find them.
-  Generating swaps the resident model, so the next reply waits for the chat model
-  to reload. The `image-gen` starter skill covers prompt expansion and iterating
-  on the previous image.
-- TUI provider setup for Local, Fireworks AI, and AMD LLM Gateway, with masked
-  runtime API keys, discovered models, and remote-inference status.
-
-- **A project map at task start.** In a code repository the agent now opens
-  every task knowing the directory shape, the likely entry points, which
-  commands are installed, and the three platform differences that change
-  command syntax — instead of discovering each one through a failed tool call.
-  Capped at 600 prompt tokens. If the repository has no code index the map
-  starts one in the background; `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns that off,
-  and `GAIA_PROJECT_ROOT` picks the project when the working directory is not
-  it. See SKILL §11.
 - **`--bypass-permissions` now lifts the shell guardrails too.** It used to skip
   only the confirmation prompt, which left the agent unable to run a build or a
   test suite even with the user's blanket consent: no interpreter, test runner
@@ -239,10 +262,42 @@ the terminal UI meant building it from source.
   Redirection has one exception: a command that
   is nothing but a skill-granted CLI runs argv-only, so `>` there is refused
   with an explanation instead of reaching the binary as text. See SPEC §5.5.
-- **`503` from `/query` at session capacity.** When every retained session
-  slot is busy and none is idle enough to evict, starting a new session
-  returns `503` with the reason in `detail` — retryable, distinct from a
-  bug-shaped `500`. See SPEC §5.2.
+
+### Notes
+
+- Tracks sidecar contract `apiVersion` **2.14**; a differing major raises
+  `VersionMismatchError`.
+- `GET /v1/gaia/memory` (contract 2.13) answers the same read-only snapshot the
+  stdio transport's `/memory` sentinel produces, so a daemon-supervised
+  install of the flagship exposes `/memory` too, not just a subprocess one.
+
+## [0.2.0] — 2026-09-16
+
+### Fixed
+
+- Windows npm launchers now find the Python daemon CLI even when npm passes the
+  package script as argv[1], preserving unrelated tools in shared PATH directories.
+
+### Added
+
+- **Image generation, reachable out of the box.** "Draw me a red bicycle" now
+  generates a PNG with local Stable Diffusion and reports the path; previously
+  the tools existed behind a flag nothing turned on, so the agent just said it
+  couldn't. Adds `generate_image`, `list_sd_models`, and `get_generation_history`
+  (70 tools → 73) plus an `image_gen` bundle so per-turn selection can find them.
+  Generating swaps the resident model, so the next reply waits for the chat model
+  to reload. The `image-gen` starter skill covers prompt expansion and iterating
+  on the previous image.
+- TUI provider setup for Local, Fireworks AI, and AMD LLM Gateway, with masked
+  runtime API keys, discovered models, and remote-inference status.
+- **A project map at task start.** In a code repository the agent now opens
+  every task knowing the directory shape, the likely entry points, which
+  commands are installed, and the three platform differences that change
+  command syntax — instead of discovering each one through a failed tool call.
+  Capped at 600 prompt tokens. If the repository has no code index the map
+  starts one in the background; `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns that off,
+  and `GAIA_PROJECT_ROOT` picks the project when the working directory is not
+  it. See SKILL §11.
 - **Three further client-visible refusals from `/query`.** Reusing a `run_id`
   that is still in flight gets `409` — it used to replace the live run, leaving
   it with no way to be cancelled. Supplying a `model` that differs from the one
@@ -250,12 +305,6 @@ the terminal UI meant building it from source.
   the old model. A request with an absent or empty `Host` header gets `400`
   rather than being served, closing a DNS-rebinding check that failed open.
   See SPEC §5 and §5.2.
-- **Per-turn skill-body selection.** A loaded skill stays loaded, but its body
-  only renders in the prompt on turns whose query matches its description; the
-  rest collapse to a one-line menu the model re-activates with `load_skill`.
-  `GAIA_DYNAMIC_SKILLS=0` turns the selection off, `GAIA_DYNAMIC_SKILLS_TAU`
-  overrides the match threshold, and an embedder outage disables it for the
-  session (every body renders — capability is never lost to a failed match).
 - **Per-turn tool selection, now on by default for the flagship `full`
   profile.** The model is sent about 28 of its 84 tools on any one call — a
   fixed core plus whichever cohesion bundles the query matched — instead of the
@@ -278,46 +327,6 @@ the terminal UI meant building it from source.
   behavioural rules intact. It had been a rationale document — every rule
   followed by the incident that motivated it — and the model needs the rule,
   not the incident report.
-- **`gaia run` (the default command)** — resolves the host platform, fetches and
-  SHA-256 verifies both binaries, then launches the terminal UI and propagates its
-  exit code. Arguments after a bare `--` are forwarded to the TUI verbatim.
-- **Dual-binary delivery.** The package installs two published artifacts: the
-  frozen agent sidecar (`gaia-agent`), published by this package's own release,
-  and the terminal UI (`gaia-tui`), which is the published **`terminal-hub`**
-  component. The TUI is consumed, not rebuilt — it is byte-for-byte the binary a
-  full GAIA install runs as `gaia tui`, so an npm user and a core user cannot end
-  up on terminal UIs that behave differently. A second build under this package's
-  own lane would have been the same bytes at a different version under a third
-  naming convention, and the two would have drifted.
-- **`binaries.lock.json` `schemaVersion` 3.0** — a component-keyed checksum
-  manifest where **each component carries its own `componentVersion`, `baseUrl`
-  and `platforms`**. Component-first rather than the email agent's flat `binaries`
-  map because the two differ in every dimension: hub lane, version, and platform
-  coverage (terminal-hub covers arm64 Linux and arm64 Windows; the PyInstaller
-  sidecar does not). A single shared base URL cannot address two lanes, so a
-  `1.x`- or `2.x`-shaped lock is rejected at load with an error naming the schema.
-- **Terminal-hub artifact naming is handled in data.** That lane names its Windows
-  builds `gaia-win-x64.exe` / `gaia-win-arm64.exe`, while platform keys come from
-  `process.platform` and say `win32`. The lock keeps the `win32-*` key and carries
-  the hub's spelling in `filename`, so nothing branches on platform to construct a
-  URL. The mapping is asserted on both sides (`TUI_ARTIFACT_NAMES` in
-  `src/platform.ts` and in the lock generator) because a wrong name there is not a
-  build failure anywhere — it is a 404 on a user's first run.
-- **Mandatory SHA-256 verification.** Every download is hashed and compared
-  against the lock before it is written. A mismatch deletes the download and
-  raises `IntegrityError` naming expected vs actual. A placeholder hash blocks the
-  fetch before any network call. There is no flag that relaxes either.
-- **`gaia fetch`** — download and verify without launching; prints JSON. Supports
-  `--component` and `--platform` for cross-platform staging in CI.
-- **`gaia serve`** — run the agent sidecar alone on `127.0.0.1:8141` for
-  integrators who want the REST surface without a daemon or a UI. Health-polls
-  `GET /health`, checks the contract version, and tree-kills on exit. Port `4001`
-  is refused.
-- **`gaia version`** — prints, per component, its version, the URL it is fetched
-  from, and its platform matrix.
-- **Programmatic exports** — `fetchAll`, `startSidecar`, `shutdown`, `runTui`, the
-  platform helpers, and the typed error classes, for embedding GAIA in another
-  app.
 - **The `.installed` record is written after a verified sidecar install.**
   Staging the binary was only half an install: the daemon and the terminal UI
   both key "this agent is installed" on `~/.gaia/agents/gaia/.installed`, and
@@ -331,28 +340,6 @@ the terminal UI meant building it from source.
 
 ### Changed
 
-- **The agent has to read a file before it changes it.** `edit_file`, and
-  `write_file` on an existing file, now refuse a file the agent hasn't read with
-  `read_file` in this session, or one that changed on disk since it did. Benchmark
-  runs caught the agent patching files it had never opened, from a grep snippet
-  or a guess; now it has to look first. A partial read counts, creating a file
-  needs no read, and the refusal comes before any approval prompt. It applies
-  with confirmations bypassed too.
-- **The agent sees every installed skill and loads the one that fits.**
-  Previously a per-turn matcher scored the request against skill descriptions
-  and loaded a skill on 0 of 24 benchmark tasks, so most GitHub requests never
-  learned `gh` was available. The system prompt now lists each installed skill
-  in one line (~1,000 tokens for the starter pack), and refusing a skill-gated
-  CLI names the skill to load. `GAIA_SKILL_DISCOVERY=0` still hides the list.
-  **Removed:** `GAIA_SKILL_DISCOVERY_TAU` is now ignored, and
-  `GaiaAgentConfig(skill_discovery_threshold=…)` raises `TypeError` — drop the
-  argument. See the Agent Skills spec, "Skill catalogue".
-- Contract `apiVersion` is now **2.14** (2.13 added `GET /memory`) for the two new routes and
-  the `claude` provider value. A differing major still raises
-  `VersionMismatchError`; a higher minor is accepted.
-- **Changing `model` on a live `session_id` switches in place** instead of
-  returning 409, so the conversation and any loaded skills survive it. A switch
-  that fails still returns 409 and leaves the session on its previous model.
 - **A `LEMONADE_BASE_URL` that already carries a path is now used exactly as
   written.** Previously any URL not ending in `/api/v1` had that suffix appended,
   so a reverse proxy configured as `https://proxy.example/lemonade` was silently
@@ -438,6 +425,75 @@ the terminal UI meant building it from source.
 
 ### Notes
 
+- `gaia_agent` enforces a per-session caller-auth bearer on every `/v1/gaia/*`
+  request, plus a loopback `Host` allowlist and non-loopback `Origin` rejection.
+  This package mints no token, so a sidecar it spawns comes up in dev mode (token
+  check skipped, loudly warned, Host/Origin still enforced) — pass your own
+  through `spawnSidecar`'s `env` to turn it on. See SPEC §5.4.
+
+## [0.1.1] — 2026-08-21
+
+First working release. `npx @amd-gaia/gaia` is now the single command that gets a
+user running GAIA: it fetches and verifies everything GAIA needs and drops them
+into the terminal UI. Before this there was no packaged path at all — the flagship
+agent had to be run from a repo checkout with a Python environment, and reaching
+the terminal UI meant building it from source.
+
+### Added
+
+- **`503` from `/query` at session capacity.** When every retained session
+  slot is busy and none is idle enough to evict, starting a new session
+  returns `503` with the reason in `detail` — retryable, distinct from a
+  bug-shaped `500`. See SPEC §5.2.
+- **Per-turn skill-body selection.** A loaded skill stays loaded, but its body
+  only renders in the prompt on turns whose query matches its description; the
+  rest collapse to a one-line menu the model re-activates with `load_skill`.
+  `GAIA_DYNAMIC_SKILLS=0` turns the selection off, `GAIA_DYNAMIC_SKILLS_TAU`
+  overrides the match threshold, and an embedder outage disables it for the
+  session (every body renders — capability is never lost to a failed match).
+- **`gaia run` (the default command)** — resolves the host platform, fetches and
+  SHA-256 verifies both binaries, then launches the terminal UI and propagates its
+  exit code. Arguments after a bare `--` are forwarded to the TUI verbatim.
+- **Dual-binary delivery.** The package installs two published artifacts: the
+  frozen agent sidecar (`gaia-agent`), published by this package's own release,
+  and the terminal UI (`gaia-tui`), which is the published **`terminal-hub`**
+  component. The TUI is consumed, not rebuilt — it is byte-for-byte the binary a
+  full GAIA install runs as `gaia tui`, so an npm user and a core user cannot end
+  up on terminal UIs that behave differently. A second build under this package's
+  own lane would have been the same bytes at a different version under a third
+  naming convention, and the two would have drifted.
+- **`binaries.lock.json` `schemaVersion` 3.0** — a component-keyed checksum
+  manifest where **each component carries its own `componentVersion`, `baseUrl`
+  and `platforms`**. Component-first rather than the email agent's flat `binaries`
+  map because the two differ in every dimension: hub lane, version, and platform
+  coverage (terminal-hub covers arm64 Linux and arm64 Windows; the PyInstaller
+  sidecar does not). A single shared base URL cannot address two lanes, so a
+  `1.x`- or `2.x`-shaped lock is rejected at load with an error naming the schema.
+- **Terminal-hub artifact naming is handled in data.** That lane names its Windows
+  builds `gaia-win-x64.exe` / `gaia-win-arm64.exe`, while platform keys come from
+  `process.platform` and say `win32`. The lock keeps the `win32-*` key and carries
+  the hub's spelling in `filename`, so nothing branches on platform to construct a
+  URL. The mapping is asserted on both sides (`TUI_ARTIFACT_NAMES` in
+  `src/platform.ts` and in the lock generator) because a wrong name there is not a
+  build failure anywhere — it is a 404 on a user's first run.
+- **Mandatory SHA-256 verification.** Every download is hashed and compared
+  against the lock before it is written. A mismatch deletes the download and
+  raises `IntegrityError` naming expected vs actual. A placeholder hash blocks the
+  fetch before any network call. There is no flag that relaxes either.
+- **`gaia fetch`** — download and verify without launching; prints JSON. Supports
+  `--component` and `--platform` for cross-platform staging in CI.
+- **`gaia serve`** — run the agent sidecar alone on `127.0.0.1:8141` for
+  integrators who want the REST surface without a daemon or a UI. Health-polls
+  `GET /health`, checks the contract version, and tree-kills on exit. Port `4001`
+  is refused.
+- **`gaia version`** — prints, per component, its version, the URL it is fetched
+  from, and its platform matrix.
+- **Programmatic exports** — `fetchAll`, `startSidecar`, `shutdown`, `runTui`, the
+  platform helpers, and the typed error classes, for embedding GAIA in another
+  app.
+
+### Notes
+
 - The sidecar is installed into `~/.gaia/agents/gaia/`, the GAIA daemon's own
   cache directory. The daemon spawns and supervises the sidecar; putting an
   already-verified binary where it looks turns its fetch into a cache hit instead
@@ -460,13 +516,3 @@ the terminal UI meant building it from source.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.
-- `gaia_agent` enforces a per-session caller-auth bearer on every `/v1/gaia/*`
-  request, plus a loopback `Host` allowlist and non-loopback `Origin` rejection.
-  This package mints no token, so a sidecar it spawns comes up in dev mode (token
-  check skipped, loudly warned, Host/Origin still enforced) — pass your own
-  through `spawnSidecar`'s `env` to turn it on. See SPEC §5.4.
-- Tracks sidecar contract `apiVersion` **2.14**; a differing major raises
-  `VersionMismatchError`.
-- `GET /v1/gaia/memory` (contract 2.13) answers the same read-only snapshot the
-  stdio transport's `/memory` sentinel produces, so a daemon-supervised
-  install of the flagship exposes `/memory` too, not just a subprocess one.

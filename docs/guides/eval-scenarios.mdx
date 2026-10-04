@@ -137,7 +137,10 @@ under `tests/fixtures/gaia/` and are staged to `~/gaia-eval/` at run time
 reference only staged paths). The eval transport runs with
 `GAIA_AUTO_APPROVE_TOOLS=1` (gated actions execute; scenarios assert
 outcomes, modal semantics belong to the TUI lane) and memory scenarios reset
-persistent state via the eval MCP admin tools (`GAIA_MEMORY_ADMIN=1`) —
+persistent state via the eval MCP admin tools (`GAIA_MEMORY_ADMIN=1`). They
+also need memory switched on in the backend under test — it is off by default,
+and the runner refuses to start a memory scenario until
+`PUT /api/memory/settings` with `{"memory_enabled": true}` has been sent —
 GAIA_FIXTURE_VALUES.md carries the full conventions. Tier tags (`t1_basic` → `t4_adversarial`) grade
 difficulty in `gaia_core`/`gaia_memory`/`gaia_voice`/`gaia_email` (whose `t4_adversarial` scenarios also carry `security` or `usability`); `live` marks non-gating real-network
 canaries; `tui` marks the capability-ladder subset; and

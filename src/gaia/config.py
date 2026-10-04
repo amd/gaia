@@ -18,14 +18,6 @@ from typing import Any, List, Optional
 
 log = logging.getLogger(__name__)
 
-# Location is overridable for tests / non-standard installs. GAIA_CONFIG_FILE
-# wins outright; otherwise GAIA_CONFIG_DIR sets the directory holding
-# config.json; otherwise the default ~/.gaia.
-GAIA_CONFIG_DIR = Path(os.getenv("GAIA_CONFIG_DIR", str(Path.home() / ".gaia")))
-GAIA_CONFIG_FILE = Path(
-    os.getenv("GAIA_CONFIG_FILE", str(GAIA_CONFIG_DIR / "config.json"))
-)
-
 
 def gaia_home() -> Path:
     """Return the directory that holds GAIA's on-disk state.
@@ -45,6 +37,19 @@ def gaia_home() -> Path:
             continue
         return Path(os.path.expandvars(os.path.expanduser(raw)))
     return Path.home() / ".gaia"
+
+
+# Location is overridable for tests / non-standard installs. GAIA_CONFIG_FILE
+# wins outright, then GAIA_CONFIG_DIR; otherwise config.json lives in
+# ``gaia_home()``, so a run with its own GAIA_HOME never touches ~/.gaia/config.json.
+GAIA_CONFIG_DIR = (
+    Path(os.path.expanduser(os.environ["GAIA_CONFIG_DIR"].strip()))
+    if os.environ.get("GAIA_CONFIG_DIR", "").strip()
+    else gaia_home()
+)
+GAIA_CONFIG_FILE = Path(
+    os.getenv("GAIA_CONFIG_FILE", str(GAIA_CONFIG_DIR / "config.json"))
+)
 
 
 class GaiaConfigError(Exception):
@@ -198,7 +203,7 @@ class GaiaConfig:
             text = config_file.read_text(encoding="utf-8")
         except FileNotFoundError:
             return cls()
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             raise GaiaConfigError(
                 f"Cannot read GAIA config at {config_file}: {e}. "
                 f"Check file permissions, or delete it to reset to defaults."

@@ -412,9 +412,7 @@ def _download_and_verify(
 def _default_run_pip(args: List[str]) -> None:
     """Install ``args`` via pip, trying frontends in order until one works.
 
-    Mirrors the frontend list in
-    ``gaia.installer.init_command.InitCommand._install_pip_extras``: the
-    standalone ``uv`` binary leads (fastest, honours the active venv), then
+    The standalone ``uv`` binary leads (fastest, honours the active venv), then
     ``python -m uv``, then ``python -m pip`` -- guaranteed present in any
     venv, so a machine with no ``uv`` on PATH (the #2358 dead end: a stock
     ``pip install amd-gaia`` user hitting ``gaia init --profile chat``)

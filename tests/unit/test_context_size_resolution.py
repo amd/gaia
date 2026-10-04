@@ -42,7 +42,8 @@ def isolated_config(monkeypatch):
         (None, "cpu", 65536),
         (None, "npu", 32768),
         ("user.local-model", "gpu", 65536),
-        ("user.local-model", "npu", 32768),
+        # A GGUF model runs on llama.cpp even on an NPU-profile machine.
+        ("user.local-model", "npu", 65536),
         ("Qwen3-0.6B-GGUF", "gpu", 4096),
         ("gemma4-it-e2b-FLM", "gpu", 32768),
     ],
@@ -79,7 +80,17 @@ def test_unset_device_uses_persisted_npu(monkeypatch):
     from gaia.config import GaiaConfig
 
     monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="npu"))
-    assert resolve_ctx_size("user.local-model") == 32768
+    assert resolve_ctx_size() == 32768
+    assert resolve_ctx_size("gemma4-it-e2b-FLM") == 32768
+
+
+def test_persisted_npu_device_does_not_clamp_a_gpu_model(monkeypatch):
+    """An NPU profile once loaded every GGUF model at 32K, the FLM ceiling."""
+    from gaia.config import GaiaConfig
+
+    monkeypatch.setattr(GaiaConfig, "load", lambda: GaiaConfig(default_device="npu"))
+    assert resolve_ctx_size("Gemma-4-E4B-it-GGUF") == 65536
+    assert resolve_ctx_size("user.local-model") == 65536
 
 
 def test_blank_override_uses_default(monkeypatch):
@@ -102,7 +113,9 @@ def test_startup_switch_and_embedder_eviction_use_same_http_load(monkeypatch, wi
         ),
     ):
         assert initialize_lemonade_for_agent("chat", base_url=base) == (True, base)
-    assert ready.call_args.kwargs["min_context_size"] == window
+    # ensure_ready resolves the floor itself, from the same override.
+    assert "min_context_size" not in ready.call_args.kwargs
+    assert resolve_ctx_size(device="gpu") == window
 
     # An embedding model occupies the slot; the target LLM has been evicted.
     responses.get(
@@ -219,10 +232,11 @@ def test_installer_saved_recipe_uses_same_override(monkeypatch, window):
 
 
 @pytest.mark.parametrize(
-    "profile,previous,expected", [("npu", "gpu", 32768), ("chat", "npu", 131072)]
+    "profile,previous,expected,gguf_load",
+    [("npu", "gpu", 32768, 131072), ("chat", "npu", 131072, 131072)],
 )
 def test_installer_profile_wins_before_config_is_saved(
-    monkeypatch, profile, previous, expected
+    monkeypatch, profile, previous, expected, gguf_load
 ):
     from unittest.mock import MagicMock
 
@@ -245,4 +259,5 @@ def test_installer_profile_wins_before_config_is_saved(
     probe.check_model_loaded.return_value = False
     probe.list_models.return_value = {"data": []}
     command._test_model_inference(probe, "user.custom-GGUF")
-    assert probe.load_model.call_args.kwargs["ctx_size"] == expected
+    # The NPU ceiling binds FLM models only; a GGUF load keeps the override.
+    assert probe.load_model.call_args.kwargs["ctx_size"] == gguf_load

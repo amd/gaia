@@ -26,7 +26,7 @@ Example:
 """
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from gaia.logger import get_logger
 
@@ -55,7 +55,7 @@ class VLMToolsMixin:
     def init_vlm(
         self,
         model: str = DEFAULT_VLM_MODEL,
-        base_url: str = "http://localhost:13305",
+        base_url: Optional[str] = None,
     ) -> None:
         """
         Initialize VLM tools and register them with the agent.
@@ -65,7 +65,8 @@ class VLMToolsMixin:
 
         Args:
             model: VLM model to use for image analysis
-            base_url: Lemonade Server base URL
+            base_url: Lemonade Server base URL (default: LEMONADE_BASE_URL,
+                else GAIA's own Lemonade)
 
         Example:
             self.init_vlm()  # Use default Gemma-4-E4B
