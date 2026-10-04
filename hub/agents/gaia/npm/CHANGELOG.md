@@ -90,6 +90,14 @@ the terminal UI meant building it from source.
 
 ### Added
 
+- **A committed, machine-readable `/query` contract.** `openapi.gaia.json` in
+  the Python package is generated from the live routes
+  (`python -m gaia_agent.export_openapi`) and checked for drift in CI, so a
+  typed client no longer has to reverse-engineer the body from prose —
+  `query`, `run_id`, and `context` are required, `run_id` must be a UUID, and
+  the bearer-auth posture is declared in the schema. Swagger UI (`/docs`) is
+  disabled on the sidecar — it loads its JS from a CDN, an unexpected network
+  call for an offline embedder — but `/openapi.json` is still served.
 - **Shell commands and MCP servers no longer inherit GAIA's internal
   credentials.** The processes the agent starts get the sidecar's environment
   minus GAIA's own tokens. Your own variables (`GH_TOKEN` and the like) still pass through, so CLI skills
