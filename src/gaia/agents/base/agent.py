@@ -498,13 +498,22 @@ _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
 #: Longest repeating cycle of calls the loop guard recognises (A, B, A, B, …).
 _MAX_LOOP_PERIOD = 3
 
+#: The wait tool (WaitToolsMixin). A cycle through it is polling at a pace the
+#: model chose — "check the build every minute" — not a loop.
+_PACING_TOOLS = frozenset({"sleep"})
+
+
+def _call_tool_name(call: Any) -> Any:
+    return call[0] if isinstance(call, tuple) else call
+
 
 def _repeat_count(history: List[Any], max_period: int = _MAX_LOOP_PERIOD) -> int:
     """How many times the calls ending at ``history[-1]`` repeated back to back.
 
     Period 1 is one call over and over. A model alternating a search with a
     read of the same file never repeats a call twice in a row, so a guard that
-    only looked at period 1 let it run 15 rounds.
+    only looked at period 1 let it run 15 rounds. A longer cycle that includes
+    the wait tool is paced polling and is not counted.
     """
     n = len(history)
     best = 0
@@ -514,6 +523,8 @@ def _repeat_count(history: List[Any], max_period: int = _MAX_LOOP_PERIOD) -> int
             break
         if len(set(block)) < period:
             continue  # a repeat inside the block is a shorter period
+        if period > 1 and any(_call_tool_name(c) in _PACING_TOOLS for c in block):
+            continue
         repeats = 0
         while (
             n - (repeats + 1) * period >= 0

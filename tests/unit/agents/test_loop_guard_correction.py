@@ -397,6 +397,11 @@ def test_summary_falls_back_to_the_return_code(agent):
         (["a", "b", "a", "c"], 1),
         (["a", "b", "b"], 2),
         ([], 0),
+        # Polling: the same status check with the same wait between, as asked.
+        ([("run_shell", "gh run view 1"), ("sleep", "60")] * 5, 1),
+        ([("run_shell", "ls"), ("read", "a"), ("sleep", "5")] * 4, 1),
+        # A wait repeated on its own still counts.
+        ([("sleep", "60")] * 4, 4),
     ],
 )
 def test_repeat_count_sees_a_repeating_cycle(history, expected):
