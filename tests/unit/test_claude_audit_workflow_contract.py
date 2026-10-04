@@ -471,6 +471,15 @@ def _classify(reply_file: Path) -> "subprocess.CompletedProcess[str]":
 
 
 def _transcript(*entries: dict) -> str:
+    """The shape claude-code-action writes: ONE pretty-printed JSON array.
+
+    The stop-reason step once read this line by line, found no result record in an
+    indented array, and handed the classifier an empty string on every failure.
+    """
+    return json.dumps(list(entries), indent=2)
+
+
+def _transcript_jsonl(*entries: dict) -> str:
     return "\n".join(json.dumps(e) for e in entries)
 
 
@@ -524,7 +533,7 @@ def test_a_lens_writing_about_auth_is_not_diagnosed_as_a_dead_credential(
     code = _RESULT_EXTRACTOR.search(_stop_reason_run(path))
     assert code, f"{path.name} no longer reduces the transcript to its result"
 
-    execution = tmp_path / "execution.jsonl"
+    execution = tmp_path / "execution.json"
     execution.write_text(_transcript(_AUTH_PROSE, _GENERIC_CRASH), encoding="utf-8")
     reply = tmp_path / "claude-result.txt"
 
@@ -541,20 +550,44 @@ def test_a_lens_writing_about_auth_is_not_diagnosed_as_a_dead_credential(
     )
 
 
+@pytest.mark.parametrize(
+    "encode", (_transcript, _transcript_jsonl), ids=("array", "jsonl")
+)
 @pytest.mark.parametrize("path", (NIGHTLY_AUDIT, SECURITY_AUDIT), ids=lambda p: p.name)
-def test_a_real_credential_rejection_is_still_named(path: Path, tmp_path: Path):
+def test_a_real_credential_rejection_is_still_named(path: Path, encode, tmp_path: Path):
     """The guard above must not be satisfied by classifying nothing at all."""
     code = _RESULT_EXTRACTOR.search(_stop_reason_run(path))
     assert code
 
-    execution = tmp_path / "execution.jsonl"
+    execution = tmp_path / "execution.json"
     execution.write_text(
-        _transcript(_AUTH_PROSE, _REAL_CREDENTIAL_FAILURE), encoding="utf-8"
+        encode(_AUTH_PROSE, _REAL_CREDENTIAL_FAILURE), encoding="utf-8"
     )
     reply = tmp_path / "claude-result.txt"
     _run_snippet(code["code"], execution, reply, tmp_path=tmp_path)
 
     assert _classify(reply).returncode == _EXIT_CREDENTIAL
+
+
+@pytest.mark.parametrize("path", (NIGHTLY_AUDIT, SECURITY_AUDIT), ids=lambda p: p.name)
+def test_a_turn_ceiling_is_named_from_the_real_log_shape(path: Path, tmp_path: Path):
+    """The snippet prints the terminal subtype the step compares to error_max_turns."""
+    code = _RESULT_EXTRACTOR.search(_stop_reason_run(path))
+    assert code
+
+    execution = tmp_path / "execution.json"
+    execution.write_text(
+        _transcript(
+            _AUTH_PROSE,
+            {"type": "result", "subtype": "error_max_turns", "is_error": True},
+        ),
+        encoding="utf-8",
+    )
+    reply = tmp_path / "claude-result.txt"
+    done = _run_snippet(code["code"], execution, reply, tmp_path=tmp_path)
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "error_max_turns"
 
 
 def test_a_findings_file_truncated_mid_write_does_not_sink_the_audit(

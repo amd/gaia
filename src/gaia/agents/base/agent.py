@@ -150,8 +150,8 @@ CHUNK_TRUNCATION_SIZE = 2500
 # Global default for how many reasoning/tool steps an agent may take before it
 # stops and reports progress. This is the single knob for the whole fleet:
 # change DEFAULT_MAX_STEPS here, or set GAIA_AGENT_MAX_STEPS=<n> at runtime to
-# override every agent at once. Agents that genuinely need more (e.g. CodeAgent
-# for multi-file generation) override it explicitly in their own config.
+# override every agent at once. Agents that genuinely need more override it
+# explicitly in their own config.
 DEFAULT_MAX_STEPS = 50
 
 # Per-reply output caps. A local model's 32K ctx must also hold a ~7.7K-token
@@ -494,6 +494,45 @@ _REPEATED_CALL_ANSWER_PROMPT = (
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
 _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
+
+#: Longest repeating cycle of calls the loop guard recognises (A, B, A, B, …).
+_MAX_LOOP_PERIOD = 3
+
+#: The wait tool (WaitToolsMixin). A cycle through it is polling at a pace the
+#: model chose — "check the build every minute" — not a loop.
+_PACING_TOOLS = frozenset({"sleep"})
+
+
+def _call_tool_name(call: Any) -> Any:
+    return call[0] if isinstance(call, tuple) else call
+
+
+def _repeat_count(history: List[Any], max_period: int = _MAX_LOOP_PERIOD) -> int:
+    """How many times the calls ending at ``history[-1]`` repeated back to back.
+
+    Period 1 is one call over and over. A model alternating a search with a
+    read of the same file never repeats a call twice in a row, so a guard that
+    only looked at period 1 let it run 15 rounds. A longer cycle that includes
+    the wait tool is paced polling and is not counted.
+    """
+    n = len(history)
+    best = 0
+    for period in range(1, max_period + 1):
+        block = history[n - period :]
+        if len(block) < period:
+            break
+        if len(set(block)) < period:
+            continue  # a repeat inside the block is a shorter period
+        if period > 1 and any(_call_tool_name(c) in _PACING_TOOLS for c in block):
+            continue
+        repeats = 0
+        while (
+            n - (repeats + 1) * period >= 0
+            and history[n - (repeats + 1) * period : n - repeats * period] == block
+        ):
+            repeats += 1
+        best = max(best, repeats)
+    return best
 
 
 # Tools that mutate external state (mark read, archive, star, …). A small
@@ -1148,8 +1187,8 @@ class Agent(abc.ABC):
     _last_tool_schemas: Optional[List[Dict[str, Any]]] = None
     _last_tool_filter: Optional[List[str]] = None
 
-    # Re-entrancy guard for tool timing. A tool body may call another tool
-    # (CodeAgent orchestrates that way); only the outermost call is timed.
+    # Re-entrancy guard for tool timing. A tool body may call another tool;
+    # only the outermost call is timed.
     _tool_timing_depth: int = 0
 
     # Seconds spent waiting on a human confirmation, excluded from tool time.
@@ -1408,7 +1447,7 @@ Do NOT wrap conversational replies in JSON.
             use_claude: If True, uses Claude API (default: False)
             use_chatgpt: Removed option; True raises migration guidance (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
-            base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
+            base_url: Base URL for local LLM server (default: ``resolve_lemonade_base_url()`` — LEMONADE_BASE_URL, else GAIA's own server)
             model_id: The ID of the model to use with LLM server (default for local)
             max_steps: Maximum number of steps the agent can take before terminating.
                 When None, falls back to the global default_max_steps() (env
@@ -1537,9 +1576,10 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
 
         # Resolve the same endpoint as TUI setup, including an isolated runtime.
-        if base_url is None:
-            from gaia.llm.lemonade_client import resolve_lemonade_base_url
+        from gaia.llm.lemonade_client import resolve_lemonade_base_url
 
+        resolve_after_start = base_url is None
+        if resolve_after_start:
             base_url = resolve_lemonade_base_url()
 
         # Lazy Lemonade initialization for local LLM users
@@ -1572,6 +1612,9 @@ Do NOT wrap conversational replies in JSON.
                     required_min_device=required_min_device,
                     device=device,
                 )
+                # Starting GAIA's own server picks its port, so follow it.
+                if resolve_after_start:
+                    base_url = resolve_lemonade_base_url()
 
         # Initialize state management
         self.execution_state = self.STATE_PLANNING
@@ -4965,9 +5008,9 @@ Do NOT wrap conversational replies in JSON.
         )
         recorder = getattr(self, "_turn_recorder", None)
         step_timer = getattr(self, "_step_timer", None)
-        # Only the outermost call is timed. A tool body may call another tool
-        # (CodeAgent's orchestration does); timing both would count the inner
-        # one's seconds twice and push tool_s past the turn's own total.
+        # Only the outermost call is timed. A tool body may call another tool;
+        # timing both would count the inner one's seconds twice and push tool_s
+        # past the turn's own total.
         if (recorder is None and step_timer is None) or not outermost:
             result = self._execute_tool(tool_name, tool_args)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
@@ -5892,13 +5935,14 @@ Do NOT wrap conversational replies in JSON.
                 cloud_model_provider,
                 lemonade_auth_headers,
                 resolve_lemonade_api_key,
+                resolve_lemonade_base_url,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
 
             if cloud_model_provider(getattr(self, "model_id", None)):
                 return False
 
-            base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
             # ``api/v0/health`` exposes ``all_models_loaded`` with ctx_size.
             # The base_url already ends in /api/v1; strip the v1 suffix to
             # reach the v0 health endpoint.
@@ -6900,7 +6944,10 @@ Do NOT wrap conversational replies in JSON.
         error_count = 0
         # Malformed replies get their own budget: failed tool calls are ordinary work.
         parse_failures = 0
-        tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
+        tool_call_history = []  # Recent tool calls, for loop detection
+        loop_window = max(
+            5, _MAX_LOOP_PERIOD * getattr(self, "max_consecutive_repeats", 4)
+        )
         # Repeated calls already sent one correction; the next repeat ends the turn.
         loop_corrected_calls: set = set()
         tool_call_log = (
@@ -8211,14 +8258,9 @@ Do NOT wrap conversational replies in JSON.
                     current_call = (tool_name, str(tool_args))
                     tool_call_history.append(current_call)
                     tool_call_log.append(current_call)
-                    if len(tool_call_history) > 5:
+                    if len(tool_call_history) > loop_window:
                         tool_call_history.pop(0)
-                    consecutive_count = 0
-                    for prior in reversed(tool_call_history):
-                        if prior == current_call:
-                            consecutive_count += 1
-                        else:
-                            break
+                    consecutive_count = _repeat_count(tool_call_history)
                     if consecutive_count >= self.max_consecutive_repeats:
                         self.console.stop_progress()
                         # NATIVE path appends results to ``previous_outputs``
@@ -8467,17 +8509,12 @@ Do NOT wrap conversational replies in JSON.
                     current_call
                 )  # Full unbounded log for workflow guards
 
-                # Keep only last 5 calls for loop detection
-                if len(tool_call_history) > 5:
+                # Enough recent calls to see a short cycle repeat to the limit
+                if len(tool_call_history) > loop_window:
                     tool_call_history.pop(0)
 
-                # Count consecutive identical calls
-                consecutive_count = 0
-                for call in reversed(tool_call_history):
-                    if call == current_call:
-                        consecutive_count += 1
-                    else:
-                        break
+                # Back-to-back repeats of this call, or of the cycle it closes
+                consecutive_count = _repeat_count(tool_call_history)
 
                 # Stop after max_consecutive_repeats identical calls
                 if consecutive_count >= self.max_consecutive_repeats:

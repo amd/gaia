@@ -198,7 +198,7 @@ class GaiaConfig:
             text = config_file.read_text(encoding="utf-8")
         except FileNotFoundError:
             return cls()
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             raise GaiaConfigError(
                 f"Cannot read GAIA config at {config_file}: {e}. "
                 f"Check file permissions, or delete it to reset to defaults."
