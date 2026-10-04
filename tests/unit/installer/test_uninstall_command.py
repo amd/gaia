@@ -164,6 +164,7 @@ class TestBuildPlan:
             gaia / "lemonade",
             gaia / "electron-config.json",
             gaia / "gaia.log",
+            gaia / "gaia.log.lock",
             gaia / "electron-install-state.json",
             gaia / "electron-install.log",
             gaia / "bin",
@@ -171,6 +172,22 @@ class TestBuildPlan:
             gaia / "host",
         ]
         assert plan.stop_daemon
+
+    def test_purge_includes_rotated_gaia_logs(self, fake_home, fs):
+        gaia = fake_home / ".gaia"
+        fs.create_file(gaia / "gaia.log")
+        fs.create_file(gaia / "gaia.log.1")
+        fs.create_file(gaia / "gaia.log.2")
+        plan = uc.build_plan(
+            venv=False,
+            purge=True,
+            purge_lemonade=False,
+            purge_models=False,
+            home=fake_home,
+        )
+        paths = plan.unique_paths()
+        assert gaia / "gaia.log.1" in paths
+        assert gaia / "gaia.log.2" in paths
 
     def test_purge_models_populates_path(self, fake_home):
         plan = uc.build_plan(

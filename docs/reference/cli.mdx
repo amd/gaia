@@ -3575,7 +3575,7 @@ gaia diagnostics --output /tmp/my-bundle.tgz
 The bundle includes:
 - System info snapshot (`uname -a`, distro, relevant env vars, all TCP listeners via `ss -tlnp`)
 - State files from `~/.gaia/` (config, session data — no chat content)
-- Log files: `~/.gaia/gaia.log` and `~/.gaia/electron-main.log` (omitted with `--no-logs`)
+- Log files: `~/.gaia/gaia.log` with its rotated copies (`gaia.log.1`, `gaia.log.2`, ...) and `~/.gaia/electron-main.log`, omitted with `--no-logs`. A log over 50 MB is bundled as its last 50 MB, named `<file>.tail`.
 
 ---
 
