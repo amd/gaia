@@ -1292,6 +1292,22 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+class _UserWaitClock:
+    """Total seconds a stream has spent waiting on the user, open wait included."""
+
+    def __init__(self) -> None:
+        self._closed = 0.0
+        self._since: Optional[float] = None
+
+    def update(self, waiting: bool, now: float) -> float:
+        if waiting and self._since is None:
+            self._since = now
+        elif not waiting and self._since is not None:
+            self._closed += now - self._since
+            self._since = None
+        return self._closed + (now - self._since if self._since is not None else 0.0)
+
+
 def _canonicalize_user_input_request(event: dict) -> dict:
     """Translate a raw ``user_input_request`` event (emitted by
     ``SSEOutputHandler.request_user_input_blocking()``) into the ``needs_input``
@@ -2440,6 +2456,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         idle_cycles = 0
         _stream_start = _time.time()
         _STREAM_TIMEOUT = 600  # 10 minutes — large system prompts need time
+        # Time spent waiting on a request_user_input answer is the user's, not
+        # the turn's; that wait has its own deadline.
+        _user_wait = _UserWaitClock()
 
         def _blocked_policy_steps():
             return [
@@ -2478,7 +2497,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         while True:
             # Guard: total timeout for the streaming response
-            if _time.time() - _stream_start > _STREAM_TIMEOUT:
+            _now = _time.time()
+            _waited = _user_wait.update(sse_handler.awaiting_user_input(), _now)
+            if _now - _stream_start - _waited > _STREAM_TIMEOUT:
                 logger.error("Streaming response timed out after %ds", _STREAM_TIMEOUT)
                 timeout_event = json.dumps(
                     {

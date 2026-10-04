@@ -9,9 +9,11 @@ apart on what "staged" means:
 
 It does three things:
 
-1. Copies ``tests/fixtures/gaia`` to ``<home>/gaia-eval`` (replacing any earlier
-   copy), because scenario messages name files like ``~/gaia-eval/csv/sales.csv``
-   and the agent's path sandbox refuses repo paths.
+1. Copies the agent-facing parts of ``tests/fixtures/gaia`` to
+   ``<home>/gaia-eval`` (replacing any earlier copy), because scenario messages
+   name files like ``~/gaia-eval/csv/sales.csv``. The eval backend runs from
+   that folder, so it is the agent's file scope; nothing that holds an answer
+   is copied there.
 2. Copies the starter skills under ``hub/skills`` into ``<home>/.gaia/skills``,
    except those the corpus contract says must start uninstalled.
 3. Builds and trusts the fixture hub with ``prepare_fixture_hub.py``.
@@ -33,6 +35,19 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 HUB_SKILLS = REPO_ROOT / "hub" / "skills"
+
+#: What the scenarios name under ``~/gaia-eval`` (GAIA_FIXTURE_VALUES.md). Only
+#: these are staged: the agent can be granted that folder, so it must hold the
+#: files a user would have and nothing the scorer knows — no ground truth,
+#: generators, canned gh data or harness scripts.
+AGENT_FACING = ("csv", "mini_repo", "media", "capture")
+_NOT_AGENT_FACING = shutil.ignore_patterns("_gen_*", "ground_truth.json", "__pycache__")
+
+#: Loose files scenarios expect under ``~/gaia-eval``, staged from the corpus.
+_CORPUS_DOCS = REPO_ROOT / "eval" / "corpus" / "documents"
+LOOSE_FILES = {
+    _CORPUS_DOCS / "meeting_notes_q3.txt": Path("documents", "meeting_notes_q3.txt"),
+}
 
 #: Install scenarios download these from the fixture hub, so they must start
 #: uninstalled (GAIA_FIXTURE_VALUES.md, "Environment preconditions").
@@ -75,7 +90,11 @@ def stage(home: Path) -> Path:
             shutil.rmtree(fixtures, onexc=_clear_readonly)
         else:
             shutil.rmtree(fixtures, onerror=_clear_readonly)
-    shutil.copytree(HERE, fixtures)
+    for name in AGENT_FACING:
+        shutil.copytree(HERE / name, fixtures / name, ignore=_NOT_AGENT_FACING)
+    for source, dest in LOOSE_FILES.items():
+        (fixtures / dest).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, fixtures / dest)
     print(f"staged fixtures -> {fixtures}")
 
     skills_root = home / ".gaia" / "skills"
