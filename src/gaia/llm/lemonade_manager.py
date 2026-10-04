@@ -660,6 +660,11 @@ class LemonadeManager:
         # floor means the default, never a TypeError at the ctx comparison.
         if min_context_size is None:
             min_context_size = resolve_ctx_size(device=device)
+            # An idle server is seeded with the default model at that model's
+            # own window, so its first chat does not reload it.
+            preload_ctx = resolve_ctx_size(model=DEFAULT_MODEL_NAME)
+        else:
+            preload_ctx = min_context_size
         # Map high-level device selector to required_min_device when the
         # caller didn't pass an explicit required_min_device.
         if device and not required_min_device:
@@ -931,7 +936,7 @@ class LemonadeManager:
                 just_preloaded = False
                 if context_size_value == 0 and not llm_models_loaded:
                     context_size_value, status = cls._try_preload_with_ctx(
-                        client, min_context_size, quiet, cls._lock
+                        client, preload_ctx, quiet, cls._lock
                     )
                     just_preloaded = True
                     # ``_try_preload_with_ctx`` already re-fetched status

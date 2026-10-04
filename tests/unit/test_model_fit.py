@@ -73,6 +73,8 @@ DGPU = {
 
 QWEN = lc.find_model_requirement(lc.LARGE_DEFAULT_MODEL_NAME)
 FLASH = lc.find_model_requirement(lc.FLASH_OPTION_MODEL_NAME)
+# Qwen3.6's KV cache at its 64K floor, the least it ever loads with.
+QWEN_KV = model_fit.kv_cache_gb(QWEN.kv_bytes_per_token, QWEN.min_ctx_size)
 
 
 class TestCapacity:
@@ -102,47 +104,43 @@ class TestCapacity:
 class TestFit:
     def test_qwen_fits_a_128gb_strix_halo(self):
         assert check_fit(
-            QWEN.size_gb, capacity_from_system_info(STRIX_HALO_128), QWEN.kv_cache_gb
+            QWEN.size_gb, capacity_from_system_info(STRIX_HALO_128), QWEN_KV
         ).fits
 
     def test_qwen_also_fits_a_64gb_strix_halo(self):
         # ~27 GB against a ~55.9 GB pool; Flash's 82.86 GB needs the 128 GB class.
         assert check_fit(
-            QWEN.size_gb, capacity_from_system_info(STRIX_HALO_64), QWEN.kv_cache_gb
+            QWEN.size_gb, capacity_from_system_info(STRIX_HALO_64), QWEN_KV
         ).fits
 
     def test_qwen_does_not_fit_the_smallest_machines(self):
-        verdict = check_fit(
-            QWEN.size_gb, capacity_from_system_info(MAC_M4), QWEN.kv_cache_gb
-        )
+        verdict = check_fit(QWEN.size_gb, capacity_from_system_info(MAC_M4), QWEN_KV)
         assert not verdict.fits and "memory" in verdict.reason
 
     def test_qwen_fits_a_32gb_cpu_box_by_memory_alone(self):
         # It fits; the GPU-only product rule (TestDefaultFollowsTheGpu) is
         # what keeps a CPU-only PC on Gemma.
         cap = capacity_from_system_info(CPU_ONLY)
-        assert check_fit(QWEN.size_gb, cap, QWEN.kv_cache_gb).fits
+        assert check_fit(QWEN.size_gb, cap, QWEN_KV).fits
 
     def test_qwen_kv_cache_is_its_full_attention_layers_at_64k(self):
         # Only 10 of 40 layers are full attention; the 30 Gated DeltaNet layers
         # keep a fixed-size state the shared margin covers.
         per_token = 10 * 2 * 256 * 2 * 2  # layers x KV heads x dims x K+V x f16
-        assert QWEN.kv_cache_gb == pytest.approx(
-            per_token * lc.GPU_CTX_SIZE / 1e9, abs=0.05
-        )
+        assert QWEN_KV == pytest.approx(per_token * lc.GPU_CTX_SIZE / 1e9, abs=0.05)
 
     def test_qwen_needs_about_27gb(self):
-        need = model_fit.required_memory_gb(QWEN.size_gb, QWEN.kv_cache_gb)
+        need = model_fit.required_memory_gb(QWEN.size_gb, QWEN_KV)
         assert need == pytest.approx(26.8, abs=0.05)
 
     def test_qwen_charges_its_kv_cache(self):
         # A 26 GB pool holds the weights and margin (~25.5 GB) but not the cache.
-        assert QWEN.kv_cache_gb > 0
+        assert QWEN_KV > 0
         cap = MachineCapacity(
             memory_gb=26.0, memory_source="AMD GPU", disk_free_gb=None
         )
         assert check_fit(QWEN.size_gb, cap).fits  # weights alone would pass
-        verdict = check_fit(QWEN.size_gb, cap, QWEN.kv_cache_gb)
+        verdict = check_fit(QWEN.size_gb, cap, QWEN_KV)
         assert not verdict.fits and "memory" in verdict.reason
 
     def test_flash_does_not_fit_a_64gb_strix_halo(self):
@@ -300,7 +298,11 @@ class TestTuiDrift:
         for entry in doc["models"]:
             mr = lc.find_model_requirement(entry.get("register_as") or entry["id"])
             if mr is not None:
-                assert entry.get("kv_cache_gb", 0.0) == mr.kv_cache_gb, entry["id"]
+                assert (
+                    entry.get("kv_bytes_per_token", 0) == mr.kv_bytes_per_token
+                ), entry["id"]
+                if mr.kv_bytes_per_token:
+                    assert entry["min_ctx_size"] == mr.min_ctx_size, entry["id"]
                 assert entry.get("size_gb") == mr.size_gb, entry["id"]
                 assert (
                     entry.get("min_lemonade_version") == mr.min_lemonade_version
@@ -351,7 +353,7 @@ class TestRealLemonadeReports:
         # The default Linux GTT limit (half of RAM) is too small for Flash's
         # 82.86 GB, but the ~27 GB default fits.
         assert not check_fit(FLASH.size_gb, cap).fits
-        assert check_fit(QWEN.size_gb, cap, QWEN.kv_cache_gb).fits
+        assert check_fit(QWEN.size_gb, cap, QWEN_KV).fits
 
     def test_macos_metal(self):
         cap = capacity_from_system_info(_fixture("lemonade11_metal_macos.json"))
@@ -462,3 +464,68 @@ def test_a_ladder_model_without_a_size_is_never_guessed_in(monkeypatch):
     model_id, skipped, _ = lc.recommend_default_chat_model(FakeClient())
     assert model_id == lc.DEFAULT_MODEL_NAME
     assert "size" in skipped[0][1]
+
+
+class TestQwenWindowFollowsMemory:
+    """Qwen3.6 loads with the largest window this PC's memory holds, to 256K."""
+
+    @pytest.mark.parametrize(
+        "info,window",
+        [
+            # 96 GB carve-out + 15.8 GB GTT: the native 262144.
+            (STRIX_HALO_128, 262144),
+            # 48 GB carve-out + 7.9 GB GTT: still the native maximum.
+            (STRIX_HALO_64, 262144),
+            # 32 GB card: 28.8 GB usable - 25.5 GB weights leaves ~152K of KV.
+            (
+                {"devices": {"amd_dgpu": [{"available": True, "vram_gb": 32.0}]}},
+                155648,
+            ),
+            # 24 GB card: Qwen3.6 is not the default here; forced, it gets 64K.
+            (DGPU, lc.GPU_CTX_SIZE),
+        ],
+    )
+    def test_window_per_machine(self, info, window):
+        cap = capacity_from_system_info(info)
+        assert lc.context_for_capacity(QWEN, cap) == window
+
+    def test_native_maximum_is_registered_next_to_the_floor(self):
+        assert (QWEN.min_ctx_size, QWEN.max_ctx_size) == (lc.GPU_CTX_SIZE, 262144)
+        assert QWEN.kv_bytes_per_token == 10 * 2 * 256 * 2 * 2
+
+    def test_gemma_does_not_opt_in(self):
+        gemma = lc.find_model_requirement(lc.DEFAULT_MODEL_NAME)
+        assert not gemma.scales_with_memory
+        for info in (STRIX_HALO_128, DGPU, CPU_ONLY):
+            cap = capacity_from_system_info(info)
+            assert lc.context_for_capacity(gemma, cap) == lc.GPU_CTX_SIZE
+
+    def test_default_pick_charges_the_window_the_load_requests(self, monkeypatch):
+        """A 32 GB card still qualifies at the ~152K window it will load."""
+        charged = []
+        real = model_fit.check_fit
+
+        def spy(size_gb, capacity, kv=0.0):
+            charged.append(kv)
+            return real(size_gb, capacity, kv)
+
+        monkeypatch.setattr(model_fit, "check_fit", spy)
+        info = {
+            "devices": {"amd_dgpu": [{"available": True, "vram_gb": 32.0}]},
+            "model_storage": {"free_bytes": 900e9},
+        }
+
+        class FakeClient:
+            def get_system_info(self, timeout=None):
+                return info
+
+            def health_check(self):
+                return {"version": "2026.40.0"}
+
+        model_id, _, cap = lc.recommend_default_chat_model(FakeClient())
+        assert model_id == lc.LARGE_DEFAULT_MODEL_NAME
+        window = lc.context_for_capacity(QWEN, cap)
+        assert window == 155648
+        assert charged[0] == pytest.approx(
+            model_fit.kv_cache_gb(QWEN.kv_bytes_per_token, window)
+        )

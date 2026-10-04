@@ -50,6 +50,7 @@ from gaia.llm.model_fit import (
     capacity_from_system_info,
     check_fit,
     check_server_supports,
+    kv_cache_gb,
 )
 
 DEFAULT_MODELS = (LARGE_DEFAULT_MODEL_NAME, FLASH_OPTION_MODEL_NAME)
@@ -345,7 +346,9 @@ def compare(models, ctx: int, suite: Optional[str], judge: bool, out: Path):
             result.fit_reason = "unknown download size; not downloading it blind"
             print(f"\n== {model}: skipped, {result.fit_reason}")
             continue
-        verdict = check_fit(size, capacity, mr.kv_cache_gb if mr else 0.0)
+        # Charged at --ctx, the window this run loads the model with.
+        kv = kv_cache_gb(mr.kv_bytes_per_token, ctx) if mr else 0.0
+        verdict = check_fit(size, capacity, kv)
         result.fits, result.fit_reason = verdict.fits, verdict.reason
         if not verdict.fits:
             print(f"\n== {model}: skipped, {verdict.reason}")

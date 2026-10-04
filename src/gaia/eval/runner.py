@@ -2077,9 +2077,9 @@ def _warn_on_judge_mismatch(baseline, current):
     print("WARNING: judge mismatch — these scorecards are not directly comparable.")
     print(f"  baseline scored by: {baseline_judge}")
     print(f"  current  scored by: {current_judge}")
-    print("Deltas below mix real behavior changes with the judge change. Regenerate")
-    print("the baseline under the current judge (`gaia eval agent --save-baseline`)")
-    print("before treating any of them as a regression.")
+    print("Deltas below mix real behavior changes with the judge change. Replace the")
+    print("committed baseline from the next nightly on the Strix Halo pool, scored by")
+    print("the current judge, before treating any of them as a regression.")
     print("=" * 78)
 
 

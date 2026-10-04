@@ -12,10 +12,12 @@ from ..base_client import LLMClient
 from ..lemonade_client import (
     DEFAULT_MODEL_NAME,
     LemonadeClient,
+    LemonadeClientError,
     active_profile_ctx_size,
     is_tool_calling_model,
     local_sampling_defaults,
     requested_thinking,
+    resolve_ctx_size,
 )
 from ..lemonade_launcher import describe_client_hint
 
@@ -156,20 +158,23 @@ class LemonadeContextOverflowError(LemonadeError):
     )
 
 
-def _loaded_below_profile(n_ctx: int) -> bool:
-    """Was the model loaded below the active profile's window?
+def _loaded_below_profile(n_ctx: int, model: Optional[str] = None) -> bool:
+    """Was the model loaded below the window GAIA loads it with?
 
-    Classifiers run inside ``except`` handlers, so an unreadable config must
-    not raise here and replace the error the user actually hit; log it and
-    leave the overflow non-retryable rather than promise a reload.
+    With *model*, that model's own window (``resolve_ctx_size``); without, the
+    active profile's. Classifiers run inside ``except`` handlers, so an
+    unreadable config must not raise here and replace the error the user
+    actually hit; log it and leave the overflow non-retryable rather than
+    promise a reload.
     """
     from gaia.config import GaiaConfigError
 
     try:
-        return 0 < n_ctx < active_profile_ctx_size()
-    except GaiaConfigError as exc:
+        expected = resolve_ctx_size(model=model) if model else active_profile_ctx_size()
+    except (GaiaConfigError, LemonadeClientError) as exc:
         logger.error("Cannot size the expected context window: %s", exc)
         return False
+    return 0 < n_ctx < expected
 
 
 class LemonadeNetworkError(LemonadeError):
@@ -275,7 +280,9 @@ class LemonadeCloudAccountError(LemonadeError):
     )
 
 
-def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError], bool]:
+def _classify_lemonade_response(
+    response: dict, model: Optional[str] = None
+) -> Tuple[Optional[LemonadeError], bool]:
     """Inspect a Lemonade response dict for a known error shape.
 
     Returns ``(error_instance_or_None, is_error)``. ``is_error=True`` with
@@ -330,7 +337,7 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         if not n_ctx_reported and isinstance(err, dict):
             n_ctx_reported = err.get("n_ctx") or 0
         err_instance = LemonadeContextOverflowError(payload=response)
-        if _loaded_below_profile(n_ctx_reported):
+        if _loaded_below_profile(n_ctx_reported, model):
             err_instance.retryable = True
         return err_instance, True
     # Distinguish "upstream model call timed out" (reachable Lemonade,
@@ -625,7 +632,7 @@ class LemonadeProvider(LLMClient):
         # for diagnostic logging.
         if not isinstance(response, dict) or "choices" not in response:
             classified, _is_err = _classify_lemonade_response(
-                response if isinstance(response, dict) else {}
+                response if isinstance(response, dict) else {}, effective_model
             )
             if classified is not None:
                 logger.warning(

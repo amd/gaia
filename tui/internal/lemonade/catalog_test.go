@@ -51,14 +51,14 @@ func TestStrixHaloPoolIsVRAMPlusSharedMemory(t *testing.T) {
 	if c.MemorySource != "AMD iGPU" || c.MemoryGB < 111 || c.MemoryGB > 112 {
 		t.Fatalf("capacity %+v", c)
 	}
-	if ok, why := c.Fit(qwenFlash().SizeGB, qwenFlash().KVCacheGB); !ok {
+	if ok, why := c.Fit(qwenFlash().SizeGB, qwenFlash().KVCacheGB()); !ok {
 		t.Fatalf("Qwen3.8 Flash must fit a 128 GB Strix Halo: %s", why)
 	}
 }
 
 func TestQwenFlashDoesNotFitSmallerMachines(t *testing.T) {
 	for name, body := range map[string]string{"strix halo 64": strixHalo64, "mac m4": macM4, "cpu 32": cpuOnly} {
-		ok, why := capacityOf(t, body).Fit(qwenFlash().SizeGB, qwenFlash().KVCacheGB)
+		ok, why := capacityOf(t, body).Fit(qwenFlash().SizeGB, qwenFlash().KVCacheGB())
 		if ok || !strings.Contains(why, "memory") {
 			t.Errorf("%s: fits=%v reason=%q", name, ok, why)
 		}
@@ -85,7 +85,7 @@ func TestLargeDefaultFitsGPUsWithAbout27GB(t *testing.T) {
 		"32 GB dGPU":     {`{"Physical Memory":"64 GB","devices":{"amd_dgpu":[{"available":true,"vram_gb":32.0}]}}`, true},
 		"24 GB dGPU":     {`{"Physical Memory":"64 GB","devices":{"nvidia_gpu":[{"available":true,"vram_gb":24.0}]}}`, false},
 	} {
-		if ok, why := capacityOf(t, tc.body).Fit(qwen.SizeGB, qwen.KVCacheGB); ok != tc.want {
+		if ok, why := capacityOf(t, tc.body).Fit(qwen.SizeGB, qwen.KVCacheGB()); ok != tc.want {
 			t.Errorf("%s: fits=%v (%s), want %v", name, ok, why, tc.want)
 		}
 	}
@@ -94,7 +94,7 @@ func TestLargeDefaultFitsGPUsWithAbout27GB(t *testing.T) {
 func TestDiskIsPartOfFit(t *testing.T) {
 	c := capacityOf(t, strixHalo128)
 	c.DiskFreeGB = 40
-	ok, why := c.Fit(qwenFlash().SizeGB, qwenFlash().KVCacheGB)
+	ok, why := c.Fit(qwenFlash().SizeGB, qwenFlash().KVCacheGB())
 	if ok || !strings.Contains(why, "disk") {
 		t.Fatalf("fits=%v reason=%q", ok, why)
 	}

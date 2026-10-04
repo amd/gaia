@@ -30,9 +30,18 @@ type Recommended struct {
 	Reasoning  bool    `json:"reasoning"`
 	// MinLemonade is the oldest Lemonade whose llama.cpp can load the model.
 	MinLemonade string `json:"min_lemonade_version"`
-	// KVCacheGB is the KV cache at GAIA's 64K window when it outgrows the fit
-	// rule's shared margin; 0 when the margin covers it.
-	KVCacheGB float64 `json:"kv_cache_gb"`
+	// MinCtxSize is the window GAIA loads the model with at the least, and
+	// KVBytesPerToken its KV cache per token of window; 0 when the fit rule's
+	// shared margin covers the cache.
+	MinCtxSize      int64 `json:"min_ctx_size"`
+	KVBytesPerToken int64 `json:"kv_bytes_per_token"`
+}
+
+// KVCacheGB is the KV cache at the model's floor window. GAIA grows the window
+// past the floor only into memory left over, so a fit judged here is the fit
+// `gaia init` judges at the window it picks.
+func (r Recommended) KVCacheGB() float64 {
+	return float64(r.KVBytesPerToken) * float64(r.MinCtxSize) / 1e9
 }
 
 // Matches reports whether a catalog id is this recommendation. A cloud id also

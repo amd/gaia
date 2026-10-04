@@ -277,8 +277,8 @@ def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
 DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
 # The default on any PC whose GPU holds it — 23.3 GB of weights and vision
-# projector plus a ~1.3 GB KV cache at 64K (~27 GB), so a 64 GB+ Strix Halo or
-# a 32 GB GPU. A CPU-only PC keeps Gemma: it could fit in RAM but decodes too
+# projector plus a ~1.3 GB KV cache at its 64K floor (~27 GB), so a 64 GB+
+# Strix Halo or a 32 GB GPU. Its window then grows with memory, to 256K. A CPU-only PC keeps Gemma: it could fit in RAM but decodes too
 # slowly to be the default. A Lemonade built-in MoE (3B active), so it decodes
 # far faster than Flash on Strix Halo. ``gaia init`` picks it only when
 # gaia.llm.model_fit says it fits, and records the pick as ``default_model``.
@@ -395,9 +395,8 @@ def is_llm_model_entry(model: Dict[str, Any]) -> bool:
 # thin re-exports so there's nothing to keep in sync.
 DEFAULT_CONTEXT_SIZE = 32768
 
-# Context window per device profile. A machine runs exactly one profile, so
-# pinning one ctx per profile means only one (model, ctx_size) pair is ever
-# resident and agents stop evicting each other.
+# Context window per device profile, for callers that size a window without
+# naming a model. With a model, ``resolve_ctx_size`` reads its MODELS entry.
 #
 # These are deliberately NOT one global number: the NPU's FLM build is
 # registered at 32768 and cannot reach 65536, so collapsing them would cap
@@ -416,24 +415,156 @@ def profile_ctx_size(device: Optional[str]) -> int:
     return NPU_CTX_SIZE if (device or "").strip().lower() == "npu" else GPU_CTX_SIZE
 
 
-def resolve_ctx_size(model: Optional[str] = None, device: Optional[str] = None) -> int:
+def runs_on_npu(model: Optional[str]) -> bool:
+    """Whether Lemonade runs *model* on the NPU (a FastFlowLM ``-FLM`` build).
+
+    Only these carry the NPU's context ceiling. A GGUF model runs on llama.cpp
+    whatever ``default_device`` says, so the ceiling must never reach it.
+    """
+    return bool(model) and str(model).strip().lower().endswith("-flm")
+
+
+#: (base_url, capacity) pairs already read from Lemonade in this process.
+_CAPACITY_CACHE: Dict[str, Any] = {}
+_CAPACITY_LOCK = threading.Lock()
+
+
+def machine_capacity(base_url: Optional[str] = None):
+    """This machine's :class:`~gaia.llm.model_fit.MachineCapacity`, from Lemonade.
+
+    Read once per server per process. Raises :class:`LemonadeClientError` when
+    the server does not answer and :class:`~gaia.llm.model_fit.ModelFitError`
+    when its answer names no memory; neither is cached, so a server that starts
+    later is read then.
+    """
+    from gaia.llm.model_fit import capacity_from_system_info
+
+    url = base_url or resolve_lemonade_base_url()
+    with _CAPACITY_LOCK:
+        if url in _CAPACITY_CACHE:
+            return _CAPACITY_CACHE[url]
+    info = LemonadeClient(base_url=url, verbose=False).get_system_info(timeout=15)
+    capacity = capacity_from_system_info(info)
+    with _CAPACITY_LOCK:
+        _CAPACITY_CACHE[url] = capacity
+    return capacity
+
+
+#: Models GAIA keeps loaded beside the chat model in a normal session, so a
+#: window sized for the chat model must leave room for them.
+CO_RESIDENT_MODELS = (DEFAULT_EMBEDDING_MODEL,)
+
+
+def co_resident_reserve_gb(capacity) -> float:
+    """Memory the ``CO_RESIDENT_MODELS`` take from *capacity*'s pool.
+
+    They run on the CPU backend (``llamacpp_backend_for``), so they only draw on
+    a pool that shares system RAM; a discrete GPU's VRAM is not theirs.
+    """
+    from gaia.llm.model_fit import required_memory_gb
+
+    if not capacity.shares_system_ram:
+        return 0.0
+    total = 0.0
+    for model_id in CO_RESIDENT_MODELS:
+        mr = find_model_requirement(model_id)
+        if mr is not None and mr.size_gb:
+            total += required_memory_gb(mr.size_gb)
+    return total
+
+
+def kv_cache_for(requirement: "ModelRequirement", capacity) -> float:
+    """KV cache, in GB, at the window *requirement*'s model loads with here.
+
+    What the fit check charges, so a model is judged at the window it gets.
+    """
+    from gaia.llm.model_fit import kv_cache_gb
+
+    return kv_cache_gb(
+        requirement.kv_bytes_per_token, context_for_capacity(requirement, capacity)
+    )
+
+
+def context_for_capacity(requirement: "ModelRequirement", capacity) -> int:
+    """The window *requirement*'s model loads with on a machine of *capacity*.
+
+    A model that declares ``max_ctx_size`` and ``kv_bytes_per_token`` gets the
+    largest window its KV cache can take after the weights and the co-resident
+    models, from ``min_ctx_size`` up to its native maximum. Any other model
+    loads at ``min_ctx_size``. The default-model fit check and the load both
+    call this, so they charge the same KV cache.
+    """
+    if not requirement.scales_with_memory:
+        return requirement.min_ctx_size
+    from gaia.llm.model_fit import largest_context
+
+    return largest_context(
+        size_gb=requirement.size_gb,
+        kv_bytes_per_token=requirement.kv_bytes_per_token,
+        min_ctx=requirement.min_ctx_size,
+        max_ctx=requirement.max_ctx_size,
+        capacity=capacity,
+        reserve_gb=co_resident_reserve_gb(capacity),
+    )
+
+
+def _model_ctx_size(requirement: "ModelRequirement", base_url: Optional[str]) -> int:
+    """``context_for_capacity`` on this machine, reading its capacity from Lemonade.
+
+    A server that cannot report its memory gets the model's registered floor,
+    logged: the floor is the window GAIA guaranteed before windows scaled.
+    """
+    if not requirement.scales_with_memory:
+        return requirement.min_ctx_size
+    from gaia.llm.model_fit import ModelFitError
+
+    try:
+        capacity = machine_capacity(base_url)
+    except (LemonadeClientError, ModelFitError) as e:
+        get_logger(__name__).warning(
+            "Cannot read this machine's memory from Lemonade (%s); loading %s at "
+            "its %d-token floor instead of sizing the window to memory.",
+            e,
+            requirement.model_id,
+            requirement.min_ctx_size,
+        )
+        return requirement.min_ctx_size
+    return context_for_capacity(requirement, capacity)
+
+
+def resolve_ctx_size(
+    model: Optional[str] = None,
+    device: Optional[str] = None,
+    base_url: Optional[str] = None,
+) -> int:
     """Resolve the requested local window for startup and subsequent reloads.
 
-    An explicit client ``ctx_size_override`` remains a separate exact pin.
-    GPU/CPU profile sizes are defaults, not model capability ceilings.
-    """
-    if device is None:
-        from gaia.config import GaiaConfig
+    With *model*: its MODELS entry decides, sized to this machine's memory when
+    the entry opts in (``context_for_capacity``); an unregistered model gets
+    ``NPU_CTX_SIZE`` on the NPU and ``GPU_CTX_SIZE`` elsewhere. *device* is not
+    consulted then: where a model runs is a property of the model, and a GGUF
+    model on an NPU-profile machine still runs on llama.cpp. Without a model,
+    the *device* profile (default: ``GaiaConfig.default_device``) decides.
 
-        device = GaiaConfig.load().default_device
-    if model and model.lower().endswith("-flm"):
-        device = "npu"
-    ctx = profile_ctx_size(device)
+    ``GAIA_CTX_SIZE`` overrides either. The NPU ceiling applies only to a model
+    that runs on the NPU, or to a model-less request on the NPU profile.
+    *base_url* is the Lemonade asked for this machine's memory.
+    An explicit client ``ctx_size_override`` remains a separate exact pin.
+    """
     if model:
-        for requirement in MODELS.values():
-            if _model_ids_match(requirement.model_id, model):
-                ctx = requirement.min_ctx_size
-                break
+        on_npu = runs_on_npu(model)
+        requirement = find_model_requirement(model)
+        if requirement is not None:
+            ctx = _model_ctx_size(requirement, base_url)
+        else:
+            ctx = NPU_CTX_SIZE if on_npu else GPU_CTX_SIZE
+    else:
+        if device is None:
+            from gaia.config import GaiaConfig
+
+            device = GaiaConfig.load().default_device
+        on_npu = (device or "").strip().lower() == "npu"
+        ctx = profile_ctx_size(device)
 
     override = os.environ.get("GAIA_CTX_SIZE", "").strip()
     if override:
@@ -448,7 +579,7 @@ def resolve_ctx_size(model: Optional[str] = None, device: Optional[str] = None) 
                 "GAIA_CTX_SIZE must be a positive integer (tokens); fix or unset it."
             )
 
-    if (device or "").strip().lower() == "npu" and ctx > NPU_CTX_SIZE:
+    if on_npu and ctx > NPU_CTX_SIZE:
         get_logger(__name__).warning(
             "Requested context %d exceeds the NPU ceiling; using %d tokens.",
             ctx,
@@ -689,18 +820,32 @@ class ModelRequirement:
     mmproj: Optional[str] = None
     vision: bool = False
     reasoning: bool = False
-    # Download size in GB, for the fit check (gaia.llm.model_fit). Built-ins
-    # leave it None — Lemonade's catalog reports their size.
+    # Download size in GB, vision projector included, for the fit check and
+    # memory sizing (gaia.llm.model_fit).
     size_gb: Optional[float] = None
     # Oldest Lemonade whose bundled llama.cpp can load the model.
     min_lemonade_version: Optional[str] = None
-    # KV cache at GAIA's 64K window, in GB, for a model whose cache outgrows the
-    # fit rule's shared margin (gaia.llm.model_fit). 0 when the margin covers it.
-    kv_cache_gb: float = 0.0
+    # The model's native context. With ``kv_bytes_per_token`` and ``size_gb``
+    # it makes the window grow from ``min_ctx_size`` toward this as memory
+    # allows (``context_for_capacity``). None keeps the window at the floor.
+    max_ctx_size: Optional[int] = None
+    # KV cache bytes per token of context, at llama.cpp's f16 cache. The fit
+    # check charges it at the window the model loads with.
+    kv_bytes_per_token: int = 0
     # Sent as ``chat_template_kwargs.enable_thinking`` on every request, so the
     # mode is GAIA's choice rather than the chat template's default. None sends
     # nothing, for models whose template has no such switch.
     thinking: Optional[bool] = None
+
+    @property
+    def scales_with_memory(self) -> bool:
+        """The window is sized to this machine's memory, not fixed."""
+        return bool(
+            self.max_ctx_size
+            and self.max_ctx_size > self.min_ctx_size
+            and self.kv_bytes_per_token > 0
+            and self.size_gb
+        )
 
     def pull_kwargs(self) -> Dict[str, Any]:
         """Registration fields for ``ensure_model_downloaded`` on a ``user.`` model.
@@ -797,8 +942,11 @@ MODELS = {
         size_gb=23.3,
         # First in Lemonade's built-in catalog in v11.7.0.
         min_lemonade_version="11.7.0",
-        # 10 full-attention layers x 2 KV heads x 256 dims x K+V x f16 = 20 KB/token, 1.34 GB at 64K.
-        kv_cache_gb=1.3,
+        # Native window. 30 of its 40 layers are Gated DeltaNet, whose state does
+        # not grow; the other 10 carry 2 KV heads x 256 dims x K+V x f16 =
+        # 20 KiB/token: 1.3 GB at 64K, 2.7 GB at 128K, 5.4 GB at 256K.
+        max_ctx_size=262144,
+        kv_bytes_per_token=20480,
     ),
     # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
@@ -873,6 +1021,8 @@ MODELS = {
         checkpoint=DEFAULT_EMBEDDING_CHECKPOINT,
         recipe="llamacpp",
         embedding=True,
+        # Q8_0 weights; held in memory beside the chat model (CO_RESIDENT_MODELS).
+        size_gb=0.33,
     ),
     # --- NPU-native FLM embedder for the NPU profile (#1744) ---
     # EmbeddingGemma 300M built for the FastFlowLM/NPU backend. On a shared-
@@ -1130,7 +1280,7 @@ def recommend_default_chat_model(client: "LemonadeClient") -> Tuple[str, list, A
             # A size of 0 would fit every PC; never guess a larger model in.
             unsupported.append((model_id, "GAIA does not know its download size"))
             continue
-        kv = mr.kv_cache_gb if mr else 0.0
+        kv = kv_cache_for(mr, capacity) if mr else 0.0
         if model_id == LARGE_DEFAULT_MODEL_NAME and not capacity.on_gpu:
             # A product rule, not a fit rule: a CPU-only PC could hold it in
             # RAM but runs it too slowly to be the default.
@@ -4762,7 +4912,7 @@ class LemonadeClient:
             self._last_model_load_seconds = time.monotonic() - _pin_load_start
             return
 
-        expected_ctx = resolve_ctx_size(model=model)
+        expected_ctx = resolve_ctx_size(model=model, base_url=self.base_url)
 
         # Best-effort pre-flight probe (#2053): skip a redundant /load when the
         # model is already loaded at a sufficient ctx. A probe failure here is

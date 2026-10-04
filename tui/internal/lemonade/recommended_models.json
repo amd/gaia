@@ -11,7 +11,8 @@
       "note": "default where a GPU holds it (~27 GB for models); faster than Flash, with vision",
       "size_gb": 23.3,
       "min_lemonade_version": "11.7.0",
-      "kv_cache_gb": 1.3
+      "min_ctx_size": 65536,
+      "kv_bytes_per_token": 20480
     },
     {
       "id": "Qwen3.8-Flash-Next-GGUF",

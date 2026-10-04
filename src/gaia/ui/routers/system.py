@@ -762,7 +762,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         status.lemonade_error = "Lemonade health query failed"
 
     # Active profile from persistent config (#1220)
-    from gaia.config import GaiaConfig, GaiaConfigError
+    from gaia.config import GaiaConfig
 
     try:
         status.active_profile = GaiaConfig.load().profile
