@@ -480,7 +480,7 @@ def test_a_resident_cloud_model_is_never_reloaded_or_evicts_local_models():
     health = _health_ok(
         [
             _cloud("fireworks.deepseek-v4p1-flash"),
-            _model("llm", "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=65536),
+            _model("llm", "Qwen3.6-35B-A3B-GGUF", ctx_size=65536),
             _model("embedding", "embeddinggemma-300m-GGUF"),
         ]
     )
@@ -507,7 +507,7 @@ def test_a_cloud_model_not_yet_resident_still_loads_nothing_locally():
 
 def test_a_reload_uses_the_agents_ctx_and_keeps_the_embedder():
     """Loading below the agent's window made it reload again on its first turn."""
-    expected = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+    expected = "Qwen3.6-35B-A3B-GGUF"
     health = _health_ok(
         [
             _model("llm", expected, ctx_size=32768),
