@@ -6502,9 +6502,7 @@ def handle_cache_command(args):
                 print("✓ Context7 is AVAILABLE (npx found, service working)")
             else:
                 print("✗ Context7 is UNAVAILABLE (npx not found or service failed)")
-                print(
-                    "  Library documentation search (search_documentation) is unavailable."
-                )
+                print("  Library documentation search is unavailable.")
 
             # Show cache and rate limiter status
             cache = Context7Cache()
