@@ -1340,6 +1340,23 @@ class MemoryMixin(ProceduralMemoryMixin):
         Returns:
             True when the vector was stored, False when the row has none.
         """
+        # Drop the old vector first: the row already holds the new text, so a
+        # failed embed below must not leave recall matching the old one.
+        old_vector_dropped = True
+        if replace:
+            try:
+                self._faiss_remove(knowledge_id)
+            except Exception as e:  # restart rebuilds the index from the DB
+                old_vector_dropped = False
+                self._note_memory_write_failure(
+                    WRITE_FAILURE_INDEX,
+                    "[MemoryMixin] could not replace the search vector of %s %s "
+                    "in this session's index, so recall by meaning may match its "
+                    "old content until the agent restarts: %s",
+                    what,
+                    knowledge_id,
+                    e,
+                )
         try:
             vec = self._embed_text(text)
             self._memory_store.store_embedding(knowledge_id, _embedding_to_blob(vec))
@@ -1354,21 +1371,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 e,
             )
             return False
-        if replace:
-            try:
-                self._faiss_remove(knowledge_id)
-            except Exception as e:  # vector is stored; restart rebuilds the index
-                self._note_memory_write_failure(
-                    WRITE_FAILURE_INDEX,
-                    "[MemoryMixin] could not replace the search vector of %s %s "
-                    "in this session's index, so recall by meaning may match its "
-                    "old content until the agent restarts: %s",
-                    what,
-                    knowledge_id,
-                    e,
-                )
-                return True
-        self._faiss_add(knowledge_id, vec)
+        if old_vector_dropped:
+            self._faiss_add(knowledge_id, vec)
         return True
 
     # ==================================================================

@@ -120,6 +120,26 @@ def test_faiss_add_failure_warns_once_and_counts_an_index_gap(host, caplog):
     assert host.memory_write_failures() == {WRITE_FAILURE_INDEX: 2}
 
 
+def test_a_failed_re_embed_after_an_edit_leaves_no_stale_vector(host, caplog):
+    """The row holds the new text, so the old vector must not keep matching."""
+    kid = host._memory_store.store(category="fact", content="Deploys go to staging")
+    with (
+        patch.object(MemoryMixin, "_faiss_remove") as remove,
+        patch.object(MemoryMixin, "_faiss_add") as add,
+        patch.object(
+            MemoryMixin, "_embed_text", side_effect=RuntimeError("embedder down")
+        ),
+    ):
+        stored = host._embed_and_index(
+            kid, "Deploys go to production", "edited fact", replace=True
+        )
+
+    assert stored is False
+    remove.assert_called_once_with(kid)
+    add.assert_not_called()
+    assert host.memory_write_failures() == {WRITE_FAILURE_EMBED: 1}
+
+
 def test_remember_tool_still_stores_when_the_embedder_fails(host, caplog):
     from gaia.agents.base.tools import _TOOL_REGISTRY
 
