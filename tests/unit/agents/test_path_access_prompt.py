@@ -74,7 +74,10 @@ def test_approved_read_prompts_once_and_succeeds(layout):
     assert "The Fed held rates." in first["content"]
     assert second["status"] == "success"
     assert console.calls == [
-        (PATH_ACCESS_PROMPT_TOOL, {"path": str(layout["file"].resolve())})
+        (
+            PATH_ACCESS_PROMPT_TOOL,
+            {"path": str(layout["file"].resolve()), "kind": "file"},
+        )
     ]
 
 
@@ -163,17 +166,35 @@ def test_always_answer_grants_only_the_prompted_path(layout):
     assert results["second"]["status"] == "error"
 
 
-def test_the_prompt_reads_as_a_question_about_the_path():
+def test_a_folder_prompt_says_folder(layout):
+    console = _RecordingConsole(False)
+    agent = _ReadAgent(layout["scope"], console)
+
+    agent._execute_tool(
+        "search_code", {"directory": str(layout["other"]), "pattern": "x"}
+    )
+
+    assert console.calls[0][1]["kind"] == "folder"
+
+
+@pytest.mark.parametrize(
+    "kind, question",
+    [
+        ("file", r"Allow GAIA to use the file C:\Users\me\sales.csv for this session?"),
+        (
+            "folder",
+            r"Allow GAIA to use the folder C:\Users\me\reports and everything in it "
+            "for this session?",
+        ),
+        (None, r"Allow GAIA to use C:\Users\me\reports for this session?"),
+    ],
+)
+def test_the_prompt_reads_as_a_question_about_the_path(kind, question):
     from gaia.ui.sse_translation import CanonicalTranslator
 
+    path = r"C:\Users\me\sales.csv" if kind == "file" else r"C:\Users\me\reports"
+    args = {"path": path, **({"kind": kind} if kind else {})}
     (event,) = CanonicalTranslator(run_id=None, agent_id="gaia", debug=False).translate(
-        {
-            "type": "permission_request",
-            "tool": PATH_ACCESS_PROMPT_TOOL,
-            "args": {"path": r"C:\Users\me\notes\plan.txt"},
-        }
+        {"type": "permission_request", "tool": PATH_ACCESS_PROMPT_TOOL, "args": args}
     )
-    assert event["summary"] == (
-        r"Allow GAIA to use C:\Users\me\notes\plan.txt (and anything inside it, "
-        "including changes) for this session?"
-    )
+    assert event["summary"] == question

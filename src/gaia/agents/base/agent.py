@@ -2221,12 +2221,16 @@ Do NOT wrap conversational replies in JSON.
                 "Not granting %s: tools are pre-approved, nobody asked", path
             )
             return False
+        args = {"path": str(path)}
+        # Lets the prompt say "file" or "folder" instead of a catch-all.
+        if path.is_dir():
+            args["kind"] = "folder"
+        elif path.is_file():
+            args["kind"] = "file"
         started = time.perf_counter()
         try:
             return (
-                self.console.confirm_tool_execution(
-                    PATH_ACCESS_PROMPT_TOOL, {"path": str(path)}
-                )
+                self.console.confirm_tool_execution(PATH_ACCESS_PROMPT_TOOL, args)
                 is True
             )
         finally:
