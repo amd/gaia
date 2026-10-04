@@ -5582,3 +5582,127 @@ def test_failed_tool_keeps_original_error_when_memory_unavailable(disabled, capl
     else:
         assert "failed to record tool exception" in caplog.text
         assert "database unavailable" in caplog.text
+
+
+# ===========================================================================
+# Side requests turn a thinking model's reasoning off
+# ===========================================================================
+
+_THINKING_MODEL = "Qwen3.6-35B-A3B-GGUF"
+_NO_THINKING = {"enable_thinking": False}
+
+
+def _chat_for(model_id, text="[]", finish_reason="stop"):
+    """A chat SDK stub on *model_id* whose every reply is *text*."""
+    chat = MagicMock()
+    chat.effective_model = model_id
+    chat.send_messages.return_value = MagicMock(text=text, finish_reason=finish_reason)
+    return chat
+
+
+class TestSideRequestsDisableThinking:
+    """Short JSON side calls must not let a thinking model reason to the cap.
+
+    Qwen3.6 thinks on every request by default; a memory extraction that
+    reasons until max_tokens holds the GPU for minutes and returns nothing.
+    """
+
+    @pytest.fixture
+    def host(self, tmp_path):
+        class Host(MemoryMixin, FakeAgent):
+            pass
+
+        host = Host()
+        with _mock_v2_init_context():
+            host.init_memory(db_path=tmp_path / "side_requests.db", context="global")
+        host._embedder = _make_mock_embedder()
+        return host
+
+    def test_extraction_turns_thinking_off_on_a_thinking_model(self, host):
+        from gaia.agents.base.memory import EXTRACTION_MAX_TOKENS
+
+        host.chat = _chat_for(_THINKING_MODEL)
+
+        host._extract_via_llm("I prefer tabs over spaces", "Noted.", [])
+
+        kwargs = host.chat.send_messages.call_args.kwargs
+        assert kwargs["chat_template_kwargs"] == _NO_THINKING
+        assert kwargs["max_tokens"] == EXTRACTION_MAX_TOKENS
+
+    def test_extraction_sends_no_switch_for_a_model_without_one(self, host):
+        host.chat = _chat_for("Gemma-4-E4B-it-GGUF")
+
+        host._extract_via_llm("I prefer tabs over spaces", "Noted.", [])
+
+        assert "chat_template_kwargs" not in host.chat.send_messages.call_args.kwargs
+
+    def test_extraction_sends_no_switch_to_a_cloud_model(self, host):
+        host.chat = _chat_for("fireworks.deepseek-v4p1-flash")
+
+        host._extract_via_llm("I prefer tabs over spaces", "Noted.", [])
+
+        assert "chat_template_kwargs" not in host.chat.send_messages.call_args.kwargs
+
+    def test_reasoning_only_extraction_logs_an_error(self, host, caplog):
+        """Budget spent with no answer is a loud ERROR, not a quiet empty list."""
+        host.chat = _chat_for(_THINKING_MODEL, text="", finish_reason="length")
+
+        with caplog.at_level(logging.ERROR, logger="gaia.agents.base.memory"):
+            result = host._extract_via_llm("I prefer tabs over spaces", "Noted.", [])
+
+        assert result == []
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert len(errors) == 1
+        assert "without writing an answer" in errors[0].getMessage()
+        assert _THINKING_MODEL in errors[0].getMessage()
+
+    def test_consolidation_turns_thinking_off(self, host):
+        sid = f"side-consol-{uuid.uuid4().hex[:8]}"
+        ts = _past_iso(20)
+        store = host._memory_store
+        for i in range(6):
+            content = f"Side consolidation turn {i} {sid}"
+            store.store_turn(sid, "user" if i % 2 == 0 else "assistant", content)
+            with store._lock:
+                store._conn.execute(
+                    "UPDATE conversations SET timestamp = ? "
+                    "WHERE session_id = ? AND content = ?",
+                    (ts, sid, content),
+                )
+                store._conn.commit()
+        host.chat = _chat_for(
+            _THINKING_MODEL, text='{"summary": "Talked shop", "knowledge": []}'
+        )
+
+        host.consolidate_old_sessions()
+
+        assert host.chat.send_messages.called
+        for call in host.chat.send_messages.call_args_list:
+            assert call.kwargs["chat_template_kwargs"] == _NO_THINKING
+
+    def test_reconciliation_turns_thinking_off(self, host):
+        from gaia.agents.base.memory import _embedding_to_blob
+
+        require_faiss()
+        vec = np.ones(host._embedding_dim, dtype=np.float32)
+        items = [
+            {
+                "id": item_id,
+                "embedding": _embedding_to_blob(vec),
+                "content": f"User deploys on Fridays ({item_id})",
+                "created_at": "2026-01-01T00:00:00",
+                "metadata": {},
+            }
+            for item_id in ("k-a", "k-b")
+        ]
+        host._faiss_index = MagicMock(ntotal=2)
+        host.chat = _chat_for(_THINKING_MODEL, text='{"relationship": "neutral"}')
+
+        with patch.object(
+            host._memory_store, "get_items_for_reconciliation", return_value=items
+        ):
+            host.reconcile_memory()
+
+        assert host.chat.send_messages.called
+        kwargs = host.chat.send_messages.call_args.kwargs
+        assert kwargs["chat_template_kwargs"] == _NO_THINKING
