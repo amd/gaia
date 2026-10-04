@@ -293,7 +293,7 @@ def request_user_input(
             timeout. If not set and continue_if_no_response=True, returns
             the sentinel string "__NO_RESPONSE__". Callers must check for
             this value and handle it explicitly — never proceed blindly.
-        timeout_seconds: How long to wait (min 10, default 300).
+        timeout_seconds: How long to wait (10 to 600, default 300).
         continue_if_no_response: If True, continue working after timeout.
             If False, the loop pauses until user re-engages.
 
