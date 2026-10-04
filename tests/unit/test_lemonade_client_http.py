@@ -55,7 +55,12 @@ class TestLemonadeClientMock(unittest.TestCase):
         home = tempfile.TemporaryDirectory()
         self.addCleanup(home.cleanup)
         os.environ["GAIA_HOME"] = home.name
-        for name in ("LEMONADE_BASE_URL", "LEMONADE_API_KEY", "LEMONADE_PORT"):
+        for name in (
+            "LEMONADE_BASE_URL",
+            "LEMONADE_API_KEY",
+            "LEMONADE_PORT",
+            "GAIA_LEMONADE_EMBEDDED",
+        ):
             os.environ.pop(name, None)
         self.client = create_lemonade_client(
             model=TEST_MODEL, host=HOST, port=PORT, verbose=False
