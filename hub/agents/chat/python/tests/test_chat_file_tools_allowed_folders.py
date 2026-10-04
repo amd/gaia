@@ -40,7 +40,12 @@ def tree(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def chat(tree):
+def chat(tree, tmp_path, monkeypatch):
+    # PathValidator's cache dir resolves under gaia_home(), and the
+    # chat_agent_build_context's Path.home() patch points at a fake,
+    # never-written "/fake/home" — give it a real, writable GAIA_HOME
+    # instead of letting it try to mkdir into "/fake".
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia_home"))
     allowed, _, _ = tree
     with chat_agent_build_context("full") as agent:
         agent.path_validator = PathValidator(allowed_paths=[str(allowed)])
