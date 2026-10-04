@@ -27,6 +27,9 @@ from gaia.api.local_http import (  # pylint: disable=wrong-import-position
     origin_is_rejected,
 )
 from gaia.llm import create_client  # pylint: disable=wrong-import-position
+from gaia.llm.lemonade_client import (  # pylint: disable=wrong-import-position
+    resolve_lemonade_base_url,
+)
 from gaia.logger import get_logger  # pylint: disable=wrong-import-position
 from gaia.mcp.ports import MCP_BRIDGE_PORT  # pylint: disable=wrong-import-position
 
@@ -72,7 +75,7 @@ class GAIAMCPBridge:
     ):
         self.host = host
         self.port = port
-        self.base_url = base_url or "http://localhost:13305/api/v1"
+        self.base_url = resolve_lemonade_base_url(base_url)
         self.auth_token = auth_token or None
         self.agents = {}
         self.tools = {}
@@ -679,7 +682,9 @@ def build_parser():
         "--port", type=int, default=MCP_BRIDGE_PORT, help="Port to listen on"
     )
     parser.add_argument(
-        "--base-url", default="http://localhost:13305/api/v1", help="LLM server URL"
+        "--base-url",
+        default=None,
+        help="LLM server URL (default: LEMONADE_BASE_URL, else GAIA's own Lemonade)",
     )
     parser.add_argument(
         "--verbose", action="store_true", help="Enable verbose logging for all requests"

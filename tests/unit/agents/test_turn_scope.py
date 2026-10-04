@@ -301,3 +301,63 @@ def test_a_check_naming_a_file_adds_only_that_file(guard, tmp_path):
     )
     assert guard.check("write_file", {"file_path": report}) is None
     assert guard.check("read_file", {"file_path": "toybox/cli.py"}) is not None
+
+
+def test_loading_a_table_the_turn_just_created_is_in_scope(tmp_path):
+    """Asked to load a sheet into a table and count it, the agent narrated its
+    plan, then insert_data was refused as "outside what the request touched"."""
+    scope = TurnScopeGuard(failure_limit=4)
+    scope.begin_turn("Load the Monthly sheet into a scratchpad table.", str(tmp_path))
+    scope.record(
+        "create_table", {"table_name": "Unemployment", "columns": "m TEXT"}, ok()
+    )
+    scope.mark_answered()
+
+    assert (
+        scope.check("insert_data", {"table_name": "unemployment", "data": "[]"}) is None
+    )
+    assert (
+        scope.check("query_data", {"sql": "SELECT COUNT(*) FROM unemployment"}) is None
+    )
+    assert (
+        scope.check("query_data", {"sql": "SELECT * FROM scratch_unemployment"}) is None
+    )
+    assert not scope.turn_should_end
+
+
+def test_a_table_the_turn_never_touched_is_still_new_work(tmp_path):
+    scope = TurnScopeGuard(failure_limit=4)
+    scope.begin_turn("Load the Monthly sheet into a scratchpad table.", str(tmp_path))
+    scope.record("create_table", {"table_name": "unemployment", "columns": "m"}, ok())
+    scope.mark_answered()
+
+    assert (
+        scope.check("insert_data", {"table_name": "payroll", "data": "[]"}) is not None
+    )
+    assert (
+        scope.check("query_data", {"sql": "SELECT * FROM unemployment_rates"})
+        is not None
+    )
+    assert (
+        scope.check("query_data", {"sql": "SELECT * FROM old_unemployment"}) is not None
+    )
+
+
+def test_only_a_structured_failure_keeps_a_table_out_of_scope(tmp_path):
+    """A dict failure keeps its table out of scope. The scratchpad tools report
+    failure as an "Error: ..." string, which _is_tool_failure does not classify,
+    so that table still enters scope; the later call then fails at the tool."""
+    scope = TurnScopeGuard(failure_limit=4)
+    scope.begin_turn("Load the sheet.", str(tmp_path))
+    scope.record(
+        "create_table", {"table_name": "t", "columns": "bad"}, {"status": "error"}
+    )
+    scope.record(
+        "create_table",
+        {"table_name": "u", "columns": "bad"},
+        "Error creating table 'u': near \"bad\": syntax error",
+    )
+    scope.mark_answered()
+
+    assert scope.check("insert_data", {"table_name": "t", "data": "[]"}) is not None
+    assert scope.check("insert_data", {"table_name": "u", "data": "[]"}) is None

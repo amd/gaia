@@ -129,8 +129,11 @@ setup(
         # OpenAI 1.58.0 is the first release with Realtime API support.
         "openai>=1.58.0",
         "pydantic>=2.9.2",
-        "transformers",
-        "accelerate",
+        # Core imports these directly; never rely on a heavier dep pulling them in.
+        "pyyaml>=6.0.1",
+        "numpy>=1.24.0",
+        "psutil>=5.9.0",
+        "python-dateutil>=2.8.2",
         "python-dotenv",
         "aiohttp",
         "rich",
@@ -185,8 +188,8 @@ setup(
             # already a core install_requires dep for `gaia connectors`, #1621).
             "httpx>=0.27.0",
             # The daemon relies on psutil for every liveness check and
-            # _check_daemon_deps refuses to start without it — declare it rather
-            # than rely on accelerate pulling it in transitively.
+            # _check_daemon_deps refuses to start without it. Also core; kept
+            # here so [api] alone still names every daemon dep.
             "psutil>=5.9.0",
         ],
         "ui": [
@@ -250,9 +253,6 @@ setup(
             "slack-sdk>=3.27",
             "psutil>=5.9.0",
         ],
-        "litellm": [
-            "litellm>=1.35.0,<2.0",
-        ],
         "dev": [
             "pytest",
             "pytest-cov",
@@ -262,10 +262,7 @@ setup(
             "pytest-xdist",
             "pytest-rerunfailures",
             "pyfakefs",
-            "memory_profiler",
             "matplotlib",
-            "adjustText",
-            "plotly",
             "black",
             "pylint",
             "isort",
@@ -295,7 +292,6 @@ setup(
         "eval": [
             "anthropic",
             "bs4",
-            "scikit-learn>=1.5.0",
             "numpy>=2.0,<2.3.0",
             "pypdf",
             "reportlab",
@@ -306,6 +302,10 @@ setup(
             "sounddevice",
             "openai-whisper",
             "kokoro>=0.3.1",
+            # kokoro leaves transformers unbounded; without this floor the
+            # resolver backtracks to transformers 4.12 / tokenizers 0.10.3,
+            # which has no wheel and fails to build from source.
+            "tokenizers>=0.19",
             "soundfile",
             "psutil",
             "pip",  # Required: spacy model download needs pip in venv (uv omits it)
@@ -349,6 +349,8 @@ setup(
         # install with 'pip install "amd-gaia[publish]"' to package an agent.
         "publish": [
             "build>=1.0.0",
+            # Agent pyprojects build with setuptools; `build --no-isolation` needs it here.
+            "setuptools>=61.0",
             "twine>=5.0.0",
         ],
         # NOTE: no 'agent-<id>' / 'agents' extras here -- see

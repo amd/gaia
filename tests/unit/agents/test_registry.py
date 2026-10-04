@@ -850,6 +850,67 @@ class TestModelResolution:
         assert result is None
 
 
+class TestAvailableModelsOutageLogging:
+    def test_an_outage_warns_once_then_logs_quietly_until_it_recovers(self):
+        from unittest.mock import MagicMock
+
+        from gaia.llm.providers.lemonade import LemonadeNetworkError
+
+        registry = AgentRegistry()
+        registry._LEMONADE_RETRY_INTERVAL = 0
+        down = LemonadeNetworkError("Lemonade not reachable")
+        results = [down, down, ["ModelA"]]
+
+        def lookup():
+            result = results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        fake_logger = MagicMock()
+        with (
+            patch.object(registry_module, "get_lemonade_models", side_effect=lookup),
+            patch.object(registry_module, "logger", fake_logger),
+        ):
+            assert registry._get_available_models() == []
+            assert registry._get_available_models() == []
+            assert registry._get_available_models() == ["ModelA"]
+
+        assert fake_logger.warning.call_count == 1
+        assert fake_logger.debug.call_count == 1
+        assert registry._lemonade_models_last_fail is None
+
+    def test_a_new_outage_after_recovery_warns_again(self):
+        from unittest.mock import MagicMock
+
+        from gaia.llm.providers.lemonade import LemonadeNetworkError
+
+        registry = AgentRegistry()
+        registry._LEMONADE_RETRY_INTERVAL = 0
+        fake_logger = MagicMock()
+        with patch.object(registry_module, "logger", fake_logger):
+            with patch.object(
+                registry_module,
+                "get_lemonade_models",
+                side_effect=LemonadeNetworkError("down"),
+            ):
+                registry._get_available_models()
+            with patch.object(
+                registry_module, "get_lemonade_models", return_value=["ModelA"]
+            ):
+                registry._get_available_models()
+            registry._lemonade_models = None
+            with patch.object(
+                registry_module,
+                "get_lemonade_models",
+                side_effect=LemonadeNetworkError("down again"),
+            ):
+                registry._get_available_models()
+
+        assert fake_logger.warning.call_count == 2
+        assert fake_logger.debug.call_count == 0
+
+
 # ---------------------------------------------------------------------------
 # Builder model-preference contract (#2243)
 #
@@ -896,21 +957,28 @@ class TestBuilderModelPreferences:
             "Qwen3.5-35B-A3B-GGUF",
         ]
 
-    def test_get_lemonade_models_none_means_unreachable_not_empty(self):
-        """None (unreachable) and [] (reachable, zero models) are distinct —
+    def test_get_lemonade_models_unreachable_raises_not_empty(self):
+        """[] (reachable, zero models) is a result; unreachable is an error —
         callers must be able to tell them apart."""
+        import requests
+
         from gaia.agents.registry import get_lemonade_models
+        from gaia.llm.providers.lemonade import LemonadeNetworkError
 
         mock_response = SimpleNamespace(status_code=200, json=lambda: {"data": []})
         with patch("requests.get", return_value=mock_response):
             reachable_empty = get_lemonade_models("http://localhost:13305/api/v1")
 
-        with patch("requests.get", side_effect=ConnectionError("refused")):
-            unreachable = get_lemonade_models("http://localhost:13305/api/v1")
+        with (
+            patch(
+                "requests.get",
+                side_effect=requests.exceptions.ConnectionError("refused"),
+            ),
+            pytest.raises(LemonadeNetworkError),
+        ):
+            get_lemonade_models("http://localhost:13305/api/v1")
 
         assert reachable_empty == []
-        assert unreachable is None
-        assert reachable_empty is not unreachable
 
     def test_builder_registration_models_is_builder_preferred_models(self):
         """The real builtin 'builder' registration must carry the new

@@ -179,6 +179,14 @@ def build_lemonade_patterns(version: str) -> list[tuple[str, str]]:
             rf"(?!\s*\+)(?!\s*\**\s*(?:or later|or newer|or above))",
             "Lemonade version reference in text",
         ),
+        # A parenthesised CalVer pin with "Lemonade" on an earlier line, e.g.
+        # "Download and run the installer (v2026.39.1):". Lemonade is the only
+        # CalVer dependency, so the year prefix stands in for the missing anchor
+        # and keeps GAIA's own "(v0.19.0)" mentions out.
+        (
+            r"\(v(?P<version>20\d{2}\.\d+\.\d+)\)",
+            "Lemonade CalVer version in parentheses",
+        ),
         # Table cells: | 9.3.0 | (preceded by Lemonade on same line)
         (
             rf"[Ll]emonade.*?\|\s*(?P<version>{semver})\s*\|",

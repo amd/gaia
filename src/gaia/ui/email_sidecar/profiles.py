@@ -202,8 +202,7 @@ EMAIL_PROFILE = RelayProfile(
     change_noun="mailbox change",
     lemonade_hint=(
         "\n\nThis usually means the local LLM backend (Lemonade Server) is "
-        "not running or unreachable from the email agent. Start Lemonade "
-        "Server, then retry."
+        "not running or unreachable from the email agent."
     ),
     always_relay=True,
     # Left off deliberately: the email relay has never sent one, and turning it
@@ -380,8 +379,7 @@ GAIA_PROFILE = RelayProfile(
     change_noun="local change",
     lemonade_hint=(
         "\n\nThis usually means the local LLM backend (Lemonade Server) is "
-        "not running or unreachable from the GAIA agent. Start Lemonade "
-        "Server, then retry."
+        "not running or unreachable from the GAIA agent."
     ),
     readiness_is_blocking=False,
     sends_session_id=True,
