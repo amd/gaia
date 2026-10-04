@@ -8,7 +8,9 @@ first copied the conversation's KV cache to host RAM — 87s per switch for a
 waited behind it.
 """
 
-from unittest.mock import patch
+import json
+import threading
+from unittest.mock import MagicMock, patch
 
 import pytest
 import responses
@@ -19,6 +21,7 @@ from gaia.llm.lemonade_client import (
     SIDE_SLOT,
     LemonadeAuthError,
     LemonadeClient,
+    LemonadeClientError,
 )
 from gaia.llm.providers.lemonade import LemonadeProvider
 
@@ -149,8 +152,6 @@ def test_a_cloud_request_carries_no_slot():
 
 
 def test_memory_extraction_runs_on_the_side_slot():
-    from unittest.mock import MagicMock
-
     from gaia.agents.base.memory import MemoryMixin
 
     class Host(MemoryMixin):
@@ -228,3 +229,137 @@ def test_a_side_request_uses_the_side_slot_when_the_model_has_one():
 def test_a_side_request_never_pins_a_slot_a_one_slot_model_lacks():
     # llama.cpp defers a request for a missing slot until the caller gives up.
     assert _side_request(1)["id_slot"] == CONVERSATION_SLOT
+
+
+# Side requests run on a background thread (memory extraction starts after the
+# answer returns), so they can overlap the user's next turn. Two active requests
+# on a unified KV pool can outgrow it, and llama.cpp then fails both with
+# "Context size has been exceeded" rather than evicting one.
+
+
+def _local_client():
+    client = LemonadeClient(base_url=BASE, verbose=False)
+    client._ensure_model_loaded = lambda *a, **k: None
+    client._is_cloud_model = lambda model: False
+    return client
+
+
+def _held_post(release):
+    active, peak, entered = [0], [0], threading.Semaphore(0)
+    lock = threading.Lock()
+
+    def post(*_args, **_kwargs):
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        entered.release()
+        release.wait(5)
+        with lock:
+            active[0] -= 1
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
+        return response
+
+    return post, peak, entered
+
+
+def test_a_side_request_waits_for_the_conversation_request():
+    client = _local_client()
+    release = threading.Event()
+    post, peak, entered = _held_post(release)
+    model = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+    with patch("gaia.llm.lemonade_client.requests.post", side_effect=post):
+        turn = threading.Thread(
+            target=client.chat_completions,
+            kwargs={"model": model, "messages": [], "id_slot": CONVERSATION_SLOT},
+        )
+        side = threading.Thread(
+            target=client.chat_completions,
+            kwargs={"model": model, "messages": [], "id_slot": SIDE_SLOT},
+        )
+        turn.start()
+        assert entered.acquire(timeout=5)
+        side.start()
+        assert not entered.acquire(timeout=0.3)
+        release.set()
+        turn.join(5)
+        side.join(5)
+    assert peak[0] == 1
+
+
+def test_a_side_request_waits_for_a_conversation_stream_to_close():
+    client = _local_client()
+    side_entered = threading.Event()
+
+    def chunks(**_kwargs):
+        yield {"choices": [{"delta": {"content": "a"}}]}
+        yield {"choices": [{"delta": {"content": "b"}}]}
+
+    def side_post(*_args, **_kwargs):
+        side_entered.set()
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
+        return response
+
+    model = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+    with (
+        patch.object(client, "_stream_chat_chunks", side_effect=chunks),
+        patch("gaia.llm.lemonade_client.requests.post", side_effect=side_post),
+    ):
+        stream = client.chat_completions(model=model, messages=[], stream=True)
+        next(stream)
+        side = threading.Thread(
+            target=client.chat_completions,
+            kwargs={"model": model, "messages": [], "id_slot": SIDE_SLOT},
+        )
+        side.start()
+        assert not side_entered.wait(0.3)
+        stream.close()
+        assert side_entered.wait(5)
+        side.join(5)
+
+
+def test_requests_to_different_models_do_not_wait_on_each_other():
+    client = _local_client()
+    release = threading.Event()
+    post, peak, entered = _held_post(release)
+    with patch("gaia.llm.lemonade_client.requests.post", side_effect=post):
+        threads = [
+            threading.Thread(
+                target=client.chat_completions,
+                kwargs={"model": model, "messages": []},
+            )
+            for model in ("Qwen3-30B-A3B-Instruct-2507-GGUF", "Gemma-4-E4B-it-GGUF")
+        ]
+        for t in threads:
+            t.start()
+        assert entered.acquire(timeout=5) and entered.acquire(timeout=5)
+        release.set()
+        for t in threads:
+            t.join(5)
+    assert peak[0] == 2
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Context size has been exceeded.", "failed to find free space in the KV cache"],
+)
+def test_an_exhausted_kv_pool_is_a_context_overflow(message):
+    from gaia.llm.lemonade_client import is_context_overflow_error
+    from gaia.llm.providers.lemonade import (
+        LemonadeContextOverflowError,
+        _classify_lemonade_response,
+        classify_lemonade_exception,
+    )
+
+    envelope = {"error": {"code": 500, "message": message, "type": "server_error"}}
+    raw = f"Error in chat completions (status 500): {json.dumps(envelope)}"
+    assert is_context_overflow_error(raw)
+    assert isinstance(
+        classify_lemonade_exception(LemonadeClientError(raw)),
+        LemonadeContextOverflowError,
+    )
+    classified, is_error = _classify_lemonade_response(envelope)
+    assert is_error and isinstance(classified, LemonadeContextOverflowError)
+    # A pool exhausted by concurrent requests is not a model loaded too small.
+    assert not classified.retryable

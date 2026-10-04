@@ -18,7 +18,7 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -390,6 +390,22 @@ CHAT_LLAMACPP_ARGS = (
 #: it lacks forever, so the side slot is used only when the load reports it.
 CONVERSATION_SLOT = 0
 SIDE_SLOT = 1
+
+#: One request at a time per local model in this process. With --kv-unified
+#: every slot is promised the whole window from one shared pool, and two active
+#: requests that together outgrow it both fail with "Context size has been
+#: exceeded" (llama.cpp never evicts an active slot). Idle slots are purged
+#: when room is needed, so one active request always fits. The daemon's broker
+#: lease does the same across processes.
+_LOCAL_REQUEST_LOCKS: Dict[str, threading.RLock] = {}
+_LOCAL_REQUEST_LOCKS_GUARD = threading.Lock()
+
+
+def _local_request_lock(model: str) -> threading.RLock:
+    """The lock serializing this process's requests to local *model*."""
+    key = model[len("user.") :] if model.startswith("user.") else model
+    with _LOCAL_REQUEST_LOCKS_GUARD:
+        return _LOCAL_REQUEST_LOCKS.setdefault(key, threading.RLock())
 
 
 def _slots_in_flags(flags: List[str]) -> Optional[int]:
@@ -1490,6 +1506,9 @@ CONTEXT_OVERFLOW_PHRASES = (
     "exceeds the available context size",
     "got too long",
     "max length reached",
+    # llama.cpp, when active requests together outgrow a unified KV pool.
+    "context size has been exceeded",
+    "failed to find free space in the kv cache",
 )
 
 
@@ -4632,9 +4651,10 @@ class LemonadeClient:
         """Hold a host-broker model-slot lease across a load (#2151 / V2-11).
 
         Serializes this load against every other process sharing the
-        single-tenant Lemonade slot. A no-op when the broker is not configured
-        (standalone ``gaia llm`` etc.) — that is the absence of a broker, not a
-        silent fallback. When the broker IS configured but unreachable, the
+        single-tenant Lemonade slot, and every request to a local model against
+        the others in this process (``_local_request_lock``). The broker part is
+        a no-op when the broker is not configured (standalone ``gaia llm`` etc.)
+        — that is the absence of a broker, not a silent fallback. When the broker IS configured but unreachable, the
         underlying context manager raises loudly rather than racing the slot.
 
         Cloud-routed models occupy no slot, so leasing one would stall every
@@ -4665,7 +4685,17 @@ class LemonadeClient:
             except ImportError:
                 print(f"⏳ {reason}")
 
-        return model_lease(model, priority=self.model_lease_priority, on_wait=_on_wait)
+        lease = model_lease(model, priority=self.model_lease_priority, on_wait=_on_wait)
+        lock = _local_request_lock(model)
+
+        @contextmanager
+        def _held():
+            # Broker first: a thread holding the broker lease must never wait on
+            # this lock while its holder waits on the broker.
+            with lease, lock:
+                yield
+
+        return _held()
 
     def _ensure_model_loaded(
         self, model: str, auto_download: bool = True, *, force: bool = False
