@@ -62,7 +62,7 @@ def source_install_command(wheel: str, *, force_reinstall: bool = False) -> str:
     # skew that produced the misdiagnosed "not installed" ImportErrors.
     core_version = _installed_version("amd-gaia")
     ref = f"@v{core_version}" if core_version else ""
-    flag = "--force-reinstall " if force_reinstall else ""
+    flag = "--force-reinstall --no-deps " if force_reinstall else ""
     return (
         f'{sys.executable} -m pip install {flag}"{wheel} @ git+{_REPO_URL}{ref}'
         f'#subdirectory=hub/agents/{subdir}/python"'
