@@ -288,21 +288,21 @@ def run(host: str = HOST) -> None:
     # deliberate, not an oversight.
     clock = _build_clock(str(scheduler_db_path()))
 
+    # GAIA's own private, self-contained Lemonade instance (#3121), which the
+    # daemon starts at boot and stops at shutdown.
+    from gaia.daemon.lemonade import EmbeddedLemonadeOwner
+
+    lemonade_owner = EmbeddedLemonadeOwner()
+
     # The machine's model server. The daemon owns the process: front-ends ask
     # for it over /daemon/v1/lemonade/start and never spawn one, which is what
     # makes "one instance" true rather than a race that usually works.
     # install_supervisor lets in-daemon callers (host-side RAG, the UI server's
     # embedder) reach it directly instead of posting to their own loopback port.
-    lemonade = LemonadeSupervisor()
+    # Where GAIA's own server is installed, the supervisor starts it through
+    # lemonade_owner rather than a system install.
+    lemonade = LemonadeSupervisor(embedded=lemonade_owner)
     install_supervisor(lemonade)
-
-    # GAIA's own private, self-contained Lemonade instance (#3121) — a second,
-    # independent model server the daemon also owns, separate from the
-    # supervisor above which starts/attaches whatever Lemonade install the
-    # host already has.
-    from gaia.daemon.lemonade import EmbeddedLemonadeOwner
-
-    lemonade_owner = EmbeddedLemonadeOwner()
 
     _register = _build_register(
         specs=specs,
