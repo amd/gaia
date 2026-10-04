@@ -237,11 +237,12 @@ profile. The default `gaia` profile is a superset, so a bare `gaia init` covers 
 
 <Note>
 For the `gaia`, `chat`, `rag` and `all` profiles the chat model follows the
-hardware. Where Lemonade reports a GPU with enough memory for it — about 26 GB for
-models, its 17.4 GB of weights plus the context cache at GAIA's 64K window, so a
-64 GB+ Strix Halo or a 32 GB GPU, but not a 24 GB card or a CPU-only PC —
-`gaia init` also sets up `Qwen3-30B-A3B-Instruct-2507-GGUF` (a 17 GB Lemonade built-in,
-text only) as the chat model, prints why, and records it as `default_model`. Gemma is
+hardware. Where Lemonade reports a GPU with enough memory for it — about 27 GB for
+models, its 23.3 GB of weights and vision projector plus the context cache at GAIA's
+64K window, so a 64 GB+ Strix Halo or a 32 GB GPU, but not a 24 GB card or a CPU-only
+PC — `gaia init` also sets up `Qwen3.6-35B-A3B-GGUF` (a 23 GB Lemonade built-in MoE,
+run with thinking on, needs Lemonade v11.7.0 or newer) as the chat model, prints
+why, and records it as `default_model`. Gemma is
 still downloaded, since vision and document-image extraction load it by name. Every
 smaller PC gets Gemma alone. A `default_model` you set yourself always wins, and
 `--check` asks for the same model `gaia init` would download.
@@ -1559,7 +1560,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3-30B-A3B-Instruct-2507-GGUF` on a PC with the memory for it and never overwrites a value you set |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |

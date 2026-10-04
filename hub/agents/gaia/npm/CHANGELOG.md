@@ -25,12 +25,12 @@ the terminal UI meant building it from source.
   step by step. New stdio sentinel `warm_up` (answers `warmed_up`, or
   `warm_up_skipped` for a remote model).
 - The default chat model now follows the hardware. On a PC whose GPU has
-  ~26 GB for models — a 64 GB+ Strix Halo or a 32 GB GPU; the 17.4 GB model also
-  needs its context cache — `gaia init` sets up Qwen3 30B A3B Instruct 2507 (a 17 GB Lemonade
-  built-in, text only) and records it as `default_model`; the agent and its
-  `GET /v1/gaia/init` readiness check use it for chat. Gemma 4 E4B is still
-  downloaded for vision. Every other PC, including a CPU-only one, keeps Gemma
-  alone.
+  ~27 GB for models — a 64 GB+ Strix Halo or a 32 GB GPU; the 23.3 GB model also
+  needs its context cache — `gaia init` sets up Qwen3.6 35B A3B (a 23 GB Lemonade
+  built-in MoE, run with thinking on) and records it as `default_model`; the
+  agent and its `GET /v1/gaia/init` readiness check use it for chat. Gemma 4 E4B
+  is still downloaded for vision. Every other PC, including a CPU-only one, keeps
+  Gemma alone.
 - Qwen3.8 Flash Next (82 GB, multimodal) is a supported manual option on
   128 GB-class PCs — not auto-selected. Switch with
   `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`.

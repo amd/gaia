@@ -65,6 +65,32 @@ func TestQwenFlashDoesNotFitSmallerMachines(t *testing.T) {
 	}
 }
 
+func TestLargeDefaultFitsGPUsWithAbout27GB(t *testing.T) {
+	var qwen *Recommended
+	for _, r := range RecommendedFor("local") {
+		if r.ID == "Qwen3.6-35B-A3B-GGUF" {
+			r := r
+			qwen = &r
+		}
+	}
+	if qwen == nil {
+		t.Fatal("Qwen3.6-35B-A3B-GGUF is not a local recommendation")
+	}
+	for name, tc := range map[string]struct {
+		body string
+		want bool
+	}{
+		"strix halo 128": {strixHalo128, true},
+		"strix halo 64":  {strixHalo64, true},
+		"32 GB dGPU":     {`{"Physical Memory":"64 GB","devices":{"amd_dgpu":[{"available":true,"vram_gb":32.0}]}}`, true},
+		"24 GB dGPU":     {`{"Physical Memory":"64 GB","devices":{"nvidia_gpu":[{"available":true,"vram_gb":24.0}]}}`, false},
+	} {
+		if ok, why := capacityOf(t, tc.body).Fit(qwen.SizeGB, qwen.KVCacheGB); ok != tc.want {
+			t.Errorf("%s: fits=%v (%s), want %v", name, ok, why, tc.want)
+		}
+	}
+}
+
 func TestDiskIsPartOfFit(t *testing.T) {
 	c := capacityOf(t, strixHalo128)
 	c.DiskFreeGB = 40
@@ -90,7 +116,7 @@ func TestEntriesPutRecommendationsFirstAndJudgeFit(t *testing.T) {
 		{ID: "Qwen3-Coder-Next-GGUF", Size: 48, Labels: []string{"chat", "coding"}},
 	}
 	entries := BuildEntries("local", models, capacityOf(t, macM4), nil)
-	if entries[0].Model.ID != "Qwen3-30B-A3B-Instruct-2507-GGUF" || entries[0].Listed || entries[0].Selectable() {
+	if entries[0].Model.ID != "Qwen3.6-35B-A3B-GGUF" || entries[0].Listed || entries[0].Selectable() {
 		t.Fatalf("the unlisted default should lead, unselectable on a 12 GB Mac: %+v", entries[0])
 	}
 	if entries[1].Model.ID != "Qwen3.8-Flash-Next-GGUF" || entries[1].Listed || entries[1].Selectable() {

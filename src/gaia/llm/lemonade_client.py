@@ -275,13 +275,13 @@ def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
 # ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
-# The default on any PC whose GPU holds it — 17.4 GB of weights plus a ~6.4 GB
-# KV cache at 64K, so a 64 GB+ Strix Halo or a 32 GB GPU. A CPU-only PC keeps
-# Gemma: it could fit in RAM but decodes too slowly to be the default. A Lemonade built-in, 2-5x faster
-# decode than Flash on Strix Halo, but text-only. ``gaia init`` picks it only
-# when gaia.llm.model_fit says it fits, and records the pick as
-# ``default_model``.
-LARGE_DEFAULT_MODEL_NAME = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+# The default on any PC whose GPU holds it — 23.3 GB of weights and vision
+# projector plus a ~1.3 GB KV cache at 64K (~27 GB), so a 64 GB+ Strix Halo or
+# a 32 GB GPU. A CPU-only PC keeps Gemma: it could fit in RAM but decodes too
+# slowly to be the default. A Lemonade built-in MoE (3B active), so it decodes
+# far faster than Flash on Strix Halo. ``gaia init`` picks it only when
+# gaia.llm.model_fit says it fits, and records the pick as ``default_model``.
+LARGE_DEFAULT_MODEL_NAME = "Qwen3.6-35B-A3B-GGUF"
 
 # The multimodal big-PC alternative: a 125B MoE with 6B active. Not a
 # Lemonade built-in — registered as a ``user.`` model on first pull (see its
@@ -696,6 +696,10 @@ class ModelRequirement:
     # KV cache at GAIA's 64K window, in GB, for a model whose cache outgrows the
     # fit rule's shared margin (gaia.llm.model_fit). 0 when the margin covers it.
     kv_cache_gb: float = 0.0
+    # Sent as ``chat_template_kwargs.enable_thinking`` on every request, so the
+    # mode is GAIA's choice rather than the chat template's default. None sends
+    # nothing, for models whose template has no such switch.
+    thinking: Optional[bool] = None
 
     def pull_kwargs(self) -> Dict[str, Any]:
         """Registration fields for ``ensure_model_downloaded`` on a ``user.`` model.
@@ -778,19 +782,22 @@ MODELS = {
         size_gb=82.86,
         min_lemonade_version="2026.39.1",
     ),
-    # --- Qwen3 30B A3B Instruct 2507: the default wherever it fits ---
-    # 30.5B MoE (3.3B active), a Lemonade built-in on llama.cpp (Q4_0).
-    # Native tool calls, no vision and no thinking mode. The "-HRX" build of the
-    # same weights is Linux-only and experimental, so it is not listed here.
-    "qwen3-30b-a3b-instruct": ModelRequirement(
+    # --- Qwen3.6 35B A3B: the default wherever a GPU holds it ---
+    # 35B MoE (3B active), a Lemonade built-in on llama.cpp (UD-Q4_K_XL +
+    # vision projector), so it is pulled by name. The "-MTP" variant is left
+    # out until its speculative decoding is measured on Lemonade's Vulkan build.
+    "qwen3.6-35b-a3b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id=LARGE_DEFAULT_MODEL_NAME,
-        display_name="Qwen3 30B A3B Instruct 2507",
+        display_name="Qwen3.6 35B A3B (Multimodal)",
         min_ctx_size=GPU_CTX_SIZE,
         tool_calling=True,
-        size_gb=17.4,
-        # 48 layers x 4 KV heads x 128 dims x K+V x f16 = 96 KB/token, ~6.4 GB at 64K.
-        kv_cache_gb=6.4,
+        thinking=True,
+        size_gb=23.3,
+        # First in Lemonade's built-in catalog in v11.7.0.
+        min_lemonade_version="11.7.0",
+        # 10 full-attention layers x 2 KV heads x 256 dims x K+V x f16 = 20 KB/token, 1.34 GB at 64K.
+        kv_cache_gb=1.3,
     ),
     # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
@@ -2668,6 +2675,12 @@ class LemonadeClient:
             # llama.cpp-only sampling knobs; cloud providers do not accept them.
             kwargs.pop("repeat_penalty", None)
             kwargs.pop("repeat_last_n", None)
+        else:
+            mr = find_model_requirement(model)
+            if mr is not None and mr.thinking is not None:
+                template_kwargs = dict(kwargs.get("chat_template_kwargs") or {})
+                template_kwargs.setdefault("enable_thinking", mr.thinking)
+                kwargs["chat_template_kwargs"] = template_kwargs
 
         if tool_choice is not None:
             if not tools:

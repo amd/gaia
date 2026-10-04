@@ -2772,7 +2772,7 @@ class TestHardwareChatModel(unittest.TestCase):
         )
 
     def test_a_user_default_the_server_cannot_load_is_refused(self):
-        """The default (a Lemonade built-in) has no version floor of its own —
+        """The default's floor (v11.7.0) is older than the Lemonade gaia init installs, so
         this refusal path is exercised by a user-configured Flash instead,
         which still needs llama.cpp's qwen4exp (v2026.39.1+)."""
         from gaia.config import GaiaConfig

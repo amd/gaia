@@ -100,33 +100,47 @@ class TestCapacity:
 
 
 class TestFit:
-    def test_qwen_30b_fits_a_128gb_strix_halo(self):
+    def test_qwen_fits_a_128gb_strix_halo(self):
         assert check_fit(
             QWEN.size_gb, capacity_from_system_info(STRIX_HALO_128), QWEN.kv_cache_gb
         ).fits
 
-    def test_qwen_30b_also_fits_a_64gb_strix_halo(self):
-        # At 17.4 GB, the new default has a much smaller footprint than Flash's
-        # 82.86 GB — a 64 GB Strix Halo (~55.9 GB pool) now qualifies too.
+    def test_qwen_also_fits_a_64gb_strix_halo(self):
+        # ~27 GB against a ~55.9 GB pool; Flash's 82.86 GB needs the 128 GB class.
         assert check_fit(
             QWEN.size_gb, capacity_from_system_info(STRIX_HALO_64), QWEN.kv_cache_gb
         ).fits
 
-    def test_qwen_30b_does_not_fit_the_smallest_machines(self):
+    def test_qwen_does_not_fit_the_smallest_machines(self):
         verdict = check_fit(
             QWEN.size_gb, capacity_from_system_info(MAC_M4), QWEN.kv_cache_gb
         )
         assert not verdict.fits and "memory" in verdict.reason
 
-    def test_qwen_30b_fits_a_32gb_cpu_box(self):
+    def test_qwen_fits_a_32gb_cpu_box_by_memory_alone(self):
+        # It fits; the GPU-only product rule (TestDefaultFollowsTheGpu) is
+        # what keeps a CPU-only PC on Gemma.
         cap = capacity_from_system_info(CPU_ONLY)
         assert check_fit(QWEN.size_gb, cap, QWEN.kv_cache_gb).fits
 
-    def test_qwen_30b_charges_its_kv_cache(self):
-        # 17.4 GB of weights plus ~6.4 GB of KV cache at 64K: a 24 GB card
-        # holds the weights but not the cache, so it must not be offered.
+    def test_qwen_kv_cache_is_its_full_attention_layers_at_64k(self):
+        # Only 10 of 40 layers are full attention; the 30 Gated DeltaNet layers
+        # keep a fixed-size state the shared margin covers.
+        per_token = 10 * 2 * 256 * 2 * 2  # layers x KV heads x dims x K+V x f16
+        assert QWEN.kv_cache_gb == pytest.approx(
+            per_token * lc.GPU_CTX_SIZE / 1e9, abs=0.05
+        )
+
+    def test_qwen_needs_about_27gb(self):
+        need = model_fit.required_memory_gb(QWEN.size_gb, QWEN.kv_cache_gb)
+        assert need == pytest.approx(26.8, abs=0.05)
+
+    def test_qwen_charges_its_kv_cache(self):
+        # A 26 GB pool holds the weights and margin (~25.5 GB) but not the cache.
         assert QWEN.kv_cache_gb > 0
-        cap = capacity_from_system_info(DGPU)
+        cap = MachineCapacity(
+            memory_gb=26.0, memory_source="AMD GPU", disk_free_gb=None
+        )
         assert check_fit(QWEN.size_gb, cap).fits  # weights alone would pass
         verdict = check_fit(QWEN.size_gb, cap, QWEN.kv_cache_gb)
         assert not verdict.fits and "memory" in verdict.reason
@@ -162,8 +176,6 @@ class TestDefaultPick:
         "info,expected",
         [
             (STRIX_HALO_128, lc.LARGE_DEFAULT_MODEL_NAME),
-            # 17.4 GB fits a 64 GB Strix Halo too — a much wider footprint
-            # than Flash's 128 GB-class-only 82.86 GB.
             (STRIX_HALO_64, lc.LARGE_DEFAULT_MODEL_NAME),
             (MAC_M4, lc.DEFAULT_MODEL_NAME),
         ],
@@ -210,13 +222,13 @@ def _recommend(system_info):
 
 
 class TestDefaultFollowsTheGpu:
-    """Qwen3 30B is the default on any PC whose GPU holds it; Gemma elsewhere."""
+    """Qwen3.6 35B is the default on any PC whose GPU holds it; Gemma elsewhere."""
 
     @pytest.mark.parametrize("info", [STRIX_HALO_128, STRIX_HALO_64, DGPU_32])
     def test_a_gpu_that_holds_it_gets_qwen(self, info):
         assert _recommend(info)[0] == lc.LARGE_DEFAULT_MODEL_NAME
 
-    def test_a_24gb_gpu_is_too_small_for_its_cache(self):
+    def test_a_24gb_gpu_is_too_small(self):
         model_id, skipped = _recommend(DGPU)
         assert model_id == lc.DEFAULT_MODEL_NAME
         assert "memory" in skipped[lc.LARGE_DEFAULT_MODEL_NAME]
@@ -283,12 +295,16 @@ class TestTuiDrift:
         assert lc.DEFAULT_MODEL_NAME in local
         assert lc.LARGE_DEFAULT_MODEL_NAME in local
 
-    def test_kv_cache_matches_the_python_registry(self, doc):
-        """The TUI's fit check must charge the same KV cache as Python's."""
+    def test_fit_inputs_match_the_python_registry(self, doc):
+        """The TUI's fit and version checks must judge a model as Python does."""
         for entry in doc["models"]:
             mr = lc.find_model_requirement(entry.get("register_as") or entry["id"])
             if mr is not None:
                 assert entry.get("kv_cache_gb", 0.0) == mr.kv_cache_gb, entry["id"]
+                assert entry.get("size_gb") == mr.size_gb, entry["id"]
+                assert (
+                    entry.get("min_lemonade_version") == mr.min_lemonade_version
+                ), entry["id"]
 
     def test_the_default_leads_the_local_list(self, doc):
         local = [m["id"] for m in doc["models"] if m["provider"] == "local"]
@@ -333,7 +349,7 @@ class TestRealLemonadeReports:
         cap = capacity_from_system_info(_fixture("lemonade11_amd_igpu_linux.json"))
         assert (cap.memory_source, cap.memory_gb) == ("AMD iGPU", pytest.approx(63.0))
         # The default Linux GTT limit (half of RAM) is too small for Flash's
-        # 82.86 GB, but the new, much smaller 17.4 GB default fits fine.
+        # 82.86 GB, but the ~27 GB default fits.
         assert not check_fit(FLASH.size_gb, cap).fits
         assert check_fit(QWEN.size_gb, cap, QWEN.kv_cache_gb).fits
 
@@ -371,12 +387,11 @@ class TestRealLemonadeReports:
 
 
 class TestLemonadeVersionGate:
-    """The default (Qwen3 30B A3B) is a Lemonade built-in with no version floor
-    of its own — a big PC gets it on any supported Lemonade. Qwen3.8 Flash
-    (the switchable alternative, no longer auto-selected) is the one that
-    needs llama.cpp's qwen4exp, first bundled in v2026.39.1; verified via its
-    ModelRequirement directly rather than through the ladder it is no longer
-    part of.
+    """The default (Qwen3.6 35B A3B) is a Lemonade built-in first listed in
+    v11.7.0; an older server cannot pull it by name. Qwen3.8 Flash (the
+    switchable alternative, not auto-selected) needs llama.cpp's qwen4exp,
+    first bundled in v2026.39.1; verified via its ModelRequirement directly
+    rather than through the ladder it is not part of.
     """
 
     def _client(self, info, version):
@@ -390,13 +405,21 @@ class TestLemonadeVersionGate:
         return FakeClient()
 
     @pytest.mark.parametrize(
-        "version", ["2026.39.1", "2026.40.0~3.abc1234", "11.9.0", None]
+        "version", ["2026.39.1", "2026.40.0~3.abc1234", "11.9.0", "11.7.0"]
     )
-    def test_a_big_pc_gets_the_default_on_any_lemonade_version(self, version):
+    def test_a_big_pc_gets_the_default_on_a_lemonade_that_lists_it(self, version):
         model_id, _, _ = lc.recommend_default_chat_model(
             self._client(STRIX_HALO_128, version)
         )
         assert model_id == lc.LARGE_DEFAULT_MODEL_NAME
+
+    @pytest.mark.parametrize("version", ["11.6.0", None])
+    def test_an_older_or_unknown_lemonade_keeps_gemma_and_says_upgrade(self, version):
+        model_id, skipped, _ = lc.recommend_default_chat_model(
+            self._client(STRIX_HALO_128, version)
+        )
+        assert model_id == lc.DEFAULT_MODEL_NAME
+        assert "force-reinstall" in dict(skipped)[lc.LARGE_DEFAULT_MODEL_NAME]
 
     def test_a_pc_too_small_is_told_it_is_too_small_not_to_upgrade(self):
         _, skipped, _ = lc.recommend_default_chat_model(self._client(MAC_M4, "11.9.0"))

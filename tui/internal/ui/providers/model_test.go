@@ -421,7 +421,7 @@ func TestTooBigModelIsShownButCannotBeDownloaded(t *testing.T) {
 			t.Fatalf("view lacks %q:\n%s", want, view)
 		}
 	}
-	if m.entries[0].Model.ID != "Qwen3-30B-A3B-Instruct-2507-GGUF" {
+	if m.entries[0].Model.ID != "Qwen3.6-35B-A3B-GGUF" {
 		t.Fatalf("first row %s, want the default", m.entries[0].Model.ID)
 	}
 	if m.entries[m.focus].Model.ID != "Gemma-4-E4B-it-GGUF" {

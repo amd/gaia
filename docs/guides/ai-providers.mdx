@@ -41,7 +41,7 @@ between fields, then paste the key and press **Enter**.
 For **Local**, the list shows every chat model Lemonade offers, downloaded or not.
 On a new machine, the list becomes available once the setup step that installs
 Lemonade is done; the panel names that step until then.
-**Recommended** models come first — Qwen3 30B A3B Instruct, Qwen3.8 Flash Next,
+**Recommended** models come first — Qwen3.6 35B A3B, Qwen3.8 Flash Next,
 Gemma 4 E4B, and the Qwen3 Coder models — marked with ★. The panel names how
 much memory this PC has for models and how much disk is free, both read from
 Lemonade:
@@ -54,7 +54,8 @@ Lemonade:
 - **fit unknown** — Lemonade did not report this PC's GPU memory or the model's
   size, so it cannot be judged and is not downloaded.
 - **needs newer Lemonade** — the model needs a newer Lemonade than this PC runs
-  (Qwen3.8 Flash Next needs v2026.39.1). Upgrade with `gaia init --force-reinstall`.
+  (Qwen3.6 35B A3B needs v11.7.0, Qwen3.8 Flash Next v2026.39.1). Upgrade with
+  `gaia init --force-reinstall`.
 
 A model fits when its size plus 5% and 1 GB of working room fits the memory
 llama.cpp loads into — on a Strix Halo that is the GPU carve-out plus shared
@@ -66,11 +67,12 @@ models, not an unused local chat model.
 
 ### The default local model
 
-`gaia init` picks the local chat model from the same rule: **Qwen3 30B A3B
-Instruct 2507** on any PC whose GPU has ~26 GB for models (its 17.4 GB of
-weights plus the context cache at GAIA's 64K window — a 64 GB+ Strix Halo or a
-32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** everywhere else,
-including CPU-only PCs. It records the pick as `default_model` in `~/.gaia/config.json`,
+`gaia init` picks the local chat model from the same rule: **Qwen3.6 35B
+A3B** on any PC whose GPU has ~27 GB for models (its 23.3 GB of weights and
+vision projector plus the context cache at GAIA's 64K window — a 64 GB+ Strix
+Halo or a 32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** everywhere
+else, including CPU-only PCs. GAIA runs Qwen3.6 with thinking on, so each step
+reasons before it answers or calls a tool. It records the pick as `default_model` in `~/.gaia/config.json`,
 so the TUI's agent starts on it. Set `gaia config set default_model <id>` to
 choose your own; `gaia init` never overwrites it. **Qwen3.8 Flash Next** (82 GB,
 multimodal, needs a 128 GB-class Strix Halo) is a supported manual option —

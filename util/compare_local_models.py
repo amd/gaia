@@ -19,10 +19,10 @@ never downloaded.
 
 Usage::
 
-    python util/compare_local_models.py                     # Qwen3 30B vs Flash
+    python util/compare_local_models.py                     # Qwen3.6 35B vs Flash
     python util/compare_local_models.py --tasks core        # plus agent quality
-    python util/compare_local_models.py --models Qwen3-30B-A3B-Instruct-2507-HRX \\
-        Qwen3-30B-A3B-Instruct-2507-GGUF                    # HRX vs llama.cpp
+    python util/compare_local_models.py --models Qwen3.6-35B-A3B-GGUF \\
+        Qwen3.6-35B-A3B-MTP-GGUF                            # plain vs MTP decode
 """
 
 import argparse

@@ -5,12 +5,13 @@
   },
   "models": [
     {
-      "id": "Qwen3-30B-A3B-Instruct-2507-GGUF",
+      "id": "Qwen3.6-35B-A3B-GGUF",
       "provider": "local",
-      "label": "Qwen3 30B A3B Instruct 2507",
-      "note": "default where a GPU holds it (~26 GB for models); faster than Flash, text only",
-      "size_gb": 17.4,
-      "kv_cache_gb": 6.4
+      "label": "Qwen3.6 35B A3B",
+      "note": "default where a GPU holds it (~27 GB for models); faster than Flash, with vision",
+      "size_gb": 23.3,
+      "min_lemonade_version": "11.7.0",
+      "kv_cache_gb": 1.3
     },
     {
       "id": "Qwen3.8-Flash-Next-GGUF",
@@ -30,7 +31,7 @@
       "id": "Gemma-4-E4B-it-GGUF",
       "provider": "local",
       "label": "Gemma 4 E4B",
-      "note": "default on CPU-only PCs and GPUs below ~26 GB for models"
+      "note": "default on CPU-only PCs and GPUs below ~27 GB for models"
     },
     {
       "id": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
