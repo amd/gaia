@@ -3,12 +3,35 @@
 
 """Unit tests for AudioRecorder with mocked sounddevice."""
 
+import importlib.util
+import os
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+
+
+def test_importing_whisper_asr_does_not_load_torch():
+    """torch's libomp disables faiss memory recall for the whole process on macOS."""
+    if importlib.util.find_spec("torch") is None:
+        pytest.skip("torch is not installed, so there is nothing to keep out")
+    src = Path(__file__).resolve().parents[2] / "src"
+    probe = "import sys, gaia.audio.whisper_asr; print('torch' in sys.modules)"
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**os.environ, "PYTHONPATH": str(src)},
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
 
 
 @pytest.mark.parametrize("resume", [False, True])
