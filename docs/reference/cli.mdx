@@ -236,7 +236,33 @@ profile. The default `gaia` profile is a superset, so a bare `gaia init` covers 
 </Note>
 
 <Note>
-`gaia llm` quick queries use the global default model (`Gemma-4-E4B-it-GGUF`).
+For the `gaia`, `chat`, `rag` and `all` profiles the chat model follows the
+hardware. Where Lemonade reports a GPU with enough memory for it — about 27 GB for
+models, its 23.3 GB of weights and vision projector plus the context cache at its
+smallest, 64K window, so a 64 GB+ Strix Halo or a 32 GB GPU, but not a 24 GB card or a
+CPU-only PC — `gaia init` also sets up `Qwen3.6-35B-A3B-GGUF` (a 23 GB Lemonade
+built-in MoE, run with thinking on, needs Lemonade v11.7.0 or newer) as the chat model,
+prints why, and records it as `default_model`. It loads with the largest window the
+memory holds, up to 262,144 tokens: 256K on a Strix Halo, about 152K on a 32 GB GPU
+(see [Context length follows memory](/guides/ai-providers#context-length-follows-memory)). Gemma is
+still downloaded, since vision and document-image extraction load it by name. Every
+smaller PC gets Gemma alone. A `default_model` you set yourself always wins, and
+`--check` asks for the same model `gaia init` would download.
+</Note>
+
+<Note>
+On 128 GB-class PCs, `user.Qwen3.8-Flash-Next-GGUF` (an 82 GB download, multimodal) is
+a supported manual alternative — not auto-selected, since it needs the full Strix Halo
+memory class and Lemonade v2026.39.1 or newer (its llama.cpp cannot load the model
+otherwise; upgrade with `gaia init --force-reinstall`). Switch to it with
+`gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`, or pick it in the
+terminal UI's model picker; Lemonade downloads it on first use. To measure both on your
+own PC, speed, tool calling and (with `--tasks core`) agent quality, run
+`python util/compare_local_models.py` from a GAIA checkout.
+</Note>
+
+<Note>
+`gaia llm` quick queries use `default_model` when set, else `Gemma-4-E4B-it-GGUF`.
 </Note>
 
 **Examples:**
@@ -1540,7 +1566,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, and for new sessions in the Agent UI |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
