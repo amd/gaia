@@ -454,6 +454,22 @@ jobs:
             }
             Write-Host "Backend + fixture server healthy."
 
+            # The Agent UI's own memory switch defaults OFF, and with it off every
+            # `remember` returns "skipped". The runner's preflight refuses to start
+            # a memory scenario while it is off.
+            try {
+              $memory = Invoke-RestMethod -Method Put -Uri "$env:BACKEND_URL/api/memory/settings" `
+                -Headers @{ "X-Gaia-UI" = "1" } -ContentType "application/json" `
+                -Body '{"memory_enabled": true}' -TimeoutSec 30 -ErrorAction Stop
+            } catch {
+              Write-Host "::error::PUT $env:BACKEND_URL/api/memory/settings failed: $($_.Exception.Message). Memory scenarios cannot run with memory off."
+              exit 1
+            }
+            if ($memory.memory_enabled -ne $true) {
+              Write-Host "::error::The backend did not switch memory on (settings: $($memory | ConvertTo-Json -Compress))."
+              exit 1
+            }
+
             # Per-category wall clock, appended to the step summary the moment
             # each category ends — this is what replaces the guessed ceiling
             # with a measurement (BOM-free: PS5.1 Out-File would prepend one).

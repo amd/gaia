@@ -1195,6 +1195,14 @@ def preflight_check(backend_url, scenarios=None):
     has_memory_scenarios = scenarios is not None and any(
         (sd or {}).get("category") == "memory" for _path, sd in scenarios
     )
+    # Long-term memory defaults OFF in the Agent UI. With it off, every
+    # `remember` returns "skipped" and the scenario scores memory being off.
+    if scenarios is not None and any(
+        _scenario_needs_memory(sd) for _path, sd in scenarios
+    ):
+        memory_off_error = _probe_memory_enabled(backend_url)
+        if memory_off_error:
+            errors.append(memory_off_error)
     if has_memory_scenarios:
         memory_admin_error = _probe_memory_admin(backend_url)
         if memory_admin_error:
@@ -1295,6 +1303,60 @@ def _probe_eval_mailbox(backend_url: str) -> Optional[str]:
             f"Eval mailbox probe could not reach {backend_url}: {e}. "
             "Is the Agent UI backend running?"
         )
+
+
+#: Categories whose scenarios are about long-term memory itself.
+_MEMORY_CATEGORIES = frozenset({"memory", "gaia_memory"})
+
+
+def _scenario_needs_memory(scenario_data: Optional[dict]) -> bool:
+    """True when a scenario reads or writes long-term memory.
+
+    A scenario outside the memory categories still depends on it when its
+    setup clears or seeds the store (a preference that must survive a new
+    session, a check-in that must be recalled later).
+    """
+    scenario_data = scenario_data or {}
+    if scenario_data.get("category") in _MEMORY_CATEGORIES:
+        return True
+    setup = scenario_data.get("setup") or {}
+    return "memory_clear" in setup or "memory_seed" in setup
+
+
+def _probe_memory_enabled(backend_url: str) -> Optional[str]:
+    """Verify long-term memory is switched on in the backend under test.
+
+    Returns ``None`` when ``GET /api/memory/settings`` reports
+    ``memory_enabled: true``, otherwise an error string for the preflight list.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = f"{backend_url}/api/memory/settings"
+    enable = (
+        f"curl -X PUT {url} -H 'X-Gaia-UI: 1' -H 'Content-Type: application/json' "
+        "-d '{\"memory_enabled\": true}'"
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=5) as r:
+            settings = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return f"Memory settings probe failed with HTTP {e.code} from {url}: {e.reason}"
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+        return (
+            f"Memory settings probe could not reach {backend_url}: {e}. "
+            "Is the Agent UI backend running?"
+        )
+    if settings.get("memory_enabled") is True:
+        return None
+    return (
+        "Scenarios that use long-term memory are queued, but the backend at "
+        f"{backend_url} has memory switched off ({url} reports "
+        f"memory_enabled={settings.get('memory_enabled')!r}; off is the Agent UI "
+        "default). Every `remember` would return 'skipped' and the scores would "
+        "measure memory being off. Turn it on, then re-run:\n"
+        f"    {enable}"
+    )
 
 
 def _probe_memory_admin(backend_url: str) -> Optional[str]:
