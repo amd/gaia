@@ -974,9 +974,9 @@ class InitCommand:
             step_num += 1
             self._print("")
             self._print_step(step_num, total_steps, "Verifying setup...")
-            if not self._verify_setup():
-                return 1
+            verify_ok = self._verify_setup()
 
+            # Saved even when verification fails -- the models may be fine.
             # Persist profile choice to ~/.gaia/config.json
             try:
                 from gaia.config import GaiaConfig, GaiaConfigError
@@ -1003,10 +1003,13 @@ class InitCommand:
                 )
                 return 1
 
+            if not verify_ok:
+                return 1
+
             # A hard Agent UI build failure means the profile's UI isn't
-            # usable -- don't report plain success for it. verify_setup and
-            # config persistence above already ran unconditionally, since
-            # neither depends on the frontend build. The build step above
+            # usable -- don't report plain success for it. Config persistence
+            # above already ran, since it doesn't depend on the frontend
+            # build. The build step above
             # already printed the actionable message via warn_fn; don't
             # repeat the full paragraph, just name the outcome.
             if webui_build_result is not None and webui_build_result.status in (
@@ -1465,9 +1468,14 @@ class InitCommand:
                         # Context was set but is too small
                         return (False, f"Context {actual_ctx} < {min_ctx} required")
                     else:
-                        # Context not in recipe_options - should not happen after forced unload/reload
-                        # Mark as unverified but don't fail the test
-                        self._ctx_verified = None  # Explicitly mark as unverified
+                        # Inference still runs, so warn rather than fail.
+                        log.warning(
+                            "Lemonade did not report ctx_size for %s after loading "
+                            "it with ctx_size=%s; context is unverified",
+                            model_id,
+                            min_ctx,
+                        )
+                        self._ctx_verified = None
                 except Exception as e:
                     return (False, f"Context check failed: {str(e)[:50]}")
             else:
@@ -1626,6 +1634,7 @@ class InitCommand:
 
             models_passed = 0
             models_failed = []
+            models_ctx_unverified = []
 
             try:
                 for model_id in model_ids:
@@ -1663,6 +1672,7 @@ class InitCommand:
                             elif self._ctx_verified is None:
                                 # Context could not be verified
                                 ctx_msg = " [yellow]⚠️ Context unverified![/yellow]"
+                                models_ctx_unverified.append(model_id)
 
                         self.console.print(
                             f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]{ctx_msg}"
@@ -1740,7 +1750,28 @@ class InitCommand:
             else:
                 self._print_success(f"All {models_passed} model(s) verified")
 
-            return True  # Don't fail init due to model issues
+            if models_ctx_unverified:
+                self.console.print()
+                self._print_warning(
+                    "Lemonade did not report a context size for "
+                    f"{', '.join(models_ctx_unverified)}, so GAIA cannot confirm "
+                    "long prompts and documents fit. The model answers, but if "
+                    "long chats or documents get truncated, update Lemonade "
+                    f"Server and re-run `gaia init --profile {self.profile} --yes`."
+                )
+
+            if models_failed:
+                self.console.print()
+                failed_ids = ", ".join(m for m, _ in models_failed)
+                self._print_error(
+                    f"Model verification failed for: {failed_ids}. "
+                    "If the error above looks transient (timeout, out of "
+                    "memory), re-run `gaia init` first. Otherwise follow the "
+                    "steps above to re-download them, then re-run `gaia init`."
+                )
+                return False
+
+            return True
 
         except Exception as e:
             self._print_error(f"Verification failed: {e}")
