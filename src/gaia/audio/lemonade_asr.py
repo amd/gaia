@@ -25,16 +25,10 @@ from typing import Any, Callable, Dict, Iterator, List, Optional
 
 import requests
 
-from gaia.llm.lemonade_client import (
-    lemonade_auth_headers,
-    resolve_lemonade_api_key,
-    resolve_lemonade_base_url,
-)
+from gaia.audio.lemonade_service import LemonadeAudioService
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
-
-DOCS_URL = "https://amd-gaia.ai/docs/guides/install"
 
 # Near-large-v3 quality at half the download, on the whispercpp backend that
 # returns the segment and word timestamps diarization aligns against.
@@ -349,8 +343,10 @@ def _merge_chunks(
     )
 
 
-class LemonadeASRClient:
+class LemonadeASRClient(LemonadeAudioService):
     """Speech-to-text against a running Lemonade Server."""
+
+    error_cls = LemonadeASRError
 
     def __init__(
         self,
@@ -373,11 +369,7 @@ class LemonadeASRClient:
                 "model must be a Lemonade transcription model id, e.g. "
                 f"'{DEFAULT_ASR_MODEL}'."
             )
-        self.base_url = resolve_lemonade_base_url(base_url)
-        self.model = model
-        self.api_key = resolve_lemonade_api_key(api_key, base_url=self.base_url)
-        self.timeout = timeout
-        self._session = requests.Session()
+        super().__init__(base_url, model, api_key, timeout)
 
     @property
     def transcriptions_url(self) -> str:
@@ -404,6 +396,19 @@ class LemonadeASRClient:
             and "transcription" in (entry.get("labels") or [])
             and entry.get("id")
         )
+
+    def ensure_model(self, say: Optional[Callable[[str], None]] = None) -> None:
+        """Make the transcription model servable, pulling it if it is not yet.
+
+        Lemonade would pull it inside the first request instead, which leaves a
+        live caller waiting on a download it was never told about.
+
+        Raises:
+            ConnectionError: Lemonade Server is not reachable.
+            LemonadeASRError: The model is not in this server's catalog, or the
+                pull failed.
+        """
+        self.ensure_model_pulled("transcription", say=say)
 
     def transcribe(
         self,
@@ -578,18 +583,6 @@ class LemonadeASRClient:
             raw_text=str(payload.get("text") or ""),
         )
 
-    def _headers(self) -> Dict[str, str]:
-        return lemonade_auth_headers(self.api_key)
-
-    def _get_json(self, url: str, what: str) -> Dict[str, Any]:
-        try:
-            response = self._session.get(
-                url, headers=self._headers(), timeout=self.timeout
-            )
-        except requests.ConnectionError as e:
-            raise self._unreachable(e) from e
-        return self._decode(response, url, what)
-
     def _post_multipart(self, url: str, files: Dict, data: Dict) -> Dict[str, Any]:
         try:
             response = self._session.post(
@@ -608,52 +601,3 @@ class LemonadeASRClient:
                 "first call with an undownloaded model also pays for the pull."
             ) from e
         return self._decode(response, url, "transcription")
-
-    def _unreachable(self, error: Exception) -> ConnectionError:
-        from gaia.llm.lemonade_launcher import describe_start_hint
-
-        # The hint owns start/install advice; repeating it here doubled it.
-        return ConnectionError(
-            f"Lemonade Server is not reachable at {self.base_url} ({error}). "
-            f"{describe_start_hint().instruction} If it runs elsewhere, set "
-            f"LEMONADE_BASE_URL to that server. See {DOCS_URL}"
-        )
-
-    def _decode(self, response, url: str, what: str) -> Dict[str, Any]:
-        # 401 is handled before the generic branch so the body — which some
-        # proxies echo the Authorization header into — never reaches the user.
-        if response.status_code == 401:
-            raise LemonadeASRError(
-                f"Lemonade rejected the API key (401 Unauthorized) on {what}. "
-                "Verify LEMONADE_API_KEY is correct."
-            )
-        if response.status_code >= 400:
-            raise LemonadeASRError(
-                f"Lemonade returned {response.status_code} for {what} at {url}: "
-                f"{_server_message(response)}"
-            )
-        try:
-            payload = response.json()
-        except ValueError as e:
-            raise LemonadeASRError(
-                f"Lemonade returned a non-JSON body for {what} at {url}: "
-                f"{response.text[:300]!r}"
-            ) from e
-        if not isinstance(payload, dict):
-            raise LemonadeASRError(
-                f"Lemonade returned {type(payload).__name__} for {what} at "
-                f"{url}, expected a JSON object."
-            )
-        return payload
-
-
-def _server_message(response) -> str:
-    """Pull Lemonade's ``{"error": {"message": ...}}`` text out of a failure body."""
-    try:
-        body = response.json()
-    except ValueError:
-        return response.text[:500]
-    error = body.get("error") if isinstance(body, dict) else None
-    if isinstance(error, dict) and error.get("message"):
-        return str(error["message"])[:500]
-    return str(body)[:500]

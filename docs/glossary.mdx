@@ -45,7 +45,7 @@ A GAIA base class for agents exposed via OpenAI-compatible REST API. Subclasses 
 A specific URL path on a server that handles particular requests, such as `/v1/chat/completions` for chat interactions.
 
 ### ASR (Automatic Speech Recognition)
-Technology that converts spoken audio into text. GAIA uses OpenAI's Whisper model for speech recognition.
+Technology that converts spoken audio into text. GAIA uses OpenAI's Whisper model, served by Lemonade Server, for speech recognition.
 
 ### Audio Chunk
 A segment of audio data processed at one time, typically measured in milliseconds or samples.
@@ -256,7 +256,7 @@ A standard format for describing the structure and validation rules of JSON data
 ## K
 
 ### Kokoro TTS
-A lightweight, high-quality text-to-speech engine used by GAIA for voice output in Talk mode. Runs locally without cloud dependencies. See also: TTS (Text-to-Speech), ASR.
+A lightweight, high-quality text-to-speech engine used by GAIA for voice output in Talk mode. Served by Lemonade Server as `kokoro-v1`, so it runs locally without cloud dependencies. See also: TTS (Text-to-Speech), ASR.
 
 ---
 
@@ -574,7 +574,7 @@ The variant of an ASR model (base, small, medium, large), trading accuracy for s
 An HTTP callback that sends real-time data to a specified URL when events occur.
 
 ### Whisper
-OpenAI's open-source speech recognition model, used by GAIA for ASR in Talk mode. Available in multiple sizes (tiny, base, small, medium, large) trading accuracy for speed. Configure with `--whisper-model-size`. See also: ASR, Voice Model Size, Kokoro TTS.
+OpenAI's open-source speech recognition model, used by GAIA for ASR in Talk mode. Served by Lemonade Server in multiple sizes (tiny, base, small, medium, large, turbo) trading accuracy for speed. Configure with `--whisper-model-size`. See also: ASR, Voice Model Size, Kokoro TTS.
 
 ---
 

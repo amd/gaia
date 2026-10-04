@@ -591,9 +591,15 @@ class LemonadeInstaller:
                 )
                 time.sleep(2)
                 waited += 2
-            except Exception as e:
-                log.debug(f"Could not check for msiexec processes: {e}")
-                return True  # Can't check, proceed anyway
+            except (OSError, subprocess.SubprocessError) as e:
+                # msiexec reports a real conflict itself (exit 1618), so warn and go on.
+                log.warning("Could not check for running msiexec processes: %s", e)
+                self._announce(
+                    f"Could not check for other Windows Installer operations ({e}). "
+                    "Continuing; if the install fails with error 1618, wait for "
+                    "the other installation to finish and re-run `gaia init`."
+                )
+                return True
         return False
 
     @staticmethod

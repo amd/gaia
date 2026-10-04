@@ -507,8 +507,8 @@ def assert_faiss_omp_safe(operation: str) -> None:
         f"are loaded ({', '.join(runtimes)}). faiss-cpu and torch each bundle "
         "one, and the next faiss search initialises the second — macOS aborts "
         "the process (OMP: Error #15), which no error handler can catch. "
-        "Keep the two out of one process (torch arrives with the [audio] and "
-        "[ui] extras; memory recall needs faiss-cpu), or set "
+        "Keep the two out of one process (torch arrives with the [ui] extra; "
+        "memory recall needs faiss-cpu), or set "
         f"{_OMP_OVERRIDE_ENV}=1 on a host where the two runtimes coexist. "
         "See src/gaia/agents/base/memory.py:_loaded_omp_runtimes."
     )
