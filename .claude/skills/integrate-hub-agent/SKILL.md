@@ -123,7 +123,8 @@ integration steps from them (don't just list the files back to the developer):
    `package.json` for npm: the canonical `id`/package name, declared `models`,
    exposed `interfaces`, dependencies, and entry points.
 3. **Source entry point** — the package's entry module (python: `entry_module` /
-   `entry_class` in `gaia-agent.yaml`, usually `gaia_agent_<id>/agent.py`; npm: the `main`/`exports` entry in
+   `entry_class` in `gaia-agent.yaml`, e.g. `gaia_agent_email` / `EmailTriageAgent`; the
+   class usually lives in `<entry_module>/agent.py`; npm: the `main`/`exports` entry in
    `package.json`): the ground truth when README and manifest leave a gap.
 
 Synthesize these into concrete steps shaped per Step 3 (install → register/configure →
