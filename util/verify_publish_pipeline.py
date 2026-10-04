@@ -18,7 +18,7 @@ TWO PUBLISHERS, NOT ONE
 There are two ``publish_to_r2.py`` scripts and they are different programs::
 
     hub/agents/email/python/packaging/publish_to_r2.py   --publisher email
-        release_agent_email.yml, release_agent_chat.yml, release_components.yml
+        release_agent_email.yml, release_components.yml
 
     hub/agents/gaia/python/packaging/publish_to_r2.py    --publisher gaia
         release_agent_gaia.yml
@@ -157,7 +157,7 @@ SPECS = {
         key="email",
         path=REPO_ROOT / "hub/agents/email/python/packaging/publish_to_r2.py",
         threshold_const="DIRECT_UPLOAD_THRESHOLD",
-        drives="release_agent_email.yml, release_agent_chat.yml, release_components.yml",
+        drives="release_agent_email.yml, release_components.yml",
         direct_r2=True,
         lenient_rebuild=True,
         strict_immutable_flag=True,

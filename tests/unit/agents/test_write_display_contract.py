@@ -105,8 +105,6 @@ class RaisingConsole(OutputHandler):
 
     def print_command_executing(self, command): ...
 
-    def print_agent_selected(self, agent_name, language, project_type): ...
-
     def print_info(self, message):
         raise RuntimeError("display is broken")
 

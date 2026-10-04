@@ -3,45 +3,37 @@
 
 """Unit tests for AudioRecorder with mocked sounddevice."""
 
+import os
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
 
-@pytest.mark.parametrize("resume", [False, True])
-def test_streaming_asr_drains_paused_audio_and_discards_overlap(mock_sd, resume):
-    from gaia.audio.audio_recorder import AudioRecorder
-    from gaia.audio.whisper_asr import WhisperAsr
-
-    asr = WhisperAsr.__new__(WhisperAsr)
-    AudioRecorder.__init__(asr, device_index=0)
-    asr.RATE = 10
-    asr.CHUNK = 10
-    asr.is_recording = True
-    reads = 0
-
-    def read(_size):
-        nonlocal reads
-        reads += 1
-        if reads == 2:
-            asr.pause_recording()
-        if reads == 3:
-            if resume:
-                asr.resume_recording()
-            asr.is_recording = False
-        return np.full((10, 1), reads, dtype=np.float32), False
-
-    mock_sd.InputStream.return_value.read.side_effect = read
-    with patch("gaia.audio.whisper_asr.sd", mock_sd):
-        asr._record_audio_streaming()
-
-    assert reads == 3, "paused capture must drain the device instead of sleeping"
-    if resume:
-        np.testing.assert_array_equal(asr.audio_queue.get_nowait(), np.full(10, 3))
-    assert asr.audio_queue.empty()
+def test_voice_modules_never_load_a_local_model_runtime():
+    """Speech runs in Lemonade; torch's libomp also breaks faiss recall on macOS."""
+    src = Path(__file__).resolve().parents[2] / "src"
+    probe = (
+        "import sys, gaia.audio.whisper_asr, gaia.audio.kokoro_tts, "
+        "gaia.audio.audio_client; "
+        "print(sorted(m for m in ('torch', 'whisper', 'kokoro', 'transformers') "
+        "if m in sys.modules))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**os.environ, "PYTHONPATH": str(src)},
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "[]"
 
 
 @pytest.fixture

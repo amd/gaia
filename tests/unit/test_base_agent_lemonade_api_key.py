@@ -118,6 +118,44 @@ def test_is_loaded_ctx_too_small_uses_active_device_profile(
     assert agent._is_loaded_ctx_too_small() is expected_too_small
 
 
+@pytest.mark.parametrize(
+    ("model_name", "loaded_ctx", "expected_too_small"),
+    [
+        ("gemma4-it-e2b-FLM", 32768, False),
+        # A GGUF model on an NPU-profile machine is undersized at the FLM ceiling.
+        ("Gemma-4-E4B-it-GGUF", 32768, True),
+        ("Gemma-4-E4B-it-GGUF", 65536, False),
+    ],
+)
+@patch("httpx.get")
+@patch("gaia.llm.lemonade_manager.LemonadeManager.get_base_url")
+def test_is_loaded_ctx_too_small_judges_each_model_by_its_own_window(
+    mock_get_base_url, mock_httpx_get, model_name, loaded_ctx, expected_too_small
+):
+    from gaia.agents.base.agent import Agent
+
+    class _DeviceAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    agent = _DeviceAgent(skip_lemonade=True, silent_mode=True, device="npu")
+    mock_get_base_url.return_value = "http://localhost:13305/api/v1"
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "all_models_loaded": [
+            {
+                "type": "llm",
+                "model_name": model_name,
+                "recipe_options": {"ctx_size": loaded_ctx},
+            }
+        ]
+    }
+    mock_httpx_get.return_value = mock_resp
+
+    assert agent._is_loaded_ctx_too_small() is expected_too_small
+
+
 @pytest.mark.parametrize("model", ["fireworks.gemma-4-31b-it", "amd.gemma-4-31b-it"])
 def test_cloud_context_error_never_probes_local_model(
     monkeypatch, _minimal_agent, model

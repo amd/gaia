@@ -22,6 +22,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
+from gaia.env import child_env
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -140,6 +141,7 @@ def _install_ffmpeg() -> None:
                 # Never inherit our stdin: on the TUI's subprocess transport it
                 # is the event wire, and a child that reads it deadlocks.
                 stdin=subprocess.DEVNULL,
+                env=child_env(),
             )
         except subprocess.TimeoutExpired as e:
             raise MediaError(
@@ -242,6 +244,7 @@ def probe_duration(src: os.PathLike | str) -> float:
             timeout=_PROBE_TIMEOUT_SECONDS,
             check=False,
             stdin=subprocess.DEVNULL,
+            env=child_env(),
         )
     except subprocess.TimeoutExpired as e:
         raise MediaError(
@@ -355,6 +358,7 @@ def _run_ffmpeg(cmd: List[str], src: Path) -> None:
             text=True,
             check=False,
             stdin=subprocess.DEVNULL,
+            env=child_env(),
         )
     except OSError as e:
         raise MediaError(f"Could not launch ffmpeg ({cmd[0]}): {e}") from e
@@ -378,6 +382,7 @@ def _run_ffmpeg_with_progress(
             stderr=subprocess.PIPE,
             text=True,
             stdin=subprocess.DEVNULL,
+            env=child_env(),
         )
     except OSError as e:
         raise MediaError(f"Could not launch ffmpeg ({cmd[0]}): {e}") from e

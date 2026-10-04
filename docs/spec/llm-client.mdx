@@ -116,7 +116,7 @@ Historical release notes describe the providers that shipped in those releases.
    - Lazy provider loading via `importlib` (load only when needed)
    - Minimal overhead from abstraction layer
    - Streaming support across all providers
-   - Default temperature of 0.1 for local models; cloud models keep the client default
+   - Local models run with their model card's sampling, else temperature 0.1 with penalties; cloud models keep the client default
 
 2. **Reliability**
    - Type safety through ABC pattern
@@ -419,7 +419,7 @@ class LemonadeProvider(LLMClient):
 
         Note:
             Default model is DEFAULT_MODEL_NAME (currently "Gemma-4-E4B-it-GGUF").
-            Local models default to temperature=0.1; cloud models keep the client default.
+            Local models use their model card's sampling, else temperature=0.1; cloud models keep the client default.
         """
 
     # Supports all methods: generate, chat, embed, vision,
@@ -533,18 +533,37 @@ class ClaudeProvider(LLMClient):
     # embed() inherited - raises NotSupportedError
 ```
 
-### Temperature Defaults
+### Sampling Defaults
 
-Local models default to `temperature=0.1`, with repetition penalties, so they do not loop on
-tables and paragraphs. Cloud models get neither: near-greedy sampling sends a reasoning
-model's thinking into a runaway, so they keep the client default (0.7). An explicit
-`temperature` is always sent as given.
+A local model whose card publishes sampling settings runs with them. These live in
+`MODEL_SAMPLING_PROFILES` in `lemonade_client.py`, keyed by Lemonade model id. For example,
+`Qwen3-30B-A3B-Instruct-2507-GGUF` gets `temperature=0.7`, `top_p=0.8`, `top_k=20`,
+`min_p=0` and `presence_penalty=1.0`, per its
+[model card](https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507). A card that gives
+separate thinking and non-thinking profiles registers both. The request's
+`chat_template_kwargs={"enable_thinking": ...}` picks the profile, so the sampling always
+matches the mode the model runs in. GAIA sends no switch, so
+[`Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) thinks and gets its
+card's thinking profile for coding and precise work.
+
+Every other local model gets `LOCAL_SAMPLING_DEFAULTS`: `temperature=0.1` plus frequency,
+presence and repeat penalties, so it does not loop on tables and paragraphs. Cloud models get
+neither, because near-greedy sampling sends a reasoning model's thinking into a runaway. They
+keep the client default (0.7). Any sampling argument the caller passes is sent as given.
 
 ```python
 # In LemonadeProvider.chat()
 if not self._backend.cloud_model_provider(effective_model):
-    kwargs.setdefault("temperature", 0.1)
+    template_kwargs = kwargs.get("chat_template_kwargs") or {}
+    defaults = local_sampling_defaults(
+        effective_model, template_kwargs.get("enable_thinking")
+    )
+    for key, value in defaults.items():
+        kwargs.setdefault(key, value)
 ```
+
+`top_k`, `min_p`, `repeat_penalty` and `repeat_last_n` are llama.cpp-native. When streaming,
+they travel in the OpenAI SDK's `extra_body` and land at the top level of the request body.
 
 ### Provider-Specific Implementation
 

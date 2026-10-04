@@ -16,7 +16,7 @@ from gaia.cli import build_parser, run_cli
 
 
 class _StubChatAgent:
-    """Stands in for the gaia-agent-chat wheel's ChatAgent.
+    """Stands in for the gaia-agent-gaia wheel's GaiaAgent.
 
     Inherits the flag's default from the core base ``Agent`` rather than
     restating it, so the test fails if that default ever flips.
@@ -29,6 +29,9 @@ class _StubChatAgent:
         self.current_session = object()
         self.listed = False
 
+    def _ensure_tool_loader_reset(self):
+        pass  # a session already exists
+
     def list_tools(self, verbose=False):
         self.listed = True
 
@@ -38,7 +41,7 @@ class _StubChatAgent:
 
 @pytest.fixture
 def stub_chat_wheel(monkeypatch):
-    """Install a fake ``gaia_agent_chat`` so the handler runs without a model."""
+    """Install fake agent wheels so the handler runs without a model."""
     built = []
 
     class _Config:
@@ -50,15 +53,16 @@ def stub_chat_wheel(monkeypatch):
             super().__init__(config)
             built.append(self)
 
-    agent_mod = types.ModuleType("gaia_agent_chat.agent")
-    agent_mod.ChatAgent = _Agent
-    agent_mod.ChatAgentConfig = _Config
+    agent_mod = types.ModuleType("gaia_agent.agent")
+    agent_mod.GaiaAgent = _Agent
+    agent_mod.GaiaAgentConfig = _Config
     app_mod = types.ModuleType("gaia_agent_chat.app")
     app_mod.interactive_mode = lambda agent: None
     pkg = types.ModuleType("gaia_agent_chat")
 
+    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
+    monkeypatch.setitem(sys.modules, "gaia_agent.agent", agent_mod)
     monkeypatch.setitem(sys.modules, "gaia_agent_chat", pkg)
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat.agent", agent_mod)
     monkeypatch.setitem(sys.modules, "gaia_agent_chat.app", app_mod)
     return built
 
@@ -159,10 +163,9 @@ def test_ui_combination_fails_loudly(capsys, monkeypatch):
 def test_the_env_var_reaches_agents_no_cli_flag_can(stub_chat_wheel, monkeypatch):
     """``GAIA_NO_LEARNED_SKILLS`` is the off-switch for the agent that learns.
 
-    ``--no-learned-skills`` only exists on ``gaia chat``, which builds a
-    ChatAgent. The flagship — the only agent that registers
-    ``remember_skill_lesson`` — runs as a daemon sidecar and behind the UI
-    server, where no chat flag reaches it. The env var is read at call time so
+    ``--no-learned-skills`` only exists on ``gaia chat``. The flagship — the
+    only agent that registers ``remember_skill_lesson`` — also runs as a
+    daemon sidecar and behind the UI server, where no chat flag reaches it. The env var is read at call time so
     it also holds for an agent constructed before it was set.
     """
     from gaia.agents.base.agent import effective_skill_body
