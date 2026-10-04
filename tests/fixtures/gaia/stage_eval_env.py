@@ -16,6 +16,9 @@ It does three things:
    except those the corpus contract says must start uninstalled.
 3. Builds and trusts the fixture hub with ``prepare_fixture_hub.py``.
 
+The staged ``<home>/gaia-eval/fake_gh`` must go first on the backend's ``PATH``;
+the github-triage scenarios are written against it, never a real ``gh``.
+
 ``--home`` is required: defaulting to the developer's real home would overwrite
 their installed skills and add a throwaway key to their trust store.
 """
@@ -60,6 +63,28 @@ def _run(argv: list[str], what: str) -> None:
         )
 
 
+def install_fake_gh(fixtures: Path) -> Path:
+    """Make the staged fake ``gh`` win over a real one on ``PATH``.
+
+    The flagship runs a skill-granted CLI as argv, and on Windows CreateProcess
+    then finds only ``gh.exe`` — the ``gh.cmd`` shim is skipped and the runner's
+    real GitHub CLI answers instead. So on Windows a ``gh.exe`` launcher is
+    written next to ``gh.py``, the same way the bench stand-in does it.
+
+    Returns:
+        The directory to put first on the agent's ``PATH``.
+    """
+    bin_dir = fixtures / "fake_gh"
+    if sys.platform == "win32":
+        sys.path.insert(0, str(REPO_ROOT / "src"))
+        from gaia.eval.bench.ghstub import _exe_launcher
+
+        (bin_dir / "gh.exe").write_bytes(
+            _exe_launcher(sys.executable, bin_dir / "gh.py")
+        )
+    return bin_dir
+
+
 def stage(home: Path) -> Path:
     """Stage fixtures, starter skills and the fixture hub under ``home``.
 
@@ -77,6 +102,7 @@ def stage(home: Path) -> Path:
             shutil.rmtree(fixtures, onerror=_clear_readonly)
     shutil.copytree(HERE, fixtures)
     print(f"staged fixtures -> {fixtures}")
+    print(f"fake gh -> {install_fake_gh(fixtures)} (prepend it to PATH)")
 
     skills_root = home / ".gaia" / "skills"
     skills_root.mkdir(parents=True, exist_ok=True)
