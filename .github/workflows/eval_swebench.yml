@@ -96,6 +96,7 @@ jobs:
         run: uv pip install --python "$(command -v python)" "swebench>=5.0,<6"
 
       - name: Start GAIA's embedded Lemonade
+        id: lemonade
         timeout-minutes: 15
         run: |
           gaia lemonade embedded start --timeout 180
@@ -164,5 +165,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Stop Lemonade
-        if: always()
+        # Only once a start was attempted: an earlier failure (no key, no install)
+        # leaves no `gaia` on PATH, and a second red step buries the real cause.
+        if: always() && steps.lemonade.outcome != 'skipped'
         run: gaia lemonade embedded stop

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A question the agent asks with `request_user_input` now waits as long as it says
+  (up to 10 minutes) instead of being abandoned after 3 minutes as a "hung" tool;
+  an answer given after that point used to be lost.
 - File and document tools now expand a leading `~`, so `~/notes.txt` reads from the
   home directory instead of failing with "File not found" or creating a literal `~`
   folder.

@@ -503,6 +503,10 @@ export interface SystemStatus {
     detected_devices?: string[];
     /** Active profile from ``~/.gaia/config.json`` (e.g. "chat", "npu"). */
     active_profile: string;
+    /** Why ``~/.gaia/config.json`` could not be loaded; null when it loaded. */
+    config_error?: string | null;
+    /** One message per status probe that failed; the matching fields stay unknown. */
+    probe_warnings?: string[];
 }
 
 /**

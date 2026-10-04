@@ -15,7 +15,6 @@ the profile's min_context_size, which is where that requirement is enforced.
 """
 
 import importlib.util
-import logging
 import os
 import subprocess
 import sys
@@ -37,9 +36,11 @@ except ImportError:
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import source_install_command
 from gaia.installer._stdin import stdin_is_tty
+from gaia.logger import get_logger
 from gaia.ui.build import WebuiBuildStatus
+from gaia.version import LEMONADE_MIN_VERSION
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 def is_embedding_model_id(model_id: str) -> bool:
@@ -98,7 +99,7 @@ INIT_PROFILES = {
         "agent": "minimal",
         "models": ["Gemma-4-E4B-it-GGUF"],
         "approx_size": "~3 GB",
-        "min_lemonade_version": "10.2.0",
+        "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
     },
@@ -110,7 +111,7 @@ INIT_PROFILES = {
             "Gemma-4-E4B-it-GGUF",  # Agentic reasoning + VLM + prompt enhancement (~3GB)
         ],
         "approx_size": "~10 GB",
-        "min_lemonade_version": "10.2.0",
+        "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
     },
@@ -141,7 +142,7 @@ INIT_PROFILES = {
         "agent": "vlm",
         "models": ["Gemma-4-E4B-it-GGUF"],
         "approx_size": "~3 GB",
-        "min_lemonade_version": "10.2.0",
+        "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
     },
@@ -153,7 +154,7 @@ INIT_PROFILES = {
         # Keep in lock-step with gaia_agent_email.version.MIN_LEMONADE_VERSION
         # and the email gaia-agent.yaml manifest (the GET /v1/email/init readiness
         # check reads the same minimum). A test asserts the three agree.
-        "min_lemonade_version": "10.2.0",
+        "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
     },
@@ -166,7 +167,7 @@ INIT_PROFILES = {
         # Lemonade *-FLM models, pulled by name only (no recipe — #1655).
         "models": ["gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"],
         "approx_size": "~3 GB",
-        "min_lemonade_version": "10.2.0",
+        "min_lemonade_version": LEMONADE_MIN_VERSION,
         # NPU context window. Matches GPU/CPU (32768) so the init report and
         # the runtime load path agree (issue #1745) — the prior 4096 pin made
         # `gaia init --profile npu` report 4096 while the loader requested
@@ -974,7 +975,7 @@ class InitCommand:
                 try:
                     config = GaiaConfig.load()
                 except GaiaConfigError as e:
-                    log.warning(f"Resetting corrupt config: {e}")
+                    self._print_warning(f"Resetting unreadable config: {e}")
                     config = GaiaConfig()
                 config.profile = self.profile
                 config.default_device = "npu" if self.profile == "npu" else "gpu"
@@ -1825,11 +1826,11 @@ class InitCommand:
                 agent.get("id") == agent_id for agent in catalog_result.agents
             )
         except Exception as exc:  # noqa: BLE001 - catalog reachability, not install
-            log.warning(
-                "Could not check the Agent Hub catalog for '%s': %s -- "
-                "treating as not-yet-published (non-fatal)",
-                agent_id,
-                exc,
+            log.debug("Agent Hub catalog check failed", exc_info=True)
+            self._print_warning(
+                f"Could not reach the Agent Hub catalog to install the "
+                f"'{agent_id}' agent ({exc}). Setup continues without it; "
+                f"re-run `gaia init` once you are online."
             )
             published = False
 

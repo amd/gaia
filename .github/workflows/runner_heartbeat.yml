@@ -23,19 +23,17 @@ jobs:
         # GitHub cancels it at the 24h limit, which marks the whole run
         # `cancelled` and buries the healthy runners' results.
         #
-        # sjlab-stx-2 removed: last successful heartbeat 2026-03-22, offline from
-        # 2026-03-30 onward, so it made every run `cancelled` for ~4 months. Its
-        # removal here is a bookkeeping fix, NOT a decision that the box is gone —
-        # re-add the line if it is brought back.
+        # The static sjlab-stx-* runners are retired: #4534 moved their jobs to the
+        # ephemeral `xsj-dispatch` pool, which now provisions those boxes per job.
         #
-        # An entry is a LABEL, not necessarily a machine. `devlab-dispatch` is the
-        # shared ephemeral pool that carries the PR workload; its runner names end
+        # An entry is a LABEL, not necessarily a machine. `devlab-dispatch` and
+        # `xsj-dispatch` are shared ephemeral pools; their runner names end
         # in a per-session suffix (ephemeral-devlab-...-106625606856) that changes,
         # so a name-pinned entry would target a runner that no longer exists and
-        # sit queued until the 24h cancel — the sjlab-stx-2 failure, self-inflicted.
+        # sit queued until the 24h cancel — the retired-runner failure above.
         # The label is unique to that pool, so it proves at least one member is
         # alive. It does NOT give per-machine coverage: one box can be dead for
-        # months and the other three will answer every beat. The per-host labels
+        # months and the rest of the pool will answer every beat. The per-host labels
         # (host-x2-la01-*) would close that, but pinning to one re-creates exactly
         # the queue-forever bug above the moment a host is retired.
         #
@@ -43,9 +41,8 @@ jobs:
         # with awk and stops at the first line that is not `- `, so a comment
         # between entries silently truncates the monitored set.
         runner:
-          - sjlab-stx-1
-          - sjlab-stx-3
           - devlab-dispatch
+          - xsj-dispatch
       fail-fast: false  # Continue even if one runner fails
     runs-on: [self-hosted, "${{ matrix.runner }}"]
     # Caps execution only — GitHub starts this clock when a runner picks the job
@@ -131,7 +128,7 @@ jobs:
             echo "until GitHub cancels them at the 24h limit, which is why this shows up" >&2
             echo "as a bare \`cancelled\` run with no explanation." >&2
             echo "" >&2
-            echo "For a shared-pool entry (devlab-dispatch) rule out saturation first:" >&2
+            echo "For a shared-pool entry (devlab-dispatch, xsj-dispatch) rule out saturation first:" >&2
             echo "every member being busy for 90 minutes looks identical to an outage" >&2
             echo "here. If the pool is merely oversubscribed, this is a capacity signal," >&2
             echo "not a dead box." >&2
