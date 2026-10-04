@@ -987,6 +987,22 @@ def local_sampling_defaults(
     return dict(LOCAL_SAMPLING_DEFAULTS)
 
 
+def requested_thinking(
+    model_id: Optional[str], chat_template_kwargs: Optional[Dict[str, Any]] = None
+) -> Optional[bool]:
+    """The thinking mode a request to a local *model_id* runs in.
+
+    The caller's ``enable_thinking`` when it set one, else GAIA's choice for the
+    model (``ModelRequirement.thinking``), else None: the template's default.
+    Sampling and the request both read this, so they cannot disagree.
+    """
+    explicit = (chat_template_kwargs or {}).get("enable_thinking")
+    if isinstance(explicit, bool):
+        return explicit
+    mr = find_model_requirement(model_id)
+    return mr.thinking if mr else None
+
+
 # Define agent profiles with their model requirements
 AGENT_PROFILES = {
     "chat": AgentProfile(
@@ -2773,10 +2789,10 @@ class LemonadeClient:
             kwargs.pop("repeat_penalty", None)
             kwargs.pop("repeat_last_n", None)
         else:
-            mr = find_model_requirement(model)
-            if mr is not None and mr.thinking is not None:
+            thinking = requested_thinking(model, kwargs.get("chat_template_kwargs"))
+            if thinking is not None:
                 template_kwargs = dict(kwargs.get("chat_template_kwargs") or {})
-                template_kwargs.setdefault("enable_thinking", mr.thinking)
+                template_kwargs["enable_thinking"] = thinking
                 kwargs["chat_template_kwargs"] = template_kwargs
 
         if tool_choice is not None:
