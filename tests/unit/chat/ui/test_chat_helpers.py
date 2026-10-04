@@ -1025,3 +1025,34 @@ class TestMaybeUpdateSessionTitleHonorsPin:
         db, gen = self._run({"id": "auto-1", "title": "New Task", "title_is_custom": 0})
         gen.assert_awaited_once()
         db.update_session.assert_called_once_with("auto-1", title="LLM Title")
+
+
+class TestSessionTitleRequest:
+    """The 24-token title request must not be spent on a thinking model's reasoning."""
+
+    def _sent_body(self, model_id):
+        from gaia.ui import _chat_helpers as ch
+
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"choices": [{"message": {"content": "Trip plan"}}]}
+        client = MagicMock()
+        client.post = AsyncMock(return_value=resp)
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        with patch("httpx.AsyncClient", return_value=client):
+            title = asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1", model_id, "plan a trip", "ok"
+                )
+            )
+        assert title == "Trip plan"
+        return client.post.call_args.kwargs["json"]
+
+    def test_thinking_model_titles_with_thinking_off(self):
+        from gaia.llm.lemonade_client import LARGE_DEFAULT_MODEL_NAME
+
+        body = self._sent_body(LARGE_DEFAULT_MODEL_NAME)
+        assert body["chat_template_kwargs"] == {"enable_thinking": False}
+
+    def test_other_models_get_no_template_switch(self):
+        assert "chat_template_kwargs" not in self._sent_body("Gemma-4-E4B-it-GGUF")
