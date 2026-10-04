@@ -740,6 +740,16 @@ class InitCommand:
                 size_str += f"/{total / 1024 / 1024:.1f} MB"
             self._print(f"\r   [{bar}] {percent:.0f}% ({size_str})", end="")
 
+    @staticmethod
+    def _tui_installed() -> bool:
+        """True if gaia-tui is on PATH or in GAIA's own bin dir."""
+        if shutil.which("gaia-tui") is not None:
+            return True
+        from gaia.config import gaia_home
+
+        name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        return (gaia_home() / "bin" / name).is_file()
+
     def _install_pip_extras(self) -> bool:
         """
         Install pip extras required by the current profile.
@@ -766,8 +776,14 @@ class InitCommand:
         log.debug("Installing extras: %s", argv)
         try:
             result = subprocess.run(  # noqa: S603 - argv is constructed, not shell
-                argv, capture_output=True, text=True, check=False
+                argv, capture_output=True, text=True, check=False, timeout=900
             )
+        except subprocess.TimeoutExpired:
+            self._print_error(
+                f"Installing [{extras_str}] extras timed out after 15 minutes. "
+                f"Check your network, then run `{retry}` and re-run `gaia init`."
+            )
+            return False
         except OSError as e:
             self._print_error(
                 f"Could not run the package installer ({argv[0]}): {e}. "
@@ -1879,7 +1895,7 @@ class InitCommand:
         flagship_install_note = (
             "GAIA agent not installed yet -- run: gaia hub install gaia"
         )
-        has_tui = shutil.which("gaia-tui") is not None
+        has_tui = self._tui_installed()
         tui_install_note = (
             f"Terminal UI (gaia-tui) ships with the installer -- run: {_INSTALLER_HINT}"
         )

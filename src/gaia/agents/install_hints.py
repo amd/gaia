@@ -51,8 +51,9 @@ class PackageInstallerUnavailableError(RuntimeError):
 
 _UV_INSTALL_DOCS = "https://docs.astral.sh/uv/getting-started/installation/"
 
-# Characters that force an argument into double quotes -- the one quoting
-# style bash, zsh, PowerShell and cmd.exe all accept.
+# Double-quote args with spaces or glob/bracket chars (e.g. ``gaia[rag]``).
+# Not a full shell escaper: ``$`` and backticks still expand in bash, and a
+# quoted executable path needs ``& "..."`` in PowerShell.
 _NEEDS_QUOTES = re.compile(r"[\s\[\]@#&|<>;()*?'$`!{}]")
 
 
@@ -92,7 +93,7 @@ def _find_uv() -> Optional[Tuple[str, str]]:
 
 
 def format_command(argv: Sequence[str]) -> str:
-    """Render ``argv`` as one line a user can paste into any common shell."""
+    """Render ``argv`` as one pasteable line for the commands GAIA prints."""
     return " ".join(f'"{a}"' if _NEEDS_QUOTES.search(a) else a for a in argv)
 
 

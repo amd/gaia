@@ -119,6 +119,25 @@ class TestExtrasInstallFailureIsLoud:
         assert calls == []
         assert "docs.astral.sh/uv" in "\n".join(printed)
 
+    def test_stalled_install_times_out_and_fails(self, installer_venv):
+        cmd, printed = _cmd()
+        timeouts = []
+
+        def stalled(argv, **kwargs):
+            timeouts.append(kwargs.get("timeout"))
+            raise init_command.subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+        with (
+            patch.object(init_command, "RICH_AVAILABLE", False),
+            patch.object(init_command.subprocess, "run", side_effect=stalled),
+        ):
+            ok = cmd._install_pip_extras()
+        out = "\n".join(printed)
+        assert ok is False
+        assert timeouts == [900]
+        assert "timed out" in out
+        assert f'uv pip install --python {sys.executable} "amd-gaia[rag]"' in out
+
     def test_failed_extras_install_fails_init(self, monkeypatch):
         """`gaia init` must exit non-zero, not print "initialization complete"
         with document Q&A broken."""
@@ -160,9 +179,12 @@ class TestAgentUiMissingDependencies:
 
 
 class TestCompletionTuiHintRich:
-    def test_rich_output_keeps_the_installer_command_intact(self, monkeypatch):
+    def test_rich_output_keeps_the_installer_command_intact(
+        self, monkeypatch, tmp_path
+    ):
         if not init_command.RICH_AVAILABLE:
             pytest.skip("rich not installed")
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
         cmd = InitCommand(profile="gaia", yes=True)
         cmd._is_hub_agent_available = lambda _id: True
         buf = io.StringIO()
@@ -172,3 +194,33 @@ class TestCompletionTuiHintRich:
         out = buf.getvalue()
         assert init_command._INSTALLER_HINT in out
         assert "    gaia-tui " not in out
+
+
+class TestTuiDetection:
+    def test_tui_in_gaia_bin_counts_as_installed_when_off_path(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        monkeypatch.setattr(init_command.shutil, "which", lambda _name: None)
+        assert InitCommand._tui_installed() is False
+
+        name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin" / name).write_text("")
+        assert InitCommand._tui_installed() is True
+
+    def test_completion_does_not_tell_an_installed_user_to_reinstall(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        monkeypatch.setattr(init_command.shutil, "which", lambda _name: None)
+        name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin" / name).write_text("")
+        cmd = InitCommand(profile="gaia", yes=True)
+        cmd._is_hub_agent_available = lambda _id: True
+        printed = []
+        cmd._print = lambda msg, end="\n": printed.append(str(msg))
+        with patch.object(init_command, "RICH_AVAILABLE", False):
+            cmd._print_completion()
+        assert init_command._INSTALLER_HINT not in "\n".join(printed)
