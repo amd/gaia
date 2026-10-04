@@ -3,9 +3,9 @@
 
 """Unit tests for RAG dependency-import guards.
 
-RAG embeds via Lemonade, so **sentence-transformers is NOT a RAG dependency** — it
-is only an optional dep of the memory cross-encoder reranker. RAG must import and
-run even when sentence-transformers is absent or broken.
+RAG embeds via Lemonade, so **sentence-transformers is NOT a RAG dependency** and
+no GAIA extra installs it. RAG must import and run even when sentence-transformers
+is absent or broken.
 
 Regression this file protects against (the EmbeddingGemma embedder switch, #1952):
 a broken ``torchcodec``/FFmpeg under sentence-transformers made ``import

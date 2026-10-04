@@ -16,9 +16,10 @@ Journey:
    R2 channel would serve for `chat` once it's published. It does NOT need
    to be the literal, production ``gaia_agent_chat`` wheel from
    ``hub/agents/chat/python`` -- but it DOES need to be importable as the
-   literal ``gaia_agent_chat`` module, because `gaia chat`'s CLI handler
-   hardcodes ``from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig``
-   (``src/gaia/cli.py:650``) rather than resolving through
+   literal ``gaia_agent_chat`` module (and a second fixture as ``gaia_agent``),
+   because `gaia chat`'s CLI handler hardcodes
+   ``from gaia_agent.agent import GaiaAgent, GaiaAgentConfig`` plus
+   ``from gaia_agent_chat.app import interactive_mode`` rather than resolving through
    ``AgentRegistry`` -- unlike `gaia browse`/`gaia analyze`, which DO go
    through the registry (``cli.py:832-855``). This is a real, load-bearing
    finding for whoever implements the fix: making
@@ -76,7 +77,9 @@ AGENT_ID = "chat"
 # The crux bug's exact failure signature on unfixed `main` (verified by
 # running `gaia chat -q hello` against a fresh $HOME with nothing installed;
 # see cli.py:650-659 / gaia.agents.install_hints.agent_not_installed_message).
-_CRUX_NOT_INSTALLED_SIGNATURE = "chat agent is not installed"
+# `gaia chat` now runs the flagship, so the same signature reads "The GAIA
+# agent is not installed" when its wheel is the one missing.
+_CRUX_NOT_INSTALLED_SIGNATURE = "agent is not installed"
 
 # Our fixture ChatAgent deliberately raises this from process_query() so the
 # test can positively confirm execution reached real agent logic, not just
@@ -121,6 +124,10 @@ class ChatAgent:
         self.current_session = None
         self.session_manager = _DummySessionManager()
 
+    def _ensure_tool_loader_reset(self):
+        if not self.current_session:
+            self.current_session = self.session_manager.create_session()
+
     def process_query(self, query, trace=False):
         # Deliberately fails PAST the import/construction gate -- proves the
         # cross-process import + construction worked, distinct from the
@@ -152,6 +159,41 @@ _FIXTURE_APP_MODULE_SOURCE = """\
 def interactive_mode(agent):
     raise RuntimeError("fixture stub: interactive_mode not exercised by -q tests")
 """
+
+
+# `gaia chat` runs the flagship, which imports `gaia_agent.agent` and builds on
+# the chat wheel -- so a second fixture wheel stands in for gaia-agent-gaia,
+# reusing the chat fixture's stub agent.
+_FIXTURE_FLAGSHIP_MODULE_SOURCE = """from gaia.agents.registry import AgentRegistration
+from gaia_agent_chat.agent import ChatAgent as GaiaAgent
+from gaia_agent_chat.agent import ChatAgentConfig as GaiaAgentConfig
+
+
+def build_registration():
+    return AgentRegistration(
+        id="gaia",
+        name="Fixture GAIA Agent",
+        description="AC-6 mechanism-proof fixture (#2358)",
+        source="installed",
+        conversation_starters=[],
+        factory=lambda **kwargs: GaiaAgent(GaiaAgentConfig(**kwargs)),
+        agent_dir=None,
+        models=[],
+    )
+"""
+
+
+def _build_flagship_fixture_wheel() -> bytes:
+    """A wheel importable as the literal ``gaia_agent`` module."""
+    return build_fixture_wheel_bytes(
+        dist_name="gaia-agent-gaia",
+        version="0.1.0",
+        module_name="gaia_agent",
+        entry_point_group="gaia.agent",
+        entry_point_name="gaia",
+        entry_point_target="gaia_agent.agent:build_registration",
+        module_source=_FIXTURE_FLAGSHIP_MODULE_SOURCE,
+    )
 
 
 def _build_chat_fixture_wheel() -> bytes:
@@ -324,38 +366,52 @@ def test_clean_core_only_init_then_chat_journey(tmp_path):
     throwaway_venv = tmp_path / "throwaway-venv"
     throwaway_purelib = _Path(_build_throwaway_venv(throwaway_venv))
 
-    # --- 1. Install a REAL fixture wheel, standing in for chat (#2358) ---
-    wheel_bytes = _build_chat_fixture_wheel()
-    manifest, artifact_path = build_wheel_manifest(
-        AGENT_ID, "0.1.0", wheel_bytes, dist_name="gaia-agent-chat"
-    )
-    fetcher = build_wheel_fetcher(BASE_URL, artifact_path, wheel_bytes, AGENT_ID)
+    # --- 1. Install REAL fixture wheels, standing in for chat + gaia (#2358) ---
+    for agent_id, dist_name, module_name, wheel_bytes in (
+        (AGENT_ID, "gaia-agent-chat", "gaia_agent_chat", _build_chat_fixture_wheel()),
+        ("gaia", "gaia-agent-gaia", "gaia_agent", _build_flagship_fixture_wheel()),
+    ):
+        manifest, artifact_path = build_wheel_manifest(
+            agent_id, "0.1.0", wheel_bytes, dist_name=dist_name
+        )
+        fetcher = build_wheel_fetcher(BASE_URL, artifact_path, wheel_bytes, agent_id)
 
-    result = hub_installer.install(
-        AGENT_ID,
-        manifest=manifest,
-        base_url=BASE_URL,
-        fetcher=fetcher,
-        run_pip=_real_pip_run_pip,
-        install_root=install_root,
-        # The throwaway venv's OWN site-packages -- this is the mechanism-2
-        # `.pth` write under test; a fresh `gaia chat` subprocess launched
-        # from that same venv (below) picks it up at interpreter startup
-        # with zero other wiring.
-        active_env_site_packages=throwaway_purelib,
-    )
+        result = hub_installer.install(
+            agent_id,
+            manifest=manifest,
+            base_url=BASE_URL,
+            fetcher=fetcher,
+            run_pip=_real_pip_run_pip,
+            install_root=install_root,
+            # The throwaway venv's OWN site-packages -- this is the mechanism-2
+            # `.pth` write under test; a fresh `gaia chat` subprocess launched
+            # from that same venv (below) picks it up at interpreter startup
+            # with zero other wiring.
+            active_env_site_packages=throwaway_purelib,
+        )
+        assert (
+            install_root / agent_id / "site-packages" / module_name / "agent.py"
+        ).exists(), (
+            "fixture wheel did not actually install -- test setup is broken, "
+            "not the crux bug"
+        )
+        assert (
+            result.hot_registered is False
+        )  # no registry= passed -- fresh-process proof only
     site_packages = install_root / AGENT_ID / "site-packages"
-    assert (site_packages / "gaia_agent_chat" / "agent.py").exists(), (
-        "fixture wheel did not actually install -- test setup is broken, "
-        "not the crux bug"
-    )
-    assert (
-        result.hot_registered is False
-    )  # no registry= passed -- fresh-process proof only
 
     gaia_exe = _gaia_executable(throwaway_venv)
+    # The root conftest exports this checkout's hub agents on PYTHONPATH, which
+    # would shadow the fixture wheels with the real agents in the subprocess.
+    hub_agents_dir = str(_Path(__file__).resolve().parents[2] / "hub" / "agents")
     base_env = {
         **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            p
+            for p in os.environ.get("PYTHONPATH", "").split(os.pathsep)
+            if p
+            and not os.path.normcase(p).startswith(os.path.normcase(hub_agents_dir))
+        ),
         "HOME": str(tmp_home),
         "PATH": _minimal_path_env(throwaway_venv),
     }
@@ -406,9 +462,9 @@ def test_clean_core_only_init_then_chat_journey(tmp_path):
 
     assert _CRUX_NOT_INSTALLED_SIGNATURE not in combined_output, (
         "`gaia chat -q hello` still shows the #2358 crux bug's exact failure "
-        "signature ('chat agent is not installed') even though a chat-shaped "
-        "wheel WAS installed under ~/.gaia/agents/chat/ -- nothing made the "
-        "hub-installed gaia_agent_chat importable in this fresh subprocess.\n"
+        "signature ('agent is not installed') even though chat- and gaia-shaped "
+        "wheels WERE installed under ~/.gaia/agents/ -- nothing made the "
+        "hub-installed wheels importable in this fresh subprocess.\n"
         f"stdout={chat_proc.stdout}\nstderr={chat_proc.stderr}"
     )
     assert "ModuleNotFoundError" not in combined_output, (
@@ -417,8 +473,8 @@ def test_clean_core_only_init_then_chat_journey(tmp_path):
     )
     # Positive proof, not just an absence check: execution must have reached
     # our fixture ChatAgent's real logic (process_query), which is only
-    # possible if `from gaia_agent_chat.agent import ChatAgent,
-    # ChatAgentConfig` (cli.py:650) actually succeeded in this fresh process.
+    # possible if `from gaia_agent.agent import GaiaAgent, GaiaAgentConfig`
+    # actually succeeded in this fresh process.
     assert _FIXTURE_STUB_MARKER in combined_output, (
         "`gaia chat -q hello` did not reach the fixture agent's process_query "
         "-- it neither hit the crux 'not installed' signature nor our stub "

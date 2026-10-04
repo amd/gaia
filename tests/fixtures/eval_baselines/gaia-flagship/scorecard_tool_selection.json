@@ -1,0 +1,721 @@
+{
+  "run_id": "eval-20261003-092616",
+  "timestamp": "2026-10-03T10:06:26.173054+00:00",
+  "config": {
+    "backend_url": "http://127.0.0.1:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia"
+  },
+  "summary": {
+    "total_scenarios": 7,
+    "passed": 4,
+    "failed": 2,
+    "blocked": 0,
+    "timeout": 1,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 0.5714285714285714,
+    "judged_pass_rate": 0.6666666666666666,
+    "avg_score": 7.95,
+    "by_category": {
+      "tool_selection": {
+        "passed": 4,
+        "failed": 2,
+        "blocked": 0,
+        "timeout": 1,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 7.948333333333333
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "data_vs_recall_disambiguation",
+      "session_id": "9f178021-5b94-4d2c-bc4e-3b5e8eaf5bbb",
+      "status": "PASS",
+      "overall_score": 9.65,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What was the total Q1 revenue across all salespeople in eval/corpus/documents/sales_data_2025.csv?",
+          "agent_response": "The total revenue across all salespeople in Q1 from `sales_data_2025.csv` was **$340,000.0**.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "index_documents",
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 8,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.45,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly routed to analyze_data_file (not query_documents or memory recall) and returned exactly $340,000, matching ground truth. Minor efficiency deduction for redundant index_documents call on an already-indexed file.",
+          "performance": {
+            "tokens_per_second": 37.8,
+            "time_to_first_token": 5.344,
+            "input_tokens": 1214,
+            "output_tokens": 319,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Who was the top salesperson by revenue?",
+          "agent_response": "Based on the data in `sales_data_2025.csv`, **Sarah Chen** was the top salesperson with total revenue of **$70,000.0**.\n\nVerification: unverified — 1 tool call ran, none of them a test, lint, or build.",
+          "agent_tools": [
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent retained file context from turn 1, called analyze_data_file with group_by=salesperson in a single optimal step, and correctly identified Sarah Chen with $70,000 — exact match with ground truth.",
+          "performance": {
+            "tokens_per_second": 38.2,
+            "time_to_first_token": 4.123,
+            "input_tokens": 844,
+            "output_tokens": 130,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 155.2286229133606,
+      "category": "tool_selection",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 38.0,
+        "min_tokens_per_second": 37.8,
+        "max_tokens_per_second": 38.2,
+        "avg_time_to_first_token": 4.734,
+        "min_time_to_first_token": 4.123,
+        "max_time_to_first_token": 5.344,
+        "total_input_tokens": 2058,
+        "total_output_tokens": 449,
+        "turns_measured": 2,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "known_path_read",
+      "session_id": "a479594a-55b1-4bd5-9c5f-d2cf907d9c93",
+      "status": "PASS",
+      "overall_score": 9.45,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Please read eval/corpus/documents/acme_q3_report.md and tell me the Q3 revenue.",
+          "agent_response": "According to `acme_q3_report.md`, the Q3 2025 revenue reached **$14.2 million**. This represents a 23% increase compared to Q3 2024's $11.5 million.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 7,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly returned $14.2M using query_specific_file on the explicitly provided path — no search_file call. Minor deduction: index_documents was called redundantly (document was already indexed in session setup), adding one unnecessary step.",
+          "performance": {
+            "tokens_per_second": 38.2,
+            "time_to_first_token": 5.396,
+            "input_tokens": 1251,
+            "output_tokens": 347,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Now what is the CEO's Q4 outlook?",
+          "agent_response": "According to `acme_q3_report.md`, page [implied]: The CEO projects **15–18% growth** for Q4, which will be driven by enterprise segment expansion and three new product launches scheduled for November.",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly recalled the document from turn 1, used query_specific_file optimally, and returned the exact expected answer: 15-18% growth driven by enterprise segment expansion. Additional product launch details are accurate and from the document.",
+          "performance": {
+            "tokens_per_second": 37.2,
+            "time_to_first_token": 5.704,
+            "input_tokens": 1253,
+            "output_tokens": 497,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.03
+      },
+      "elapsed_s": 144.93496584892273,
+      "category": "tool_selection",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.7,
+        "min_tokens_per_second": 37.2,
+        "max_tokens_per_second": 38.2,
+        "avg_time_to_first_token": 5.55,
+        "min_time_to_first_token": 5.396,
+        "max_time_to_first_token": 5.704,
+        "total_input_tokens": 2504,
+        "total_output_tokens": 844,
+        "turns_measured": 2,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "multi_step_plan",
+      "session_id": "b6e3532f-8da5-40ad-aed9-a00920425210",
+      "status": "PASS",
+      "overall_score": 9.95,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Can you give me a quick HR briefing -- PTO policy, remote work rules, and whether contractors get benefits?",
+          "agent_response": "Here is your quick HR briefing pulled directly from `employee_handbook.md`.\n\n### PTO Policy\n- First-year employees: 15 days (accruing at 1.25 days/month)\n- Accrual increases: 20 days (Years 2–4), 25 days (Years 5–9), 30 days (Year 10+)\n- Unused PTO rollover max: 10 days\n\n### Remote Work Rules\n- Up to 3 days/week with manager approval\n- Fully remote (5 days/week) requires VP-level approval, quarterly office travel\n\n### Contractor Benefits Eligibility\n- Contractors are NOT eligible for company benefits programs (health, dental, vision, 401k, EAP, etc.)",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file",
+            "query_specific_file",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "All three required facts retrieved accurately and completely from employee_handbook.md: 15 days first-year PTO, up to 3 days/week remote with manager approval, and contractors explicitly NOT eligible for benefits. Bonus VP approval for fully-remote also included. Agent used optimal tool strategy of one query per topic.",
+          "performance": {
+            "tokens_per_second": 35.2,
+            "time_to_first_token": 32.594,
+            "input_tokens": 7828,
+            "output_tokens": 1150,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Now add the Q3 financial highlight to that briefing.",
+          "agent_response": "Here's your updated briefing—the policy rundown plus Q3 financial highlights from acme_q3_report.md.\n\n### Q3 Financial Highlights\n- Q3 2025 revenue: $14.2 million (+23% YoY from $11.5M in Q3 2024)\n- Gross margin: 68% (up from 65% in Q2 2025)\n[...plus full HR policy briefing reproduced from Turn 1...]",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly queried acme_q3_report.md and retrieved the exact Q3 revenue of $14.2 million. It also seamlessly retained and reproduced the full HR briefing from Turn 1, producing a coherent combined briefing as requested. Single optimal tool call.",
+          "performance": {
+            "tokens_per_second": 34.7,
+            "time_to_first_token": 7.006,
+            "input_tokens": 1247,
+            "output_tokens": 956,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.13
+      },
+      "elapsed_s": 270.31581687927246,
+      "category": "tool_selection",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 35.0,
+        "min_tokens_per_second": 34.7,
+        "max_tokens_per_second": 35.2,
+        "avg_time_to_first_token": 19.8,
+        "min_time_to_first_token": 7.006,
+        "max_time_to_first_token": 32.594,
+        "total_input_tokens": 9075,
+        "total_output_tokens": 2106,
+        "turns_measured": 2,
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 4,
+        "flags": [
+          "high_latency",
+          "token_explosion"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 5,
+        "max_tool_calls_in_a_turn": 4,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "no_tools_needed",
+      "session_id": "c7b1a387-0b35-49c0-a891-98b388dc1d53",
+      "status": "PASS",
+      "overall_score": 9.9,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "hey what's the capital of France?",
+          "agent_response": "Paris is the capital of France—a city that manages to be both incredibly historic and ridiculously chic at the same time.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 7,
+            "error_recovery": 10
+          },
+          "overall_score": 9.85,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent answered 'Paris' correctly and invoked zero tools, satisfying both the factual and tool-restraint criteria. The 'Verification: unverified' footer is an unnecessary artifact that slightly diminishes personality but does not affect correctness.",
+          "performance": {
+            "tokens_per_second": 38.7,
+            "time_to_first_token": 32.525,
+            "input_tokens": 15647,
+            "output_tokens": 218,
+            "flags": [
+              "high_latency",
+              "token_explosion"
+            ]
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "what is 15% of 200?",
+          "agent_response": "Thirty. Simple enough! No need to get fancy with spreadsheets for something that basic. 😉\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent answered '30' (as 'Thirty') correctly with no tool calls. Personality is witty and direct. The recurring 'Verification: unverified' footer is slightly noisy but acceptable.",
+          "performance": {
+            "tokens_per_second": 38.8,
+            "time_to_first_token": 1.66,
+            "input_tokens": 61,
+            "output_tokens": 116,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "tell me a fun fact about penguins",
+          "agent_response": "Penguins can actually dive deeper than any other bird—some species can plunge into icy waters over 100 meters deep! They're basically aquatic torpedoes with feathers instead of fins.\n\nVerification: unverified — no tools ran, so nothing was checked.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent provided a factual and entertaining penguin fact from general knowledge with zero tool calls, fully matching the expected behavior. 'Aquatic torpedoes with feathers instead of fins' demonstrates strong GAIA voice.",
+          "performance": {
+            "tokens_per_second": 38.6,
+            "time_to_first_token": 1.695,
+            "input_tokens": 50,
+            "output_tokens": 286,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 118.91490769386292,
+      "category": "tool_selection",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 38.7,
+        "min_tokens_per_second": 38.6,
+        "max_tokens_per_second": 38.8,
+        "avg_time_to_first_token": 11.96,
+        "min_time_to_first_token": 1.66,
+        "max_time_to_first_token": 32.525,
+        "total_input_tokens": 15758,
+        "total_output_tokens": 620,
+        "turns_measured": 3,
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "flags": [
+          "high_latency",
+          "token_explosion"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 0,
+        "max_tool_calls_in_a_turn": 0,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "skill_file_ops_discovery",
+      "session_id": "2a06b295-c16f-4ce4-b56f-8d1cf32574fd",
+      "status": "FAIL",
+      "overall_score": 7.12,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "Please load your file-ops skill. Then, without me giving you the path, locate the Acme API reference file somewhere under eval/corpus and tell me how long an auth token stays valid.",
+          "agent_response": "That `eval/corpus` directory isn't showing up in my filesystem right now. The search failed because that specific path doesn't seem to exist here.\n\nCan you confirm if `eval/corpus` is spelled correctly, or perhaps tell me what folder it lives inside? Once we pinpoint the file, finding out how long an auth token stays valid will be straightforward.",
+          "agent_tools": [
+            "load_skill",
+            "find_files"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 4,
+            "context_retention": 10,
+            "completeness": 0,
+            "efficiency": 4,
+            "personality": 7,
+            "error_recovery": 0
+          },
+          "overall_score": 3.55,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Agent correctly loaded file-ops skill but called find_files with scope='specific path:eval/corpus' — an invalid format that produced an error. The tool error message offered valid alternatives (cwd, everywhere, absolute folder path) but the agent gave up and asked the user instead of retrying with a valid scope. No answer was provided for the token expiry question.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 1.427,
+            "input_tokens": 105,
+            "output_tokens": 274,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "Actually, let me try a different approach. Which file under eval/corpus contains the text \"HTTP 429\"? Search by content, not by filename.",
+          "agent_response": "Found it. The Acme API reference (`api_reference.py`) specifies that tokens expire after **24 hours**.\n\nIt looks like they also limit requests to 1000 per hour per token—so keep those calls efficient!",
+          "agent_tools": [
+            "search_file_content",
+            "read_file"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 8,
+            "context_retention": 8,
+            "completeness": 8,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 8.25,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly used search_file_content (the skill-prescribed tool for content lookup), found api_reference.py, named it, stated the 1000 requests/hour rate limit, and connected back to turn 1's unresolved token expiry question. Skipped get_file_info confirmation per the skill's discovery protocol but turn 2 criteria does not gate on that. High TTFT (11.7s) noted.",
+          "performance": {
+            "tokens_per_second": 37,
+            "time_to_first_token": 11.719,
+            "input_tokens": 2836,
+            "output_tokens": 159,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "From that same file, what are the production and staging base URLs?",
+          "agent_response": "The base URLs are clearly defined within `C:\\actions-runner-01\\_work\\gaia\\gaia\\eval\\corpus\\documents\\api_reference.py`:\n\n*   **Production Base URL:** `https://api.acmecorp.com/v2`\n*   **Staging Base URL:** `https://api-staging.acmecorp.com/v2`",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.55,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Both URLs exactly match ground truth, and the agent named the full absolute path as required by the skill's step 6. Reasonably answered from prior turn's read_file context without redundant re-reads. Very high TTFT (14.5s) noted.",
+          "performance": {
+            "tokens_per_second": 36.5,
+            "time_to_first_token": 14.482,
+            "input_tokens": 3547,
+            "output_tokens": 385,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "On turn 1, the agent passed scope='specific path:eval/corpus' to find_files — a fabricated parameter format that the tool does not accept. The tool returned an error message listing valid scope values (cwd, everywhere, absolute folder path), but the agent did not attempt recovery by retrying with any of those alternatives. It gave up immediately and asked the user for clarification, leaving the primary factual query unanswered.",
+      "recommended_fix": {
+        "target": "tool_description",
+        "file": "hub/skills/file-ops/SKILL.md",
+        "description": "Add explicit documentation of valid find_files scope values (absolute path, 'cwd', 'everywhere', 'smart') and include a recovery instruction: if the first find_files call returns a path-not-found error, retry with scope='everywhere' before asking the user."
+      },
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.38
+      },
+      "elapsed_s": 288.28830003738403,
+      "category": "tool_selection",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.0,
+        "min_tokens_per_second": 36.5,
+        "max_tokens_per_second": 37.4,
+        "avg_time_to_first_token": 9.209,
+        "min_time_to_first_token": 1.427,
+        "max_time_to_first_token": 14.482,
+        "total_input_tokens": 6488,
+        "total_output_tokens": 818,
+        "turns_measured": 3,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 3
+      }
+    },
+    {
+      "scenario_id": "skill_file_ops_guardrails",
+      "status": "TIMEOUT",
+      "overall_score": null,
+      "turns": [],
+      "error": "subprocess exceeded 900s timeout",
+      "elapsed_s": 1264.6627249717712,
+      "cost_estimate": {
+        "turns": 0,
+        "estimated_usd": 0.0
+      },
+      "category": "tool_selection",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": null,
+      "performance_summary": null
+    },
+    {
+      "scenario_id": "smart_discovery",
+      "session_id": "810b8a09-5b78-47b5-990e-9c07f4104929",
+      "status": "FAIL",
+      "overall_score": 2.75,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What's the PTO policy for first-year employees? I need to know how many days they get.",
+          "agent_response": "It looks like there isn't a local document detailing your company's PTO policy among the files currently accessible on your machine. The search results pointed toward internal configuration files rather than an employee handbook or HR manual.\n\nPTO policies are usually kept on a company intranet or within a dedicated HR portal. If you can point me to a specific PDF, website link, or file path containing the policy, I can read it for you immediately!",
+          "agent_tools": [
+            "find_files",
+            "browse_directory"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 2,
+            "context_retention": 10,
+            "completeness": 0,
+            "efficiency": 3,
+            "personality": 7,
+            "error_recovery": 2
+          },
+          "overall_score": 3.15,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Agent called find_files('policy') and browse_directory(Documents) but never located employee_handbook.md in eval/corpus/documents/. It never tried 'employee handbook' or 'handbook' keyword searches, never browsed the corpus directory, and gave up without indexing or answering. Expected answer '15 days' was not provided.",
+          "performance": {
+            "tokens_per_second": 37.9,
+            "time_to_first_token": 2.585,
+            "input_tokens": 448,
+            "output_tokens": 300,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "What about the remote work policy? How many days per week can employees work remotely?",
+          "agent_response": "Another shot at finding it, but unfortunately, all I found was a technical test file (`test_remote_disconnected_handling.py`). That looks like code testing for network issues, not an employee handbook!\n\nIt seems this kind of detailed corporate policy isn't stored among your current accessible files on this machine. Remote work policies are almost always hosted on a dedicated internal resource—like a company SharePoint site, Intranet portal, or HR system.\n\nIf you have a link to that policy page or if there's another folder I should look through (like \"HR Documents\"), let me know!",
+          "agent_tools": [
+            "find_files"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 2,
+            "context_retention": 5,
+            "completeness": 0,
+            "efficiency": 5,
+            "personality": 7,
+            "error_recovery": 2
+          },
+          "overall_score": 2.35,
+          "pass": false,
+          "failure_category": "no_fallback",
+          "reasoning": "Document was never indexed in turn 1; agent again called find_files('remote') which matched a test file. No discovery of employee_handbook.md, no indexing, no answer. Expected 'Up to 3 days/week with manager approval' was not provided. Agent gave up after a single tool call.",
+          "performance": {
+            "tokens_per_second": 38.2,
+            "time_to_first_token": 1.278,
+            "input_tokens": 95,
+            "output_tokens": 292,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "The agent's SMART DISCOVERY workflow used generic keyword searches (\"policy\", \"remote\") that matched codebase/config files rather than the HR document corpus. It never tried domain-specific filenames (\"employee handbook\", \"handbook\") and never browsed or searched the eval/corpus/documents/ directory where employee_handbook.md resides, giving up after 2 low-signal tool calls per turn.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "The SMART DISCOVERY WORKFLOW in the system prompt should instruct the agent to: (1) try multiple filename-specific search terms (e.g. 'employee handbook', 'handbook', 'HR manual') before declaring not found, (2) fall back to browsing known document corpus directories when keyword search returns only code/config files, and (3) avoid giving up after fewer than 3-4 targeted search attempts with varied queries."
+      },
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.11
+      },
+      "elapsed_s": 167.0378544330597,
+      "category": "tool_selection",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 38.0,
+        "min_tokens_per_second": 37.9,
+        "max_tokens_per_second": 38.2,
+        "avg_time_to_first_token": 1.931,
+        "min_time_to_first_token": 1.278,
+        "max_time_to_first_token": 2.585,
+        "total_input_tokens": 543,
+        "total_output_tokens": 592,
+        "turns_measured": 2,
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 3,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.65
+  },
+  "performance": {
+    "avg_tokens_per_second": 37.4,
+    "avg_time_to_first_token": 8.864,
+    "total_input_tokens": 36426,
+    "total_output_tokens": 5429,
+    "scenarios_with_data": 6,
+    "flags": [
+      "high_latency",
+      "token_explosion"
+    ]
+  }
+}

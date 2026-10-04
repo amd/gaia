@@ -391,7 +391,9 @@ want to test an installed wheel.
 
 **Every scenario scores the flagship `gaia` agent.** That is the `--agent-type` default and scenarios no longer pin their own, so a scorecard names one agent and two scorecards are comparable. Pass `--agent-type` only to measure a different agent — and never compare that result to a scorecard captured under another one, because `compare_scorecards` keys on `scenario_id` alone and will happily report "improved/regressed" across two different agents.
 
-**There is no committed baseline right now.** The previous ones scored the `doc` ChatAgent profile, so diffing a flagship run against them is exactly the cross-agent comparison above; they were deleted rather than reinterpreted. Until the first flagship baseline lands (a real run on AMD hardware, committed to `tests/fixtures/eval_baselines/gaia-flagship/`), `--compare` has nothing to diff and CI reports scores without a regression verdict. **Never hand-author, estimate, or copy forward a baseline number to fill the gap** — a fabricated baseline is worse than none, because it looks like a verdict.
+**The flagship baseline is `tests/fixtures/eval_baselines/gaia-flagship/`**, one `scorecard_<category>.json` per category in [`eval/ci_lanes.json`](eval/ci_lanes.json), copied unedited from a real nightly on the self-hosted Strix Halo pool. Its `meta.json` records the run, the agent model, and the Claude model that drove and judged it. It is a single run (128/218, 59%), so a lone PASS→FAIL against it can be noise; re-run before calling it a regression. The target is **80%**. It is a goal, not a gate, so falling short of it doesn't fail CI. **Never hand-author, estimate, or edit a baseline number** — replace the files from a newer real run. A fabricated baseline is worse than none, because it looks like a verdict. Comparing against it is only valid under the same Claude model (`EVAL_MODEL` in `eval_flagship.yml`), because that model drives the scenarios as well as judging them; changing it means re-capturing the baseline.
+
+**Most dev machines can't run the evals; use CI.** The scenario lanes need the memory and hardware of the self-hosted Strix Halo pool. Without that hardware, dispatch `eval_flagship.yml` on amd/gaia and list in the PR the categories it must re-run. A baseline must come from that same pool.
 
 **Changes that REQUIRE an eval run before merge:**
 
@@ -423,17 +425,16 @@ python -m gaia.ui.server --port 4200 --host 127.0.0.1
 gaia eval agent --category rag_quality
 # → prints an ABSOLUTE path, e.g.  Output: /…/gaia/eval/results/<run-id>/   ← use it as printed, + /scorecard.json
 
-# Compare to a baseline ONLY once one is committed and it was captured under the
-# same agent. `--compare` only DIFFS scorecards (BASELINE CURRENT) — it does NOT
-# run an eval, so run the eval above first.
+# Compare to the committed baseline (same agent, same EVAL_MODEL). `--compare`
+# only DIFFS scorecards (BASELINE CURRENT) — it does NOT run an eval.
 gaia eval agent --compare \
   tests/fixtures/eval_baselines/gaia-flagship/scorecard_rag_quality.json \
   <printed-output-path>/scorecard.json
 ```
 
-**Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), regenerate the baseline with `--save-baseline` and call it out explicitly in the PR description — the reviewer needs to see the diff between baselines, not just the new score.
+**Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), call it out explicitly in the PR description and replace that category's `scorecard_<category>.json` from the next nightly on the Strix Halo pool — never from a local `--save-baseline` run, which writes elsewhere and measures a different machine. The reviewer needs to see the diff between baselines, not just the new score.
 
-With no baseline committed, the eval still tells you plenty: a category full of `INFRA_ERROR` or a score that cratered against the run you did an hour ago is a signal. What you cannot do is claim "no regression" — say what you measured, not what you compared.
+Report what you compared: name the baseline run, list scenarios that went PASS→FAIL (regressions) and FAIL→PASS (progress toward 80%) separately, and re-run any lone flip before trusting it.
 
 **#1030 (the Gemma-4 RAG-PDF timeout) is the canonical example of what happens when this rule is skipped:** a prompt change passed every unit test, then broke document Q&A in production. #1033 tracks the systemic CI gaps that let it through.
 
@@ -667,7 +668,7 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 - `gaia llm` default: `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME` in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)). ChatAgent explicitly uses it too.
 - Agents that leave `model_id` unset fall back to `Gemma-4-E4B-it-GGUF` — the base `Agent.__init__` default (`model_id or DEFAULT_MODEL_NAME`). That covers GaiaAgent, ChatAgent, BuilderAgent, and the example templates. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
 - **EmailTriageAgent is the one exception.** With no explicit `model_id` it calls `resolve_default_email_model()` (`hub/agents/email/python/gaia_agent_email/model_select.py`), which returns `gemma4-it-e2b-FLM` when an NPU is present *and* that model is already servable, and `DEFAULT_MODEL_NAME` in every other case.
-- Context window is pinned per device profile, not per agent: `GPU_CTX_SIZE` (65536, GPU/CPU) and `NPU_CTX_SIZE` (32768, the FLM ceiling) in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py). A machine runs one profile, so the ctx size is fixed machine-wide; the NPU email model above is the only case where a second model id enters the picture.
+- Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` in `MODELS` ([`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)) gets the largest window that fits the GPU memory Lemonade reports (`largest_context` in [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py)), and the fit check charges the KV cache at that same window. Every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). `NPU_CTX_SIZE` (32768, the FLM ceiling) applies only to models that run on the NPU, never to a GPU model on a machine whose `default_device` is `npu`. Gemma-4-E4B stays at 65536 because the eval baseline was captured there.
 - Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported, and is the RAG SDK's `vlm_model` default (`src/gaia/rag/sdk.py`)
 - Image generation (SD): `SDXL-Turbo`
 
