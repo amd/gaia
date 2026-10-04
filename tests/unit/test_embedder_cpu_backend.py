@@ -32,7 +32,7 @@ def test_the_embedder_loads_on_cpu_under_either_name(not_macos):
 
 
 def test_chat_models_keep_the_default_backend(not_macos):
-    assert llamacpp_backend_for("Qwen3-30B-A3B-Instruct-2507-GGUF") is None
+    assert llamacpp_backend_for("Qwen3.6-35B-A3B-GGUF") is None
     assert llamacpp_backend_for("Gemma-4-E4B-it-GGUF") is None
 
 
@@ -65,14 +65,14 @@ def test_embedded_lemonade_pins_the_embedder_for_auto_loads(tmp_path, not_macos)
     options_path = manager.config_dir / "recipe_options.json"
     options_path.parent.mkdir(parents=True)
     options_path.write_text(
-        json.dumps({"builtin.Qwen3-30B-A3B-Instruct-2507-GGUF": {"ctx_size": 65536}})
+        json.dumps({"builtin.Qwen3.6-35B-A3B-GGUF": {"ctx_size": 65536}})
     )
 
     manager.write_config()
 
     options = json.loads(options_path.read_text())
     assert options[DEFAULT_EMBEDDING_MODEL] == {"llamacpp_backend": "cpu"}
-    assert options["builtin.Qwen3-30B-A3B-Instruct-2507-GGUF"] == {"ctx_size": 65536}
+    assert options["builtin.Qwen3.6-35B-A3B-GGUF"] == {"ctx_size": 65536}
 
 
 def test_an_unreadable_options_file_fails_loudly(tmp_path, not_macos):
@@ -128,7 +128,7 @@ def test_the_first_embedding_pins_the_backend_once(not_macos, fresh_pins):
     """A server GAIA did not configure would auto-load the embedder on Vulkan."""
     calls = []
     client = _recording_client(calls)
-    client.model = "Qwen3-30B-A3B-Instruct-2507-GGUF"
+    client.model = "Qwen3.6-35B-A3B-GGUF"
 
     client.embeddings("one", model=DEFAULT_EMBEDDING_MODEL)
     client.embeddings("two", model=DEFAULT_EMBEDDING_MODEL)
@@ -136,7 +136,7 @@ def test_the_first_embedding_pins_the_backend_once(not_macos, fresh_pins):
     assert [endpoint for endpoint, _ in calls] == ["load", "embeddings", "embeddings"]
     assert calls[0][1]["llamacpp_backend"] == "cpu"
     assert calls[0][1]["save_options"] is True
-    assert client.model == "Qwen3-30B-A3B-Instruct-2507-GGUF"
+    assert client.model == "Qwen3.6-35B-A3B-GGUF"
 
 
 def test_other_embedders_are_not_loaded_first(not_macos, fresh_pins):

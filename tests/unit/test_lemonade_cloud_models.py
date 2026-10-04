@@ -631,23 +631,71 @@ _QWEN3_6_INSTRUCT = {
 }
 
 
-@pytest.mark.parametrize("model", ["Qwen3.6-35B-A3B-GGUF", "Qwen3.6-35B-A3B-MTP-GGUF"])
 @pytest.mark.parametrize(
     "template_kwargs,expected",
     [
-        # GAIA sends no switch, so the model thinks: card's coding/precise profile.
+        # Not in MODELS, so GAIA sends no switch and the template thinks.
         (None, _QWEN3_6_THINKING),
         ({"enable_thinking": True}, _QWEN3_6_THINKING),
         ({"enable_thinking": False}, _QWEN3_6_INSTRUCT),
     ],
 )
 @pytest.mark.parametrize("stream", [False, True])
-def test_qwen3_6_sampling_follows_the_thinking_mode(
-    monkeypatch, stream, template_kwargs, expected, model
+def test_qwen3_6_mtp_sampling_follows_the_thinking_mode(
+    monkeypatch, stream, template_kwargs, expected
 ):
+    model = "Qwen3.6-35B-A3B-MTP-GGUF"
     kwargs = {"chat_template_kwargs": template_kwargs} if template_kwargs else {}
     body = _sent_body(monkeypatch, model, stream, **kwargs)
     assert body == _wire(model, stream, **kwargs, **expected)
+
+
+_QWEN3_6 = "Qwen3.6-35B-A3B-GGUF"
+
+
+@pytest.mark.parametrize(
+    "template_kwargs,sent_switch,expected",
+    [
+        # GAIA's choice for the default, sent explicitly rather than left to the template.
+        (None, True, _QWEN3_6_THINKING),
+        ({"enable_thinking": True}, True, _QWEN3_6_THINKING),
+        ({"enable_thinking": False}, False, _QWEN3_6_INSTRUCT),
+    ],
+)
+@pytest.mark.parametrize("stream", [False, True])
+def test_qwen3_6_sends_its_thinking_mode_with_the_matching_sampling(
+    monkeypatch, stream, template_kwargs, sent_switch, expected
+):
+    kwargs = {"chat_template_kwargs": template_kwargs} if template_kwargs else {}
+    body = _sent_body(monkeypatch, _QWEN3_6, stream, **kwargs)
+    assert body == _wire(
+        _QWEN3_6,
+        stream,
+        chat_template_kwargs={"enable_thinking": sent_switch},
+        **expected,
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_turning_the_default_non_thinking_flips_switch_and_sampling_together(
+    monkeypatch, stream
+):
+    """Sampling and the request read one resolver, so they cannot disagree."""
+    import dataclasses
+
+    from gaia.llm import lemonade_client as lc
+
+    key = next(k for k, mr in lc.MODELS.items() if mr.model_id == _QWEN3_6)
+    monkeypatch.setitem(
+        lc.MODELS, key, dataclasses.replace(lc.MODELS[key], thinking=False)
+    )
+    body = _sent_body(monkeypatch, _QWEN3_6, stream)
+    assert body == _wire(
+        _QWEN3_6,
+        stream,
+        chat_template_kwargs={"enable_thinking": False},
+        **_QWEN3_6_INSTRUCT,
+    )
 
 
 def test_single_mode_model_ignores_the_thinking_switch():

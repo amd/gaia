@@ -1926,7 +1926,7 @@ def test_model_list_offers_only_models_that_chat(monkeypatch):
     catalog = [
         {"id": "Gemma-4-E4B-it-GGUF", "downloaded": True, "labels": ["chat", "vision"]},
         {
-            "id": "Qwen3-30B-A3B-Instruct-2507-GGUF",
+            "id": "Qwen3.6-35B-A3B-GGUF",
             "downloaded": True,
             "labels": ["chat"],
         },
@@ -1959,6 +1959,6 @@ def test_model_list_offers_only_models_that_chat(monkeypatch):
     assert stdio._lemonade_models(None) == [
         "Gemma-4-E4B-it-GGUF",
         "Qwen2.5-Omni-3B-GGUF",
-        "Qwen3-30B-A3B-Instruct-2507-GGUF",
+        "Qwen3.6-35B-A3B-GGUF",
         "fireworks.glm-5p3",
     ]

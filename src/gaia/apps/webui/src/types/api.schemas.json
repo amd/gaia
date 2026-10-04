@@ -2997,9 +2997,16 @@
         "type": "boolean"
       },
       "default_model_name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
         "default": "Gemma-4-E4B-it-GGUF",
-        "title": "Default Model Name",
-        "type": "string"
+        "title": "Default Model Name"
       },
       "default_model_size_gb": {
         "anyOf": [
