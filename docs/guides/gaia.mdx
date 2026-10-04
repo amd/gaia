@@ -249,7 +249,7 @@ or in Python, which takes precedence over the environment:
 GaiaAgentConfig(skill_set="research")
 ```
 
-A name that isn't a declared set **fails at startup** naming the valid sets — it never silently falls back to a default. Today, with no sets declared, any value fails; leave it unset.
+A name that isn't a declared set **fails at startup** naming the valid sets — the sidecar exits non-zero before it binds its port, and it never silently falls back to a default. Today, with no sets declared, any value fails; leave it unset.
 
 ## Driving it over HTTP
 
