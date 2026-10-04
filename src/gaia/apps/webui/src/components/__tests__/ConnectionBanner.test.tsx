@@ -47,5 +47,6 @@ describe('an unreadable config is surfaced, not hidden', () => {
         render(<ConnectionBanner />);
         expect(screen.getByRole('alert')).toHaveTextContent('GAIA settings could not be loaded.');
         expect(screen.getByText(message)).toBeInTheDocument();
+        expect(screen.queryByLabelText('Dismiss')).toBeNull();
     });
 });

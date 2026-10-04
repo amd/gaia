@@ -7,7 +7,7 @@
 auto-start already failed, so they must not promise it will happen.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -64,7 +64,69 @@ def test_gaias_own_server_counts_as_installed(monkeypatch):
     client_cls.assert_not_called()
 
 
-def test_client_initialize_not_installed_points_at_gaia_init(capsys):
+@pytest.fixture
+def no_configured_url(monkeypatch):
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+
+
+def _down_client():
+    """A client whose server is not answering, on a host with no system Lemonade."""
+    client = LemonadeClient(verbose=False)
+    client.health_check = MagicMock(side_effect=ConnectionError("down"))
+    no_tooling = patch(
+        "gaia.llm.lemonade_client.resolve_lemonade",
+        return_value=MagicMock(found=False),
+    )
+    return client, no_tooling
+
+
+def test_client_counts_gaias_own_server_as_installed(no_configured_url):
+    client, no_tooling = _down_client()
+    with (
+        no_tooling,
+        patch(
+            "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
+            return_value=True,
+        ),
+    ):
+        assert client._check_lemonade_installed() is True
+
+
+def test_client_ignores_gaias_own_server_when_another_is_configured(monkeypatch):
+    monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://10.0.0.5:8000/api/v1")
+    client, no_tooling = _down_client()
+    with (
+        no_tooling,
+        patch(
+            "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
+            return_value=True,
+        ),
+    ):
+        assert client._check_lemonade_installed() is False
+
+
+def test_client_initialize_unreachable_remote_is_not_called_uninstalled(
+    capsys, monkeypatch
+):
+    monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://10.0.0.5:8000/api/v1")
+    client = LemonadeClient(verbose=False)
+    with patch.object(client, "_check_lemonade_installed", return_value=False):
+        status = client.initialize(agent="chat")
+
+    out = capsys.readouterr().out
+    assert status.running is False
+    assert status.error == (
+        "Lemonade Server at http://10.0.0.5:8000/api/v1 not reachable"
+    )
+    assert "not installed" not in out
+    assert "gaia init" not in out
+    _assert_no_dead_remedy(out)
+
+
+def test_client_initialize_not_installed_points_at_gaia_init(capsys, no_configured_url):
     client = LemonadeClient(verbose=False)
     with patch.object(client, "_check_lemonade_installed", return_value=False):
         status = client.initialize(agent="chat")
