@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Guards the amd-gaia dependency floor against the agent's real core needs.
 
-The chat agent imports ``gaia.agents.tools.path_access`` at module load; that
-module first ships in core v0.25.0 (``get_embedding_model_for_device``, the
-previous floor-setter, shipped in v0.22.0). With a lower floor a fresh resolver may legally select an older
+The chat agent imports ``get_embedding_model_for_device`` from
+``gaia.agents.registry`` at module load; that symbol first shipped in core
+v0.22.0. With a lower floor a fresh resolver may legally select an older
 core and the agent dies at startup with ImportError (#2112). These tests
 pin the floor to the symbol so the two can't silently drift apart again:
 if the floor is lowered, or the agent grows an import the declared floor
@@ -20,9 +20,9 @@ from pathlib import Path
 
 CHAT_ROOT = Path(__file__).resolve().parents[1]
 
-# First core release shipping gaia.agents.tools.path_access (v0.25.0); it also
-# covers gaia.agents.registry.get_embedding_model_for_device (v0.22.0, #2112).
-REQUIRED_FLOOR = (0, 25, 0)
+# First core release shipping gaia.agents.registry.get_embedding_model_for_device
+# (introduced by commit 89db99d6, first tagged in v0.22.0).
+REQUIRED_FLOOR = (0, 22, 0)
 
 # Matches the version in "amd-gaia>=X.Y.Z" with or without an extras suffix
 # (e.g. "amd-gaia[api]>=X.Y.Z") — the extras are #1617's concern, not the floor's.
@@ -38,10 +38,8 @@ def test_agent_module_imports_and_registry_symbol_exists():
     """The exact import chain that crashed fresh installs in #2112."""
     import gaia_agent_chat.agent  # noqa: F401
     from gaia.agents.registry import get_embedding_model_for_device
-    from gaia.agents.tools.path_access import read_access_error
 
     assert callable(get_embedding_model_for_device)
-    assert callable(read_access_error)
 
 
 def test_pyproject_floor_covers_registry_symbol():
@@ -50,8 +48,9 @@ def test_pyproject_floor_covers_registry_symbol():
     assert match, "pyproject.toml must declare an amd-gaia>=X.Y.Z floor"
     assert _floor_tuple(match.group(1)) >= REQUIRED_FLOOR, (
         f"amd-gaia floor {match.group(1)} predates "
-        "gaia.agents.tools.path_access (first shipped in 0.25.0); a fresh "
-        "resolver may select a core that ImportErrors at agent start"
+        "gaia.agents.registry.get_embedding_model_for_device (first shipped in "
+        "0.22.0); a fresh resolver may select a core that ImportErrors at "
+        "agent start (#2112)"
     )
 
 

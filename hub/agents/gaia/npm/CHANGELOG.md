@@ -108,8 +108,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   browsing, folder and content search, recent files, document indexing, folder
   watching, code indexing, and where screenshots, transcripts and exports are
   saved. A folder outside the scope gets the usual approval prompt, and a folder
-  you approve is readable by document indexing too. The agent now requires
-  `amd-gaia>=0.25.0` and `gaia-agent-chat>=0.1.1` (package version 0.2.1).
+  you approve is readable by document indexing too.
 
 ### Added
 
@@ -504,10 +503,9 @@ the terminal UI meant building it from source.
   building its own TUI. Each terminal-hub artifact is additionally cross-checked
   against the hub's own server-side SHA-256 before its hash enters the lock.
 - Requires Node.js 18+ (built-in `fetch`), a running Lemonade Server for
-  inference, and the `gaia` Python CLI 0.25.0+ on `PATH` for the daemon the TUI
+  inference, and the `gaia` Python CLI 0.24.1+ on `PATH` for the daemon the TUI
   starts. 0.24.1 is the first core whose daemon knows how to supervise this
-  agent (on an earlier core the UI starts with nothing behind it), and 0.25.0
-  adds the allowed-folders check the file tools use.
+  agent; on an earlier core the UI starts with nothing behind it.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.

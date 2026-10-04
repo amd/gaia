@@ -23,7 +23,7 @@ registry's ``_discover_installed_agents`` stamps ``source="installed"``, the
 
 __all__ = ["build_chat", "build_doc", "build_file"]
 
-__version__ = "0.1.1"
+__version__ = "0.1.0"
 
 _LAZY = {
     "ChatAgent": "agent",
