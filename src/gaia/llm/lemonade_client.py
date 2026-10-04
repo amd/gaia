@@ -1169,6 +1169,21 @@ def requested_thinking(
     return mr.thinking if mr else None
 
 
+def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
+    """Request fields that turn thinking off for a short, structured side call.
+
+    A thinking model bills its reasoning against ``max_tokens``, so a side call
+    that wants a few hundred tokens of JSON instead reasons until the cap and
+    returns nothing. Empty for cloud models and for local models whose template
+    has no thinking switch (``requested_thinking`` is None), which send nothing.
+    """
+    if not isinstance(model_id, str) or cloud_model_provider(model_id):
+        return {}
+    if requested_thinking(model_id) is None:
+        return {}
+    return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
 # Define agent profiles with their model requirements
 AGENT_PROFILES = {
     "chat": AgentProfile(
