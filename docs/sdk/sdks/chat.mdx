@@ -72,7 +72,8 @@ class AgentResponse:
 
 A reasoning model (Gemma-4, Qwen3) can spend the whole `max_tokens` budget
 thinking. The reply then has empty `text`, `finish_reason == "length"`, and the
-partial thought in `reasoning`, and the SDK logs a warning naming the budget. Raise
+partial thought in `reasoning`. `send()` and `send_messages()` also log a warning
+naming the budget; the streaming methods report it on the final chunk. Raise
 `max_tokens` when that happens.
 
 ### SimpleChat
