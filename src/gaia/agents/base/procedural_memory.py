@@ -89,6 +89,7 @@ class ProceduralMemoryMixin:
 
         index = faiss.IndexFlatIP(EMBEDDING_DIM)
         id_map: List[str] = []
+        unindexed: List[str] = []
 
         for proc in procedures:
             blob = proc.get("embedding")
@@ -96,24 +97,39 @@ class ProceduralMemoryMixin:
                 continue
             try:
                 vec = _blob_to_embedding(blob)
-                if vec.shape[0] != EMBEDDING_DIM:
-                    logger.debug(
-                        "[MemoryMixin] skipping procedure embedding for %s: wrong dim %d",
-                        proc["id"],
-                        vec.shape[0],
-                    )
-                    continue
-                norm = np.linalg.norm(vec)
-                if norm > 0:
-                    vec = vec / norm
-                index.add(vec.reshape(1, -1))
-                id_map.append(proc["id"])
-            except Exception as e:
+            except (ValueError, TypeError) as e:  # TypeError: a non-BLOB value
                 logger.debug(
-                    "[MemoryMixin] skipping bad procedure embedding for %s: %s",
+                    "[MemoryMixin] unreadable procedure embedding %s: %s",
                     proc["id"],
                     e,
                 )
+                unindexed.append(proc["id"])
+                continue
+            if vec.shape[0] != EMBEDDING_DIM:
+                logger.debug(
+                    "[MemoryMixin] procedure embedding %s has dim %d, expected %d",
+                    proc["id"],
+                    vec.shape[0],
+                    EMBEDDING_DIM,
+                )
+                unindexed.append(proc["id"])
+                continue
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+            index.add(vec.reshape(1, -1))
+            id_map.append(proc["id"])
+
+        if unindexed:
+            logger.warning(
+                "[MemoryMixin] %d stored procedure embedding(s) are unreadable or "
+                "the wrong dimension (index expects %d) and were left out of the "
+                "vector index; those procedures are reachable only by keyword. "
+                "First: %s",
+                len(unindexed),
+                EMBEDDING_DIM,
+                unindexed[0],
+            )
 
         with _PROC_INDEX_LOCK:
             self._proc_faiss_index = index

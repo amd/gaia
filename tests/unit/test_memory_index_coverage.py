@@ -158,3 +158,61 @@ def test_resolving_hits_by_id_applies_filters(store):
     )
 
     assert [item["id"] for item in items] == [first_id]
+
+
+def _unreadable(bad: bytes):
+    """A decoder that fails on *bad* the way a TEXT value in the BLOB column does."""
+    from gaia.agents.base import memory
+
+    real = memory._blob_to_embedding
+
+    def decode(blob):
+        if blob == bad:
+            raise TypeError("a bytes-like object is required, not 'str'")
+        return real(blob)
+
+    return patch.object(memory, "_blob_to_embedding", side_effect=decode)
+
+
+def test_an_unreadable_memory_vector_is_counted_not_fatal(store, caplog):
+    vectors, first_id = _fill(store, 3)
+    host = _Host(store, vectors)
+
+    with _unreadable(_embedding_to_blob(_axis(0))):
+        host._rebuild_faiss_index()
+
+    assert host._faiss_index.ntotal == 2
+    assert first_id not in host._faiss_id_map
+    assert any(
+        "1 stored embedding(s)" in r.getMessage() and first_id in r.getMessage()
+        for r in caplog.records
+        if r.levelname == "WARNING"
+    )
+
+
+def test_an_unreadable_or_misshapen_procedure_vector_is_counted(store, caplog):
+    def proc(i, blob):
+        return store.put_skill(
+            name=f"procedure-{i}",
+            when_to_use=f"when case {i} comes up",
+            markdown_body=f"step for case {i}",
+            embedding=blob,
+        )
+
+    good = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+    good[0] = 1.0
+    proc(0, _embedding_to_blob(good))
+    bad = np.ones(EMBEDDING_DIM, dtype=np.float32)
+    proc(1, _embedding_to_blob(bad))
+    proc(2, _embedding_to_blob(np.ones(8, dtype=np.float32)))
+    host = _Host(store, {})
+
+    with _unreadable(_embedding_to_blob(bad)):
+        host._rebuild_proc_faiss_index()
+
+    assert host._proc_faiss_index.ntotal == 1
+    assert any(
+        "2 stored procedure embedding(s)" in r.getMessage()
+        for r in caplog.records
+        if r.levelname == "WARNING"
+    )

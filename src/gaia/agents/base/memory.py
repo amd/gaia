@@ -1318,7 +1318,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         for item in items:
             try:
                 vec = _blob_to_embedding(item["embedding"])
-            except ValueError as e:
+            except (ValueError, TypeError) as e:  # TypeError: a non-BLOB value
                 logger.debug("[MemoryMixin] unreadable embedding %s: %s", item["id"], e)
                 unindexed.append(item["id"])
                 continue
