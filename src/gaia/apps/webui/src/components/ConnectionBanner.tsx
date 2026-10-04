@@ -214,7 +214,8 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         );
     }
 
-    // Case 1b: ~/.gaia/config.json exists but could not be loaded
+    // Case 1b: ~/.gaia/config.json exists but could not be loaded.
+    // Not dismissable: the shared dismiss flag would also hide a Lemonade-down banner.
     if (systemStatus?.config_error) {
         return (
             <div className="connection-banner connection-banner--error" role="alert">
@@ -230,13 +231,6 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                         Check again
                     </button>
                 )}
-                <button
-                    className="connection-banner__dismiss"
-                    onClick={() => setDismissed(true)}
-                    aria-label="Dismiss"
-                >
-                    <X size={14} />
-                </button>
             </div>
         );
     }
