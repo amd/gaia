@@ -951,7 +951,8 @@ class TestLemonadePythonResolution:
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"#!/opt/venvs/lemon/bin/python\n# rest\n")
 
-        monkeypatch.setattr("sys.platform", "linux")
+        # Patch only uc's view: pyfakefs teardown calls os.getuid() on a global "linux".
+        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
 
         assert uc._resolve_lemonade_python() == "/opt/venvs/lemon/bin/python"
@@ -961,13 +962,13 @@ class TestLemonadePythonResolution:
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"#!/usr/bin/env python3\n# rest\n")
 
-        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
 
         assert uc._resolve_lemonade_python() == "python3"
 
     def test_not_on_path_returns_none(self, monkeypatch):
-        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
         monkeypatch.setattr(uc.shutil, "which", lambda name: None)
         assert uc._resolve_lemonade_python() is None
 
@@ -976,7 +977,7 @@ class TestLemonadePythonResolution:
         lemonade.parent.mkdir(parents=True, exist_ok=True)
         lemonade.write_bytes(b"# no shebang here\nprint('hi')\n")
 
-        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
         monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
 
         assert uc._resolve_lemonade_python() is None
@@ -1473,11 +1474,11 @@ def _installer_block(dirs: str) -> str:
 
 
 def _current_dirs(home: Path) -> str:
-    return f"{home}/.gaia/venv/bin:{home}/.gaia/bin"
+    return f"{home / '.gaia' / 'venv' / 'bin'}:{home / '.gaia' / 'bin'}"
 
 
 def _legacy_dirs(home: Path) -> str:
-    return f"{home}/.gaia/venv/bin"
+    return str(home / ".gaia" / "venv" / "bin")
 
 
 @pytest.fixture
@@ -1523,8 +1524,9 @@ class TestInstallerLeftovers:
         exit_code = uc.run(_ns(purge=True, dry_run=True), printer=captured)
 
         assert exit_code == uc.EXIT_OK, captured.text
-        for needle in (".gaia/bin", ".gaia/host", ".gaia/traces", ".zshrc"):
-            assert needle in captured.text, captured.text
+        for leftover in ("bin", "host", "traces"):
+            assert str(Path(".gaia") / leftover) in captured.text, captured.text
+        assert ".zshrc" in captured.text, captured.text
         assert (installer_home / ".gaia" / "host" / "instance.json").exists()
         assert zshrc.read_text() == original
 
