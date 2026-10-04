@@ -3575,21 +3575,50 @@ Do NOT wrap conversational replies in JSON.
         """Get a list of registered tools for the agent."""
         return list(self._tools_registry.values())
 
-    def _attach_tool_call_progress(self) -> None:
-        """Report a long tool call while its arguments stream in.
+    def _announce_model_call(self, after_tools: bool) -> None:
+        """Say what the model is doing until its first token, and keep saying it.
 
-        A local model writing a whole file into edit_file streamed for seven
-        minutes with nothing on screen but a timer.
+        A streamed call is silent until the model produces something: a cold
+        load, then reading the whole prompt, then (for a thinking model) a
+        reasoning paragraph that is only released once it is finished. Each of
+        those is reported as it actually starts, never on a timer.
         """
+        reading = "Reading the tool results" if after_tools else "Reading your request"
         provider = getattr(getattr(self, "chat", None), "llm_client", None)
         if provider is not None and hasattr(provider, "tool_call_progress"):
             provider.tool_call_progress = self._report_tool_call_progress
+        if provider is not None and hasattr(provider, "reasoning_progress"):
+            provider.reasoning_progress = self._report_reasoning_progress
+        backend = getattr(provider, "_backend", None)
+        if backend is not None and hasattr(backend, "model_load_listener"):
+
+            def _on_load(model: str, state: str) -> None:
+                if state == "loaded":
+                    self.console.report_phase("reading", reading)
+                elif state == "downloading":
+                    self.console.report_phase(
+                        "downloading_model", f"Downloading {model}"
+                    )
+                else:
+                    self.console.report_phase(
+                        "loading_model", f"Loading {model} into memory"
+                    )
+
+            backend.model_load_listener = _on_load
+        self.console.report_phase("reading", reading)
 
     def _report_tool_call_progress(self, tool: str, chars: int) -> None:
         label = _TOOL_CALL_PROGRESS_LABELS.get(tool) or (
             f"Preparing {tool}" if tool else "Preparing a tool call"
         )
-        self.console.report_progress(f"{label} — {chars:,} characters so far")
+        self.console.report_phase(
+            "tool_call", f"{label} — {chars:,} characters so far", chars=chars
+        )
+
+    def _report_reasoning_progress(self, words: int) -> None:
+        self.console.report_phase(
+            "reasoning", f"Reasoning — {words:,} words so far", words=words
+        )
 
     def _tool_call_retry_prompt(self, reason: Exception) -> str:
         """Build the recovery turn sent after a tool-call parse failure.
@@ -7478,7 +7507,7 @@ Do NOT wrap conversational replies in JSON.
                 # behaviour as the non-streaming branch below — needed because
                 # multi-step ReAct loops accumulate tool results in `messages`.
                 _retried_after_trim_stream = False
-                self._attach_tool_call_progress()
+                self._announce_model_call(after_tools=bool(tool_call_history))
                 while True:
                     try:
                         response_stream = self.chat.send_messages_stream(

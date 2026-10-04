@@ -8,6 +8,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A turn's silent opening now says what the model is doing.** A thinking
+  model sat on "Getting started" for 10-20 s while it read the prompt and then
+  reasoned in a paragraph released only once finished. `status` events gain an
+  optional `phase` (`loading_model`, `downloading_model`, `reading`,
+  `reasoning`, `tool_call`) with a `words` or `chars` count, sent when each phase
+  actually starts; the terminal UI shows them as "Reading your request",
+  "Reasoning · 214 words" and so on. Clients that ignore the field see the same
+  sentence in `message`.
 - **GPU models no longer load at 32K on an NPU-profile machine.** The NPU's
   32,768-token ceiling was applied to every model whenever `default_device` was
   `npu`, so a GGUF model ran at half its window and long tasks overflowed. It now
