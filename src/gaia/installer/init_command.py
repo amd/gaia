@@ -1451,9 +1451,14 @@ class InitCommand:
                         # Context was set but is too small
                         return (False, f"Context {actual_ctx} < {min_ctx} required")
                     else:
-                        # Context not in recipe_options - should not happen after forced unload/reload
-                        # Mark as unverified but don't fail the test
-                        self._ctx_verified = None  # Explicitly mark as unverified
+                        # Inference still runs, so warn rather than fail.
+                        log.warning(
+                            "Lemonade did not report ctx_size for %s after loading "
+                            "it with ctx_size=%s; context is unverified",
+                            model_id,
+                            min_ctx,
+                        )
+                        self._ctx_verified = None
                 except Exception as e:
                     return (False, f"Context check failed: {str(e)[:50]}")
             else:
@@ -1612,6 +1617,7 @@ class InitCommand:
 
             models_passed = 0
             models_failed = []
+            models_ctx_unverified = []
 
             try:
                 for model_id in model_ids:
@@ -1649,6 +1655,7 @@ class InitCommand:
                             elif self._ctx_verified is None:
                                 # Context could not be verified
                                 ctx_msg = " [yellow]⚠️ Context unverified![/yellow]"
+                                models_ctx_unverified.append(model_id)
 
                         self.console.print(
                             f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]{ctx_msg}"
@@ -1726,7 +1733,27 @@ class InitCommand:
             else:
                 self._print_success(f"All {models_passed} model(s) verified")
 
-            return True  # Don't fail init due to model issues
+            if models_ctx_unverified:
+                self.console.print()
+                self._print_warning(
+                    "Lemonade did not report a context size for "
+                    f"{', '.join(models_ctx_unverified)}, so GAIA cannot confirm "
+                    "long prompts and documents fit. The model answers, but if "
+                    "long chats or documents get truncated, update Lemonade "
+                    f"Server and re-run `gaia init --profile {self.profile} --yes`."
+                )
+
+            if models_failed:
+                self.console.print()
+                failed_ids = ", ".join(m for m, _ in models_failed)
+                self._print_error(
+                    f"Model verification failed for: {failed_ids}. "
+                    "Follow the steps above to re-download them, then re-run "
+                    "`gaia init`."
+                )
+                return False
+
+            return True
 
         except Exception as e:
             self._print_error(f"Verification failed: {e}")
