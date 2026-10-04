@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from gaia.env import child_env
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -83,6 +84,7 @@ def _git_grep(root: Path, pattern: str) -> List[str]:
             errors="replace",
             timeout=GIT_TIMEOUT_S,
             check=False,
+            env=child_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         log.warning("edit impact: git grep in %s failed: %s", root, exc)

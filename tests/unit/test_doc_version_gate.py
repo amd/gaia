@@ -181,3 +181,40 @@ def test_a_v_prefixed_pin_is_still_caught():
     line = "Install Lemonade Server v11.8.1:"
     match = _v_pattern().search(line)
     assert match is not None and match.group("version") == "11.8.1"
+
+
+# -- a parenthesised CalVer pin needs no "Lemonade" on its line --------------
+
+
+def _paren_pattern():
+    return re.compile(
+        next(
+            pat
+            for pat, desc in build_lemonade_patterns(PIN)
+            if "in parentheses" in desc
+        )
+    )
+
+
+def test_a_parenthesised_calver_pin_is_caught_without_a_lemonade_anchor():
+    """docs/cpp/setup.mdx said "installer (v2026.39.1)" under a 2026.40.0 URL.
+
+    "Lemonade" sat on the line above, so the text pattern never saw it.
+    """
+    line = "    Download and run the installer (v2026.39.1):"
+    match = _paren_pattern().search(line)
+    assert match is not None and match.group("version") == "2026.39.1"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # GAIA's own semver releases share the "(vX.Y.Z)" shape.
+        "Fine-tuning (v0.19.0) closes the gap",
+        "## Limitations (v0.1.1)",
+        # A floor is never closed by ")" straight after the number.
+        "Requires the installer (v2026.39.1+)",
+    ],
+)
+def test_parenthesised_pattern_leaves_gaia_versions_and_floors_alone(line):
+    assert _paren_pattern().search(line) is None, f"wrongly matched: {line!r}"

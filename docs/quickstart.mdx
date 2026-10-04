@@ -71,10 +71,10 @@ npm install -g @amd-gaia/agent-ui@latest
 
 On next run, GAIA automatically updates the Python backend to match.
 
-To install a specific version (current release is **v0.20.1**):
+To install a specific version, name it after `@`:
 
 ```bash
-npm install -g @amd-gaia/agent-ui@0.20.1
+npm install -g @amd-gaia/agent-ui@<version>
 ```
 
 #### Uninstall
@@ -224,7 +224,7 @@ Choose your platform and installation type:
     ```
 
     <Note>
-      A bare `gaia init` sets up the flagship agent (~4GB). Use `--profile vlm` for vision/document extraction (~3GB), or `--profile minimal` for a quick start (~400MB).
+      A bare `gaia init` sets up the flagship agent (~6 GB). Use `--profile vlm` for vision/document extraction (~3 GB), or `--profile minimal` for a smaller start (~3 GB).
       See [CLI Reference](/reference/cli#init-command) for all profiles.
     </Note>
   </Tab>
@@ -261,11 +261,11 @@ Choose your platform and installation type:
     ### Step 4: Install GAIA
 
     <Warning>
-      **Linux users:** GAIA depends on PyTorch (via `transformers` package). Always use `--extra-index-url` to install CPU-only PyTorch and avoid large CUDA packages (~2GB → ~200MB).
+      **Linux users:** the base install has no PyTorch, but the `[talk]`, `[audio]` and `[ui]` extras do. When you add any of them, pass `--extra-index-url https://download.pytorch.org/whl/cpu` to get CPU-only PyTorch instead of the multi-GB CUDA build.
     </Warning>
 
     ```bash
-    uv pip install amd-gaia --extra-index-url https://download.pytorch.org/whl/cpu
+    uv pip install amd-gaia
     ```
 
     <Tip>
@@ -290,7 +290,7 @@ Choose your platform and installation type:
     ```
 
     <Note>
-      A bare `gaia init` sets up the flagship agent (~4GB). Use `--profile vlm` for vision/document extraction (~3GB), or `--profile minimal` for a quick start (~400MB).
+      A bare `gaia init` sets up the flagship agent (~6 GB). Use `--profile vlm` for vision/document extraction (~3 GB), or `--profile minimal` for a smaller start (~3 GB).
       See [CLI Reference](/reference/cli#init-command) for all profiles.
     </Note>
   </Tab>
@@ -368,7 +368,7 @@ Choose your platform and installation type:
     ```
 
     <Note>
-      A bare `gaia init` sets up the flagship agent (~4GB). Use `--profile vlm` for vision/document extraction (~3GB), or `--profile minimal` for a quick start (~400MB).
+      A bare `gaia init` sets up the flagship agent (~6 GB). Use `--profile vlm` for vision/document extraction (~3 GB), or `--profile minimal` for a smaller start (~3 GB).
       See [CLI Reference](/reference/cli#init-command) for all profiles.
     </Note>
   </Tab>
@@ -409,11 +409,11 @@ Choose your platform and installation type:
     ### Step 4: Install in Editable Mode
 
     <Warning>
-      **Linux users:** GAIA depends on PyTorch (via `transformers` package). Always use `--extra-index-url` to install CPU-only PyTorch and avoid large CUDA packages (~2GB → ~200MB).
+      **Linux users:** the base install has no PyTorch, but the `[talk]`, `[audio]` and `[ui]` extras do. When you add any of them, pass `--extra-index-url https://download.pytorch.org/whl/cpu` to get CPU-only PyTorch instead of the multi-GB CUDA build.
     </Warning>
 
     ```bash
-    uv pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cpu
+    uv pip install -e ".[dev]"
     ```
 
     <Tip>
@@ -442,7 +442,7 @@ Choose your platform and installation type:
     ```
 
     <Note>
-      A bare `gaia init` sets up the flagship agent (~4GB). Use `--profile vlm` for vision/document extraction (~3GB), or `--profile minimal` for a quick start (~400MB).
+      A bare `gaia init` sets up the flagship agent (~6 GB). Use `--profile vlm` for vision/document extraction (~3 GB), or `--profile minimal` for a smaller start (~3 GB).
       See [CLI Reference](/reference/cli#init-command) for all profiles.
     </Note>
   </Tab>
