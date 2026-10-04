@@ -2250,7 +2250,8 @@ def resolve_binary_policies(
 
 
 def unavailable_binaries(permissions: Sequence["Permission"]) -> list[BinaryPolicy]:
-    """Declared binaries that are not on ``PATH`` but have a substitute.
+    """Declared binaries not on ``PATH`` that have a substitute or an installed
+    declared alias.
 
     The skill loaded without them; the model must be told, or it follows the
     skill's own instructions into a command that cannot run.

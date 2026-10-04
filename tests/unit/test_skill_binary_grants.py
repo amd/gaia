@@ -174,14 +174,23 @@ def _only_on_path(monkeypatch, *names):
     )
 
 
-def test_python3_missing_does_not_refuse_a_skill_that_also_declares_python(
-    monkeypatch,
+@pytest.mark.parametrize(
+    "installed,missing_name",
+    [
+        # Stock Windows installs `python`, not `python3`.
+        ("python", "python3"),
+        # Debian/Ubuntu without python-is-python3 installs only `python3`.
+        ("python3", "python"),
+    ],
+)
+def test_one_missing_python_name_does_not_refuse_a_skill_that_declares_both(
+    monkeypatch, installed, missing_name
 ):
-    """Stock Windows Python installs `python`, not `python3`; the coding skill
-    declares both, and was refused outright on every Windows machine."""
+    """The coding skill declares both names, and was refused outright wherever
+    only one of them is installed."""
     from gaia.skills.binaries import unavailable_binaries
 
-    _only_on_path(monkeypatch, "python", "git")
+    _only_on_path(monkeypatch, installed, "git")
     permissions = parse_permissions(
         ["shell:execute:python", "shell:execute:python3", "shell:execute:git"],
         skill_name="coding",
@@ -189,10 +198,13 @@ def test_python3_missing_does_not_refuse_a_skill_that_also_declares_python(
 
     granted = resolve_binary_policies(permissions, skill_name="coding")
 
-    assert [p.binary for p in granted] == ["python", "git"]
+    assert [p.binary for p in granted] == [installed, "git"]
     (missing,) = unavailable_binaries(permissions)
-    assert missing.binary == "python3"
-    assert "run `python` wherever it says `python3`" in missing.unavailable_note()
+    assert missing.binary == missing_name
+    assert (
+        f"run `{installed}` wherever it says `{missing_name}`"
+        in missing.unavailable_note()
+    )
 
 
 def test_the_alias_must_be_declared_too(monkeypatch):
