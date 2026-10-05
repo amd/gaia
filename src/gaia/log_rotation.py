@@ -71,6 +71,32 @@ def log_limits() -> Tuple[int, int]:
 def log_family(path) -> List[Path]:
     """The live log and its existing rotated files, newest first."""
     path = Path(path)
+    family = [path] if path.is_file() else []
+    return family + [entry for _, entry in sorted(_numbered_backups(path))]
+
+
+def shift_backups(path, backup_count: int) -> None:
+    """Rename ``path`` to ``path.1``, moving older backups up and dropping the oldest.
+
+    Finds which backups exist with one directory scan rather than probing
+    every number up to ``backup_count``: at a large backup_count that probe
+    is slow enough on its own to blow another writer's lock-acquire timeout.
+
+    Raises:
+        OSError: a rename failed, typically because another process holds the
+            file open on Windows.
+    """
+    path = Path(path)
+    base = str(path)
+    existing = {n for n, _ in _numbered_backups(path)}
+    for i in range(backup_count - 1, 0, -1):
+        if i in existing:
+            os.replace(f"{base}.{i}", f"{base}.{i + 1}")
+    os.replace(base, f"{base}.1")
+
+
+def _numbered_backups(path: Path) -> List[Tuple[int, Path]]:
+    """``(n, entry)`` for every ``path.<n>`` beside ``path``, unsorted."""
     pattern = re.compile(re.escape(path.name) + r"\.(\d+)$")
     backups = []
     try:
@@ -80,23 +106,7 @@ def log_family(path) -> List[Path]:
                 backups.append((int(match.group(1)), entry))
     except FileNotFoundError:
         pass
-    family = [path] if path.is_file() else []
-    return family + [entry for _, entry in sorted(backups)]
-
-
-def shift_backups(path, backup_count: int) -> None:
-    """Rename ``path`` to ``path.1``, moving older backups up and dropping the oldest.
-
-    Raises:
-        OSError: a rename failed, typically because another process holds the
-            file open on Windows.
-    """
-    base = str(path)
-    for i in range(backup_count - 1, 0, -1):
-        src = f"{base}.{i}"
-        if os.path.exists(src):
-            os.replace(src, f"{base}.{i + 1}")
-    os.replace(base, f"{base}.1")
+    return backups
 
 
 def rotate_if_oversized(path, max_bytes: Optional[int] = None) -> bool:

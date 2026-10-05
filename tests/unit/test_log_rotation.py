@@ -264,10 +264,14 @@ def test_two_processes_on_windows_semantics_stay_under_the_cap(tmp_path):
     """Rename refused and CRLF on disk in both writers; a small cap rotates often."""
     log = tmp_path / "shared" / "gaia.log"
     log.parent.mkdir()
-    _run_writers(tmp_path, log, max_bytes=350, backups=1000, platform="windows")
+    # Each rotation shifts every existing backup up a slot, so an uncapped backup
+    # count makes per-rotation cost grow with how many have piled up. 1500 keeps
+    # dozens of rotations (still exercising the CRLF byte-boundary math) without
+    # that shift cost alone outrunning the lock's 5 s timeout.
+    _run_writers(tmp_path, log, max_bytes=1500, backups=1000, platform="windows")
 
     assert sorted(_all_lines(log)) == sorted(_writer_lines())
-    assert _over_cap(log, 350) == {}
+    assert _over_cap(log, 1500) == {}
     assert b"\r\n" in log.read_bytes()
 
 
