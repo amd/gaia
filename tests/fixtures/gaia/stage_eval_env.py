@@ -7,16 +7,18 @@ apart on what "staged" means:
 
     python tests/fixtures/gaia/stage_eval_env.py --home "$HOME"
 
-It does three things:
+It does four things:
 
 1. Copies the agent-facing parts of ``tests/fixtures/gaia`` to
    ``<home>/gaia-eval`` (replacing any earlier copy), because scenario messages
    name files like ``~/gaia-eval/csv/sales.csv``. The eval backend runs from
    that folder, so it is the agent's file scope; nothing that holds an answer
    is copied there.
-2. Copies the starter skills under ``hub/skills`` into ``<home>/.gaia/skills``,
+2. Builds the git workspaces a commit cannot carry (a nested ``.git``) into that
+   staged copy, running the builders from this checkout.
+3. Copies the starter skills under ``hub/skills`` into ``<home>/.gaia/skills``,
    except those the corpus contract says must start uninstalled.
-3. Builds and trusts the fixture hub with ``prepare_fixture_hub.py``.
+4. Builds and trusts the fixture hub with ``prepare_fixture_hub.py``.
 
 ``<home>/.gaia-eval-bin`` (the fake ``gh``) must go first on the backend's
 ``PATH``; the github-triage scenarios are written against it, never a real
@@ -44,8 +46,25 @@ HUB_SKILLS = REPO_ROOT / "hub" / "skills"
 #: these are staged: the agent can be granted that folder, so it must hold the
 #: files a user would have and nothing the scorer knows — no ground truth,
 #: generators, canned gh data or harness scripts.
-AGENT_FACING = ("csv", "mini_repo", "media", "capture")
-_NOT_AGENT_FACING = shutil.ignore_patterns("_gen_*", "ground_truth.json", "__pycache__")
+AGENT_FACING = (
+    "csv",
+    "mini_repo",
+    "media",
+    "capture",
+    "tiers_conversation",
+    "tiers_documents",
+    "tiers_files_shell",
+    "tiers_git_code",
+    "tiers_resilience",
+    "tiers_skills_web",
+)
+_NOT_AGENT_FACING = shutil.ignore_patterns(
+    "_gen_*",
+    "ground_truth.json",
+    "__pycache__",
+    "build_fixtures.py",
+    "fake_gh_auth.json",
+)
 
 #: Loose files scenarios expect under ``~/gaia-eval``, staged from the corpus.
 _CORPUS_DOCS = REPO_ROOT / "eval" / "corpus" / "documents"
@@ -57,10 +76,13 @@ LOOSE_FILES = {
 #: uninstalled (GAIA_FIXTURE_VALUES.md, "Environment preconditions").
 NOT_PRE_INSTALLED = frozenset({"rss-digest"})
 
+#: Staged directories whose repositories are built after the copy, by the
+#: ``build_fixtures.py`` beside them in this checkout.
+GIT_BUILDERS = ("tiers_git_code", "tiers_resilience")
+
 
 def _clear_readonly(func, path, _exc):
-    # Staged fixtures can hold read-only files, which rmtree cannot delete on
-    # Windows.
+    # git writes its objects read-only, which rmtree cannot delete on Windows.
     os.chmod(path, stat.S_IWRITE)
     func(path)
 
@@ -113,7 +135,7 @@ def install_fake_gh(home: Path) -> Path:
 
 
 def stage(home: Path) -> Path:
-    """Stage fixtures, starter skills and the fixture hub under ``home``.
+    """Stage fixtures, workspaces, starter skills and the fixture hub under ``home``.
 
     Returns:
         The skills root the fixture hub was trusted into.
@@ -134,6 +156,18 @@ def stage(home: Path) -> Path:
         shutil.copyfile(source, fixtures / dest)
     print(f"staged fixtures -> {fixtures}")
     print(f"fake gh -> {install_fake_gh(home)} (prepend it to PATH)")
+
+    for name in GIT_BUILDERS:
+        staged = fixtures / name
+        _run(
+            [
+                sys.executable,
+                str(HERE / name / "build_fixtures.py"),
+                "--dest",
+                str(staged),
+            ],
+            f"Building the {name} workspaces",
+        )
 
     skills_root = home / ".gaia" / "skills"
     skills_root.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,50 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_skills_web/capture/field-guide-long/
+# SKILL.md (~19K chars, 13 sections; money rule in section 12) served at
+# /tiers_skills_web/capture/field-guide-long/SKILL.md — see
+# GAIA_FIXTURE_VALUES.md "Skills, web and tool selection".
+id: capture_long_skill_deep_rule
+name: "Capture — Long Skill From a URL, Rule Buried in Section 12 Applied"
+category: gaia_skills_capture
+severity: high
+tags: [t3_stress]
+description: |
+  A ~19K-character skill captured from a URL. The opening rule (prefix) and
+  closing rule (last line) are easy; the money rule is buried in section 12
+  of 13. Applying all three proves the whole body reached the model rather
+  than a truncated head.
+
+persona: student
+
+setup:
+  index_documents: []
+  notes: "Fixture server on 127.0.0.1:8765; GAIA_WEB_ALLOWED_HOSTS=127.0.0.1; GAIA_AUTO_APPROVE_TOOLS=1."
+
+turns:
+  - turn: 1
+    objective: "Capture the long skill from its URL and load it"
+    user_message: "grab this skill and load it: http://127.0.0.1:8765/tiers_skills_web/capture/field-guide-long/SKILL.md"
+    ground_truth:
+      expected_behavior: "capture_skill with the URL, then load_skill('field-guide-long')"
+    success_criteria: "agent_tools[] shows capture_skill (source = the URL) and load_skill for field-guide-long."
+
+  - turn: 2
+    objective: "Ask a money question the deep rule governs"
+    user_message: "Planning a trip: 3 nights at a hut that charges 1249.50 per night. What's the total?"
+    ground_truth:
+      expected_answer: "Starts with 'FIELD GUIDE:', total EUR 3.748,50, ends with the line '-- field-guide'"
+    success_criteria: |
+      Starts with `FIELD GUIDE:`, gives the total as `EUR 3.748,50`, and ends
+      with `-- field-guide`. Writing the money as $3,748.50, €3748.50, or
+      3,748.50 means section 12 was not applied — FAIL. A wrong total is a
+      FAIL.
+
+  - turn: 3
+    objective: "Follow-up with one more night"
+    user_message: "and if we add a 4th night?"
+    ground_truth:
+      expected_answer: "EUR 4.998,00, same prefix and closing line"
+    success_criteria: "Total `EUR 4.998,00` in the section-12 format, with the `FIELD GUIDE:` prefix and `-- field-guide` closing."
+
+expected_outcome: |
+  A long captured skill is applied in full — the buried rule holds across
+  turns, not just the rules at the edges.

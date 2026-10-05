@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+<title>Cedar Gap Trail News</title>
+<link>http://127.0.0.1:8765/tiers_skills_web/feeds/trailnews.xml</link>
+<description>Conditions and notices for the Cedar Gap trail network.</description>
+<item>
+<title>Bridge on the east loop reopens</title>
+<link>http://127.0.0.1:8765/cedar-gap/east-bridge</link>
+<pubDate>Sun, 20 Sep 2026 08:00:00 GMT</pubDate>
+<description>The footbridge at mile 3 of the east loop is open again after decking repairs.</description>
+</item>
+<item>
+<title>Bear-proof lockers installed at camp 2</title>
+<link>http://127.0.0.1:8765/cedar-gap/lockers</link>
+<pubDate>Mon, 14 Sep 2026 08:00:00 GMT</pubDate>
+<description>Six lockers are now available at camp 2; bring your own lock.</description>
+</item>
+</channel>
+</rss>

@@ -17,11 +17,16 @@ policy (``gaia.skills.binaries``) refuses them before any shell runs, so if
 one reaches this shim the permission gate leaked — the shim exits nonzero with
 a message that says exactly that. Unknown commands never return empty success
 (no silent fallbacks).
+
+Auth state: github.com is signed in by default. Hosts listed in
+``tiers_resilience/fake_gh_auth.json`` are signed out (commands fail with gh's
+own exit 4), and ``FAKE_GH_AUTH=logged_out`` signs out every host.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -31,14 +36,25 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 #: (contract: eval/scenarios/GAIA_FIXTURE_VALUES.md).
 FIXTURE_REPO = "acme-labs/widgetworks"
 
+DEFAULT_HOST = "github.com"
+
+#: Hosts the resilience scenarios need signed out. Read from this checkout:
+#: the shim runs from here, and the file is kept out of the staged copy.
+AUTH_STATE_FILE = (
+    Path(__file__).resolve().parent.parent / "tiers_resilience" / "fake_gh_auth.json"
+)
+
+#: ``FAKE_GH_AUTH=logged_out`` signs out every host — a local repro of #4428.
+AUTH_ENV = "FAKE_GH_AUTH"
+
 #: ``gh auth status --json hosts`` for the fixture account, in real gh's shape.
 AUTH_STATUS_HOSTS = {
     "hosts": {
-        "github.com": [
+        DEFAULT_HOST: [
             {
                 "state": "success",
                 "active": True,
-                "host": "github.com",
+                "host": DEFAULT_HOST,
                 "login": "fixture-bot",
                 "tokenSource": "keyring",
                 "scopes": "repo, read:org",
@@ -66,6 +82,91 @@ _REFUSE_TIER = {
 def _fail(message: str, code: int = 2) -> int:
     print(f"fake gh: {message}", file=sys.stderr)
     return code
+
+
+def _signed_out_hosts() -> set[str] | None:
+    """Hosts with no credentials; ``None`` means every host is signed out."""
+    mode = os.environ.get(AUTH_ENV, "")
+    if mode == "logged_out":
+        return None
+    if mode not in ("", "logged_in"):
+        raise SystemExit(
+            _fail(f"{AUTH_ENV}={mode!r} is not a mode; use logged_in or logged_out")
+        )
+    if not AUTH_STATE_FILE.is_file():
+        return set()
+    try:
+        state = json.loads(AUTH_STATE_FILE.read_text(encoding="utf-8"))
+        return set(state["signed_out_hosts"])
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise SystemExit(
+            _fail(f"auth state file {AUTH_STATE_FILE} is malformed ({exc})")
+        ) from exc
+
+
+def _is_signed_out(host: str) -> bool:
+    hosts = _signed_out_hosts()
+    return hosts is None or host in hosts
+
+
+def _target_host(argv: list[str]) -> str:
+    """The host a command talks to: --hostname, a HOST/OWNER/REPO repo, GH_HOST."""
+    for i, token in enumerate(argv):
+        for flag in ("--hostname", "--repo", "-R"):
+            value = None
+            if token == flag and i + 1 < len(argv):
+                value = argv[i + 1]
+            elif token.startswith(flag + "="):
+                value = token.partition("=")[2]
+            if value is None:
+                continue
+            if flag == "--hostname":
+                return value
+            if value.count("/") >= 2:
+                return value.split("/", 1)[0]
+    return os.environ.get("GH_HOST") or DEFAULT_HOST
+
+
+def _auth_required(host: str) -> int:
+    """Real gh's wording and exit code 4 for a command with no credentials."""
+    login = "gh auth login" + ("" if host == DEFAULT_HOST else f" --hostname {host}")
+    token_var = "GH_TOKEN" if host == DEFAULT_HOST else "GH_ENTERPRISE_TOKEN"
+    print(
+        f"To get started with GitHub CLI, please run:  {login}\n"
+        f"Alternatively, populate the {token_var} environment variable with a "
+        "GitHub API authentication token.",
+        file=sys.stderr,
+    )
+    return 4
+
+
+def _auth_status_hosts(args: list[str]) -> dict:
+    """``auth status --json hosts``; signed-out hosts are absent, as in real gh."""
+    flags, _ = _parse_flags(args, {"--hostname", "--json"})
+    host = flags.get("--hostname")
+    if host in (None, DEFAULT_HOST) and not _is_signed_out(DEFAULT_HOST):
+        return AUTH_STATUS_HOSTS
+    return {"hosts": {}}
+
+
+def _auth_status(args: list[str]) -> int:
+    flags, _ = _parse_flags(args, {"--hostname"})
+    host = flags.get("--hostname")
+    if isinstance(host, str) and _is_signed_out(host):
+        print(f"You are not logged into any accounts on {host}", file=sys.stderr)
+        return 1
+    if _is_signed_out(DEFAULT_HOST):
+        print(
+            "You are not logged into any GitHub hosts. To log in, run: gh auth login",
+            file=sys.stderr,
+        )
+        return 1
+    # ASCII only: Windows consoles decode cp1252 and choke on check marks.
+    print("github.com")
+    print("  - Logged in to github.com account fixture-bot (keyring)")
+    print("  - Active account: true")
+    print("  - Token scopes: 'repo', 'read:org'")
+    return 0
 
 
 def _load(name: str):
@@ -364,15 +465,13 @@ def main(argv: list[str]) -> int:
         # The form check_cli_setup reads before any github-triage step.
         if auth_json != "hosts":
             return _fail("auth status --json serves only the 'hosts' field")
-        print(json.dumps(AUTH_STATUS_HOSTS, indent=2))
+        print(json.dumps(_auth_status_hosts(argv[2:]), indent=2))
         return 0
     if head == ("auth", "status"):
-        # ASCII only: Windows consoles decode cp1252 and choke on check marks.
-        print("github.com")
-        print("  - Logged in to github.com account fixture-bot (keyring)")
-        print("  - Active account: true")
-        print("  - Token scopes: 'repo', 'read:org'")
-        return 0
+        return _auth_status(argv[2:])
+    host = _target_host(argv)
+    if _is_signed_out(host):
+        return _auth_required(host)
     if head == ("issue", "list"):
         return _issue_list(argv[2:])
     if head == ("issue", "view"):

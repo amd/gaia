@@ -37,22 +37,27 @@
     },
     {
       "lane": "gaia-signal",
-      "categories": ["gaia_memory", "gaia_honesty", "gaia_web", "gaia_media"]
+      "categories": ["gaia_memory", "gaia_honesty", "gaia_voice"]
     },
     {
       "lane": "gaia-code",
-      "categories": ["gaia_core", "gaia_files", "gaia_code", "gaia_voice"]
+      "categories": ["gaia_core", "gaia_shell"]
     },
     {
-      "lane": "gaia-tools",
-      "categories": [
-        "gaia_rag",
-        "gaia_skills_lifecycle",
-        "gaia_shell",
-        "gaia_data",
-        "gaia_skills_capture",
-        "gaia_resilience"
-      ]
+      "lane": "gaia-repo",
+      "categories": ["gaia_code", "gaia_git"]
+    },
+    {
+      "lane": "gaia-files",
+      "categories": ["gaia_files", "gaia_resilience"]
+    },
+    {
+      "lane": "gaia-docs",
+      "categories": ["gaia_rag", "gaia_data", "gaia_media"]
+    },
+    {
+      "lane": "gaia-skills",
+      "categories": ["gaia_skills_lifecycle", "gaia_skills_capture", "gaia_web"]
     },
     {
       "lane": "gaia-email",

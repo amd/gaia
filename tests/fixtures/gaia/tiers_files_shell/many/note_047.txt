@@ -1,0 +1,3 @@
+Note 047
+owner: Lior
+status: ok

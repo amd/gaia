@@ -4,7 +4,7 @@ id: task_pricewatch_new_low
 name: "Skill Task — price-watch Detects a New Low"
 category: gaia_skills_tasks
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   The remembered previous low is $949; the fixture page now shows $899.
   The skill must extract the real current price, compare against the

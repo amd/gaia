@@ -178,6 +178,11 @@ leaves the searchable index unchanged, so retrying does not duplicate chunks.
 Use `reindex_document(path)` after changing a document; if replacement fails,
 the previously indexed version remains available for queries.
 
+Embedding dominates indexing time, so a thousand-page PDF on a CPU embedder
+takes minutes. Pass `progress_callback=lambda done, total: ...` to
+`index_document()` to follow it; the callback fires as embedding starts and
+every 250 chunks. Queries over other documents keep working while it runs.
+
 ---
 
 ## Understanding Chunks
@@ -996,6 +1001,8 @@ try:
 except PermissionError as e:
     print(f"Blocked: {e}")
 ```
+
+An agent that already has a `PathValidator` passes it in, `RAGSDK(config, path_validator=validator)`, so a path the user grants mid-session is readable to indexing too. Without it the SDK builds its own validator from `allowed_paths`.
 
 <Warning>
 **Security Consideration:** Without `allowed_paths`, RAG can index any file the process can read. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.

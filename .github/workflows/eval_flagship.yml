@@ -986,8 +986,15 @@ jobs:
             foreach ($category in $categories) {
               $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
               if (-not (Test-Path $baseline)) {
-                Write-Host "::error::Missing baseline $baseline. Pick the baseline matching the model under test; do not substitute another directory."
-                exit 1
+                # A category added since the baseline was captured has none until
+                # its first nightly; that is reported, and never enforced against.
+                if ($env:ENFORCE -eq 'true') {
+                  Write-Host "::error::enforce=true but there is no baseline at $baseline, so '$category' would pass by default. Commit its scorecard from a nightly on this hardware first, or re-run without [eval-enforce]."
+                  exit 1
+                }
+                Write-Host "::warning::${category}: NOT COMPARED - no baseline at $baseline yet. The category still runs and its scorecard is uploaded; commit that scorecard as the baseline."
+                "``$category``: not compared, no baseline yet. Its scorecard from this run is the baseline candidate." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+                continue
               }
               Write-Host "baseline ok: $baseline"
             }
@@ -1770,6 +1777,11 @@ jobs:
               # verdict and it has already rendered it under the enforce policy.
               # Counting it again here would fail the job regardless of enforce.
               Write-Host "::warning::${category}: no scorecard produced - nothing to compare (already reported by the integrity gate)."
+              continue
+            }
+            if (-not (Test-Path $baseline)) {
+              # Preflight already refused this under enforce=true.
+              Write-Host "::warning::${category}: NOT COMPARED - no baseline at $baseline yet (reported at preflight)."
               continue
             }
             # `--compare` exits 2 on status/score/time regressions, 0 otherwise

@@ -1,0 +1,72 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_skills_web/capture/trail-log/ (URL)
+# and capture/packing-list/ (folder, staged to ~/gaia-eval/tiers_skills_web/
+# capture/packing-list) — see GAIA_FIXTURE_VALUES.md "Skills, web and tool
+# selection".
+id: capture_three_sources_then_remove
+name: "Capture — Paste, URL, and Folder in One Request, Then Remove All Three"
+category: gaia_skills_capture
+severity: high
+tags: [t3_stress]
+description: |
+  All three capture source kinds in a single request, then the right one of
+  the three chosen for a task, then all three removed. Stresses tool
+  chaining (three captures, a load, three removals) and keeping three new
+  names straight.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Fixture server on 127.0.0.1:8765; GAIA_WEB_ALLOWED_HOSTS=127.0.0.1; tests/fixtures/gaia staged to ~/gaia-eval/; GAIA_AUTO_APPROVE_TOOLS=1."
+
+turns:
+  - turn: 1
+    objective: "Capture three skills from three kinds of source"
+    user_message: |
+      add all three of these to your skill library:
+      1. the skill at http://127.0.0.1:8765/tiers_skills_web/capture/trail-log/SKILL.md
+      2. the skill folder at ~/gaia-eval/tiers_skills_web/capture/packing-list
+      3. this one:
+
+      ---
+      name: weather-haiku
+      description: Answer weather questions as a single 5-7-5 haiku.
+      version: "1.0.0"
+      ---
+
+      # Weather Haiku
+
+      Answer any question about the weather as one haiku (5, 7, 5 syllables),
+      then the exact line `-- weather-haiku`.
+    ground_truth:
+      expected_behavior: "Three capture_skill calls: a URL source, a folder path, and pasted text; names trail-log, packing-list, weather-haiku"
+    success_criteria: |
+      agent_tools[] shows three capture_skill calls whose sources are the
+      URL, the folder path, and the pasted text. The answer names all three
+      captured skills. A missing capture, or claiming one with no call, is a
+      FAIL.
+
+  - turn: 2
+    objective: "Pick the right one of the three and use it"
+    user_message: "load the one for logging hikes and log this: Cedar Gap loop, 12.4 km, 610 m of climbing"
+    ground_truth:
+      expected_answer: "TRAIL LOG / Trail: Cedar Gap loop / Distance: 12.4 km / Elevation gain: 610 m / Logged by trail-log."
+    success_criteria: "load_skill for trail-log (not packing-list or weather-haiku), and the entry uses the trail-log format with exactly the given values."
+
+  - turn: 3
+    objective: "Remove all three"
+    user_message: "ok, remove all three of those skills now"
+    ground_truth:
+      expected_behavior: "remove_skill for trail-log, packing-list, and weather-haiku"
+    success_criteria: "agent_tools[] shows remove_skill for each of the three."
+
+  - turn: 4
+    objective: "Verify none remain"
+    user_message: "list my skills — are any of those three still there?"
+    ground_truth:
+      expected_answer: "None of trail-log, packing-list, or weather-haiku remain"
+    success_criteria: "list_skills in agent_tools[] and a clear statement that none of the three remain. Reporting one as still installed when it was removed (or the reverse) is a FAIL."
+
+expected_outcome: |
+  Three sources captured in one request, the right skill chosen among them,
+  and a clean removal verified by a real listing.

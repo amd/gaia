@@ -8,6 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Everyday questions get short, plain answers.** "Why is the sky blue?" got
+  140 words with an equation, and a Wi-Fi question got diagnostic shell runs.
+  The voice skill now caps an everyday answer at three plain sentences, goes
+  one level deeper only when asked, honours a stored short/detailed preference,
+  and answers general-knowledge questions without running tools.
+- **Memory off no longer loads the embedding model.** A private chat, or one
+  with memory switched off, used to load the ~300 MB embedder on its first turn
+  only to validate it and to score the always-on `gaia-voice` skill. It now
+  loads when memory is first used, such as when memory is switched back on or
+  the agent recalls something. A turn with only always-on skills loaded embeds
+  nothing.
 - **Every tool is offered on every turn again, as in the Agent UI.** Per-turn
   tool selection swapped about a dozen tools in and out at its cap, which broke
   the local model's prompt cache (17s to first token on a one-line question,
@@ -85,6 +96,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A file you allow is usable by every tool, including document Q&A.** Indexing
+  or querying a file outside the chat's scope was refused with no prompt, and
+  approving it through another tool still left it unreadable to the document
+  index. Indexing now asks the same question `read_file` does, and one approval
+  covers both. A tool waiting on that question is no longer abandoned at its
+  180 s limit while the question is still on screen. A refusal now tells the
+  model not to copy or move the file elsewhere to get around it.
 - **`--use-claude` works with the downloaded binary.** The release build left
   out the Anthropic client, so every Claude launch from the terminal UI, and
   every `/model` switch to Claude, failed with "The 'anthropic' package is

@@ -2,7 +2,7 @@ id: task_ghtriage_live_canary
 name: "Skill Task — github-triage Live Canary (Non-Gating)"
 category: gaia_skills_tasks
 severity: low
-tags: [live]
+tags: [t1_basic, live]
 description: |
   Live canary against the real amd/gaia repository with the REAL gh CLI
   (fake shim absent). Non-gating; verifies the skill works off-fixture.

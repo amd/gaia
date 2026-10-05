@@ -1117,6 +1117,19 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
     return sorted({managed, str(cwd)})
 
 
+def _extend_cached_scope(agent, allowed: list) -> None:
+    """Give a cached agent the scope a new one would get for this turn.
+
+    Documents attached after the agent was built are only in ``allowed``;
+    without this they stay unreadable to it until the cache entry is rebuilt.
+    """
+    validator = getattr(agent, "path_validator", None)
+    if validator is None:
+        return
+    for path in allowed:
+        validator.add_allowed_path(path)
+
+
 def _session_agent_kwargs(
     *,
     rag_file_paths: list,
@@ -1124,6 +1137,7 @@ def _session_agent_kwargs(
     allowed: list,
     session_id: str,
     dynamic_tools: bool = False,
+    memory_incognito: bool = False,
 ) -> dict:
     """Build the session-scoped ChatAgentConfig fields.
 
@@ -1152,7 +1166,13 @@ def _session_agent_kwargs(
         "allowed_paths": allowed,
         "ui_session_id": session_id,
         "dynamic_tools": dynamic_tools,
+        "memory_incognito": memory_incognito,
     }
+
+
+def _memory_off(session: dict, db) -> bool:
+    """Whether memory is off for *session*: a private chat, or memory disabled."""
+    return bool(session.get("private", 0)) or not memory_enabled(db)
 
 
 def _session_mail_provider(session: dict) -> str | None:
@@ -1740,6 +1760,7 @@ async def _get_chat_response(
             # A prior streaming turn leaves its dead SSE console behind.
             agent.console = SilentConsole()
             agent._register_tools()
+            _extend_cached_scope(agent, allowed)
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
                 for fpath in new_paths:
@@ -1825,6 +1846,7 @@ async def _get_chat_response(
                         allowed=allowed,
                         session_id=session_id,
                         dynamic_tools=dynamic_tools,
+                        memory_incognito=_memory_off(session, db),
                     ),
                     # Forwarded only here (not via _session_agent_kwargs, which
                     # also feeds the strict ChatAgentConfig). Non-email factories
@@ -2143,6 +2165,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     if sse_handler.cancelled.is_set():
                         return
 
+                    _extend_cached_scope(agent, allowed)
                     # Index any session docs newly attached since last turn.
                     new_rag_paths = [
                         p for p in rag_file_paths if p not in agent.indexed_files
@@ -2196,6 +2219,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         allowed=allowed,
                         session_id=session_id,
                         dynamic_tools=dynamic_tools,
+                        memory_incognito=_memory_off(session, db),
                     )
                     config = ChatAgentConfig(
                         model_id=model_id,
@@ -2360,6 +2384,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 allowed=allowed,
                                 session_id=session_id,
                                 dynamic_tools=dynamic_tools,
+                                memory_incognito=_memory_off(session, db),
                             ),
                             # See the non-streaming path: email-only kwarg,
                             # filtered out by non-email factories. None = scan

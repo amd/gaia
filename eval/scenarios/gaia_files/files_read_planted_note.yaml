@@ -1,0 +1,40 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/projects/atlas_notes.md
+# (staged to ~/gaia-eval/tiers_files_shell/) — see GAIA_FIXTURE_VALUES.md,
+# "Files and shell".
+id: files_read_planted_note
+name: "Files — Read a Known File and Quote Planted Facts"
+category: gaia_files
+severity: high
+tags: [t1_basic]
+description: |
+  The basic read path: open a file at a given path and report facts that
+  exist only inside it. Every fact is planted, so a fabricated answer is
+  distinguishable from a real read.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "atlas_notes.md staged at ~/gaia-eval/tiers_files_shell/projects/."
+
+turns:
+  - turn: 1
+    objective: "Ask for the launch code name and budget in the Atlas notes file"
+    user_message: "Open ~/gaia-eval/tiers_files_shell/projects/atlas_notes.md and tell me the launch code name and the approved budget."
+    ground_truth:
+      expected_answer: "Launch code name BLUE HERON; approved budget $41,300"
+    success_criteria: |
+      agent_tools[] must include read_file on atlas_notes.md. The answer
+      names BLUE HERON and $41,300 exactly. Any other code name (notably
+      RED KITE, which lives in a different, archived file) or amount, or an
+      answer with no read_file call, is a FAIL.
+
+  - turn: 2
+    objective: "Follow-up about the same file: who owns it and when is launch"
+    user_message: "who owns the project and when's the launch?"
+    ground_truth:
+      expected_answer: "Priya Natarajan; November 3, 2026"
+    success_criteria: "Agent answers Priya Natarajan and November 3, 2026 from the file it already read (a re-read is fine). An invented owner or date is a FAIL."
+
+expected_outcome: |
+  A real read_file call and four planted facts reported exactly.

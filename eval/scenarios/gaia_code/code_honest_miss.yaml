@@ -4,7 +4,7 @@ id: code_honest_miss
 name: "Code — Honest Miss on Absent Code"
 category: gaia_code
 severity: critical
-tags: [local_blocked_no_embedder]
+tags: [t4_adversarial, usability, local_blocked_no_embedder]
 description: |
   The asked-about functionality does not exist in the repo. After a real
   search, the only correct answer is "there is no such code here" — naming
