@@ -36,18 +36,18 @@ def _serve(monkeypatch, payload):
 
 @pytest.fixture
 def settings_endpoint():
-    """The real GET /api/memory/settings, before and after the switch is flipped."""
+    """The real GET /api/memory/settings: the default, or with the switch set."""
     from fastapi.testclient import TestClient
 
     from gaia.ui.server import create_app
 
     client = TestClient(create_app(db_path=":memory:"))
 
-    def read(enable: bool = False):
-        if enable:
+    def read(enable=None):
+        if enable is not None:
             resp = client.put(
                 "/api/memory/settings",
-                json={"memory_enabled": True},
+                json={"memory_enabled": enable},
                 headers={"X-Gaia-UI": "1"},
             )
             assert resp.status_code == 200, resp.text
@@ -72,10 +72,10 @@ def test_which_scenarios_need_memory(scenario, needs):
     assert runner._scenario_needs_memory(scenario) is needs
 
 
-def test_default_backend_fails_the_probe_with_the_command_that_fixes_it(
+def test_memory_turned_off_fails_the_probe_with_the_command_that_fixes_it(
     monkeypatch, settings_endpoint
 ):
-    seen = _serve(monkeypatch, settings_endpoint())
+    seen = _serve(monkeypatch, settings_endpoint(enable=False))
 
     error = runner._probe_memory_enabled("http://127.0.0.1:4200")
 
@@ -87,6 +87,13 @@ def test_default_backend_fails_the_probe_with_the_command_that_fixes_it(
 
 def test_backend_with_memory_on_passes_the_probe(monkeypatch, settings_endpoint):
     _serve(monkeypatch, settings_endpoint(enable=True))
+
+    assert runner._probe_memory_enabled("http://127.0.0.1:4200") is None
+
+
+def test_a_default_backend_passes_the_probe(monkeypatch, settings_endpoint):
+    """Memory is on unless someone turned it off."""
+    _serve(monkeypatch, settings_endpoint())
 
     assert runner._probe_memory_enabled("http://127.0.0.1:4200") is None
 

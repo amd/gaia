@@ -610,13 +610,15 @@ class EmbeddedLemonade:
         return path
 
     def _pin_llamacpp_backends(self) -> None:
-        """Record per-model backends Lemonade applies even when it auto-loads.
+        """Record per-model load options Lemonade applies even when it auto-loads.
 
         The embedder is loaded on demand by ``/embeddings`` as well as by GAIA's
-        explicit loads, so the backend has to live in Lemonade's saved options.
+        explicit loads, so its backend and ubatch have to live in Lemonade's
+        saved options.
         """
         from gaia.llm.lemonade_client import (
             DEFAULT_EMBEDDING_MODEL,
+            EMBEDDER_LLAMACPP_ARGS,
             llamacpp_backend_for,
         )
 
@@ -644,6 +646,9 @@ class EmbeddedLemonade:
             entry = options.get(model)
             entry = dict(entry) if isinstance(entry, dict) else {}
             entry["llamacpp_backend"] = backend
+            args = str(entry.get("llamacpp_args") or "")
+            if "--ubatch-size" not in args:
+                entry["llamacpp_args"] = f"{args} {EMBEDDER_LLAMACPP_ARGS}".strip()
             options[model] = entry
         path.write_text(json.dumps(options, indent=2), encoding="utf-8")
 

@@ -100,10 +100,12 @@ Pick the install path that fits you best:
     and `gaia-agent-ui-0.17.2-amd64.deb`.
 
     **Windows (.exe):**
-    1. Download `gaia-agent-ui-<version>-x64-setup.exe` from [Releases](https://github.com/amd/gaia/releases).
-    2. Double-click to install, then launch "GAIA" from the Start Menu (binary: `gaia-desktop`).
-    3. Update by downloading and running the newer installer.
+    1. Download **Install GAIA for Windows** from [amd-gaia.ai](https://amd-gaia.ai/#install) (`gaia-<version>-win-x64-setup.exe`) and run it.
+    2. Tick **Desktop app** on Choose Components (and the terminal too, if you want it), then launch "GAIA" from the desktop or Start Menu (binary: `gaia-desktop`).
+    3. Update by running the newer installer; it keeps your choices.
     4. Uninstall via Windows Settings → Apps → Installed apps → GAIA.
+
+    See [Install GAIA](/guides/install) for silent installs. The desktop app's own installer, `gaia-agent-ui-<version>-x64-setup.exe`, is still on [Releases](https://github.com/amd/gaia/releases) for scripted installs of the app alone.
 
     **Ubuntu (.deb):**
     ```bash
@@ -332,7 +334,7 @@ When GAIA asks permission, the prompt takes focus and `Enter` does nothing, so a
 
 ## Memory
 
-The agent can remember facts, preferences, and decisions across sessions. Memory is **opt-in (beta)** and disabled by default — see the [Agent Memory guide](/guides/memory) to learn more. Turn it on in **Settings → Memory**, and open **Memory** in the sidebar to search, edit or forget what GAIA remembers.
+The agent can remember facts, preferences, and decisions across sessions. Memory is **on by default (beta)** — see the [Agent Memory guide](/guides/memory) to learn more. Turn it off in **Settings → Memory**, and open **Memory** in the sidebar to search, edit or forget what GAIA remembers.
 
 ---
 

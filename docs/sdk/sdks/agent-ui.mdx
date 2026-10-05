@@ -1185,7 +1185,7 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="POST /api/memory/knowledge">
-    Create a knowledge entry from the dashboard. Items created via the UI use `source='user'` and `confidence=0.8`.
+    Create a knowledge entry from the dashboard. Items created via the UI use `source='user'` and `confidence=0.8`. The entry is embedded right away with the embedder that produced the stored vectors, so recall by meaning finds it without a rebuild.
 
     **Request:**
     ```json
@@ -1199,10 +1199,17 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
       "sensitive": false
     }
     ```
+
+    **Response:**
+    ```json
+    { "status": "created", "knowledge_id": "abc-123", "embedded": true }
+    ```
+
+    If embedding fails the entry is still saved, and the response carries `"embedded": false` plus an `embed_error` saying what to do (run **Rebuild Embeddings**; keyword recall still finds it).
   </Accordion>
 
   <Accordion title="PUT /api/memory/knowledge/{knowledge_id}">
-    Edit a knowledge entry. Only provided fields are updated.
+    Edit a knowledge entry. Only provided fields are updated. A `content` change re-embeds the entry and the response includes `embedded` (and `embed_error` on failure), as for create; other edits keep the existing vector and omit the field.
 
     **Request:**
     ```json
@@ -1414,7 +1421,10 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
 
   <Accordion title="GET /api/memory/stream-inference">
     SSE stream of LLM-assisted profile inference over the discovery findings
-    — each `insight` event is a candidate fact awaiting approval.
+    — each `insight` event is a candidate fact awaiting approval. It runs on
+    the machine's default local chat model (`default_model` in
+    `~/.gaia/config.json`), never the chat's cloud model; a cloud
+    `default_model` ends the stream with an `error` event.
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-discovery">
@@ -1430,8 +1440,9 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="GET /api/memory/settings">
-    Memory feature flags: `memory_enabled`, `mcp_memory_enabled` (expose read
-    tools to MCP clients), `system_discovery_consent` — all default `false`.
+    Memory feature flags: `memory_enabled` (default `true`), `mcp_memory_enabled`
+    (expose read tools to MCP clients) and `system_discovery_consent` (both
+    default `false`).
   </Accordion>
 
   <Accordion title="PUT /api/memory/settings">

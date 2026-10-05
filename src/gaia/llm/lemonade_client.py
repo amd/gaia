@@ -317,6 +317,11 @@ CPU_BACKEND_MODELS = frozenset(
     {DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_MODEL.removeprefix("user.")}
 )
 
+#: The embedder's input limit in tokens: llama-server rejects an input longer
+#: than its ubatch (default 512), so every embedder load carries this one.
+EMBEDDER_UBATCH_TOKENS = 2048
+EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
+
 
 def llamacpp_backend_for(model_name: Optional[str]) -> Optional[str]:
     """The llama.cpp backend *model_name* must load on, or None for the default."""
@@ -5396,6 +5401,8 @@ class LemonadeClient:
                 )
             if recipe == "llamacpp":
                 llamacpp_args = CHAT_LLAMACPP_ARGS
+        if llamacpp_args is None and model_name in CPU_BACKEND_MODELS:
+            llamacpp_args = EMBEDDER_LLAMACPP_ARGS
 
         request_data = {"model_name": model_name}
         backend = llamacpp_backend_for(model_name)

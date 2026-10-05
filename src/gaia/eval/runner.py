@@ -1359,8 +1359,8 @@ def _probe_memory_enabled(backend_url: str) -> Optional[str]:
     return (
         "Scenarios that use long-term memory are queued, but the backend at "
         f"{backend_url} has memory switched off ({url} reports "
-        f"memory_enabled={settings.get('memory_enabled')!r}; off is the Agent UI "
-        "default). Every `remember` would return 'skipped' and the scores would "
+        f"memory_enabled={settings.get('memory_enabled')!r}; someone turned it "
+        "off in Settings). Every `remember` would return 'skipped' and the scores would "
         "measure memory being off. Turn it on, then re-run:\n"
         f"    {enable}"
     )
