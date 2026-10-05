@@ -17,6 +17,7 @@ from gaia.agents.base.completion import (
     save_obligations,
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+from gaia.agents.base.turn_scope import TurnScopeGuard
 
 
 @pytest.fixture
@@ -1125,6 +1126,25 @@ def test_loop_after_a_declined_write_does_not_retry_it(agent, tmp_path):
     assert "here or anywhere else" in correction
     assert "wasn't confirmed" not in correction
     assert agent.console.confirm_tool_execution.call_count == 1
+
+
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_a_write_that_was_not_approved_does_not_widen_the_turn_scope(
+    agent, tmp_path, timed_out
+):
+    _deny_writes(agent, timed_out=timed_out)
+    target = str(tmp_path / "Documents" / "ui_notes.txt")
+    lie = {"answer": "Saved! `ui_notes.txt` is in your Documents folder."}
+    script(
+        agent,
+        call("write_file", file_path=target, content="hello from the agent ui"),
+        lie,
+        lie,
+    )
+    widened = []
+    with patch.object(TurnScopeGuard, "widen", lambda _, text: widened.append(text)):
+        agent.process_query(_DOCUMENTS_REQUEST, max_steps=10)
+    assert widened == []
 
 
 def test_a_folder_named_by_its_variable_is_backed_by_a_write_inside_it(

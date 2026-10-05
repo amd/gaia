@@ -88,6 +88,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
     POST_ANSWER_CLOSING_PROMPT,
+    REOPENED_MARKER,
     TurnScopeGuard,
 )
 from gaia.agents.base.verification import (
@@ -7019,6 +7020,14 @@ Do NOT wrap conversational replies in JSON.
         explicit = getattr(getattr(self, "config", None), "project_root", None)
         return resolve_project_root(explicit)
 
+    def _reopen_turn_scope(self, conversation: List[Dict[str, Any]]) -> None:
+        """A check is sending the answer back; the work it asks for is in scope."""
+        scope = getattr(self, "_turn_scope", None)
+        if scope is None or not scope.answered:
+            return
+        scope.reopen()
+        conversation.append({"role": "system", "content": {"type": REOPENED_MARKER}})
+
     def _verify_after_change_prompt(self) -> Optional[str]:
         """Corrective message when files changed after the last check, else ``None``.
 
@@ -9725,6 +9734,7 @@ Do NOT wrap conversational replies in JSON.
                         logger.info(
                             "%s fired at step %d", VERIFY_AFTER_CHANGE_TAG, steps_taken
                         )
+                        self._reopen_turn_scope(conversation)
                         messages.append({"role": "user", "content": _correction})
                         conversation.append({"role": "user", "content": _correction})
                         continue
@@ -9772,6 +9782,7 @@ Do NOT wrap conversational replies in JSON.
                                 "not see."
                             ),
                         }
+                        self._reopen_turn_scope(conversation)
                         messages.append(correction)
                         conversation.append(dict(correction))
                         continue
@@ -9863,6 +9874,9 @@ Do NOT wrap conversational replies in JSON.
                                     "else. Say it was not saved, and give your "
                                     "complete answer again."
                                 )
+                        else:
+                            # Only the files it names: other reads are still drift.
+                            self._turn_scope.widen(correction)
                         messages.append({"role": "user", "content": correction})
                         conversation.append({"role": "user", "content": correction})
                         continue

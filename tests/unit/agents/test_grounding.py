@@ -672,23 +672,24 @@ def test_no_step_left_marks_the_answer_without_correcting(agent):
     assert GUESSED_SUMMARY in result["result"]
 
 
-def test_a_gap_found_after_the_answer_counts_is_marked_not_corrected(agent):
-    # The test-claim correction comes after the turn is answered; a lookup the
-    # grounding check asked for then would be refused by the scope guard.
+def test_a_gap_found_after_a_check_reopened_the_turn_is_corrected(agent):
+    # The test-claim correction reopens the turn, so the scope guard no longer
+    # refuses the lookup the grounding check asks for, and it can ask once.
     sent = _stub_chat(
         agent,
         _read_call(),
         _answer(GROUNDED + " Tests: 4 passed."),
         _answer(GROUNDED + " I searched the whole repo for other parsers."),
+        _answer(GROUNDED),
     )
 
     result = agent.process_query(QA_QUERY, max_steps=10)
 
-    assert len(sent) == 3
+    assert len(sent) == 4
     assert "4 passed" in sent[2][-1]["content"]
+    assert sent[3][-1]["content"].startswith("[check:grounding]")
     assert _final_text(result).startswith(GROUNDED)
-    text = result["result"]
-    assert VERIFICATION_NOTE_OPENER in text and "no search or listing ran" in text
+    assert "no search or listing ran" not in result["result"]
 
 
 def test_still_reports_rather_than_negates():

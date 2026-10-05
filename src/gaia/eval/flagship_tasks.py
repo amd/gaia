@@ -37,7 +37,11 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.checks import check_kind, runner_summary, summary_reports_failure
 from gaia.agents.base.memory import drain_memory_extraction
 from gaia.agents.base.tool_grants import PATH_TOOLS
-from gaia.agents.base.turn_scope import ANSWERED_MARKER, TurnScopeGuard
+from gaia.agents.base.turn_scope import (
+    ANSWERED_MARKER,
+    REOPENED_MARKER,
+    TurnScopeGuard,
+)
 from gaia.agents.base.verification import (
     check_was_executed,
     verification_check_label,
@@ -553,6 +557,8 @@ def calls_after_answer(
         if entry.get("role") == "system" and isinstance(content, dict):
             if content.get("type") == ANSWERED_MARKER:
                 scope.mark_answered()
+            elif content.get("type") == REOPENED_MARKER:
+                scope.reopen()
             continue
         if entry.get("role") != "tool":
             continue
