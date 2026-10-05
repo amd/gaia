@@ -19,7 +19,7 @@ import pytest
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
-from gaia.agents.base.verification import VERIFICATION_SCOPE_PREFIX
+from gaia.agents.base.verification import VERIFICATION_NOTE_OPENER
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
 _TOOL = "gh_issue_view_for_step_cap_test"
@@ -67,11 +67,16 @@ def clean_registry():
     _TOOL_REGISTRY.update(snapshot)
 
 
+_NOTE = f"{VERIFICATION_NOTE_OPENER} — sentinel."
+
+
 def _make_agent(streaming: bool, model_id=DEFAULT_MODEL_NAME) -> _DummyAgent:
     """The default model takes tools natively, so the loop sends ``tools=``."""
     with patch("gaia.agents.base.agent.AgentSDK"):
         agent = _DummyAgent(silent_mode=True, skip_lemonade=True, model_id=model_id)
     agent.streaming = streaming
+    # Most turns carry no note; pin one so "attached exactly once" is testable.
+    agent.verification_scope_statement = lambda: _NOTE
     return agent
 
 
@@ -149,7 +154,7 @@ def _answer(text: str) -> str:
 
 def _scope_lines(text: str) -> list:
     return [
-        line for line in text.splitlines() if line.startswith(VERIFICATION_SCOPE_PREFIX)
+        line for line in text.splitlines() if line.startswith(VERIFICATION_NOTE_OPENER)
     ]
 
 
@@ -164,7 +169,7 @@ def test_step_cap_answer_is_the_models_no_tool_call_reply(agent):
     result = agent.process_query("summarize issue 42", max_steps=3)
 
     assert result["result"].startswith(_SUMMARY)
-    assert "Reached maximum steps limit" not in result["result"]
+    assert "I ran out of steps" not in result["result"]
     assert len(_scope_lines(result["result"])) == 1
     # The task did hit the cap, whatever the reply says.
     assert result["status"] == "incomplete"
@@ -243,7 +248,7 @@ def test_answer_before_the_cap_is_untouched(agent):
         "Issue 42 is about login."
     )
     assert result["max_steps_reached"] is False
-    assert "Reached maximum steps limit" not in result["result"]
+    assert "I ran out of steps" not in result["result"]
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +279,8 @@ def test_failed_step_cap_call_returns_the_note_and_why(agent, caplog, reply, rea
         result = agent.process_query("summarize issue 42", max_steps=3)
 
     answer = result["result"]
-    assert "Reached maximum steps limit (3 steps)" in answer
+    assert "I ran out of steps before I could finish — I used 3 of the 3" in answer
+    assert "`--max-steps 53`" in answer
     assert f"{_TOOL}: 3x" in answer
     failure_lines = [line for line in answer.splitlines() if reason in line]
     assert len(failure_lines) == 1
@@ -294,7 +300,7 @@ def test_max_steps_message_lists_the_tools_that_ran(agent):
 
     message = agent._generate_max_steps_message(result["conversation"], 3, 3)
 
-    tools_block = message.split("using these tools:\n", 1)[1].split("\n\n", 1)[0]
+    tools_block = message.split("Here's what I ran:\n", 1)[1].split("\n\n", 1)[0]
     assert tools_block.strip() == f"- {_TOOL}: 3x"
 
 
@@ -346,5 +352,8 @@ def test_cancelled_run_skips_the_closing_call(agent):
     result = agent.process_query("summarize issue 42", max_steps=3)
 
     assert len(_model_calls(agent, chat)) == 3
-    assert "Reached maximum steps limit (3 steps)" in result["result"]
+    assert (
+        "I ran out of steps before I could finish — I used 3 of the 3"
+        in result["result"]
+    )
     assert "cancelled" in result["result"]

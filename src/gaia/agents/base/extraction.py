@@ -897,11 +897,12 @@ class ExtractionLedger:
     def render(self):
         parts = []
         for path, result in sorted(self.results.items()):
-            entries, pages, _digest = result
+            entries, _pages, _digest = result
+            found = f"{len(entries)} item{'' if len(entries) == 1 else 's'}"
             parts.append(
-                f"### Extracted inventory: {os.path.basename(path)}\n\n"
-                f"{len(entries)} source occurrences; {pages} pages processed. "
-                "Page coverage is verified; implicit items may still need human review."
+                f"### Items in {os.path.basename(path)}\n\n"
+                f"I went through the whole document and found {found}. Anything "
+                "the text only implies, rather than states, is worth a second look."
             )
             for number, entry in enumerate(entries, 1):
                 # Kept apart because the evidence was ambiguous: say so.
@@ -917,7 +918,7 @@ class ExtractionLedger:
                 if entry.note:
                     note += f" ({entry.note})"
                 parts.append(
-                    f"{number}. {entry.text}{note}\n   Source characters {entry.start}–{entry.end}: {entry.quote}"
+                    f'{number}. {entry.text}{note}\n   From the text: "{entry.quote}"'
                 )
         return "\n\n".join(parts)
 

@@ -1,0 +1,47 @@
+{
+  "$help": "Written by the GAIA Terminal Hub setup and removed by its uninstaller. Change the profile from Windows Terminal's settings instead of editing this file: a reinstall rewrites it.",
+  "profiles": [
+    {
+      "guid": "{6b5d7d70-4ed6-471b-b773-f1cafc56246f}",
+      "name": "GAIA",
+      "commandline": "\"__GAIA_INSTDIR__\\gaia-tui.exe\"",
+      "icon": "__GAIA_INSTDIR__\\gaia.ico",
+      "startingDirectory": "%USERPROFILE%",
+      "tabTitle": "GAIA",
+      "suppressApplicationTitle": true,
+      "colorScheme": "GAIA",
+      "font": {
+        "face": "IBM Plex Mono",
+        "size": 12,
+        "cellHeight": "1.35"
+      },
+      "padding": "18",
+      "hidden": false
+    }
+  ],
+  "schemes": [
+    {
+      "name": "GAIA",
+      "background": "#17161B",
+      "foreground": "#E7E3DA",
+      "cursorColor": "#E5874C",
+      "selectionBackground": "#4A3A33",
+      "black": "#222128",
+      "red": "#E5736B",
+      "green": "#7FC28A",
+      "yellow": "#E5B567",
+      "blue": "#5FA8E0",
+      "magenta": "#D77AB8",
+      "cyan": "#4DB8B8",
+      "white": "#C9C4BA",
+      "brightBlack": "#8C8880",
+      "brightRed": "#FF9C9C",
+      "brightGreen": "#3FD98A",
+      "brightYellow": "#FFAF3F",
+      "brightBlue": "#5FBFFF",
+      "brightMagenta": "#FF87D7",
+      "brightCyan": "#4DE8E8",
+      "brightWhite": "#F0EDE7"
+    }
+  ]
+}

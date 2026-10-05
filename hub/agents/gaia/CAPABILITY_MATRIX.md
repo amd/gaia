@@ -9,7 +9,7 @@ python hub/agents/gaia/python/packaging/capability_matrix.py
 
 ## Definitions
 
-- **tools_count**: the number of registered agent-loop tools for the default construction (prompt_profile='full', memory available): FULL_CORE_TOOLS unioned with every FULL_BUNDLES member in gaia_agent_chat.tool_bundles (which the flagship's registry must equal exactly, including the 8 skill-library tools, the 4 code-index tools, and the load_tools escape hatch). This is the REGISTERED size — what the agent can do. Dynamic tool loading means a single turn only shows the model a subset of it, and it is distinct from the REST surface's 7 functional verbs, a purpose-built streaming facade for external callers.
+- **tools_count**: the number of registered agent-loop tools for the default construction (prompt_profile='full', memory available): FULL_CORE_TOOLS unioned with every FULL_BUNDLES member in gaia_agent_chat.tool_bundles (which the flagship's registry must equal exactly, including the 8 skill-library tools and the 4 code-index tools), less the load_tools escape hatch, which registers only when GAIA_DYNAMIC_TOOLS=1 turns per-turn tool selection on. This is the REGISTERED size — what the agent can do. It is distinct from the REST surface's 7 functional verbs, a purpose-built streaming facade for external callers.
 - **no quality eval sentinel**: `no quality eval (contract-tested only)` -- the op is contract/shape-tested only; no judged quality bar exists for it.
 
 ## Capability matrix
@@ -30,7 +30,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
 
 ## Surface totals
 
-- Registered agent-loop tools: **96** (CORE 16 + 25 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
+- Registered agent-loop tools: **95** (CORE 16 + 25 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
   - `browser_nav`: 2
   - `browser_use`: 6
   - `cli_setup`: 3

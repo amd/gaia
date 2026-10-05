@@ -1,11 +1,13 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Tests for the verification-scope statement on emitted answers (#3376).
+"""Tests for the "not confirmed" note on emitted answers (#3376, #4484).
 
 The loop used to say "done" identically whether it ran the test suite or ran
-nothing at all. Every emitted answer now carries one bounded line naming which
-of three states applies — verified / partially verified / unverified — derived
-from the turn's own tool-execution log.
+nothing at all. An answer now ends with one bounded, plain-English line when a
+check failed, never ran, or a change went untested — and with nothing when the
+work checked out or nothing needed checking. The state itself (verified /
+partially verified / unverified) is data on the result, derived from the
+turn's own tool-execution log.
 
 Two layers of coverage:
 
@@ -33,6 +35,7 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
+    VERIFICATION_NOTE_OPENER,
     VERIFICATION_SCOPE_MAX_CHARS,
     VERIFICATION_SCOPE_PREFIX,
     build_verification_scope,
@@ -42,6 +45,7 @@ from gaia.agents.base.verification import (
     summary_reports_failure,
     verification_check_label,
     verification_check_target,
+    verification_summary,
 )
 from gaia.llm.lemonade_client import _cloud_request_error
 
@@ -127,12 +131,25 @@ def _tool_call(command: str) -> str:
 
 
 def _scope_line(text: str) -> str:
-    """The verification line from an emitted answer (asserts there is one)."""
+    """The note from an emitted answer (asserts there is exactly one)."""
     lines = [
-        line for line in text.splitlines() if line.startswith(VERIFICATION_SCOPE_PREFIX)
+        line for line in text.splitlines() if line.startswith(VERIFICATION_NOTE_OPENER)
     ]
-    assert len(lines) == 1, f"expected exactly one scope line in:\n{text}"
+    assert len(lines) == 1, f"expected exactly one note in:\n{text}"
     return lines[0]
+
+
+def _assert_no_note(text: str) -> None:
+    assert VERIFICATION_NOTE_OPENER not in text, text
+    assert VERIFICATION_SCOPE_PREFIX not in text, text
+
+
+def _state(executions, **kwargs) -> str:
+    return verification_summary(executions, **kwargs)["state"]
+
+
+#: Stands in for this turn's note, so an exit path is shown to attach it.
+SENTINEL = f"{VERIFICATION_NOTE_OPENER} — sentinel."
 
 
 # ---------------------------------------------------------------------------
@@ -186,59 +203,146 @@ def _execution(label=None, failed=False, name="some_tool", target=None):
     return record
 
 
-def test_no_tools_at_all_is_unverified():
-    statement = build_verification_scope([])
-    assert statement.startswith(VERIFICATION_SCOPE_PREFIX)
-    assert "unverified" in statement
-    assert "no tools ran" in statement
+def test_no_tools_at_all_is_unverified_and_says_nothing():
+    assert _state([]) == "unverified"
+    assert build_verification_scope([]) == ""
 
 
-def test_tools_but_no_checks_is_unverified_and_says_how_many():
-    statement = build_verification_scope([_execution(), _execution()])
-    assert "unverified" in statement
-    assert "2 tool calls ran" in statement
+def test_tools_but_no_checks_is_unverified_and_says_nothing():
+    summary = verification_summary([_execution(), _execution()])
+    assert summary["state"] == "unverified"
+    assert summary["tool_calls"] == 2
+    assert build_verification_scope([_execution(), _execution()]) == ""
 
 
-def test_singular_tool_call_wording():
-    assert "1 tool call ran" in build_verification_scope([_execution()])
-
-
-def test_all_checks_passed_is_verified():
-    statement = build_verification_scope(
-        [_execution("pytest"), _execution("ruff"), _execution()]
-    )
-    assert "verified —" in statement
-    assert "partially" not in statement
-    assert "pytest, ruff" in statement
+def test_all_checks_passed_is_verified_and_says_nothing():
+    executions = [_execution("pytest"), _execution("ruff"), _execution()]
+    summary = verification_summary(executions)
+    assert summary["state"] == "verified"
+    assert summary["passed"] == ["pytest", "ruff"]
+    assert build_verification_scope(executions) == ""
 
 
 def test_mixed_check_outcomes_is_partially_verified():
-    statement = build_verification_scope(
-        [_execution("ruff"), _execution("pytest", failed=True)]
-    )
-    assert "partially verified" in statement
-    assert "ruff passed" in statement
-    assert "pytest did not" in statement
+    executions = [_execution("ruff"), _execution("pytest", failed=True)]
+    assert _state(executions) == "partially verified"
+    statement = build_verification_scope(executions)
+    assert statement.startswith(VERIFICATION_NOTE_OPENER)
+    assert "ruff passed, pytest didn't" in statement
 
 
 def test_all_checks_failed_is_partially_verified_not_verified():
-    statement = build_verification_scope([_execution("pytest", failed=True)])
-    assert "partially verified" in statement
-    assert "did not pass" in statement
+    executions = [_execution("pytest", failed=True)]
+    assert _state(executions) == "partially verified"
+    assert build_verification_scope(executions) == (
+        f"{VERIFICATION_NOTE_OPENER} — pytest didn't pass."
+    )
 
 
 def test_the_three_states_are_distinguishable():
-    unverified = build_verification_scope([])
-    verified = build_verification_scope([_execution("pytest")])
-    partial = build_verification_scope(
-        [_execution("pytest"), _execution("ruff", failed=True)]
+    assert _state([]) == "unverified"
+    assert _state([_execution("pytest")]) == "verified"
+    assert (
+        _state([_execution("pytest"), _execution("ruff", failed=True)])
+        == "partially verified"
     )
-    assert len({unverified, verified, partial}) == 3
-    # "verified" is a substring of "unverified", so the states must be told
-    # apart on their own terms, not by substring containment.
-    assert unverified.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
-    assert verified.startswith(f"{VERIFICATION_SCOPE_PREFIX}verified")
-    assert partial.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+
+
+def test_the_summary_is_plain_data():
+    summary = verification_summary(
+        [_execution("pytest", failed=True), _blocked("ruff")],
+        unchecked_change="app.py",
+    )
+    assert summary == {
+        "state": "partially verified",
+        "tool_calls": 1,
+        "passed": [],
+        "failed": ["pytest"],
+        "not_run": ["ruff"],
+        "unchecked_change": "app.py",
+    }
+
+
+# ---------------------------------------------------------------------------
+# A change nothing checked afterwards
+# ---------------------------------------------------------------------------
+
+
+def test_an_unchecked_change_is_reported_in_plain_words():
+    statement = build_verification_scope([_execution()], unchecked_change="cart.py")
+    assert statement == (
+        f"{VERIFICATION_NOTE_OPENER} — I changed `cart.py` and didn't run the "
+        "tests afterwards."
+    )
+    assert _state([_execution()], unchecked_change="cart.py") == "unverified"
+
+
+def test_a_passing_run_before_an_unchecked_change_is_not_verified():
+    executions = [_execution("pytest")]
+    assert _state(executions, unchecked_change="cart.py") == "partially verified"
+    statement = build_verification_scope(executions, unchecked_change="cart.py")
+    assert "`cart.py`" in statement
+
+
+def test_an_edit_in_a_project_with_tests_gets_the_note(agent, tmp_path):
+    (tmp_path / "tests").mkdir()
+    agent._verification_project_root = lambda: str(tmp_path)
+    agent._turn_tool_executions = [
+        {
+            "tool": "write_file",
+            "check_label": None,
+            "failed": False,
+            "args": {"file_path": str(tmp_path / "cart.py")},
+        }
+    ]
+    assert "`cart.py`" in agent.verification_scope_statement()
+    assert agent.verification_state()["unchecked_change"] == "cart.py"
+
+
+def _edit(path):
+    return {
+        "tool": "write_file",
+        "check_label": None,
+        "failed": False,
+        "args": {"file_path": str(path)},
+    }
+
+
+def test_an_edit_in_a_project_without_tests_still_says_nothing_ran(agent, tmp_path):
+    agent._verification_project_root = lambda: str(tmp_path)
+    agent._turn_tool_executions = [_edit(tmp_path / "cart.py")]
+    assert agent.verification_scope_statement() == (
+        f"{VERIFICATION_NOTE_OPENER} — I changed `cart.py` and didn't run "
+        "anything to check it."
+    )
+
+
+def test_a_lint_after_an_edit_does_not_stand_in_for_the_tests(agent, tmp_path):
+    (tmp_path / "tests").mkdir()
+    agent._verification_project_root = lambda: str(tmp_path)
+    agent._turn_tool_executions = [
+        _edit(tmp_path / "cart.py"),
+        {"tool": "run_shell_command", "check_label": "ruff", "failed": False},
+    ]
+    assert "didn't run the tests afterwards" in agent.verification_scope_statement()
+    assert agent.verification_state()["state"] == "partially verified"
+
+
+def test_a_test_run_after_an_edit_covers_it(agent, tmp_path):
+    (tmp_path / "tests").mkdir()
+    agent._verification_project_root = lambda: str(tmp_path)
+    agent._turn_tool_executions = [
+        _edit(tmp_path / "cart.py"),
+        {"tool": "run_shell_command", "check_label": "pytest", "failed": False},
+    ]
+    assert agent.verification_scope_statement() == ""
+    assert agent.verification_state()["state"] == "verified"
+
+
+def test_editing_notes_is_not_a_code_change(agent, tmp_path):
+    agent._verification_project_root = lambda: str(tmp_path)
+    agent._turn_tool_executions = [_edit(tmp_path / "notes.md")]
+    assert agent.verification_scope_statement() == ""
 
 
 # ---------------------------------------------------------------------------
@@ -254,17 +358,17 @@ def test_statement_is_bounded_even_with_many_distinct_checks():
 def test_label_list_is_capped_with_a_count():
     statement = build_verification_scope(
         [
-            _execution("pytest"),
-            _execution("ruff"),
-            _execution("mypy"),
-            _execution("tsc"),
+            _execution("pytest", failed=True),
+            _execution("ruff", failed=True),
+            _execution("mypy", failed=True),
+            _execution("tsc", failed=True),
         ]
     )
     assert "+1 more" in statement
 
 
 def test_duplicate_labels_collapse():
-    statement = build_verification_scope([_execution("pytest")] * 5)
+    statement = build_verification_scope([_execution("pytest", failed=True)] * 5)
     assert statement.count("pytest") == 1
 
 
@@ -274,18 +378,16 @@ def test_duplicate_labels_collapse():
 
 
 def test_a_check_that_failed_then_passed_after_a_fix_is_verified():
-    statement = build_verification_scope(
-        [_execution("pytest", failed=True), _execution("pytest")]
-    )
-    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+    executions = [_execution("pytest", failed=True), _execution("pytest")]
+    assert _state(executions) == "verified"
+    assert build_verification_scope(executions) == ""
 
 
 def test_a_check_that_passed_then_failed_after_an_edit_did_not_pass():
-    statement = build_verification_scope(
-        [_execution("pytest"), _execution("pytest", failed=True)]
-    )
-    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
-    assert "pytest ran and did not pass" in statement
+    executions = [_execution("pytest"), _execution("pytest", failed=True)]
+    assert _state(executions) == "partially verified"
+    statement = build_verification_scope(executions)
+    assert "pytest didn't pass" in statement
     assert "passed," not in statement
 
 
@@ -308,50 +410,46 @@ def test_only_the_last_of_many_runs_counts():
             _execution("pytest", failed=True),
         ]
     )
-    assert "pytest ran and did not pass" in statement
+    assert "pytest didn't pass" in statement
 
 
 def test_distinct_labels_are_each_judged_on_their_own_latest_run():
-    statement = build_verification_scope(
-        [
-            _execution("ruff", failed=True),
-            _execution("pytest"),
-            _execution("ruff"),
-            _execution("mypy", failed=True),
-        ]
-    )
-    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
+    executions = [
+        _execution("ruff", failed=True),
+        _execution("pytest"),
+        _execution("ruff"),
+        _execution("mypy", failed=True),
+    ]
+    assert _state(executions) == "partially verified"
+    statement = build_verification_scope(executions)
     assert "ruff, pytest passed" in statement
-    assert "mypy did not" in statement
+    assert "mypy didn't" in statement
 
 
 def test_distinct_labels_with_one_run_each_are_unchanged():
     statement = build_verification_scope(
         [_execution("ruff"), _execution("pytest", failed=True)]
     )
-    assert "ruff passed, pytest did not." in statement
+    assert "ruff passed, pytest didn't." in statement
 
 
 def test_a_refused_attempt_then_a_fail_then_a_fix_is_verified():
-    statement = build_verification_scope(
-        [
-            _blocked("pytest"),
-            _execution("pytest", failed=True),
-            _execution("pytest"),
-        ]
-    )
-    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+    executions = [
+        _blocked("pytest"),
+        _execution("pytest", failed=True),
+        _execution("pytest"),
+    ]
+    assert _state(executions) == "verified"
+    assert build_verification_scope(executions) == ""
 
 
 def test_a_narrower_rerun_that_passes_does_not_hide_a_failed_suite():
-    statement = build_verification_scope(
-        [
-            _execution("pytest", failed=True, target="pytest tests/"),
-            _execution("pytest", target="pytest tests/test_cart.py"),
-        ]
-    )
-    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
-    assert "did not" in statement
+    executions = [
+        _execution("pytest", failed=True, target="pytest tests/"),
+        _execution("pytest", target="pytest tests/test_cart.py"),
+    ]
+    assert _state(executions) == "partially verified"
+    assert "didn't pass" in build_verification_scope(executions)
 
 
 def test_one_label_on_both_sides_is_counted_not_named_twice():
@@ -366,9 +464,8 @@ def test_one_label_on_both_sides_is_counted_not_named_twice():
             _execution("pytest", target='run_python {"code": "..."}'),
         ]
     )
-    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
-    assert "pytest passed, pytest did not" not in statement
-    assert "1 of 2 pytest runs did not pass" in statement
+    assert "pytest passed, pytest didn't" not in statement
+    assert "1 of 2 pytest runs didn't pass" in statement
 
 
 def test_a_split_label_sits_beside_labels_that_did_not_split():
@@ -381,18 +478,16 @@ def test_a_split_label_sits_beside_labels_that_did_not_split():
         ]
     )
     assert "ruff passed" in statement
-    assert "1 of 2 pytest runs did not pass" in statement
-    assert "mypy did not" in statement
+    assert "1 of 2 pytest runs didn't pass" in statement
+    assert "mypy didn't" in statement
 
 
 def test_a_rerun_of_the_same_command_replaces_the_earlier_run():
-    statement = build_verification_scope(
-        [
-            _execution("pytest", failed=True, target="pytest tests/"),
-            _execution("pytest", target="pytest tests/"),
-        ]
-    )
-    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+    executions = [
+        _execution("pytest", failed=True, target="pytest tests/"),
+        _execution("pytest", target="pytest tests/"),
+    ]
+    assert _state(executions) == "verified"
 
 
 def test_the_check_target_is_the_command_with_whitespace_collapsed():
@@ -424,19 +519,21 @@ def test_loop_keeps_a_failed_suite_visible_after_a_narrow_rerun(agent):
             "pytest tests/test_cart.py",
         ),
     )
-    line = _scope_line(agent.process_query("fix the test", max_steps=5)["result"])
-    assert line.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
-    assert "did not" in line
+    result = agent.process_query("fix the test", max_steps=5)
+    assert result["verification"]["state"] == "partially verified"
+    assert "didn't pass" in _scope_line(result["result"])
 
 
-def test_loop_reports_a_fixed_test_as_verified(agent):
+def test_loop_says_nothing_about_a_fixed_test(agent):
     _scripted_runs(
         agent,
         ({"status": "error", "error": "1 failed", "return_code": 1}, "pytest -q"),
         ({"status": "success", "return_code": 0, "stdout": "3 passed"}, "pytest -q"),
     )
-    line = _scope_line(agent.process_query("fix the test", max_steps=5)["result"])
-    assert line == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+    result = agent.process_query("fix the test", max_steps=5)
+    assert result["verification"]["state"] == "verified"
+    assert result["verification"]["passed"] == ["pytest"]
+    _assert_no_note(result["result"])
 
 
 def test_loop_reports_a_newly_broken_test_as_not_passing(agent):
@@ -446,7 +543,7 @@ def test_loop_reports_a_newly_broken_test_as_not_passing(agent):
         ({"status": "error", "error": "1 failed", "return_code": 1}, "pytest -q"),
     )
     line = _scope_line(agent.process_query("refactor", max_steps=5)["result"])
-    assert "pytest ran and did not pass" in line
+    assert "pytest didn't pass" in line
     assert "pytest passed" not in line
 
 
@@ -482,8 +579,8 @@ def test_every_state_fits_the_bound():
 
 def test_strip_removes_the_statement_and_leaves_the_answer():
     answer = "All set."
-    emitted = f"{answer}\n\n{build_verification_scope([])}"
-    assert strip_verification_scope(emitted) == answer
+    note = build_verification_scope([_execution("pytest", failed=True)])
+    assert strip_verification_scope(f"{answer}\n\n{note}") == answer
 
 
 def test_strip_is_a_no_op_without_a_statement():
@@ -495,57 +592,63 @@ def test_strip_is_a_no_op_without_a_statement():
 # ---------------------------------------------------------------------------
 
 
-def test_parsed_answer_with_no_tools_is_unverified(agent):
+def test_parsed_answer_with_no_tools_carries_no_note(agent):
     _stub_chat(agent, _answer("Paris is the capital of France."))
     result = agent.process_query("capital of france?", max_steps=3)
-    assert "Paris" in result["result"]
-    assert "unverified" in _scope_line(result["result"])
+    assert result["result"] == "Paris is the capital of France."
+    assert result["verification"]["state"] == "unverified"
 
 
-def test_parsed_answer_after_a_passing_check_is_verified(agent):
+def test_parsed_answer_after_a_passing_check_carries_no_note(agent):
     agent.shell_result = {"status": "success", "return_code": 0, "stdout": "3 passed"}
     _stub_chat(agent, _tool_call("pytest tests/unit -q"), _answer("Tests pass."))
     result = agent.process_query("run the tests", max_steps=5)
-    line = _scope_line(result["result"])
-    assert line.startswith(f"{VERIFICATION_SCOPE_PREFIX}verified")
-    assert "pytest" in line
+    assert result["result"] == "Tests pass."
+    assert result["verification"]["state"] == "verified"
 
 
-def test_parsed_answer_after_a_failing_check_is_partially_verified(agent):
+def test_parsed_answer_after_a_failing_check_says_so(agent):
     agent.shell_result = {"status": "error", "error": "1 failed", "return_code": 1}
     _stub_chat(agent, _tool_call("pytest tests/unit -q"), _answer("One test failed."))
     result = agent.process_query("run the tests", max_steps=5)
-    assert "partially verified" in _scope_line(result["result"])
+    assert _scope_line(result["result"]) == (
+        f"{VERIFICATION_NOTE_OPENER} — pytest didn't pass."
+    )
+    assert result["verification"]["state"] == "partially verified"
 
 
-def test_non_check_tool_still_reads_unverified(agent):
+def test_non_check_tool_carries_no_note(agent):
     _stub_chat(agent, _tool_call("ls -la"), _answer("Here are the files."))
     result = agent.process_query("list files", max_steps=5)
-    line = _scope_line(result["result"])
-    assert "unverified" in line
-    assert "1 tool call ran" in line
+    assert result["result"] == "Here are the files."
+    assert result["verification"]["tool_calls"] == 1
 
 
 def test_statement_survives_a_subclass_rewriting_the_answer(agent):
     """``finalize_answer`` runs first; a subclass must not be able to drop it."""
     agent.finalize_answer = lambda answer, _conversation: "REWRITTEN"
     _stub_chat(agent, _answer("original"))
-    result = agent.process_query("hello", max_steps=3)
-    assert result["result"].startswith("REWRITTEN")
-    assert "unverified" in _scope_line(result["result"])
+    with patch.object(
+        _DummyAgent, "verification_scope_statement", return_value=SENTINEL
+    ):
+        result = agent.process_query("hello", max_steps=3)
+    assert result["result"] == f"REWRITTEN\n\n{SENTINEL}"
 
 
 def test_statement_is_emitted_to_the_console_not_only_returned(agent):
-    """The scope line must reach the SSE/console surface, not just the dict."""
+    """The note must reach the SSE/console surface, not just the dict."""
     _stub_chat(agent, _answer("Done."))
     agent.console.print_final_answer = MagicMock()
-    agent.process_query("hello", max_steps=3)
+    with patch.object(
+        _DummyAgent, "verification_scope_statement", return_value=SENTINEL
+    ):
+        agent.process_query("hello", max_steps=3)
     printed = agent.console.print_final_answer.call_args[0][0]
-    assert VERIFICATION_SCOPE_PREFIX in printed
+    assert SENTINEL in printed
 
 
 def test_scope_is_reset_between_turns(agent):
-    agent.shell_result = {"status": "success", "return_code": 0}
+    agent.shell_result = {"status": "error", "error": "1 failed", "return_code": 1}
     _stub_chat(
         agent,
         _tool_call("pytest -q"),
@@ -554,10 +657,9 @@ def test_scope_is_reset_between_turns(agent):
     )
     first = agent.process_query("run tests", max_steps=5)
     second = agent.process_query("say hi", max_steps=3)
-    assert _scope_line(first["result"]).startswith(
-        f"{VERIFICATION_SCOPE_PREFIX}verified"
-    )
-    assert "unverified" in _scope_line(second["result"])
+    assert "pytest didn't pass" in _scope_line(first["result"])
+    assert second["result"] == "second"
+    assert second["verification"]["state"] == "unverified"
 
 
 # ---------------------------------------------------------------------------
@@ -565,23 +667,31 @@ def test_scope_is_reset_between_turns(agent):
 # ---------------------------------------------------------------------------
 
 
+def _with_sentinel(agent_, query, **kwargs):
+    """Run *query* with this turn's note pinned to ``SENTINEL``."""
+    with patch.object(
+        _DummyAgent, "verification_scope_statement", return_value=SENTINEL
+    ):
+        return agent_.process_query(query, **kwargs)
+
+
 def test_cancel_event_path_carries_the_statement(agent):
     event = threading.Event()
     event.set()
     agent._cancel_event = event
     _stub_chat(agent, _answer("never reached"))
-    result = agent.process_query("do something", max_steps=5)
+    result = _with_sentinel(agent, "do something", max_steps=5)
     assert "stopped before it finished" in result["result"]
     # Cancel has several triggers now; the text must not claim a timeout.
     assert "exceeded the allowed" not in result["result"]
-    assert "unverified" in _scope_line(result["result"])
+    assert _scope_line(result["result"]) == SENTINEL
 
 
 def test_llm_connection_error_path_carries_the_statement(agent):
     _stub_chat(agent, ConnectionError("connection refused"))
-    result = agent.process_query("hello", max_steps=3)
+    result = _with_sentinel(agent, "hello", max_steps=3)
     assert "trouble reaching the language model" in result["result"]
-    assert "unverified" in _scope_line(result["result"])
+    assert _scope_line(result["result"]) == SENTINEL
 
 
 def test_context_overflow_path_carries_the_statement(agent):
@@ -590,23 +700,23 @@ def test_context_overflow_path_carries_the_statement(agent):
     )
     _stub_chat(agent, overflow, overflow)
     with patch.object(_DummyAgent, "_is_loaded_ctx_too_small", return_value=False):
-        result = agent.process_query("summarize everything", max_steps=3)
+        result = _with_sentinel(agent, "summarize everything", max_steps=3)
     assert "context window" in result["result"]
-    assert "unverified" in _scope_line(result["result"])
+    assert _scope_line(result["result"]) == SENTINEL
 
 
 def test_generic_llm_error_path_carries_the_statement(agent):
     _stub_chat(agent, RuntimeError("kaboom"))
     with patch.object(_DummyAgent, "_is_loaded_ctx_too_small", return_value=False):
-        result = agent.process_query("hello", max_steps=3)
+        result = _with_sentinel(agent, "hello", max_steps=3)
     assert "unexpected problem" in result["result"]
-    assert "unverified" in _scope_line(result["result"])
+    assert _scope_line(result["result"]) == SENTINEL
 
 
 @pytest.mark.parametrize("streaming", [False, True])
 def test_a_refused_cloud_account_ends_the_turn_as_an_error(agent, streaming):
     """Out of funds: the user gets where to add funds, as an error, with no
-    "try again" advice and no "unverified" footer. Streaming is the TUI's path,
+    "try again" advice and no verification note. Streaming is the TUI's path,
     which used to skip the typed message entirely."""
     refused = RuntimeError(
         f"Error in send_messages: {_cloud_request_error(412, 'fireworks')}"
@@ -616,30 +726,30 @@ def test_a_refused_cloud_account_ends_the_turn_as_an_error(agent, streaming):
     chat.send_messages_stream = MagicMock(side_effect=refused)
     agent.console.print_error = MagicMock()
     with patch.object(_DummyAgent, "_is_loaded_ctx_too_small", return_value=False):
-        result = agent.process_query("hello", max_steps=3)
+        result = _with_sentinel(agent, "hello", max_steps=3)
 
     answer = result["result"]
     assert answer.startswith("Fireworks AI refused the request (HTTP 412)")
     assert "https://fireworks.ai/account/billing" in answer
     assert "temporary" not in answer
-    assert VERIFICATION_SCOPE_PREFIX not in answer
+    assert SENTINEL not in answer
     agent.console.print_error.assert_any_call(answer)
 
 
 def test_parse_give_up_path_carries_the_statement(agent):
     bad = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
     _stub_chat(agent, bad, bad, bad, bad, bad)
-    result = agent.process_query("do it", max_steps=10)
+    result = _with_sentinel(agent, "do it", max_steps=10)
     assert "trouble formatting my tool call" in result["result"]
-    assert "unverified" in _scope_line(result["result"])
+    assert _scope_line(result["result"]) == SENTINEL
 
 
 def test_loop_break_summary_path_carries_the_statement(agent):
-    """A repeated failing check breaks the loop — and still states its scope.
+    """A repeated failing check breaks the loop — and still says it failed.
 
     Every call errored, so the summary must not claim completion (#3750)
-    and must not guess a cause it does not have (#3888); the scope line is
-    what tells the user the check ran and did not pass.
+    and must not guess a cause it does not have (#3888); the note is what
+    tells the user the check ran and did not pass.
     """
     agent.max_consecutive_repeats = 2
     agent.shell_result = {"status": "error", "error": "boom", "return_code": 1}
@@ -647,16 +757,16 @@ def test_loop_break_summary_path_carries_the_statement(agent):
     _stub_chat(agent, call, call, call, call)
     result = agent.process_query("run the tests", max_steps=6)
     assert "Task completed with" not in result["result"]
-    # Checks ran and did not pass — not "unverified", not "verified".
-    assert "partially verified" in _scope_line(result["result"])
+    assert "pytest didn't pass" in _scope_line(result["result"])
+    assert result["verification"]["state"] == "partially verified"
 
 
 def test_max_steps_path_carries_the_statement(agent):
-    """No answer was ever produced; the max-steps message still states scope."""
+    """No answer was ever produced; the max-steps message still gets the note."""
     _stub_chat(agent, _tool_call("ls -la"), _tool_call("ls -la"))
-    result = agent.process_query("browse", max_steps=1)
-    assert "Reached maximum steps limit" in result["result"]
-    assert "unverified" in _scope_line(result["result"])
+    result = _with_sentinel(agent, "browse", max_steps=1)
+    assert "I ran out of steps" in result["result"]
+    assert _scope_line(result["result"]) == SENTINEL
 
 
 # ---------------------------------------------------------------------------
@@ -684,7 +794,6 @@ def test_console_cancellation_stays_empty(agent):
     result = agent.process_query("hello", max_steps=3)
     assert result["status"] == "cancelled"
     assert result["result"] == ""
-    assert VERIFICATION_SCOPE_PREFIX not in result["result"]
 
 
 def test_empty_answer_is_left_empty(agent):
@@ -714,16 +823,17 @@ def _sse_answer(raw: str) -> str:
     return captured[0]["content"]
 
 
+_FAILED_NOTE = f"{VERIFICATION_NOTE_OPENER} — pytest didn't pass."
+
+
 def test_sse_keeps_the_scope_line_on_a_real_answer():
-    raw = f"Here is the answer.\n\n{build_verification_scope([])}"
-    content = _sse_answer(raw)
-    assert content.startswith("Here is the answer.")
-    assert VERIFICATION_SCOPE_PREFIX in content
+    raw = f"Here is the answer.\n\n{_FAILED_NOTE}"
+    assert _sse_answer(raw) == raw
 
 
 def test_sse_card_echo_stays_empty_rather_than_scope_line_only():
-    """An answer the cleaners strip to nothing must not become a scope line."""
-    raw = f'{{"thought": "done", "answer": ""}}\n\n{build_verification_scope([])}'
+    """An answer the cleaners strip to nothing must not become a note alone."""
+    raw = f'{{"thought": "done", "answer": ""}}\n\n{_FAILED_NOTE}'
     assert _sse_answer(raw) == ""
 
 
@@ -815,16 +925,17 @@ def _blocked(label="pytest", name="run_shell_command"):
 
 
 def test_a_refused_check_is_unverified_not_partially_verified():
+    assert _state([_blocked()]) == "unverified"
     statement = build_verification_scope([_blocked()])
-    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
-    assert "did not run" in statement
-    assert "did not pass" not in statement
+    assert "blocked before it could run" in statement
+    assert "didn't pass" not in statement
 
 
 def test_a_refused_check_names_what_was_requested():
     statement = build_verification_scope([_blocked("pytest")])
-    assert "pytest" in statement
-    assert "refused before execution" in statement
+    assert statement == (
+        f"{VERIFICATION_NOTE_OPENER} — pytest was blocked before it could run."
+    )
 
 
 def test_a_declined_check_is_not_reported_as_passing():
@@ -835,40 +946,42 @@ def test_a_declined_check_is_not_reported_as_passing():
         "failed": False,
         "ran": False,
     }
-    statement = build_verification_scope([declined])
-    assert "ran and passed" not in statement
-    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
+    assert _state([declined]) == "unverified"
+    assert "passed" not in build_verification_scope([declined])
 
 
 def test_a_refused_check_alongside_a_passing_one_is_only_partial():
-    statement = build_verification_scope(
-        [{"tool": "t", "check_label": "ruff", "failed": False}, _blocked("pytest")]
+    executions = [
+        {"tool": "t", "check_label": "ruff", "failed": False},
+        _blocked("pytest"),
+    ]
+    assert _state(executions) == "partially verified"
+    assert build_verification_scope(executions) == (
+        f"{VERIFICATION_NOTE_OPENER} — ruff passed, and pytest was blocked "
+        "before it could run."
     )
-    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
-    assert "ruff ran and passed" in statement
-    assert "pytest did not run" in statement
 
 
 def test_a_refused_check_does_not_inflate_the_ran_tool_count():
-    statement = build_verification_scope(
+    summary = verification_summary(
         [
             {"tool": "read_file", "check_label": None, "failed": False},
             _blocked("pytest"),
         ]
     )
-    assert "2 tool calls ran" not in statement
+    assert summary["tool_calls"] == 1
 
 
 def test_non_check_tools_that_never_ran_are_not_counted_as_having_run():
-    statement = build_verification_scope(
+    summary = verification_summary(
         [{"tool": "read_file", "check_label": None, "failed": True, "ran": False}]
     )
-    assert "no tools ran" in statement
+    assert summary["tool_calls"] == 0
 
 
 def test_a_tool_that_ran_and_errored_still_counts_as_a_tool_call_that_ran():
     """An error is not a refusal — read_file on a missing path did run."""
-    statement = build_verification_scope(
+    summary = verification_summary(
         [
             {
                 "tool": "read_file",
@@ -880,7 +993,7 @@ def test_a_tool_that_ran_and_errored_still_counts_as_a_tool_call_that_ran():
             }
         ]
     )
-    assert "1 tool call ran" in statement
+    assert summary["tool_calls"] == 1
 
 
 def test_the_footer_is_still_bounded_with_blocked_checks():
@@ -910,11 +1023,12 @@ def test_loop_reports_a_rejected_pytest_as_never_having_run(agent):
         _answer("The command was rejected, so no tests ran."),
     )
 
-    line = _scope_line(agent.process_query("run the tests")["result"])
+    result = agent.process_query("run the tests")
+    line = _scope_line(result["result"])
 
-    assert line.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
-    assert "did not run" in line
-    assert "did not pass" not in line
+    assert result["verification"]["state"] == "unverified"
+    assert "blocked before it could run" in line
+    assert "didn't pass" not in line
 
 
 def test_loop_reports_a_declined_pytest_as_never_having_run(agent):
@@ -925,10 +1039,11 @@ def test_loop_reports_a_declined_pytest_as_never_having_run(agent):
         _answer("You declined, so nothing was checked."),
     )
 
-    line = _scope_line(agent.process_query("run the tests")["result"])
+    result = agent.process_query("run the tests")
+    line = _scope_line(result["result"])
 
-    assert line.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
-    assert "ran and passed" not in line
+    assert result["verification"]["not_run"] == ["pytest"]
+    assert "passed" not in line
 
 
 def test_loop_still_reports_a_real_failing_test_as_having_run(agent):
@@ -941,10 +1056,10 @@ def test_loop_still_reports_a_real_failing_test_as_having_run(agent):
     }
     _stub_chat(agent, _tool_call("pytest tests/"), _answer("One test failed."))
 
-    line = _scope_line(agent.process_query("run the tests")["result"])
+    result = agent.process_query("run the tests")
 
-    assert "partially verified" in line
-    assert "did not pass" in line
+    assert result["verification"]["state"] == "partially verified"
+    assert "pytest didn't pass" in _scope_line(result["result"])
 
 
 def test_loop_still_reports_a_passing_test_as_verified(agent):
@@ -956,9 +1071,10 @@ def test_loop_still_reports_a_passing_test_as_verified(agent):
     }
     _stub_chat(agent, _tool_call("pytest tests/"), _answer("All green."))
 
-    line = _scope_line(agent.process_query("run the tests")["result"])
+    result = agent.process_query("run the tests")
 
-    assert line.startswith(f"{VERIFICATION_SCOPE_PREFIX}verified")
+    assert result["verification"]["state"] == "verified"
+    assert result["result"] == "All green."
 
 
 # --- the real shell tool declares its own refusals --------------------------
@@ -1045,8 +1161,8 @@ def test_a_refused_pytest_leaves_the_turn_unverified(shell_tool, unattended):
             }
         ]
     )
-    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
-    assert "did not pass" not in statement
+    assert "blocked before it could run" in statement
+    assert "didn't pass" not in statement
 
 
 def test_a_command_that_really_runs_says_it_ran(shell_tool):
@@ -1109,32 +1225,31 @@ def test_a_hallucinated_kwarg_on_a_pytest_call_leaves_the_turn_unverified(agent)
             }
         ]
     )
-    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}unverified")
-    assert "ran and did not pass" not in statement
+    assert "blocked before it could run" in statement
+    assert "didn't pass" not in statement
 
 
 # --- a refusal the agent recovered from is not an unrun check ---------------
 
 
 def test_a_refused_check_that_later_ran_is_not_also_reported_as_unrun():
-    statement = build_verification_scope(
-        [
-            _blocked("pytest"),
-            {"tool": "run_shell_command", "check_label": "pytest", "failed": False},
-        ]
-    )
-    assert statement == f"{VERIFICATION_SCOPE_PREFIX}verified — pytest ran and passed."
+    executions = [
+        _blocked("pytest"),
+        {"tool": "run_shell_command", "check_label": "pytest", "failed": False},
+    ]
+    assert _state(executions) == "verified"
+    assert build_verification_scope(executions) == ""
 
 
 def test_a_different_check_left_unrun_is_still_reported():
-    statement = build_verification_scope(
-        [
-            _blocked("ruff"),
-            {"tool": "run_shell_command", "check_label": "pytest", "failed": False},
-        ]
+    executions = [
+        _blocked("ruff"),
+        {"tool": "run_shell_command", "check_label": "pytest", "failed": False},
+    ]
+    assert _state(executions) == "partially verified"
+    assert "ruff was blocked before it could run" in build_verification_scope(
+        executions
     )
-    assert statement.startswith(f"{VERIFICATION_SCOPE_PREFIX}partially verified")
-    assert "ruff did not run" in statement
 
 
 def test_a_refused_check_that_later_ran_and_failed_is_reported_as_failing():
@@ -1144,16 +1259,24 @@ def test_a_refused_check_that_later_ran_and_failed_is_reported_as_failing():
             {"tool": "run_shell_command", "check_label": "pytest", "failed": True},
         ]
     )
-    assert "ran and did not pass" in statement
-    assert "did not run" not in statement
+    assert "pytest didn't pass" in statement
+    assert "blocked" not in statement
 
 
 # ---------------------------------------------------------------------------
 # Exactly one statement per answer, whatever the model wrote (#3675)
 # ---------------------------------------------------------------------------
 
+#: A legacy footer, as older answers in saved history still carry it.
 ECHOED = (
     "Verification: unverified — 5 tool calls ran, none of them a test, lint, or build."
+)
+
+#: The current note, echoed back by a model that read it in history.
+ECHOED_NOTE = f"{VERIFICATION_NOTE_OPENER} — pytest didn't pass."
+# Long enough that the cap cuts off the note's ending.
+ECHOED_TRUNCATED_NOTE = build_verification_scope(
+    [], unchecked_change="src/" + "deeply/nested/" * 12 + "module.py"
 )
 
 MODEL_ECHOES = [
@@ -1190,52 +1313,88 @@ MODEL_ECHOES = [
         "em_dash_variants",
         "All five calls succeeded.\n\nVerification: unverified - 5 tool calls ran.",
     ),
+    ("new_note", f"All five calls succeeded.\n\n{ECHOED_NOTE}"),
+    ("new_note_italic", f"All five calls succeeded.\n\n_{ECHOED_NOTE}_"),
+    (
+        "new_note_curly_apostrophe",
+        "All five calls succeeded.\n\nI haven\u2019t confirmed this works — pytest "
+        "didn\u2019t pass.",
+    ),
+    ("new_note_twice", f"Body.\n\n{ECHOED_NOTE}\n\n{ECHOED_NOTE}"),
+    ("new_note_truncated", f"All five calls succeeded.\n\n{ECHOED_TRUNCATED_NOTE}"),
 ]
+
+
+def test_the_truncated_echo_fixture_really_is_cut_off():
+    assert ECHOED_TRUNCATED_NOTE.endswith("…")
+    assert len(ECHOED_TRUNCATED_NOTE) == VERIFICATION_SCOPE_MAX_CHARS
 
 
 def _scope_lines(text):
     return [
         line
         for line in text.splitlines()
-        if line.lstrip(" >-*_`").startswith("Verification:")
+        if line.lstrip(" >-*_`#1.").startswith(("Verification:", "I haven"))
     ]
 
 
 @pytest.mark.parametrize(
     "answer", [case[1] for case in MODEL_ECHOES], ids=[case[0] for case in MODEL_ECHOES]
 )
-def test_an_echoed_statement_is_replaced_not_duplicated(agent, answer):
-    emitted = agent._with_verification_scope(answer)
-    assert len(_scope_lines(emitted)) == 1, emitted
-
-
-def test_the_surviving_statement_is_the_one_derived_from_this_turn(agent):
+def test_an_echo_is_replaced_by_this_turns_note(agent, answer):
     agent._turn_tool_executions = [
-        {"tool": "run_shell_command", "check_label": "pytest", "failed": False}
+        {"tool": "run_shell_command", "check_label": "ruff", "failed": True}
     ]
-    emitted = agent._with_verification_scope(f"Body.\n\n{ECHOED}")
-    assert _scope_lines(emitted) == [agent.verification_scope_statement()]
-    assert "5 tool calls ran" not in emitted
+    emitted = agent._with_verification_scope(answer)
+    assert _scope_lines(emitted) == [agent.verification_scope_statement()], emitted
+
+
+@pytest.mark.parametrize(
+    "answer", [case[1] for case in MODEL_ECHOES], ids=[case[0] for case in MODEL_ECHOES]
+)
+def test_an_echo_is_removed_when_this_turn_has_nothing_to_say(agent, answer):
+    emitted = agent._with_verification_scope(answer)
+    assert _scope_lines(emitted) == [], emitted
 
 
 def test_the_answer_text_around_an_echo_is_preserved(agent):
     emitted = agent._with_verification_scope(f"First part.\n\n{ECHOED}\n\nSecond part.")
-    assert "First part." in emitted
-    assert "Second part." in emitted
+    assert emitted == "First part.\n\nSecond part."
 
 
-def test_an_answer_that_is_only_an_echo_keeps_exactly_one_statement(agent):
+def test_an_answer_that_is_only_an_echo_becomes_this_turns_note(agent):
+    agent._turn_tool_executions = [
+        {"tool": "run_shell_command", "check_label": "ruff", "failed": True}
+    ]
     emitted = agent._with_verification_scope(ECHOED)
     assert emitted == agent.verification_scope_statement()
 
 
-def test_an_answer_with_no_echo_is_unchanged_but_for_the_appended_line(agent):
-    emitted = agent._with_verification_scope("Just an answer.")
-    assert emitted.startswith("Just an answer.")
-    assert len(_scope_lines(emitted)) == 1
+def test_an_answer_that_is_only_an_echo_never_surfaces_the_stale_note(agent):
+    """A blank answer means "cancelled" downstream, and the echo is stale."""
+    assert agent._with_verification_scope(ECHOED) == agent.ECHO_ONLY_ANSWER
+    assert agent._with_verification_scope(ECHOED_NOTE) == agent.ECHO_ONLY_ANSWER
 
 
-def test_the_loop_emits_one_statement_when_the_model_echoes_one(agent):
+def test_the_models_own_caveat_is_not_mistaken_for_the_note():
+    text = "Here's the script.\n\nI haven't confirmed this works - it needs your GPU."
+    assert strip_verification_scope(text) == text
+    text = "Here's the script.\n\nI haven't confirmed this works — it needs your GPU."
+    assert strip_verification_scope(text) == text
+
+
+def test_an_echoed_bold_legacy_line_comes_back_clean():
+    _, line = split_verification_scope(
+        "Body.\n\n**Verification:** verified — pytest ran and passed."
+    )
+    assert line == "Verification: verified — pytest ran and passed."
+
+
+def test_an_answer_with_no_echo_is_unchanged_when_there_is_nothing_to_say(agent):
+    assert agent._with_verification_scope("Just an answer.") == "Just an answer."
+
+
+def test_the_loop_drops_an_echoed_legacy_footer(agent):
     """End-to-end: the echo comes back through conversation history."""
     agent.shell_result = {"status": "success", "return_code": 0, "stdout": "ok"}
     _stub_chat(
@@ -1246,14 +1405,16 @@ def test_the_loop_emits_one_statement_when_the_model_echoes_one(agent):
 
     result = agent.process_query("list the directory")["result"]
 
-    assert len(_scope_lines(result)) == 1, result
-    assert "5 tool calls ran" not in result
+    assert result == "Listed the directory."
 
 
 def test_split_returns_the_body_and_the_last_statement():
     body, line = split_verification_scope(f"Body.\n\n{ECHOED}")
     assert body == "Body."
     assert line == ECHOED
+    body, line = split_verification_scope(f"Body.\n\n_{ECHOED_NOTE}_")
+    assert body == "Body."
+    assert line == ECHOED_NOTE
 
 
 def test_split_tolerates_a_non_string():
@@ -1276,6 +1437,11 @@ KEEP_VERBATIM = [
     ),
     ("the_word_in_prose", "verification: none was performed on this branch."),
     ("a_colon_line_that_is_not_a_statement", "Verification: TBD"),
+    (
+        "the_opener_mid_sentence",
+        "Honestly, I haven't confirmed this works — try it first.",
+    ),
+    ("the_opener_without_a_dash", "I haven't confirmed this works yet."),
     ("paragraph_spacing", "Line A.\n\n\nLine B."),
     (
         "a_footer_quoted_inside_a_code_fence",
@@ -1317,6 +1483,9 @@ def test_only_the_statements_blank_separator_is_removed():
 
 def test_a_quoted_footer_survives_while_the_real_one_is_replaced(agent):
     """An answer explaining the feature must keep its example intact."""
+    agent._turn_tool_executions = [
+        {"tool": "run_shell_command", "check_label": "ruff", "failed": True}
+    ]
     answer = "Here is what the footer looks like:\n\n```\n" f"{ECHOED}\n```\n\n{ECHOED}"
     emitted = agent._with_verification_scope(answer)
     assert "```\n" + ECHOED + "\n```" in emitted
@@ -1407,9 +1576,9 @@ def test_python_check_after_shell_refusal_is_reported_as_executed(agent, code, c
     )
     assert agent._turn_tool_executions[-1]["check_label"] == "pytest"
     assert agent._turn_tool_executions[-1]["ran"] is True
-    statement = agent.verification_scope_statement()
-    assert "pytest ran" in statement
-    assert ("partially verified" in statement) == bool(code)
+    state = agent.verification_state()
+    assert state["not_run"] == []
+    assert state["state"] == ("partially verified" if code else "verified")
 
 
 @pytest.mark.parametrize("runner", ["pytest", "unittest"])
@@ -1470,8 +1639,8 @@ def test_a_failing_summary_is_a_failed_check_whatever_the_exit_code(
     )
     assert agent._turn_tool_executions[-1]["failed"] is True
     statement = agent.verification_scope_statement()
-    assert "ran and passed" not in statement
-    assert "did not pass" in statement
+    assert statement.startswith(VERIFICATION_NOTE_OPENER)
+    assert statement.endswith("didn't pass.")
 
 
 def test_a_passing_summary_from_a_snippet_stays_passed(agent):
@@ -1528,3 +1697,15 @@ class TestSubtestSummariesAreRecognised:
         }
 
         assert summary_reports_failure("run_python", result) is False
+
+
+def test_a_new_turn_rechecks_whether_the_project_has_tests(agent, tmp_path):
+    root = str(tmp_path)
+    assert not agent._project_has_tests(root)
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+    assert not agent._project_has_tests(root), "cached within the turn"
+
+    _stub_chat(agent, _answer("Hello."))
+    agent.process_query("hi")
+
+    assert agent._project_has_tests(root)

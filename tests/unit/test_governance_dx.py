@@ -10,7 +10,6 @@ from typing import Any
 import pytest
 
 from gaia import tool
-from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.governance import (
     GaiaGovernanceAdapter,
     GovernanceConfig,
@@ -20,13 +19,11 @@ from gaia.governance import (
 )
 
 
-@tool
 @govern(risk="blocked", reason="dx test blocked")
 def _dx_decorated_blocked(x: int = 1) -> dict:
     return {"x": x}
 
 
-@tool
 @govern(risk=["review", "slow"])
 def _dx_decorated_review(x: int = 1) -> dict:
     return {"x": x}
@@ -47,10 +44,16 @@ class _GovernedFakeAgent(GovernedAgentMixin, _FakeAgent):
 
 @pytest.fixture(autouse=True)
 def _ensure_dx_tools_registered():
-    """Re-register test tools if _TOOL_REGISTRY was cleared by another test suite."""
+    """Register these fake tools for the lifetime of each test.
+
+    Registering at module level would run at collection time, before the root
+    conftest's per-test/per-module registry restore ever gets a chance to
+    snapshot — that leaks these names into every other test collected in the
+    same session (#4702). Registering here instead keeps it inside the window
+    the restore already wraps.
+    """
     for fn in (_dx_decorated_blocked, _dx_decorated_review):
-        if fn.__name__ not in _TOOL_REGISTRY:
-            tool(fn)
+        tool(fn)
     yield
 
 
