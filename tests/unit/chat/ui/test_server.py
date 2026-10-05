@@ -2033,7 +2033,7 @@ class TestLemonadeApiKeyInjection:
     surface area for httpx calls; per-site tests for the remaining call
     sites (_chat_helpers, server.py startup) are covered by the T13 grep
     sweep + the unit tests of ``lemonade_auth_headers`` in
-    ``tests/test_lemonade_client.py``.
+    ``tests/unit/test_lemonade_client_http.py``.
     """
 
     @patch("httpx.AsyncClient")

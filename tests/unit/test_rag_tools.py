@@ -77,6 +77,27 @@ class TestExtractPageFromChunk:
         result = extract_page_from_chunk(chunks[2], chunk_index=2, all_chunks=chunks)
         assert result == 5
 
+    def test_backward_search_stops_at_another_document(self):
+        """A text file indexed after a PDF never inherits the PDF's last page.
+
+        A .txt answer was cited as "page 1667" because the lookback walked
+        into the 1,667-page handbook indexed just before it.
+        """
+        chunks = ["[Page 1667] end of the handbook", "Fed decision text"]
+        owners = {0: "handbook.pdf", 1: "fed.txt"}
+        result = extract_page_from_chunk(
+            chunks[1], chunk_index=1, all_chunks=chunks, chunk_to_file=owners
+        )
+        assert result is None
+
+    def test_backward_search_still_walks_its_own_document(self):
+        chunks = ["[Page 4] start", "continues", "target"]
+        owners = {0: "a.pdf", 1: "a.pdf", 2: "a.pdf"}
+        result = extract_page_from_chunk(
+            chunks[2], chunk_index=2, all_chunks=chunks, chunk_to_file=owners
+        )
+        assert result == 4
+
     # -- No page found --
 
     def test_no_page_marker_returns_none(self):

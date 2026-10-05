@@ -30,6 +30,9 @@ stdio JSONL -- what the TUI spawns as a child process:
      PyInstaller missed shows up as an ``error`` event naming it), stdout
      carries JSON and nothing else, and the process tears down when its parent
      leaves.
+  8. The same handshake with ``--use-claude`` names the ``claude`` backend.
+     The TUI forwards that flag, and the Anthropic client's import is guarded,
+     so a binary built without it boots fine and fails only here.
 
 The handshake deliberately stops short of a real turn: an answer needs a running
 Lemonade Server and a downloaded model, which the release runners do not have.
@@ -46,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import queue
 import socket
 import subprocess
@@ -243,10 +247,18 @@ def _first_stdout_line(proc: subprocess.Popen, deadline_s: float):
         return None
 
 
-def check_stdio_handshake(binary: Path) -> bool:
-    """The opening event of a real stdio session, read off the real pipe."""
-    cmd = [str(binary), *STDIO_ARGV]
-    log(f"command: {' '.join(cmd) if STDIO_ARGV else str(binary) + ' (no arguments)'}")
+def check_stdio_handshake(
+    binary: Path,
+    argv: list[str] = STDIO_ARGV,
+    env: dict | None = None,
+    backend: str | None = None,
+) -> bool:
+    """The opening event of a real stdio session, read off the real pipe.
+
+    *backend*, when given, is the ``model_backend`` the opening event must name.
+    """
+    cmd = [str(binary), *argv]
+    log(f"command: {' '.join(cmd) if argv else str(binary) + ' (no arguments)'}")
     t0 = time.time()
     proc = subprocess.Popen(
         cmd,
@@ -255,6 +267,7 @@ def check_stdio_handshake(binary: Path) -> bool:
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
+        env=env,
     )
     try:
         line = _first_stdout_line(proc, STDIO_HANDSHAKE_DEADLINE_S)
@@ -311,6 +324,12 @@ def check_stdio_handshake(binary: Path) -> bool:
             f"backend={event.get('model_backend')!r} "
             f"lemonade_reachable={event.get('lemonade_reachable')}"
         )
+        if backend is not None and event.get("model_backend") != backend:
+            log(
+                f"FAIL: expected model_backend={backend!r}, got "
+                f"{event.get('model_backend')!r}"
+            )
+            return False
 
         # stdin closing is how the TUI says goodbye; a child that ignores it
         # holds the model slot for the life of the machine.
@@ -382,8 +401,17 @@ def main(argv=None) -> int:
     results["stdio_argv"] = check_stdio_argv(binary)
     results["stdio_handshake"] = check_stdio_handshake(binary)
 
+    # Building the Claude client makes no network call, so a placeholder key is
+    # enough to prove the client is bundled.
+    log("checking the --use-claude backend")
+    claude_env = dict(os.environ)
+    claude_env.setdefault("ANTHROPIC_API_KEY", "smoke-test-placeholder")
+    results["claude_handshake"] = check_stdio_handshake(
+        binary, ["--use-claude"], env=claude_env, backend="claude"
+    )
+
     log(f"results: {results}")
-    ok = len(results) == 5 and all(results.values())
+    ok = len(results) == 6 and all(results.values())
     log("VERDICT: PASS" if ok else "VERDICT: FAIL")
     return 0 if ok else 1
 

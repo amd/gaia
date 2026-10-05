@@ -858,7 +858,7 @@ The system prompt is split into two parts to allow LLM inference engines to reus
 
 ### Stable Prefix
 
-`get_memory_system_prompt()` -- injected once via `Agent._get_mixin_prompts()`. Contains nothing time-sensitive (no timestamps, no due dates). Stays frozen for the entire session so KV-cache can be reused. Rebuilt only when context changes.
+`get_memory_system_prompt()` -- injected once via `Agent._get_mixin_prompts()`. Contains nothing time-sensitive (no timestamps, no due dates). Stays frozen for the entire session so KV-cache can be reused: rendered once after the first turn's upkeep, and re-rendered only on a context switch, a session reset, or a `forget`/`update_memory` of an item it shows. Memories stored mid-session reach the model through the dynamic suffix.
 
 ```python
 def get_memory_system_prompt(self) -> str:
@@ -926,7 +926,7 @@ the same project does not rediscover the quirk.
 
 ### Dynamic Suffix
 
-`get_memory_dynamic_context()` -- prepended to the user message each turn. Contains current time, upcoming/overdue items, lessons learned since the stable prompt was frozen, and the memories a vector search found relevant to this message. Changes every turn.
+`get_memory_dynamic_context()` -- prepended to the user message each turn. Contains current time, upcoming/overdue items, lessons learned since the stable prompt was frozen, the memories a vector search found relevant to this message, and any learned procedures recalled for this goal. Changes every turn.
 
 ```python
 def get_memory_dynamic_context(self) -> str:

@@ -667,10 +667,11 @@
     line-height: 1.6;
 }
 
+/* Inline, not inline-flex: an atomic box splits the path out of the sentence
+   it belongs to, in layout and in copied/extracted text. */
 .tool-result-path {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
+    display: inline;
+    overflow-wrap: anywhere;
     color: var(--accent);
     cursor: pointer;
     border-radius: 0;
@@ -678,6 +679,10 @@
     transition: background 100ms var(--ease);
     text-decoration: underline;
     text-decoration-style: dashed;
+}
+.tool-result-path svg {
+    margin-right: 3px;
+    vertical-align: -1px;
 }
 .tool-result-path:hover {
     background: color-mix(in srgb, var(--accent) 6%, transparent);

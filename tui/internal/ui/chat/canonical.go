@@ -79,6 +79,13 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
+		// A phase report drives the live line and nothing else: it is not
+		// narration, so it never lands in the work log.
+		if e.Phase != "" {
+			m.phase = modelPhase{name: e.Phase, words: e.Words, label: truncateRunes(clean(e.Message), narrationMax)}
+			break
+		}
+
 		// One live line, replaced — not a log. A user watching a 200s turn needs
 		// to know what is happening NOW; an accumulating list of "Step 2/50"
 		// and "Thinking" answers a question nobody asked and buries the tool
@@ -122,6 +129,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	case event.CanonicalToolCallEvent:
 		m.stashNarration()
+		m.phase = modelPhase{}
 		item := ActivityItem{
 			Kind:    "tool",
 			Tool:    e.Tool,
@@ -136,6 +144,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.activity = append(m.activity, item)
 
 	case event.CanonicalToolResultEvent:
+		m.phase = modelPhase{}
 		outcome, toolErr := event.ToolOutcomeOf(e)
 		if e.Render == "" {
 			// A tool that draws no card has no surface but its step row, so the
