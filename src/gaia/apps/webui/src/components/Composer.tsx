@@ -12,6 +12,8 @@ interface ComposerProps {
     onSubmit: () => void;
     onStop?: () => void;
     streaming?: boolean;
+    /** Stop was pressed and the run is winding down. */
+    stopping?: boolean;
     /** Blocks typing and sending, with the reason shown as the placeholder. */
     disabledReason?: string | null;
     attachments: UseAttachments;
@@ -27,7 +29,7 @@ interface ComposerProps {
 const MAX_INPUT_HEIGHT = 240;
 
 export function Composer({
-    value, onChange, onSubmit, onStop, streaming = false, disabledReason, attachments,
+    value, onChange, onSubmit, onStop, streaming = false, stopping = false, disabledReason, attachments,
     placeholder = 'Ask GAIA anything', autoFocus, inputRef, leftControls, rightControls,
 }: ComposerProps) {
     const ownRef = useRef<HTMLTextAreaElement | null>(null);
@@ -127,7 +129,14 @@ export function Composer({
                 <div className="composer-row-right">
                     {rightControls}
                     {streaming ? (
-                        <button type="button" className="composer-send is-stop" onClick={onStop} aria-label="Stop" title="Stop (Esc)">
+                        <button
+                            type="button"
+                            className="composer-send is-stop"
+                            onClick={onStop}
+                            disabled={stopping}
+                            aria-label="Stop"
+                            title={stopping ? 'Stopping…' : 'Stop (Esc)'}
+                        >
                             <Square size={12} fill="currentColor" />
                         </button>
                     ) : (

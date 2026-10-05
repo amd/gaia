@@ -216,12 +216,11 @@ describe('ChatView streaming cards (#2108)', () => {
         }
     });
 
-    it('handleStop transfers in-flight cards onto the partial message', async () => {
+    it('Stop transfers in-flight cards onto the stopped message', async () => {
         vi.useFakeTimers();
         try {
             await driveSend();
 
-            // handleStop only saves a partial message when content is non-empty.
             act(() => {
                 capturedCallbacks!.onChunk({ type: 'chunk', content: 'partial answer text' } as unknown as StreamEvent);
             });
@@ -234,6 +233,18 @@ describe('ChatView streaming cards (#2108)', () => {
 
             act(() => {
                 fireEvent.click(screen.getByLabelText('Stop'));
+            });
+            // The server closes a stopped turn with a done carrying the partial
+            // text; the refetch that follows returns no cards field.
+            mockedApi.getMessages.mockResolvedValue({
+                messages: [
+                    { id: 10, session_id: SESSION.id, role: 'user', content: 'scan my inbox', created_at: '2026-07-16T00:00:00.000Z', rag_sources: null },
+                    { id: 11, session_id: SESSION.id, role: 'assistant', content: 'partial answer text', created_at: '2026-07-16T00:00:01.000Z', rag_sources: null },
+                ],
+                total: 2,
+            });
+            act(() => {
+                capturedCallbacks!.onDone({ type: 'done', content: 'partial answer text' } as unknown as StreamEvent);
             });
 
             // Stay under the 3s message-poll interval so a stray poll doesn't

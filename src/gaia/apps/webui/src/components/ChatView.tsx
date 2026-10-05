@@ -32,6 +32,9 @@ import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
  */
 const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*"[^}]*(?:"?tool_args"?\s*:\s*\{[^}]*\})?\s*\}/g;
 
+/** How long Stop waits for the server's closing `done` before the client closes the turn itself. */
+export const STOP_GRACE_MS = 15_000;
+
 /**
  * Strip the LLM JSON envelope from streamed/accumulated content.
  * Handles responses like {"thought":"...", "goal":"...", "answer":"<content>"}
@@ -220,6 +223,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // blinked once per second — too distracting for an always-visible
     // text input). Native browser caret is plenty.
     const abortRef = useRef<AbortController | null>(null);
+    // Stop keeps the stream open until the server's closing `done` arrives.
+    const [stopping, setStopping] = useState(false);
+    const stopRequestedRef = useRef(false);
+    const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const closeStoppedTurnLocallyRef = useRef<(() => void) | null>(null);
     const stepIdRef = useRef(0);
     const toolOccurredRef = useRef(false);
     const sendMessageRef = useRef<(text?: string, options?: { attach?: boolean }) => void>(() => {});
@@ -380,6 +388,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 abortRef.current.abort();
                 abortRef.current = null;
             }
+            if (stopTimerRef.current) {
+                clearTimeout(stopTimerRef.current);
+                stopTimerRef.current = null;
+            }
+            stopRequestedRef.current = false;
+            closeStoppedTurnLocallyRef.current = null;
+            setStopping(false);
             if (streamRafRef.current !== null) {
                 cancelAnimationFrame(streamRafRef.current);
                 streamRafRef.current = null;
@@ -412,50 +427,27 @@ export function ChatView({ sessionId }: ChatViewProps) {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, []);
 
-    // Stop streaming — reads fresh state from store to avoid stale closures
+    // Stop: ask the server to cancel, but keep reading the stream. The run
+    // outlives the connection (#1580) and closes with a `done` carrying the
+    // persisted turn, steps included — the user must be able to audit what ran.
     const handleStop = useCallback(() => {
+        if (stopRequestedRef.current) return;
+        stopRequestedRef.current = true;
+        setStopping(true);
         useNotificationStore.getState().dismissSessionPrompts(sessionId);
-        log.stream.warn('User stopped generation');
-        // Tell the backend to cancel the run. Since runs now outlive the SSE
-        // connection (#1580), aborting the client alone only detaches us — the
-        // agent would keep generating in the background. The cancel endpoint
-        // sets the handler's cancelled flag so the producer bails at its next
-        // step boundary.
-        api.cancelStream(sessionId).catch(() => { /* best-effort */ });
-        if (abortRef.current) {
-            abortRef.current.abort();
-            abortRef.current = null;
-        }
-        // Cancel any pending rAF flush
-        if (streamRafRef.current !== null) {
-            cancelAnimationFrame(streamRafRef.current);
-            streamRafRef.current = null;
-        }
-        // Use the buffer (most up-to-date) or fall back to store content
-        const storeState = useChatStore.getState();
-        const content = streamBufferRef.current || storeState.streamingContent;
-        if (content) {
-            log.stream.info(`Saving partial response (${content.length} chars)`);
-            const currentSteps = storeState.agentSteps;
-            const currentCards = storeState.cards;
-            const assistantMsg: Message = {
-                id: Date.now() + 1,
-                session_id: sessionId,
-                role: 'assistant',
-                content,
-                created_at: new Date().toISOString(),
-                rag_sources: null,
-                agentSteps: currentSteps.length > 0 ? [...currentSteps] : undefined,
-                cards: currentCards.length > 0 ? [...currentCards] : undefined,
-            };
-            addMessage(assistantMsg);
-        }
-        streamBufferRef.current = '';
-        setStreaming(false);
-        clearStreamContent();
-        clearAgentSteps();
-        clearCards();
-    }, [sessionId, addMessage, setStreaming, clearStreamContent, clearAgentSteps, clearCards]);
+        log.stream.warn('User stopped generation; waiting for the server to close the turn');
+        // A 404 here usually means the run just finished and its `done` is in
+        // flight; the grace timer below closes the turn if nothing arrives.
+        api.cancelStream(sessionId).catch((err) => {
+            log.stream.error('Stop request failed; waiting for the stream to close', err);
+        });
+        stopTimerRef.current = setTimeout(() => {
+            log.stream.error(
+                `No closing event ${STOP_GRACE_MS}ms after Stop; closing the turn locally (session=${sessionId})`,
+            );
+            closeStoppedTurnLocallyRef.current?.();
+        }, STOP_GRACE_MS);
+    }, [sessionId]);
 
     // Global keyboard shortcuts: Escape → stop streaming, Ctrl+K → focus sidebar search
     useEffect(() => {
@@ -546,6 +538,59 @@ export function ChatView({ sessionId }: ChatViewProps) {
         let fullContent = '';
         let doneHandled = false;
         streamBufferRef.current = '';
+        stopRequestedRef.current = false;
+        setStopping(false);
+
+        const endStopWait = () => {
+            if (stopTimerRef.current) {
+                clearTimeout(stopTimerRef.current);
+                stopTimerRef.current = null;
+            }
+            stopRequestedRef.current = false;
+            closeStoppedTurnLocallyRef.current = null;
+            setStopping(false);
+        };
+
+        const snapshotTurn = () => {
+            const { agentSteps: steps, cards: liveCards } = useChatStore.getState();
+            return {
+                steps: steps.map((s) => ({ ...s, active: false })),
+                cards: [...liveCards],
+            };
+        };
+
+        // Used only when the server never closes a stopped turn: keep what
+        // the user saw, and label it unconfirmed rather than pretend it ended.
+        closeStoppedTurnLocallyRef.current = () => {
+            if (doneHandled) return;
+            doneHandled = true;
+            endStopWait();
+            abortRef.current?.abort();
+            abortRef.current = null;
+            if (streamRafRef.current !== null) {
+                cancelAnimationFrame(streamRafRef.current);
+                streamRafRef.current = null;
+            }
+            const content = streamBufferRef.current || useChatStore.getState().streamingContent;
+            streamBufferRef.current = '';
+            if (isStale()) return;
+            const { steps, cards: cardsSnapshot } = snapshotTurn();
+            addMessage({
+                id: Date.now() + 1,
+                session_id: sessionId,
+                role: 'assistant',
+                content,
+                created_at: new Date().toISOString(),
+                rag_sources: null,
+                agentSteps: steps.length > 0 ? steps : undefined,
+                cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
+                stopState: 'unconfirmed',
+            });
+            setStreaming(false);
+            clearStreamContent();
+            clearAgentSteps();
+            clearCards();
+        };
 
         const streamCallbacks: api.StreamCallbacks = {
             onChunk: (event) => {
@@ -833,6 +878,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);
                 if (doneHandled) return;
                 doneHandled = true;
+                const stopped = stopRequestedRef.current;
+                endStopWait();
 
                 // Cancel any pending rAF flush — we have the final content
                 if (streamRafRef.current !== null) {
@@ -845,18 +892,18 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // server-side, so don't touch the shared store (#1580).
                 if (isStale()) return;
 
-                const content = event.content || fullContent;
-                log.chat.timed(`Agent response complete: ${content.length} chars`, streamStart);
+                // `done` is the run's last event, so it is no longer running.
+                const store = useChatStore.getState();
+                store.setRunningSessions(store.runningSessionIds.filter((id) => id !== sessionId));
 
-                // Snapshot agent steps for the completed message
-                const stepsSnapshot = useChatStore.getState().agentSteps.map((s) => ({
-                    ...s, active: false,
-                }));
-                // Snapshot streaming cards (#2108) — same lifecycle as steps.
-                const cardsSnapshot = [...useChatStore.getState().cards];
+                const content = event.content || fullContent;
+                log.chat.timed(`Agent response complete: ${content.length} chars${stopped ? ' (stopped)' : ''}`, streamStart);
+
+                // Snapshot agent steps and streaming cards (#2108) for the completed message
+                const { steps: stepsSnapshot, cards: cardsSnapshot } = snapshotTurn();
 
                 const hasPolicyAlert = stepsSnapshot.some((s) => s.type === 'policy_alert');
-                if (content || hasPolicyAlert) {
+                if (content || hasPolicyAlert || stopped) {
                     // Update msg count ref so poll doesn't re-fetch what we just added
                     lastMsgCountRef.current = useChatStore.getState().messages.length + 1;
                     const assistantMsg: Message = {
@@ -869,6 +916,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         agentSteps: stepsSnapshot.length > 0 ? stepsSnapshot : undefined,
                         stats: event.stats || undefined,
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
+                        stopState: stopped ? 'stopped' : undefined,
                     };
                     addMessage(assistantMsg);
                 }
@@ -893,8 +941,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             // would drop them — merge from the pre-refetch
                             // in-memory messages by id, else role+content.
                             // #2109 replaces this merge with steps-derived hydration.
-                            const prevWithCards = useChatStore.getState().messages
-                                .filter((m) => m.cards && m.cards.length > 0);
+                            // stopState isn't persisted either; carry it by id.
+                            const prevMsgs = useChatStore.getState().messages;
+                            const prevWithCards = prevMsgs.filter((m) => m.cards && m.cards.length > 0);
                             const msgs: Message[] = (data.messages || []).map((m: any) => {
                                 const prev = prevWithCards.find(
                                     (p) => p.id === m.id || (p.role === m.role && p.content === m.content),
@@ -904,12 +953,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     agentSteps: m.agentSteps || m.agent_steps || undefined,
                                     stats: m.stats || m.inference_stats || undefined,
                                     cards: prev?.cards,
+                                    stopState: prevMsgs.find((p) => p.id === m.id)?.stopState,
                                 };
                             });
                             setMessages(msgs);
                             lastMsgCountRef.current = msgs.length;
                         })
-                        .catch(() => {});
+                        .catch((err) => log.chat.error(`Could not refresh messages for session=${sessionId}`, err));
                 }, 300);
 
                 // Auto-title on first message
@@ -926,6 +976,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onError: (err) => {
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);
+                endStopWait();
                 // Cancel any pending rAF flush
                 if (streamRafRef.current !== null) {
                     cancelAnimationFrame(streamRafRef.current);
@@ -1448,6 +1499,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         onSubmit={() => sendMessage()}
                         onStop={handleStop}
                         streaming={isStreaming}
+                        stopping={stopping}
                         disabledReason={composerBlocked}
                         attachments={attach}
                         inputRef={inputRef}

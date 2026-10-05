@@ -257,6 +257,9 @@ export interface Message {
     /** Structured cards emitted via tool_result.render during this turn
      *  (issue #2108). Rendered by RenderCard above the markdown content. */
     cards?: RenderCardData[];
+    /** Set when the user stopped this turn. 'unconfirmed' means the server
+     *  never acknowledged the stop, so the client closed the turn itself. */
+    stopState?: 'stopped' | 'unconfirmed';
 }
 
 /** One card instance transferred onto a finalized Message (issue #2108). */

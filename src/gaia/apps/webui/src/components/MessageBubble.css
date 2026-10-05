@@ -115,6 +115,21 @@
     background: color-mix(in srgb, var(--danger) 5%, transparent);
 }
 
+.msg-stopped {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 12px;
+}
+.msg-stopped.is-unconfirmed {
+    color: var(--accent-yellow);
+}
+
 .error-banner {
     display: flex;
     align-items: center;

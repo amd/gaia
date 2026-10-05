@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import React, { useCallback, useRef, useState, useEffect, useMemo } from 'react';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -358,8 +358,14 @@ function formatLatency(ms: number): string {
     return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
+const SERVER_CANCELLED_TEXT = 'Cancelled.';
+
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, liveStatus }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
+    const stopState = message.role === 'assistant'
+        ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
+        : undefined;
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
     const cleanedContent = useMemo(
@@ -495,7 +501,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     ))}
                     {/* The cursor is a streaming indicator, not decoration — it never
                         outlives the write. See docs/spec/gaia-design-language.mdx. */}
-                    <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} />
+                    {!(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
+                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} />
+                    )}
+                    {stopState && (
+                        <div className={`msg-stopped${stopState === 'unconfirmed' ? ' is-unconfirmed' : ''}`} role="note">
+                            <Square size={9} fill="currentColor" aria-hidden="true" />
+                            <span>
+                                {stopState === 'unconfirmed'
+                                    ? 'Stopped. GAIA did not confirm the stop, so some steps may be missing here. Reload the chat to see what it saved.'
+                                    : 'Stopped'}
+                            </span>
+                        </div>
+                    )}
                     {message.role === 'assistant'
                         && !isStreaming
                         && isAuthRequiredMessage(cleanedContent) && (
