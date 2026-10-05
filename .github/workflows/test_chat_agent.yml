@@ -38,8 +38,10 @@ on:
       - 'tests/unit/test_chat_*.py'
       - 'tests/unit/test_dynamic_tool_filtering.py'
       - 'tests/unit/test_prompt_size_budget.py'
+      - 'tests/unit/test_sd_rule_gating.py'
       - 'tests/unit/test_run_python_tool.py'
       - 'tests/unit/test_tool_loader_disambiguation.py'
+      - 'tests/unit/test_chat_tool_requests.py'
       - 'tests/unit/test_agent_required_connectors.py'
       - 'tests/unit/test_multi_device_wiring.py'
       - 'tests/unit/test_agent_hub_api.py'
@@ -83,8 +85,10 @@ on:
       - 'tests/unit/test_chat_*.py'
       - 'tests/unit/test_dynamic_tool_filtering.py'
       - 'tests/unit/test_prompt_size_budget.py'
+      - 'tests/unit/test_sd_rule_gating.py'
       - 'tests/unit/test_run_python_tool.py'
       - 'tests/unit/test_tool_loader_disambiguation.py'
+      - 'tests/unit/test_chat_tool_requests.py'
       - 'tests/unit/test_agent_required_connectors.py'
       - 'tests/unit/test_multi_device_wiring.py'
       - 'tests/unit/test_agent_hub_api.py'
@@ -181,8 +185,10 @@ jobs:
             tests/unit/test_dynamic_tool_filtering.py \
             tests/unit/test_indexed_docs_per_turn.py \
             tests/unit/test_prompt_size_budget.py \
+            tests/unit/test_sd_rule_gating.py \
             tests/unit/test_run_python_tool.py \
             tests/unit/test_tool_loader_disambiguation.py \
+            tests/unit/test_chat_tool_requests.py \
             tests/unit/test_agent_required_connectors.py \
             tests/unit/test_multi_device_wiring.py \
             tests/unit/test_agent_hub_api.py \

@@ -98,6 +98,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A file you allow is usable by every tool, including document Q&A.** Indexing
+  or querying a file outside the chat's scope was refused with no prompt, and
+  approving it through another tool still left it unreadable to the document
+  index. Indexing now asks the same question `read_file` does, and one approval
+  covers both. A tool waiting on that question is no longer abandoned at its
+  180 s limit while the question is still on screen. A refusal now tells the
+  model not to copy or move the file elsewhere to get around it.
 - **`--use-claude` works with the downloaded binary.** The release build left
   out the Anthropic client, so every Claude launch from the terminal UI, and
   every `/model` switch to Claude, failed with "The 'anthropic' package is

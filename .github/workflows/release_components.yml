@@ -305,6 +305,28 @@ jobs:
       version: ${{ needs.version.outputs.tui_version }}
       sidecar: pinned
 
+  # ── The one Windows setup: desktop app, terminal, or both ───────────────────
+  # Its own workflow so a slow or failed desktop app build costs only this
+  # setup, never the macOS and Linux packages or the raw binaries. It embeds the
+  # desktop app setup build-installers.yml made: on a tag, from publish.yml's run
+  # for the same commit (built before that run's approval gate, so no human
+  # wait); on a dispatch, from the published v<version> release.
+  windows-setup:
+    name: Windows setup
+    needs: [version, tui]
+    if: '!cancelled() && needs.tui.outputs.binaries_ok == ''true'''
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/windows_setup.yml
+    with:
+      version: ${{ needs.version.outputs.tui_version }}
+      sidecar: pinned
+      agent_ui_publish_run_sha: ${{ github.event_name == 'push' && github.sha || '' }}
+      # A dispatch before that release exists fails here, loudly -- there is no
+      # desktop app setup to embed yet.
+      agent_ui_release: ${{ github.event_name != 'push' && format('v{0}', needs.version.outputs.tui_version) || '' }}
+
 
   # ── terminal-hub: publish the binaries and the installers ───────────────────
   terminal-hub:
@@ -445,8 +467,11 @@ jobs:
           VERSION: ${{ needs.version.outputs.tui_version }}
         run: |
           set -euo pipefail
+          # The Windows setup publishes from publish-windows-setup below.
           python installer/tui/artifacts.py publish-args \
-            --version "${VERSION}" --dir dist > publish-args.txt
+            --version "${VERSION}" --dir dist \
+            --exclude-platform win-x64 \
+            > publish-args.txt
           artifact_args=()
           while IFS= read -r spec; do
             [ -n "${spec}" ] || continue
@@ -463,6 +488,99 @@ jobs:
             --summary-out published-installers.json
           echo "=== publish summary (installers) ==="
           cat published-installers.json
+
+  # ── The Windows setup, published under terminal-hub's win-x64-setup key ─────
+  # After terminal-hub, never before: the Worker fills a version's singular
+  # `artifact` field from the FIRST publish, and hub installs download that
+  # field expecting the raw binary (see "Must stay SECOND" above).
+  #
+  # Gated on the setup at the job level, not per step: the environment asks for
+  # approval when the job starts, and nobody should be asked to approve a
+  # publish that has nothing to publish.
+  publish-windows-setup:
+    name: Publish the Windows setup
+    needs: [version, terminal-hub, windows-setup]
+    if: |
+      !cancelled()
+      && needs.version.result == 'success'
+      && needs.terminal-hub.result == 'success'
+      && needs.windows-setup.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    # Same tag-allowlist requirement as terminal-hub above (#2935).
+    environment: agent-publish
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-setup
+          path: dist
+
+      # Before anything else: the setup carries the desktop app, so it is over
+      # the Worker's 90 MiB body cap and goes straight to R2 -- the R2 pair is
+      # as load-bearing here as the hub token.
+      - name: Require the publish credentials
+        if: needs.version.outputs.dry_run == 'false'
+        env:
+          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${GAIA_HUB_TOKEN:-}" ]        || missing="${missing} GAIA_HUB_TOKEN"
+          [ -n "${GAIA_HUB_PUBLISH_URL:-}" ]  || missing="${missing} GAIA_HUB_PUBLISH_URL(variable)"
+          [ -n "${R2_ACCESS_KEY_ID:-}" ]      || missing="${missing} R2_ACCESS_KEY_ID"
+          [ -n "${R2_SECRET_ACCESS_KEY:-}" ]  || missing="${missing} R2_SECRET_ACCESS_KEY"
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="${missing} CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "${missing}" ]; then
+            echo "::error::missing:${missing}. Same credentials as the agent-ui job: GAIA_HUB_TOKEN must match the Worker's PUBLISH_TOKENS, and the R2_* pair are R2 S3 credentials for the direct-to-R2 lane. See workers/agent-hub/README.md."
+            exit 1
+          fi
+
+      - name: Install publisher deps
+        if: needs.version.outputs.dry_run == 'false'
+        run: python -m pip install --upgrade requests pyyaml boto3
+
+      - name: Publish (POST /publish)
+        if: needs.version.outputs.dry_run == 'false'
+        shell: bash
+        env:
+          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          VERSION: ${{ needs.version.outputs.tui_version }}
+        run: |
+          set -euo pipefail
+          spec="$(python installer/tui/artifacts.py publish-args \
+            --version "${VERSION}" --dir dist --platform win-x64)"
+          [ -n "${spec}" ] || { echo "::error::installer/tui/artifacts.py named no Windows setup to publish. Nothing was published."; exit 1; }
+          python hub/agents/email/python/packaging/publish_to_r2.py \
+            --base-url "${GAIA_HUB_PUBLISH_URL}" \
+            --manifest "${TERMINAL_HUB_MANIFEST}" \
+            --artifact "${spec}" \
+            --summary-out published-windows-setup.json
+          echo "=== publish summary (Windows setup) ==="
+          cat published-windows-setup.json
+
+  # No environment, so no approval prompt: this only says why there is nothing
+  # to publish.
+  windows-setup-missing:
+    name: Windows setup not published
+    needs: [version, windows-setup]
+    if: '!cancelled() && needs.version.result == ''success'' && needs.windows-setup.outputs.ok != ''true'''
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::warning::the Windows setup did not build and smoke-test cleanly, so no gaia-${{ needs.version.outputs.tui_version }}-win-x64-setup.exe is published for this version. Everything else is. Fix the Windows setup run and re-run this workflow to add it to the same version."
 
   # ── agent-ui: republish the installers build-installers.yml already made ────
   agent-ui:
@@ -610,7 +728,9 @@ jobs:
   # auto-triggers on website/** only, and a hub publish touches no such file.
   redeploy-website:
     name: Redeploy website
-    needs: [version, terminal-hub, agent-ui]
+    # publish-windows-setup is waited for, not required: the site renders the
+    # Windows setup when it is published and today's two downloads when not.
+    needs: [version, terminal-hub, agent-ui, publish-windows-setup]
     # No status-check function in `needs.version.outputs...` means GitHub
     # implicitly ANDs this with success() -- so a 'skipped' terminal-hub or
     # agent-ui (e.g. worker-check failed, or tui's binaries were not ok) would

@@ -370,8 +370,11 @@ def _normalize_key(path: str, base: str) -> str:
         # A drive-lettered path off Windows: no filesystem here can resolve it.
         return ntpath.normcase(ntpath.normpath(ntpath.join(base, path)))
     # Write tools report resolved paths; junctions and macOS /tmp are symlinks.
+    # Prose names folders as `%TEMP%` or `$HOME`; tools report them expanded.
     return os.path.normcase(
-        os.path.realpath(os.path.join(base, os.path.expanduser(path)))
+        os.path.realpath(
+            os.path.join(base, os.path.expandvars(os.path.expanduser(path)))
+        )
     )
 
 

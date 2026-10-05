@@ -283,7 +283,9 @@ def test_real_loop_requires_correct_file_write_and_readback(agent, tmp_path):
     result = agent.process_query(
         "Summarize the video and save to `summary.md`", max_steps=10
     )
-    assert "[check:completion]" in sent[2][-1]["content"]
+    correction = sent[2][-1]["content"]
+    assert "[check:completion]" in correction
+    assert "without mentioning it or the read's offset and pages" in correction
     assert (tmp_path / "summary.md").read_text() == "alpha\nbeta\n"
     assert result["status"] == "success"
     assert not result["completion_gaps"]
@@ -1123,3 +1125,15 @@ def test_loop_after_a_declined_write_does_not_retry_it(agent, tmp_path):
     assert "here or anywhere else" in correction
     assert "wasn't confirmed" not in correction
     assert agent.console.confirm_tool_execution.call_count == 1
+
+
+def test_a_folder_named_by_its_variable_is_backed_by_a_write_inside_it(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GAIA_TEST_TEMP", str(tmp_path / "temp"))
+    ledger = CompletionEvidence("Walk me through the flow.", str(tmp_path))
+    script = str(tmp_path / "temp" / "scratch" / "trace.py")
+    write(ledger, script)
+    read(ledger, script)
+    variable = "%GAIA_TEST_TEMP%" if sys.platform == "win32" else "$GAIA_TEST_TEMP"
+    assert gaps(ledger, f"I wrote a throwaway script in `{variable}`.") == []
