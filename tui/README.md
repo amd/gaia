@@ -34,6 +34,18 @@ gaia-tui
 machine. Skip it and the readiness gate stops you before the agent starts and
 tells you the same thing.
 
+### Or use the Windows setup
+
+`gaia-<version>-win-x64-setup.exe` from the
+[GitHub release](https://github.com/amd/gaia/releases/latest) installs `gaia-tui`
+and `gaia-agent` per-user, plus a **GAIA** Windows Terminal profile (IBM Plex Mono
+and a dark GAIA colour scheme). Its Start menu and desktop shortcuts open that
+profile when Windows Terminal is installed. Without Windows Terminal they run
+`gaia-tui` in the default console. Uninstalling removes the profile and the fonts
+it added. See the
+[Terminal Hub guide](https://amd-gaia.ai/docs/guides/terminal-hub#installing) for
+exactly what it writes.
+
 ### Or download the binary directly
 
 The installer fetches these and verifies their SHA-256; you can also take one
