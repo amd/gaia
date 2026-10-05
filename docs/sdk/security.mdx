@@ -37,6 +37,23 @@ is_allowed, reason = session.validate_write("/home/user/documents/out.md")
 session.set_scratch_dir(tempfile.mkdtemp(prefix="gaia-scratch-"))
 ```
 
+Every agent tool that takes a path checks it with `validate_read` or
+`validate_write`: reading, listing a folder, searching inside one, indexing it,
+watching it, and the files a tool saves (screenshots, transcripts, speech,
+exports). Out-of-scope paths go through the same approval prompt as `read_file`.
+The validator expands `~` and resolves `..` and symlinks before it decides, and a
+folder walk skips any entry that leads outside the scope. Tools build on these
+checks through `gaia.agents.tools.path_access` rather than adding their own.
+
+Three things are wider on purpose:
+
+- A name search (`search_file`, `find_files` with a named scope) can return paths
+  under the common document folders. Opening one is still checked.
+- Output a tool writes to GAIA's own folders (`~/.gaia/screenshots`,
+  `~/.gaia/transcripts`, `~/.gaia/tts`) is not the user's files and is not checked.
+- `capture_skill` may copy a local skill folder from anywhere, because every
+  capture asks the user first with the source shown.
+
 `ChatAgent` and `GaiaAgent` create one scratch directory per agent that has a
 file-writing tool, name it in the system prompt, and delete it when the agent is
 cleaned up (`GaiaAgent.close()`). The `chat` profile has no file-writing tools, so

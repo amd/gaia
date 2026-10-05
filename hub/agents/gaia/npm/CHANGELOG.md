@@ -169,6 +169,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   out of scope, so the agent wrote throwaway test runners and intermediate files
   into the repository instead. It now gets its own scratch directory, named in its
   prompt and deleted when the agent closes; the rest of the temp dir stays denied.
+- Every file tool now checks the same allowed-folders rule as `read_file`:
+  browsing, folder and content search, recent files, document indexing, folder
+  watching, code indexing, and where screenshots, transcripts and exports are
+  saved. A folder outside the scope gets the usual approval prompt, and a folder
+  you approve is readable by document indexing too.
 
 ### Added
 

@@ -7,7 +7,6 @@ Provides document retrieval, querying, and evaluation tools.
 """
 
 import contextvars
-import logging
 import os
 import re
 import threading
@@ -17,10 +16,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
-from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools.path_access import (
+    read_access_error,
+    readable_entry,
+    write_access_error,
+)
+from gaia.logger import get_logger
 from gaia.tool_cancellation import raise_if_cancelled
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _RAG_HINT = "Set self.rag = <RAGSDK instance, or None to disable RAG>."
 _RAG_DOC_ANCHOR = "docs/spec/rag-tools-mixin.mdx#host-agent-contract"
@@ -258,26 +262,6 @@ class RAGToolsMixin:
     Note: File system search tools (search_file, search_directory, search_file_content)
     are provided by FileSearchToolsMixin from gaia.agents.tools.file_tools
     """
-
-    def _index_access_error(self, path: str):
-        """The refusal for indexing *path*, or None when it may be read.
-
-        Asks the user through the host's access prompt, like ``read_file``: a
-        silent refusal here left the model nothing to do but route around it.
-        """
-        validator = getattr(self, "path_validator", None)
-        if validator is not None:
-            allowed, reason = validator.validate_read(path)
-            if allowed:
-                return None
-            return {**NOT_EXECUTED, "status": "error", "error": reason}
-        if hasattr(self, "_is_path_allowed") and not self._is_path_allowed(path):
-            return {
-                **NOT_EXECUTED,
-                "status": "error",
-                "error": f"Access denied: '{path}' is not in allowed paths",
-            }
-        return None
 
     def register_rag_tools(self) -> None:
         """Register RAG-related tools."""
@@ -757,11 +741,12 @@ class RAGToolsMixin:
                     if len(matching_files) == 0:
                         # Auto-index the file if it exists on disk instead of failing.
                         # This avoids the slow fail → plan → index → re-query cycle.
-                        if os.path.exists(file_path):
-                            resolved = os.path.realpath(file_path)
-                            denied = self._index_access_error(resolved)
-                            if denied:
-                                return denied
+                        disk_path = os.path.expanduser(file_path)
+                        denied = read_access_error(self, disk_path)
+                        if denied:
+                            return denied
+                        if os.path.exists(disk_path):
+                            resolved = os.path.realpath(disk_path)
                             logger.info(
                                 f"[query_specific_file] '{basename}' not indexed — "
                                 f"auto-indexing '{resolved}' before querying"
@@ -1364,6 +1349,11 @@ class RAGToolsMixin:
                         "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
                     }
 
+                # Before the existence probe, as in read_file.
+                denied = read_access_error(self, file_path)
+                if denied:
+                    return denied
+
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
@@ -1390,10 +1380,6 @@ class RAGToolsMixin:
                         "from_cache": True,
                         "total_indexed_files": len(self.indexed_files),
                     }
-
-                denied = self._index_access_error(real_file_path)
-                if denied:
-                    return denied
 
                 # A document too big to index within the budget keeps indexing
                 # in the background; say so instead of running into the timeout.
@@ -1969,7 +1955,10 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         self.rag.config.cache_dir, output_filename
                     )
                 else:
-                    output_path = str(Path(output_path).resolve())
+                    output_path = str(Path(output_path).expanduser().resolve())
+                    denied = write_access_error(self, output_path)
+                    if denied:
+                        return denied
 
                 # Write markdown file with metadata header
                 markdown_content = f"""# Extracted Text from {Path(target_file).name}
@@ -2040,6 +2029,12 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 
                 dir_path = Path(directory_path).expanduser().resolve()
 
+                # Before the existence probe, as in read_file.
+                denied = read_access_error(self, dir_path)
+                if denied:
+                    denied["has_errors"] = True
+                    return denied
+
                 if not dir_path.exists():
                     return {
                         "status": "error",
@@ -2082,6 +2077,10 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                     files_to_index = [f for f in dir_path.iterdir() if f.is_file()]
 
                 for file_path in files_to_index:
+                    # A link out of the folder, or a secret in it, is not indexed.
+                    if not readable_entry(self, file_path):
+                        skipped_files.append(str(file_path))
+                        continue
                     if file_path.suffix.lower() in supported_extensions:
                         try:
                             # Use the RAG SDK to index the file
