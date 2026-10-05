@@ -110,7 +110,7 @@ Some skills intentionally need more headroom than the default (e.g. multi-file c
 
 ### Per-tool execution timeout
 
-Each tool call is bounded so a hung tool (e.g. a stuck connector or network request) surfaces an actionable error instead of leaving the agent — and the UI — stuck indefinitely. The default is **180 seconds** per tool.
+Each tool call is bounded so a hung tool (e.g. a stuck connector or network request) surfaces an actionable error instead of leaving the agent — and the UI — stuck indefinitely. The default is **180 seconds** per tool. Time a tool spends waiting for you to answer a file-access prompt doesn't count toward it.
 
 - **Fleet-wide:** set `GAIA_AGENT_TOOL_TIMEOUT` (seconds) to change the default for every tool at once.
 
@@ -1898,7 +1898,7 @@ gaia eval retrieval --component code --suite pr --gate tests/fixtures/eval_basel
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--component` | required | `code`: the code index behind semantic code search |
+| `--component` | `rag` | Pass `code` for the code index behind semantic code search; the default, `rag`, is the [document Q&A benchmark](#retrieval-benchmark) |
 | `--suite` | `pr` | `pr` (~40 min, gates PRs), `nightly` (sampled), `scale` (big repos, hours) |
 | `--parts` | the suite's | Comma-separated subset of `quality,incremental,robustness,scale` |
 | `--gate BASELINE` | off | Compare with a baseline `results.json`; exit 1 on a regression |
@@ -2030,6 +2030,39 @@ gaia eval code --control ~/.gaia/tui/control.json
 | `--control` | – | Path to the running TUI's `control.json` |
 | `--out` | `eval/results/code-<timestamp>` | Output directory |
 | `--workspace` | a temp directory | Where to materialize the task projects |
+
+---
+
+### Retrieval Benchmark
+
+Scores RAG retrieval (recall@k, MRR) separately from answer accuracy, on real documents with labelled evidence, and measures indexing and query cost as the corpus grows. See [Retrieval Benchmark](/reference/eval#retrieval-benchmark-rag).
+
+```bash
+gaia eval retrieval --suite pr                     # Offline, retrieval only: the PR gate
+gaia eval retrieval --suite pr --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json
+gaia eval retrieval --suite full --judge           # FinanceBench, AMD docs, XQuAD, scale tiers, answers
+gaia eval retrieval --fetch-only                   # Download and verify the corpora
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--component` | `rag` | `rag` (document Q&A) or `code` (code search, [its own options](#evaluation-commands)) |
+| `--suite` | `pr` | `pr` (offline, deterministic) or `full` |
+| `--repo-root` | the current directory | gaia checkout holding `eval/retrieval/` and the committed documents; needed when gaia is installed as a wheel and you run from elsewhere |
+| `--datasets` | the suite's | Subset of `repo_docs`, `technical_docs`, `financebench`, `xquad` |
+| `--retrieval-only` | off | Skip answer generation |
+| `--judge` / `--judge-model` | off | Grade free-form answers with Claude; otherwise they are unscored |
+| `--model` | RAG default | Chat model that answers |
+| `--scale-tiers` / `--no-scale` | `10,100,1000` (full) | Corpus sizes for the scale phase |
+| `--no-hard-cases` | off | Skip the hard cases |
+| `--xquad-languages` / `--xquad-per-language` | `en,de,es,ru,zh,ar,hi` / `40` | Multilingual slice |
+| `--financebench-docs` | all | Keep the questions over the first N filings |
+| `--no-vlm` | off | Do not read PDF images with the VLM (`pr` never does); otherwise the VLM must read a test image before the run starts |
+| `--offline` | off | Never download; fail if a file is not cached |
+| `--fetch-only` | off | Download and verify every corpus file, then stop |
+| `--out` | `eval/results/retrieval-<suite>-<timestamp>` | Output directory |
+| `--gate` / `--tolerance` | – / `0.02` | Compare to a baseline `results.json`; exit 1 on a regression |
+| `--keep-work` | off | Keep the temporary index caches |
 
 ---
 
