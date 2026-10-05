@@ -52,7 +52,7 @@ jobs:
       uses: ./.github/actions/setup-venv
       with:
         python-version: '3.12'
-        install-package: '.[dev,rag] ./hub/agents/chat/python'
+        install-package: '.[dev,rag,eval] ./hub/agents/chat/python'
 
     - name: Install Lemonade Server
       uses: ./.github/actions/install-lemonade

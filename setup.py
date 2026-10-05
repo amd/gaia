@@ -285,6 +285,8 @@ setup(
             "reportlab",
             # Tool-prompt cost measurement (#1448): tiktoken cl100k_base proxy.
             "tiktoken>=0.7.0,<1.0.0",
+            # Wikipedia distractors for `gaia eval retrieval` scale tiers (parquet).
+            "pyarrow",
         ],
         # Microphone and speaker I/O for `gaia talk`. Speech recognition
         # (Whisper) and voice output (Kokoro) both run inside Lemonade Server,

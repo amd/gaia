@@ -146,14 +146,14 @@ over real documents with labelled evidence locations, so a retrieval miss is
 told apart from a generation miss.
 
 ```bash
-gaia eval retrieval --suite pr                     # offline, retrieval only, ~1 min
+gaia eval retrieval --suite pr                     # offline, retrieval only, ~30 s
 gaia eval retrieval --suite pr --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json
 gaia eval retrieval --suite full                   # downloads corpora, answers, scale tiers
 gaia eval retrieval --suite full --judge           # also grade free-form answers with Claude
 gaia eval retrieval --fetch-only                   # download + verify every corpus file, then stop
 ```
 
-A running Lemonade with the RAG embedder is required. The command takes the
+A running Lemonade with the RAG embedder is required, and the `full` suite's scale tiers need the `eval` extra (`uv pip install -e ".[eval]"`). The command takes the
 machine-wide eval lock, like `gaia eval agent`.
 
 PDF images are read only through the VLM, so whether it runs changes a PDF's chunks.
@@ -228,9 +228,9 @@ that is not on its labelled page raises, so a label never silently scores agains
 Each run writes `results.json` (every question's ranks, latencies and answer) and `report.md`
 to `eval/results/retrieval-<suite>-<timestamp>/`, recording the machine, embedder and its
 device, the VLM state and the RAG defaults. `--gate BASELINE` fails when `sdk` recall@5, MRR
-or `agent` R@returned drops more than `--tolerance` (default 0.02, widened to one question on
-small sets so a single flip is not a failure) below the baseline, more labelled documents fail to
-index, or a passing hard case fails. It lists every question that flipped. It refuses to compare runs
+or `agent` R@returned drops more than `--tolerance` (default 0.02, widened to 1.5 questions on
+small sets, so one flipped question passes and two fail) below the baseline, more labelled documents fail to
+index, or a passing hard case fails or is not run. It lists every question that flipped. It refuses to compare runs
 with a different embedder, or one with the VLM on against one with it off.
 
 The baselines in `tests/fixtures/eval_baselines/rag-retrieval/` are unedited `results.json`

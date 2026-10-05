@@ -532,7 +532,15 @@ def run(opts: RunOptions) -> dict:
     judge = _Judge(opts.judge_model) if (opts.judge and answers) else None
     vlm = suite.vlm if opts.vlm is None else opts.vlm
     vlm_meta = _vlm_info(vlm)
-    opts.rag_overrides = {"use_vlm": vlm}
+    opts.rag_overrides = {**opts.rag_overrides, "use_vlm": vlm}
+    if tiers:
+        try:
+            import pyarrow.parquet  # noqa: F401  pylint: disable=import-outside-toplevel,unused-import
+        except ImportError as e:
+            raise ImportError(
+                "The scale tiers read Wikipedia distractors from parquet and need pyarrow: "
+                'run `uv pip install -e ".[eval]"`, or pass --no-scale.'
+            ) from e
     opts.out_dir.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="gaia-retrieval-"))
     started = time.time()
@@ -808,6 +816,13 @@ def compare(baseline: dict, current: dict, tolerance: float) -> tuple:
                     f"     {q['id']}: sdk hit@5 {'PASS->FAIL' if was else 'FAIL->PASS'}"
                 )
     b_cases = {c["id"]: c["status"] for c in baseline.get("hard_cases", [])}
+    ran = {c["id"] for c in current.get("hard_cases", [])}
+    for case_id, status in b_cases.items():
+        if status == "pass" and case_id not in ran:
+            passed = False
+            lines.append(
+                f"FAIL hard case {case_id}: passed in the baseline, not run now"
+            )
     for case in current.get("hard_cases", []):
         before = b_cases.get(case["id"])
         if case["status"] == "error" or (before == "pass" and case["status"] == "fail"):

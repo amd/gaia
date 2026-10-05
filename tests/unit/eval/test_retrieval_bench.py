@@ -429,3 +429,10 @@ def test_gate_fails_when_a_baseline_metric_is_missing_from_the_run():
     del current["datasets"][0]["summary"]["agent"]
     passed, lines = runner.compare(_results(), current, 0.02)
     assert not passed and any("missing from this run" in line for line in lines)
+
+
+def test_gate_fails_when_a_passing_baseline_hard_case_was_not_run():
+    current = _results()
+    current["hard_cases"] = []
+    passed, lines = runner.compare(_results(), current, 0.02)
+    assert not passed and any("not run now" in line for line in lines)
