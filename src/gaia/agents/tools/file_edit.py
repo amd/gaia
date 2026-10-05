@@ -213,6 +213,18 @@ def _match_offsets(content: str, needle: str) -> List[int]:
         start = found + len(needle)
 
 
+def _retarget_newlines(block: str, reference: str) -> str:
+    """*block* with the line endings *reference* uses.
+
+    The caller composes ``old_content`` from text it was shown, which may have
+    been normalised on the way, while the file on disk keeps whatever endings
+    it was authored with. A CRLF-vs-LF difference is never a semantic one, so
+    it must not be the reason an otherwise exact edit is refused.
+    """
+    flat = block.replace("\r\n", "\n")
+    return flat.replace("\n", "\r\n") if "\r\n" in reference else flat
+
+
 def _collapse_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
@@ -351,6 +363,18 @@ def apply_unique_replacement(
         )
 
     offsets = _match_offsets(current_content, old_content)
+
+    if not offsets:
+        # Retry once with old_content's line endings rewritten to the file's.
+        # Only a line-ending difference can be rescued this way, and only when
+        # it then matches exactly one place, so nothing ambiguous is guessed at.
+        retargeted = _retarget_newlines(old_content, current_content)
+        if retargeted != old_content:
+            retargeted_offsets = _match_offsets(current_content, retargeted)
+            if len(retargeted_offsets) == 1:
+                old_content = retargeted
+                new_content = _retarget_newlines(new_content, current_content)
+                offsets = retargeted_offsets
 
     if not offsets:
         hint = ""

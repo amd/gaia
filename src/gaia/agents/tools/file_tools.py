@@ -43,6 +43,30 @@ from gaia.security import BackupError
 logger = get_logger(__name__)
 
 
+def _read_exact(path) -> str:
+    """Read *path* as text without translating its line endings.
+
+    ``open()`` in text mode, and ``Path.read_text``, default to universal
+    newlines: every CRLF in the file arrives as a bare LF. Paired with
+    :func:`_write_exact` this keeps a read/modify/write round trip
+    byte-exact, so a one-line edit stays a one-line diff on every platform.
+    """
+    with open(path, "r", encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
+def _write_exact(path, content: str) -> None:
+    """Write *content* to *path* with its line endings left alone.
+
+    ``open()`` in text mode, and ``Path.write_text``, translate every LF to
+    ``os.linesep`` on write. On Windows that silently turns an LF-terminated
+    file into a CRLF one, which no byte-comparing tool treats as a no-op: a
+    three-line edit to a 400-line file is reported as 400 lines changed.
+    """
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(content)
+
+
 #: Rows searched for a table's header below title and note rows.
 HEADER_SEARCH_ROWS = 20
 
@@ -1331,7 +1355,7 @@ class FileSearchToolsMixin:
                     resolved_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Write the file
-                with open(resolved_path, "w", encoding="utf-8") as f:
+                with open(resolved_path, "w", encoding="utf-8", newline="") as f:
                     f.write(content)
                 reads.note(resolved_path)
 
@@ -1679,7 +1703,7 @@ class FileSearchToolsMixin:
                     return {**refusal, "operation": "edit_file"}
 
                 # Read current content
-                current_content = resolved_path.read_text(encoding="utf-8")
+                current_content = _read_exact(resolved_path)
 
                 updated_content, edit_error = apply_unique_replacement(
                     str(resolved_path), current_content, old_content, new_content
@@ -1737,7 +1761,7 @@ class FileSearchToolsMixin:
                 )
 
                 # Write updated content
-                resolved_path.write_text(updated_content, encoding="utf-8")
+                _write_exact(resolved_path, updated_content)
                 reads.note(resolved_path)
 
                 # Audit the edit

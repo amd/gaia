@@ -32,6 +32,42 @@ from gaia.security import BackupError
 logger = get_logger(__name__)
 
 
+def _read_exact(path) -> str:
+    """Read *path* as text without translating its line endings.
+
+    ``open()`` in text mode, and ``Path.read_text``, default to universal
+    newlines: every CRLF in the file arrives as a bare LF. Paired with
+    :func:`_write_exact` this keeps a read/modify/write round trip
+    byte-exact, so a one-line edit stays a one-line diff on every platform.
+    """
+    with open(path, "r", encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
+def _write_exact(path, content: str) -> None:
+    """Write *content* to *path* with its line endings left alone.
+
+    ``open()`` in text mode, and ``Path.write_text``, translate every LF to
+    ``os.linesep`` on write. On Windows that silently turns an LF-terminated
+    file into a CRLF one, which no byte-comparing tool treats as a no-op: a
+    three-line edit to a 400-line file is reported as 400 lines changed.
+    """
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(content)
+
+
+def _match_newlines(block: str, reference: str) -> str:
+    """Rewrite *block*'s line endings to the ones *reference* already uses.
+
+    Generated text arrives LF-terminated. Splicing it into a CRLF file
+    unchanged would leave that file with two different line endings, which
+    is worse than consistently either one.
+    """
+    if "\r\n" not in reference:
+        return block
+    return block.replace("\r\n", "\n").replace("\n", "\r\n")
+
+
 def _python_syntax_error(path: Path, content: str) -> Optional[str]:
     """Why a just-written .py file will not run, or ``None`` when it parses.
 
@@ -622,7 +658,7 @@ class FileIOToolsMixin:
                     os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
                 # Write the file
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(content)
                 reads.note(file_path)
 
@@ -741,7 +777,7 @@ class FileIOToolsMixin:
                 if refusal is not None:
                     return refusal
 
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, "r", encoding="utf-8", newline="") as f:
                     current_content = f.read()
 
                 modified_content, edit_error = apply_unique_replacement(
@@ -791,7 +827,7 @@ class FileIOToolsMixin:
                     backup_path = path_validator.create_backup(str(file_path))
 
                 # Write the modified content
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(modified_content)
                 reads.note(file_path)
 
@@ -948,7 +984,7 @@ class FileIOToolsMixin:
 
                 # Read original content
                 if os.path.exists(file_path):
-                    with open(file_path, "r", encoding="utf-8") as f:
+                    with open(file_path, "r", encoding="utf-8", newline="") as f:
                         original_content = f.read()
                 else:
                     original_content = ""
@@ -1049,7 +1085,7 @@ class FileIOToolsMixin:
                         os.makedirs(dir_name, exist_ok=True)
 
                 # Write the file
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(content)
                 reads.note(file_path)
 
@@ -1149,7 +1185,7 @@ class FileIOToolsMixin:
                     path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Write content to file
-                path.write_text(content, encoding="utf-8")
+                _write_exact(path, content)
                 reads.note(path)
 
                 console = getattr(self, "console", None)
@@ -1281,7 +1317,7 @@ class FileIOToolsMixin:
                     return refusal
 
                 # Read current content
-                current_content = path.read_text(encoding="utf-8")
+                current_content = _read_exact(path)
 
                 updated_content, edit_error = apply_unique_replacement(
                     str(path), current_content, old_content, new_content
@@ -1308,7 +1344,7 @@ class FileIOToolsMixin:
                 )
 
                 # Write updated content
-                path.write_text(updated_content, encoding="utf-8")
+                _write_exact(path, updated_content)
                 reads.note(path)
 
                 console = getattr(self, "console", None)
@@ -1476,7 +1512,7 @@ class FileIOToolsMixin:
                 is_new_file = not os.path.exists(gaia_path)
 
                 # Write the file
-                with open(gaia_path, "w", encoding="utf-8") as f:
+                with open(gaia_path, "w", encoding="utf-8", newline="") as f:
                     f.write(content)
                 reads.note(gaia_path)
 
@@ -1574,7 +1610,7 @@ class FileIOToolsMixin:
                     )
                     return refusal
 
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, "r", encoding="utf-8", newline="") as f:
                     content = f.read()
 
                 # Parse the file to find the function
@@ -1597,11 +1633,14 @@ class FileIOToolsMixin:
                     backup_path = path_validator.create_backup(str(file_path))
 
                 # Replace the function
-                new_lines = (
-                    lines[:start_line]
-                    + [new_implementation.rstrip("\n") + "\n"]
-                    + lines[end_line:]
+                # The replacement always arrives LF-terminated. Splicing it into a
+                # CRLF file unchanged would leave that file carrying both endings, so
+                # it is converted to whatever the file already uses.
+                replacement = _match_newlines(
+                    new_implementation.replace("\r\n", "\n").rstrip("\n") + "\n",
+                    content,
                 )
+                new_lines = lines[:start_line] + [replacement] + lines[end_line:]
                 modified_content = "".join(new_lines)
 
                 # Validate new content
@@ -1631,7 +1670,7 @@ class FileIOToolsMixin:
                     return {"status": "error", "error": misplaced}
 
                 # Write the modified content
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(modified_content)
                 reads.note(file_path)
 
