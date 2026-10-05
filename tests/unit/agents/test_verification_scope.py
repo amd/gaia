@@ -260,7 +260,18 @@ def test_the_summary_is_plain_data():
         "failed": ["pytest"],
         "not_run": ["ruff"],
         "unchecked_change": "app.py",
+        "ungrounded": [],
     }
+
+
+def test_an_unbacked_claim_keeps_passing_checks_from_reading_verified():
+    reason = "I didn't read `dates.py` this turn"
+    summary = verification_summary([_execution("pytest")], ungrounded=[reason])
+    assert summary["state"] == "partially verified"
+    assert summary["ungrounded"] == [reason]
+    assert build_verification_scope([_execution("pytest")], ungrounded=[reason]) == (
+        f"{VERIFICATION_NOTE_OPENER} — {reason}."
+    )
 
 
 # ---------------------------------------------------------------------------

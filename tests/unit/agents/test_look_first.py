@@ -154,6 +154,24 @@ def test_it_asks_only_once(agent, workspace):
     assert GUESS in result["result"]
 
 
+def test_look_first_and_the_grounding_look_check_correct_once_between_them(
+    agent, workspace
+):
+    sent = _script(agent, _answer(GUESS), _answer(GUESS), _answer(GUESS))
+
+    agent.process_query("Review toybox/dates.py", max_steps=10)
+
+    corrections = [
+        m["content"]
+        for m in sent[-1]
+        if m.get("role") == "user" and m["content"] != "Review toybox/dates.py"
+    ]
+    assert len(sent) == 2
+    assert len(corrections) == 1
+    assert "Look with your tools first" in corrections[0]
+    assert not any("[check:grounding]" in c for c in corrections)
+
+
 def test_an_answer_that_looked_is_left_alone(agent, workspace):
     sent = _script(agent, _read("toybox/dates.py"), _answer(REVIEW))
 

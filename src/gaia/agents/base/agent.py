@@ -62,6 +62,14 @@ from gaia.agents.base.extraction import (
     extraction_response_format,
     read_snapshot,
 )
+from gaia.agents.base.grounding import (
+    LOOK,
+    OBSERVED_MAX_CHARS,
+    grounding_correction,
+    path_locator,
+    ungrounded,
+    unverified_reasons,
+)
 from gaia.agents.base.look_first import LOOK_FIRST_PROMPT, named_workspace_paths
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
@@ -79,6 +87,7 @@ from gaia.agents.base.verification import (
     VERIFY_AFTER_CHANGE_TAG,
     build_verification_scope,
     check_output,
+    observed_text,
     project_has_tests,
     strip_verification_scope,
     summary_reports_failure,
@@ -1581,6 +1590,10 @@ Do NOT wrap conversational replies in JSON.
         self._has_tests_cache: Dict[Optional[str], bool] = {}
         # Same rationale for the per-turn record of edited files (#3733).
         self._turn_file_edits: List[Dict[str, Any]] = []
+        # Earlier turns' user and tool text, for the grounding checks.
+        self._grounding_history = ""
+        # Grounding gaps that survived their correction, for the scope note.
+        self._turn_ungrounded: List[str] = []
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -6726,6 +6739,7 @@ Do NOT wrap conversational replies in JSON.
         )
         record["args"] = tool_args if isinstance(tool_args, dict) else {}
         record["output"] = check_output(tool_name, result)
+        record["observed"] = observed_text(result)[:OBSERVED_MAX_CHARS]
         log.append(record)
         evidence = getattr(self, "_completion_evidence", None)
         if evidence is not None:
@@ -6761,6 +6775,29 @@ Do NOT wrap conversational replies in JSON.
             return None
         return verify_after_change_correction(changed)
 
+    def _grounding_findings(
+        self, answer: Optional[str], query: str, history: str
+    ) -> list:
+        """Where *answer* outruns this turn's tool record (see ``grounding.py``)."""
+        if not answer or not answer.strip():
+            return []
+        roots = [os.getcwd(), self._verification_project_root()]
+        return ungrounded(
+            strip_verification_scope(answer),
+            query or "",
+            getattr(self, "_turn_tool_executions", None) or [],
+            history=history,
+            locate=path_locator(roots),
+        )
+
+    def _note_ungrounded(self, answer: Optional[str], query: str) -> None:
+        """Record what *answer* still outruns, for this turn's scope note."""
+        self._turn_ungrounded = unverified_reasons(
+            self._grounding_findings(
+                answer, query, getattr(self, "_grounding_history", "")
+            )
+        )
+
     def _project_has_tests(self, root: Optional[str]) -> bool:
         """``project_has_tests``, walked once per root per turn."""
         if root not in self._has_tests_cache:
@@ -6795,6 +6832,7 @@ Do NOT wrap conversational replies in JSON.
             getattr(self, "_turn_tool_executions", None) or [],
             unchecked_change=changed,
             has_tests=has_tests,
+            ungrounded=getattr(self, "_turn_ungrounded", ()),
         )
 
     def verification_state(self) -> Dict[str, Any]:
@@ -6802,6 +6840,7 @@ Do NOT wrap conversational replies in JSON.
         return verification_summary(
             getattr(self, "_turn_tool_executions", None) or [],
             unchecked_change=self._unchecked_change()[0],
+            ungrounded=getattr(self, "_turn_ungrounded", ()),
         )
 
     #: Stands in for an answer that was nothing but a previous turn's note.
@@ -6852,6 +6891,8 @@ Do NOT wrap conversational replies in JSON.
             answer = (
                 f"{answer}\n\n{report}" if answer and self.error_history else report
             )
+        elif answer and answer.strip() and not self.error_history:
+            self._note_ungrounded(answer, getattr(self, "_current_query", ""))
         # Items already extracted stay visible when the turn runs out.
         inventory = self._extraction_ledger.render()
         if inventory and answer:
@@ -7069,6 +7110,15 @@ Do NOT wrap conversational replies in JSON.
             logger.debug(
                 f"Loaded {len(self.conversation_history)} messages from conversation history"
             )
+        # What earlier turns asked and saw — not what the model said — so the
+        # grounding checks neither re-ask for it nor take a past claim as proof.
+        self._grounding_history = "\n".join(
+            observed_text(m.get("content"))
+            for m in messages
+            if isinstance(m, dict) and m.get("role") != "assistant"
+        )
+        # Grounding gates that already asked for one correction this turn.
+        grounding_fired: set = set()
 
         steps_taken = 0
         final_answer = None
@@ -7128,6 +7178,7 @@ Do NOT wrap conversational replies in JSON.
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
         self._has_tests_cache = {}
+        self._turn_ungrounded = []
         self._completion_evidence = CompletionEvidence(
             user_input,
             os.getcwd(),
@@ -9073,6 +9124,8 @@ Do NOT wrap conversational replies in JSON.
                     )
                     if unlooked:
                         look_first_reprompted = True
+                        # Grounding's look gate would ask the same thing again.
+                        grounding_fired.add(LOOK)
                         logger.info(
                             "[WORKFLOW] Answer named %s without a tool call; asking "
                             "the agent to look first",
@@ -9336,6 +9389,35 @@ Do NOT wrap conversational replies in JSON.
                             "start GAIA with the `--sd` flag to enable it."
                         )
 
+                # A request it never looked at, values no tool produced, or
+                # work it never did: one correction per gate, and only before
+                # the answer counts — after it the scope guard refuses lookups.
+                fresh = (
+                    []
+                    if self._turn_scope.answered
+                    else [
+                        f
+                        for f in self._grounding_findings(
+                            answer_candidate, user_input, self._grounding_history
+                        )
+                        if f.gate not in grounding_fired
+                    ]
+                )
+                if fresh and steps_taken < steps_limit - 1:
+                    grounding_fired.update(f.gate for f in fresh)
+                    logger.info(
+                        "[check:grounding] %s fired at step %d",
+                        ",".join(sorted({f.gate for f in fresh})),
+                        steps_taken,
+                    )
+                    correction = {
+                        "role": "user",
+                        "content": grounding_correction(fresh),
+                    }
+                    messages.append(correction)
+                    conversation.append(dict(correction))
+                    continue
+
                 # An answer, not a plan or a narrated step: from here on, calls
                 # must serve the request rather than start new work.
                 if not self._turn_scope.answered:
@@ -9493,6 +9575,8 @@ Do NOT wrap conversational replies in JSON.
                     completion_gaps.append(final_test_claim[1] + ".")
                 if completion_gaps:
                     answer_candidate = incomplete_answer(completion_gaps)
+                else:
+                    self._note_ungrounded(answer_candidate, user_input)
                 inventory = self._extraction_ledger.render()
                 if inventory:
                     # Never ask another synthesis call to reproduce the set; it condenses.

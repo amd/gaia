@@ -18,7 +18,7 @@ from test_prompt_prefix_stability import flagship  # noqa: F401 - fixture
 def test_working_directory_line_stays_fixed_across_turns(flagship):
     agent, model, doc = flagship
     stability._turn(agent, model, "Hi, I'm Sam.", ["Hi Sam."])
-    stability._turn(agent, model, "What is in docs/notes.md?", ["No such file."])
+    stability._turn(agent, model, "What is in docs/notes.md?", ["Want me to open it and summarise it?"])
 
     assert len(model.requests) == 2
     system = [request[0][0]["content"] for request in model.requests]
