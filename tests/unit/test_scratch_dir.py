@@ -18,7 +18,8 @@ from gaia.security import PathValidator
 
 @pytest.fixture
 def scratch():
-    path = Path(tempfile.mkdtemp(prefix="gaia-scratch-test-"))
+    # Resolved like set_scratch_dir does: Windows CI's temp is an 8.3 short path.
+    path = Path(tempfile.mkdtemp(prefix="gaia-scratch-test-")).resolve()
     yield path
     shutil.rmtree(path)
 
@@ -212,7 +213,12 @@ class TestScratchDirIsTheSameEverySession:
         monkeypatch.setattr(security.tempfile, "gettempdir", lambda: str(tmp_path))
         expected = stable_scratch_dir(str(tmp_path / "proj"))
         shutil.rmtree(expected)
-        expected.symlink_to(tmp_path)
+        try:
+            expected.symlink_to(tmp_path)
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                pytest.skip("symlink creation requires elevated privilege on this host")
+            raise
         with caplog.at_level(logging.WARNING):
             path = stable_scratch_dir(str(tmp_path / "proj"))
         assert path != expected and path.is_dir() and not path.is_symlink()
