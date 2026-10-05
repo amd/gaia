@@ -36,7 +36,7 @@ Before using Agent Memory, make sure you have the following in place:
 </Note>
 
 <Note>
-  **Memory is opt-in (beta) and disabled by default.** This feature is still under active development -- every new GAIA install ships with memory off, so you'll see standard chat behavior until you turn it on. With memory disabled, prompt construction and session reset do no memory work. The SDK `memory_store` accessor returns `None` for a disabled session; callers can use `memory_unavailable_message()` to explain why. See [Enable Memory](#enable-memory) below before trying any examples on this page.
+  **Memory is on by default (beta).** This feature is still under active development -- every new GAIA install ships with memory on, so the agent starts recalling and saving facts right away. Turn it off (see [Turn Memory On or Off](#turn-memory-on-or-off) below) to get standard, non-persistent chat behavior. With memory disabled, prompt construction and session reset do no memory work. The SDK `memory_store` accessor returns `None` for a disabled session; callers can use `memory_unavailable_message()` to explain why.
 </Note>
 
 ---
@@ -148,7 +148,7 @@ Everything is stored in a single file at `~/.gaia/memory.db` (SQLite with WAL mo
   </Step>
 
   <Step title="Start chatting">
-    With memory enabled (see [Enable Memory](#enable-memory) above), the agent injects relevant knowledge into its system prompt and uses memory tools during conversation:
+    With memory on (see [Turn Memory On or Off](#turn-memory-on-or-off) above), the agent injects relevant knowledge into its system prompt and uses memory tools during conversation:
 
     ```bash
     gaia chat
