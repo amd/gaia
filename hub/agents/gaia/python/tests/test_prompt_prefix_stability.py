@@ -143,13 +143,23 @@ def flagship(monkeypatch, tmp_path):
 
         # A stand-in RAG — this test pins request-prefix stability, not real
         # indexing, and the CI lane that runs it installs no RAG extras.
+        # Shaped like an empty-but-valid RAGSDK (no chunks) so the agent's
+        # post-index query guard (query_specific_file, forced when an answer
+        # skips retrieval) gets its normal "no relevant information found"
+        # reply instead of an AttributeError on a real SDK's internals.
         class _FakeRag:
             def __init__(self):
                 self.indexed_files = set()
+                self.chunks = []
+                self.file_metadata = {}
+                self.file_to_chunk_indices = {}
 
             def index_document(self, path):
                 self.indexed_files.add(path)
                 return {"success": True, "file_name": "handbook.md", "num_chunks": 1}
+
+            def _retrieve_chunks_from_file(self, query, file_path):
+                return [], []
 
         agent.rag = _FakeRag()
 
