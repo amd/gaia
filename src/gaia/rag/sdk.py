@@ -2757,6 +2757,7 @@ These positions indicate where to split the text."""
                 self.log.info(f"Document already indexed: {file_path}")
                 stats["success"] = True
                 stats["already_indexed"] = True
+                stats["num_chunks"] = len(self.file_to_chunk_indices.get(file_path, []))
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 return stats
@@ -2818,6 +2819,9 @@ These positions indicate where to split the text."""
                         self.log.info(f"Document already indexed: {file_path}")
                         stats["success"] = True
                         stats["already_indexed"] = True
+                        stats["num_chunks"] = len(
+                            self.file_to_chunk_indices.get(file_path, [])
+                        )
                         stats["total_indexed_files"] = len(self.indexed_files)
                         stats["total_chunks"] = len(self.chunks)
                         return stats
@@ -2973,6 +2977,9 @@ These positions indicate where to split the text."""
                     self.log.info(f"Document already indexed: {file_path}")
                     stats["success"] = True
                     stats["already_indexed"] = True
+                    stats["num_chunks"] = len(
+                        self.file_to_chunk_indices.get(file_path, [])
+                    )
                     stats["total_indexed_files"] = len(self.indexed_files)
                     stats["total_chunks"] = len(self.chunks)
                     return stats

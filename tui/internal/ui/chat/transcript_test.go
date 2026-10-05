@@ -107,7 +107,7 @@ func TestNarrationIsFoldedUntilAskedFor(t *testing.T) {
 	if strings.Contains(frame, "should I fix it") {
 		t.Errorf("the model's reasoning reached the live line:\n%s", frame)
 	}
-	if !strings.Contains(frame, "Getting started") {
+	if !strings.Contains(frame, "Waiting for the model") {
 		t.Errorf("the live line must still say what state the turn is in:\n%s", frame)
 	}
 
@@ -130,6 +130,60 @@ func TestNarrationIsFoldedUntilAskedFor(t *testing.T) {
 	}
 	if frame := frameOf(ctrlO(t, m)); !strings.Contains(frame, "Let me do it.") {
 		t.Errorf("Ctrl+O must bring the narration back:\n%s", frame)
+	}
+}
+
+func phase(name string, words int) event.CanonicalStatusEvent {
+	return event.CanonicalStatusEvent{Type: "status", Message: "agent words for " + name, Phase: name, Words: words}
+}
+
+// "Getting started" sat on the live line through the whole silent opening of a
+// thinking model's turn. The line now names each phase the agent reports, as it
+// reports it, and no phase report becomes narration.
+func TestTheLiveLineNamesTheModelsPhase(t *testing.T) {
+	m := sizedChat(t, 120, 40)
+	m.modelDisplay = "Qwen3.6 35B"
+	steps := []struct {
+		evt  interface{}
+		want string
+	}{
+		{phase("reading", 0), "Reading your request"},
+		{phase("loading_model", 0), "Loading Qwen3.6 35B into memory"},
+		{phase("reading", 0), "Reading your request"},
+		{phase("reasoning", 0), "Reasoning"},
+		// Reasoning text is narration: folded, and it must not end the phase.
+		{event.CanonicalStatusEvent{Type: "status", Message: "The user wants revenue by region."}, "Reasoning"},
+		{phase("reasoning", 1234), "Reasoning · 1,234 words"},
+		{phase("tool_call", 3200), "agent words for tool_call"},
+	}
+	for _, step := range steps {
+		m = feed(t, m, step.evt)
+		frame := frameOf(m)
+		if !strings.Contains(frame, step.want) {
+			t.Fatalf("after %+v the live line should say %q:\n%s", step.evt, step.want, frame)
+		}
+		if strings.Contains(frame, "revenue by region") {
+			t.Fatalf("reasoning reached the screen unasked:\n%s", frame)
+		}
+	}
+
+	m = feed(t, m,
+		toolCall("analyze_data_file", `{"file_path":"sales.csv"}`),
+		toolDone("analyze_data_file", "4 groups by region · 120 rows"),
+	)
+	if frame := frameOf(m); strings.Contains(frame, "Reasoning") || strings.Contains(frame, "agent words") {
+		t.Errorf("a finished tool must clear the previous call's phase:\n%s", frame)
+	}
+	m = feed(t, m, phase("reading", 0))
+	if frame := frameOf(m); !strings.Contains(frame, "Reading the tool results") {
+		t.Errorf("after a tool, the model is reading its result:\n%s", frame)
+	}
+	m = feed(t, m, tok("Revenue was highest in the West."))
+	if frame := frameOf(m); !strings.Contains(frame, "Writing your answer") {
+		t.Errorf("answer text outranks any phase:\n%s", frame)
+	}
+	if frame := frameOf(ctrlO(t, m)); strings.Contains(frame, "agent words for") {
+		t.Errorf("a phase report is not narration and must not reach Ctrl+O:\n%s", frame)
 	}
 }
 

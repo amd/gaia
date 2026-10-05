@@ -179,6 +179,7 @@ jobs:
             tests/unit/test_chat_inline_web_ssrf.py \
             tests/unit/test_chat_system_prompt_budget.py \
             tests/unit/test_dynamic_tool_filtering.py \
+            tests/unit/test_indexed_docs_per_turn.py \
             tests/unit/test_prompt_size_budget.py \
             tests/unit/test_run_python_tool.py \
             tests/unit/test_tool_loader_disambiguation.py \
