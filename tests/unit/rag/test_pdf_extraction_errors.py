@@ -6,7 +6,7 @@ Unit tests for PDF extraction error handling in gaia.rag.sdk (#451).
 Covers the three failure modes RAGSDK._extract_text_from_pdf must surface
 with actionable guidance:
 
-- Encrypted / password-protected PDFs  -> EncryptedPDFError
+- PDFs that need a user password       -> EncryptedPDFError
 - Corrupted / truncated PDFs           -> CorruptedPDFError
 - PDFs with no extractable text        -> EmptyPDFError
 
@@ -19,11 +19,12 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 pypdf = pytest.importorskip("pypdf")
 
-from pypdf import PdfWriter  # noqa: E402
+from pypdf import PdfReader, PdfWriter  # noqa: E402
 
 from gaia.rag.sdk import (  # noqa: E402
     RAGSDK,
@@ -92,6 +93,27 @@ def _write_encrypted_pdf(path: Path, password: str = "hunter2") -> None:
         writer.write(f)
 
 
+def _write_owner_only_pdf(path: Path, text: str) -> None:
+    """
+    Write a PDF encrypted with an empty user password and an owner password.
+
+    This is how permission-restricted PDFs (e.g. most SEC filings) ship: every
+    viewer opens them without a prompt, but pypdf still reports is_encrypted.
+    """
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), text)
+    plain = path.with_suffix(".plain.pdf")
+    doc.save(str(plain))
+    doc.close()
+
+    writer = PdfWriter(clone_from=str(plain))
+    writer.encrypt(user_password="", owner_password="owner-secret")
+    with open(path, "wb") as f:
+        writer.write(f)
+    plain.unlink()
+
+
 def _write_corrupted_pdf(path: Path) -> None:
     """
     Write an obviously invalid PDF — bytes that don't match the PDF header.
@@ -151,6 +173,38 @@ class TestEncryptedPDF:
         assert stats["success"] is False
         assert stats.get("pdf_status") == "encrypted"
         assert "password-protected" in stats["error"]
+
+
+class TestOwnerPasswordOnlyPDF:
+    """Encrypted with an empty user password — opens in any viewer, so it indexes."""
+
+    def test_extracts_text(self, rag: RAGSDK, tmp_path: Path) -> None:
+        pdf = tmp_path / "10k.pdf"
+        _write_owner_only_pdf(pdf, "Total net revenue was 17606 million")
+        assert PdfReader(str(pdf)).is_encrypted
+
+        text, num_pages, metadata = rag._extract_text_from_pdf(str(pdf))
+
+        assert "17606" in text
+        assert num_pages == 1
+        assert metadata["pdf_status"] == "readable"
+
+    def test_index_document_succeeds(self, rag: RAGSDK, tmp_path: Path) -> None:
+        pdf = tmp_path / "10k.pdf"
+        _write_owner_only_pdf(pdf, "Total net revenue was 17606 million")
+
+        def fake_encode(texts, show_progress=False):
+            return np.ones((len(texts), 8), dtype="float32")
+
+        with (
+            patch.object(rag, "_load_embedder", return_value=None),
+            patch.object(rag, "_encode_texts", side_effect=fake_encode),
+        ):
+            stats = rag.index_document(str(pdf))
+
+        assert stats["success"] is True, stats.get("error")
+        assert stats.get("pdf_status") == "readable"
+        assert stats["num_chunks"] > 0
 
 
 # ---------------------------------------------------------------------------
