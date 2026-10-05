@@ -53,6 +53,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chat: the agent starts, loads its model and reads its system prompt there,
   step by step. New stdio sentinel `warm_up` (answers `warmed_up`, or
   `warm_up_skipped` for a remote model).
+- **Permission prompts say what a command does, once.** Running the tests is
+  labelled `RUNS CODE`, not `DESTRUCTIVE`; the command appears once, relative to
+  the project; and `a` ("always this session") is offered for shell commands and
+  Python too, covering the command's family — `pytest` covers
+  `python -m pytest`, `cd proj && pytest 2>&1 | tail`. Deletes never offer it.
+  `needs_confirmation` gains an optional `risk` field.
+- **Shift+Tab permission modes in the terminal UI**: ask → accept edits → full
+  access. Accept edits lets file edits inside the starting folder run unasked;
+  the stdio control verb is `accept_edits`, and `--accept-edits` starts in it.
+  Full access is still never turned on by a stray keypress.
+- **An unanswered prompt is reported as a timeout.** `tool_decision` accepts
+  `timeout`; the agent tells the user the request expired rather than that they
+  refused it.
 - The default chat model now follows the hardware. On a PC whose GPU has
   ~27 GB for models — a 64 GB+ Strix Halo or a 32 GB GPU; the 23.3 GB model also
   needs its context cache — `gaia init` sets up Qwen3.6 35B A3B (a 23 GB Lemonade
@@ -169,6 +182,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   out of scope, so the agent wrote throwaway test runners and intermediate files
   into the repository instead. It now gets its own scratch directory, named in its
   prompt and deleted when the agent closes; the rest of the temp dir stays denied.
+- Every file tool now checks the same allowed-folders rule as `read_file`:
+  browsing, folder and content search, recent files, document indexing, folder
+  watching, code indexing, and where screenshots, transcripts and exports are
+  saved. A folder outside the scope gets the usual approval prompt, and a folder
+  you approve is readable by document indexing too.
 
 ### Added
 

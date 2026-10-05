@@ -383,7 +383,7 @@ python util/tui_driver.py screen      # the frame, as the terminal paints it
 | check | pass |
 |---|---|
 | the command is on screen | `gh issue create --title …` appears verbatim |
-| it is answerable | `y run once · … · n/esc deny` on screen |
+| it is answerable | `y once · a always: … · n/esc deny` on screen |
 | the status bar tells the truth | `● gaia waiting for your answer` — **not** `streaming` |
 | the prompt survives scrollback | run a long session first, then trigger a write; the prompt is still in the frame |
 | no contradiction | the status hint must not say `Esc cancel` while the modal says `esc deny` |

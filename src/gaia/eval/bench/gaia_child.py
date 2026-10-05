@@ -34,6 +34,7 @@ def instrument(progress: Path) -> Callable[[Any], None]:
     def _install(agent: Any) -> None:
         from gaia.agents.base.turn_scope import (  # pylint: disable=import-outside-toplevel
             ANSWERED_MARKER,
+            REOPENED_MARKER,
         )
 
         execute = agent._execute_tool  # pylint: disable=protected-access
@@ -67,6 +68,18 @@ def instrument(progress: Path) -> Callable[[Any], None]:
                 mark()
 
             scope.mark_answered = _answered
+            reopen = scope.reopen
+
+            @functools.wraps(reopen)
+            def _reopened() -> None:
+                if scope.answered:
+                    _append(
+                        progress,
+                        {"role": "system", "content": {"type": REOPENED_MARKER}},
+                    )
+                reopen()
+
+            scope.reopen = _reopened
         chat = getattr(agent, "chat", None)
         for name in ("send_messages", "send_messages_stream"):
             send = getattr(chat, name, None)

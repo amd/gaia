@@ -287,6 +287,13 @@ type ChatModel struct {
 	// autonomy ON is a two-step confirmation; turning it OFF is one key, and
 	// never gated.
 	fullAccessArmed bool
+	// fullAccessUnlocked is set once full access has been turned on this
+	// session — by the launch flag, a saved default, or /full-access confirm.
+	// Only then does Shift+Tab switch straight into it; before, it explains.
+	fullAccessUnlocked bool
+	// acceptEdits is the "accept edits" permission mode: file edits in the
+	// workspace run unasked. Set only after the transport confirmed it.
+	acceptEdits bool
 
 	// warming is the warm-up stage before the first chat turn — see warmup.go.
 	// warmHidden is Esc on the stage: the chat shows while the warm-up turn
@@ -1270,6 +1277,13 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// other key passes through untouched so scrolling and typing still work.
 	if msg.Type == tea.KeyEsc && (m.memoryView != nil || m.memoryLoading) {
 		return m.dismissMemoryView(), nil
+	}
+
+	// Shift+Tab cycles the permission mode from anywhere a question or the
+	// palette is not using it — including over a pending confirmation, whose
+	// own hint line points at this key.
+	if msg.Type == tea.KeyShiftTab && m.question == nil && !m.palette.open {
+		return m.cyclePermissionMode()
 	}
 
 	// A pending confirmation owns the keyboard too, but UNLIKE a question, Esc

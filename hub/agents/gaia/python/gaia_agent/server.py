@@ -217,10 +217,10 @@ class QueryFollowUpResponse(_Strict):
     delivered: bool
 
 
-#: The three answers a tool confirmation accepts, matching the stdio control
-#: channel's vocabulary exactly (``gaia_agent.stdio.DECISION_*``). A fourth
-#: spelling would be refused here rather than guessed at.
-_TOOL_DECISIONS = ("allow", "deny", "always")
+#: The answers a tool confirmation accepts, matching the stdio control
+#: channel's vocabulary exactly (``gaia_agent.stdio.DECISION_*``). Any other
+#: spelling is refused here rather than guessed at.
+_TOOL_DECISIONS = ("allow", "deny", "always", "timeout")
 
 
 class ToolDecisionRequest(_Strict):
@@ -233,8 +233,9 @@ class ToolDecisionRequest(_Strict):
 
     decision: str = Field(
         description=(
-            "One of 'allow', 'deny', 'always'. 'always' grants the pending "
-            "call's scope for the rest of the session."
+            "One of 'allow', 'deny', 'always', 'timeout'. 'always' grants the "
+            "pending call's scope for the rest of the session. 'timeout' denies "
+            "because nobody answered, and the agent reports it as a timeout."
         )
     )
     confirm_id: Optional[str] = Field(
@@ -1150,6 +1151,7 @@ async def tool_decision(run_id: str, body: ToolDecisionRequest):
         approved=approved,
         always=body.decision == "always",
         confirm_id=body.confirm_id,
+        timed_out=body.decision == "timeout",
     )
     if not delivered:
         raise HTTPException(

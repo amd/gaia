@@ -68,6 +68,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ShellToolsMixin,
     WaitToolsMixin,
 )
+from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import documents_still_indexing
 from gaia.llm.inference_location import (
     InferenceLocation,
@@ -1418,7 +1419,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
     def _is_path_allowed(self, path: str) -> bool:
         """
-        Check if a path is within allowed directories.
+        Check if a path may be read, without asking the user.
         Uses PathValidator for the actual check.
 
         Args:
@@ -1427,7 +1428,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         Returns:
             True if path is allowed, False otherwise
         """
-        return self.path_validator.is_path_allowed(path, prompt_user=False)
+        return self.path_validator.validate_read(path, prompt_user=False)[0]
 
     def _script_project_root(self) -> Optional[str]:
         """This session's project root, or ``None`` when there is no project.
@@ -1637,6 +1638,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 Returns:
                     Dictionary with files, directories, and total count
                 """
+                path = os.path.expanduser(path)
+                denied = read_access_error(self, path)
+                if denied:
+                    return denied
                 try:
                     items = os.listdir(path)
                     files = sorted(
@@ -2313,10 +2318,16 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     ),
                 }
             if not output_path:
+                # GAIA's own output folder, not the user's files.
                 tts_dir = Path.home() / ".gaia" / "tts"
                 tts_dir.mkdir(parents=True, exist_ok=True)
                 ts = time.strftime("%Y%m%d_%H%M%S")
                 output_path = str(tts_dir / f"speech_{ts}.wav")
+            else:
+                output_path = os.path.expanduser(output_path)
+                denied = write_access_error(self, output_path)
+                if denied:
+                    return denied
 
             try:
                 client = LemonadeTTSClient(

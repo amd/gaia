@@ -68,6 +68,9 @@ class _Registry:
     def get_load_error(self, _agent_id):
         return None
 
+    def resolve_model(self, _agent_id, available_models=None):
+        return None
+
 
 @pytest.fixture
 def client(monkeypatch):

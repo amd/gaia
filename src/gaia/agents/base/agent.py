@@ -88,6 +88,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
     POST_ANSWER_CLOSING_PROMPT,
+    REOPENED_MARKER,
     TurnScopeGuard,
 )
 from gaia.agents.base.verification import (
@@ -5527,8 +5528,7 @@ Do NOT wrap conversational replies in JSON.
             if not approved:
                 denied_error = self._confirmation_denied_error(tool_name)
                 denied = {"status": "denied", "error": denied_error}
-                timed_out = getattr(self.console, "confirmation_timed_out", None)
-                if callable(timed_out) and timed_out(tool_name) is True:
+                if self.console.confirmation_timed_out(tool_name) is True:
                     # Nobody said no, so this is not a refusal to route around.
                     denied["timed_out"] = True
                 else:
@@ -7019,6 +7019,14 @@ Do NOT wrap conversational replies in JSON.
                 return getattr(self, hook)()
         explicit = getattr(getattr(self, "config", None), "project_root", None)
         return resolve_project_root(explicit)
+
+    def _reopen_turn_scope(self, conversation: List[Dict[str, Any]]) -> None:
+        """A check is sending the answer back; the work it asks for is in scope."""
+        scope = getattr(self, "_turn_scope", None)
+        if scope is None or not scope.answered:
+            return
+        scope.reopen()
+        conversation.append({"role": "system", "content": {"type": REOPENED_MARKER}})
 
     def _verify_after_change_prompt(self) -> Optional[str]:
         """Corrective message when files changed after the last check, else ``None``.
@@ -9726,6 +9734,7 @@ Do NOT wrap conversational replies in JSON.
                         logger.info(
                             "%s fired at step %d", VERIFY_AFTER_CHANGE_TAG, steps_taken
                         )
+                        self._reopen_turn_scope(conversation)
                         messages.append({"role": "user", "content": _correction})
                         conversation.append({"role": "user", "content": _correction})
                         continue
@@ -9773,6 +9782,7 @@ Do NOT wrap conversational replies in JSON.
                                 "not see."
                             ),
                         }
+                        self._reopen_turn_scope(conversation)
                         messages.append(correction)
                         conversation.append(dict(correction))
                         continue
@@ -9844,14 +9854,29 @@ Do NOT wrap conversational replies in JSON.
                         )
                         refused = set(self._completion_evidence.refused.values())
                         if artifact_gaps and set(artifact_gaps) <= refused:
-                            # Asking for the write again would re-ask a "no".
-                            correction = (
-                                "[check:completion] "
-                                + " ".join(artifact_gaps)
-                                + " Do not retry that write, here or anywhere "
-                                "else. Say it was not saved, and give your "
-                                "complete answer again."
-                            )
+                            unconfirmed = self._completion_evidence.unconfirmed
+                            if unconfirmed & set(artifact_gaps):
+                                # Nobody said no, but retrying unasked skips them.
+                                correction = (
+                                    "[check:completion] "
+                                    + " ".join(artifact_gaps)
+                                    + " Do not retry that write now. Say it was "
+                                    "not saved because the approval expired, ask "
+                                    "whether to try again, and give your complete "
+                                    "answer again."
+                                )
+                            else:
+                                # Asking for the write again would re-ask a "no".
+                                correction = (
+                                    "[check:completion] "
+                                    + " ".join(artifact_gaps)
+                                    + " Do not retry that write, here or anywhere "
+                                    "else. Say it was not saved, and give your "
+                                    "complete answer again."
+                                )
+                        else:
+                            # Only the files it names: other reads are still drift.
+                            self._turn_scope.widen(correction)
                         messages.append({"role": "user", "content": correction})
                         conversation.append({"role": "user", "content": correction})
                         continue

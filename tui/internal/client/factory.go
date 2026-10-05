@@ -52,6 +52,11 @@ type ForAgentOptions struct {
 // --bypass-permissions the same way.
 const FullAccessFlag = "--full-access"
 
+// AcceptEditsFlag starts a subprocess agent in "accept edits" mode. Only ever
+// added on a respawn, to carry a mode the user picked with Shift+Tab over to
+// the replacement child; must match gaia_agent.stdio's parser.
+const AcceptEditsFlag = "--accept-edits"
+
 // UseClaudeFlag is the argument that points a subprocess agent at Anthropic's
 // Claude API instead of the local Lemonade backend. Must match the flag the
 // agent's parser declares, and SubprocessClient.ClaudeAtLaunch scans argv for

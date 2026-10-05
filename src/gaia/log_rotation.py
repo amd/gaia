@@ -13,6 +13,11 @@ truncates it in place. That is lossless because every GAIA writer takes the same
 lock before it writes, and the other writers' append-mode handles keep writing at
 the new end of file.
 
+The cap is measured in bytes on disk: a record is encoded, line ending included,
+before it is weighed against the room left. No file in the family exceeds the cap,
+except that a single record larger than the whole cap is written alone to an empty
+file rather than dropped.
+
 Stdlib-only: ``gaia.logger`` imports this before anything else in GAIA exists.
 """
 
@@ -37,6 +42,8 @@ DEFAULT_BACKUPS = 3
 _COPY_LIMIT_FACTOR = 2
 _LOCK_TIMEOUT_S = 5.0
 _RETRY_AFTER_S = 30.0
+# What "\n" becomes on disk: "\r\n" on Windows, so a record weighs more than its length.
+_LINESEP = os.linesep
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -64,6 +71,32 @@ def log_limits() -> Tuple[int, int]:
 def log_family(path) -> List[Path]:
     """The live log and its existing rotated files, newest first."""
     path = Path(path)
+    family = [path] if path.is_file() else []
+    return family + [entry for _, entry in sorted(_numbered_backups(path))]
+
+
+def shift_backups(path, backup_count: int) -> None:
+    """Rename ``path`` to ``path.1``, moving older backups up and dropping the oldest.
+
+    Finds which backups exist with one directory scan rather than probing
+    every number up to ``backup_count``: at a large backup_count that probe
+    is slow enough on its own to blow another writer's lock-acquire timeout.
+
+    Raises:
+        OSError: a rename failed, typically because another process holds the
+            file open on Windows.
+    """
+    path = Path(path)
+    base = str(path)
+    existing = {n for n, _ in _numbered_backups(path)}
+    for i in range(backup_count - 1, 0, -1):
+        if i in existing:
+            os.replace(f"{base}.{i}", f"{base}.{i + 1}")
+    os.replace(base, f"{base}.1")
+
+
+def _numbered_backups(path: Path) -> List[Tuple[int, Path]]:
+    """``(n, entry)`` for every ``path.<n>`` beside ``path``, unsorted."""
     pattern = re.compile(re.escape(path.name) + r"\.(\d+)$")
     backups = []
     try:
@@ -73,23 +106,7 @@ def log_family(path) -> List[Path]:
                 backups.append((int(match.group(1)), entry))
     except FileNotFoundError:
         pass
-    family = [path] if path.is_file() else []
-    return family + [entry for _, entry in sorted(backups)]
-
-
-def shift_backups(path, backup_count: int) -> None:
-    """Rename ``path`` to ``path.1``, moving older backups up and dropping the oldest.
-
-    Raises:
-        OSError: a rename failed, typically because another process holds the
-            file open on Windows.
-    """
-    base = str(path)
-    for i in range(backup_count - 1, 0, -1):
-        src = f"{base}.{i}"
-        if os.path.exists(src):
-            os.replace(src, f"{base}.{i + 1}")
-    os.replace(base, f"{base}.1")
+    return backups
 
 
 def rotate_if_oversized(path, max_bytes: Optional[int] = None) -> bool:
@@ -178,7 +195,8 @@ class SharedRotatingFileHandler(logging.FileHandler):
     Safe when several processes (and several handlers in one process) write the
     same path. A log already over the cap when the handler starts is rotated
     aside to ``<log>.1`` rather than deleted, so it stays available for a bug
-    report until it ages out.
+    report until it ages out. A single record larger than ``max_bytes`` gets a
+    file to itself.
 
     When a rotation cannot happen at all, the handler says so once on stderr and
     stops writing to the file while it is over the cap, retrying every 30 s. The
@@ -232,6 +250,18 @@ class SharedRotatingFileHandler(logging.FileHandler):
             return os.path.getsize(self.baseFilename)
         except FileNotFoundError:
             return None
+
+    def _open(self):
+        # Binary append: the bytes written are the bytes weighed against the cap.
+        return open(self.baseFilename, "ab")
+
+    def _encode(self, msg: str) -> bytes:
+        if _LINESEP != "\n":
+            msg = msg.replace("\n", _LINESEP)
+        return msg.encode(self.encoding or "utf-8", self.errors or "strict")
+
+    def _fits(self, size: int, nbytes: int) -> bool:
+        return not size or size + nbytes <= self.max_bytes
 
     def _close_stream(self) -> None:
         if self.stream is not None:
@@ -307,7 +337,7 @@ class SharedRotatingFileHandler(logging.FileHandler):
 
     def emit(self, record):
         try:
-            msg = self.format(record) + self.terminator
+            data = self._encode(self.format(record) + self.terminator)
             if not self._ipc_lock.acquire():
                 self._announce(
                     "lock",
@@ -315,12 +345,12 @@ class SharedRotatingFileHandler(logging.FileHandler):
                     "GAIA process is holding it. Writing without rotation until "
                     "it frees.",
                 )
-                self._write_unlocked(msg)
+                self._write_unlocked(data)
                 return
             try:
                 self._follow_live_file()
                 size = self._path_size() or 0
-                if size and size + len(msg) > self.max_bytes:
+                if not self._fits(size, len(data)):
                     if self._paused():
                         return
                     self._rollover(size)
@@ -328,7 +358,7 @@ class SharedRotatingFileHandler(logging.FileHandler):
                         return
                 if self.stream is None:
                     self.stream = self._open()
-                self.stream.write(msg)
+                self.stream.write(data)
                 self.stream.flush()
             finally:
                 self._ipc_lock.release()
@@ -338,13 +368,13 @@ class SharedRotatingFileHandler(logging.FileHandler):
             # logging.Handler's contract: report through handleError, never raise.
             self.handleError(record)
 
-    def _write_unlocked(self, msg: str) -> None:
+    def _write_unlocked(self, data: bytes) -> None:
         # Without the lock no rotation is safe, so the cap is enforced by not writing.
-        if (self._path_size() or 0) >= self.max_bytes:
+        if not self._fits(self._path_size() or 0, len(data)):
             return
         if self.stream is None:
             self.stream = self._open()
-        self.stream.write(msg)
+        self.stream.write(data)
         self.stream.flush()
 
     def close(self):

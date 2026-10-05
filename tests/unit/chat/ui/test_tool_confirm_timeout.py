@@ -40,6 +40,27 @@ def test_the_prompt_advertises_the_wait_it_enforces():
     assert request["timeout_seconds"] == handler.confirm_timeout_seconds == 600
 
 
+def test_an_unanswered_prompt_is_recorded_as_a_timeout():
+    handler = SSEOutputHandler()
+    assert not handler.confirm_tool_execution("write_file", {}, timeout=0.01)
+    assert handler.confirmation_timed_out("write_file")
+    assert not handler.confirmation_timed_out("edit_file")
+
+
+def test_a_refusal_is_not_recorded_as_a_timeout():
+    handler = SSEOutputHandler()
+    worker = threading.Thread(
+        target=handler.confirm_tool_execution,
+        args=("write_file", {"file_path": "a.txt"}),
+        daemon=True,
+    )
+    worker.start()
+    handler.event_queue.get(timeout=5)
+    handler.resolve_tool_confirmation(approved=False)
+    worker.join(timeout=5)
+    assert not handler.confirmation_timed_out("write_file")
+
+
 def test_a_failed_tool_ends_as_a_failure():
     """tool_end must not overturn the error its tool_result just reported."""
     handler = SSEOutputHandler()

@@ -105,6 +105,7 @@ describe('SetupScreen', () => {
             ],
         });
         mockedApi.selectModel.mockResolvedValue({ provider: 'fireworks', model: 'fireworks.m1', label: 'm1', remote: true, is_default: false });
+        mockedApi.listSessions.mockResolvedValue({ sessions: [], total: 0 });
 
         await start(/Fireworks AI/);
         expect(screen.getByText('Connect Fireworks AI')).toBeInTheDocument();

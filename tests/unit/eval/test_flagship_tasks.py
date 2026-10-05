@@ -1163,6 +1163,7 @@ def test_verified_reads_every_runner_the_record_knows(conversation, verified):
 
 
 ANSWERED = {"role": "system", "content": {"type": "answered", "step": 4}}
+REOPENED = {"role": "system", "content": {"type": "reopened"}}
 BUGFIX = "toybox/dates.py mishandles a lowercase z. Fix it and add a regression test."
 
 
@@ -1201,6 +1202,10 @@ def _read(path):
             [],
         ),
         ([_read("toybox/cli.py"), ANSWERED, _read("toybox/cli.py")], []),
+        (
+            [_edit(), ANSWERED, REOPENED, _read("toybox/sorting.py"), ANSWERED],
+            [],
+        ),
     ],
     ids=[
         "no-answer-yet",
@@ -1208,6 +1213,7 @@ def _read(path):
         "new-work-after-the-answer",
         "refused-calls-never-ran",
         "a-file-read-before-the-answer",
+        "a-check-reopened-the-turn",
     ],
 )
 def test_calls_after_answer_counts_only_work_the_request_never_touched(

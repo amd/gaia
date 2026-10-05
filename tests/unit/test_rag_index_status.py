@@ -132,7 +132,7 @@ def _file_monitor_agent(rag_result):
         pass
 
     host = _Host()
-    host.path_validator = Mock(is_path_allowed=Mock(return_value=True))
+    host.path_validator = Mock(validate_read=Mock(return_value=(True, "")))
     host.watch_directories = []
     host.indexed_files = set()
     host.rag = Mock(index_document=Mock(return_value=rag_result))
