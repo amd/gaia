@@ -420,6 +420,29 @@ _TOOL_USER_WAIT: contextvars.ContextVar[Optional[_UserWaitClock]] = (
 )
 
 
+def verify_edits_enabled() -> bool:
+    """Whether a turn reads its own edits back before it answers.
+
+    On by default. The check is read-only and in-process — it opens the files
+    this turn wrote and nothing else — so it cannot run a build, start a
+    process, or reach anything the turn had not already touched.
+    ``GAIA_AGENT_VERIFY_EDITS=0`` turns it off. Read at call time, like the
+    other ``GAIA_AGENT_*`` knobs.
+    """
+    raw = os.environ.get("GAIA_AGENT_VERIFY_EDITS")
+    if raw is None or raw == "":
+        return True
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(
+        f"GAIA_AGENT_VERIFY_EDITS must be a boolean (1/0, true/false, on/off), "
+        f"got {raw!r}. Unset it to keep the check on."
+    )
+
+
 class ToolExecutionTimeout(Exception):
     """Raised when a tool body exceeds its bounded execution window.
 
@@ -1100,6 +1123,29 @@ _LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 # Fabricated-save guard (#4010): a final answer that asserts a file was
 # written when no write tool ran this turn.
 _MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
+
+# Post-edit verification. Whether a turn checks its own edits is currently a
+# property of the model rather than of the loop: given the same tools and the
+# same prompt, some models read their work back and some never do. The loop
+# can make it a property of the system instead, and it is better placed to do
+# so — it already knows exactly which files this turn wrote.
+#
+# Verifying costs steps from the same budget as working, so a model under
+# budget pressure rationally skips it. That is the wrong incentive, and it is
+# the one that bites hardest at the end of a turn, which is where the edits
+# are. Repair steps are therefore granted on top of the limit rather than
+# taken out of it.
+_VERIFY_REPAIR_STEPS = 2
+# Rounds per turn. One round is the normal case; the second exists for an
+# edit that introduces a fresh problem while fixing the first. Past that the
+# turn is looping, and the gaps go into the answer instead.
+_MAX_EDIT_VERIFICATIONS = 2
+_EDIT_VERIFICATION_PROMPT = (
+    "[check:edits] The files you changed this turn were read back off disk "
+    "and these did not come out right:\n{problems}\n\nFix them now, then "
+    "answer. You have {steps} extra steps for this and they are not charged "
+    "against your step budget."
+)
 # Tools that could hand-edit a file save_extracted_items exported this turn.
 _INVENTORY_HAND_EDITS = frozenset(
     {
@@ -1696,6 +1742,10 @@ Do NOT wrap conversational replies in JSON.
         self._grounding_history = ""
         # Grounding gaps that survived their correction, for the scope note.
         self._turn_ungrounded: List[str] = []
+        # Post-edit verification bookkeeping; reset per turn below.
+        self._edit_verification_rounds = 0
+        self._edit_verification_findings: List[str] = []
+        self._verify_edits_on = verify_edits_enabled()
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -7145,6 +7195,100 @@ Do NOT wrap conversational replies in JSON.
             return body
         return f"{body.rstrip()}\n\n{statement}"
 
+    def _files_written_this_turn(self) -> List[str]:
+        """Every path a write tool successfully wrote this turn.
+
+        Read out of the completion-evidence ledger, which is the only per-turn
+        record every write tool feeds: ``CompletionEvidence.record`` is called
+        for all of ``WRITE_TOOLS`` (write_file, edit_file, edit_python_file,
+        write_python_file, write_markdown_file, replace_function,
+        save_extracted_items).
+
+        ``_turn_file_edits`` looks like the obvious source and is not: it is
+        appended only for a tool result carrying ``operation == "edit_file"``,
+        which none of the tools in ``file_io_tools`` sets. Reading it would
+        have made this check silently do nothing for the shipped file tools —
+        which is exactly the kind of failure it exists to catch, so it is worth
+        the comment.
+
+        Inferred entries are skipped: those are files found by modification
+        time rather than reported by a tool, so the turn may not have written
+        them at all and a complaint about one would be a guess.
+        """
+        paths: List[str] = []
+        evidence = getattr(self, "_completion_evidence", None)
+        for item in getattr(evidence, "files", {}).values():
+            if item.written and not item.inferred:
+                paths.append(item.path)
+        for edit in getattr(self, "_turn_file_edits", None) or []:
+            raw = (edit or {}).get("file_path")
+            if raw:
+                paths.append(str(raw))
+        return paths
+
+    def _verify_turn_edits(self) -> List[str]:
+        """Read this turn's edited files back off disk; report what is wrong.
+
+        Deliberately narrow. It opens the files this turn already wrote and
+        asks three questions a diff cannot answer from the tool result alone:
+        is it still there, does it still have content, and does it still
+        parse. No shell, no subprocess, no repository-wide walk — so it is
+        safe to run on every turn, cannot be slow in proportion to the
+        repository, and cannot reach anything the turn had not already
+        touched.
+
+        That is less than a test run would tell you, and it is the part that
+        needs no configuration and cannot be wrong about a project it has
+        never seen. A `write_file` that reported success and left a file that
+        does not parse is a failure the loop can detect by itself; whether the
+        change is *correct* is not.
+        """
+        problems: List[str] = []
+        seen: set = set()
+        for raw in self._files_written_this_turn():
+            path = Path(str(raw))
+            key = os.path.normcase(str(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                if not path.is_file():
+                    problems.append(
+                        f"`{path}` was edited this turn but is not on disk now."
+                    )
+                    continue
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                problems.append(f"`{path}` could not be read back after its edit: {e}")
+                continue
+            if not text.strip():
+                problems.append(f"`{path}` is empty after this turn's edit.")
+                continue
+            suffix = path.suffix.lower()
+            if suffix in (".py", ".pyi"):
+                try:
+                    ast.parse(text)
+                except (SyntaxError, ValueError) as e:
+                    problems.append(f"`{path}` no longer parses as Python: {e}")
+            elif suffix == ".json":
+                try:
+                    json.loads(text)
+                except ValueError as e:
+                    problems.append(f"`{path}` is no longer valid JSON: {e}")
+        self._edit_verification_rounds = (
+            getattr(self, "_edit_verification_rounds", 0) + 1
+        )
+        if getattr(self, "_edit_verification_findings", None) is None:
+            self._edit_verification_findings = []
+        self._edit_verification_findings.extend(problems)
+        logger.debug(
+            "Post-edit verification round %d: %d file(s), %d problem(s)",
+            self._edit_verification_rounds,
+            len(seen),
+            len(problems),
+        )
+        return problems
+
     def _gate_unsealed_answer(
         self, answer: Optional[str]
     ) -> Tuple[Optional[str], List[str]]:
@@ -7463,6 +7607,12 @@ Do NOT wrap conversational replies in JSON.
         # Files edited this turn, so an empty response can name what it left
         # behind (#3733). Per-turn: an instance persists across queries.
         self._turn_file_edits: List[Dict[str, Any]] = []
+        # Per-turn too: a previous turn's edits are not this turn's to repair.
+        # The env knob is read here, not at import, so it can be changed
+        # between turns.
+        self._edit_verification_rounds = 0
+        self._edit_verification_findings = []
+        self._verify_edits_on = verify_edits_enabled()
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
@@ -9750,6 +9900,42 @@ Do NOT wrap conversational replies in JSON.
                     and self._drain_followups(messages, conversation)
                 ):
                     continue
+
+                # The turn believes it is done and it changed files. Read them
+                # back before that belief is sealed — a tool result saying
+                # "success" is not the same as a file that is still there and
+                # still parses, and this is the last moment anything can be
+                # done about the difference.
+                if (
+                    self._verify_edits_on
+                    and self._edit_verification_rounds < _MAX_EDIT_VERIFICATIONS
+                    and self._files_written_this_turn()
+                ):
+                    edit_problems = self._verify_turn_edits()
+                    if edit_problems:
+                        # Granted on top of the limit, not taken out of it:
+                        # see _VERIFY_REPAIR_STEPS. A turn that has already
+                        # spent its budget is exactly the one that needs the
+                        # room, and charging the repair to the same budget is
+                        # what makes skipping the check the rational choice.
+                        steps_limit += _VERIFY_REPAIR_STEPS
+                        repair = {
+                            "role": "user",
+                            "content": _EDIT_VERIFICATION_PROMPT.format(
+                                problems="\n".join(f"- {p}" for p in edit_problems),
+                                steps=_VERIFY_REPAIR_STEPS,
+                            ),
+                        }
+                        messages.append(repair)
+                        conversation.append(dict(repair))
+                        logger.info(
+                            "Post-edit verification found %d problem(s); "
+                            "granted %d repair step(s) (limit now %d)",
+                            len(edit_problems),
+                            _VERIFY_REPAIR_STEPS,
+                            steps_limit,
+                        )
+                        continue
 
                 answer_candidate = self.finalize_answer(answer_candidate, conversation)
                 soft_gaps: List[str] = []
