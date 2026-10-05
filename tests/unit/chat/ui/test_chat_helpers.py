@@ -521,7 +521,29 @@ class TestSessionAgentKwargsShape:
             "allowed_paths",
             "ui_session_id",
             "dynamic_tools",
+            "memory_incognito",
         }
+
+    def test_memory_off_reaches_the_agent_at_construction(self):
+        """Memory off must be known when the agent is built, so it never
+        loads the embedder for a session that does not use memory."""
+        from gaia.ui._chat_helpers import _memory_off, _session_agent_kwargs
+
+        db = MagicMock()
+        db.get_setting.return_value = "false"
+        assert _memory_off({"private": 0}, db) is True
+        db.get_setting.return_value = "true"
+        assert _memory_off({"private": 0}, db) is False
+        assert _memory_off({"private": 1}, db) is True
+
+        kwargs = _session_agent_kwargs(
+            rag_file_paths=[],
+            library_paths=[],
+            allowed=["/root"],
+            session_id="s",
+            memory_incognito=True,
+        )
+        assert kwargs["memory_incognito"] is True
 
     def test_dynamic_tools_defaults_off_and_forwards_when_set(self):
         """The Beta tool-loader toggle (#1798) defaults off and round-trips
