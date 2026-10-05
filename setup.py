@@ -66,6 +66,7 @@ setup(
         "gaia.engineering",
         "gaia.eval.bench",
         "gaia.eval.retrieval",
+        "gaia.eval.code_retrieval",
         "gaia.installer",
         "gaia.hub",
         "gaia.rag",

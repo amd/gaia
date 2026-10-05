@@ -181,7 +181,8 @@ jobs:
             # Offline, retrieval-only subset over committed documents, compared to
             # the committed baseline. The full suite runs nightly (eval_retrieval.yml).
             Write-Host "`n=== Retrieval benchmark gate (gaia eval retrieval --suite pr) ==="
-            python -m gaia.cli eval retrieval --suite pr --offline --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json --out retrieval-pr
+            # gaia is installed as a wheel here, so name the checkout that holds the labels.
+            python -m gaia.cli eval retrieval --suite pr --offline --repo-root $env:GITHUB_WORKSPACE --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json --out retrieval-pr
             if ($LASTEXITCODE -ne 0) { throw "Retrieval gate failed with exit code $LASTEXITCODE" }
         } finally {
             if ($env:LEMONADE_PROCESS_ID) {

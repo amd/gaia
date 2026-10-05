@@ -67,7 +67,7 @@ jobs:
     - name: Download the corpora
       shell: powershell
       run: |
-        python -m gaia.cli eval retrieval --fetch-only
+        python -m gaia.cli eval retrieval --fetch-only --repo-root $env:GITHUB_WORKSPACE
         if ($LASTEXITCODE -ne 0) { throw "Corpus download failed with exit code $LASTEXITCODE" }
 
     - name: Start Lemonade and run the benchmark
@@ -91,7 +91,7 @@ jobs:
             uv run python tests/ci_lemonade_check.py --model user.embeddinggemma-300m-GGUF --checkpoint ggml-org/embeddinggemma-300M-GGUF:Q8_0 --recipe llamacpp --register-embedding --embeddings
             if ($LASTEXITCODE -ne 0) { throw "Embedding model setup failed" }
 
-            $cliArgs = @("--suite", $env:SUITE, "--offline", "--out", "retrieval-results")
+            $cliArgs = @("--suite", $env:SUITE, "--offline", "--repo-root", $env:GITHUB_WORKSPACE, "--out", "retrieval-results")
             if ($env:EXTRA_ARGS) { $cliArgs += $env:EXTRA_ARGS.Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries) }
             python -m gaia.cli eval retrieval @cliArgs
             if ($LASTEXITCODE -ne 0) { throw "Retrieval benchmark failed with exit code $LASTEXITCODE" }

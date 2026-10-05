@@ -23,7 +23,6 @@ from typing import List, Optional, Sequence
 from gaia.eval.retrieval import sources
 from gaia.eval.retrieval.scoring import is_numeric_answer
 
-DATASETS_DIR = sources.REPO_ROOT / "eval" / "retrieval" / "datasets"
 ANSWER_TYPES = ("numeric", "exact", "judge")
 XQUAD_LANGUAGES = ("ar", "de", "el", "en", "es", "hi", "ru", "th", "tr", "vi", "zh")
 
@@ -87,20 +86,31 @@ def _check_question(q: Question, doc_ids: set) -> None:
             raise ValueError(f"{q.id}: evidence needs a page or a quote")
 
 
+def datasets_dir() -> Path:
+    return sources.repo_root() / "eval" / "retrieval" / "datasets"
+
+
 def load_labelled(name: str, offline: bool = False) -> Dataset:
     """Load ``eval/retrieval/datasets/<name>.json`` and fetch its documents."""
-    path = DATASETS_DIR / f"{name}.json"
+    root = sources.repo_root()
+    path = datasets_dir() / f"{name}.json"
     if not path.is_file():
-        raise FileNotFoundError(f"Labelled dataset not found: {path}")
+        raise FileNotFoundError(
+            f"Labelled dataset not found: {path}. Known datasets are the .json "
+            f"files in {datasets_dir()}; if {root} is not the gaia checkout you "
+            "meant, pass --repo-root <checkout>."
+        )
     spec = json.loads(path.read_text(encoding="utf-8"))
     documents: List[Document] = []
     used_sources = set()
     for d in spec["documents"]:
         if "path" in d:
-            local = sources.REPO_ROOT / d["path"]
+            local = root / d["path"]
             if not local.is_file():
                 raise FileNotFoundError(
-                    f"{name}: document {d['id']} missing at {local}"
+                    f"{name}: document {d['id']} missing at {local}. {path} labels "
+                    "a file this checkout does not have; update the checkout or "
+                    "pass --repo-root <checkout> for the one the labels belong to."
                 )
             documents.append(Document(d["id"], local, "repo"))
         else:

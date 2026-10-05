@@ -233,7 +233,7 @@ def test_offline_fetch_of_a_missing_file_names_how_to_download_it(
 @pytest.mark.parametrize("name", ["repo_docs", "technical_docs"])
 def test_labelled_datasets_are_well_formed(name):
     spec = json.loads(
-        (corpus.DATASETS_DIR / f"{name}.json").read_text(encoding="utf-8")
+        (corpus.datasets_dir() / f"{name}.json").read_text(encoding="utf-8")
     )
     doc_ids = {d["id"] for d in spec["documents"]}
     ids = [q["id"] for q in spec["questions"]]
@@ -241,7 +241,7 @@ def test_labelled_datasets_are_well_formed(name):
     manifest = sources.load_manifest()
     for d in spec["documents"]:
         if "path" in d:
-            assert (sources.REPO_ROOT / d["path"]).is_file(), d
+            assert (sources.repo_root() / d["path"]).is_file(), d
         else:
             assert d["file"] in manifest[d["source"]]["files"], d
     for q in spec["questions"]:
@@ -355,12 +355,9 @@ def test_cli_parses_the_documented_invocations():
     args = parse(
         ["eval", "retrieval", "--component", "rag", "--suite", "pr", "--gate", "b.json"]
     )
-    assert (args.eval_command, args.suite, args.gate, args.tolerance) == (
-        "retrieval",
-        "pr",
-        "b.json",
-        0.02,
-    )
+    assert (args.eval_command, args.suite, args.gate) == ("retrieval", "pr", "b.json")
+    cli._check_retrieval_args(args)  # pylint: disable=protected-access
+    assert args.tolerance == 0.02
     args = parse(
         [
             "eval",
@@ -387,8 +384,139 @@ def test_cli_parses_the_documented_invocations():
         parse(["eval", "retrieval", "--component", "code_index"])
 
 
+@pytest.mark.parametrize(
+    "argv,message",
+    [
+        (["--suite", "nightly"], "choose one of: pr, full"),
+        (["--component", "code", "--suite", "full"], "choose one of: pr, nightly"),
+        (["--component", "code", "--offline"], "--offline only applies"),
+        (["--parts", "quality"], "--parts only applies to --component code"),
+    ],
+)
+def test_cli_rejects_a_suite_or_flag_of_the_other_component(argv, message):
+    args = cli.build_parser().parse_args(["eval", "retrieval", *argv])
+    with pytest.raises(SystemExit) as exc:
+        cli._check_retrieval_args(args)  # pylint: disable=protected-access
+    assert message in str(exc.value)
+
+
+def test_cli_code_component_keeps_its_own_tolerance():
+    args = cli.build_parser().parse_args(["eval", "retrieval", "--component", "code"])
+    cli._check_retrieval_args(args)  # pylint: disable=protected-access
+    assert args.tolerance == 0.05
+
+
+# ── where the labels live ───────────────────────────────────────────────────
+
+
+@pytest.fixture
+def wheel_install(tmp_path, monkeypatch):
+    """gaia installed as a wheel: the module is in site-packages, not a checkout."""
+    site = tmp_path / "venv" / "Lib" / "site-packages" / "gaia" / "eval" / "retrieval"
+    site.mkdir(parents=True)
+    monkeypatch.setattr(sources, "__file__", str(site / "sources.py"))
+    monkeypatch.setattr(sources, "_repo_root", None)
+    return tmp_path
+
+
+def _checkout(root):
+    """A minimal gaia checkout: manifest, one labelled dataset, its document."""
+    (root / "eval" / "retrieval" / "datasets").mkdir(parents=True)
+    (root / "eval" / "retrieval" / "sources.json").write_text(
+        '{"sources": {}}', encoding="utf-8"
+    )
+    (root / "docs").mkdir()
+    (root / "docs" / "a.md").write_text("The widget ships in March.", encoding="utf-8")
+    spec = {
+        "id": "repo_docs",
+        "description": "d",
+        "documents": [{"id": "a", "path": "docs/a.md"}],
+        "questions": [
+            {
+                "id": "q1",
+                "doc": "a",
+                "question": "When does the widget ship?",
+                "answer": "March",
+                "answer_type": "exact",
+                "evidence": [{"quote": "The widget ships in March."}],
+            }
+        ],
+    }
+    (root / "eval" / "retrieval" / "datasets" / "repo_docs.json").write_text(
+        json.dumps(spec), encoding="utf-8"
+    )
+    return root.resolve()
+
+
+def test_wheel_install_reads_the_labels_from_the_current_directory(
+    wheel_install, monkeypatch
+):
+    checkout = _checkout(wheel_install / "checkout")
+    monkeypatch.chdir(checkout)
+    ds = corpus.load_labelled("repo_docs", offline=True)
+    assert ds.documents[0].path == checkout / "docs" / "a.md"
+    assert sources.load_manifest() == {}
+
+
+def test_wheel_install_reads_the_labels_from_an_explicit_repo_root(
+    wheel_install, monkeypatch
+):
+    checkout = _checkout(wheel_install / "checkout")
+    elsewhere = wheel_install / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert sources.set_repo_root(checkout) == checkout
+    ds = corpus.load_labelled("repo_docs", offline=True)
+    assert ds.documents[0].path == checkout / "docs" / "a.md"
+
+
+def test_explicit_repo_root_wins_over_the_current_directory(wheel_install, monkeypatch):
+    here = _checkout(wheel_install / "here")
+    there = _checkout(wheel_install / "there")
+    monkeypatch.chdir(here)
+    sources.set_repo_root(there)
+    assert corpus.datasets_dir() == there / "eval" / "retrieval" / "datasets"
+
+
+def test_wheel_install_outside_a_checkout_names_the_flag(wheel_install, monkeypatch):
+    elsewhere = wheel_install / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    with pytest.raises(sources.SourceError) as exc:
+        corpus.load_labelled("repo_docs", offline=True)
+    message = str(exc.value)
+    assert "--repo-root" in message and "eval/retrieval/sources.json" in message
+    assert str(elsewhere.resolve()) in message
+
+
+def test_repo_root_that_is_not_a_checkout_is_refused(wheel_install):
+    with pytest.raises(sources.SourceError, match="is not a gaia checkout"):
+        sources.set_repo_root(wheel_install)
+    assert sources._repo_root is None  # pylint: disable=protected-access
+
+
+def test_unknown_dataset_and_missing_document_name_the_flag(wheel_install, monkeypatch):
+    checkout = _checkout(wheel_install / "checkout")
+    monkeypatch.chdir(checkout)
+    with pytest.raises(FileNotFoundError, match="--repo-root"):
+        corpus.load_labelled("nope", offline=True)
+    (checkout / "docs" / "a.md").unlink()
+    with pytest.raises(FileNotFoundError, match="--repo-root"):
+        corpus.load_labelled("repo_docs", offline=True)
+
+
+def test_cli_exits_with_the_flag_when_no_checkout_is_found(wheel_install, monkeypatch):
+    elsewhere = wheel_install / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    args = cli.build_parser().parse_args(["eval", "retrieval", "--fetch-only"])
+    with pytest.raises(SystemExit) as exc:
+        cli._handle_eval_retrieval(args)  # pylint: disable=protected-access
+    assert "--repo-root" in str(exc.value)
+
+
 def test_committed_pr_baseline_is_a_real_gateable_run():
-    path = sources.REPO_ROOT / "tests/fixtures/eval_baselines/rag-retrieval/pr.json"
+    path = sources.repo_root() / "tests/fixtures/eval_baselines/rag-retrieval/pr.json"
     baseline = json.loads(path.read_text(encoding="utf-8"))
     assert baseline["meta"]["suite"] == "pr"
     assert baseline["meta"]["vlm"]["enabled"] is False

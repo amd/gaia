@@ -20,26 +20,60 @@ from typing import Callable, Dict, Iterable, List, Optional
 from gaia.config import gaia_home
 
 CACHE_ENV = "GAIA_RETRIEVAL_CACHE"
-REPO_ROOT = Path(__file__).resolve().parents[4]
+_MANIFEST = Path("eval") / "retrieval" / "sources.json"
 _USER_AGENT = "Mozilla/5.0 (gaia-eval-retrieval; +https://github.com/amd/gaia)"
+_repo_root: Optional[Path] = None
 
 
 class SourceError(RuntimeError):
     """A corpus file could not be fetched or failed its checksum."""
 
 
+def _module_checkout() -> Path:
+    # Only a checkout when gaia is run from source or installed editable.
+    return Path(__file__).resolve().parents[4]
+
+
+def set_repo_root(path: Optional[os.PathLike] = None) -> Path:
+    """Pin the gaia checkout the labels and committed documents are read from.
+
+    The benchmark's data lives in the repository (``eval/retrieval/`` and the
+    documents under ``docs/``), not in the installed package. ``path`` wins;
+    otherwise the current directory, then the checkout this module runs from.
+    """
+    global _repo_root  # pylint: disable=global-statement
+    if path is not None:
+        root = Path(path).expanduser().resolve()
+        if not (root / _MANIFEST).is_file():
+            raise SourceError(
+                f"--repo-root {root} is not a gaia checkout: {root / _MANIFEST} is "
+                "missing. Pass the directory that holds eval/retrieval/sources.json."
+            )
+    else:
+        candidates = [Path.cwd().resolve(), _module_checkout()]
+        root = next((c for c in candidates if (c / _MANIFEST).is_file()), None)
+        if root is None:
+            raise SourceError(
+                f"No gaia checkout found: {_MANIFEST.as_posix()} is in neither the "
+                f"current directory ({candidates[0]}) nor next to the installed "
+                f"package ({candidates[1]}). The labels and committed documents ship "
+                "in the amd/gaia repository, not in the wheel: run from a checkout "
+                "(git clone https://github.com/amd/gaia) or pass --repo-root <checkout>."
+            )
+    _repo_root = root
+    return root
+
+
+def repo_root() -> Path:
+    return _repo_root or set_repo_root()
+
+
 def manifest_path() -> Path:
-    return REPO_ROOT / "eval" / "retrieval" / "sources.json"
+    return repo_root() / _MANIFEST
 
 
 def load_manifest() -> Dict[str, dict]:
-    path = manifest_path()
-    if not path.is_file():
-        raise SourceError(
-            f"Corpus manifest not found at {path}. `gaia eval retrieval` needs a "
-            "source checkout of amd/gaia (the manifest and labels ship in eval/)."
-        )
-    return json.loads(path.read_text(encoding="utf-8"))["sources"]
+    return json.loads(manifest_path().read_text(encoding="utf-8"))["sources"]
 
 
 def cache_dir() -> Path:

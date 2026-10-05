@@ -106,7 +106,7 @@ def _git_sha() -> Optional[str]:
     try:
         return subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=sources.REPO_ROOT,
+            cwd=sources.repo_root(),
             capture_output=True,
             text=True,
             check=True,
