@@ -353,7 +353,7 @@
 }
 
 @media (max-width: 768px) {
-    .task-header { padding-left: 64px; }
+    .task-header { padding-left: var(--sidebar-toggle-clearance); }
     .messages-column,
     .input-column { padding: 0 12px; }
 }

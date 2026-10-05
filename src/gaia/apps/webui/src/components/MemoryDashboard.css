@@ -1571,6 +1571,12 @@
 }
 
 /* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .memory-dashboard-header {
+        padding-left: var(--sidebar-toggle-clearance);
+    }
+}
+
 @media (max-width: 900px) {
     .mem-stat-cards {
         grid-template-columns: repeat(2, 1fr);

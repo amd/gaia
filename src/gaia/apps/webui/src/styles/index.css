@@ -145,6 +145,9 @@
     --radius-xl: 14px;
     --radius-full: 9999px;
 
+    /* Left inset that keeps top-row content clear of the floating .sidebar-toggle. */
+    --sidebar-toggle-clearance: 58px;
+
     --font-sans: 'DM Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Roboto, Helvetica, Arial, sans-serif;
     --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
     --font-display: 'Space Mono', 'JetBrains Mono', monospace;
@@ -621,6 +624,7 @@ textarea:focus-visible {
 @media (max-width: 768px) {
     .sidebar-toggle { display: flex; }
     .sidebar-overlay.visible { display: block; }
+    .app-notice { padding-left: var(--sidebar-toggle-clearance); }
 
     .modal-panel {
         max-width: 96%;

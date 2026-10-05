@@ -170,7 +170,7 @@
 @media (max-width: 768px) {
     .connection-banner {
         padding: 8px 16px;
-        padding-left: 52px;
+        padding-left: var(--sidebar-toggle-clearance);
         font-size: 11px;
     }
 }
