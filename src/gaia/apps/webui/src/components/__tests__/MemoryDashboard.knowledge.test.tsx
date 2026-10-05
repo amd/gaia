@@ -74,7 +74,7 @@ describe('MemoryDashboard knowledge rows', () => {
 
     it('refreshes the embedded indicator after an edit', async () => {
         const user = userEvent.setup();
-        mockedApi.editKnowledge.mockResolvedValue({ status: 'updated', embedded: true });
+        mockedApi.editKnowledge.mockResolvedValue({ status: 'updated', knowledge_id: 'k1', embedded: true });
         const row = await renderTable();
         expect(await screen.findByText('100% embedded')).toBeInTheDocument();
 
@@ -88,7 +88,7 @@ describe('MemoryDashboard knowledge rows', () => {
     it('says when a saved memory could not be embedded', async () => {
         const user = userEvent.setup();
         mockedApi.editKnowledge.mockResolvedValue({
-            status: 'updated', embedded: false,
+            status: 'updated', knowledge_id: 'k1', embedded: false,
             embed_error: 'Saved, but not embedded: run Maintenance > Rebuild Embeddings.',
         });
         const row = await renderTable();

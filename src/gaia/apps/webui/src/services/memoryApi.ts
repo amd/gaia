@@ -84,8 +84,16 @@ export interface KnowledgeCreateBody {
     due_at?: string;
 }
 
+/** A saved entry; `embedded` is absent when an edit left the content alone. */
+export interface KnowledgeSaveResult {
+    status: string;
+    knowledge_id: string;
+    embedded?: boolean;
+    embed_error?: string;
+}
+
 export function createKnowledge(body: KnowledgeCreateBody) {
-    return memFetch<any>('POST', '/memory/knowledge', body);
+    return memFetch<KnowledgeSaveResult>('POST', '/memory/knowledge', body);
 }
 
 export interface KnowledgeUpdateBody {
@@ -100,7 +108,7 @@ export interface KnowledgeUpdateBody {
 }
 
 export function editKnowledge(id: string, body: KnowledgeUpdateBody) {
-    return memFetch<any>('PUT', `/memory/knowledge/${encodeURIComponent(id)}`, body);
+    return memFetch<KnowledgeSaveResult>('PUT', `/memory/knowledge/${encodeURIComponent(id)}`, body);
 }
 
 export function deleteKnowledge(id: string) {
