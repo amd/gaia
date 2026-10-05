@@ -135,7 +135,15 @@ def flagship(monkeypatch, tmp_path):
         # off here; this pins everything else in the request.
         agent = GaiaAgent(
             config=GaiaAgentConfig(
-                silent_mode=True, streaming=True, dynamic_tools=False
+                silent_mode=True,
+                streaming=True,
+                dynamic_tools=False,
+                # GaiaAgentConfig defaults allowed_paths to the user's home
+                # directory, not cwd (unlike ChatAgent) -- on a CI runner the
+                # pytest tmp dir lives under /tmp, outside $HOME, so without
+                # this the handbook fixture is refused as "not in allowed
+                # paths" the moment a turn tries to index or read it.
+                allowed_paths=[str(work)],
             )
         )
         assert agent._memory_store is not None, "memory must be on for this test"
