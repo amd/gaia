@@ -52,6 +52,8 @@ on:
       - 'tests/unit/test_inference_location.py'
       - 'tests/unit/test_skill_tools_same_turn.py'
       - 'tests/unit/test_tool_admission_order.py'
+      - 'src/gaia/eval/retrieval/**'
+      - 'tests/unit/rag/test_retrieval_bench_harness.py'
       - 'setup.py'
       - '.github/workflows/test_chat_agent.yml'
   pull_request:
@@ -99,6 +101,8 @@ on:
       - 'tests/unit/test_inference_location.py'
       - 'tests/unit/test_skill_tools_same_turn.py'
       - 'tests/unit/test_tool_admission_order.py'
+      - 'src/gaia/eval/retrieval/**'
+      - 'tests/unit/rag/test_retrieval_bench_harness.py'
       - 'setup.py'
       - '.github/workflows/test_chat_agent.yml'
   merge_group:
@@ -199,6 +203,7 @@ jobs:
             tests/unit/test_inference_location.py \
             tests/unit/test_skill_tools_same_turn.py \
             tests/unit/test_tool_admission_order.py \
+            tests/unit/rag/test_retrieval_bench_harness.py \
             -v --tb=short
 
       - name: Run Framework Registry Discovery Tests

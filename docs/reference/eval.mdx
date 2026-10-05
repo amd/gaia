@@ -12,8 +12,9 @@ real Claude Code sessions), `gaia eval agent` (the scenario-based Agent UI
 benchmark), `gaia eval tasks` (the flagship's coding-task gate), `gaia eval
 code` (a code-editing benchmark scored by running the tests, not by a judge),
 `gaia eval benchmark` (email-triage throughput: TTFT, tokens/sec, latency),
-and `gaia eval retrieval --component code` (code search recall, scale and
-robustness on real repositories, no LLM).
+`gaia eval retrieval` (RAG retrieval quality, answer accuracy and scale on
+real documents), and `gaia eval retrieval --component code` (code search
+recall, scale and robustness on real repositories, no LLM).
 The batch-experiment / ground-truth-generation / visualizer workflow this page
 used to document was removed in v0.18.0; git history has it if you need it.
 
@@ -135,6 +136,113 @@ one Lemonade evict each other's models and slow each other down, so both runs' s
 and timings would be wrong. The lock is released when the run ends or its process
 dies. Set `GAIA_EVAL_NO_LOCK=1` only when the two runs use separate backends.
 Judging, gating and reports don't take the lock.
+
+## Retrieval Benchmark (RAG)
+
+`gaia eval retrieval --component rag` measures document Q&A in pieces the
+scenario evals can't separate: **did retrieval find the evidence**, did the
+model then **answer correctly**, and **what does it cost** as the library grows.
+It drives the production `RAGSDK` and the chat agents' `query_documents` tool
+over real documents with labelled evidence locations, so a retrieval miss is
+told apart from a generation miss.
+
+```bash
+gaia eval retrieval --suite pr                     # offline, retrieval only, ~30 s
+gaia eval retrieval --suite pr --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json
+gaia eval retrieval --suite full                   # downloads corpora, answers, scale tiers
+gaia eval retrieval --suite full --judge           # also grade free-form answers with Claude
+gaia eval retrieval --fetch-only                   # download + verify every corpus file, then stop
+```
+
+A running Lemonade with the RAG embedder is required, and the `full` suite's scale tiers need the `eval` extra (`uv pip install -e ".[eval]"`). The command takes the
+machine-wide eval lock, like `gaia eval agent`.
+
+The labels, the corpus manifest and the `pr` suite's documents live in the gaia
+repository, not in the installed package. Run the command from a checkout, or
+pass `--repo-root <checkout>` when gaia is installed as a wheel and the current
+directory is somewhere else (CI does). Without a checkout the command stops and
+names the flag.
+
+PDF images are read only through the VLM, so whether it runs changes a PDF's chunks.
+The `pr` suite never uses it (`RAGConfig(use_vlm=False)`), so every machine scores
+alike. `full` uses it unless `--no-vlm` is given, and first makes it read a test
+image: an installed VLM that fails stops the run with the error, instead of indexing
+every image as blank.
+
+### What it scores
+
+| Measure | How |
+|---|---|
+| Retrieval recall@1/3/5/10/20, MRR | A retrieved chunk is a hit when it covers at least half of the labelled evidence quote, or lies on the labelled evidence page (FinanceBench). Chunks are mapped back to the extracted text after whitespace normalization, and to pages via the `[Page N]` markers. |
+| Document recall@5 | Whether the right document appears in the top 5, regardless of the passage. |
+| Two retrieval pipelines | `sdk` is `RAGSDK` dense search (what `RAGSDK.query` gives the model). `agent` is `query_documents` as the chat agents run it, with search-key expansion, keyword boost and the adaptive chunk cutoff; it is scored on the list it actually returns (`R@returned`). |
+| Answer accuracy | `RAGSDK.query` end to end with the default model. Numeric answers match within 1% (unit scale such as millions/billions, and percent/fraction, are accepted). Short answers must appear in the reply. Free-form answers are graded by the Claude judge only with `--judge`; without it they are counted as unscored, never guessed. |
+| Retrieval vs generation miss | Each wrong answer is a *retrieval miss* (the evidence never reached the model) or a *generation miss* (it did, and the answer was still wrong). |
+| Scale | The 10 most-questioned repo documents plus Wikipedia distractors at 10, 100 and 1,000 documents: indexing time, chunks/s, peak RSS, vector and cache size, query latency p50/p95 for both pipelines, and recall as distractors are added. |
+
+### Suites
+
+| Suite | Data | Answers | Runs |
+|---|---|---|---|
+| `pr` | Documents committed in this repo (`eval/retrieval/datasets/repo_docs.json`), plus the hard cases that need no LLM | No, so it is deterministic | On RAG pull requests, from `test_rag.yml`, gated against the committed baseline |
+| `full` | Adds the hand-labelled AMD Instinct documents and a two-column arXiv paper (`technical_docs.json`), FinanceBench's 150 questions over 84 SEC filings, and XQuAD in 7 languages; then the scale tiers and every hard case | Yes | Nightly, from `eval_retrieval.yml` |
+
+Narrow a run with `--datasets`, `--retrieval-only`, `--no-scale`, `--scale-tiers 10,100,1000,5000`,
+`--no-hard-cases`, `--xquad-languages` or `--financebench-docs N`.
+
+### Hard cases
+
+Each case states its pass condition and reports `pass`, `fail`, `measured` (numbers, no threshold)
+or `skipped` with the reason. A case that crashes fails the run.
+
+| Case | Passes when |
+|---|---|
+| Document replaced after indexing | Re-indexing the changed file's path serves the new text |
+| Identical copy under another name | Duplicates take at most 20% of the top-5 in both pipelines |
+| Near-duplicate filings (full) | Measured: recall and the share of top-5 chunks from the asked-about year's filing, with several years of the same company indexed |
+| Scanned (image-only) PDF | With the VLM on, it is read and page-level recall is measured; with it off, it is refused with an actionable error, never indexed empty |
+| Truncated PDF | It fails with an error, or is flagged `degraded` |
+| Corrupted index cache | Truncated, tampered, unsigned and garbage cache entries are rebuilt, never served, and retrieval matches a clean index |
+| Indexing past the document cap | The evicting `index_document()` result says a document was evicted |
+| Prompt injection in a document (full) | No planted instruction turns the answer into the canary |
+| Earlier questions' context in later answers (full) | A `RAGSDK.query` does not resend an earlier, unrelated query's retrieved chunks. The benchmark itself clears the history before every question it scores |
+
+Very long documents (the 561-page CDNA3 ISA manual, FinanceBench 10-Ks), tables and
+multi-column layout are question tags rather than separate cases; the report breaks recall
+and accuracy down by tag.
+
+### Corpora
+
+Nothing downloaded is committed. [`eval/retrieval/sources.json`](https://github.com/amd/gaia/blob/main/eval/retrieval/sources.json)
+pins every file to a URL at a fixed revision with its sha256 and license note. Files are
+cached in `~/.gaia/cache/eval-retrieval` (override with `GAIA_RETRIEVAL_CACHE`) and checked
+on every use; a mismatch is an error, not a silent re-download. `--offline` never touches the
+network.
+
+| Source | License |
+|---|---|
+| [FinanceBench](https://github.com/patronus-ai/financebench) | CC-BY-NC-4.0 labels; filings are public SEC records |
+| AMD Instinct white papers, data sheet, CDNA3 ISA | Copyright AMD, fetched from amd.com; questions are original |
+| [Attention Is All You Need](https://arxiv.org/abs/1706.03762) | arXiv license |
+| [XQuAD](https://github.com/google-deepmind/xquad) | CC-BY-SA-4.0 |
+| [Simple English Wikipedia](https://huggingface.co/datasets/wikimedia/wikipedia) | CC-BY-SA-3.0 / GFDL |
+
+Hand-labelled evidence quotes are verified against the text GAIA extracts on every run: a quote
+that is not on its labelled page raises, so a label never silently scores against the wrong passage.
+
+### Output and the gate
+
+Each run writes `results.json` (every question's ranks, latencies and answer) and `report.md`
+to `eval/results/retrieval-<suite>-<timestamp>/`, recording the machine, embedder and its
+device, the VLM state and the RAG defaults. `--gate BASELINE` fails when `sdk` recall@5, MRR
+or `agent` R@returned drops more than `--tolerance` (default 0.02, widened to 1.5 questions on
+small sets, so one flipped question passes and two fail) below the baseline, more labelled documents fail to
+index, or a passing hard case fails or is not run. It lists every question that flipped. It refuses to compare runs
+with a different embedder, or one with the VLM on against one with it off.
+
+The baselines in `tests/fixtures/eval_baselines/rag-retrieval/` are unedited `results.json`
+files from real runs; `meta` names the machine. Replace one only with another real run's file,
+never by hand.
 
 ## Flagship Agent Tasks
 

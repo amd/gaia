@@ -1,0 +1,1982 @@
+{
+ "$comment": [
+  "Every external file the retrieval benchmark (gaia eval retrieval) may download.",
+  "URLs are pinned to a commit/revision and every file is verified against sha256 before use;",
+  "a mismatch is an error, never a silent re-download. Files land in the cache directory",
+  "($GAIA_RETRIEVAL_CACHE, default ~/.gaia/cache/eval-retrieval) and are never committed."
+ ],
+ "sources": {
+  "financebench": {
+   "title": "FinanceBench open-source sample (150 questions over SEC filings)",
+   "homepage": "https://github.com/patronus-ai/financebench",
+   "license": "Questions, answers and evidence labels: CC-BY-NC-4.0 (Patronus AI). The PDFs are public SEC filings. Downloaded for local evaluation only; never committed or redistributed.",
+   "citation": "Islam et al., FinanceBench: A New Benchmark for Financial Question Answering, arXiv:2311.11944",
+   "files": {
+    "data/financebench_document_information.jsonl": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/data/financebench_document_information.jsonl",
+     "sha256": "1c69127783879de8cdadb159d2181f39bc3123b8e0ebf74031c3969d69189575",
+     "bytes": 88781
+    },
+    "data/financebench_open_source.jsonl": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/data/financebench_open_source.jsonl",
+     "sha256": "a5a2aa673e573e55675fc3c0f9aa38c1cf59d2abc91edb077534f71f10a71877",
+     "bytes": 929848
+    },
+    "pdfs/3M_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/3M_2015_10K.pdf",
+     "sha256": "f0e44e111987a845ab85875e3bd8dc81905c5eb7f6113b9318adb5b709f8b50d",
+     "bytes": 1160173
+    },
+    "pdfs/3M_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/3M_2016_10K.pdf",
+     "sha256": "522a1638abf789bbfad713d941f27f80a508599e8d196553a20999b838ce924d",
+     "bytes": 1449990
+    },
+    "pdfs/3M_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/3M_2017_10K.pdf",
+     "sha256": "4f552ac7313e6d4b2ca5a6dfdd6f2e0bf5e3f80e84cc45dcbbeb9f62f440d0c5",
+     "bytes": 1375146
+    },
+    "pdfs/3M_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/3M_2018_10K.pdf",
+     "sha256": "faf10c53fc6f1a8aa346ec3db79145e3ae6fbb3753c8064924e174d0a973934d",
+     "bytes": 1252586
+    },
+    "pdfs/3M_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/3M_2019_10K.pdf",
+     "sha256": "87eb86895ff32ea2b6d8af9c38181071940c0a5830105d37f93ee809cbde954d",
+     "bytes": 1231580
+    },
+    "pdfs/3M_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/3M_2020_10K.pdf",
+     "sha256": "3f08a9350074d19b85c4c3476962a2b6d55614f50e58ea41d0defad56ae7d146",
+     "bytes": 1114965
+    },
+    "pdfs/3M_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/3M_2021_10K.pdf",
+     "sha256": "ba87f86df45ba4c6117c3e8fdc17298022d01a3306e5821f9b2b2c3d4d10ca6f",
+     "bytes": 1144721
+    },
+    "pdfs/3M_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/3M_2022_10K.pdf",
+     "sha256": "d5cf549543a24b04228fd2af979ff2ca94cf64fb008a789340cb9117fbcfde5d",
+     "bytes": 1655681
+    },
+    "pdfs/3M_2023Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/3M_2023Q2_10Q.pdf",
+     "sha256": "3e66115793459f42185feeeab4e7f07dd27ab6dd465d0694ce415e861029cf93",
+     "bytes": 5287301
+    },
+    "pdfs/ACTIVISIONBLIZZARD_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ACTIVISIONBLIZZARD_2015_10K.pdf",
+     "sha256": "b25b955085f98c009e802e9fa5f3674e3c317d2d38e79ff0b58bdf1bc4ac587b",
+     "bytes": 864243
+    },
+    "pdfs/ACTIVISIONBLIZZARD_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ACTIVISIONBLIZZARD_2016_10K.pdf",
+     "sha256": "9031689ba063652b5da56a24a6aa0c60b2f361071493d17ba968ba941aac08ea",
+     "bytes": 1328536
+    },
+    "pdfs/ACTIVISIONBLIZZARD_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ACTIVISIONBLIZZARD_2017_10K.pdf",
+     "sha256": "b864b72478a7b93f87c5ca2eb378b1adf21ee7bb94d2ebbe463c399566b8b178",
+     "bytes": 808406
+    },
+    "pdfs/ACTIVISIONBLIZZARD_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ACTIVISIONBLIZZARD_2018_10K.pdf",
+     "sha256": "7f7a57d287a35395a8e0774bfea547ebd1766770c1932f9d2620240fe7064e2f",
+     "bytes": 1438940
+    },
+    "pdfs/ACTIVISIONBLIZZARD_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ACTIVISIONBLIZZARD_2019_10K.pdf",
+     "sha256": "017f1bbc1e37f2945a41fa2b5cf39d822e1e9d435a2c2b9c6b1cc76cd114a2df",
+     "bytes": 1274941
+    },
+    "pdfs/ACTIVISIONBLIZZARD_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ACTIVISIONBLIZZARD_2020_10K.pdf",
+     "sha256": "521b66e308144e1a4b261a4f1fba056920e2d88bc3f859ad1290d5b0884842e4",
+     "bytes": 1153457
+    },
+    "pdfs/ACTIVISIONBLIZZARD_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ACTIVISIONBLIZZARD_2021_10K.pdf",
+     "sha256": "8ab642cb348a61cdc81c3eddcf4d7a0dbf0b1461f798e3dd6783eb6727d86a73",
+     "bytes": 1912840
+    },
+    "pdfs/ACTIVISIONBLIZZARD_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ACTIVISIONBLIZZARD_2022_10K.pdf",
+     "sha256": "2f929f118979c52658324f8a78374aba89ce30cf7fc7c3d97dab6177c54f003c",
+     "bytes": 2299060
+    },
+    "pdfs/ACTIVSIONBLIZZARD_2023Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ACTIVSIONBLIZZARD_2023Q2_10Q.pdf",
+     "sha256": "168f10a7ed23e78b7eb84f98fae284dc69d0a3f027be873c83c1560f55592168",
+     "bytes": 919791
+    },
+    "pdfs/ADOBE_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ADOBE_2015_10K.pdf",
+     "sha256": "f9ddba652f19e20752d98b1b4cedcebcb1a9a6d11dd23ab2e2f00f009a164c24",
+     "bytes": 1457725
+    },
+    "pdfs/ADOBE_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ADOBE_2016_10K.pdf",
+     "sha256": "655153cdaed14d7093e98ff75595bf850a0d2299fa851ccf5b344ebc2d5038ae",
+     "bytes": 4171413
+    },
+    "pdfs/ADOBE_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ADOBE_2017_10K.pdf",
+     "sha256": "ace32580369138998de84a0d0e24943766aa8374a17b823fdfae980b9c1458bd",
+     "bytes": 4028448
+    },
+    "pdfs/ADOBE_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ADOBE_2018_10K.pdf",
+     "sha256": "9544def28e9c7c2f31cffedbc5275d3a6a9bd984619d7aedaa0c7285860a2376",
+     "bytes": 4226085
+    },
+    "pdfs/ADOBE_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ADOBE_2019_10K.pdf",
+     "sha256": "28bfe9c62651ec545591e37cff51334abf4ea71f7c36d868ec21a41fd9441c3b",
+     "bytes": 866662
+    },
+    "pdfs/ADOBE_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ADOBE_2020_10K.pdf",
+     "sha256": "60bca947de880e85c2c78290dc44dc517a91d28261840902a610284e062fe73c",
+     "bytes": 706905
+    },
+    "pdfs/ADOBE_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ADOBE_2021_10K.pdf",
+     "sha256": "c8b1340273afaceab32d238860651bd1b3c1716639a7abf7fb6eecc47b423b16",
+     "bytes": 633302
+    },
+    "pdfs/ADOBE_2022Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ADOBE_2022Q2_10Q.pdf",
+     "sha256": "df47d40f5e6fb19ab4e0c883345c2bd9be8bd2345db90a0123012c582b5bdcd8",
+     "bytes": 416174
+    },
+    "pdfs/ADOBE_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ADOBE_2022_10K.pdf",
+     "sha256": "ce8c716abac26bfa38ae6b71d703112852c8591a4bb19f7c1177beb1dfc87ad2",
+     "bytes": 620288
+    },
+    "pdfs/AES_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AES_2015_10K.pdf",
+     "sha256": "2ee97a52f1b41fa58caffb3ce1c216e2fbccb156ec0dd6d295348cd4b35f0519",
+     "bytes": 2037591
+    },
+    "pdfs/AES_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AES_2016_10K.pdf",
+     "sha256": "ac5c93882ba9f6aad2d737065744f7a8b8fcf0b94e00c8273af96c57f534a154",
+     "bytes": 2940480
+    },
+    "pdfs/AES_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AES_2017_10K.pdf",
+     "sha256": "39339d64287d94e290af9f978acc96f964dc005fd89df250bc62b52da91743ac",
+     "bytes": 6671754
+    },
+    "pdfs/AES_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AES_2018_10K.pdf",
+     "sha256": "ba4ccae51c0d0e16ed0a385a77c5a0c0dc0f2794ec38b54374f3a2f1458b6bc0",
+     "bytes": 6342795
+    },
+    "pdfs/AES_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AES_2019_10K.pdf",
+     "sha256": "a5ef2ce8b55b335216c6edc7f99a717e71e4141129dad35f058ece3b7885ffdc",
+     "bytes": 7900813
+    },
+    "pdfs/AES_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AES_2020_10K.pdf",
+     "sha256": "b5ec88f460d60c4c48ddfb08a6c4a228c15ceb3e7a4711cac9747e1abd03ae72",
+     "bytes": 3624890
+    },
+    "pdfs/AES_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AES_2021_10K.pdf",
+     "sha256": "1e68b565e1d84ef46a46b41e4f779bb8b8caeabedb272fdf8f24da052612707a",
+     "bytes": 2511838
+    },
+    "pdfs/AES_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AES_2022_10K.pdf",
+     "sha256": "9c5de2227534c4d6bf3d805f635bad5d82eddf8e4183a85a3d1311b48b50291d",
+     "bytes": 4479324
+    },
+    "pdfs/AMAZON_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMAZON_2015_10K.pdf",
+     "sha256": "a6c9af291feb8444480470a0d3551501d45e7e1bfaba2010a7e7b90d477b99ae",
+     "bytes": 602072
+    },
+    "pdfs/AMAZON_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMAZON_2016_10K.pdf",
+     "sha256": "ff3799690fd1f82e2b0ff6d99b8ac0099b2eab7f0d25191a97eb2f8365e5db13",
+     "bytes": 594926
+    },
+    "pdfs/AMAZON_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMAZON_2017_10K.pdf",
+     "sha256": "f8af08ff6c4147351ec3a6e5e2c74e104678ce68fb0d6d476b1e43f685c09a3f",
+     "bytes": 627047
+    },
+    "pdfs/AMAZON_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMAZON_2018_10K.pdf",
+     "sha256": "d7dc1d663a423a54a5a865a2374ed7334e875f632515848ebab8fcbca2432c7a",
+     "bytes": 638004
+    },
+    "pdfs/AMAZON_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMAZON_2019_10K.pdf",
+     "sha256": "d7df8c6cf3e351a8d68c7473be4159723d545260a32dbc82a8dd11c254c5584a",
+     "bytes": 619184
+    },
+    "pdfs/AMAZON_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMAZON_2020_10K.pdf",
+     "sha256": "d5ee9892f7fe5295ffa6a3a110649030b631acf5ad54cc23964505492028e4b0",
+     "bytes": 571542
+    },
+    "pdfs/AMAZON_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMAZON_2021_10K.pdf",
+     "sha256": "75d71a60e49bc60d69f6b2a79e38bd73c124ab18ed9f3f3657860614b8404d7a",
+     "bytes": 999574
+    },
+    "pdfs/AMAZON_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMAZON_2022_10K.pdf",
+     "sha256": "084ef3d6031c4b57169b32ae6a878a86ebbcbc7bb868030e3170d04392b4096e",
+     "bytes": 712683
+    },
+    "pdfs/AMCOR_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMCOR_2019_10K.pdf",
+     "sha256": "45a91dc2ab73783cbaa18c51f03e2caf1a4a11e6b0e3d81878dae0e1c1129ae5",
+     "bytes": 1394789
+    },
+    "pdfs/AMCOR_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMCOR_2020_10K.pdf",
+     "sha256": "da158d5c68835374bcc52205663aa7653af1c2a6b31b09ab775c6e02a40da026",
+     "bytes": 8364895
+    },
+    "pdfs/AMCOR_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMCOR_2021_10K.pdf",
+     "sha256": "de9d249bae4c6d3cee10ca338cc2d9786afce49be18be1d067c001b899c088fd",
+     "bytes": 1123058
+    },
+    "pdfs/AMCOR_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMCOR_2022_10K.pdf",
+     "sha256": "0b36f6560cb49e56f53bc8948975b83565f36773c7a8cc22e02e25d530f29cb5",
+     "bytes": 1055470
+    },
+    "pdfs/AMCOR_2022_8K_2022-04-26.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMCOR_2022_8K_2022-04-26.pdf",
+     "sha256": "adddeda2984e18100c35996823a2f4ec09107c7e0e8c2515a9ebd76b15773c2a",
+     "bytes": 1751261
+    },
+    "pdfs/AMCOR_2022_8K_2022-07-01.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMCOR_2022_8K_2022-07-01.pdf",
+     "sha256": "1de32e72c265486469f3b1c7cbfbe064a27055e60f7b43a81439986dda9025ad",
+     "bytes": 147921
+    },
+    "pdfs/AMCOR_2022_8K_dated-2022-04-26.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMCOR_2022_8K_dated-2022-04-26.pdf",
+     "sha256": "adddeda2984e18100c35996823a2f4ec09107c7e0e8c2515a9ebd76b15773c2a",
+     "bytes": 1751261
+    },
+    "pdfs/AMCOR_2022_8K_dated-2022-07-01.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMCOR_2022_8K_dated-2022-07-01.pdf",
+     "sha256": "1de32e72c265486469f3b1c7cbfbe064a27055e60f7b43a81439986dda9025ad",
+     "bytes": 147921
+    },
+    "pdfs/AMCOR_2023Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMCOR_2023Q2_10Q.pdf",
+     "sha256": "71c39c3f338fc81a99e128e8e871e265818657670a7d29a62c454c905f94524c",
+     "bytes": 455017
+    },
+    "pdfs/AMCOR_2023Q4_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMCOR_2023Q4_EARNINGS.pdf",
+     "sha256": "d155b7808e78167831648f476b7e3578e2d98645dee30862bbef4ff50fa24bf4",
+     "bytes": 244702
+    },
+    "pdfs/AMCOR_2023_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMCOR_2023_10K.pdf",
+     "sha256": "84d7a0291a12f4e68352750dccda3754c78eefdf06e0b5462046357a1ed53332",
+     "bytes": 1108309
+    },
+    "pdfs/AMD_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMD_2015_10K.pdf",
+     "sha256": "105fff1c4af84a3d974b0f3fa224122e782aedca60fa3609f2789c80549dd8f6",
+     "bytes": 2474122
+    },
+    "pdfs/AMD_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMD_2016_10K.pdf",
+     "sha256": "a4ae1cf3afcc19cdd2f0d7e1f39bd4aedbfe0dda85a9266490357152da385dfd",
+     "bytes": 2629303
+    },
+    "pdfs/AMD_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMD_2017_10K.pdf",
+     "sha256": "404d11de48537a09e0f5f9dd8b88b24b13df8cc8b72a9753a34cc9b33788e123",
+     "bytes": 3193280
+    },
+    "pdfs/AMD_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMD_2018_10K.pdf",
+     "sha256": "df31a5b9999e7327515d038213fa933ed7b976a599639580de9cd77c76e50721",
+     "bytes": 2459354
+    },
+    "pdfs/AMD_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMD_2019_10K.pdf",
+     "sha256": "7fc56f7502d5faefb0ed52e10761a7766deaaccf92146d9fb0235959df9401e5",
+     "bytes": 1720886
+    },
+    "pdfs/AMD_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMD_2020_10K.pdf",
+     "sha256": "3eb78bd130cf34d69e83c9f22bc7675459ed14b20dae696598d9dac647df40bf",
+     "bytes": 1964354
+    },
+    "pdfs/AMD_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMD_2021_10K.pdf",
+     "sha256": "51c1fbfb4587b375fe64a1d8daa3d103ecc09f8194c6a6e2537149c618d97271",
+     "bytes": 1518628
+    },
+    "pdfs/AMD_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMD_2022_10K.pdf",
+     "sha256": "a3bd74088fae0ad4aa03d04998a1f4c64fd0b3c693841601b0ac49b46cf5c1f4",
+     "bytes": 5122473
+    },
+    "pdfs/AMD_2022_annualreport.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMD_2022_annualreport.pdf",
+     "sha256": "f980a3ec1a9cc6be563c0908efadad1397c080ce2aebd5b990f147541b82051c",
+     "bytes": 998571
+    },
+    "pdfs/AMERICANEXPRESS_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMERICANEXPRESS_2022_10K.pdf",
+     "sha256": "d3bbc7ab23d6160e07eab50a359e4d68c40efff9fde3baa168e7c40e06f568e6",
+     "bytes": 2436166
+    },
+    "pdfs/AMERICANWATERWORKS_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMERICANWATERWORKS_2015_10K.pdf",
+     "sha256": "bbe3f552204cef95b656c9402df0a9723dde2bd66d9968df973fa96384d2135a",
+     "bytes": 1441662
+    },
+    "pdfs/AMERICANWATERWORKS_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMERICANWATERWORKS_2016_10K.pdf",
+     "sha256": "dd76223234ea11b61539a1bc703474881b50b0b61f1decb7adafa9b2ca1d00be",
+     "bytes": 1070321
+    },
+    "pdfs/AMERICANWATERWORKS_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMERICANWATERWORKS_2017_10K.pdf",
+     "sha256": "bff98ff4a14abd8bd3028e80ace3aeddb7f54c87fe5dac9929b9ca541736e253",
+     "bytes": 1259702
+    },
+    "pdfs/AMERICANWATERWORKS_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMERICANWATERWORKS_2018_10K.pdf",
+     "sha256": "4e430025544d088821bae72930e6ea45e05fe77ff3013ff3a95490310af538a4",
+     "bytes": 1531304
+    },
+    "pdfs/AMERICANWATERWORKS_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMERICANWATERWORKS_2019_10K.pdf",
+     "sha256": "e3f87e239188c08f2c61b4939c7aac3895b1e95d9bfcb02f2bd55a771290b5e5",
+     "bytes": 1816284
+    },
+    "pdfs/AMERICANWATERWORKS_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMERICANWATERWORKS_2020_10K.pdf",
+     "sha256": "6b43f1ed70b67c06483d28f8054270d597bce8507f298af2b1b6d9356d728602",
+     "bytes": 1437123
+    },
+    "pdfs/AMERICANWATERWORKS_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMERICANWATERWORKS_2021_10K.pdf",
+     "sha256": "701528ae6d14a77229468a829ee18f01ed439d5be012d0a915d2683335051029",
+     "bytes": 1975636
+    },
+    "pdfs/AMERICANWATERWORKS_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMERICANWATERWORKS_2022_10K.pdf",
+     "sha256": "aea336531f1f8b10ecee1dd61066aab29794504f1f4a1407c857bd1e20d7da40",
+     "bytes": 2729077
+    },
+    "pdfs/AMERICANWATERWORKS_2023Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/AMERICANWATERWORKS_2023Q2_10Q.pdf",
+     "sha256": "9895cebd67fbccc8eba30529f272df11ecf676339d418642be6146675a05c83c",
+     "bytes": 647520
+    },
+    "pdfs/APPLE_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/APPLE_2015_10K.pdf",
+     "sha256": "0161a2975d0eabbf3653130e61fba9b02d907a1a652af0af3a1b3941732f080b",
+     "bytes": 705595
+    },
+    "pdfs/APPLE_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/APPLE_2016_10K.pdf",
+     "sha256": "fd6cc1bd4f9d99e7319893efb83da5fa51f652928afcf8d30c40296692b59ab1",
+     "bytes": 864831
+    },
+    "pdfs/APPLE_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/APPLE_2017_10K.pdf",
+     "sha256": "e522b5202543c71e0174b77a9c335d985d1d62d963cb6a251b4cf7768b75ba7d",
+     "bytes": 942816
+    },
+    "pdfs/APPLE_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/APPLE_2018_10K.pdf",
+     "sha256": "1ab47a60815822e4291fed0f5d431f80fe50d057990abddaee5cd17719f528c4",
+     "bytes": 812663
+    },
+    "pdfs/APPLE_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/APPLE_2019_10K.pdf",
+     "sha256": "f607facc037d4767ccf2451b6c07cb313afd679552ff9c2aeeecf2a32324c5e2",
+     "bytes": 796040
+    },
+    "pdfs/APPLE_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/APPLE_2020_10K.pdf",
+     "sha256": "93a9fc778c5fa0eb7898009dd5a9beaad3be1222391789f5a5d4481ee991063f",
+     "bytes": 799616
+    },
+    "pdfs/APPLE_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/APPLE_2021_10K.pdf",
+     "sha256": "175d0b7a907fd7d41836d44410ee06f3843eb9cb3aed1644bb877cb05f66f94c",
+     "bytes": 646454
+    },
+    "pdfs/APPLE_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/APPLE_2022_10K.pdf",
+     "sha256": "40f4a5169ac49f1c3011b8287afe28364138cd4f3e4db36c8d75c9da0f6b2a93",
+     "bytes": 729516
+    },
+    "pdfs/APPLE_2023Q3_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/APPLE_2023Q3_10Q.pdf",
+     "sha256": "7b9b54830f070aab56cd842b391dd81d21613aacda2cb92234f43b997930b0ea",
+     "bytes": 268231
+    },
+    "pdfs/BESTBUY_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2015_10K.pdf",
+     "sha256": "10f4381245de9df059b6bdfd9e0a97ae92e17f37872c62d3fe86ce3adbc6d2ed",
+     "bytes": 1562075
+    },
+    "pdfs/BESTBUY_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2016_10K.pdf",
+     "sha256": "d3d5b533253d60250c885067224f8266a70e5816522445209316a99d62d2ad53",
+     "bytes": 810883
+    },
+    "pdfs/BESTBUY_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2017_10K.pdf",
+     "sha256": "4570187fa697f252e08c8f99c409446fbcde05b08358851d34d4cb1c8bd1cec8",
+     "bytes": 776434
+    },
+    "pdfs/BESTBUY_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2018_10K.pdf",
+     "sha256": "51d916e5573546558586f936817298c095b47a8c97023c3cf06a7de1a60a6f2c",
+     "bytes": 819070
+    },
+    "pdfs/BESTBUY_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2019_10K.pdf",
+     "sha256": "d3228e9acd2ce498b97a9d2cb99c2330b9a04687b7947908646d205b3eadf30d",
+     "bytes": 782117
+    },
+    "pdfs/BESTBUY_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2020_10K.pdf",
+     "sha256": "b699823b02e3545752f28cc579694dc9c81ef3b7a21b751c96f8b3a175804ec8",
+     "bytes": 1505983
+    },
+    "pdfs/BESTBUY_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2021_10K.pdf",
+     "sha256": "6b6b627551bc05df2b3467dc717a4e51843d20793965fbe5c5b8463a68d90a5b",
+     "bytes": 968248
+    },
+    "pdfs/BESTBUY_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2022_10K.pdf",
+     "sha256": "4500be5e8b75be0a421ab5d7fac90605ef9cf02c89732d94f591b32a9157570a",
+     "bytes": 967635
+    },
+    "pdfs/BESTBUY_2023Q4_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2023Q4_EARNINGS.pdf",
+     "sha256": "a9a46c9fae1af1b37dfd0efc3996ac36bd4228d0b3f39159e0818ad8d7c68f72",
+     "bytes": 650946
+    },
+    "pdfs/BESTBUY_2023_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2023_10K.pdf",
+     "sha256": "7ca465d31a08be29e8c08d756644d33d818c7254a1215720f265227005cda696",
+     "bytes": 703034
+    },
+    "pdfs/BESTBUY_2023_8K_dated-2023-04-12.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2023_8K_dated-2023-04-12.pdf",
+     "sha256": "7d7ecf0d6c881ef45138c4471541ef571c788b6b9a9fd48f168606bc429806a6",
+     "bytes": 1180832
+    },
+    "pdfs/BESTBUY_2023_8K_dated-2023-04-24.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2023_8K_dated-2023-04-24.pdf",
+     "sha256": "1cc6d0adda05038f53d64444587419b47f4713a5f67fe5740da7dd3fa690a5b1",
+     "bytes": 212968
+    },
+    "pdfs/BESTBUY_2024Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2024Q2_10Q.pdf",
+     "sha256": "cf9efb922bdd28d726d7e1605c5fa1f263dda72e033989e3bc9ee3a3bb356c03",
+     "bytes": 442386
+    },
+    "pdfs/BESTBUY_2024Q2_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BESTBUY_2024Q2_EARNINGS.pdf",
+     "sha256": "e1924224ecf2513d7446bff7f66c3c2d4430349121f63cc818c020e15c28dd20",
+     "bytes": 623598
+    },
+    "pdfs/BLOCK_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BLOCK_2015_10K.pdf",
+     "sha256": "87dc69304698991f666082197649b4af6cb724666ec1bfa9a7bbcdba35aa14f2",
+     "bytes": 970619
+    },
+    "pdfs/BLOCK_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BLOCK_2016_10K.pdf",
+     "sha256": "5ef866a19b1110dcdbd1b0bc3c513a04e3d05322384c754cf394ad63f9af8191",
+     "bytes": 864350
+    },
+    "pdfs/BLOCK_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BLOCK_2017_10K.pdf",
+     "sha256": "2099ce9c23da4eb6c4aea5bc2b2781b498783cd04fe16b742635c347e02af4a1",
+     "bytes": 1016446
+    },
+    "pdfs/BLOCK_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BLOCK_2018_10K.pdf",
+     "sha256": "bb8c341957d210f14b8b2d1b6892fdbaf787a123f72452e114a16f8ed6a73d1b",
+     "bytes": 1059480
+    },
+    "pdfs/BLOCK_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BLOCK_2019_10K.pdf",
+     "sha256": "12cf046b906a573bf07cc3a7a9f60319a49498b90a6a643623dd7165f735a072",
+     "bytes": 1020639
+    },
+    "pdfs/BLOCK_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BLOCK_2020_10K.pdf",
+     "sha256": "c19a9fb25db3270e3a908c202855f4a54f000a06bf19a8b284331810228646fe",
+     "bytes": 1159158
+    },
+    "pdfs/BLOCK_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BLOCK_2021_10K.pdf",
+     "sha256": "16b87667a402590a47e302cb305cca02aadae1c4e3ac968510e9b05fe22cdccc",
+     "bytes": 2162695
+    },
+    "pdfs/BLOCK_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BLOCK_2022_10K.pdf",
+     "sha256": "049a8bba97041cd60a6d7541602500eaccb0ddeed3b43b64ff52725c1319d462",
+     "bytes": 6445303
+    },
+    "pdfs/BLOCK_2022_8K_dated-2022-01-28.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BLOCK_2022_8K_dated-2022-01-28.pdf",
+     "sha256": "b61aed800c8eafe6830ee60a95a10f2b9e20c0304cf1c1d2af7ce0c442442fa6",
+     "bytes": 579908
+    },
+    "pdfs/BOEING_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BOEING_2015_10K.pdf",
+     "sha256": "06b6570c9df5fa33a0f8c6139c3bfc964bf247b28d2063f30a920bae7f660ac1",
+     "bytes": 1124734
+    },
+    "pdfs/BOEING_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BOEING_2016_10K.pdf",
+     "sha256": "8ef5f3314b1c3c888262294ad1224b1007d5a3d540b0c2052f616f71f685cb94",
+     "bytes": 1160528
+    },
+    "pdfs/BOEING_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BOEING_2017_10K.pdf",
+     "sha256": "127d4046b54e93515570d8a0e884d27521e53a0755fae98385fa3768367675aa",
+     "bytes": 884454
+    },
+    "pdfs/BOEING_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BOEING_2018_10K.pdf",
+     "sha256": "6f1ace34b3b01778ad7d92d43ccd2f76513d5159ef48fbc07b510296cf2d07dc",
+     "bytes": 967741
+    },
+    "pdfs/BOEING_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BOEING_2019_10K.pdf",
+     "sha256": "89bad2d173fa5829123ae5473047ee951ef29dcab9bc5e151355b5f75aa751b6",
+     "bytes": 995981
+    },
+    "pdfs/BOEING_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BOEING_2020_10K.pdf",
+     "sha256": "e40e574b0fb556763fe43660bb392f6ed56e09c66fa7bf737a4b4eed99f377f8",
+     "bytes": 966465
+    },
+    "pdfs/BOEING_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BOEING_2021_10K.pdf",
+     "sha256": "947c298acb17e663db8faca2028a26ca53520864a660676abdc313afd23d46a9",
+     "bytes": 1250296
+    },
+    "pdfs/BOEING_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BOEING_2022_10K.pdf",
+     "sha256": "09285ff7ee737d3302977104aa05cc53c9dfb0161f3461a89b583dc38b9f2ab6",
+     "bytes": 1366995
+    },
+    "pdfs/BOSTONPROPERTIES_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/BOSTONPROPERTIES_2015_10K.pdf",
+     "sha256": "40d1e8a2bdc9a3c1dd8f256f2eaf4a3cec16b44e2713f47b3c7b3d9bfc964e00",
+     "bytes": 1503717
+    },
+    "pdfs/COCACOLA_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COCACOLA_2015_10K.pdf",
+     "sha256": "98352423d73b8a9f6bfd68df02df87902d4f180f541938f85fa721e0a77641f7",
+     "bytes": 1744160
+    },
+    "pdfs/COCACOLA_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COCACOLA_2016_10K.pdf",
+     "sha256": "5597169308c58efee358ec1db31c876ac6d4a5336f205d943cf0261bf178918b",
+     "bytes": 1735945
+    },
+    "pdfs/COCACOLA_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COCACOLA_2017_10K.pdf",
+     "sha256": "b57c75cf20916904f31c6aa7644d6c110f019adf7c76782c7d0ede7b95c65ac1",
+     "bytes": 1790599
+    },
+    "pdfs/COCACOLA_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COCACOLA_2018_10K.pdf",
+     "sha256": "f7191ecc7e09c401c93db18f959c8ac0f195015b1df18143f46db0e20d1e8742",
+     "bytes": 1823444
+    },
+    "pdfs/COCACOLA_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COCACOLA_2019_10K.pdf",
+     "sha256": "61e879af349b3c7e9e9062e8888e8e0993541726da54b114f7b84bedaec17419",
+     "bytes": 1677379
+    },
+    "pdfs/COCACOLA_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COCACOLA_2020_10K.pdf",
+     "sha256": "8a2cf3bed945080187ca9a91471bf0a2269826e9f9ece10a6323e2e1ba827f77",
+     "bytes": 1523345
+    },
+    "pdfs/COCACOLA_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COCACOLA_2021_10K.pdf",
+     "sha256": "46a7059b9da795cd1ea9862d5b4f82a21e9b72e799351927a11f5cb4c528b592",
+     "bytes": 9762541
+    },
+    "pdfs/COCACOLA_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COCACOLA_2022_10K.pdf",
+     "sha256": "9f91bb914d94d014cfca96e1021c932d5476d8b8ac2a933767bac4c438fd7a71",
+     "bytes": 9485744
+    },
+    "pdfs/CORNING_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CORNING_2015_10K.pdf",
+     "sha256": "7d6bff1fbc328a689cc2ddf382af86ac56ba034948a06924441f808a4032b960",
+     "bytes": 1389655
+    },
+    "pdfs/CORNING_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CORNING_2016_10K.pdf",
+     "sha256": "79707475b1cdd2c9f23af29d70e572340a784477586b6d1194df31b93d8070b3",
+     "bytes": 1068337
+    },
+    "pdfs/CORNING_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CORNING_2017_10K.pdf",
+     "sha256": "6d5f226082fd51e2220190b28c2cb051f5715e5a66875dce165de4846c0f0eda",
+     "bytes": 1163943
+    },
+    "pdfs/CORNING_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CORNING_2018_10K.pdf",
+     "sha256": "0fe7e010b3910e064979be1b96a6399ab230a342bc9cc2748cedd057b82c0c29",
+     "bytes": 1059369
+    },
+    "pdfs/CORNING_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CORNING_2019_10K.pdf",
+     "sha256": "44de10fd80d7e7d9d65257fa02466270d249a1b2d2692057b3bf1ca8e73b82c2",
+     "bytes": 1244649
+    },
+    "pdfs/CORNING_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CORNING_2020_10K.pdf",
+     "sha256": "ef471ab9ff6067f117977df6df8b4b5007066286b733981475ac2ccf48d91e59",
+     "bytes": 1180865
+    },
+    "pdfs/CORNING_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CORNING_2021_10K.pdf",
+     "sha256": "8023fac91ad417f996b692c506ee0e097effd091e698275288e4126cb8a2020e",
+     "bytes": 1131912
+    },
+    "pdfs/CORNING_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CORNING_2022_10K.pdf",
+     "sha256": "a63f102f045826b38ad21a606c33710f62932646fd7c0f1852ce411a4397a3ee",
+     "bytes": 1399926
+    },
+    "pdfs/CORNING_2023Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CORNING_2023Q2_10Q.pdf",
+     "sha256": "dace1d72871f6f6ba80a865f5bc1513569e42d749d54470bdbd8617f063ec7cc",
+     "bytes": 464735
+    },
+    "pdfs/COSTCO_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2015_10K.pdf",
+     "sha256": "bb089888811c9b71f0dfa777c3c894145479fb1426674c05accec07cf555fa4f",
+     "bytes": 621316
+    },
+    "pdfs/COSTCO_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2016_10K.pdf",
+     "sha256": "b7b87e8488b2259807a6b97b32fbaac8cff78d61b7d2af18f6cd16a5f549da5d",
+     "bytes": 587301
+    },
+    "pdfs/COSTCO_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2017_10K.pdf",
+     "sha256": "6fb8b9b75f4dcfb7a378136418b91d3b345a84c0a71fde0222d3373d6e441d66",
+     "bytes": 632558
+    },
+    "pdfs/COSTCO_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2018_10K.pdf",
+     "sha256": "870ea98ee6f469105f3e855401d171b5903b5db2db0702b453a8ef2ae481dc46",
+     "bytes": 647305
+    },
+    "pdfs/COSTCO_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2019_10K.pdf",
+     "sha256": "6bd16e20807393c68b85a5afd523f3e29d776490ccf2a5345b383c9a1675bc80",
+     "bytes": 711370
+    },
+    "pdfs/COSTCO_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2020_10K.pdf",
+     "sha256": "769dae83a6b9a15bbdb3bb81a5a01977341e93401e9522331c99864205614962",
+     "bytes": 643504
+    },
+    "pdfs/COSTCO_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2021_10K.pdf",
+     "sha256": "29e05b3862cf6ffa6cfda34ac82a9fa0fe76b67338c5924da3325c2ee3b08748",
+     "bytes": 765319
+    },
+    "pdfs/COSTCO_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2022_10K.pdf",
+     "sha256": "80f1845a06e6992885726c8fdce574a521236e49cba7ae924d323bc469772a78",
+     "bytes": 799480
+    },
+    "pdfs/COSTCO_2023Q1_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2023Q1_EARNINGS.pdf",
+     "sha256": "c97bdc4174ef3efeec4221787e05f1beca24c5b6b5cc328ce0297646caecfe52",
+     "bytes": 129582
+    },
+    "pdfs/COSTCO_2023Q3_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2023Q3_EARNINGS.pdf",
+     "sha256": "5af87a4ce66952244c4ac217d381b005c69e10e2b66772fd49d40a511a6c83ac",
+     "bytes": 134636
+    },
+    "pdfs/COSTCO_2023_8K_dated-2023-01-19.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2023_8K_dated-2023-01-19.pdf",
+     "sha256": "34b573fc40c8728ad3da2dc0e2b8783bb96e77f2b87c072424821cc980fa6823",
+     "bytes": 90118
+    },
+    "pdfs/COSTCO_2023_8K_dated-2023-08-09.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2023_8K_dated-2023-08-09.pdf",
+     "sha256": "3368235529cb0e88a040e299d69570f0c4d786be7f1f8c34e372a2520944aae8",
+     "bytes": 305657
+    },
+    "pdfs/COSTCO_2023_8K_dated-2023-08-16.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/COSTCO_2023_8K_dated-2023-08-16.pdf",
+     "sha256": "6c04d3431eda8b55da09a31358c0b0c1a1f9ea5aed40626811eaa1b4a13baf1b",
+     "bytes": 86362
+    },
+    "pdfs/CVSHEALTH_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CVSHEALTH_2015_10K.pdf",
+     "sha256": "e2e8601b7170f12ce091be27430257c6f4e70d644085396724cfcabfc4c9f486",
+     "bytes": 1148726
+    },
+    "pdfs/CVSHEALTH_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CVSHEALTH_2016_10K.pdf",
+     "sha256": "3f84bc642630b314d293c2c727b086549a0403a9d8653d6058001c79768febea",
+     "bytes": 1457647
+    },
+    "pdfs/CVSHEALTH_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CVSHEALTH_2017_10K.pdf",
+     "sha256": "f3c5f343f341bc5f163125ff114c451035de54e34269242faf49b36487080453",
+     "bytes": 968861
+    },
+    "pdfs/CVSHEALTH_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CVSHEALTH_2018_10K.pdf",
+     "sha256": "bdc800e3f52a3e1d7a79c0973af3e94122fa08a76e335ea8305df60a09e1a0dc",
+     "bytes": 1868195
+    },
+    "pdfs/CVSHEALTH_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CVSHEALTH_2019_10K.pdf",
+     "sha256": "6fa120e49fe966c7e7990ec916a96b343390b004339e3b918a2a1956cf170377",
+     "bytes": 1755827
+    },
+    "pdfs/CVSHEALTH_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CVSHEALTH_2020_10K.pdf",
+     "sha256": "f344e1b3e386c0bcb2ff770143b34e45e3d658ed039645d0cd71d8e02643ce99",
+     "bytes": 1340219
+    },
+    "pdfs/CVSHEALTH_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CVSHEALTH_2021_10K.pdf",
+     "sha256": "48ddde57f512689174924dfcf2ceb7e5d01ba817cc213568b01c9551bdfce88e",
+     "bytes": 1619115
+    },
+    "pdfs/CVSHEALTH_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/CVSHEALTH_2022_10K.pdf",
+     "sha256": "183c196a41793cd50002ff6b88f8c6d32e4fcb1117ab490a732414e1208cda8f",
+     "bytes": 1898137
+    },
+    "pdfs/EBAY_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2015_10K.pdf",
+     "sha256": "18b363c2e5ca82f9110b28ecd8ef3a6a0958207631207c78108d6826ba644230",
+     "bytes": 818332
+    },
+    "pdfs/EBAY_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2016_10K.pdf",
+     "sha256": "11b6f81f2a3afebb5aab7c97668c9f2322fb3fb851c7b84db0e6f7eb8cfdaee4",
+     "bytes": 829723
+    },
+    "pdfs/EBAY_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2017_10K.pdf",
+     "sha256": "f229947a40092c5187ebe85f5bb90448a81109225b36282cc3f1adad35e5d8d1",
+     "bytes": 912254
+    },
+    "pdfs/EBAY_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2018_10K.pdf",
+     "sha256": "4c642cf01f917e71b6f6e981be2686b7c941cd7e7fba0aa1656a2f6df820819a",
+     "bytes": 1399040
+    },
+    "pdfs/EBAY_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2019_10K.pdf",
+     "sha256": "ecdc280371a9bdeda7e918fbe1aa515e9e03fd14e18bb13e0de69f5f53c32abd",
+     "bytes": 1161390
+    },
+    "pdfs/EBAY_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2020_10K.pdf",
+     "sha256": "61a6e8ce8c7823d2c4b9c11f85a5f31fbb5c6b043635c0c453767ff443017c40",
+     "bytes": 949277
+    },
+    "pdfs/EBAY_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2021_10K.pdf",
+     "sha256": "4e83da48a0e2515c76e1ae772829c4befa468e784558c0b3c6a5c5878457f8ec",
+     "bytes": 1005333
+    },
+    "pdfs/EBAY_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2022_10K.pdf",
+     "sha256": "ed3a72b091113d2ab019ee4cc81ce4987df5c480372339ef5627a93091b7d396",
+     "bytes": 1326258
+    },
+    "pdfs/EBAY_2023Q1_8K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2023Q1_8K.pdf",
+     "sha256": "972e1924b4aedda46ff9cbe57d3308b387c35f8e3b5d17c3d4699e092debd13e",
+     "bytes": 116136
+    },
+    "pdfs/EBAY_2023Q1_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2023Q1_EARNINGS.pdf",
+     "sha256": "1332209a1678c3123b8c29abea0b6360dffba64eb3765636357de14716bd9d94",
+     "bytes": 219339
+    },
+    "pdfs/EBAY_2023Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2023Q2_10Q.pdf",
+     "sha256": "2183a750fd4da17368e2326ecc62e05497a3c00857f1b13d24be8c183ee43a10",
+     "bytes": 1346336
+    },
+    "pdfs/EBAY_2023Q2_8K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2023Q2_8K.pdf",
+     "sha256": "add318cd9b5b1607329b5f85b5277f230e5eab4277e67004928d962521efffa0",
+     "bytes": 113167
+    },
+    "pdfs/EBAY_2023Q2_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/EBAY_2023Q2_EARNINGS.pdf",
+     "sha256": "5e57f05c791943c3cd5baee56606e08d8845c5846d0ce9ab16157a975d7bd091",
+     "bytes": 220354
+    },
+    "pdfs/FEDEX_2023_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/FEDEX_2023_10K.pdf",
+     "sha256": "a8a9279c0f10214a61ee33df4ed780576ad43c7bbcc79897d337fbdea4c7e0fc",
+     "bytes": 2555043
+    },
+    "pdfs/FEDEX_2023_annualreport.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/FEDEX_2023_annualreport.pdf",
+     "sha256": "0a8ead368e2d7cd896a214195febfb2355f671a132d9fe5668d4ddb3bb4e39ea",
+     "bytes": 2307753
+    },
+    "pdfs/FOOTLOCKER_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/FOOTLOCKER_2022_10K.pdf",
+     "sha256": "a493fd29da534b4f943d70acee5bdd2d14f5dd9c1435afc80b78ccc980802aac",
+     "bytes": 971024
+    },
+    "pdfs/FOOTLOCKER_2022_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/FOOTLOCKER_2022_10Q.pdf",
+     "sha256": "c005a60c708c685ea12b102a5c20ed82f223013f123f53f75b779078e2250252",
+     "bytes": 723598
+    },
+    "pdfs/FOOTLOCKER_2022_8K_dated-2022-05-20.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/FOOTLOCKER_2022_8K_dated-2022-05-20.pdf",
+     "sha256": "865f22331a5943a85e53e38d1753addbeb6c42270853cddd0abc73ab23d150e9",
+     "bytes": 116133
+    },
+    "pdfs/FOOTLOCKER_2022_8K_dated_2022-08-19.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/FOOTLOCKER_2022_8K_dated_2022-08-19.pdf",
+     "sha256": "70fd2d5bfc6955424196b372a5273ffbc74d2f0153f291e10e73edc37962a14e",
+     "bytes": 316459
+    },
+    "pdfs/FOOTLOCKER_2022_8K_dated_2023-02-21.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/FOOTLOCKER_2022_8K_dated_2023-02-21.pdf",
+     "sha256": "ace7c56b31d9bd4419d4588e34b74e9f7e89193bb92425df6b2b5e61a6f7b53c",
+     "bytes": 108092
+    },
+    "pdfs/FOOTLOCKER_2023Q3_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/FOOTLOCKER_2023Q3_10Q.pdf",
+     "sha256": "c005a60c708c685ea12b102a5c20ed82f223013f123f53f75b779078e2250252",
+     "bytes": 723598
+    },
+    "pdfs/FOOTLOCKER_2023_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/FOOTLOCKER_2023_10K.pdf",
+     "sha256": "3d5d700c4cdbfe8a7ba5a035a255e57309776958d175977ed01656dca3e7a6b9",
+     "bytes": 1526587
+    },
+    "pdfs/FOOTLOCKER_2023_annualreport.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/FOOTLOCKER_2023_annualreport.pdf",
+     "sha256": "422ea8ffa1e10d10d835a41f83272392a1f9b9f8a9d26fb3099d328095d45c6c",
+     "bytes": 6173185
+    },
+    "pdfs/GENERALMILLS_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/GENERALMILLS_2015_10K.pdf",
+     "sha256": "6452cd8a4d5f866e2d9f8b46e30ba00b5065058d05c80205e0eecc7f53b1dadf",
+     "bytes": 1330979
+    },
+    "pdfs/GENERALMILLS_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/GENERALMILLS_2016_10K.pdf",
+     "sha256": "a51bf18d8489ebd3c5ba31e16947d4506cb65406a365aab71560b92942feb2f0",
+     "bytes": 844447
+    },
+    "pdfs/GENERALMILLS_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/GENERALMILLS_2017_10K.pdf",
+     "sha256": "b8e0709878c47cb6cad99f4c2b3fa639fabb3246943914f2fba5a43ac07f9a39",
+     "bytes": 886280
+    },
+    "pdfs/GENERALMILLS_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/GENERALMILLS_2018_10K.pdf",
+     "sha256": "fc1ec85cbaa48184cb13b3c6d5bcba421ee86d8a6a7605da249c1cb3664bda86",
+     "bytes": 1166294
+    },
+    "pdfs/GENERALMILLS_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/GENERALMILLS_2019_10K.pdf",
+     "sha256": "e8120ce31b22136e15c14115cdfbf3ddc548e58f15b6febc350c422a4c12d9db",
+     "bytes": 920782
+    },
+    "pdfs/GENERALMILLS_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/GENERALMILLS_2020_10K.pdf",
+     "sha256": "626dd53f9b52e5895b7a7073e1c491008769970609c10e2f6cf8247ed85d6fae",
+     "bytes": 2342475
+    },
+    "pdfs/GENERALMILLS_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/GENERALMILLS_2021_10K.pdf",
+     "sha256": "91913a1a1349b4388e46b6dca6d861dfe64e0a01ac5d99b49bc7e80ff78e3d1f",
+     "bytes": 813588
+    },
+    "pdfs/GENERALMILLS_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/GENERALMILLS_2022_10K.pdf",
+     "sha256": "27f2cc507ffc056de3b679d124d51b80bd043ce7b8e867c59e2cdfe1d2ea5de3",
+     "bytes": 1083414
+    },
+    "pdfs/GENERALMILLS_2023_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/GENERALMILLS_2023_10K.pdf",
+     "sha256": "edc62ea8eea4778131c5cdf5dee14a5947c34211b8a07d8997a854e96e64cac1",
+     "bytes": 1994505
+    },
+    "pdfs/GENERALMILLS_2023_annualreport.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/GENERALMILLS_2023_annualreport.pdf",
+     "sha256": "48a68f2e6dae2d479ec9d0e21f7da764ed064c39d065b01bcf016a6ad0435ac6",
+     "bytes": 1731620
+    },
+    "pdfs/INTEL_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2015_10K.pdf",
+     "sha256": "3b8709a85b42a17dcde6bd21b4aea2b70e48e2e8e2a1c163872a0c32fe1f6c29",
+     "bytes": 6245151
+    },
+    "pdfs/INTEL_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2016_10K.pdf",
+     "sha256": "10b9eb3bb75c23f01ba7122f58c56699797f6a9616546a20e1cba4ed95d445d4",
+     "bytes": 5152351
+    },
+    "pdfs/INTEL_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2017_10K.pdf",
+     "sha256": "a0b1b503be30d6116d9b9a80e5c31fdbc1ffdf33541bf5866ba16733a2463027",
+     "bytes": 36864629
+    },
+    "pdfs/INTEL_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2018_10K.pdf",
+     "sha256": "e172370edf7f41bdb807c8d1a10b0500f47b6c517352ee1ae97b4c218faeeb3f",
+     "bytes": 30278219
+    },
+    "pdfs/INTEL_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2019_10K.pdf",
+     "sha256": "dc33ddb6477a7b00e437df12384e70eb8ef3c993e7f570b123efa62f0fd24407",
+     "bytes": 38484035
+    },
+    "pdfs/INTEL_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2020_10K.pdf",
+     "sha256": "f4c5d42b9ad1cdaa059b8444f15c8a91e2aabc619a326a9c8cbff45b75bc01c3",
+     "bytes": 2512055
+    },
+    "pdfs/INTEL_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2021_10K.pdf",
+     "sha256": "705cb59d5a52969278614eea9ca766858ade6425d52d447f47273f0e4d8d7f3e",
+     "bytes": 25078554
+    },
+    "pdfs/INTEL_2022Q4_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2022Q4_EARNINGS.pdf",
+     "sha256": "d63f547b61832263e6f1e76210c75c6e78c296bb96ec90f111fd2c2240967396",
+     "bytes": 183215
+    },
+    "pdfs/INTEL_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2022_10K.pdf",
+     "sha256": "b5581e989c35e0e7ede71c406e5309956901a290fdeef0d541f7a3a24558d7f8",
+     "bytes": 24746388
+    },
+    "pdfs/INTEL_2023Q1_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2023Q1_EARNINGS.pdf",
+     "sha256": "9184bb8c26735de7e1efcc41014232e79414082a3ab2371418c98900203e4382",
+     "bytes": 538948
+    },
+    "pdfs/INTEL_2023_8K_dated-2022-11-22.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2023_8K_dated-2022-11-22.pdf",
+     "sha256": "00f033ebf9c22f23eef3fe0e68f496b9c093e3a6b5e3b8089ab0d97926e14534",
+     "bytes": 2414159
+    },
+    "pdfs/INTEL_2023_8K_dated-2023-02-10.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2023_8K_dated-2023-02-10.pdf",
+     "sha256": "c212c3300473159c8ce86e65a4f94b3452d738282efd9634ff863c14f29affb4",
+     "bytes": 4161758
+    },
+    "pdfs/INTEL_2023_8K_dated-2023-08-16.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/INTEL_2023_8K_dated-2023-08-16.pdf",
+     "sha256": "a70b0d9e23d9a5cc873b48daa125f2f0da96aaa5af2259a900f44e3ec22e68d7",
+     "bytes": 211264
+    },
+    "pdfs/JOHNSON_JOHNSON_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2015_10K.pdf",
+     "sha256": "e244362aed3d2d708a8be07e0662709ea1338963bcbcbb8be2eb8e2f911f02e1",
+     "bytes": 2015815
+    },
+    "pdfs/JOHNSON_JOHNSON_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2016_10K.pdf",
+     "sha256": "7363e85d82df3e09afc95b76164894e79fd3fdd6a5cd9dc6e100e28258bba3d7",
+     "bytes": 2110124
+    },
+    "pdfs/JOHNSON_JOHNSON_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2017_10K.pdf",
+     "sha256": "e6d2098e66539280570910ba8a8fb5f023e7b2ba0ad79deec662f868e87df26d",
+     "bytes": 2265401
+    },
+    "pdfs/JOHNSON_JOHNSON_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2018_10K.pdf",
+     "sha256": "965a64e386e87e3e66068dc282d98fd83bded11a3ee38e8d84cccee7f025fbc3",
+     "bytes": 2672053
+    },
+    "pdfs/JOHNSON_JOHNSON_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2019_10K.pdf",
+     "sha256": "b878e4c824a748da231aeda320d19d833d44ae1969797d0df00a60289a37b840",
+     "bytes": 2694796
+    },
+    "pdfs/JOHNSON_JOHNSON_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2020_10K.pdf",
+     "sha256": "2d2207c4de37167fa7da69c279cf8074042c45e55da265d3fada47ec2046d5bb",
+     "bytes": 2109544
+    },
+    "pdfs/JOHNSON_JOHNSON_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2021_10K.pdf",
+     "sha256": "64cbca719de42b6308609b7bb8f684c7ab55ccca0ee3174be5ca261ec15f3652",
+     "bytes": 2001016
+    },
+    "pdfs/JOHNSON_JOHNSON_2022Q4_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2022Q4_EARNINGS.pdf",
+     "sha256": "7ae6bf6f9a998d19e23fd796b58b0f2015085c74712253b78fb90174c12436a7",
+     "bytes": 729392
+    },
+    "pdfs/JOHNSON_JOHNSON_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2022_10K.pdf",
+     "sha256": "dba7d6cc97734abd6dcbc1a6a34f82b5d228e60d0a1a32425a90404fd4d3e290",
+     "bytes": 1941368
+    },
+    "pdfs/JOHNSON_JOHNSON_2023Q1_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2023Q1_EARNINGS.pdf",
+     "sha256": "4adbdaad569b8423fcca8af12f02855b8765791f088ceae725fa3ac9c1fe24a1",
+     "bytes": 942096
+    },
+    "pdfs/JOHNSON_JOHNSON_2023Q2_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2023Q2_EARNINGS.pdf",
+     "sha256": "db1f3419d309440e644dc3cdfbb74758e67734dd181e5dbabc7479d0ab92d026",
+     "bytes": 1212840
+    },
+    "pdfs/JOHNSON_JOHNSON_2023_8K_dated-2023-08-23.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2023_8K_dated-2023-08-23.pdf",
+     "sha256": "4156c3d262196e310d39a89f34ad9f0248792a951a3f04649c2e9cbc1877584f",
+     "bytes": 44188
+    },
+    "pdfs/JOHNSON_JOHNSON_2023_8K_dated-2023-08-30.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JOHNSON_JOHNSON_2023_8K_dated-2023-08-30.pdf",
+     "sha256": "0601a4b9f15e4400ced1b2ccb81c309cb66844fbac6b975a76dc490501bea95a",
+     "bytes": 455282
+    },
+    "pdfs/JPMORGAN_2021Q1_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JPMORGAN_2021Q1_10Q.pdf",
+     "sha256": "62518c05b02265dc13ca257d9ec0be0aec4449dad53db0c77d93444e7e2cfe97",
+     "bytes": 2285253
+    },
+    "pdfs/JPMORGAN_2021Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JPMORGAN_2021Q2_10Q.pdf",
+     "sha256": "3b5ae250840366f27f82409255e10cf1c7b1307b681b183dc85ca9108d41bef7",
+     "bytes": 2649497
+    },
+    "pdfs/JPMORGAN_2021Q3_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JPMORGAN_2021Q3_10Q.pdf",
+     "sha256": "f3f888746929e4cfd0d12adaa70afb40a53e54ac96d136362073e0ad7bf50d07",
+     "bytes": 2685049
+    },
+    "pdfs/JPMORGAN_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JPMORGAN_2021_10K.pdf",
+     "sha256": "4256ecbd1f0c2747232850b15cb4a2fc17286d08788811a1de5a0b00d59f7c19",
+     "bytes": 5844405
+    },
+    "pdfs/JPMORGAN_2022Q1_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JPMORGAN_2022Q1_10Q.pdf",
+     "sha256": "2b7669b4f92da82cc3fe415dcfd9f2621a23ee6eb0fff789893139c52629cdd3",
+     "bytes": 1985223
+    },
+    "pdfs/JPMORGAN_2022Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JPMORGAN_2022Q2_10Q.pdf",
+     "sha256": "7d715f552d4eeb6b2a1ea8ae02237b5767306907e761270ac23d74ac5b7e44b5",
+     "bytes": 2290421
+    },
+    "pdfs/JPMORGAN_2022Q3_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JPMORGAN_2022Q3_10Q.pdf",
+     "sha256": "a37d3baacba65136132c66b0f10f1ee03724c207662252d59f3ecf14d187138c",
+     "bytes": 2313104
+    },
+    "pdfs/JPMORGAN_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JPMORGAN_2022_10K.pdf",
+     "sha256": "c269899950f36edfa496e3c8447a51d86d0a206442a96dc24dcd9317d55b957c",
+     "bytes": 6947859
+    },
+    "pdfs/JPMORGAN_2023Q1_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JPMORGAN_2023Q1_10Q.pdf",
+     "sha256": "04c347324e2a6dee890ef7ca597dbba5b0b12013e634405fdb4378db3a838ef1",
+     "bytes": 2037946
+    },
+    "pdfs/JPMORGAN_2023Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/JPMORGAN_2023Q2_10Q.pdf",
+     "sha256": "eef2d9c1fdb5dc82be48166487a9e451c8544aec932a01fb06309ea7cd7122f5",
+     "bytes": 2573600
+    },
+    "pdfs/KRAFTHEINZ_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/KRAFTHEINZ_2015_10K.pdf",
+     "sha256": "59c59e14f3d06ff4ccf584b082c2964b20ef82dc98dd391b9f07e39bfd175908",
+     "bytes": 1300738
+    },
+    "pdfs/KRAFTHEINZ_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/KRAFTHEINZ_2016_10K.pdf",
+     "sha256": "536051032143c5e7ee2768c459debe7ed88832d192c5ae378ce27c73e74d6541",
+     "bytes": 1417551
+    },
+    "pdfs/KRAFTHEINZ_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/KRAFTHEINZ_2017_10K.pdf",
+     "sha256": "0496d8676cc4e217b5a84f1a73afdb77531570bba35f609b75776d694ff2d900",
+     "bytes": 1549180
+    },
+    "pdfs/KRAFTHEINZ_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/KRAFTHEINZ_2018_10K.pdf",
+     "sha256": "dd7848bac658051e7931a515f017f4ab8f886bfc4b40bf4f9dc7b8a6b29e7a04",
+     "bytes": 3283287
+    },
+    "pdfs/KRAFTHEINZ_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/KRAFTHEINZ_2019_10K.pdf",
+     "sha256": "df1340e7b002e5f412d4c9073292d0f48a2988fd347d5a4f44d017b9680fbae2",
+     "bytes": 1531923
+    },
+    "pdfs/KRAFTHEINZ_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/KRAFTHEINZ_2020_10K.pdf",
+     "sha256": "1eedee9bf1531d9a095b1a9c5d2c2ac95dde33edce778c57ffda5dd0f5e8bfad",
+     "bytes": 1696414
+    },
+    "pdfs/KRAFTHEINZ_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/KRAFTHEINZ_2021_10K.pdf",
+     "sha256": "1d578ae4ec1c476d2534ed43a866db5cd9761614ab06c72a67d2f5ddf9f17ee0",
+     "bytes": 1468714
+    },
+    "pdfs/KRAFTHEINZ_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/KRAFTHEINZ_2022_10K.pdf",
+     "sha256": "862aff613aa82ae057d7c1c3a5cd364e1efc187f79f252351b7b63ad003e19bb",
+     "bytes": 3133684
+    },
+    "pdfs/LOCKHEEDMARTIN_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2015_10K.pdf",
+     "sha256": "649ede5cd9d18cfc5191791228a920533a348e70efdd0cc943f493c15ac33cb1",
+     "bytes": 1248903
+    },
+    "pdfs/LOCKHEEDMARTIN_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2016_10K.pdf",
+     "sha256": "845871a164515bfc1421c722eddfe5fe27c0fe361818196bb5e52b974b34e849",
+     "bytes": 1793681
+    },
+    "pdfs/LOCKHEEDMARTIN_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2017_10K.pdf",
+     "sha256": "aff154683b82e8c1958ef8b0fd4646ea5e509d8e609168dd00e1909f6bcb4114",
+     "bytes": 1758027
+    },
+    "pdfs/LOCKHEEDMARTIN_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2018_10K.pdf",
+     "sha256": "30bd01ba556cf440a8ca00e01c6daacccc5d05f87dfa7fd2ca508b92a5199f1a",
+     "bytes": 1487228
+    },
+    "pdfs/LOCKHEEDMARTIN_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2019_10K.pdf",
+     "sha256": "e1f294d7d130f8508b36a14684aa8f984aa7a26d351eb1d6b82c778763d259cf",
+     "bytes": 1335683
+    },
+    "pdfs/LOCKHEEDMARTIN_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2020_10K.pdf",
+     "sha256": "1e68051a649270779fc5cb68806612a28d7d81288ed75dd37aa1858717bf55a0",
+     "bytes": 1372193
+    },
+    "pdfs/LOCKHEEDMARTIN_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2021_10K.pdf",
+     "sha256": "d2486265fedea887bcc621f0b2dbb9670e66fe05203e1378b8e650c9564732fb",
+     "bytes": 1347017
+    },
+    "pdfs/LOCKHEEDMARTIN_2022Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2022Q2_10Q.pdf",
+     "sha256": "4039c9985845dd6000f89f61c16be58842b56afa39369aff7710cdeb0c7bb187",
+     "bytes": 709630
+    },
+    "pdfs/LOCKHEEDMARTIN_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2022_10K.pdf",
+     "sha256": "9a2317300d0f1e2623ba291fe9ec38fc779c1d1ad989dcfe6f862b77435c6923",
+     "bytes": 1398312
+    },
+    "pdfs/LOCKHEEDMARTIN_2023Q1_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2023Q1_10Q.pdf",
+     "sha256": "598f6f069d72851634962532c6b95922e309d40cacc8b3f8ed475ca5f04b5381",
+     "bytes": 382177
+    },
+    "pdfs/LOCKHEEDMARTIN_2023Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2023Q2_10Q.pdf",
+     "sha256": "dbadfc550666415903fc520c28609d683360199ac7bb982f45195031b83e512c",
+     "bytes": 792027
+    },
+    "pdfs/LOCKHEEDMARTIN_2023_8K_dated-2023-05-25.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2023_8K_dated-2023-05-25.pdf",
+     "sha256": "78e7b47986744f14e7585da7134df28cee21ee86910a9c6dc8ee08928725db38",
+     "bytes": 537276
+    },
+    "pdfs/LOCKHEEDMARTIN_2023_8K_dated-2023-08-24.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/LOCKHEEDMARTIN_2023_8K_dated-2023-08-24.pdf",
+     "sha256": "45cb5e86a67fbb5f719ab1996647766295a09fc039834352993a2a60b97a735d",
+     "bytes": 104681
+    },
+    "pdfs/MCDONALDS_2022Q4_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MCDONALDS_2022Q4_EARNINGS.pdf",
+     "sha256": "ef0bc4c8f3cc0c6364bc371a0cf273ae47f00b4d0e4769f2820cb729dea27b60",
+     "bytes": 525016
+    },
+    "pdfs/MCDONALDS_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MCDONALDS_2022_10K.pdf",
+     "sha256": "a30967c85beb68a624c0e0b4d801aa06c026d10c5813a23836d65f0097a29743",
+     "bytes": 1529243
+    },
+    "pdfs/MCDONALDS_2023Q1_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MCDONALDS_2023Q1_EARNINGS.pdf",
+     "sha256": "f94b34aa7484876647ce3a35e9b9729fb2b1c0117ef652d317edb275ac0ffa22",
+     "bytes": 101217
+    },
+    "pdfs/MCDONALDS_2023Q2_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MCDONALDS_2023Q2_EARNINGS.pdf",
+     "sha256": "0f7fcd9bbd9175f5e5a302dd82b928ee1e4091efa8288c6c77ccb7de2bfddef5",
+     "bytes": 306936
+    },
+    "pdfs/MCDONALDS_8K_dated-2023-01-06.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MCDONALDS_8K_dated-2023-01-06.pdf",
+     "sha256": "33fafbfbb2629ff6470cd3ab0d2535d7c58ff9e3f30973c1d2dda933dc4f7839",
+     "bytes": 199859
+    },
+    "pdfs/MCDONALDS_8K_dated-2023-02-13.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MCDONALDS_8K_dated-2023-02-13.pdf",
+     "sha256": "bcfff6550bc3540cb4a26a953a5064f4048c682c4f2c82a47b62c81a68f639a3",
+     "bytes": 109585
+    },
+    "pdfs/MCDONALDS_8K_dated-2023-08-14.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MCDONALDS_8K_dated-2023-08-14.pdf",
+     "sha256": "0b45a7fbc67ff496d79d143acb7240bc4b094f3deee2d245387a8edcec302051",
+     "bytes": 140828
+    },
+    "pdfs/MGMRESORTS_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MGMRESORTS_2015_10K.pdf",
+     "sha256": "e075ac4759cb581b3b086bede7c498be7646a449eb8df83a793707d6aa487b05",
+     "bytes": 1465159
+    },
+    "pdfs/MGMRESORTS_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MGMRESORTS_2016_10K.pdf",
+     "sha256": "136083e95121205cf6f51530a38750a3d87bb2a886aa9daf161ae0776fa0d18a",
+     "bytes": 2257525
+    },
+    "pdfs/MGMRESORTS_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MGMRESORTS_2017_10K.pdf",
+     "sha256": "3ca2fbc51b6306dfcc2db200c981eeae3d5c8fc21c17e9657e01f6318925fad4",
+     "bytes": 1398714
+    },
+    "pdfs/MGMRESORTS_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MGMRESORTS_2018_10K.pdf",
+     "sha256": "1b540737f91716aaa23b062499e6cab9c51d258e151f37eb8c65646bb588a0da",
+     "bytes": 1421540
+    },
+    "pdfs/MGMRESORTS_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MGMRESORTS_2019_10K.pdf",
+     "sha256": "954620199cb326c789d178cedff41532bee619aab7c4944a7c5c8b4e8e05fed7",
+     "bytes": 1664093
+    },
+    "pdfs/MGMRESORTS_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MGMRESORTS_2020_10K.pdf",
+     "sha256": "98a9a55baf838309d16a730fd63efbcd146be1911b61abb3658b1774f360b099",
+     "bytes": 1383002
+    },
+    "pdfs/MGMRESORTS_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MGMRESORTS_2021_10K.pdf",
+     "sha256": "a1a0deb06a3e380726793494dceb13141bdc823fc4faa8749224dcd4868a3d92",
+     "bytes": 1446235
+    },
+    "pdfs/MGMRESORTS_2022Q4_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MGMRESORTS_2022Q4_EARNINGS.pdf",
+     "sha256": "fe9126b17c3656e50d53741b13cb5fb233d4adaf922e4d84072b1d5e564fbfbd",
+     "bytes": 737922
+    },
+    "pdfs/MGMRESORTS_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MGMRESORTS_2022_10K.pdf",
+     "sha256": "130b96c1309c97aaedcabee2fa5d5421e54491e618273bd33c3b1aeddad323ec",
+     "bytes": 1755866
+    },
+    "pdfs/MGMRESORTS_2023Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MGMRESORTS_2023Q2_10Q.pdf",
+     "sha256": "09c02fd40073570ae0826d707674154a9cd55a895e94096a82fcf0a4447ea64d",
+     "bytes": 661891
+    },
+    "pdfs/MGMRESORTS_2023_8K_dated-2023-03-01.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MGMRESORTS_2023_8K_dated-2023-03-01.pdf",
+     "sha256": "b1704e69cec7aab0d32f42db5f60bdf2ed3bad73278d6ea997617add10ea1ba6",
+     "bytes": 137149
+    },
+    "pdfs/MGMRESORTS_2023_8K_dated-2023-09-12.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MGMRESORTS_2023_8K_dated-2023-09-12.pdf",
+     "sha256": "b4bd1be73d95467d0739d8e5e00af3f55fdc03c81beec090dcbd6eaec955ad18",
+     "bytes": 126773
+    },
+    "pdfs/MICROSOFT_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MICROSOFT_2015_10K.pdf",
+     "sha256": "0e105acdaaaf9c2c84093bd7a5a8c3535997c5ea19e85c6b743258b202c3bb65",
+     "bytes": 925162
+    },
+    "pdfs/MICROSOFT_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MICROSOFT_2016_10K.pdf",
+     "sha256": "f3555bd5ea1802770cc8f2a7ca766392e16fe6504f18688db681d852029404dc",
+     "bytes": 838415
+    },
+    "pdfs/MICROSOFT_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MICROSOFT_2017_10K.pdf",
+     "sha256": "b963e1a5674c56b1223df6c4f6d66fc677e2141288c935589a1c1a45426c1e5a",
+     "bytes": 924558
+    },
+    "pdfs/MICROSOFT_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MICROSOFT_2018_10K.pdf",
+     "sha256": "77c61516a168909b62672fb0f06fb197647c68513932feb3813bcf03f75580df",
+     "bytes": 1007036
+    },
+    "pdfs/MICROSOFT_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MICROSOFT_2019_10K.pdf",
+     "sha256": "988125b50b8b8ee306a07831f4f46b2042bf9261c8fb7152ae5232251bc43fd9",
+     "bytes": 1111773
+    },
+    "pdfs/MICROSOFT_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MICROSOFT_2020_10K.pdf",
+     "sha256": "4e96b8ff8dc97712a167a39db5725a6bb3cab959151e0e5f33831d02c8c12b57",
+     "bytes": 902353
+    },
+    "pdfs/MICROSOFT_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MICROSOFT_2021_10K.pdf",
+     "sha256": "b54bca858992012d6382106f2af667d8a983ced1e2cb48988720396b809b4a2e",
+     "bytes": 880287
+    },
+    "pdfs/MICROSOFT_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MICROSOFT_2022_10K.pdf",
+     "sha256": "561d30b6cfcb5ef2e673d8ae7d5e4264c432e62b972c94233c3569f9f5395212",
+     "bytes": 877980
+    },
+    "pdfs/MICROSOFT_2023_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/MICROSOFT_2023_10K.pdf",
+     "sha256": "e534af371c824aab19b8d01f8bc0e9d1e0a3fb418a33119c5224a53d20a0d37b",
+     "bytes": 726155
+    },
+    "pdfs/NETFLIX_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NETFLIX_2015_10K.pdf",
+     "sha256": "b22ca874ef08f383bd0b1071677d44f4a242af668f855f00dc9c6d4ac94148e2",
+     "bytes": 578489
+    },
+    "pdfs/NETFLIX_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NETFLIX_2016_10K.pdf",
+     "sha256": "b4ca471b6f386447255c736df2bdcba0aeffea07fc062aec4a8f632adaeaf6a2",
+     "bytes": 577535
+    },
+    "pdfs/NETFLIX_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NETFLIX_2017_10K.pdf",
+     "sha256": "981a69bba010dd1709c74ccec9ca26c61635c02a4f22b76345d26021e88077d6",
+     "bytes": 651011
+    },
+    "pdfs/NETFLIX_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NETFLIX_2018_10K.pdf",
+     "sha256": "182eb08c330375b0cd62e5f3d4ee6f83fc29dddef8d57aa576442c9456ecca8d",
+     "bytes": 702272
+    },
+    "pdfs/NETFLIX_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NETFLIX_2019_10K.pdf",
+     "sha256": "4b7ffc5a9c6f1cb50bff91b04b0a6e2bf732d30ff83b506531e3e29a1cb49dae",
+     "bytes": 681746
+    },
+    "pdfs/NETFLIX_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NETFLIX_2020_10K.pdf",
+     "sha256": "d26f9b58c13dff3d8531faf15419e0e7809c8f7559f6677746d7cf735934139d",
+     "bytes": 674503
+    },
+    "pdfs/NETFLIX_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NETFLIX_2021_10K.pdf",
+     "sha256": "b69dbad165095cd484f5fa7da75da3a097d866b61bf6d5cfd00a3657cca1dc5a",
+     "bytes": 1476677
+    },
+    "pdfs/NETFLIX_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NETFLIX_2022_10K.pdf",
+     "sha256": "c57c586cd6e9483dbd4a8eac2f4982d10eb730159f557d0b1faec9b24601da72",
+     "bytes": 794637
+    },
+    "pdfs/NETFLIX_2023Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NETFLIX_2023Q2_10Q.pdf",
+     "sha256": "116368021bc335491367a7083196ba670649a6fe4e547ac8f2ebc7d463ccc717",
+     "bytes": 380564
+    },
+    "pdfs/NIKE_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NIKE_2015_10K.pdf",
+     "sha256": "73baba59aeba490a15f57726c21ec61388ed93acbc9ab09602bea94cab646d45",
+     "bytes": 2014748
+    },
+    "pdfs/NIKE_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NIKE_2016_10K.pdf",
+     "sha256": "122ec7058ad7a6d6877703ca515d4b1578578f30dbc488e3627ceb43a0ae8880",
+     "bytes": 943152
+    },
+    "pdfs/NIKE_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NIKE_2017_10K.pdf",
+     "sha256": "e785c949f1cac8371cc54ed5397d6a4d0116ece0ddc0b043f2e758de0916adfd",
+     "bytes": 935319
+    },
+    "pdfs/NIKE_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NIKE_2018_10K.pdf",
+     "sha256": "31de66f1e37cabf1785e0ffa66955bf003bf2a9dcf3f4ebe93732d063b7b6ebe",
+     "bytes": 962221
+    },
+    "pdfs/NIKE_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NIKE_2019_10K.pdf",
+     "sha256": "7dbdf1bcbf37dd6d6e694ce95bcb23cd6943d08cc9cd1e5ee9832ed8f7eebdc6",
+     "bytes": 909932
+    },
+    "pdfs/NIKE_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NIKE_2020_10K.pdf",
+     "sha256": "1c11d4942f12de57ef2d480e7175803e42cdca1f19dab0b4ec32f8078f2d1018",
+     "bytes": 955558
+    },
+    "pdfs/NIKE_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NIKE_2021_10K.pdf",
+     "sha256": "73b54e5e0b1b0b33e51ac314f6d9a9db0bcc286269feb24a3445a5f1ff0f7789",
+     "bytes": 877882
+    },
+    "pdfs/NIKE_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NIKE_2022_10K.pdf",
+     "sha256": "c23471e31b9c2a4e0a9cca7a018107667f25d00488d8a4df9d05b422eeda3763",
+     "bytes": 2255285
+    },
+    "pdfs/NIKE_2023_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/NIKE_2023_10K.pdf",
+     "sha256": "51f5a0fc6ede20de4f5cfdeae8791a57bdd65c95db2ceb263eb120696ff90172",
+     "bytes": 3463188
+    },
+    "pdfs/ORACLE_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ORACLE_2015_10K.pdf",
+     "sha256": "58c240d1413f04d67a66c44688b497db24ce27ce824a11a27f62c81267ab5faa",
+     "bytes": 1674676
+    },
+    "pdfs/ORACLE_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ORACLE_2016_10K.pdf",
+     "sha256": "a460bea9ace2931b4bcb026c7a1bdec64b9c4b2c524ff69d07718980513c1087",
+     "bytes": 987706
+    },
+    "pdfs/ORACLE_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ORACLE_2017_10K.pdf",
+     "sha256": "d7de933751254a91713c03b400a11447f29e47a02179b8327518db783bb2a868",
+     "bytes": 933007
+    },
+    "pdfs/ORACLE_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ORACLE_2018_10K.pdf",
+     "sha256": "3dee4164fd395dd7763976af1e8459865fceeef37404a05301c29b46ad7cd83a",
+     "bytes": 1088934
+    },
+    "pdfs/ORACLE_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ORACLE_2019_10K.pdf",
+     "sha256": "2fdcd008830ee96de2e9d494823f359af73e19132b03bc2c6cb01f4acd61c861",
+     "bytes": 1133803
+    },
+    "pdfs/ORACLE_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ORACLE_2020_10K.pdf",
+     "sha256": "dd3c10f174844555de4ba21a34e49577be1606159b7f2d0bccbce4061008bea2",
+     "bytes": 1044886
+    },
+    "pdfs/ORACLE_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ORACLE_2021_10K.pdf",
+     "sha256": "316d3e1a49ea14e31bb11cece3378d391cb5a085a3f0bfc3ef98077204ecffa2",
+     "bytes": 1037893
+    },
+    "pdfs/ORACLE_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ORACLE_2022_10K.pdf",
+     "sha256": "aeabd9273d954112b6d183f381060dddbc9d9ead7ac4d2dba9f80e13f875ed19",
+     "bytes": 1544204
+    },
+    "pdfs/ORACLE_2023_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ORACLE_2023_10K.pdf",
+     "sha256": "0ea02f2abfbca3581cea7a9e5371ecb8394e1673819add6c8c3bfba03f90e020",
+     "bytes": 1742303
+    },
+    "pdfs/PAYPAL_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PAYPAL_2022_10K.pdf",
+     "sha256": "0c1dd6cd170261c6bd778de382a211a56a3bb1e009a429246370c97fa0defab3",
+     "bytes": 4371232
+    },
+    "pdfs/PAYPAL_2023Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PAYPAL_2023Q2_10Q.pdf",
+     "sha256": "d3dc1016ba6662d40a72d3fa343b2cc3bd08bd202b99a2b6a57c43b90b4b0f01",
+     "bytes": 1283070
+    },
+    "pdfs/PEPSICO_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2015_10K.pdf",
+     "sha256": "0686e40e1563cb34423e7310d5acc75cb05a4fc25bf62a9c272d25b4e7130eba",
+     "bytes": 1236627
+    },
+    "pdfs/PEPSICO_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2016_10K.pdf",
+     "sha256": "61c72d97baf3d8fec4b3e21b59632b32720ecc0ea58484ddf5c5e1e9d6cfe3a3",
+     "bytes": 2186522
+    },
+    "pdfs/PEPSICO_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2017_10K.pdf",
+     "sha256": "bdcae89f3debc2dc2e1478c2625fbde07fe4fc7ae0c946dbfdbd66127409f119",
+     "bytes": 2183951
+    },
+    "pdfs/PEPSICO_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2018_10K.pdf",
+     "sha256": "90ee547cffd4fe1d56498f47cf22bc2fd5f31a8b85f7569a2acd2ca8812cf893",
+     "bytes": 2029488
+    },
+    "pdfs/PEPSICO_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2019_10K.pdf",
+     "sha256": "a323c766a69a88bac581a08ce2264f4a99055e8a244070d8b9a0c3fe38eaaab5",
+     "bytes": 2443245
+    },
+    "pdfs/PEPSICO_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2020_10K.pdf",
+     "sha256": "04ee1f204d73fa23586032ac0acb99f3b42804879da5c1e771bd7538870f22f0",
+     "bytes": 2288916
+    },
+    "pdfs/PEPSICO_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2021_10K.pdf",
+     "sha256": "f2c7cf1969c7f6dfc8c0596824e1d6b3cc70f662ee2dd06be84bb27af5635364",
+     "bytes": 2139398
+    },
+    "pdfs/PEPSICO_2022Q4_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2022Q4_EARNINGS.pdf",
+     "sha256": "d85fe9f542054dea91d69ded090620e359cfd3d6a473c0e8f54706f41717c53a",
+     "bytes": 1028887
+    },
+    "pdfs/PEPSICO_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2022_10K.pdf",
+     "sha256": "7d8a9f3374e429c58f101319e2da8a0e601a89859e1e4f6854163dd5f8ce6b47",
+     "bytes": 2993516
+    },
+    "pdfs/PEPSICO_2023Q1_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2023Q1_EARNINGS.pdf",
+     "sha256": "a705483ea6c548a2f67c421bc24ced391a6beb8487600b44b54e9ae2aca1f31c",
+     "bytes": 987394
+    },
+    "pdfs/PEPSICO_2023Q2_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2023Q2_EARNINGS.pdf",
+     "sha256": "e86fbda488c1fd60641282b297a89d6f3da9370fd0e8089669b597f41945f92b",
+     "bytes": 1014091
+    },
+    "pdfs/PEPSICO_2023_8K_dated-2023-05-05.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2023_8K_dated-2023-05-05.pdf",
+     "sha256": "e8591d6f83d810a0f9edfc540a1a21aa6269a6de4c756b5eb808d5dbbea330ed",
+     "bytes": 102321
+    },
+    "pdfs/PEPSICO_2023_8K_dated-2023-05-30.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PEPSICO_2023_8K_dated-2023-05-30.pdf",
+     "sha256": "8e8f99f270b065e105636f54b2684f4c4170b3fc80845ae2f393bf66f3291d2c",
+     "bytes": 1460889
+    },
+    "pdfs/PFIZER_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PFIZER_2015_10K.pdf",
+     "sha256": "abd46d3deab49520e2800daf5cc27a1a99e328f7d0ad691dea2690e4c9b60074",
+     "bytes": 1726062
+    },
+    "pdfs/PFIZER_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PFIZER_2016_10K.pdf",
+     "sha256": "a05533e463f4872858ed7bbdbd153e1f620dd8bdc18320846d029a3d8fc17696",
+     "bytes": 1757373
+    },
+    "pdfs/PFIZER_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PFIZER_2017_10K.pdf",
+     "sha256": "254e545196c2fdc9801e4272c026ee7069a6e836553820e3d05c09dc27155abd",
+     "bytes": 2309546
+    },
+    "pdfs/PFIZER_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PFIZER_2018_10K.pdf",
+     "sha256": "55f080fb4d828cf92b9fa0801e23acbb79efccb49e4aedd09ec213c8ccd117b6",
+     "bytes": 2976762
+    },
+    "pdfs/PFIZER_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PFIZER_2019_10K.pdf",
+     "sha256": "eb51edd59a4d18e65c7b5750dfb290f13e44092a923aee26bdb1394e0f0823e5",
+     "bytes": 2043092
+    },
+    "pdfs/PFIZER_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PFIZER_2020_10K.pdf",
+     "sha256": "57386f5d72aa857925b947a47d88d40906ae9916325a64f44c9b7958ec62d721",
+     "bytes": 1295394
+    },
+    "pdfs/PFIZER_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PFIZER_2021_10K.pdf",
+     "sha256": "ff3307d5f633c5dbe59a976f5ff5e086af04ba5a5135f2b6411c89538a22a665",
+     "bytes": 1171782
+    },
+    "pdfs/PFIZER_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PFIZER_2022_10K.pdf",
+     "sha256": "0cb303feeff5290bff4f6a31c57b13c2e220dc24e57191820a47fa1d23058f8a",
+     "bytes": 2231275
+    },
+    "pdfs/PFIZER_2023Q2_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PFIZER_2023Q2_EARNINGS.pdf",
+     "sha256": "332c64f8b63ca88cd2c6d1c9136d2df23e4bf4822d940d0cb40d1e28848055ff",
+     "bytes": 343582
+    },
+    "pdfs/PG_E_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2015_10K.pdf",
+     "sha256": "5a6955f012007fc8aa2262854f68f9a1c8a29c001f937c7510c4be3703eef375",
+     "bytes": 1309123
+    },
+    "pdfs/PG_E_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2016_10K.pdf",
+     "sha256": "b0a39bcf3025f2ffb5e3b38d32bd0e5816450eb98fb86a230878fcb0ceafc22b",
+     "bytes": 1400317
+    },
+    "pdfs/PG_E_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2017_10K.pdf",
+     "sha256": "3305055b875bdd9ec6a8a89a39c6ae56269a209afc254f0c0e186f9bb30f362a",
+     "bytes": 1530105
+    },
+    "pdfs/PG_E_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2018_10K.pdf",
+     "sha256": "2560a3ec3dc13a50f702e91d61b0aba4b57850d4b55449634fb863822c4764fd",
+     "bytes": 1448352
+    },
+    "pdfs/PG_E_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2019_10K.pdf",
+     "sha256": "654651dbed450f043a229fe1f4232ff865b28fe5dc7edf1bd682dbb8aa3f243c",
+     "bytes": 2340050
+    },
+    "pdfs/PG_E_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2020_10K.pdf",
+     "sha256": "40101af54664899fd880b10c3641e4172869de8a89c57c3655a9c43d2a202772",
+     "bytes": 2137294
+    },
+    "pdfs/PG_E_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2021_10K.pdf",
+     "sha256": "cacc0237aa301a84abb625b6893273daa0c526cd2e9872dba6a8f59c5f996073",
+     "bytes": 2683080
+    },
+    "pdfs/PG_E_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2022_10K.pdf",
+     "sha256": "82ec40397bcf57171b8c06cf65652a857b9505387bf79da4ed078b9eb280c6e2",
+     "bytes": 3072849
+    },
+    "pdfs/PG_E_2023Q3_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2023Q3_10Q.pdf",
+     "sha256": "2e4285298432519d5ada4f95059a5193043673ced2d5c7a5384b905ebb6a90f2",
+     "bytes": 3328915
+    },
+    "pdfs/PG_E_2023_EARNINGS-dated-2023-06-01.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2023_EARNINGS-dated-2023-06-01.pdf",
+     "sha256": "df41ee8ebb59f420bfec3ff12335a2e57010054952e99225ce3bf7b14ccac4f7",
+     "bytes": 620932
+    },
+    "pdfs/PG_E_2023_EARNINGS-dated-2023-07-27.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2023_EARNINGS-dated-2023-07-27.pdf",
+     "sha256": "a5d38f2fdc54a9e97a3495b10c8cb19c577b68c7de6e7e8a6587b100bcd0c542",
+     "bytes": 199186
+    },
+    "pdfs/PG_E_2023_EARNINGS_dated-2023-05-04.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2023_EARNINGS_dated-2023-05-04.pdf",
+     "sha256": "337b3e54c573cc54dbed9459f78e2aa0d2f6b456f7b5eb60e23d6e4ac761bc39",
+     "bytes": 182134
+    },
+    "pdfs/PG_E_2023_EARNINGS_dated-2023-05-31.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/PG_E_2023_EARNINGS_dated-2023-05-31.pdf",
+     "sha256": "05ead22dcf0217127c534d3adf9fc90cf71bc0e0bfefe8ded227e31336e6c1b9",
+     "bytes": 270593
+    },
+    "pdfs/Pfizer_2023Q2_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/Pfizer_2023Q2_10Q.pdf",
+     "sha256": "bf6c059a1dd71bd56581c94bce650bd85b56de2f4d0a25b45f05804a8bd6684d",
+     "bytes": 743533
+    },
+    "pdfs/SALESFORCE_2021_8K_dated-2021-07-21.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/SALESFORCE_2021_8K_dated-2021-07-21.pdf",
+     "sha256": "7bc6a48a7427a85d146b642de527218b0ef9975f4d262974bd0f0688c257d4ec",
+     "bytes": 188817
+    },
+    "pdfs/SALESFORCE_2021_8K_dated-2023-01-04.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/SALESFORCE_2021_8K_dated-2023-01-04.pdf",
+     "sha256": "f092d495aea810b7c7f9d9a17194769238bf74640e37314809068642d5af1048",
+     "bytes": 126810
+    },
+    "pdfs/SALESFORCE_2023Q3_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/SALESFORCE_2023Q3_10Q.pdf",
+     "sha256": "d8ceebef5e019ee8c411cecb873d28d8fff696766dd39aa013ee7491d515c9f3",
+     "bytes": 990194
+    },
+    "pdfs/SALESFORCE_2023_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/SALESFORCE_2023_10K.pdf",
+     "sha256": "929326eff499f867bdfbb45f62976788621849ee390e5851b5d89934f805b131",
+     "bytes": 1386171
+    },
+    "pdfs/SALESFORCE_2024Q1_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/SALESFORCE_2024Q1_EARNINGS.pdf",
+     "sha256": "770600f26f547057b379a1163ac7cf1015282403e84c778411d117211e5fa9a4",
+     "bytes": 404147
+    },
+    "pdfs/SALESFORCE_2024Q2_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/SALESFORCE_2024Q2_EARNINGS.pdf",
+     "sha256": "249a60c677e45d366715d90332d12d15cd1cf9ed6e9f987fbc6deff34a4e8384",
+     "bytes": 354468
+    },
+    "pdfs/ULTABEAUTY_2023Q1_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ULTABEAUTY_2023Q1_EARNINGS.pdf",
+     "sha256": "bae222e3206d3cd98f2649446c27d0bc1405d454b4f139356fb6223d6868e499",
+     "bytes": 97671
+    },
+    "pdfs/ULTABEAUTY_2023Q2_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ULTABEAUTY_2023Q2_EARNINGS.pdf",
+     "sha256": "9efa44d42fa12802ab5c94f912322d31c60ee08906cf2b20284d0e9d278c4e7b",
+     "bytes": 106346
+    },
+    "pdfs/ULTABEAUTY_2023Q4_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ULTABEAUTY_2023Q4_EARNINGS.pdf",
+     "sha256": "c7df6210a627042e231c9579982648a43f3ff8b630b4020540330c2a85e0d781",
+     "bytes": 99758
+    },
+    "pdfs/ULTABEAUTY_2023_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ULTABEAUTY_2023_10K.pdf",
+     "sha256": "cdf2ebcfbc2eb9ecf880126d38b186cac1f683dae5bcb50cad15176bfc449ff4",
+     "bytes": 4954215
+    },
+    "pdfs/ULTABEAUTY_2023_8K_dated-2023-06-07.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ULTABEAUTY_2023_8K_dated-2023-06-07.pdf",
+     "sha256": "04578342d73ad8d8cac9b381250e744fdda8840ff8e1fb09fc2e80397a592d83",
+     "bytes": 222058
+    },
+    "pdfs/ULTABEAUTY_2023_8K_dated-2023-09-18.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ULTABEAUTY_2023_8K_dated-2023-09-18.pdf",
+     "sha256": "2caa436e1707a1d49e8ac2ca38c58862ebc23f7e21dbd0f41ce033bd3abb0045",
+     "bytes": 63520
+    },
+    "pdfs/ULTABEAUTY_2024Q1_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ULTABEAUTY_2024Q1_EARNINGS.pdf",
+     "sha256": "bae222e3206d3cd98f2649446c27d0bc1405d454b4f139356fb6223d6868e499",
+     "bytes": 97671
+    },
+    "pdfs/ULTABEAUTY_2024Q2_EARNINGS.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/ULTABEAUTY_2024Q2_EARNINGS.pdf",
+     "sha256": "9efa44d42fa12802ab5c94f912322d31c60ee08906cf2b20284d0e9d278c4e7b",
+     "bytes": 106346
+    },
+    "pdfs/VERIZON_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/VERIZON_2015_10K.pdf",
+     "sha256": "e65c62517b4d71f21ab80cdb843832fef9f4cc70bdc8dfc9f5e5711b66b2c888",
+     "bytes": 1035337
+    },
+    "pdfs/VERIZON_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/VERIZON_2016_10K.pdf",
+     "sha256": "a7353409fe796190633df0517571ad600b0dd8e39022a49b9d7d343b95b2e196",
+     "bytes": 1057355
+    },
+    "pdfs/VERIZON_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/VERIZON_2017_10K.pdf",
+     "sha256": "2859dbd2bce81d695e9c36002ecaf293c698f5993fbf02665e5a192d3dc4505f",
+     "bytes": 1250536
+    },
+    "pdfs/VERIZON_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/VERIZON_2018_10K.pdf",
+     "sha256": "a6dd004ff3d33e45062cafa1760255e4341c3e7d428943c36f361e84302395cb",
+     "bytes": 1434299
+    },
+    "pdfs/VERIZON_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/VERIZON_2019_10K.pdf",
+     "sha256": "176912bba63d8097f9a2c0a2d59b84961f34b835071af368638f10caa397397d",
+     "bytes": 1172186
+    },
+    "pdfs/VERIZON_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/VERIZON_2020_10K.pdf",
+     "sha256": "3631e14a418c2b4c76f2c2a996838099a5fc757252b9ffdfb6c87918e2c8a0d1",
+     "bytes": 1421020
+    },
+    "pdfs/VERIZON_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/VERIZON_2021_10K.pdf",
+     "sha256": "f7fcb508f920e3df9a07bc858a6d9f0d3cd1e976a46efe72375c9ffb983822ac",
+     "bytes": 2098068
+    },
+    "pdfs/VERIZON_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/VERIZON_2022_10K.pdf",
+     "sha256": "403d7346e8a059472863d1789527f16e5127a61c2f6c4429012e6227f27576d7",
+     "bytes": 2315268
+    },
+    "pdfs/WALMART_2015_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/WALMART_2015_10K.pdf",
+     "sha256": "bf60dfa4d645c7375626cfee8753623cf8f0ebc84348f9ba48574567f2a82e1e",
+     "bytes": 1208739
+    },
+    "pdfs/WALMART_2016_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/WALMART_2016_10K.pdf",
+     "sha256": "a5fcb52907f9678165d670ce4b32eddc2dc1c62a3bd0b1f872acbbb3ec1b23c7",
+     "bytes": 1343987
+    },
+    "pdfs/WALMART_2017_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/WALMART_2017_10K.pdf",
+     "sha256": "b4e89e11d8f124e9d0dd7376bd333e12c126c87a0517333d82a4210751956320",
+     "bytes": 1152029
+    },
+    "pdfs/WALMART_2018_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/WALMART_2018_10K.pdf",
+     "sha256": "661512df698c895a4a5ab3d4ab879fd8ffc8f17a9038e27bcb208401982b6c15",
+     "bytes": 1599075
+    },
+    "pdfs/WALMART_2019_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/WALMART_2019_10K.pdf",
+     "sha256": "f1d1b052c2b68c5d68e3575de7069dc47914f03abb02771d2629b10bf7d9e377",
+     "bytes": 7211754
+    },
+    "pdfs/WALMART_2020_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/WALMART_2020_10K.pdf",
+     "sha256": "0f9e2ebc9432caef54fe932ec91ccc6fea3eac89f370073462ae002eabb71a34",
+     "bytes": 1132390
+    },
+    "pdfs/WALMART_2021_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/WALMART_2021_10K.pdf",
+     "sha256": "0b1126cab3184ee81d7881cddf1cdcbfe463887fd74fa6519e96f21e94311195",
+     "bytes": 784527
+    },
+    "pdfs/WALMART_2022_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/WALMART_2022_10K.pdf",
+     "sha256": "d6996d3fa7d9160c3ecf9667024e45afab3f1e2f87f51b01e0101248937a5803",
+     "bytes": 1503396
+    },
+    "pdfs/WALMART_2023_10K.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/WALMART_2023_10K.pdf",
+     "sha256": "38784c15a37807c9ea690ab49401fa4f977d896399c93a55a46ef2657e782867",
+     "bytes": 1742387
+    },
+    "pdfs/WALMART_2023_annualreport.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/WALMART_2023_annualreport.pdf",
+     "sha256": "a18c2dbbd5985ff7b77ea6739abf4c1de503649ea2cede21bdab20b9ac88895e",
+     "bytes": 1611721
+    },
+    "pdfs/WALMART_2024Q1_10Q.pdf": {
+     "url": "https://raw.githubusercontent.com/patronus-ai/financebench/cc39aeb4afdf33909ee1412188bf89035950c2eb/pdfs/WALMART_2024Q1_10Q.pdf",
+     "sha256": "75f1ec8c71d859ef5ab0cca169faf7f963059011a19ef7dcf89c08cd16c388ab",
+     "bytes": 493204
+    }
+   }
+  },
+  "amd": {
+   "title": "Public AMD Instinct technical documents (white papers, data sheet, ISA manual)",
+   "homepage": "https://www.amd.com/en/products/accelerators/instinct.html",
+   "license": "Copyright AMD. Fetched from amd.com for local evaluation only; never committed or redistributed. Questions in eval/retrieval/datasets/technical_docs.json are original.",
+   "files": {
+    "amd-cdna-3-white-paper.pdf": {
+     "url": "https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/white-papers/amd-cdna-3-white-paper.pdf",
+     "sha256": "a0811d04f101f9127bd183d6e228f462b6fd988b0e0e6d263a25e4bed712f593",
+     "bytes": 8096236
+    },
+    "amd-cdna-4-architecture-whitepaper.pdf": {
+     "url": "https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/white-papers/amd-cdna-4-architecture-whitepaper.pdf",
+     "sha256": "7ebf89edb9b82198b9edea7bb37eb7fe7c998842257eb21ef7a459a87774a4b2",
+     "bytes": 2703210
+    },
+    "amd-instinct-mi300-cdna3-instruction-set-architecture.pdf": {
+     "url": "https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf",
+     "sha256": "0cec4237cd93ce7dd76ee8502771429eb2308ab47dfa389f5bcc34f5903a6e2a",
+     "bytes": 4440087
+    },
+    "amd-instinct-mi300x-data-sheet.pdf": {
+     "url": "https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/amd-instinct-mi300x-data-sheet.pdf",
+     "sha256": "60d78bc2849cd7c3a34aa17fdbcd263c44c0447d597895ab41d2832ab740c7ab",
+     "bytes": 1855742
+    }
+   }
+  },
+  "arxiv": {
+   "title": "Attention Is All You Need (arXiv:1706.03762v7), a two-column paper with tables",
+   "homepage": "https://arxiv.org/abs/1706.03762",
+   "license": "arXiv non-exclusive distribution license; the authors grant permission to reproduce tables and figures for scholarly works. Fetched for local evaluation only; never committed.",
+   "files": {
+    "1706.03762v7.pdf": {
+     "url": "https://arxiv.org/pdf/1706.03762v7",
+     "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+     "bytes": 2215244
+    }
+   }
+  },
+  "xquad": {
+   "title": "XQuAD: SQuAD v1.1 dev paragraphs professionally translated into 10 languages",
+   "homepage": "https://github.com/google-deepmind/xquad",
+   "license": "CC-BY-SA-4.0. Downloaded for local evaluation only; never committed.",
+   "citation": "Artetxe et al., On the Cross-lingual Transferability of Monolingual Representations, ACL 2020",
+   "files": {
+    "xquad.ar.json": {
+     "url": "https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.ar.json",
+     "sha256": "abdabd7afed5c635d99cca0f3f0d0c9d9ed0bc77451e963c2e4e0638c29e486d",
+     "bytes": 1582988
+    },
+    "xquad.de.json": {
+     "url": "https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.de.json",
+     "sha256": "990b5d746746ed65ed4702ea5f35f99ffa4e2f1c390c07d003642acd937916f9",
+     "bytes": 669810
+    },
+    "xquad.el.json": {
+     "url": "https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.el.json",
+     "sha256": "821cf0f88e73fa258fd2f548b19b6ec39f7025059e16f6f9fc8cd797c9c3663e",
+     "bytes": 1918889
+    },
+    "xquad.en.json": {
+     "url": "https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.en.json",
+     "sha256": "e4c57d1c9143aaa1c5d265ba5987a65f4e69528d2a98f29d6e75019b10344f29",
+     "bytes": 609383
+    },
+    "xquad.es.json": {
+     "url": "https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.es.json",
+     "sha256": "dcbae93ec3a9f4b9e78fd834a171d6f96c1a875e10e15b7530b7e4ef4971e37e",
+     "bytes": 684322
+    },
+    "xquad.hi.json": {
+     "url": "https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.hi.json",
+     "sha256": "df2cce3532b37e9beb8979704b5c9a4bf874358f105395a298b89427b43b9d24",
+     "bytes": 1680538
+    },
+    "xquad.ru.json": {
+     "url": "https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.ru.json",
+     "sha256": "208d5b1aa154c52b1b5c5eda16281e455e8fd198cdb9af3f469f0d6037d973bf",
+     "bytes": 1896368
+    },
+    "xquad.th.json": {
+     "url": "https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.th.json",
+     "sha256": "5cdda11d0e1e075f7872abf4e6ae830388ce7f617964d542308e9ae4257e0f43",
+     "bytes": 1809143
+    },
+    "xquad.tr.json": {
+     "url": "https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.tr.json",
+     "sha256": "92179a564774b7696100d144c1e10870d0a966b6fccbdd254a65b9d2ab1971cc",
+     "bytes": 729506
+    },
+    "xquad.vi.json": {
+     "url": "https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.vi.json",
+     "sha256": "f619a1eb11fb42d3ab0834259e488a65f585447ef6154437bfb7199d85161a04",
+     "bytes": 911401
+    },
+    "xquad.zh.json": {
+     "url": "https://raw.githubusercontent.com/google-deepmind/xquad/7d30520c717524000f0d9d2f9c10a069acd9d285/xquad.zh.json",
+     "sha256": "691d0b3359bc6b8faa8de931dfdfe21d50a65861ae348e32a0d1a0190b0c8835",
+     "bytes": 808652
+    }
+   }
+  },
+  "wikipedia": {
+   "title": "Simple English Wikipedia dump 2023-11-01 (scale distractors)",
+   "homepage": "https://huggingface.co/datasets/wikimedia/wikipedia",
+   "license": "CC-BY-SA-3.0 and GFDL. Downloaded for local evaluation only; never committed.",
+   "files": {
+    "20231101.simple/train-00000-of-00001.parquet": {
+     "url": "https://huggingface.co/datasets/wikimedia/wikipedia/resolve/b04c8d1ceb2f5cd4588862100d08de323dccfbaa/20231101.simple/train-00000-of-00001.parquet",
+     "sha256": "31bded16768a47c286becd292079122f5d7d4397a17b87d4250a00ccd581e6f0",
+     "bytes": 156885218
+    }
+   }
+  }
+ }
+}
