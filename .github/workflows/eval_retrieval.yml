@@ -1,0 +1,117 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# The full RAG retrieval benchmark: FinanceBench, public AMD documents, XQuAD
+# and Wikipedia distractors, with answer generation and the 10/100/1000-document
+# scale tiers. Too slow for pull requests; the offline `pr` subset gates those
+# from test_rag.yml. This run reports rather than gates: it fails only when the
+# run itself errors (a hard case crashing, a corpus checksum mismatch). Compare a
+# run to the committed full-suite baseline with `--gate`, and replace that
+# baseline only with a results.json artifact from this workflow.
+
+name: Eval — RAG retrieval (nightly)
+
+on:
+  schedule:
+    - cron: '43 6 * * *'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Suite to run (full or pr)'
+        required: false
+        default: 'full'
+      extra_args:
+        description: 'Extra flags for gaia eval retrieval, e.g. --no-scale or --datasets financebench'
+        required: false
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  retrieval-benchmark:
+    name: RAG retrieval benchmark
+    runs-on:
+      - self-hosted
+      - Windows
+      - xsj-dispatch
+      - strix-point
+    timeout-minutes: 480
+    env:
+      SUITE: ${{ github.event.inputs.suite || 'full' }}
+      EXTRA_ARGS: ${{ github.event.inputs.extra_args || '' }}
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup Python environment
+      uses: ./.github/actions/setup-venv
+      with:
+        python-version: '3.12'
+        install-package: '.[dev,rag,eval] ./hub/agents/chat/python'
+
+    - name: Install Lemonade Server
+      uses: ./.github/actions/install-lemonade
+
+    # tool_cache persists on self-hosted runners, so the ~900 MB corpus downloads
+    # once; every file is sha256-checked on use either way.
+    - name: Locate the corpus cache
+      shell: powershell
+      run: |
+        "GAIA_RETRIEVAL_CACHE=${{ runner.tool_cache }}\gaia-retrieval-corpus" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+    - name: Download the corpora
+      shell: powershell
+      run: |
+        python -m gaia.cli eval retrieval --fetch-only --repo-root $env:GITHUB_WORKSPACE
+        if ($LASTEXITCODE -ne 0) { throw "Corpus download failed with exit code $LASTEXITCODE" }
+
+    - name: Start Lemonade and run the benchmark
+      shell: powershell
+      run: |
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        $env:PYTHONIOENCODING = "utf-8"
+        $env:PYTHONUTF8 = "1"
+        chcp 65001 | Out-Null
+
+        try {
+            .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+            if ($LASTEXITCODE -ne 0) { throw "Lemonade server failed to start" }
+
+            # The answer model (the RAG default), the VLM that reads PDF images,
+            # and the embedder, registered and verified through GAIA's own client.
+            uv run python tests/ci_lemonade_check.py --model Gemma-4-E4B-it-GGUF --pull-only
+            if ($LASTEXITCODE -ne 0) { throw "Answer model pull failed" }
+            uv run python tests/ci_lemonade_check.py --model Qwen3-VL-4B-Instruct-GGUF --pull-only
+            if ($LASTEXITCODE -ne 0) { throw "VLM pull failed" }
+            uv run python tests/ci_lemonade_check.py --model user.embeddinggemma-300m-GGUF --checkpoint ggml-org/embeddinggemma-300M-GGUF:Q8_0 --recipe llamacpp --register-embedding --embeddings
+            if ($LASTEXITCODE -ne 0) { throw "Embedding model setup failed" }
+
+            $cliArgs = @("--suite", $env:SUITE, "--offline", "--repo-root", $env:GITHUB_WORKSPACE, "--out", "retrieval-results")
+            if ($env:EXTRA_ARGS) { $cliArgs += $env:EXTRA_ARGS.Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries) }
+            python -m gaia.cli eval retrieval @cliArgs
+            if ($LASTEXITCODE -ne 0) { throw "Retrieval benchmark failed with exit code $LASTEXITCODE" }
+        } finally {
+            if ($env:LEMONADE_PROCESS_ID) {
+                Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+    - name: Publish the report
+      if: always()
+      shell: powershell
+      run: |
+        if (Test-Path retrieval-results/report.md) {
+            Get-Content retrieval-results/report.md | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+        }
+
+    - name: Upload results
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: rag-retrieval-${{ env.SUITE }}
+        path: retrieval-results/
