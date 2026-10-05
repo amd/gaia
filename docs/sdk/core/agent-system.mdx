@@ -979,31 +979,46 @@ walkthrough of the registry entry.
 
 ## Verification Scope
 
-Every answer the agent loop emits ends with one line saying whether the result
-was actually checked. Without it, "done" reads the same whether the agent ran
-the test suite or ran nothing at all, and the only rational response is to
-distrust every completion message.
+When the agent can't confirm its work, the answer says so in one plain line.
+Without it, "done" reads the same whether the agent ran the test suite or ran
+nothing at all, and the only rational response is to distrust every completion
+message.
 
 ```text
 Fixed the off-by-one in the pagination helper.
 
-Verification: verified — pytest ran and passed.
+I haven't confirmed this works — pytest didn't pass.
 ```
 
-Three states, derived from the tool calls that actually executed during the
-turn — no extra model call:
+The note appears when a check failed, when a check was blocked before it could
+run, or when the agent changed code and nothing checked it afterwards. In a
+project with a test suite only a test run covers a change, so a clean lint alone
+still gets the note. When every check passed, or nothing needed checking (a
+question, a lookup, a read, a notes file), the answer carries no note at all.
+
+The state is derived from the tool calls that actually executed during the
+turn — no extra model call — and is returned as data on the result, for
+tooling rather than the reader:
+
+```python
+result = agent.process_query("fix the pagination bug")
+result["verification"]
+# {"state": "partially verified", "tool_calls": 4, "passed": ["ruff"],
+#  "failed": ["pytest"], "not_run": [], "unchecked_change": None,
+#  "ungrounded": []}
+```
 
 | State | When |
 |-------|------|
-| `verified` | At least one test / lint / build ran, and every one passed. |
-| `partially verified` | Checks ran, but not all of them passed. |
-| `unverified` | No check ran. Names how many tools did run, if any. |
+| `verified` | At least one test / lint / build ran, every one passed, and no code change went untested. |
+| `partially verified` | Checks ran, but not all passed, some never ran, a code change went untested, or the answer claims something the tool record does not back (`ungrounded`, below). |
+| `unverified` | No check ran. `tool_calls` says how many tools did. |
 
 The tool that ran the check says so. `run_shell_command`, `run_python`, and
 `execute_python_file` put a `check_result` on every result for a call that ran:
 a `CheckResult` (`label`, `target`, `kind`, `passed`, `summary`) when the program
 was a test, lint, typecheck, or build runner, and `null` when it was not. The
-footer reads that and nothing else. A shell run counts only when the program
+note reads that and nothing else. A shell run counts only when the program
 itself is the runner (`pytest -q`, `python -m pytest`, `uv run pytest`), so
 `cat pytest.ini` is not a test run; a failing summary line wins over a zero exit
 code, so `pytest | tail` that failed reads as failed.
@@ -1013,7 +1028,7 @@ field existed — are still classified from their text: a tool named `run_tests`
 `run_lint`, `typecheck`, or `build`, a `command` argument naming a known runner,
 or a `run_python` / `execute_python_file` output with a test runner's summary
 (pytest, unittest, jest, vitest, mocha, `go test`, `cargo test`). Other
-unrecognized runners remain `unverified`.
+unrecognized runners don't count as a check.
 
 Before the answer goes out, the loop also checks it against the same record. An
 answer that reports a test outcome (`111 passed`, "all tests pass") when no test
@@ -1023,10 +1038,10 @@ it with an explicit incomplete result. Unsupported claims never become successfu
 results merely because the correction budget ran out.
 
 A check that ran more than once in the turn is judged by its most recent run. A
-test that failed and then passed after a fix reads `verified`; one that passed
-and then failed after an edit reads `ran and did not pass`. Only a rerun of the
-same command replaces an earlier run: if `pytest tests/` failed and
-`pytest tests/test_cart.py` then passed, the line still reports the failure.
+test that failed and then passed after a fix is `verified` and gets no note; one
+that passed and then failed after an edit reads `pytest didn't pass`. Only a
+rerun of the same command replaces an earlier run: if `pytest tests/` failed and
+`pytest tests/test_cart.py` then passed, the note still reports the failure.
 
 ### Grounding checks
 
@@ -1044,19 +1059,21 @@ Each check asks for at most one correction per turn, before the answer is
 marked answered, so the lookup it asks for is not refused as off-request work.
 An answer that already admits the gap ("I haven't opened it", "these figures
 are unverified") is not corrected. If a gap survives its correction, or no step
-is left, the answer is kept as written and ends with one line naming what is
-unsupported:
+is left, the answer is kept as written and what is unsupported becomes part of
+the same "not confirmed" note, never a second one:
 
 ```text
-Unverified: no tool read `toybox/dates.py` this turn.
+I haven't confirmed this works — I didn't read `toybox/dates.py` this turn.
 ```
+
+The reasons are also listed under `result["verification"]["ungrounded"]`.
 
 Unlike an unsupported test claim, the answer is not replaced: these checks read
 prose and can be wrong, so they flag rather than rewrite.
 
 ### Saved output and cleanup evidence
 
-File completion is checked separately from the test/lint/build footer. A save
+File completion is checked separately from the test/lint/build note. A save
 claim must name an output backed by this turn's successful write to that path;
 a transcript or screenshot written elsewhere cannot satisfy it. A save request
 that names a file, folder or disk is checked even when the answer silently omits

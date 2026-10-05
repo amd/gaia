@@ -3,6 +3,7 @@
 
 """Unit tests for shell command guardrails in ShellToolsMixin._validate_command."""
 
+import os
 import shutil
 import time
 from types import SimpleNamespace
@@ -1349,6 +1350,11 @@ class TestTiers:
         assert refusal("npm test") is not None
 
 
+_POSIX_ONLY = pytest.mark.skipif(
+    os.name == "nt", reason="on Windows git.exe is bare git, not another spelling"
+)
+
+
 class TestASpellingDoesNotChangeTheTier:
     """A refusal follows the program, however its name is written."""
 
@@ -1356,7 +1362,7 @@ class TestASpellingDoesNotChangeTheTier:
         "command",
         [
             "/usr/bin/git -c core.pager=evil.sh status",
-            "git.exe -c core.pager=evil.sh status",
+            pytest.param("git.exe -c core.pager=evil.sh status", marks=_POSIX_ONLY),
             '"C:\\Program Files\\Git\\cmd\\git.exe" -c core.pager=x status',
             "/usr/local/bin/powershell -EncodedCommand aQBlAHgA",
             "pwsh -EncodedCommand aQBlAHgA",
@@ -1372,7 +1378,7 @@ class TestASpellingDoesNotChangeTheTier:
         "command",
         [
             "/usr/bin/git status",
-            "git.exe log --oneline",
+            pytest.param("git.exe log --oneline", marks=_POSIX_ONLY),
             "pwsh -Command Get-Process",
             "/opt/homebrew/bin/gh issue list",
         ],
@@ -1381,6 +1387,16 @@ class TestASpellingDoesNotChangeTheTier:
         """The no-prompt list names bare programs; nothing else joins it."""
         assert validate(command)["tier"] == TIER_CONFIRM
         assert refusal(command) is None
+
+    @pytest.mark.skipif(os.name != "nt", reason="git.exe is bare git only on Windows")
+    @pytest.mark.parametrize(
+        "args", ["log --oneline", "status", "-c core.pager=evil.sh status"]
+    )
+    def test_git_exe_on_windows_gets_bare_gits_verdict(self, args):
+        exe, bare = f"git.exe {args}", f"git {args}"
+        assert validate(exe) == validate(bare)
+        assert refusal(exe) == refusal(bare)
+        assert refusal(exe, full_access=True) == refusal(bare, full_access=True)
 
 
 class TestConfirmableCommandsReachThePrompt:

@@ -31,17 +31,18 @@ from gaia.agents.base.grounding import (
     ACTION,
     CONTENT,
     LOOK,
-    UNVERIFIED_PREFIX,
     content_findings,
     grounding_correction,
     look_findings,
     named_targets,
     presented_values,
     ungrounded,
-    unverified_note,
+    unverified_reasons,
 )
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import (
+    VERIFICATION_NOTE_OPENER,
+    build_verification_scope,
     observed_text,
     strip_verification_scope,
     verification_record,
@@ -527,12 +528,22 @@ def test_the_correction_and_note_name_every_gap():
     findings = ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
 
     correction = grounding_correction(findings)
-    note = unverified_note(findings)
+    note = build_verification_scope([], ungrounded=unverified_reasons(findings))
 
     assert correction.startswith("[check:grounding] ")
     assert "complete answer again" in correction
-    assert note.startswith(UNVERIFIED_PREFIX)
+    assert note.startswith(VERIFICATION_NOTE_OPENER + " — ")
     assert "`README.md`" in note and "is already documented" in note
+
+
+def test_a_grounding_note_is_stripped_like_any_scope_note():
+    # It rides in history; the model's echo of it must come back out.
+    findings = ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    note = build_verification_scope([], ungrounded=unverified_reasons(findings))
+
+    assert strip_verification_scope(f"Answer.\n\n{note}") == "Answer."
+    own = f"{VERIFICATION_NOTE_OPENER} — it needs your GPU."
+    assert strip_verification_scope(own) == own
 
 
 # ---------------------------------------------------------------------------
@@ -640,11 +651,15 @@ def test_a_gap_that_survives_its_correction_ships_marked_unverified(agent):
     result = agent.process_query(QA_QUERY, max_steps=10)
 
     assert len(sent) == 2, "each gate corrects once, never loops"
-    text = _final_text(result)
-    assert text.startswith(GUESSED_SUMMARY), "the answer is kept, not rewritten"
+    assert _final_text(result) == GUESSED_SUMMARY, "kept, not rewritten"
+    text = result["result"]
     assert text.endswith(
-        UNVERIFIED_PREFIX + "no tool read `toybox/dates.py` this turn."
+        f"{VERIFICATION_NOTE_OPENER} — I didn't read `toybox/dates.py` this turn."
     )
+    assert text.count(VERIFICATION_NOTE_OPENER) == 1
+    assert result["verification"]["ungrounded"] == [
+        "I didn't read `toybox/dates.py` this turn"
+    ]
 
 
 def test_no_step_left_marks_the_answer_without_correcting(agent):
@@ -653,7 +668,7 @@ def test_no_step_left_marks_the_answer_without_correcting(agent):
     result = agent.process_query(QA_QUERY, max_steps=1)
 
     assert len(sent) == 1
-    assert UNVERIFIED_PREFIX in result["result"]
+    assert VERIFICATION_NOTE_OPENER in result["result"]
     assert GUESSED_SUMMARY in result["result"]
 
 
@@ -671,9 +686,9 @@ def test_a_gap_found_after_the_answer_counts_is_marked_not_corrected(agent):
 
     assert len(sent) == 3
     assert "4 passed" in sent[2][-1]["content"]
-    text = _final_text(result)
-    assert text.startswith(GROUNDED)
-    assert UNVERIFIED_PREFIX in text and "no search or listing ran" in text
+    assert _final_text(result).startswith(GROUNDED)
+    text = result["result"]
+    assert VERIFICATION_NOTE_OPENER in text and "no search or listing ran" in text
 
 
 def test_still_reports_rather_than_negates():

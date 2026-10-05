@@ -53,6 +53,12 @@ def only_these_paths_exist(mocker, *present):
     )
 
 
+def clear_env_keeping_home(mocker):
+    """Empty the environment except the home dir, which ``~`` needs on Windows."""
+    home = {k: os.environ[k] for k in ("HOME", "USERPROFILE") if k in os.environ}
+    mocker.patch.dict(os.environ, home, clear=True)
+
+
 # ---------------------------------------------------------------------------
 # resolve_lemonade() precedence (AC3)
 # ---------------------------------------------------------------------------
@@ -678,7 +684,7 @@ def test_start_hint_macos_names_the_daemon_via_real_detection(mocker):
     mocking of resolve_lemonade, which would only prove we called it."""
     from gaia.llm.lemonade_launcher import describe_start_hint
 
-    mocker.patch.dict(os.environ, {}, clear=True)
+    clear_env_keeping_home(mocker)
     mocker.patch("platform.system", return_value="Darwin")
     mocker.patch("shutil.which", return_value=None)
     only_these_paths_exist(mocker, MACOS_DAEMON, MACOS_CLIENT)
@@ -698,7 +704,7 @@ def test_start_hint_macos_app_installed_but_no_binaries_describes_the_app(mocker
     invent a shell command."""
     from gaia.llm.lemonade_launcher import StartHint, describe_start_hint
 
-    mocker.patch.dict(os.environ, {}, clear=True)
+    clear_env_keeping_home(mocker)
     mocker.patch("platform.system", return_value="Darwin")
     mocker.patch("shutil.which", return_value=None)
     only_these_paths_exist(mocker, "/Applications/lemonade-app.app")
@@ -714,7 +720,7 @@ def test_start_hint_macos_nothing_installed_points_at_gaia_init(mocker):
     """Nothing installed on macOS: `gaia init` is the supported remedy."""
     from gaia.llm.lemonade_launcher import StartHint, describe_start_hint
 
-    mocker.patch.dict(os.environ, {}, clear=True)
+    clear_env_keeping_home(mocker)
     mocker.patch("platform.system", return_value="Darwin")
     mocker.patch("shutil.which", return_value=None)
     only_these_paths_exist(mocker)

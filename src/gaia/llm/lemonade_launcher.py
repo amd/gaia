@@ -28,6 +28,7 @@ stdlib-only by design — import direction is installer -> llm, no cycles.
 import logging
 import os
 import platform
+import posixpath
 import re
 import shlex
 import shutil
@@ -171,16 +172,17 @@ def resolve_lemonade() -> LemonadeTooling:
         # Probe the daemon (what we start), not the client — the client is
         # only needed for the version query and may be absent.
         for bin_dir in _MACOS_BIN_DIRS:
-            daemon = Path(bin_dir) / _MACOS_DAEMON_NAME
-            if not daemon.exists():
+            # posixpath: the answer is a macOS path whatever host computes it.
+            daemon = posixpath.join(bin_dir, _MACOS_DAEMON_NAME)
+            if not Path(daemon).exists():
                 continue
-            client = Path(bin_dir) / _MACOS_CLIENT_NAME
+            client = posixpath.join(bin_dir, _MACOS_CLIENT_NAME)
             log.debug("Found modern Lemonade at canonical path: %s", daemon)
             return LemonadeTooling(
                 found=True,
                 kind="modern",
-                client_path=str(client) if client.exists() else None,
-                server_launcher=str(daemon),
+                client_path=client if Path(client).exists() else None,
+                server_launcher=daemon,
             )
         # Installed under a non-standard prefix but still on PATH.
         daemon_on_path = shutil.which(_MACOS_DAEMON_NAME)

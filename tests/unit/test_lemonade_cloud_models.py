@@ -679,6 +679,44 @@ def test_qwen3_6_sends_its_thinking_mode_with_the_matching_sampling(
     )
 
 
+_FLASH = "user.Qwen3.8-Flash-Next-GGUF"
+_FLASH_THINKING = {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+}
+_FLASH_INSTRUCT = {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 1.5,
+}
+
+
+@pytest.mark.parametrize(
+    "template_kwargs,sent_switch,expected",
+    [
+        (None, True, _FLASH_THINKING),
+        ({"enable_thinking": False}, False, _FLASH_INSTRUCT),
+    ],
+)
+@pytest.mark.parametrize("stream", [False, True])
+def test_flash_sends_its_thinking_mode_with_its_card_sampling(
+    monkeypatch, stream, template_kwargs, sent_switch, expected
+):
+    kwargs = {"chat_template_kwargs": template_kwargs} if template_kwargs else {}
+    body = _sent_body(monkeypatch, _FLASH, stream, **kwargs)
+    assert body == _wire(
+        _FLASH,
+        stream,
+        chat_template_kwargs={"enable_thinking": sent_switch},
+        **expected,
+    )
+
+
 @pytest.mark.parametrize("stream", [False, True])
 def test_turning_the_default_non_thinking_flips_switch_and_sampling_together(
     monkeypatch, stream

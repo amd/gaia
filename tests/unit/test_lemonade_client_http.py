@@ -1396,6 +1396,34 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertNotIn("recipe", builtin)
 
     @responses.activate
+    def test_flash_pull_registers_it_as_a_user_model(self):
+        """Lemonade does not ship Flash, so the pull must carry its whole
+        registration: checkpoint, recipe, projector and labels (#1655)."""
+        from gaia.llm.lemonade_client import FLASH_OPTION_MODEL_NAME
+
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            body='event: complete\ndata: {"percent":100}\n\n',
+            status=200,
+            content_type="text/event-stream",
+        )
+        list(self.client.pull_model_stream(model_name=FLASH_OPTION_MODEL_NAME))
+
+        self.assertEqual(
+            json.loads(responses.calls[0].request.body),
+            {
+                "model_name": "user.Qwen3.8-Flash-Next-GGUF",
+                "stream": True,
+                "checkpoint": "unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS",
+                "recipe": "llamacpp",
+                "reasoning": True,
+                "vision": True,
+                "mmproj": "mmproj-F16.gguf",
+            },
+        )
+
+    @responses.activate
     def test_large_default_pulls_by_name_only(self):
         """Qwen3.6 35B A3B is a Lemonade built-in: the pull names it and nothing
         else, because a recipe on a built-in pull is a 400 (#1655)."""

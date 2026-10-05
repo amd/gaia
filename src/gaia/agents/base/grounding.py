@@ -13,8 +13,8 @@ Three checks, each comparing the answer's prose with the turn's tool record:
   documented something, and no tool of that kind ran.
 
 Each returns :class:`Finding` objects; the agent loop turns them into one
-correction, then — if the next answer still has them — a line marking them
-unverified. A finding is a prompt to look, never a rewrite of the answer.
+correction, then — if the next answer still has them — reasons for the
+answer's one "not confirmed" note (:func:`~gaia.agents.base.verification.build_verification_scope`). A finding is a prompt to look, never a rewrite of the answer.
 
 Records are the loop's ``_turn_tool_executions`` entries
 (:func:`~gaia.agents.base.verification.verification_record` plus ``args`` and
@@ -49,7 +49,7 @@ class Finding:
     gate: str
     #: Sentence for the correction the model sees.
     correction: str
-    #: Short phrase for the "Unverified:" line if the gap survives.
+    #: First-person reason for the "not confirmed" note if the gap survives.
     note: str
 
 
@@ -242,7 +242,7 @@ def look_findings(
                 f"You haven't read {names} this turn{located} — read "
                 f"{'it' if len(missed) == 1 else 'them'} now, or say plainly that "
                 "you didn't.",
-                f"no tool read {names} this turn",
+                f"I didn't read {names} this turn",
             )
         )
     if absent and not any(_searched(r) or _looked(r) for r in records):
@@ -257,7 +257,7 @@ def look_findings(
     return findings
 
 
-_ABSENT_NOTE = "the claim that something does not exist was made without a search"
+_ABSENT_NOTE = "I said something doesn't exist without searching for it this turn"
 
 
 # ---------------------------------------------------------------------------
@@ -495,7 +495,7 @@ def content_findings(
             f"These values in your answer appear in no tool output this turn: {shown}. "
             "Read the file back (or rerun the command) and report what it shows, or "
             "mark the values as unverified.",
-            f"{shown} appear in no tool output this turn",
+            f"I didn't find {shown} in any tool output this turn",
         )
     ]
 
@@ -528,7 +528,7 @@ def action_findings(answer: str, records: Sequence[Dict[str, Any]]) -> List[Find
             Finding(
                 ACTION,
                 f'Your answer says "{phrase}", but {why}. Do it now, or drop the claim.',
-                f'"{phrase}" — {why}',
+                f'I said "{phrase}", but {why}',
             )
         )
     return findings
@@ -571,13 +571,9 @@ def grounding_correction(findings: Sequence[Finding]) -> str:
     )
 
 
-UNVERIFIED_PREFIX = "Unverified: "
-
-
-def unverified_note(findings: Sequence[Finding]) -> str:
-    """The line appended to an answer whose gaps survived their correction."""
-    notes = list(dict.fromkeys(f.note for f in findings))
-    return UNVERIFIED_PREFIX + "; ".join(notes) + "."
+def unverified_reasons(findings: Sequence[Finding]) -> List[str]:
+    """Reasons for the "not confirmed" note, for gaps that survived correction."""
+    return list(dict.fromkeys(f.note for f in findings))
 
 
 def path_locator(

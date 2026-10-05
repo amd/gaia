@@ -19,14 +19,16 @@
       "register_as": "user.Qwen3.8-Flash-Next-GGUF",
       "provider": "local",
       "label": "Qwen3.8 Flash Next",
-      "note": "manual option on PCs with ~88 GB for models (Strix Halo 128 GB); switch to it with `gaia config set default_model`",
+      "note": "optional, never a default: needs ~90 GB for models (Strix Halo 128 GB); choose it with `gaia config set default_model`",
       "size_gb": 82.86,
       "checkpoint": "unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS",
       "recipe": "llamacpp",
       "mmproj": "mmproj-F16.gguf",
       "vision": true,
       "reasoning": true,
-      "min_lemonade_version": "2026.39.1"
+      "min_lemonade_version": "2026.39.1",
+      "min_ctx_size": 65536,
+      "kv_bytes_per_token": 24576
     },
     {
       "id": "Gemma-4-E4B-it-GGUF",

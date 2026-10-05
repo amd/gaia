@@ -133,6 +133,12 @@ class TestSystemPromptAgreesWithTheToolset:
 
 
 class TestTranscribeMedia:
+    @pytest.fixture(autouse=True)
+    def _no_real_diarization(self):
+        # The real path pip-installs sherpa-onnx and downloads models.
+        with patch.object(Host, "_diarize_if_possible", return_value=[]):
+            yield
+
     @pytest.mark.parametrize("fail_decode", [False, True])
     def test_owned_scratch_directory_is_removed_on_failure(self, tmp_path, fail_decode):
         source = tmp_path / "meeting.mp4"
