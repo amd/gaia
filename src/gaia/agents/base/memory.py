@@ -2684,18 +2684,23 @@ class MemoryMixin(ProceduralMemoryMixin):
             "- GREETINGS: If you know the user's name or context, personalize greetings!\n"
             "  WRONG: 'Hey! What are you working on?' (generic, ignores stored knowledge)\n"
             "  RIGHT: 'Hey Jordan! How's the K8s migration going?' (uses stored name + project)\n"
-            "  RIGHT: 'Hi Sam — still working on that edge detection pipeline?' (warm, contextual)\n"
             "  Reference their name, project, or recent activity. Make them feel known.\n"
             "- IMPERATIVE: Any storage request ('remember', 'store', 'set a reminder',\n"
-            "  'remind me', 'add a journal entry', 'log this') → call `remember` FIRST.\n"
-            "  A verbal 'Got it' WITHOUT a tool call does NOT persist across sessions.\n"
+            "  'remind me', 'add a journal entry', 'log this') → call `remember` FIRST,\n"
+            "  even when they say 'just acknowledge'. A verbal 'Got it' WITHOUT a tool\n"
+            "  call does NOT persist across sessions.\n"
             "- Reminders/deadlines → remember(category='reminder', due_at='YYYY-MM-DD')\n"
             "- Journal entries/notes → remember(category='note', domain='journal')\n"
             "- Facts, preferences, commitments → remember() immediately\n"
             "- 'Show my journal' → recall(category='note', domain='journal')\n"
             "- 'What reminders?' → recall(category='reminder')\n"
             "- Info changed → recall() old item, then update_memory()\n"
-            "- User wants to forget → recall() then forget()\n"
+            "- User wants to forget → recall() then forget(). Forgotten info is off-limits\n"
+            "  for the rest of the session, even though it is still in the chat: never\n"
+            "  repeat it or anything computed from it; offer to redo it if they re-share.\n"
+            "- 'As I told you…' / 'you forgot X' → check with recall() or\n"
+            "  search_past_conversations(). Nothing found → say plainly it was never\n"
+            "  mentioned. Don't apologise or guess it got lost; offer to store it now.\n"
             "- NEVER say 'Noted', 'Logged', 'Stored' — call the tool silently and respond naturally.\n"
         )
 
@@ -4237,7 +4242,15 @@ class MemoryMixin(ProceduralMemoryMixin):
             if removed:
                 mixin._faiss_remove(knowledge_id)
                 mixin._refresh_if_shown(knowledge_id)
-                return {"status": "removed", "knowledge_id": knowledge_id}
+                return {
+                    "status": "removed",
+                    "knowledge_id": knowledge_id,
+                    "message": (
+                        "Deleted. Don't repeat this information or anything "
+                        "derived from it for the rest of the session, even "
+                        "though it is still in the chat history."
+                    ),
+                }
             return {"status": "not_found", "knowledge_id": knowledge_id}
 
         @tool
