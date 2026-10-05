@@ -382,6 +382,35 @@ class ToolCallTruncated(ValueError):
         )
 
 
+class _UserWaitClock:
+    """Time a tool body spends blocked on the user, which its timeout excludes."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._done = 0.0
+        self._open: List[float] = []
+
+    def begin(self) -> None:
+        with self._lock:
+            self._open.append(time.monotonic())
+
+    def end(self) -> None:
+        with self._lock:
+            self._done += time.monotonic() - self._open.pop()
+
+    def waited(self) -> float:
+        """Seconds waited so far, including a question still on screen."""
+        now = time.monotonic()
+        with self._lock:
+            return self._done + sum(now - started for started in self._open)
+
+
+# Set inside a bounded tool worker so a prompt raised from its body pauses its clock.
+_TOOL_USER_WAIT: contextvars.ContextVar[Optional[_UserWaitClock]] = (
+    contextvars.ContextVar("gaia_tool_user_wait", default=None)
+)
+
+
 class ToolExecutionTimeout(Exception):
     """Raised when a tool body exceeds its bounded execution window.
 
@@ -2260,12 +2289,17 @@ Do NOT wrap conversational replies in JSON.
         elif path.is_file():
             args["kind"] = "file"
         started = time.perf_counter()
+        clock = _TOOL_USER_WAIT.get()
+        if clock is not None:
+            clock.begin()
         try:
             return (
                 self.console.confirm_tool_execution(PATH_ACCESS_PROMPT_TOOL, args)
                 is True
             )
         finally:
+            if clock is not None:
+                clock.end()
             self._confirmation_wait_s += time.perf_counter() - started
 
     def _check_extraction_sources(self):
@@ -4853,9 +4887,11 @@ Do NOT wrap conversational replies in JSON.
         timeout = self._resolve_tool_timeout(tool_name)
         holder: Dict[str, Any] = {}
         cancel = threading.Event()
+        user_wait = _UserWaitClock()
 
         def _target():
             set_tool_cancel_event(cancel)
+            _TOOL_USER_WAIT.set(user_wait)
             try:
                 holder["result"] = tool(**tool_args)
             except BaseException as exc:  # noqa: BLE001 — re-raised in caller
@@ -4873,7 +4909,14 @@ Do NOT wrap conversational replies in JSON.
             target=lambda: ctx.run(_target), name=f"tool:{tool_name}", daemon=True
         )
         worker.start()
-        worker.join(timeout)
+        # Time spent on a question the body raised (e.g. path access) is the
+        # user's, not the tool's: abandoning there strands a live prompt.
+        started = time.monotonic()
+        while worker.is_alive():
+            remaining = started + timeout + user_wait.waited() - time.monotonic()
+            if remaining <= 0:
+                break
+            worker.join(min(remaining, 0.5))
         if worker.is_alive():
             cancel.set()
             raise ToolExecutionTimeout(tool_name, timeout)

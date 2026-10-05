@@ -1118,6 +1118,19 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
     return sorted({managed, str(cwd)})
 
 
+def _extend_cached_scope(agent, allowed: list) -> None:
+    """Give a cached agent the scope a new one would get for this turn.
+
+    Documents attached after the agent was built are only in ``allowed``;
+    without this they stay unreadable to it until the cache entry is rebuilt.
+    """
+    validator = getattr(agent, "path_validator", None)
+    if validator is None:
+        return
+    for path in allowed:
+        validator.add_allowed_path(path)
+
+
 def _session_agent_kwargs(
     *,
     rag_file_paths: list,
@@ -1741,6 +1754,7 @@ async def _get_chat_response(
             # A prior streaming turn leaves its dead SSE console behind.
             agent.console = SilentConsole()
             agent._register_tools()
+            _extend_cached_scope(agent, allowed)
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
                 for fpath in new_paths:
@@ -2147,6 +2161,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     if sse_handler.cancelled.is_set():
                         return
 
+                    _extend_cached_scope(agent, allowed)
                     # Index any session docs newly attached since last turn.
                     new_rag_paths = [
                         p for p in rag_file_paths if p not in agent.indexed_files
