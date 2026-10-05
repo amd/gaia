@@ -36,20 +36,20 @@ Before using Agent Memory, make sure you have the following in place:
 </Note>
 
 <Note>
-  **Memory is opt-in (beta) and disabled by default.** This feature is still under active development -- every new GAIA install ships with memory off, so you'll see standard chat behavior until you turn it on. With memory disabled, prompt construction and session reset do no memory work. The SDK `memory_store` accessor returns `None` for a disabled session; callers can use `memory_unavailable_message()` to explain why. See [Enable Memory](#enable-memory) below before trying any examples on this page.
+  **Memory is on by default (beta).** This feature is still under active development -- every new GAIA install ships with memory on, so the agent starts recalling and saving facts right away. Turn it off (see [Turn Memory On or Off](#turn-memory-on-or-off) below) to get standard, non-persistent chat behavior. With memory disabled, prompt construction and session reset do no memory work. The SDK `memory_store` accessor returns `None` for a disabled session; callers can use `memory_unavailable_message()` to explain why.
 </Note>
 
 ---
 
-## Enable Memory
+## Turn Memory On or Off
 
-Memory is off by default. Turn it on once and it stays on for every future `gaia chat` session on this machine.
+Memory is on by default, in the terminal UI and the Agent UI alike. Turning it off stops all memory writes for every future session on this machine until you turn it back on; a private chat pauses it for that chat only.
 
 ### Via the Agent UI (recommended)
 
 1. Launch the Agent UI: `gaia chat --ui`
-2. Click the **Brain** icon in the toolbar to open the Memory Dashboard.
-3. Click the **Off** toggle next to *Memory*; a confirmation modal appears. Click **Enable Memory** in the modal to confirm. The agent picks up the change on its next message -- no restart needed.
+2. Open the Memory Dashboard.
+3. Use the toggle next to *Memory*. The agent picks up the change on its next message -- no restart needed.
 
 ### Via the API (for headless / scripted setups)
 
@@ -57,20 +57,20 @@ Memory is off by default. Turn it on once and it stays on for every future `gaia
 curl -X PUT http://localhost:4200/api/memory/settings \
   -H "Content-Type: application/json" \
   -H "X-Gaia-UI: 1" \
-  -d '{"memory_enabled": true}'
+  -d '{"memory_enabled": false}'
 ```
 
 Verify it stuck:
 
 ```bash
 curl http://localhost:4200/api/memory/settings
-# → {"memory_enabled": true, ...}
+# → {"memory_enabled": false, ...}
 ```
 
-Until you enable memory, none of the behaviors on this page (cross-session recall, automatic extraction, the Memory Dashboard's knowledge browser) will activate -- sessions run in "incognito" mode and nothing is written to `~/.gaia/memory.db`.
+While memory is off, none of the behaviors on this page (cross-session recall, automatic extraction, the Memory Dashboard's knowledge browser) are active -- sessions run in "incognito" mode, nothing is written to `~/.gaia/memory.db`, and the agent says memory is turned off when asked to remember something.
 
 <Note>
-  Once enabled, conversations are summarized into `~/.gaia/memory.db` -- a **plaintext SQLite file** (not encrypted). The [Sensitive Data](#sensitive-data) section below explains the `sensitive` flag for controlling system-prompt visibility; do not store passwords or tokens in agent memory.
+  While memory is on, conversations are summarized into `~/.gaia/memory.db` -- a **plaintext SQLite file** (not encrypted). The [Sensitive Data](#sensitive-data) section below explains the `sensitive` flag for controlling system-prompt visibility; do not store passwords or tokens in agent memory.
 </Note>
 
 ---
@@ -148,7 +148,7 @@ Everything is stored in a single file at `~/.gaia/memory.db` (SQLite with WAL mo
   </Step>
 
   <Step title="Start chatting">
-    With memory enabled (see [Enable Memory](#enable-memory) above), the agent injects relevant knowledge into its system prompt and uses memory tools during conversation:
+    With memory on (see [Turn Memory On or Off](#turn-memory-on-or-off) above), the agent injects relevant knowledge into its system prompt and uses memory tools during conversation:
 
     ```bash
     gaia chat
@@ -414,7 +414,7 @@ gaia chat --ui
 
 ### What you can do
 
-- **Create** new memory entries manually (stored with high confidence)
+- **Create** new memory entries manually (stored with high confidence and embedded right away, so recall by meaning finds them at once)
 - **Edit** any field on any memory entry -- content, category, context, entity, sensitivity
 - **Delete** entries the agent got wrong
 - **Toggle sensitive** to hide or show private data

@@ -136,6 +136,30 @@ def test_publish_args_emits_path_equals_key_for_every_built_artifact(tmp_path, c
     assert emitted == expected
 
 
+def test_publish_args_platform_filter_names_only_those_platforms(tmp_path, capsys):
+    # The Windows setup publishes from its own job: a filtered run must neither
+    # emit the other platforms nor demand their files be on disk.
+    (setup,) = _names("win-x64")
+    (tmp_path / setup).write_bytes(b"x")
+    argv = ["publish-args", "--version", VERSION, "--dir", str(tmp_path)]
+    assert artifacts.main_argv([*argv, "--platform", "win-x64"]) == 0
+    out = capsys.readouterr().out.strip().splitlines()
+    assert out == [f"{(tmp_path / setup).as_posix()}=win-x64-setup"]
+    with pytest.raises(SystemExit, match="not on disk"):
+        artifacts.main_argv([*argv, "--platform", "linux-x64"])
+
+
+def test_publish_args_exclude_platform_names_every_other_platform(tmp_path, capsys):
+    others = [p for p in artifacts.ARTIFACTS if p != "win-x64"]
+    for platform in others:
+        for name in _names(platform):
+            (tmp_path / name).write_bytes(b"x")
+    argv = ["publish-args", "--version", VERSION, "--dir", str(tmp_path)]
+    assert artifacts.main_argv([*argv, "--exclude-platform", "win-x64"]) == 0
+    keys = {line.split("=", 1)[1] for line in capsys.readouterr().out.split()}
+    assert keys == {k for p in others for _, k in artifacts.artifacts_for(p, VERSION)}
+
+
 def test_publish_args_skips_a_platform_the_lock_has_no_sidecar_for(
     tmp_path, monkeypatch, capsys
 ):

@@ -415,6 +415,12 @@ def _normalize_macos_symlinks(path_str: str) -> str:
     return path_str
 
 
+# A copy of a refused file is the same data: the model must ask, not relocate it.
+_NO_WORKAROUND = (
+    " Do not copy, move or convert it to another location to get around this."
+)
+
+
 def _system_temp_roots() -> Set[str]:
     """Shared temp directories, which stay out of every agent's scope."""
     return {tempfile.gettempdir(), "/tmp", "/var/tmp"}
@@ -757,11 +763,13 @@ class PathValidator:
             remedy = (
                 " To use it, ask again and approve access when prompted, or "
                 "attach the file to this chat."
+                f"{_NO_WORKAROUND}"
             )
         else:
             remedy = (
                 " Attach the file to this session, or start the agent with an "
                 "allowed_paths list that covers it."
+                f"{_NO_WORKAROUND}"
             )
         return f"{message}{remedy}{self.scratch_hint(path)}"
 

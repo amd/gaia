@@ -112,7 +112,7 @@ def test_rag_reads_through_the_agents_validator(tree):
         rag = agent._build_rag()
 
     assert rag is rag_cls.return_value
-    assert rag.path_validator is agent.path_validator
+    assert rag_cls.call_args.kwargs["path_validator"] is agent.path_validator
 
 
 def test_is_path_allowed_refuses_a_secret_inside_the_scope(tree):

@@ -29,6 +29,7 @@ except ImportError as _watchdog_err:
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
 from gaia_agent_chat.session import SessionManager
 from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
+from gaia_agent_chat.tool_requests import requested_tools
 
 from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.checks import (
@@ -670,16 +671,14 @@ class ChatAgent(
             # was already logged there) — nothing to retry.
             return None
         try:
-            rag = RAGSDK(self._rag_config)
+            # Shared, so access the user grants mid-chat reaches indexing too.
+            return RAGSDK(self._rag_config, path_validator=self.path_validator)
         except Exception as e:
             logger.warning(
                 "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
             )
             logger.debug("RAG init traceback:", exc_info=True)
             return None
-        # One validator, so a folder the user approves is readable by RAG too.
-        rag.path_validator = self.path_validator
-        return rag
 
     @property
     def session_manager(self) -> SessionManager:
@@ -860,6 +859,10 @@ class ChatAgent(
         join the same signal, ahead of recalled-procedure tools: the user's
         skill is the stronger signal. A skill stops contributing when the body
         filter hides it or it is unloaded.
+
+        Tools the current message explicitly asks for (``requested_tools``)
+        go ahead of both: semantic ranking alone dropped ``run_shell_command``
+        from "use your shell tool to run pwd".
         """
         if not self._dynamic_tools_active():
             return None
@@ -874,7 +877,10 @@ class ChatAgent(
             if name not in skill_tools:
                 skill_tools.append(name)
         return self.tool_loader.select(
-            query, self._tools_registry, skill_tools=skill_tools
+            query,
+            self._tools_registry,
+            skill_tools=skill_tools,
+            requested_tools=requested_tools(user_input, self._tools_registry),
         )
 
     def _admit_skill_tools(self, names: List[str]) -> None:

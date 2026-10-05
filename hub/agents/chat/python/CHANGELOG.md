@@ -10,6 +10,10 @@
   approve for the chat is now readable by document indexing too. Symlinks and
   `..` are resolved before the check, and secrets such as `.env` inside an allowed
   folder are no longer indexed.
+- Asking for the shell by name ("use your shell tool to run pwd") or for the
+  working directory now always offers `run_shell_command`. With dynamic tool
+  selection on, most tools matched such a request and the cap dropped the shell, so
+  the agent answered the directory from a guess.
 - A GPU model now loads at its own context window on a machine whose
   `default_device` is `npu`. Every model there used to load at the NPU's 32,768
   tokens, so long tasks overflowed. `ChatAgentConfig.min_context_size` no longer
