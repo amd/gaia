@@ -1021,10 +1021,11 @@ _FILE_WRITE_CLAIM_PATTERNS = (
         rf"\bi(?:'ve|\s+have)?\s+{_WRITE_ADVERBS}{_FILE_WRITE_VERBS}\b",
         re.IGNORECASE,
     ),
-    # "… has been saved", "… was written", "… has been successfully written"
+    # "… has been saved", "… was written", "… has been successfully written".
+    # "are exported from `__init__.py`" names a module's source, not a save.
     re.compile(
         rf"\b(?:has|have|had|was|were|is|are)\s+{_WRITE_ADVERBS}"
-        rf"(?:been\s+)?{_WRITE_ADVERBS}{_FILE_WRITE_VERBS}\b",
+        rf"(?:been\s+)?{_WRITE_ADVERBS}{_FILE_WRITE_VERBS}\b(?!(?<=exported)\s+from\b)",
         re.IGNORECASE,
     ),
     # A bare "Saved to …" / "Report saved successfully at …" opening a line.
