@@ -131,13 +131,12 @@ def flagship(monkeypatch, tmp_path):
     doc.write_text("# Safety handbook\n\nWear goggles in the lab.\n", encoding="utf-8")
 
     with _isolated_registry():
-        # Per-turn tool selection changes the tool list by design, so it is
-        # off here; this pins everything else in the request.
+        # The default config, so a default that brings back per-turn tool
+        # selection (a new tool list every turn) fails here.
         agent = GaiaAgent(
             config=GaiaAgentConfig(
                 silent_mode=True,
                 streaming=True,
-                dynamic_tools=False,
                 # GaiaAgentConfig defaults allowed_paths to the user's home
                 # directory, not cwd (unlike ChatAgent) -- on a CI runner the
                 # pytest tmp dir lives under /tmp, outside $HOME, so without

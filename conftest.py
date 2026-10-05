@@ -31,6 +31,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent
 
 
@@ -154,3 +156,29 @@ def pytest_sessionstart(session):  # noqa: D103 — pytest hook
 
     _assert_local(_fail)
     _isolate_config_dir()
+
+
+def _restore_tool_registry():
+    """Undo every ``@tool`` registration made while the caller was active.
+
+    ``_TOOL_REGISTRY`` is process-global and agents snapshot all of it, so a
+    tool one test registers shows up in every agent built after it.
+    """
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    saved = dict(_TOOL_REGISTRY)
+    yield
+    _TOOL_REGISTRY.clear()
+    _TOOL_REGISTRY.update(saved)
+
+
+# Module scope also catches class- and module-scoped fixtures that build agents,
+# which set up before (and outside) the per-test restore.
+@pytest.fixture(scope="module", autouse=True)
+def _isolate_tool_registry_per_module():
+    yield from _restore_tool_registry()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tool_registry_per_test():
+    yield from _restore_tool_registry()

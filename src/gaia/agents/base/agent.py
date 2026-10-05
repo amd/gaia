@@ -62,6 +62,15 @@ from gaia.agents.base.extraction import (
     extraction_response_format,
     read_snapshot,
 )
+from gaia.agents.base.grounding import (
+    LOOK,
+    OBSERVED_MAX_CHARS,
+    grounding_correction,
+    path_locator,
+    ungrounded,
+    unverified_reasons,
+)
+from gaia.agents.base.look_first import LOOK_FIRST_PROMPT, named_workspace_paths
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
@@ -78,12 +87,14 @@ from gaia.agents.base.verification import (
     VERIFY_AFTER_CHANGE_TAG,
     build_verification_scope,
     check_output,
+    observed_text,
     project_has_tests,
     strip_verification_scope,
     summary_reports_failure,
     unsupported_test_claim,
     unverified_change,
     verification_record,
+    verification_summary,
     verify_after_change_correction,
 )
 
@@ -357,6 +368,18 @@ def _trace_includes_schema_text() -> bool:
         f"GAIA_TRACE_TOOL_SCHEMA must be a boolean (1/0, true/false, on/off), "
         f"got {raw!r}. Unset it to record the full schema."
     )
+
+
+class ToolCallTruncated(ValueError):
+    """A native tool call ran past the output-token cap mid-arguments."""
+
+    def __init__(self, model_id: str, cap: int):
+        self.cap = cap
+        super().__init__(
+            f"Tool call truncated mid-arguments (finish_reason=length). Model "
+            f"{model_id} ran out of output tokens before finishing the call "
+            f"({cap} max) — pass a larger max_output_tokens to the agent."
+        )
 
 
 class ToolExecutionTimeout(Exception):
@@ -970,6 +993,9 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     return None
 
 
+#: Any one of these lets the agent look at a file the request names.
+_LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
+
 # Fabricated-save guard (#4010): a final answer that asserts a file was
 # written when no write tool ran this turn.
 _MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
@@ -1560,8 +1586,14 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage: List[Dict[str, Any]] = []
         # Same rationale for the verification-scope log (#3376).
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # Whether a project root has tests, walked once per root per turn.
+        self._has_tests_cache: Dict[Optional[str], bool] = {}
         # Same rationale for the per-turn record of edited files (#3733).
         self._turn_file_edits: List[Dict[str, Any]] = []
+        # Earlier turns' user and tool text, for the grounding checks.
+        self._grounding_history = ""
+        # Grounding gaps that survived their correction, for the scope note.
+        self._turn_ungrounded: List[str] = []
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -3654,6 +3686,22 @@ Do NOT wrap conversational replies in JSON.
         which is what lets the model correct the real problem instead of
         guessing from generic advice.
         """
+        if isinstance(reason, ToolCallTruncated):
+            # The generic advice sent the same oversized edit back three times.
+            prompt = (
+                f"Your last tool call was cut off at the {reason.cap}-token output "
+                "limit before its arguments were finished, so nothing ran. Send "
+                "much shorter arguments."
+            )
+            # write_file replaces the whole file, so a long file is built with edits.
+            if "edit_file" in self._tools_registry:
+                prompt += (
+                    " For edit_file, put only the few lines that change in "
+                    "old_content and new_content, never the whole file; to create "
+                    "a long file, write_file a short first part, then add the rest "
+                    "with edit_file in small pieces."
+                )
+            return prompt
         return (
             f"Your last tool call could not be used: {reason}\n"
             "Please try again. Emit exactly ONE tool call as raw JSON — no code "
@@ -4209,6 +4257,8 @@ Do NOT wrap conversational replies in JSON.
                 desc = param_info.get("description", "")
                 if desc:
                     prop["description"] = desc
+                if param_info.get("enum"):
+                    prop["enum"] = list(param_info["enum"])
                 properties[param_name] = prop
                 if param_info.get("required", True):
                     required.append(param_name)
@@ -4338,12 +4388,7 @@ Do NOT wrap conversational replies in JSON.
                 # ``max_output_tokens`` (or, for one-off long tool calls,
                 # asking the model to pick a single value rather than
                 # concatenating).
-                raise ValueError(
-                    f"Tool call truncated mid-arguments (finish_reason=length). "
-                    f"Model {self.model_id} ran out of output tokens before "
-                    f"finishing the call ({self._max_output_tokens()} max) — "
-                    f"pass a larger max_output_tokens to the agent."
-                )
+                raise ToolCallTruncated(self.model_id, self._max_output_tokens())
             if not raw_tool_calls:
                 raise ValueError(
                     "Native tool_calls envelope contained an empty tool_calls list."
@@ -5403,20 +5448,22 @@ Do NOT wrap conversational replies in JSON.
             if msg.get("role") == "tool" and msg.get("name")
         ]
 
-        message = f"⚠️ Reached maximum steps limit ({steps_limit} steps)\n\n"
-        message += f"Completed {steps_taken} steps using these tools:\n"
+        message = (
+            f"I ran out of steps before I could finish — I used {steps_taken} "
+            f"of the {steps_limit} I get per request.\n\n"
+        )
+        if tools_used:
+            from collections import Counter
 
-        # Count tool usage
-        from collections import Counter
+            message += "Here's what I ran:\n"
+            for tool, count in Counter(tools_used).most_common(10):
+                message += f"  - {tool}: {count}x\n"
+            message += "\n"
 
-        tool_counts = Counter(tools_used)
-        for tool, count in tool_counts.most_common(10):
-            message += f"  - {tool}: {count}x\n"
-
-        message += "\nTo continue or complete this task:\n"
-        message += "1. Review the generated files and progress so far\n"
-        message += f"2. Run with --max-steps {steps_limit + 50} to allow more steps\n"
-        message += "3. Or complete remaining tasks manually\n"
+        message += (
+            "Ask me to continue and I'll pick up from here. From the command "
+            f"line, `--max-steps {steps_limit + 50}` gives me more room.\n"
+        )
 
         return message
 
@@ -6692,6 +6739,7 @@ Do NOT wrap conversational replies in JSON.
         )
         record["args"] = tool_args if isinstance(tool_args, dict) else {}
         record["output"] = check_output(tool_name, result)
+        record["observed"] = observed_text(result)[:OBSERVED_MAX_CHARS]
         log.append(record)
         evidence = getattr(self, "_completion_evidence", None)
         if evidence is not None:
@@ -6723,24 +6771,89 @@ Do NOT wrap conversational replies in JSON.
             return None
         root = self._verification_project_root()
         changed = unverified_change(executions, root)
-        if changed is None or not project_has_tests(root):
+        if changed is None or not self._project_has_tests(root):
             return None
         return verify_after_change_correction(changed)
 
-    def verification_scope_statement(self) -> str:
-        """This turn's bounded verified / partially verified / unverified line."""
-        return build_verification_scope(
-            getattr(self, "_turn_tool_executions", None) or []
+    def _grounding_findings(
+        self, answer: Optional[str], query: str, history: str
+    ) -> list:
+        """Where *answer* outruns this turn's tool record (see ``grounding.py``)."""
+        if not answer or not answer.strip():
+            return []
+        roots = [os.getcwd(), self._verification_project_root()]
+        return ungrounded(
+            strip_verification_scope(answer),
+            query or "",
+            getattr(self, "_turn_tool_executions", None) or [],
+            history=history,
+            locate=path_locator(roots),
         )
 
-    def _with_verification_scope(self, answer: Optional[str]) -> Optional[str]:
-        """Give a non-empty answer exactly one scope statement (#3376, #3675).
+    def _note_ungrounded(self, answer: Optional[str], query: str) -> None:
+        """Record what *answer* still outruns, for this turn's scope note."""
+        self._turn_ungrounded = unverified_reasons(
+            self._grounding_findings(
+                answer, query, getattr(self, "_grounding_history", "")
+            )
+        )
 
-        Any statement the model wrote itself comes out first. The line rides in
-        the answer and the answer comes back as conversation history, so a model
-        can and does echo a previous turn's — and the user then read the same
-        verification paragraph twice, once from the model and once from here.
-        Only the one derived from this turn's tool log is authoritative.
+    def _project_has_tests(self, root: Optional[str]) -> bool:
+        """``project_has_tests``, walked once per root per turn."""
+        if root not in self._has_tests_cache:
+            self._has_tests_cache[root] = project_has_tests(root)
+        return self._has_tests_cache[root]
+
+    def _unchecked_change(self) -> Tuple[Optional[str], bool]:
+        """``(path, has_tests)`` for the last change nothing checked afterwards.
+
+        In a project with tests only a test run covers a change; without one,
+        any check does.
+        """
+        executions = getattr(self, "_turn_tool_executions", None) or []
+        if not executions:
+            return None, True
+        root = self._verification_project_root()
+        has_tests = self._project_has_tests(root)
+        changed = unverified_change(executions, root, tests_only=has_tests)
+        if changed and root and os.path.isabs(changed):
+            same_drive = (
+                os.path.splitdrive(os.path.abspath(changed))[0].lower()
+                == os.path.splitdrive(os.path.abspath(root))[0].lower()
+            )
+            if same_drive:
+                changed = os.path.relpath(changed, root)
+        return changed, has_tests
+
+    def verification_scope_statement(self) -> str:
+        """This turn's plain-English "not confirmed" note, or ``""``."""
+        changed, has_tests = self._unchecked_change()
+        return build_verification_scope(
+            getattr(self, "_turn_tool_executions", None) or [],
+            unchecked_change=changed,
+            has_tests=has_tests,
+            ungrounded=getattr(self, "_turn_ungrounded", ()),
+        )
+
+    def verification_state(self) -> Dict[str, Any]:
+        """This turn's check results as data, for tooling rather than the user."""
+        return verification_summary(
+            getattr(self, "_turn_tool_executions", None) or [],
+            unchecked_change=self._unchecked_change()[0],
+            ungrounded=getattr(self, "_turn_ungrounded", ()),
+        )
+
+    #: Stands in for an answer that was nothing but a previous turn's note.
+    ECHO_ONLY_ANSWER = "I don't have anything new to add."
+
+    def _with_verification_scope(self, answer: Optional[str]) -> Optional[str]:
+        """Give a non-empty answer at most one scope note (#3376, #3675).
+
+        Any note the model wrote itself comes out first. The line rides in the
+        answer and the answer comes back as conversation history, so a model
+        can and does echo a previous turn's. Only the one derived from this
+        turn's tool log is authoritative, and it is added only when the work
+        is not confirmed.
 
         Empty stays empty — a blank answer is a signal downstream (cancelled
         turns skip persistence), and a scope line would make it non-blank.
@@ -6750,8 +6863,10 @@ Do NOT wrap conversational replies in JSON.
         body = strip_verification_scope(answer)
         statement = self.verification_scope_statement()
         if not body.strip():
-            # The whole "answer" was an echoed scope line; one is still one.
-            return statement
+            # Never surface the stale echo as this turn's answer.
+            return statement or self.ECHO_ONLY_ANSWER
+        if not statement:
+            return body
         return f"{body.rstrip()}\n\n{statement}"
 
     def _gate_unsealed_answer(
@@ -6776,6 +6891,8 @@ Do NOT wrap conversational replies in JSON.
             answer = (
                 f"{answer}\n\n{report}" if answer and self.error_history else report
             )
+        elif answer and answer.strip() and not self.error_history:
+            self._note_ungrounded(answer, getattr(self, "_current_query", ""))
         # Items already extracted stay visible when the turn runs out.
         inventory = self._extraction_ledger.render()
         if inventory and answer:
@@ -6993,6 +7110,15 @@ Do NOT wrap conversational replies in JSON.
             logger.debug(
                 f"Loaded {len(self.conversation_history)} messages from conversation history"
             )
+        # What earlier turns asked and saw — not what the model said — so the
+        # grounding checks neither re-ask for it nor take a past claim as proof.
+        self._grounding_history = "\n".join(
+            observed_text(m.get("content"))
+            for m in messages
+            if isinstance(m, dict) and m.get("role") != "assistant"
+        )
+        # Grounding gates that already asked for one correction this turn.
+        grounding_fired: set = set()
 
         steps_taken = 0
         final_answer = None
@@ -7016,6 +7142,7 @@ Do NOT wrap conversational replies in JSON.
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
         unfinished_answer_reprompts = 0
+        look_first_reprompted = False
         verify_after_change_reprompted = False
         test_claim_corrections = 0
         cut_off_continuations = 0
@@ -7050,6 +7177,8 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        self._has_tests_cache = {}
+        self._turn_ungrounded = []
         self._completion_evidence = CompletionEvidence(
             user_input,
             os.getcwd(),
@@ -8982,6 +9111,33 @@ Do NOT wrap conversational replies in JSON.
                     )
                     continue
 
+                # An answer about named workspace files that never opened one.
+                if (
+                    not look_first_reprompted
+                    and not tool_call_log
+                    and steps_taken < steps_limit - 1
+                    and any(name in self._tools_registry for name in _LOOK_TOOLS)
+                ):
+                    unlooked = named_workspace_paths(
+                        getattr(self, "_original_user_input", None) or user_input,
+                        os.getcwd(),
+                    )
+                    if unlooked:
+                        look_first_reprompted = True
+                        # Grounding's look gate would ask the same thing again.
+                        grounding_fired.add(LOOK)
+                        logger.info(
+                            "[WORKFLOW] Answer named %s without a tool call; asking "
+                            "the agent to look first",
+                            unlooked,
+                        )
+                        correction = LOOK_FIRST_PROMPT.format(
+                            paths=", ".join(f"`{p}`" for p in unlooked[:3])
+                        )
+                        messages.append({"role": "user", "content": correction})
+                        conversation.append({"role": "user", "content": correction})
+                        continue
+
                 # Universal planning-text guard: catch any short response that is
                 # only an intent sentence ("I'll check...", "Let me query...") with
                 # no actual answer, regardless of whether tools were already called.
@@ -9233,6 +9389,35 @@ Do NOT wrap conversational replies in JSON.
                             "start GAIA with the `--sd` flag to enable it."
                         )
 
+                # A request it never looked at, values no tool produced, or
+                # work it never did: one correction per gate, and only before
+                # the answer counts — after it the scope guard refuses lookups.
+                fresh = (
+                    []
+                    if self._turn_scope.answered
+                    else [
+                        f
+                        for f in self._grounding_findings(
+                            answer_candidate, user_input, self._grounding_history
+                        )
+                        if f.gate not in grounding_fired
+                    ]
+                )
+                if fresh and steps_taken < steps_limit - 1:
+                    grounding_fired.update(f.gate for f in fresh)
+                    logger.info(
+                        "[check:grounding] %s fired at step %d",
+                        ",".join(sorted({f.gate for f in fresh})),
+                        steps_taken,
+                    )
+                    correction = {
+                        "role": "user",
+                        "content": grounding_correction(fresh),
+                    }
+                    messages.append(correction)
+                    conversation.append(dict(correction))
+                    continue
+
                 # An answer, not a plan or a narrated step: from here on, calls
                 # must serve the request rather than start new work.
                 if not self._turn_scope.answered:
@@ -9390,6 +9575,8 @@ Do NOT wrap conversational replies in JSON.
                     completion_gaps.append(final_test_claim[1] + ".")
                 if completion_gaps:
                     answer_candidate = incomplete_answer(completion_gaps)
+                else:
+                    self._note_ungrounded(answer_candidate, user_input)
                 inventory = self._extraction_ledger.render()
                 if inventory:
                     # Never ask another synthesis call to reproduce the set; it condenses.
@@ -9398,8 +9585,9 @@ Do NOT wrap conversational replies in JSON.
                         saved = sorted(self._extraction_ledger.destinations)
                         if saved:
                             answer_candidate += (
-                                "\n\nSaved and read back the complete inventory: "
+                                "\n\nI saved the full list to "
                                 + ", ".join(f"`{path}`" for path in saved)
+                                + " and checked the file."
                             )
                 final_answer = self._with_verification_scope(answer_candidate)
                 verification_scope_applied = True
@@ -9644,6 +9832,7 @@ Do NOT wrap conversational replies in JSON.
             "tool_schema": self._trace_tool_schema(),
             "completion_gaps": completion_gaps,
             "extraction_sources": sorted(self._extraction_ledger.results),
+            "verification": self.verification_state(),
         }
 
         result["model_messages"] = messages.finish(result["result"])

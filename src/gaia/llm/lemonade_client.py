@@ -3117,9 +3117,10 @@ class LemonadeClient:
             timeout = request_budget_seconds()
 
         if self.cloud_model_provider(model):
-            # llama.cpp-only sampling knobs; cloud providers do not accept them.
+            # llama.cpp-only fields; a cloud provider rejects the request (HTTP 400).
             kwargs.pop("repeat_penalty", None)
             kwargs.pop("repeat_last_n", None)
+            kwargs.pop("id_slot", None)
         else:
             thinking = requested_thinking(model, kwargs.get("chat_template_kwargs"))
             if thinking is not None:
