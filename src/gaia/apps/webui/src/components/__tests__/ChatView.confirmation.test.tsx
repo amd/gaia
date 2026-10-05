@@ -315,10 +315,42 @@ describe('ChatView path-access permission_request', () => {
         });
 
         const prompt = selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState());
+        expect(prompt?.title).toBe('Let GAIA use this file?');
         expect(prompt?.message).toBe(
-            'GAIA wants to use the file C:\\Users\\me\\sales.csv, which this chat cannot reach yet. Allow it for this chat?'
+            "GAIA wants to use the file C:\\Users\\me\\sales.csv. This chat can't reach it yet. Allow it for this chat?"
         );
         expect(prompt?.timeoutSeconds).toBe(600);
+        expect(screen.getByRole('heading', { name: 'Let GAIA use this file?' })).toBeInTheDocument();
+        expect(screen.queryByText('allow_path_access')).not.toBeInTheDocument();
+    });
+
+    it('words the path card as a follow-up to the write it backs', async () => {
+        await driveSend();
+        const target = 'C:\\Users\\me\\home\\gaia_ui_test.txt';
+        mockedApi.confirmTool.mockResolvedValue(undefined as never);
+
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'permission_request', tool: 'write_file',
+                args: { file_path: target, content: 'hi' }, confirm_id: 'w-1',
+            } as unknown as StreamEvent);
+        });
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Allow once' }));
+        });
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'permission_request', tool: 'allow_path_access',
+                args: { path: target }, confirm_id: 'p-1',
+            } as unknown as StreamEvent);
+        });
+
+        const prompt = selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState());
+        expect(prompt?.id).toBe('p-1');
+        expect(screen.getByRole('heading', { name: 'Also let GAIA use this location?' })).toBeInTheDocument();
+        expect(prompt?.message).toBe(
+            `To do what you just allowed, GAIA also needs ${target}, which doesn't exist yet. This chat can't reach it yet. Allow it for this chat?`
+        );
     });
 
     it('invents no countdown when the backend sent no timeout', async () => {

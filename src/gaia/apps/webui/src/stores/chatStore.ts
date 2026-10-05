@@ -118,6 +118,9 @@ interface ChatState {
     /** Update the last tool step (not the absolute last step). */
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
     clearAgentSteps: () => void;
+    /** What the model is doing right now, from the latest phase status event; null before one arrives. */
+    liveStatus: string | null;
+    setLiveStatus: (status: string | null) => void;
 
     // Structured cards from tool_result.render events (issue #2108).
     // Accumulated during the stream, transferred onto the finalized
@@ -257,7 +260,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => ({ streamingContent: state.streamingContent + content })),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
-    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [] }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null }),
 
     // Agent activity
     agentSteps: [],
@@ -303,7 +306,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // No tool step found — don't corrupt non-tool steps
             return state;
         }),
-    clearAgentSteps: () => set({ agentSteps: [] }),
+    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null }),
+    liveStatus: null,
+    setLiveStatus: (status) => set({ liveStatus: status }),
 
     // Streaming cards (#2108)
     cards: [],

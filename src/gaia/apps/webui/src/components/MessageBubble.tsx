@@ -31,16 +31,24 @@ interface MessageBubbleProps {
     onResend?: (message: Message) => void;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
+    /** The model's current phase while streaming; null shows "Thinking...". */
+    liveStatus?: string | null;
 }
 
 
 
-/** Thinking indicator next to GAIA name — types out "Thinking...", erases when done. */
-function ThinkingIndicator({ active }: { active: boolean }) {
-    const text = 'Thinking...';
+/**
+ * Live status next to GAIA's name: the model's current phase ("Reading your request",
+ * "Reasoning — 38 words so far"), or "Thinking..." until the first one arrives.
+ * Types out on first show, swaps text in place after that, erases when done.
+ */
+function ThinkingIndicator({ active, label }: { active: boolean; label?: string | null }) {
+    const text = label || 'Thinking...';
     const [chars, setChars] = useState(0);
     const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>('typing');
     const wasActiveRef = useRef(active);
+    const textLengthRef = useRef(text.length);
+    textLengthRef.current = text.length;
 
     // Type out characters
     useEffect(() => {
@@ -48,11 +56,12 @@ function ThinkingIndicator({ active }: { active: boolean }) {
         if (chars >= text.length) { setPhase('idle'); return; }
         const timer = setTimeout(() => setChars(c => c + 1), 30);
         return () => clearTimeout(timer);
-    }, [phase, chars]);
+    }, [phase, chars, text.length]);
 
     // Detect active → false: start erasing
     useEffect(() => {
         if (wasActiveRef.current && !active) {
+            setChars(textLengthRef.current);
             setPhase('erasing');
         }
         wasActiveRef.current = active;
@@ -78,7 +87,7 @@ function ThinkingIndicator({ active }: { active: boolean }) {
 
     return (
         <span className="thinking-indicator">
-            <span className="thinking-indicator-text">{text.slice(0, chars)}</span>
+            <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
             {active && <span className="cursor" />}
         </span>
     );
@@ -349,7 +358,7 @@ function formatLatency(ms: number): string {
     return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, liveStatus }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
@@ -425,7 +434,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                 <div className="msg-header">
                     <div className="msg-header-left">
                         {message.role === 'assistant' && isStreaming && (
-                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} />
+                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} />
                         )}
                     </div>
                     {!isStreaming && (

@@ -614,6 +614,8 @@ export interface StreamEvent {
     // Agent-specific fields
     status?: string;
     message?: string;
+    /** Model phase on a status event: reading, loading_model, reasoning, tool_call, … */
+    phase?: string;
     step?: number;
     total?: number;
     tool?: string;
