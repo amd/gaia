@@ -344,6 +344,12 @@ class SessionResponse(BaseModel):
     device: str = "gpu"
     # Mailbox FILTER (#1596): None = every connected mailbox (no pick).
     mail_provider: Optional[str] = None
+    # Where the next chat turn is answered. inference_remote is None when that
+    # can't be determined, so the UI must not claim the chat stays local.
+    inference_remote: Optional[bool] = None
+    inference_provider: Optional[str] = None
+    inference_provider_name: Optional[str] = None
+    inference_description: Optional[str] = None
 
 
 class SessionListResponse(BaseModel):

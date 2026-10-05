@@ -470,6 +470,11 @@
     flex-shrink: 0;
 }
 
+.privacy-dot-cloud {
+    background: var(--accent-yellow);
+    animation: none;
+}
+
 .version-badge {
     margin-left: auto;
     font-size: 9px;
