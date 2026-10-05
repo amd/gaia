@@ -2,9 +2,7 @@
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
-
-from tests.unit.test_profilespec_characterization import (  # noqa: E402
+from tests.unit.test_profilespec_characterization import (
     chat_agent_build_context,
 )
 
