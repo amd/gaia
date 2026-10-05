@@ -189,6 +189,30 @@ describe('ChatView Stop', () => {
         expect(useChatStore.getState().messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
     });
 
+    it('keeps the steps when the stopped turn closes with an error instead of done', async () => {
+        await sendAndRunTools();
+
+        act(() => {
+            fireEvent.click(screen.getByLabelText('Stop'));
+        });
+        act(() => {
+            capturedCallbacks!.onError(new Error('run failed while stopping'));
+        });
+
+        const msg = assistantMessage();
+        expect(msg?.content).toContain('run failed while stopping');
+        expect(msg?.agentSteps).toHaveLength(2);
+        expect(msg?.agentSteps?.every((s) => !s.active)).toBe(true);
+        expect(useChatStore.getState().isStreaming).toBe(false);
+        expect(screen.getByLabelText('Send')).toBeInTheDocument();
+
+        // The grace timer was cleared: no second, unconfirmed copy of the turn.
+        act(() => {
+            vi.advanceTimersByTime(STOP_GRACE_MS);
+        });
+        expect(useChatStore.getState().messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
+    });
+
     it('a normal done without Stop carries no stopped marker', async () => {
         await sendAndRunTools();
 

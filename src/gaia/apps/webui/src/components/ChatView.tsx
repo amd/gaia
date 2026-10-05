@@ -976,6 +976,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onError: (err) => {
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);
+                const stopped = stopRequestedRef.current;
                 endStopWait();
                 // Cancel any pending rAF flush
                 if (streamRafRef.current !== null) {
@@ -1020,6 +1021,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     created_at: new Date().toISOString(),
                     rag_sources: null,
                 };
+                // A stopped turn that closes with an error still shows what ran.
+                if (stopped) {
+                    const { steps, cards: cardsSnapshot } = snapshotTurn();
+                    if (steps.length > 0) errMsg.agentSteps = steps;
+                    if (cardsSnapshot.length > 0) errMsg.cards = cardsSnapshot;
+                }
                 addMessage(errMsg);
                 setStreaming(false);
                 clearStreamContent();
