@@ -60,7 +60,19 @@ def test_store(tmp_path):
 
 
 @pytest.fixture
-def client(test_store):
+def fake_embedder():
+    """Stand-in Lemonade embedder, so create/edit never reach a real server."""
+    provider = MagicMock()
+    provider.embed.return_value = [[0.5] * 768]
+    with patch(
+        "gaia.llm.providers.lemonade.LemonadeProvider", return_value=provider
+    ) as cls:
+        cls.instance = provider
+        yield cls
+
+
+@pytest.fixture
+def client(test_store, fake_embedder):
     """FastAPI TestClient with the memory router and injected test store."""
     from gaia.ui.database import ChatDatabase
     from gaia.ui.dependencies import get_db
@@ -1378,6 +1390,85 @@ class TestUpcomingV2:
 # ===========================================================================
 
 
+class TestDashboardWritesAreEmbedded:
+    """Dashboard create/edit embed the row so recall by meaning finds it now."""
+
+    def _has_vector(self, store, kid):
+        return any(
+            item["id"] == kid
+            for item in store.get_items_with_embeddings(
+                ids=[kid], include_sensitive=True
+            )
+        )
+
+    def test_create_embeds_with_the_stored_embedder(
+        self, client, test_store, fake_embedder
+    ):
+        test_store.set_embedder_id("embed-gemma-300m-FLM")
+        data = _create_knowledge(client, "The gateway listens on port 8080")
+
+        assert data["embedded"] is True
+        assert "embed_error" not in data
+        assert self._has_vector(test_store, data["knowledge_id"])
+        # Same embedder as the stored vectors, not the module default (#1744).
+        fake_embedder.assert_called_with(model="embed-gemma-300m-FLM")
+        fake_embedder.instance.embed.assert_called_with(
+            ["The gateway listens on port 8080"], model="embed-gemma-300m-FLM"
+        )
+        assert test_store.get_embedding_coverage()["coverage_pct"] == 100.0
+
+    def test_content_edit_re_embeds(self, client, test_store, fake_embedder):
+        kid = _create_knowledge(client, "Original content")["knowledge_id"]
+        fake_embedder.instance.embed.reset_mock()
+
+        resp = client.put(f"/api/memory/knowledge/{kid}", json={"content": "New text"})
+
+        assert resp.status_code == 200
+        assert resp.json()["embedded"] is True
+        assert self._has_vector(test_store, kid)
+        fake_embedder.instance.embed.assert_called_once()
+        assert fake_embedder.instance.embed.call_args.args[0] == ["New text"]
+
+    def test_non_content_edit_keeps_vector_without_re_embedding(
+        self, client, test_store, fake_embedder
+    ):
+        kid = _create_knowledge(client, "Stable content")["knowledge_id"]
+        fake_embedder.instance.embed.reset_mock()
+
+        resp = client.put(f"/api/memory/knowledge/{kid}", json={"sensitive": True})
+
+        assert resp.status_code == 200
+        assert "embedded" not in resp.json()
+        fake_embedder.instance.embed.assert_not_called()
+        assert self._has_vector(test_store, kid)
+
+    def test_create_reports_embed_failure_and_keeps_the_row(
+        self, client, test_store, fake_embedder
+    ):
+        fake_embedder.instance.embed.side_effect = ConnectionError("refused")
+
+        data = _create_knowledge(client, "Saved without a vector")
+
+        assert data["status"] == "created"
+        assert data["embedded"] is False
+        assert "Rebuild Embeddings" in data["embed_error"]
+        assert "refused" not in data["embed_error"]  # internals stay in the log
+        assert test_store.get_item(data["knowledge_id"]) is not None
+        assert not self._has_vector(test_store, data["knowledge_id"])
+
+    def test_edit_reports_embed_failure(self, client, test_store, fake_embedder):
+        kid = _create_knowledge(client, "Before")["knowledge_id"]
+        fake_embedder.instance.embed.side_effect = RuntimeError("model not loaded")
+
+        resp = client.put(f"/api/memory/knowledge/{kid}", json={"content": "After"})
+
+        assert resp.status_code == 200
+        assert resp.json()["embedded"] is False
+        assert resp.json()["embed_error"]
+        assert test_store.get_item(kid)["content"] == "After"
+        assert not self._has_vector(test_store, kid)
+
+
 class TestKnowledgeCRUDV2:
     """Test knowledge CRUD endpoints handle v2 fields."""
 
@@ -1969,3 +2060,66 @@ class TestPrivilegedAdminWriters:
             memory_router_mod.InferenceCommit(
                 insights=[{"content": "Machine has an NPU", "category": "system"}]
             )
+
+
+class TestStreamInferenceModel:
+    """Profile inference runs on the machine's default local chat model."""
+
+    def _stream(self, client, tmp_path, default_model, custom_model=None):
+        apps = [{"content": "Installed app: Blender"}]
+        fake_llm = MagicMock()
+        fake_llm.chat.return_value = "[]"
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch("sys.platform", "darwin"))
+            stack.enter_context(patch("pathlib.Path.home", return_value=tmp_path))
+            stack.enter_context(patch("gaia.agents.base.discovery._MACOS_APP_DIRS", ()))
+            stack.enter_context(
+                patch(
+                    "gaia.agents.base.discovery.SystemDiscovery.scan_installed_apps",
+                    return_value=apps,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "gaia.llm.lemonade_client.resolve_default_chat_model",
+                    return_value=default_model,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "gaia.ui.database.ChatDatabase.get_setting",
+                    side_effect=lambda key, *a, **k: (
+                        custom_model if key == "custom_model" else None
+                    ),
+                )
+            )
+            create = stack.enter_context(
+                patch("gaia.llm.create_client", return_value=fake_llm)
+            )
+            resp = client.get("/api/memory/stream-inference")
+        return resp, create
+
+    def test_uses_the_default_chat_model_not_the_cloud_custom_model(
+        self, client, tmp_path
+    ):
+        resp, create = self._stream(
+            client,
+            tmp_path,
+            default_model="Qwen3.6-35B-A3B-GGUF",
+            custom_model="fireworks.accounts/fireworks/models/kimi-k2",
+        )
+
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="Qwen3.6-35B-A3B-GGUF")
+        assert "fireworks" not in str(create.call_args)
+        assert "Qwen3.6-35B-A3B-GGUF" in resp.text
+
+    def test_a_cloud_default_model_is_refused_not_called(self, client, tmp_path):
+        resp, create = self._stream(
+            client, tmp_path, default_model="fireworks.accounts/fireworks/models/x"
+        )
+
+        assert resp.status_code == 200
+        create.assert_not_called()
+        assert '"type": "error"' in resp.text
+        assert "gaia config set default_model" in resp.text
