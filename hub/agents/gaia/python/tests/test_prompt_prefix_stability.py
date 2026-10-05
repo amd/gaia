@@ -141,11 +141,17 @@ def flagship(monkeypatch, tmp_path):
         assert agent._memory_store is not None, "memory must be on for this test"
         agent.conversation_history = SessionHistory(str(tmp_path / "history.sqlite3"))
 
-        def index(path):
-            agent.rag.indexed_files.add(path)
-            return {"success": True, "file_name": "handbook.md", "num_chunks": 1}
+        # A stand-in RAG — this test pins request-prefix stability, not real
+        # indexing, and the CI lane that runs it installs no RAG extras.
+        class _FakeRag:
+            def __init__(self):
+                self.indexed_files = set()
 
-        monkeypatch.setattr(agent.rag, "index_document", index)
+            def index_document(self, path):
+                self.indexed_files.add(path)
+                return {"success": True, "file_name": "handbook.md", "num_chunks": 1}
+
+        agent.rag = _FakeRag()
 
         procedure = DistilledProcedure(
             name="read-the-handbook",
