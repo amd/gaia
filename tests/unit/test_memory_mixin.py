@@ -4621,7 +4621,7 @@ class TestRecallOnceProcedureCache:
 
         # Both consumers now read the cached result — no second recall.
         assert mixin_host._recalled_skill_tools() == ["read_file"]
-        assert mixin_host.get_recalled_skills_system_prompt()  # non-empty
+        assert mixin_host._recalled_skill_prompt  # non-empty
         assert spy.call_count == 1
 
     def test_off_state_caches_empty_and_skips_settings_read(self, mixin_host):
@@ -4639,13 +4639,13 @@ class TestRecallOnceProcedureCache:
 
 
 class _ComposingAgent(FakeAgent):
-    """FakeAgent + the parts of Agent that recalled-skill injection relies on.
+    """FakeAgent + the parts of Agent that prompt composition relies on.
 
     A faithful stand-in for ``Agent._get_mixin_prompts`` (the
     ``get_*_system_prompt`` auto-discovery), ``_compose_system_prompt`` (drops
     empty fragments), and ``rebuild_system_prompt`` (recompose on demand) — so a
-    test can observe the recalled block landing in, and leaving, the composed
-    system prompt without instantiating the full Agent stack.
+    test can check that the recalled block reaches the turn's message and never
+    the composed system prompt, without instantiating the full Agent stack.
     """
 
     def _get_mixin_prompts(self):
@@ -4679,8 +4679,8 @@ class _ComposingAgent(FakeAgent):
 def composing_host(tmp_db_path):
     """A MemoryMixin host whose base implements the Agent composition seam.
 
-    Like ``mixin_host`` but over ``_ComposingAgent`` so recalled-skill injection
-    into the composed system prompt is observable.
+    Like ``mixin_host`` but over ``_ComposingAgent`` so the composed system
+    prompt is observable alongside the turn's message.
     """
     from gaia.agents.base.memory import MemoryMixin
 
@@ -4719,10 +4719,14 @@ def composing_host(tmp_db_path):
 
 
 class TestRecalledSkillInjection:
-    """Per-turn injection of the recalled procedure into the composed prompt."""
+    """Per-turn injection of the recalled procedure into the turn's message."""
 
-    def test_matching_goal_injects_procedure_into_system_prompt(self, composing_host):
-        """A matching goal makes process_query inject the recipe into the prompt."""
+    def test_matching_goal_injects_procedure_into_the_turn(self, composing_host):
+        """A matching goal puts the recipe in this turn's message, not the prompt.
+
+        The recalled set changes from turn to turn; carried in the system prompt
+        it made the server re-read the whole conversation whenever it did.
+        """
         require_faiss()
         composing_host._memory_post_init_pending = False  # isolate from synthesis
         _seed_procedure(
@@ -4730,13 +4734,14 @@ class TestRecalledSkillInjection:
             name="triage-support-ticket",
             body="# Triage\n1. pull docs\n2. read log\n## Edge cases\n- escalate",
         )
+        before = composing_host.system_prompt
 
-        composing_host.process_query("triage this inbound ticket")
+        sent = composing_host.process_query("triage this inbound ticket")["result"]
 
-        prompt = composing_host.system_prompt
-        assert "RECALLED PROCEDURES" in prompt
-        assert "triage-support-ticket" in prompt
-        assert "pull docs" in prompt
+        assert "RECALLED PROCEDURES" in sent
+        assert "triage-support-ticket" in sent
+        assert "pull docs" in sent
+        assert composing_host.system_prompt == before
 
     def test_off_state_prompt_is_byte_identical(self, composing_host):
         """No procedures → recall is a no-op and the prompt is unchanged.
@@ -4757,11 +4762,7 @@ class TestRecalledSkillInjection:
         assert "RECALLED PROCEDURES" not in after
 
     def test_injection_removed_when_recall_set_empties(self, composing_host):
-        """Recompose-on-change: disabling the only match drops it from the prompt.
-
-        Mirrors _refresh_active_tool_filter — the cached prompt is recomposed
-        when the recalled set changes, in either direction.
-        """
+        """Disabling the only match drops it from the next turn's message."""
         require_faiss()
         composing_host._memory_post_init_pending = False
         pid = _seed_procedure(
@@ -4770,8 +4771,7 @@ class TestRecalledSkillInjection:
             body="# B\n1. step\n## Edge cases\n- e",
         )
 
-        composing_host.process_query("goal one")
-        assert "proc-x" in composing_host.system_prompt
+        assert "proc-x" in composing_host.process_query("goal one")["result"]
 
         # Disable + rebuild empties the recall set for the next turn.
         composing_host._memory_store.put_skill(
@@ -4783,8 +4783,7 @@ class TestRecalledSkillInjection:
         )
         composing_host._rebuild_proc_faiss_index()
 
-        composing_host.process_query("goal two")
-        assert "proc-x" not in composing_host.system_prompt
+        assert "proc-x" not in composing_host.process_query("goal two")["result"]
         assert composing_host._recalled_skill_prompt == ""
 
     def test_recall_is_not_a_sixth_memory_tool(self, mixin_with_tools):
@@ -4800,6 +4799,67 @@ class TestRecalledSkillInjection:
         } <= registered
 
 
+class TestStableMemorySectionIsFrozen:
+    """The stable memory section is rendered once per session.
+
+    The store changes under it every turn (extraction, auto-stored tool
+    errors, confidence bumps). Re-read on every prompt recomposition, that
+    drift rewrote the system prompt and the server re-read the whole
+    conversation; mid-session writes reach the model through per-turn recall.
+    """
+
+    FACT = "Sam leads the safety team"
+
+    @staticmethod
+    def _tool(host, name):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        host.register_memory_tools()
+        return _TOOL_REGISTRY[name]["function"]
+
+    def test_mid_session_writes_stay_out_of_the_prompt(self, composing_host):
+        before = composing_host.system_prompt
+
+        composing_host._memory_store.store(
+            category="fact", content=self.FACT, source="extraction"
+        )
+        composing_host.rebuild_system_prompt()  # e.g. a skill load mid-session
+
+        assert composing_host.system_prompt == before
+
+    def test_forgetting_a_shown_memory_removes_it_at_once(self, composing_host):
+        kid = composing_host._memory_store.store(category="fact", content=self.FACT)
+        composing_host._refresh_stable_memory_prompt()
+        assert self.FACT in composing_host.system_prompt
+
+        assert self._tool(composing_host, "forget")(kid)["status"] == "removed"
+
+        assert self.FACT not in composing_host.system_prompt
+
+    def test_forgetting_an_unshown_memory_keeps_the_prompt(self, composing_host):
+        before = composing_host.system_prompt
+        kid = composing_host._memory_store.store(category="note", content="buy milk")
+        forget = self._tool(composing_host, "forget")
+
+        with patch.object(
+            composing_host,
+            "rebuild_system_prompt",
+            wraps=composing_host.rebuild_system_prompt,
+        ) as rebuild:
+            assert forget(kid)["status"] == "removed"
+
+        rebuild.assert_not_called()
+        assert composing_host.system_prompt == before
+
+    def test_a_context_switch_re_renders_it(self, composing_host):
+        assert self.FACT not in composing_host.system_prompt
+        composing_host._memory_store.store(category="fact", content=self.FACT)
+
+        composing_host.set_memory_context("global")
+
+        assert self.FACT in composing_host.system_prompt
+
+
 # ===========================================================================
 # #6.3 — a stored procedure must actually be observable in production
 # ===========================================================================
@@ -4808,8 +4868,8 @@ class TestRecalledSkillInjection:
 # last_recalled: None} — a procedure written by skill synthesis had never once
 # been recalled, despite near-verbatim repeats of its trigger phrase occurring
 # well after it was stored. The wiring itself (put_skill -> FAISS index ->
-# recall_skill -> _refresh_recalled_skills -> get_recalled_skills_system_prompt
-# -> composed system prompt) turned out to be intact — TestRecalledSkillInjection
+# recall_skill -> _refresh_recalled_skills -> the turn's memory context) turned
+# out to be intact — TestRecalledSkillInjection
 # above already proves it end to end. What was genuinely missing: recall_skill
 # never logged a single line except on a hard embedding failure, so "never
 # recalled" was undiagnosable without opening the SQLite file by hand. These
@@ -4818,14 +4878,14 @@ class TestRecalledSkillInjection:
 
 
 class TestRecallEndToEndReachesThePrompt:
-    """put_skill() -> a relevant query actually reaches the composed prompt.
+    """put_skill() -> a relevant query actually reaches the model.
 
     This is the literal defect-3 acceptance test: not "recall_skill() was
-    called" but "the procedure's body is present in the system prompt the
-    LLM would actually see."
+    called" but "the procedure's body is present in the message the LLM
+    would actually see."
     """
 
-    def test_put_skill_is_recalled_into_the_composed_prompt(self, composing_host):
+    def test_put_skill_is_recalled_into_the_turn(self, composing_host):
         require_faiss()
         from gaia.agents.base.memory import _embedding_to_blob
 
@@ -4848,13 +4908,12 @@ class TestRecallEndToEndReachesThePrompt:
             is None
         )
 
-        composing_host.process_query("please rotate the deploy keys")
+        sent = composing_host.process_query("please rotate the deploy keys")["result"]
 
-        prompt = composing_host.get_recalled_skills_system_prompt()
-        assert "RECALLED PROCEDURES" in prompt
-        assert "rotate-deploy-keys" in prompt
-        assert "revoke the old key last" in prompt
-        assert "RECALLED PROCEDURES" in composing_host.system_prompt
+        assert "RECALLED PROCEDURES" in sent
+        assert "rotate-deploy-keys" in sent
+        assert "revoke the old key last" in sent
+        assert "RECALLED PROCEDURES" not in composing_host.system_prompt
         # And the recall was actually recorded, not just rendered.
         assert (
             composing_host._memory_store.search_skills(skill_id=pid)[0]["last_used_at"]
@@ -4929,20 +4988,20 @@ class TestRecallSkillObservability:
 # ===========================================================================
 
 
-def _run_surrogate_planner(system_prompt, needed_tools, candidate_tools):
+def _run_surrogate_planner(context, needed_tools, candidate_tools):
     """Deterministic stand-in for the planner LLM, returning the tools it ran.
 
     The true 4th-attempt reduction is a behavioral property of the planner
     model (and of the tool-loader consumer, #1451) and belongs to the eval
     harness. What #1794 owns — and what this surrogate pins — is the *lever*:
     a recalled procedure hands the planner the exact ordered tool sequence in
-    its system prompt, so it runs only those steps; with no recall the planner
+    its context, so it runs only those steps; with no recall the planner
     must DISCOVER the sequence, probing candidate tools in registry order until
     it has covered the goal.
     """
     marker = "RECALLED PROCEDURES"
-    if marker in system_prompt:
-        block = system_prompt.split(marker, 1)[1]
+    if marker in context:
+        block = context.split(marker, 1)[1]
         # Follow the recipe: run the needed tools in their order of appearance
         # in the recalled block — zero discovery overhead.
         return sorted(
@@ -4985,10 +5044,10 @@ class TestRecallReducesToolSteps:
         goal = "triage this inbound support ticket"
 
         # --- Baseline: no procedure yet (the 1st-3rd attempts). ---
-        composing_host.process_query(goal)
-        assert "RECALLED PROCEDURES" not in composing_host.system_prompt
+        sent = composing_host.process_query(goal)["result"]
+        assert "RECALLED PROCEDURES" not in sent
         baseline = _run_surrogate_planner(
-            composing_host.system_prompt, needed, candidates
+            composing_host.system_prompt + sent, needed, candidates
         )
 
         # --- 4th attempt: the synthesized procedure is now recalled. ---
@@ -5005,10 +5064,10 @@ class TestRecallReducesToolSteps:
             ),
             tools_required=needed,
         )
-        composing_host.process_query(goal)
-        assert "RECALLED PROCEDURES" in composing_host.system_prompt
+        sent = composing_host.process_query(goal)["result"]
+        assert "RECALLED PROCEDURES" in sent
         recall = _run_surrogate_planner(
-            composing_host.system_prompt, needed, candidates
+            composing_host.system_prompt + sent, needed, candidates
         )
 
         # The measurable reduction: the recalled recipe eliminates discovery.
