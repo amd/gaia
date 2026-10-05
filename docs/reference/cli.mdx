@@ -110,7 +110,7 @@ Some skills intentionally need more headroom than the default (e.g. multi-file c
 
 ### Per-tool execution timeout
 
-Each tool call is bounded so a hung tool (e.g. a stuck connector or network request) surfaces an actionable error instead of leaving the agent — and the UI — stuck indefinitely. The default is **180 seconds** per tool.
+Each tool call is bounded so a hung tool (e.g. a stuck connector or network request) surfaces an actionable error instead of leaving the agent — and the UI — stuck indefinitely. The default is **180 seconds** per tool. Time a tool spends waiting for you to answer a file-access prompt doesn't count toward it.
 
 - **Fleet-wide:** set `GAIA_AGENT_TOOL_TIMEOUT` (seconds) to change the default for every tool at once.
 
