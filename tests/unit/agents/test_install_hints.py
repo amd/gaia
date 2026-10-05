@@ -287,6 +287,31 @@ class TestAgentImportErrorMessage:
         assert "is installed, but it could not be imported" in message
         assert "_gaia_missing_transitive_dep" in message
 
+    def test_gaia_agent_gaia_missing_top_level_reports_not_installed(self):
+        """gaia-agent-gaia's top-level package is gaia_agent (not gaia_agent_gaia).
+        A ModuleNotFoundError for gaia_agent must be treated as 'not installed'."""
+        error = ModuleNotFoundError("No module named 'gaia_agent'")
+        error.name = "gaia_agent"
+        message = agent_import_error_message(
+            error, "The GAIA agent is not installed", "gaia-agent-gaia"
+        )
+        assert "is not installed" in message
+        assert source_install_command("gaia-agent-gaia") in message
+        assert "--no-deps" not in message
+
+    def test_gaia_agent_gaia_missing_sibling_chat_reports_not_installed(self):
+        """A missing required sibling should reinstall the primary wheel with
+        dependencies enabled, restoring gaia-agent-chat."""
+        error = ModuleNotFoundError("No module named 'gaia_agent_chat'")
+        error.name = "gaia_agent_chat"
+        message = agent_import_error_message(
+            error, "The GAIA agent is not installed", "gaia-agent-gaia"
+        )
+        assert "is not installed" in message
+        assert source_install_command("gaia-agent-gaia") in message
+        assert "subdirectory=hub/agents/gaia/python" in message
+        assert "--no-deps" not in message
+
 
 class TestGaiaExtraRequirements:
     """Adding extras installs their requirements, never GAIA itself."""

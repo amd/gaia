@@ -36,6 +36,21 @@ _AGENT_SOURCE_SUBDIRS = {
     "gaia-agent-gaia": "gaia",
 }
 
+# Map wheel name -> actual top-level Python package name.
+# Needed because wheel names use hyphens but package directories use underscores,
+# and the mapping isn't always a simple replace (e.g. gaia-agent-gaia -> gaia_agent).
+_WHEEL_TOP_LEVEL_PACKAGE = {
+    "gaia-agent-chat": "gaia_agent_chat",
+    "gaia-agent-email": "gaia_agent_email",
+    "gaia-agent-gaia": "gaia_agent",
+}
+
+# Required sibling packages for each primary wheel. If one is missing, suggest
+# installing the primary wheel normally so dependency resolution installs it.
+_WHEEL_REQUIRED_SIBLINGS = {
+    "gaia-agent-gaia": ("gaia-agent-chat", "gaia_agent_chat"),
+}
+
 _REPO_URL = "https://github.com/amd/gaia.git"
 
 # Agent ids the ``gaia-agent-chat`` wheel registers — its three prompt
@@ -327,10 +342,30 @@ def agent_import_error_message(
     package means the package is genuinely absent. Anything else -- a
     missing transitive dependency, or an ImportError from a version-skewed
     wheel -- means the package is installed but broken.
+
+    Also treats a missing *required sibling* wheel (e.g. gaia-agent-chat
+    for gaia-agent-gaia) as "not installed" so the reinstall hint includes
+    the sibling via normal dependency resolution (no --no-deps).
     """
-    top_level = wheel.replace("-", "_")
+    top_level = _WHEEL_TOP_LEVEL_PACKAGE.get(wheel, wheel.replace("-", "_"))
+
+    # Primary wheel genuinely absent?
     if isinstance(error, ModuleNotFoundError) and (
         error.name == top_level or (error.name or "").startswith(top_level + ".")
     ):
         return agent_not_installed_message(subject, wheel, next_step=next_step)
+
+    # Missing required sibling (e.g. gaia_agent_chat for gaia-agent-gaia)?
+    siblings = _WHEEL_REQUIRED_SIBLINGS.get(wheel)
+    if siblings:
+        _, sib_pkg = siblings
+        if isinstance(error, ModuleNotFoundError) and (
+            error.name == sib_pkg or (error.name or "").startswith(sib_pkg + ".")
+        ):
+            # Reinstall the primary wheel with dependency resolution enabled;
+            # installing only the sibling would leave any other missing
+            # requirements undiscovered, while --no-deps would preserve this
+            # broken environment.
+            return agent_not_installed_message(subject, wheel, next_step=next_step)
+
     return agent_wheel_failed_message(subject, wheel, error, next_step=next_step)
