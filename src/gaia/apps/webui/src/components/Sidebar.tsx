@@ -112,7 +112,12 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     }, [setSidebarOpen]);
 
     const select = useCallback((id: string) => {
-        if (id === currentSessionId) return;
+        if (id === currentSessionId) {
+            // Still leaves Memory / Scheduled tasks for the open chat.
+            setCurrentSession(id);
+            closeOnMobile();
+            return;
+        }
         void cleanupAbandonedDraft(currentSessionId);
         setCurrentSession(id);
         setMessages([]);

@@ -75,6 +75,22 @@ describe('Sidebar', () => {
         expect(useChatStore.getState().currentSessionId).toBe('b');
     });
 
+    it('opening another chat leaves the Memory dashboard', () => {
+        useChatStore.setState({ currentSessionId: 'a', showMemoryDashboard: true });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Plan the trip' }));
+        expect(useChatStore.getState().currentSessionId).toBe('b');
+        expect(useChatStore.getState().showMemoryDashboard).toBe(false);
+    });
+
+    it('clicking the open chat leaves the Memory dashboard too', () => {
+        useChatStore.setState({ currentSessionId: 'a', showMemoryDashboard: true, messages: [] });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Fix the build' }));
+        expect(useChatStore.getState().currentSessionId).toBe('a');
+        expect(useChatStore.getState().showMemoryDashboard).toBe(false);
+    });
+
     it('deletes only after a confirming click', async () => {
         render(<Sidebar onNewChat={vi.fn()} />);
         fireEvent.click(screen.getByRole('button', { name: 'Delete Tax questions' }));
