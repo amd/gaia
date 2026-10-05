@@ -478,7 +478,7 @@ def client(monkeypatch):
     monkeypatch.setattr(setup_router, "runner", runner)
     app = FastAPI()
     app.include_router(setup_router.router)
-    return TestClient(app), runner
+    return TestClient(app, headers={"X-Gaia-UI": "1"}), runner
 
 
 def test_check_route_adds_the_steps(client, monkeypatch):
@@ -498,6 +498,18 @@ def test_check_route_adds_the_steps(client, monkeypatch):
     assert body["stage"] == "models"
     assert [s["key"] for s in body["steps"]] == list(sr.PHASES)
     assert seen == {"skip_chat_model": True, "load": True}
+
+
+def test_check_route_needs_the_ui_header(client, monkeypatch):
+    """A cross-site GET carries no X-Gaia-UI, so it must not start a check."""
+    test_client, _ = client
+    called = []
+    monkeypatch.setattr(setup_router, "check", lambda **k: called.append(k))
+    resp = test_client.get(
+        "/api/setup/check", params={"load": "true"}, headers={"X-Gaia-UI": ""}
+    )
+    assert resp.status_code == 403
+    assert called == []
 
 
 def test_check_route_unanswered_is_503(client, monkeypatch):

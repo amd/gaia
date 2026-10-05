@@ -158,7 +158,7 @@ def client(db):
     app = FastAPI()
     app.include_router(providers.router)
     app.state.db = db
-    return TestClient(app)
+    return TestClient(app, headers={"X-Gaia-UI": "1"})
 
 
 def _config():
@@ -170,6 +170,17 @@ def _write_config(data):
 
 
 # ── GET /api/providers ─────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("path", ["/api/providers", "/api/providers/active"])
+def test_side_effecting_reads_need_the_ui_header(client, monkeypatch, path):
+    """A cross-site GET carries no X-Gaia-UI, so it must not push a key or restore."""
+    called = []
+    monkeypatch.setattr(providers, "_cloud_entry", lambda p: called.append(p))
+    monkeypatch.setattr(providers, "restore_last_model", lambda db: called.append(db))
+    resp = client.get(path, headers={"X-Gaia-UI": ""})
+    assert resp.status_code == 403
+    assert called == []
 
 
 def test_list_when_lemonade_is_unreachable(client, lemonade, keys):

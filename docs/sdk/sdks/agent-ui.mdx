@@ -1703,8 +1703,10 @@ so the two can never disagree about whether GAIA is set up.
     only the embedding model is needed locally), `load` (also check that the
     models load).
 
-    **Errors:** **503** when the check could not be answered — a timeout or an
-    unexpected exit. That is never reported as "not set up".
+    **Errors:** **403** without the `X-Gaia-UI: 1` header — the check can start
+    the model server, so it is guarded like a mutating route. **503** when the
+    check could not be answered — a timeout or an unexpected exit. That is
+    never reported as "not set up".
   </Accordion>
 
   <Accordion title="POST /api/setup/run">
@@ -1738,7 +1740,8 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     Every provider with its state — `registered`, `key_source` (`environment`,
     `lemonade`, `stored`, or `null`), `models_discovered` — and the active
     model. A stored key is handed back to a Lemonade that lost it.
-    `lemonade_error` is set when Lemonade could not be reached.
+    `lemonade_error` is set when Lemonade could not be reached. Requires
+    `X-Gaia-UI: 1` (**403** without it).
   </Accordion>
 
   <Accordion title="GET /api/providers/active">
@@ -1747,7 +1750,7 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `restored`, `failed` (with the reason — another model is never switched in
     quietly), `none`, or `pending` while the local model server is still
     starting (not cached; ask again). A saved key is never sent to a Lemonade
-    that is not on this PC.
+    that is not on this PC. Requires `X-Gaia-UI: 1` (**403** without it).
   </Accordion>
 
   <Accordion title="POST /api/providers/{provider}/connect">
@@ -1832,7 +1835,9 @@ the desktop app's `gaia://hub/install/<id>` deep link.
    or `/v1/*` must carry `X-Gaia-UI: 1`. A cross-origin page cannot set a
    custom header without triggering a CORS preflight, and the app's CORS
    policy only approves preflights from its own first-party dev origins.
-   Missing the header is a `403`.
+   Missing the header is a `403`. Three reads with side effects carry the same
+   requirement: `GET /api/setup/check`, `GET /api/providers` and
+   `GET /api/providers/active`.
 2. **Origin allowlist.** A mutating request whose `Origin` names anything
    other than this server, loopback, or the live tunnel is refused, so a CORS
    misconfiguration alone isn't enough to get through.
