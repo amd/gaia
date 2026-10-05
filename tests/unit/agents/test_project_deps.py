@@ -12,6 +12,7 @@ from gaia.agents.base.project_map import (
     ProjectMap,
     build_project_map,
     clear_project_map_cache,
+    python_deps_line,
     render_project_map,
 )
 
@@ -89,10 +90,21 @@ def render(work_roots=("/r",), **fields):
     return render_project_map(pm, work_roots=work_roots)
 
 
-def test_missing_deps_and_the_work_roots_are_on_the_map():
-    text = render(python_deps=["asgiref", "sqlparse"], missing_python_deps=["asgiref"])
-    assert "NOT installed for `python`: asgiref (of 2 declared)" in text
-    assert "You can read and write without asking only under: /r" in text
+def deps_line(**fields):
+    return python_deps_line(
+        ProjectMap(root="/r", is_repository=True, vcs=None, **fields)
+    )
+
+
+def test_the_work_roots_are_on_the_map():
+    assert "You can read and write without asking only under: /r" in render()
+
+
+def test_deps_ride_in_the_turn_not_on_the_map():
+    """An install changes them mid-session; the system prompt must not change."""
+    fields = {"python_deps": ["asgiref", "sqlparse"], "missing_python_deps": ["a"]}
+    assert "dependencies" not in render(**fields)
+    assert "NOT installed for `python`: a (of 2 declared)" in deps_line(**fields)
 
 
 def test_a_long_list_of_work_roots_is_capped():
@@ -101,10 +113,10 @@ def test_a_long_list_of_work_roots_is_capped():
 
 
 def test_a_fully_installed_project_says_so():
-    assert "all 2 declared are installed" in render(
-        python_deps=["a", "b"], missing_python_deps=[]
+    assert deps_line(python_deps=["a", "b"], missing_python_deps=[]) == (
+        "[Python dependencies: all 2 declared are installed.]"
     )
 
 
 def test_an_unchecked_project_says_nothing_about_deps():
-    assert "dependencies" not in render(python_deps=["a"], missing_python_deps=None)
+    assert deps_line(python_deps=["a"], missing_python_deps=None) == ""

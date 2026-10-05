@@ -597,19 +597,6 @@ def render_project_map(
     elif pm.tools_present:
         commands.append(f"Installed: {', '.join(pm.tools_present)}")
 
-    deps: List[str] = []
-    if pm.missing_python_deps:
-        deps.append(
-            f"Python dependencies NOT installed for `python`: "
-            f"{', '.join(pm.missing_python_deps)} (of {len(pm.python_deps)} "
-            "declared). Importing the project, and running its tests, fails "
-            "until they are installed."
-        )
-    elif pm.missing_python_deps == [] and pm.python_deps:
-        deps.append(
-            f"Python dependencies: all {len(pm.python_deps)} declared are installed."
-        )
-
     index: List[str] = [f"Code index: {index_status}"] if index_status else []
 
     # The header always ships — a map that says nothing but "you are in
@@ -620,7 +607,6 @@ def render_project_map(
     used = count_tokens(head)
 
     optional: Sequence[str] = (
-        "\n".join(deps),
         "\n".join(quirks),
         _fit("\n".join(shape), int(token_budget * _DIR_SHAPE_SHARE)),
         "\n".join(entries),
@@ -641,6 +627,26 @@ def render_project_map(
         used += cost
 
     return "\n\n".join(out)
+
+
+def python_deps_line(pm: ProjectMap) -> str:
+    """``[Python dependencies ...]`` for the user turn, or "" when unknown.
+
+    Per turn rather than in the map: an install mid-session changes it, and a
+    changed system prompt makes a local model re-read the whole conversation.
+    """
+    if pm.missing_python_deps:
+        return (
+            f"[Python dependencies NOT installed for `python`: "
+            f"{', '.join(pm.missing_python_deps)} (of {len(pm.python_deps)} "
+            "declared). Importing the project, and running its tests, fails "
+            "until they are installed.]"
+        )
+    if pm.missing_python_deps == [] and pm.python_deps:
+        return (
+            f"[Python dependencies: all {len(pm.python_deps)} declared are installed.]"
+        )
+    return ""
 
 
 # ── agent mixin ───────────────────────────────────────────────────────────
@@ -727,8 +733,34 @@ class ProjectMapMixin:
         )
 
     def _work_roots(self) -> List[str]:
-        validator = getattr(self, "path_validator", None)
-        return [str(p) for p in getattr(validator, "allowed_paths", None) or ()]
+        """Where the agent may work without asking, as of the first render.
+
+        Frozen so a mid-session grant cannot rewrite the system prompt; the
+        grant still applies, only this line lags it.
+        """
+        if not hasattr(self, "_work_roots_cache"):
+            validator = getattr(self, "path_validator", None)
+            if validator is None:
+                return []
+            self._work_roots_cache = [
+                str(p) for p in getattr(validator, "allowed_paths", None) or ()
+            ]
+        return self._work_roots_cache
+
+    def get_memory_dynamic_context(self) -> str:
+        """Per-turn context, plus whether the project's Python deps are installed."""
+        parent = getattr(super(), "get_memory_dynamic_context", None)
+        parts = (parent() if parent else "", self._python_deps_line())
+        return "\n".join(part for part in parts if part)
+
+    def _python_deps_line(self) -> str:
+        try:
+            pm = self.materialize_project_map()
+        except OSError as e:
+            # Same as _on_task_start: a vanished root must not take the turn.
+            logger.warning("[project-map] cannot read the project root: %s", e)
+            return ""
+        return python_deps_line(pm) if pm is not None else ""
 
     def _shell_tool_offered(self) -> bool:
         """Whether *this turn* offers the shell, not whether the agent owns it.

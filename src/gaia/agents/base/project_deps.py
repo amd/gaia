@@ -5,8 +5,8 @@
 An agent that cannot import the project spends step after step finding that
 out — running its tests, reading the traceback, probing for the package,
 trying another interpreter. The project's own manifest says what it needs, and
-the interpreter says what it has: comparing them once, at task start, turns
-that exploration into one line of the project map.
+the interpreter says what it has: comparing them, and re-comparing only after
+an install, turns that exploration into one line on each user turn.
 
 Nothing from the project is imported or executed. The manifest is parsed as
 data and the interpreter is asked only which distributions it has.
