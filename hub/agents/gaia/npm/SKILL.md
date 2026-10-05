@@ -316,7 +316,7 @@ The canonical event shapes, as emitted:
 
 | Event | Shape |
 |---|---|
-| `status` | `{ type, message }` — progress and reasoning narration |
+| `status` | `{ type, message, phase?, words?, chars? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`) names what the model is doing; show it as the live line, not as narration |
 | `token` | `{ type, delta }` — answer text to append |
 | `tool_call` | `{ type, tool, args }` |
 | `tool_result` | `{ type, tool, data, render? }` |

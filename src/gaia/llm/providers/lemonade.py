@@ -75,6 +75,8 @@ def _reasoning_tokens(usage: dict) -> Optional[int]:
 TOOL_CALL_PROGRESS_INTERVAL_S = 3.0
 #: Argument characters before a tool call is long enough to report on.
 TOOL_CALL_PROGRESS_MIN_CHARS = 1500
+#: Seconds between word counts while the model reasons.
+REASONING_PROGRESS_INTERVAL_S = 1.0
 
 
 def _accumulate_tool_calls(acc: dict, deltas: Optional[List[dict]]) -> None:
@@ -477,6 +479,11 @@ class LemonadeProvider(LLMClient):
     #: its arguments arrive as silent deltas, minutes of nothing to show.
     tool_call_progress: Optional[Callable[[str, int], None]] = None
 
+    #: Called with the reasoning word count so far while a thinking model
+    #: reasons. Its text is held back a line at a time, so a one-paragraph
+    #: thought otherwise shows nothing until it is finished.
+    reasoning_progress: Optional[Callable[[int], None]] = None
+
     def __init__(
         self,
         model: Optional[str] = None,
@@ -820,6 +827,7 @@ class LemonadeProvider(LLMClient):
         thought = ""  # reasoning held back until a line is whole (see below)
         tool_calls: dict[int, dict] = {}
         next_progress = time.perf_counter()
+        next_reasoning_progress: Optional[float] = None
         finish_reason = ""
         text_seen: list[str] = []
         reasoning_seen: list[str] = []
@@ -876,6 +884,21 @@ class LemonadeProvider(LLMClient):
                     reasoning = delta.get("reasoning_content")
                     if reasoning:
                         reasoning_seen.append(reasoning)
+                        now = time.perf_counter()
+                        if next_reasoning_progress is None:
+                            next_reasoning_progress = (
+                                now + REASONING_PROGRESS_INTERVAL_S
+                            )
+                        elif (
+                            self.reasoning_progress is not None
+                            and now >= next_reasoning_progress
+                        ):
+                            self.reasoning_progress(
+                                len("".join(reasoning_seen).split())
+                            )
+                            next_reasoning_progress = (
+                                now + REASONING_PROGRESS_INTERVAL_S
+                            )
                         if not in_thinking:
                             yield "<think>"
                             in_thinking = True

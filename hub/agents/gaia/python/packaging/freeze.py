@@ -89,6 +89,10 @@ COLLECT_SUBMODULES = [
 # collect-all because the wheel carries native .dll/.pyd payloads that static
 # analysis cannot see. ~29 MB, Apache-2.0 (its vendored onnxruntime is MIT).
 COLLECT_ALL = ["faiss", "sherpa_onnx"]
+# Imported behind an ``except ImportError`` guard, so PyInstaller bundles them
+# only when they are installed and the binary otherwise boots without them.
+# anthropic: ``--use-claude`` and ``/model``, which the TUI forwards to the binary.
+REQUIRED_IMPORTS = ["anthropic"]
 # importlib.metadata version probes + entry-point agent discovery.
 COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia", "gaia-agent-chat"]
 
@@ -132,16 +136,17 @@ def _verify_collect_targets() -> None:
 
     missing = [
         mod
-        for mod in COLLECT_SUBMODULES + COLLECT_ALL
+        for mod in COLLECT_SUBMODULES + COLLECT_ALL + REQUIRED_IMPORTS
         if importlib.util.find_spec(mod) is None
     ]
     if missing:
         raise SystemExit(
-            "freeze: refusing to build -- these modules are declared for "
-            f"collection but are not installed: {', '.join(missing)}.\n"
-            "PyInstaller would only warn and produce a binary missing that "
-            "capability. Install them into the freeze environment and re-run, "
-            'e.g. `uv pip install --python .venv-freeze -e ".[api,rag]"`.'
+            "freeze: refusing to build -- these modules must be in the binary "
+            f"but are not installed: {', '.join(missing)}.\n"
+            "PyInstaller would produce a binary missing that capability "
+            "without failing. Install them into the freeze environment the way "
+            'the "Install deps + PyInstaller" step of '
+            ".github/workflows/release_agent_gaia.yml does, and re-run."
         )
 
 

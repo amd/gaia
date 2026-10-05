@@ -9,6 +9,7 @@ from GitHub releases for Windows, Linux, and macOS.
 """
 
 import logging
+import ntpath
 import os
 import platform
 import re
@@ -190,39 +191,42 @@ class LemonadeInstaller:
             print(f"   {message}")
 
     def refresh_path_from_registry(self) -> None:
-        """Refresh PATH from Windows registry after MSI install."""
+        """Add the PATH entries an MSI install just wrote to the registry.
+
+        The process keeps its own PATH first — the active venv and whatever
+        the launching shell added — and gains only the registry entries it
+        lacks, with ``%VARS%`` expanded.
+        """
         if self.system != "windows":
             return
-        try:
-            import winreg
+        import winreg
 
-            user_path = ""
+        registry_entries = []
+        for root, subkey in (
+            (winreg.HKEY_CURRENT_USER, r"Environment"),
+            (
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+            ),
+        ):
             try:
-                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
-                    user_path, _ = winreg.QueryValueEx(key, "Path")
-            except (FileNotFoundError, OSError):
-                pass
+                with winreg.OpenKey(root, subkey) as key:
+                    value, _ = winreg.QueryValueEx(key, "Path")
+            except OSError:
+                continue  # this hive has no Path value
+            registry_entries += winreg.ExpandEnvironmentStrings(value).split(";")
 
-            system_path = ""
-            try:
-                with winreg.OpenKey(
-                    winreg.HKEY_LOCAL_MACHINE,
-                    r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
-                ) as key:
-                    system_path, _ = winreg.QueryValueEx(key, "Path")
-            except (FileNotFoundError, OSError):
-                pass
-
-            if user_path or system_path:
-                new_path = (
-                    f"{user_path};{system_path}"
-                    if user_path and system_path
-                    else (user_path or system_path)
-                )
-                os.environ["PATH"] = new_path
-                log.debug("Refreshed PATH from registry")
-        except Exception as e:
-            log.debug(f"Failed to refresh PATH: {e}")
+        entries = [p for p in os.environ.get("PATH", "").split(";") if p]
+        seen = {ntpath.normcase(p.rstrip("\\/")) for p in entries}
+        added = []
+        for entry in (e.strip() for e in registry_entries):
+            key_form = ntpath.normcase(entry.rstrip("\\/"))
+            if entry and key_form not in seen:
+                seen.add(key_form)
+                added.append(entry)
+        if added:
+            os.environ["PATH"] = ";".join(entries + added)
+            log.debug("Added %d PATH entries from the registry", len(added))
 
     def check_installation(self) -> LemonadeInfo:
         """
