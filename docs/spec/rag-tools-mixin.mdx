@@ -281,12 +281,19 @@ class RAGToolsMixin:
         """
         Add a document to the RAG index.
 
+        Waits up to 120 s. A document that takes longer (a thousand-page PDF
+        on a CPU embedder runs for minutes) keeps indexing in the background
+        and the call returns "in_progress" with chunks_embedded, total_chunks,
+        elapsed_seconds and estimated_seconds_remaining. Calling it again with
+        the same path waits on that job; query_specific_file's auto-index
+        behaves the same way.
+
         Args:
             file_path: Path to PDF to index
 
         Returns:
             {
-                "status": "success" | "error",
+                "status": "success" | "in_progress" | "error",
                 "message": str,
                 "file_name": str,
                 "file_type": str,
