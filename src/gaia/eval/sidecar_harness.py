@@ -595,7 +595,9 @@ class SidecarEvalHarness:
                 f"could not reach the /query front-door at {url} "
                 f"({e.__class__.__name__}: {e}). Is the daemon running "
                 "(`gaia daemon status`) and the sidecar ensured? Check "
-                "~/.gaia/host/ and the sidecar logs under ~/.gaia/agents/."
+                "the daemon host dir (~/.gaia/host/, or $GAIA_HOME/host/ "
+                "when GAIA_HOME is set) and the sidecar logs under "
+                "~/.gaia/agents/."
             ) from e
 
         if resp.status_code != 200:

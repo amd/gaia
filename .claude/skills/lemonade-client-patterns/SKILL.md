@@ -30,14 +30,14 @@ It is a **public SDK surface that real user paths reach**. In-tree callers: `__m
 client's own tests, the flagship sidecar's warm-up turn
 (`hub/agents/gaia/python/gaia_agent/server.py`) and the audio tools' transcript-refinement
 LLM (`src/gaia/agents/tools/audio_tools.py`). Both of those pass no `host`/`port`, so a
-change to how the factory resolves the server address changes `gaia audio` and the
-flagship's warm-up (#3558).
+change to how the factory resolves the server address changes audio transcription
+and the flagship's warm-up (#3558).
 
 ### Module-level helpers should be PUBLIC (no underscore)
 Helpers shared across packages (`vlm_client.py`, `ui/routers/system.py`, `ui/_chat_helpers.py`, `ui/server.py`, `agents/base/agent.py`) must be public-named (no leading `_`). Leading underscore signals "package-internal" and creates confusion. Precedent: `system.py` already imports `DEFAULT_CONTEXT_SIZE` from `lemonade_client`.
 
-### `agents/base/agent.py` — deferred imports are intentional
-The base `Agent` class deliberately imports `gaia.llm.lemonade_client` ONLY inside `try:` blocks inside methods (never at module level). This preserves the LLM-backend-agnostic layering invariant so agents can run with Claude/OpenAI backends without loading Lemonade. **Do not add module-level imports from `gaia.llm.*` to this file.**
+### `agents/base/agent.py` — mostly deferred imports, but not Lemonade-free
+`agent.py` imports a few constants and helpers from `gaia.llm.lemonade_client` at module level (`DEFAULT_MODEL_NAME`, the ctx-budget helpers) and `CONNECTION_FAILURE_RE` from `gaia.llm.providers.lemonade`, so importing the base `Agent` already loads `lemonade_client`. Everything else (`LemonadeClient`, `LemonadeManager`, `cloud_model_provider`, …) is imported inside the methods that use it. Keep new Lemonade-specific *behavior* behind those deferred imports, and keep `lemonade_client` cheap to import, since every agent pays for it.
 
 ### VLMClient does NOT resolve env vars itself
 `VLMClient` forwards `api_key=` raw to `LemonadeClient`, which does the single canonical resolution. VLMClient has no direct HTTP calls (delegates everything to `self.client`), so pre-resolving env vars there violates single-source-of-truth.
@@ -56,8 +56,9 @@ Misconfigured reverse proxies can reflect the `Authorization` header back in a 4
 - `src/gaia/ui/routers/system.py` — already imports `DEFAULT_CONTEXT_SIZE` from `lemonade_client` (established cross-package import precedent)
 - `src/gaia/ui/_chat_helpers.py` — 4 Lemonade-bound httpx call sites: auto-title POST (~337), health GET (~1006, ~1058), stats GET (~2289). (Line numbers drift — grep the call, don't trust the offset.)
 - `src/gaia/ui/server.py` — 2 health probe httpx GET sites (~299, ~311)
-- `src/gaia/agents/base/agent.py` — `_is_loaded_ctx_too_small()` (~2177) — DEFERRED import pattern
-- `tests/test_lemonade_client.py` — uses `responses` library for `requests` interception; `TestLemonadeClientMock` class
+- `src/gaia/agents/base/agent.py` — `_is_loaded_ctx_too_small()` is the reference for the deferred pattern (`lemonade_client` and `LemonadeManager` imported inside the method)
+- `tests/unit/test_lemonade_client_http.py` — mocked HTTP via the `responses` library (`TestLemonadeClientMock`); `_mock_cold_load` / `_assert_one_load` answer and check the pre-request ctx load
+- `tests/test_lemonade_client.py` — live-server `TestLemonadeClientIntegration` only (CI selects it with `-k Integration`)
 - `docs/.env.example` — This is a Mintlify/docs-proxy config file, NOT GAIA's env var file. GAIA env vars go in `.env.example` at the repo root.
 
 ## Conventions
@@ -106,10 +107,10 @@ next(gen)  # consume one item; don't iterate fully or it blocks
 ```
 
 ### `_ensure_model_loaded` makes its own network calls
-In `test_401_does_not_trigger_auto_download_retry`-style tests, forgetting to mock `_ensure_model_loaded` causes the test to fail because `_ensure_model_loaded` itself calls `get_status()` → `list_models()`, which makes HTTP requests that can trigger model loading. Always patch `_ensure_model_loaded` when testing `chat_completions` error paths.
+In `test_401_does_not_trigger_auto_download_retry`-style tests, forgetting to mock `_ensure_model_loaded` causes the test to fail because `_ensure_model_loaded` itself calls `get_status()` → `list_models()`, which makes HTTP requests that can trigger model loading. Always patch `_ensure_model_loaded` when testing `chat_completions` error paths. On happy paths, answer it instead (`_mock_cold_load`) and assert the `/load` body (`model_name`, `ctx_size`, `llamacpp_args`) — patching it away hides the load the user actually triggers.
 
 ### Never assume a failure is pre-existing — check `main`
-`tests/test_lemonade_client.py` has historically carried a few failures unrelated to any
+`tests/unit/test_lemonade_client_http.py` (formerly the mock class in `tests/test_lemonade_client.py`) has historically carried a few failures unrelated to any
 given change (model-name drift, removed kwargs, deprecated APIs). **Do not work from a
 remembered list** — a test that was broken last month may have been fixed since, and
 dismissing it as "pre-existing" would hide a real regression you just introduced.
@@ -117,7 +118,7 @@ dismissing it as "pre-existing" would hide a real regression you just introduced
 Confirm empirically for each failing test, every time:
 
 ```bash
-git stash && python -m pytest tests/test_lemonade_client.py::<Class>::<test> -x; git stash pop
+git stash && python -m pytest tests/unit/test_lemonade_client_http.py::<Class>::<test> -x; git stash pop
 ```
 
 Fails on a clean `main` too → pre-existing. Passes there → **you broke it.**

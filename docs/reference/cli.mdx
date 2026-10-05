@@ -236,7 +236,34 @@ profile. The default `gaia` profile is a superset, so a bare `gaia init` covers 
 </Note>
 
 <Note>
-`gaia llm` quick queries use the global default model (`Gemma-4-E4B-it-GGUF`).
+For the `gaia`, `chat`, `rag` and `all` profiles the chat model follows the
+hardware. Where Lemonade reports a GPU with enough memory for it — about 27 GB for
+models, its 23.3 GB of weights and vision projector plus the context cache at its
+smallest, 64K window, so a 64 GB+ Strix Halo or a 32 GB GPU, but not a 24 GB card or a
+CPU-only PC — `gaia init` also sets up `Qwen3.6-35B-A3B-GGUF` (a 23 GB Lemonade
+built-in MoE, run with thinking on, needs Lemonade v11.7.0 or newer) as the chat model,
+prints why, and records it as `default_model`. It loads with the largest window the
+memory holds, up to 262,144 tokens: 256K on a Strix Halo, about 152K on a 32 GB GPU
+(see [Context length follows memory](/guides/ai-providers#context-length-follows-memory)). Gemma is
+still downloaded, since vision and document-image extraction load it by name. Every
+smaller PC gets Gemma alone. A `default_model` you set yourself always wins, and
+`--check` asks for the same model `gaia init` would download.
+</Note>
+
+<Note>
+`user.Qwen3.8-Flash-Next-GGUF` (an 82 GB download, multimodal, thinking on) is
+available on a 128 GB Strix Halo and never auto-selected. It needs ~90 GB for models
+and Lemonade v2026.39.1 or newer (its llama.cpp cannot load the model otherwise;
+upgrade with `gaia init --force-reinstall`). Choose it with
+`gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`, or pick it in the
+terminal UI's model picker; Lemonade downloads it on first use. `gaia init` refuses it
+on a PC that cannot hold it and names the memory it needs. To measure both on your
+own PC, speed, tool calling and (with `--tasks core`) agent quality, run
+`python util/compare_local_models.py` from a GAIA checkout.
+</Note>
+
+<Note>
+`gaia llm` quick queries use `default_model` when set, else `Gemma-4-E4B-it-GGUF`.
 </Note>
 
 **Examples:**
@@ -773,7 +800,7 @@ The lemonade server must be running. If not available, the command will provide 
 
 ### Chat Command
 
-Start an interactive conversation or send a single message with conversation history.
+Talk to the flagship GAIA agent (the same agent the TUI and Agent UI run): start an interactive conversation, or send a single message and exit.
 
 ```bash
 gaia chat [MESSAGE] [OPTIONS]
@@ -783,12 +810,18 @@ gaia chat [MESSAGE] [OPTIONS]
 - **No message**: Starts interactive chat session
 - **Message provided**: Sends single message and exits
 
+**Output:** the answer goes to stdout; the device banner, model-load progress,
+warnings and errors go to stderr, so `gaia chat -q "…" > answer.txt` captures
+just the answer. INFO diagnostics are written only to the log file
+(`~/.gaia/gaia.log`, or the path in `GAIA_AGENT_LOG`); `--debug` also shows them
+on stderr.
+
 **Options:**
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
-| `--model` | string | auto-selected by agent | Override the model used by `ChatAgent` (`None` means let the agent pick; see `ChatAgentConfig.model_id`). Falls back to `default_model` from config — see [Configuration](#configuration) |
+| `--model` | string | auto-selected by agent | Override the model the GAIA agent uses (`None` means let the agent pick; see `GaiaAgentConfig.model_id`). Falls back to `default_model` from config — see [Configuration](#configuration) |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
 | `--chunk-size` | integer | 500 | Document chunk size for RAG |
@@ -802,11 +835,13 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--stats`, `--show-stats` | flag | false | Show performance statistics |
 | `--stream` | flag | false | Enable streaming responses |
 | `--show-prompts` | flag | false | Display prompts sent to LLM |
-| `--debug` | flag | false | Enable debug output |
+| `--debug` | flag | false | Enable debug output, including INFO diagnostics on stderr |
 | `--list-tools` | flag | false | List available tools and exit |
 | `--ui` | flag | false | Launch the Chat Web UI (browser-based interface on port 4200) |
 | `--ui-port` | integer | 4200 | Port for the Agent UI server (used with `--ui`) |
 | `--ui-dist` | path | - | Serve an alternative prebuilt Agent UI bundle (e.g., a PR preview) instead of the one shipped in the package |
+
+**Exit codes:** `--query` exits `0` when the agent answered, `1` when the query or the agent failed, and `130` when interrupted with Ctrl+C — so `gaia chat --query "..." && next-step` only runs next-step on success.
 
 **Examples:**
 
@@ -892,6 +927,8 @@ gaia prompt "MESSAGE" [OPTIONS]
 | `--config` | path | `~/.gaia/config.json` | GAIA config file used to resolve `default_model` (or `$GAIA_CONFIG_FILE`) |
 | `--stats` | flag | false | Show performance statistics |
 
+With `--stats`, the command exits `1` if the stats cannot be fetched after the answer has printed.
+
 **Examples:**
 
 <CodeGroup>
@@ -938,13 +975,13 @@ gaia talk [OPTIONS]
 | `--base-url` | string | `LEMONADE_BASE_URL` or `http://localhost:13305/api/v1` | Lemonade server URL |
 | `--no-tts` | flag | false | Disable text-to-speech |
 | `--audio-device-index` | integer | auto-detect | Audio input device index |
-| `--whisper-model-size` | string | base | Whisper model [tiny, base, small, medium, large] |
+| `--whisper-model-size` | string | base | Whisper model Lemonade transcribes with [tiny, base, small, medium, large, turbo] |
 | `--silence-threshold` | float | 0.5 | Seconds of silence that end your turn |
 | `--mic-threshold` | float | 0.003 | Microphone amplitude threshold for voice detection (lower = more sensitive) |
 | `--stats`, `--show-stats` | flag | false | Print performance statistics after each reply |
 | `--index, -i` | path | - | PDF document for voice Q&A |
 
-The microphone is muted while GAIA speaks. Say "stop" or press Ctrl+C to end the session; `gaia talk` exits non-zero if the voice loop or microphone fails.
+Speech recognition (Whisper) and voice output (Kokoro) run in the same Lemonade Server as the chat model, at `--base-url`; the first run downloads both models through it. The microphone is muted while GAIA speaks. Say "stop" or press Ctrl+C to end the session; `gaia talk` exits non-zero if the voice loop, the microphone or Lemonade's transcription fails.
 
 **Examples:**
 
@@ -1474,7 +1511,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, and for new sessions in the Agent UI |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set. `user.Qwen3.8-Flash-Next-GGUF` is available on a 128 GB Strix Halo; choose it here, `gaia init` never does |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
@@ -1575,7 +1612,7 @@ gaia download [OPTIONS]
 | `--clear-cache` | flag | false | Delete all downloaded GAIA models to free up disk space |
 
 **Available Agents:**
-chat, code, talk, rag, blender, jira, docker, vlm, minimal, mcp
+chat, talk, rag, vlm, minimal, mcp
 
 **Examples:**
 
@@ -1603,7 +1640,7 @@ gaia download
 Download for specific agent:
 <CodeGroup>
 ```bash Download Agent Models
-gaia download --agent code
+gaia download --agent chat
 ```
 </CodeGroup>
 
@@ -1628,17 +1665,13 @@ gaia download --agent code
 
 ---
 
-### Pull Command
+### Pulling a single model
 
-To download individual models, use the Lemonade Server CLI directly:
-
-```bash
-lemonade-server pull MODEL_NAME [OPTIONS]
-```
-
-<Tip>
-Use `lemonade-server list` to see all available models and their download status.
-</Tip>
+`gaia download` takes no model name; it fetches every model an agent needs. To
+pull one model, use the client that ships with your Lemonade install — on a
+current Lemonade that is `lemonade pull MODEL_NAME`. When a GAIA command finds a
+model missing, its error names the exact command for your machine, so you never
+have to guess which client you have.
 
 ---
 
@@ -1664,7 +1697,7 @@ get a 401. `start` writes them to a file you source rather than printing the key
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
-✅ Embedded Lemonade 2026.39.1 running on http://localhost:62232/api/v1
+✅ Embedded Lemonade 2026.40.0 running on http://localhost:62232/api/v1
    pid 26080   logs: ~/.gaia/lemonade/lemond.log
 
    The instance is private. Load its URL and API key with:
@@ -1801,6 +1834,22 @@ Visualize llama.cpp performance logs:
 ```bash
 gaia perf-vis ./logs/llama-server.log
 ```
+
+Benchmark code search on real repositories (recall vs `git grep`, scale, robustness; no LLM):
+```bash
+gaia eval retrieval --component code --suite pr --gate tests/fixtures/eval_baselines/code-retrieval/pr.json
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--component` | required | `code`: the code index behind semantic code search |
+| `--suite` | `pr` | `pr` (~40 min, gates PRs), `nightly` (sampled), `scale` (big repos, hours) |
+| `--parts` | the suite's | Comma-separated subset of `quality,incremental,robustness,scale` |
+| `--gate BASELINE` | off | Compare with a baseline `results.json`; exit 1 on a regression |
+| `--tolerance` | `0.05` | Largest drop in a quality metric that is not a regression |
+| `--out` | `eval/results/retrieval-code-<suite>-<time>` | Where `results.json` and `report.md` go |
+| `--work-root` | `$GAIA_BENCH_WORK_ROOT` or `<tmp>/gaia-bench` | Repository cache and indexes |
+| `--keep-work` | off | Keep the indexes built during the run |
 
 [→ Full Evaluation Guide](/reference/eval)
 
@@ -1976,6 +2025,8 @@ gaia eval tasks swebench eval/results/eval-tasks-swebench   # Grade those predic
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--instances` | the five-instance pilot | Comma-separated SWE-bench Verified instance ids; only with `--suite swebench` |
+| `--sample N` | off | A seeded random N of the 500 SWE-bench Verified instances instead of `--instances`; the same N and seed always pick the same tasks |
+| `--seed S` | `20260930` | The seed `--sample` draws with |
 | `--no-evaluate` | off | Capture predictions without grading them in Docker |
 
 [→ How tasks are scored and gated](/reference/eval#flagship-agent-tasks) · [→ Comparing harnesses and models](/reference/eval#comparing-harnesses-and-models)
@@ -2078,6 +2129,7 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
 
     **Output includes:**
     - Knowledge entries by category (fact, preference, error, skill) and context
+    - Search-vector coverage, and how many entries are **Without vector** (saved while the embedding model was unavailable, so only keyword recall finds them) with how to re-embed them
     - Conversation count and session history
     - Tool call success rates and error counts
     - Upcoming and overdue time-sensitive items
@@ -2810,6 +2862,8 @@ View performance statistics from the most recent model run.
 gaia stats [OPTIONS]
 ```
 
+Exits `0` and says so when no run has recorded stats yet. If the stats cannot be fetched — for example, the LLM server is unreachable — it prints the cause to stderr and exits `1`.
+
 ---
 
 ### Test Commands
@@ -2859,7 +2913,7 @@ gaia test --test-type TYPE [OPTIONS]
     **Options:**
     - `--recording-duration` - Recording duration (default: 10s)
     - `--audio-device-index` - Audio input device index
-    - `--whisper-model-size` - Whisper model size (default: base)
+    - `--whisper-model-size` - Whisper model Lemonade transcribes with (default: base)
 
     <Note>
       These test the **live microphone** path. To transcribe a file you already have, ask the GAIA agent — see [Transcription & Meeting Notes](/guides/transcription).
@@ -2988,7 +3042,7 @@ contract; every route needs `Authorization: Bearer <token>` from
 |-------|---------|
 | `GET /daemon/v1/status` | pid / port / uptime / API version |
 | `POST /daemon/v1/lemonade/ensure` | Start GAIA's embedded Lemonade Server if stopped and return where it listens (409 if not managed, 503 on a start failure). Host API ≥ 1.2 |
-| `POST /daemon/v1/lemonade/start` | Start or attach the local model server; returns 503 with actionable detail on refusal. Host API ≥ 1.3 |
+| `POST /daemon/v1/lemonade/start` | Start or attach the local model server — GAIA's embedded one when `gaia init` installed it and `LEMONADE_BASE_URL` is unset, otherwise the system install; returns 503 with actionable detail on refusal. Host API ≥ 1.3 |
 | `GET /daemon/v1/lemonade/status` | Whether this daemon supervises a server, its PID, and its log path. Host API ≥ 1.3 |
 | `POST /daemon/v1/shutdown` | graceful drain + exit |
 | `GET /daemon/v1/agents` | registered sidecars — never the bearer token |
@@ -3508,7 +3562,7 @@ gaia diagnostics --output /tmp/my-bundle.tgz
 The bundle includes:
 - System info snapshot (`uname -a`, distro, relevant env vars, all TCP listeners via `ss -tlnp`)
 - State files from `~/.gaia/` (config, session data — no chat content)
-- Log files: `~/.gaia/gaia.log` and `~/.gaia/electron-main.log` (omitted with `--no-logs`)
+- Log files: `~/.gaia/gaia.log` with its rotated copies (`gaia.log.1`, `gaia.log.2`, ...) and `~/.gaia/electron-main.log`, omitted with `--no-logs`. A log over 50 MB is bundled as its last 50 MB, named `<file>.tail`.
 
 ---
 

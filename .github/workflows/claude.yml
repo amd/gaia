@@ -18,37 +18,34 @@
 #   or that the agent isn't fully sure of still get a PR — opened as a DRAFT with a manual test plan.
 # - release-notes (workflow_run): ✅ Fires when "Publish Release" succeeds on a v* tag — generates docs + GH release notes
 #
-# Action version: the conversational jobs (pr-review, pr-comment, issue-handler) run the
+# Action version: the conversational jobs (pr-review, pr-rereview, pr-comment,
+# issue-handler, issue-triage) run the
 # action via the reusable workflow .github/workflows/claude-run.yml — which also adds a
 # retry for the upstream install-phase ENOENT crash and verifies output was produced.
-# auto-fix and release-notes still call the action inline. All invocations pin the same
-# SHA (v1.0.184). v0 `@beta` was stuck on a 2025-08-22 SHA that predates
-# `pull_request_target` support (merged 2025-09-22) and Opus 4.7 support (v1.0.98). v1's
-# API replaces `direct_prompt` / `custom_instructions` / `model` / `max_turns` with
-# `prompt` + `claude_args`.
+# auto-fix and release-notes still call the action inline. Every invocation pins the same
+# SHA; the version is in the `# v1.0.x` comment on each `uses:` line, and Dependabot bumps
+# them together. v1's API replaces `direct_prompt` / `custom_instructions` / `model` /
+# `max_turns` with `prompt` + `claude_args`.
 #
 # MODEL SUPPORT IS GATED BY THE ACTION VERSION — bumping a model string alone is not
 # enough. The action bundles the Claude Code CLI that resolves model names, so a model
-# released after the pinned build is unresolvable. v1.0.178 (2026-07-19) predates Claude
-# Opus 5 (2026-07-24); v1.0.184 bundles CLI 2.1.221 and resolves it. When moving to a
-# newer model, bump this SHA in the SAME change and prove it first with
+# released after the pinned build is unresolvable. When moving to a newer model, bump this
+# SHA in the SAME change and prove it first with
 # `gh workflow run claude-auth-canary.yml -f model=<new-id>` before trusting other jobs.
+# claude-run.yml fails a run whose model-usage map lacks the requested model, so a CLI
+# that quietly substitutes another model shows up red instead of as a weaker review.
 #
 # Model strings are repeated per job ON PURPOSE, not centralized into a top-level `env:`.
 # Five jobs here call the reusable claude-run.yml, and GitHub does not expose the `env`
 # context inside `jobs.<id>.with:` (only github/needs/strategy/matrix/inputs/vars) — an
 # `${{ env.CLAUDE_MODEL }}` there is a workflow validation error. Centralizing would cover
 # only auto-fix and release-notes and leave the rest hardcoded, which is worse than a
-# consistent grep. To bump every model: grep this file for `--model` (7 hits), plus
-# AUDIT_MODEL / WALKTHROUGH_*_MODEL in the audit + walkthrough workflows, the canary's
-# own default, and the pinned CLI model in claude-run.yml's evidence stage.
-# EVAL_MODEL in eval_flagship.yml is in that list but is NOT a like-for-like
-# bump: it is the JUDGE that scores eval runs, so moving it changes what a
-# score means and the committed baselines (scored by Sonnet 4.6) stop being comparable.
-# It moved to Opus 5 here without regenerated baselines, so `--compare` now warns on the
-# judge mismatch instead of silently reading the shift as a regression — see
-# `compare_scorecards` in src/gaia/eval/runner.py. Regenerate with `--save-baseline` on
-# hardware and the warning goes away.
+# consistent grep. To bump every model: `git grep -n 'claude-opus-' .github/workflows`
+# (the 7 `--model` lines here, AUDIT_MODEL, WALKTHROUGH_*_MODEL, the canary default,
+# claude-run.yml's evidence stage, and the other scheduled Claude jobs).
+# EVAL_MODEL in eval_flagship.yml is deliberately NOT in that list: it drives and judges
+# the scenario eval, so it stays on claude-sonnet-4-6 until a baseline is captured under
+# a new one (see the note beside it). Moving it changes what a score means.
 #
 # Authentication: all 7 jobs prefer a subscription OAuth token over a billed API key.
 # Set the `CLAUDE_CODE_OAUTH_TOKEN` repo secret (generate locally with `claude setup-token`,
@@ -253,7 +250,7 @@ jobs:
 
             ## Output style
 
-            CLAUDE.md "Issue Response Guidelines" sets the style — follow it. Lead with the verdict in 1–2 sentences; `file.py:line` references go AFTER the finding, not before; do not open with a labelled `In plain English:` preamble. Length caps and the nit limit live in the review rubric (`/tmp/review-rubric.md`) — follow them; if the rubric is unavailable, keep the summary tight, blocking issues focused, and nits to a short bounded list. Keep part 1 short by pushing technical specifics into part 2.
+            CLAUDE.md "How You Communicate" sets the style — follow it; lead with the verdict. Length caps and the nit limit live in the review rubric (`/tmp/review-rubric.md`) — follow them; if the rubric is unavailable, keep the summary tight, blocking issues focused, and nits to a short bounded list. Keep part 1 short by pushing technical specifics into part 2.
 
             Be concise and write for the human: plain language over implementation detail. A `file.py:line` or symbol name earns its place only when it helps the author act on a finding — not to show your work. Don't narrate internals the reader doesn't need.
 
@@ -626,7 +623,7 @@ jobs:
 
             ## Output style
 
-            CLAUDE.md "Issue Response Guidelines" sets the style — follow it. Lead with the answer in 1–2 sentences; `file.py:line` references go AFTER the finding; do not open with a labelled `In plain English:` preamble. Length cap: ≤200 words per reply.
+            CLAUDE.md "How You Communicate" sets the style — follow it; lead with the answer. Length cap: ≤200 words per reply.
 
             Write for the human reading it, not an engineer auditing the code: plain language,
             shortest reply that fully answers. Cite a `file.py:line`, module path, or flag name
@@ -755,7 +752,7 @@ jobs:
 
             ## Output style
 
-            CLAUDE.md "Issue Response Guidelines" → "Response Length Guidelines" set the style — follow them (quick: 2–4 sentences; how-to ≤150 words; bug/feature ≤200). Lead with the diagnosis / answer; `file.py:line` references go AFTER the finding (don't reference files you guessed at); never open with a labelled `In plain English:` preamble.
+            CLAUDE.md "How You Communicate" sets the style; `.claude/skills/github-issue-response/SKILL.md` → "Length caps by response type" sets the length (quick: 2–4 sentences; how-to ≤150 words; bug/feature ≤200). Lead with the diagnosis / answer, and don't reference files you guessed at.
 
             Write for the human reading it, not an engineer auditing the code: plain language,
             shortest reply that fully answers. Cite a `file.py:line`, module path, or flag name
@@ -775,7 +772,7 @@ jobs:
             - Requests to merge/close (suggest asking a maintainer instead)
 
             ## FIRST ACTIONS
-            **Always:** Read `CLAUDE.md` first for GAIA conventions, project structure, and the Issue Response Guidelines section.
+            **Always:** Read `CLAUDE.md` first for GAIA conventions and project structure, then `.claude/skills/github-issue-response/SKILL.md` for the security-escalation protocol and the doc-link map.
 
             **For PR conversations:**
             1. Read `pr-diff.txt` to see what changed
@@ -794,7 +791,7 @@ jobs:
             ### For Questions
             Check docs/ folder:
             - **Setup:** `docs/setup.mdx`, `docs/quickstart.mdx`
-            - **Guides:** `docs/guides/chat.mdx`, `docs/guides/talk.mdx`, `docs/guides/code.mdx`
+            - **Guides:** `docs/guides/gaia.mdx`, `docs/guides/chat.mdx`, `docs/guides/talk.mdx`
             - **CLI:** `docs/reference/cli.mdx`, `docs/reference/features.mdx`
             - **SDK:** `docs/sdk/core/agent-system.mdx`, `docs/sdk/sdks/`
             - **FAQ:** `docs/reference/faq.mdx`
@@ -849,7 +846,7 @@ jobs:
             Claude Opus 5 writes longer by default than earlier models. Keep responses
             focused, brief, and concise: spend the response on the answer, keep caveats
             short, and give a high-level summary unless depth is specifically requested.
-            The CLAUDE.md caps are hard limits, not targets — a quick answer is 2–4
+            The skill's caps are hard limits, not targets — a quick answer is 2–4
             sentences, and most replies should come in well under them.
 
             ## Tone
@@ -937,7 +934,8 @@ jobs:
             Apply AT MOST ONE component label, only if the issue clearly belongs to it:
             `agent::email`, `agent::connectors-demo`, `agent::examples`,
             `cli`, `agent-ui`, `rag`, `eval`, `tests`, `installer`, `connectors`,
-            `mcp`, `llm`, `audio`, `electron`, `lemonade`, `performance`, `security`.
+            `mcp`, `llm`, `audio`, `electron`, `lemonade 🍋` (the emoji is part of the name),
+            `performance`, `security`.
 
             Apply AT MOST ONE priority label, and only when the issue itself gives you
             evidence for it: `p1` (blocks a user on the default path), `p2` (normal),
@@ -1067,7 +1065,7 @@ jobs:
 
       - name: Attempt auto-fix
         id: claude   # referenced by the Notify step's execution_file check below
-        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790  # v1.0.235
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1102,7 +1100,7 @@ jobs:
             ## Output style
             Read these CLAUDE.md sections and follow them: "PR Descriptions — Tight and
             Value-Focused", "No Claude Attribution of Any Kind", and "Commit Only When
-            Bulletproof". Any issue comment you post follows "Issue Response Guidelines"
+            Bulletproof". Any issue comment you post follows "How You Communicate"
             (lead with the finding). Conventional-commits PR title.
 
             ## Output format — TWO parts (mandatory)
@@ -1345,7 +1343,8 @@ jobs:
               for a human to run (see PHASE 1 / 1.5 / 4).
             - SECURITY issues: do NOT fix and do NOT post details. Comment only "🔒 This looks
               like a security issue — please open a private security advisory" and tag
-              @kovtcharov-amd (matches CLAUDE.md "Security Handling Protocol"), then stop.
+              @kovtcharov-amd (CLAUDE.md "Issue Response Guidelines" → never discuss vulnerability
+              details publicly), then stop.
 
           claude_args: |
             --max-turns 100
@@ -1542,7 +1541,7 @@ jobs:
         # continue-on-error: a rate-limit / expired-token / outage failure here is
         # caught by the "Verify and validate release notes" step (which fails the job)
         # and the "Notify on failure" step opens a tracking issue.
-        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790  # v1.0.235
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.

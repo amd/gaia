@@ -6,14 +6,20 @@ import json
 import logging
 import re
 import time
-from typing import Iterator, List, Optional, Tuple, Union
+from typing import Callable, Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
 from ..lemonade_client import (
+    CONTEXT_OVERFLOW_PHRASES,
+    CONVERSATION_SLOT,
     DEFAULT_MODEL_NAME,
     LemonadeClient,
+    LemonadeClientError,
     active_profile_ctx_size,
     is_tool_calling_model,
+    local_sampling_defaults,
+    requested_thinking,
+    resolve_ctx_size,
 )
 from ..lemonade_launcher import describe_client_hint
 
@@ -63,6 +69,14 @@ def _reasoning_tokens(usage: dict) -> Optional[int]:
             if isinstance(value, int) and not isinstance(value, bool):
                 return value
     return None
+
+
+#: Seconds between progress reports while a tool call's arguments stream in.
+TOOL_CALL_PROGRESS_INTERVAL_S = 3.0
+#: Argument characters before a tool call is long enough to report on.
+TOOL_CALL_PROGRESS_MIN_CHARS = 1500
+#: Seconds between word counts while the model reasons.
+REASONING_PROGRESS_INTERVAL_S = 1.0
 
 
 def _accumulate_tool_calls(acc: dict, deltas: Optional[List[dict]]) -> None:
@@ -148,20 +162,23 @@ class LemonadeContextOverflowError(LemonadeError):
     )
 
 
-def _loaded_below_profile(n_ctx: int) -> bool:
-    """Was the model loaded below the active profile's window?
+def _loaded_below_profile(n_ctx: int, model: Optional[str] = None) -> bool:
+    """Was the model loaded below the window GAIA loads it with?
 
-    Classifiers run inside ``except`` handlers, so an unreadable config must
-    not raise here and replace the error the user actually hit; log it and
-    leave the overflow non-retryable rather than promise a reload.
+    With *model*, that model's own window (``resolve_ctx_size``); without, the
+    active profile's. Classifiers run inside ``except`` handlers, so an
+    unreadable config must not raise here and replace the error the user
+    actually hit; log it and leave the overflow non-retryable rather than
+    promise a reload.
     """
     from gaia.config import GaiaConfigError
 
     try:
-        return 0 < n_ctx < active_profile_ctx_size()
-    except GaiaConfigError as exc:
+        expected = resolve_ctx_size(model=model) if model else active_profile_ctx_size()
+    except (GaiaConfigError, LemonadeClientError) as exc:
         logger.error("Cannot size the expected context window: %s", exc)
         return False
+    return 0 < n_ctx < expected
 
 
 class LemonadeNetworkError(LemonadeError):
@@ -267,7 +284,9 @@ class LemonadeCloudAccountError(LemonadeError):
     )
 
 
-def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError], bool]:
+def _classify_lemonade_response(
+    response: dict, model: Optional[str] = None
+) -> Tuple[Optional[LemonadeError], bool]:
     """Inspect a Lemonade response dict for a known error shape.
 
     Returns ``(error_instance_or_None, is_error)``. ``is_error=True`` with
@@ -300,9 +319,8 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
 
     if "model_not_loaded" in type_blob or "no model loaded" in msg_blob:
         return LemonadeModelNotLoadedError(payload=response), True
-    if (
-        "exceed_context_size" in type_blob
-        or "exceeds the available context size" in msg_blob
+    if any(
+        phrase in type_blob or phrase in msg_blob for phrase in CONTEXT_OVERFLOW_PHRASES
     ):
         # Mark retryable when the model was loaded with an unexpectedly
         # small ctx (typical: 4096 from a pre-restart leftover, or 32K
@@ -322,7 +340,7 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         if not n_ctx_reported and isinstance(err, dict):
             n_ctx_reported = err.get("n_ctx") or 0
         err_instance = LemonadeContextOverflowError(payload=response)
-        if _loaded_below_profile(n_ctx_reported):
+        if _loaded_below_profile(n_ctx_reported, model):
             err_instance.retryable = True
         return err_instance, True
     # Distinguish "upstream model call timed out" (reachable Lemonade,
@@ -408,7 +426,7 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     ):
         m = re.search(r"[Mm]odel ['\"]([^'\"]+)['\"]", raw)
         return LemonadeModelNotFoundError(model_id=m.group(1) if m else None)
-    if "exceed_context_size" in text or "exceeds the available context size" in text:
+    if any(phrase in text for phrase in CONTEXT_OVERFLOW_PHRASES):
         err = LemonadeContextOverflowError()
         m = re.search(r"context size \((\d+) tokens?\)", text)
         if not m:
@@ -456,6 +474,15 @@ class LemonadeProvider(LLMClient):
 
     # llama.cpp ignores unknown message fields; a proxied model that rejects one 400s by name.
     accepts_reasoning_history = True
+
+    #: Called as (tool_name, argument_chars) while a long tool call streams:
+    #: its arguments arrive as silent deltas, minutes of nothing to show.
+    tool_call_progress: Optional[Callable[[str, int], None]] = None
+
+    #: Called with the reasoning word count so far while a thinking model
+    #: reasons. Its text is held back a line at a time, so a one-paragraph
+    #: thought otherwise shows nothing until it is finished.
+    reasoning_progress: Optional[Callable[[int], None]] = None
 
     def __init__(
         self,
@@ -567,18 +594,24 @@ class LemonadeProvider(LLMClient):
                 messages
             )
 
-        # Default to low temperature for deterministic responses (matches old LLMClient behavior)
-        kwargs.setdefault("temperature", 0.1)
-
-        # Stops local models looping on tables and paragraphs. Cloud models get
-        # none: the penalties hit their reasoning tokens and the thinking runs away.
-        # repeat_penalty / repeat_last_n are llama.cpp-native (sent via extra_body
-        # when streaming).
+        # Local models get their card's sampling, else GAIA's low-temperature
+        # anti-looping profile. Cloud models get neither: near-greedy sampling
+        # and the penalties both send a reasoning model's thinking into a
+        # runaway, so they get the client's standard 0.7.
         if not self._backend.cloud_model_provider(effective_model):
-            kwargs.setdefault("frequency_penalty", 0.3)
-            kwargs.setdefault("presence_penalty", 0.1)
-            kwargs.setdefault("repeat_penalty", 1.1)
-            kwargs.setdefault("repeat_last_n", 256)
+            wanted = kwargs.get("id_slot")
+            if wanted not in (None, CONVERSATION_SLOT) and wanted >= (
+                self._backend.slot_count(effective_model)
+            ):
+                # One slot means one cache anyway; pinning would hang the call.
+                kwargs.pop("id_slot")
+            kwargs.setdefault("id_slot", CONVERSATION_SLOT)
+            defaults = local_sampling_defaults(
+                effective_model,
+                requested_thinking(effective_model, kwargs.get("chat_template_kwargs")),
+            )
+            for key, value in defaults.items():
+                kwargs.setdefault(key, value)
 
         # Tools no longer force non-streaming: ``_handle_stream`` reassembles the
         # tool_call delta frames and emits the same sentinel envelope the
@@ -614,7 +647,7 @@ class LemonadeProvider(LLMClient):
         # for diagnostic logging.
         if not isinstance(response, dict) or "choices" not in response:
             classified, _is_err = _classify_lemonade_response(
-                response if isinstance(response, dict) else {}
+                response if isinstance(response, dict) else {}, effective_model
             )
             if classified is not None:
                 logger.warning(
@@ -793,6 +826,8 @@ class LemonadeProvider(LLMClient):
         in_thinking = False
         thought = ""  # reasoning held back until a line is whole (see below)
         tool_calls: dict[int, dict] = {}
+        next_progress = time.perf_counter()
+        next_reasoning_progress: Optional[float] = None
         finish_reason = ""
         text_seen: list[str] = []
         reasoning_seen: list[str] = []
@@ -821,6 +856,20 @@ class LemonadeProvider(LLMClient):
                 ):
                     self._last_ttft_seconds = time.perf_counter() - request_started
                 _accumulate_tool_calls(tool_calls, delta.get("tool_calls"))
+                if (
+                    delta.get("tool_calls")
+                    and self.tool_call_progress is not None
+                    and time.perf_counter() >= next_progress
+                ):
+                    chars = sum(
+                        len(tc["function"]["arguments"]) for tc in tool_calls.values()
+                    )
+                    if chars >= TOOL_CALL_PROGRESS_MIN_CHARS:
+                        name = tool_calls[max(tool_calls)]["function"]["name"]
+                        self.tool_call_progress(name, chars)
+                        next_progress = (
+                            time.perf_counter() + TOOL_CALL_PROGRESS_INTERVAL_S
+                        )
                 content = delta.get("content")
                 if content:
                     # Close thinking block before yielding actual content
@@ -835,6 +884,21 @@ class LemonadeProvider(LLMClient):
                     reasoning = delta.get("reasoning_content")
                     if reasoning:
                         reasoning_seen.append(reasoning)
+                        now = time.perf_counter()
+                        if next_reasoning_progress is None:
+                            next_reasoning_progress = (
+                                now + REASONING_PROGRESS_INTERVAL_S
+                            )
+                        elif (
+                            self.reasoning_progress is not None
+                            and now >= next_reasoning_progress
+                        ):
+                            self.reasoning_progress(
+                                len("".join(reasoning_seen).split())
+                            )
+                            next_reasoning_progress = (
+                                now + REASONING_PROGRESS_INTERVAL_S
+                            )
                         if not in_thinking:
                             yield "<think>"
                             in_thinking = True

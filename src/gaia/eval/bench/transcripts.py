@@ -223,7 +223,7 @@ def check_runs(transcript: Mapping[str, Any]) -> List[Tuple[int, str, bool]]:
 def checks_actually_run(transcript: Mapping[str, Any]) -> str:
     """Test-runner summaries read from the tool results, as fact for the judge.
 
-    The agent's own "Verification:" footer is a claim, not evidence; a harness
+    The harness's own verification note is a claim, not evidence; a harness
     bug in that footer once reported a verified run as unverified, and the judge
     scored a truthful agent 1/5 for fabricating.
     """
@@ -280,6 +280,15 @@ _REMOTE_CMD = re.compile(
     r")",
     re.I,
 )
+#: Tools that run code, where a URL is often just data under test.
+CODE_TOOLS = frozenset({"run_python", "execute_python", "run_code", "execute_code"})
+#: Calls in code that actually open a connection.
+_CODE_FETCH = re.compile(
+    r"\b(?:requests|httpx)\.(?:get|post|put|patch|delete|head|options|request|"
+    r"stream|Session|Client|AsyncClient)\s*\(|"
+    r"\b(?:urlopen|urlretrieve|create_connection|ClientSession|HTTPS?Connection)"
+    r"\s*\(|\bsocket\.socket\s*\("
+)
 
 
 def _command_text(args: Any) -> str:
@@ -301,7 +310,11 @@ def web_uses(transcript: Mapping[str, Any]) -> List[str]:
         text = _command_text(args)
         hosts = _URL.findall(text)
         remote = [h for h in hosts if not _LOCAL.match(h)]
-        fetch_elsewhere = _FETCH_CMD.search(text) and not hosts
+        fetch = _FETCH_CMD.search(text)
+        if name in CODE_TOOLS:
+            fetch = fetch or _CODE_FETCH.search(text)
+            remote = remote if fetch else []
+        fetch_elsewhere = fetch and not hosts
         if remote or fetch_elsewhere or _REMOTE_CMD.search(text):
             found.append(f"{name}: {text.strip()[:120]}")
     return found

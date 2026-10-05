@@ -32,6 +32,10 @@ from gaia.agents.install_hints import (
     agent_not_installed_message,
 )
 from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.llm.inference_location import (
+    InferenceLocation,
+    resolve_inference_location,
+)
 from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import BLOCKED_DIRECTORIES
 from gaia.ui.email_sidecar.profiles import (
@@ -40,6 +44,7 @@ from gaia.ui.email_sidecar.profiles import (
     api_version_supported,
     profile_for,
 )
+from gaia.ui.memory_settings import memory_enabled
 
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
@@ -93,16 +98,17 @@ def _register_agent_memory_ops(agent) -> None:
 
     Safe to call on every agent construction — the router just overwrites the
     previous reference (all agents share the same DB, so any active agent works).
+    Agents without ``MemoryMixin`` have no memory to maintain and are skipped.
     """
-    try:
-        from gaia.ui.routers import memory as _mem_router
+    from gaia.agents.base.memory import MemoryMixin
+    from gaia.ui.routers import memory as _mem_router
 
-        if hasattr(agent, "consolidate_old_sessions"):
-            _mem_router._consolidate_fn = agent.consolidate_old_sessions
-        if hasattr(agent, "reconcile_memory"):
-            _mem_router._reconcile_fn = agent.reconcile_memory
-    except Exception as exc:
-        logger.warning("Could not register agent memory operations: %s", exc)
+    if not isinstance(agent, MemoryMixin):
+        return
+    # Direct attribute access: a renamed method must fail here, not silently
+    # stop memory upkeep.
+    _mem_router._consolidate_fn = agent.consolidate_old_sessions
+    _mem_router._reconcile_fn = agent.reconcile_memory
 
 
 # Active SSE handlers keyed by session_id.  The /api/chat/confirm-tool
@@ -304,12 +310,13 @@ async def _generate_session_title(
     """Call Lemonade chat completions to produce a short tab-style title.
 
     Returns the cleaned title (≤ 64 chars, no quotes, no trailing
-    punctuation) or None on any failure.  Times out at 30 s so a hung
+    punctuation) or None on an HTTP or parse failure.  Times out at 30 s so a hung
     LLM doesn't keep the background task alive forever.
     """
     import httpx  # pylint: disable=import-outside-toplevel
 
     from gaia.llm.lemonade_client import (
+        find_model_requirement,
         lemonade_auth_headers,
         resolve_lemonade_api_key,
     )
@@ -322,18 +329,23 @@ async def _generate_session_title(
         f"Assistant: {(assistant_msg or '')[:200]}\n"
         "Title:"
     )
+    body = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 24,
+        # Low temperature: titles should be deterministic-ish
+        # for the same conversation.
+        "temperature": 0.3,
+    }
+    mr = find_model_requirement(model_id)
+    if mr is not None and mr.thinking is not None:
+        # A thinking model would spend all 24 tokens reasoning and title nothing.
+        body["chat_template_kwargs"] = {"enable_thinking": False}
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 f"{base_url}/chat/completions",
-                json={
-                    "model": model_id,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 24,
-                    # Low temperature: titles should be deterministic-ish
-                    # for the same conversation.
-                    "temperature": 0.3,
-                },
+                json=body,
                 headers=lemonade_auth_headers(
                     resolve_lemonade_api_key(base_url=base_url)
                 ),
@@ -356,7 +368,7 @@ async def _generate_session_title(
                 if title.lower().startswith(prefix):
                     title = title[len(prefix) :].strip()
             return title[:64] if title else None
-    except Exception as exc:  # pylint: disable=broad-except
+    except (httpx.HTTPError, ValueError, LookupError, AttributeError) as exc:
         logger.debug("Auto-title LLM call failed: %s", exc)
         return None
 
@@ -395,9 +407,10 @@ async def _maybe_update_session_title(
         _AUTO_TITLE_LAST_AT[session_id] = now
 
     # Use the same Lemonade endpoint the chat just used.
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
     from gaia.llm.lemonade_manager import LemonadeManager
 
-    base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+    base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
     new_title = await _generate_session_title(
         base_url=base_url,
         model_id=model_id,
@@ -602,6 +615,62 @@ def _apply_device_model(
             )
         return dev_model, dev_ctx
     return model_id, None
+
+
+def _ui_cloud_provider(model_id: str) -> str | None:
+    """Classify *model_id*, also recognising cloud ids already seen in the catalog."""
+    from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
+
+    metadata = {"recipe": "cloud"} if is_cloud_model(model_id) else None
+    return cloud_model_provider(model_id, metadata)
+
+
+def session_inference_location(
+    session: dict, custom_model: str | None, registry=None
+) -> InferenceLocation | None:
+    """Where this session's next chat turn will be answered, or None if unknowable.
+
+    ``model`` is empty when the destination is certain but the exact model is not.
+
+    Mirrors the chat path's model choice (custom override > agent preference >
+    device) without touching the network: the agent's preferred-model pick
+    depends on what Lemonade has downloaded, so every candidate is classified
+    and an answer is given only when they all agree.
+    """
+    try:
+        provider_kwargs = _eval_provider_kwargs()
+    except ValueError as exc:
+        logger.warning("Inference location unknown: %s", exc)
+        return None
+    if provider_kwargs.get("use_claude"):
+        return resolve_inference_location(
+            provider_kwargs["claude_model"], use_claude=True
+        )
+
+    if custom_model:
+        candidates = [custom_model]
+    else:
+        registry = registry if registry is not None else _agent_registry
+        agent_type = session.get("agent_type") or "chat"
+        reg = registry.get(agent_type) if registry is not None else None
+        preferred = [m for m in (getattr(reg, "models", None) or []) if m]
+        candidates = preferred + [session.get("model")]
+        candidates = [
+            _apply_device_model(session, agent_type, m, None, registry)[0]
+            for m in candidates
+        ]
+
+    locations = {
+        resolve_inference_location(m, cloud_provider_lookup=_ui_cloud_provider)
+        for m in candidates
+    }
+    if len({(loc.provider, loc.remote) for loc in locations}) != 1:
+        return None
+    if len(locations) == 1:
+        return locations.pop()
+    # Same destination, several possible models: name the destination only.
+    loc = next(iter(locations))
+    return InferenceLocation(loc.provider, "", remote=loc.remote)
 
 
 def get_cached_mcp_status() -> list[dict]:
@@ -1048,6 +1117,19 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
     return sorted({managed, str(cwd)})
 
 
+def _extend_cached_scope(agent, allowed: list) -> None:
+    """Give a cached agent the scope a new one would get for this turn.
+
+    Documents attached after the agent was built are only in ``allowed``;
+    without this they stay unreadable to it until the cache entry is rebuilt.
+    """
+    validator = getattr(agent, "path_validator", None)
+    if validator is None:
+        return
+    for path in allowed:
+        validator.add_allowed_path(path)
+
+
 def _session_agent_kwargs(
     *,
     rag_file_paths: list,
@@ -1291,6 +1373,22 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+class _UserWaitClock:
+    """Total seconds a stream has spent waiting on the user, open wait included."""
+
+    def __init__(self) -> None:
+        self._closed = 0.0
+        self._since: Optional[float] = None
+
+    def update(self, waiting: bool, now: float) -> float:
+        if waiting and self._since is None:
+            self._since = now
+        elif not waiting and self._since is not None:
+            self._closed += now - self._since
+            self._since = None
+        return self._closed + (now - self._since if self._since is not None else 0.0)
+
+
 def _canonicalize_user_input_request(event: dict) -> dict:
     """Translate a raw ``user_input_request`` event (emitted by
     ``SSEOutputHandler.request_user_input_blocking()``) into the ``needs_input``
@@ -1407,12 +1505,15 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         import httpx
 
         from gaia.llm.lemonade_client import (
+            cloud_model_provider,
             lemonade_auth_headers,
+            resolve_ctx_size,
             resolve_lemonade_api_key,
+            resolve_lemonade_base_url,
         )
-        from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
+        from gaia.llm.lemonade_manager import LemonadeManager
 
-        base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+        base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
         if resp.status_code != 200:
@@ -1422,6 +1523,16 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
         expected_lower = model_id.lower()
         chat_models = [m for m in all_models if m.get("type") in ("llm", "vlm")]
+        # A cloud model occupies no local slot: nothing to load, nothing to evict.
+        if any(
+            (m.get("model_name") or "").lower() == expected_lower
+            and m.get("recipe") == "cloud"
+            for m in chat_models
+        ) or cloud_model_provider(model_id, None):
+            return
+        # The window the agent itself will require; loading smaller makes it reload.
+        required_ctx = resolve_ctx_size(model_id)
+        chat_models = [m for m in chat_models if m.get("recipe") != "cloud"]
         active_is_expected = any(
             (m.get("model_name") or "").lower() == expected_lower for m in chat_models
         )
@@ -1434,11 +1545,11 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         #   - no chat model active
         #   - active chat model isn't the one we want
         #   - active ctx is missing (== 0 from .get() fallback) OR < required
-        # The previous guard ``active_ctx and active_ctx < DEFAULT_CONTEXT_SIZE``
+        # The previous guard ``active_ctx and active_ctx < required``
         # let a 0-ctx state pass through, which is exactly the broken-model
         # state where reload is most needed.
         ctx_too_small = active_is_expected and (
-            active_ctx == 0 or active_ctx < DEFAULT_CONTEXT_SIZE
+            active_ctx == 0 or active_ctx < required_ctx
         )
         needs_load = not chat_models or not active_is_expected or ctx_too_small
         if not needs_load:
@@ -1451,7 +1562,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                 f"wrong model active ({[m.get('model_name') for m in chat_models]}); "
                 f"need {model_id}"
                 if not active_is_expected
-                else f"ctx={active_ctx} < required {DEFAULT_CONTEXT_SIZE}"
+                else f"ctx={active_ctx} < required {required_ctx}"
             )
         )
         logger.info("Pre-flight load: %s → loading %s", reason, model_id)
@@ -1483,12 +1594,12 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                 resident_chat_models = [
                     m
                     for m in resp2.json().get("all_models_loaded", [])
-                    if m.get("type") in ("llm", "vlm")
+                    if m.get("type") in ("llm", "vlm") and m.get("recipe") != "cloud"
                 ]
                 if any(
                     (m.get("model_name") or "").lower() == expected_lower
                     and (m.get("recipe_options", {}).get("ctx_size") or 0)
-                    >= DEFAULT_CONTEXT_SIZE
+                    >= required_ctx
                     for m in resident_chat_models
                 ):
                     logger.debug(
@@ -1499,20 +1610,13 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
             client = LemonadeClient(verbose=False)
             # Lemonade does not evict the resident model on a new /load, so
-            # loading a different model (or the same model at a larger ctx)
-            # leaves the previous one resident — a silent double-load that
-            # wastes memory and can degrade output. Unload the wrong/stale chat
-            # model first, mirroring gaia/rag/sdk.py before an embedder swap.
-            if resident_chat_models:
-                try:
-                    client.unload_model()
-                except Exception as unload_exc:
-                    logger.debug(
-                        "Pre-flight unload before reload failed: %s", unload_exc
-                    )
+            # unload the stale local chat models first — by name, so the
+            # embedder that memory and RAG need stays resident.
+            for stale in resident_chat_models:
+                client.unload_model(stale["model_name"], ignore_if_not_loaded=True)
             client.load_model(
                 model_id,
-                ctx_size=DEFAULT_CONTEXT_SIZE,
+                ctx_size=required_ctx,
                 prompt=False,
                 timeout=_PREFLIGHT_LOAD_TIMEOUT_S,
             )
@@ -1649,6 +1753,7 @@ async def _get_chat_response(
             # A prior streaming turn leaves its dead SSE console behind.
             agent.console = SilentConsole()
             agent._register_tools()
+            _extend_cached_scope(agent, allowed)
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                 new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
                 for fpath in new_paths:
@@ -1760,8 +1865,9 @@ async def _get_chat_response(
 
         # Suppress memory writes when private session OR global memory is disabled.
         if hasattr(agent, "_incognito"):
-            memory_globally_off = db.get_setting("memory_enabled", "false") == "false"
-            agent._incognito = memory_globally_off or bool(session.get("private", 0))
+            private = bool(session.get("private", 0))
+            agent._incognito = private or not memory_enabled(db)
+            agent._incognito_reason = "private" if private else "memory_off"
 
         _restore_model_history(agent, db, session_id, request.message)
 
@@ -2051,6 +2157,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     if sse_handler.cancelled.is_set():
                         return
 
+                    _extend_cached_scope(agent, allowed)
                     # Index any session docs newly attached since last turn.
                     new_rag_paths = [
                         p for p in rag_file_paths if p not in agent.indexed_files
@@ -2316,12 +2423,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                 # Suppress memory writes when private session OR global memory is disabled.
                 if hasattr(agent, "_incognito"):
-                    memory_globally_off = (
-                        db.get_setting("memory_enabled", "false") == "false"
-                    )
-                    agent._incognito = memory_globally_off or bool(
-                        session.get("private", 0)
-                    )
+                    private = bool(session.get("private", 0))
+                    agent._incognito = private or not memory_enabled(db)
+                    agent._incognito_reason = "private" if private else "memory_off"
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -2433,6 +2537,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         idle_cycles = 0
         _stream_start = _time.time()
         _STREAM_TIMEOUT = 600  # 10 minutes — large system prompts need time
+        # Time spent waiting on a request_user_input answer is the user's, not
+        # the turn's; that wait has its own deadline.
+        _user_wait = _UserWaitClock()
 
         def _blocked_policy_steps():
             return [
@@ -2471,7 +2578,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         while True:
             # Guard: total timeout for the streaming response
-            if _time.time() - _stream_start > _STREAM_TIMEOUT:
+            _now = _time.time()
+            _waited = _user_wait.update(sse_handler.awaiting_user_input(), _now)
+            if _now - _stream_start - _waited > _STREAM_TIMEOUT:
                 logger.error("Streaming response timed out after %ds", _STREAM_TIMEOUT)
                 timeout_event = json.dumps(
                     {
@@ -2773,12 +2882,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 from gaia.llm.lemonade_client import (
                     lemonade_auth_headers,
                     resolve_lemonade_api_key,
+                    resolve_lemonade_base_url,
                 )
                 from gaia.llm.lemonade_manager import LemonadeManager
 
-                base_url = (
-                    LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
-                )
+                base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
                 _auth = lemonade_auth_headers(
                     resolve_lemonade_api_key(base_url=base_url)
                 )

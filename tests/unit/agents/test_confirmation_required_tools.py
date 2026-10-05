@@ -9,6 +9,8 @@ agent declares its own destructive tools on the class attribute
 merges the two (union), and ``_execute_tool`` gates on that merged set.
 """
 
+import re
+from pathlib import Path
 from unittest.mock import patch
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION, Agent
@@ -124,3 +126,15 @@ class TestExecuteToolGate:
         # never consulted, so it executes normally.
         result = agent._execute_tool("read_status", {})
         assert result != {"status": "denied"}
+
+
+def test_every_base_gated_tool_has_a_tui_risk_tier():
+    """An unlisted tool falls to the TUI's DESTRUCTIVE default and is badged
+    "may not be reversible" — a read-only pandas groupby was."""
+    go = (
+        Path(__file__).resolve().parents[3]
+        / "tui/internal/ui/components/confirmation.go"
+    ).read_text(encoding="utf-8")
+    table = go.split("var confirmationRiskTiers", 1)[1].split("\n}", 1)[0]
+    tiered = set(re.findall(r'^\s*"(\w+)":', table, flags=re.M))
+    assert TOOLS_REQUIRING_CONFIRMATION - tiered == set()

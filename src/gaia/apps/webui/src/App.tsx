@@ -23,10 +23,11 @@ import { useNotificationStore } from './stores/notificationStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash } from './utils/format';
-import { resolveUrlNavTarget } from './utils/sessionNav';
+import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { planNewTask } from './utils/newTask';
+import type { Session } from './types';
 
 /** Wrapper that delays unmount to allow CSS exit animations to play. */
 function AnimatedPresence({ show, children, duration = 250 }: {
@@ -245,6 +246,9 @@ function App() {
     const sessionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     /** Fingerprint of the last server session list (id:updated_at:title per session). */
     const lastSessionFingerprintRef = useRef<string>('');
+    // The session the page was opened on, read before the hash-sync effect
+    // below clears the hash for "no session yet"; resolved once the list loads.
+    const pendingUrlTargetRef = useRef<string | null>(readUrlTarget(window.location));
 
     useEffect(() => {
         logBanner(__APP_VERSION__);
@@ -252,9 +256,31 @@ function App() {
         const t = log.system.time();
 
         /** Build a cheap fingerprint string for a session list so we can detect
-         *  any change — new/deleted sessions, title edits, updated_at bumps. */
-        const fingerprint = (sessions: Array<{ id: string; updated_at: string; title: string }>) =>
-            sessions.map((s) => `${s.id}|${s.updated_at}|${s.title}`).join('\n');
+         *  any change — new/deleted sessions, title edits, updated_at bumps,
+         *  and a changed inference location (a model override reaches the footer). */
+        const fingerprint = (sessions: Session[]) =>
+            sessions
+                .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}`)
+                .join('\n');
+
+        const openPendingUrlTarget = (serverSessions: Array<{ id: string }>) => {
+            const target = pendingUrlTargetRef.current;
+            if (!target) return;
+            pendingUrlTargetRef.current = null;
+            const matchId = resolveUrlNavTarget(
+                target,
+                useChatStore.getState().currentSessionId,
+                serverSessions,
+            );
+            if (matchId) {
+                log.nav.info(`URL session navigation: ${target}`);
+                setCurrentSession(matchId);
+                setMessages([]);
+            } else if (!useChatStore.getState().currentSessionId) {
+                // A link to a deleted chat: drop it, as the hash-sync effect would.
+                window.history.replaceState(null, '', window.location.pathname + window.location.search);
+            }
+        };
 
         const loadSessions = (isInitial = false) => {
             api.listSessions()
@@ -265,6 +291,7 @@ function App() {
                         setBackendConnected(true);
                         lastSessionFingerprintRef.current = fingerprint(serverSessions);
                         log.system.timed(`Loaded ${serverSessions.length} session(s)`, t);
+                        openPendingUrlTarget(serverSessions);
                         return;
                     }
 
@@ -290,6 +317,7 @@ function App() {
                         setSessions(serverSessions);
                         lastSessionFingerprintRef.current = fp;
                     }
+                    openPendingUrlTarget(serverSessions);
                 })
                 .catch((err) => {
                     if (isInitial) {
@@ -306,7 +334,7 @@ function App() {
         return () => {
             if (sessionPollRef.current) clearInterval(sessionPollRef.current);
         };
-    }, [setSessions, addSession, removeSession, updateSessionInList, setBackendConnected]);
+    }, [setSessions, addSession, removeSession, updateSessionInList, setBackendConnected, setCurrentSession, setMessages]);
 
     // Poll which sessions have a running turn so the sidebar can show a
     // "still running" spinner on backgrounded runs. Backend-truth
@@ -327,18 +355,16 @@ function App() {
         };
     }, [setRunningSessions]);
 
-    // Support URL-based session navigation (?session=<id> or #<hash>).
-    // Responds ONLY to external navigation — initial load, and the user pasting
-    // a URL or using browser back/forward (hashchange/popstate). The app's own
-    // session switches update the hash via replaceState (below), which does NOT
-    // fire hashchange/popstate, so this effect never fights a programmatic
-    // switch and can't oscillate with the SSE-activation handler.
+    // Support URL-based session navigation (?session=<id> or #<hash>) after
+    // load: the user pasting a URL or using browser back/forward
+    // (hashchange/popstate). The URL the page opened on is resolved by the
+    // initial session load above. The app's own session switches update the
+    // hash via replaceState (below), which does NOT fire hashchange/popstate,
+    // so this effect never fights a programmatic switch and can't oscillate
+    // with the SSE-activation handler.
     useEffect(() => {
         const navigateFromUrl = () => {
-            const params = new URLSearchParams(window.location.search);
-            const sessionParam = params.get('session');
-            const hashParam = window.location.hash.replace(/^#/, '');
-            const target = sessionParam || hashParam;
+            const target = readUrlTarget(window.location);
             const { currentSessionId: cur, sessions } = useChatStore.getState();
             const matchId = resolveUrlNavTarget(target, cur, sessions);
             if (matchId) {
@@ -347,12 +373,9 @@ function App() {
                 setMessages([]);
             }
         };
-        // Defer the initial pass so the session list has time to load.
-        const timer = setTimeout(navigateFromUrl, 500);
         window.addEventListener('hashchange', navigateFromUrl);
         window.addEventListener('popstate', navigateFromUrl);
         return () => {
-            clearTimeout(timer);
             window.removeEventListener('hashchange', navigateFromUrl);
             window.removeEventListener('popstate', navigateFromUrl);
         };
@@ -410,7 +433,7 @@ function App() {
             if (window.location.hash !== `#${hash}`) {
                 window.history.replaceState(null, '', `#${hash}`);
             }
-        } else if (window.location.hash) {
+        } else if (window.location.hash && !pendingUrlTargetRef.current) {
             window.history.replaceState(null, '', window.location.pathname + window.location.search);
         }
     }, [currentSessionId]);

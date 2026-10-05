@@ -20,14 +20,22 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
-    configured_lemonade_url,
+    cloud_model_provider,
     is_llm_model_entry,
     resolve_ctx_size,
+    resolve_default_chat_model,
     resolve_effective_ctx_size,
     resolve_lemonade_base_url,
 )
-from gaia.llm.lemonade_launcher import describe_start_hint
+from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
 from gaia.logger import get_logger
+
+
+def _preload_model() -> str:
+    """The local model an idle server is seeded with: this machine's default
+    chat model, or Gemma when that default is a cloud model (nothing to load)."""
+    model = resolve_default_chat_model()
+    return DEFAULT_MODEL_NAME if cloud_model_provider(model) else model
 
 
 def _is_cloud_entry(entry: dict) -> bool:
@@ -38,19 +46,6 @@ def _is_cloud_entry(entry: dict) -> bool:
     """
     return entry.get("recipe") == CLOUD_RECIPE or "cloud" in (entry.get("labels") or [])
 
-
-# Allow-list mapping from detected device -> Lemonade recipe
-# TODO: Confirm full recipe vocabulary with the Lemonade specialist
-# (@kovtcharov-amd). Currently we map hybrid-capable devices to
-# 'oga-hybrid'. Before wiring recipe -> startup (dispatch), verify whether
-# device-specific recipes exist (e.g., 'oga-npu', 'oga-dgpu') and update
-# this allow-list accordingly.
-_RECIPE_BY_DEVICE = {
-    "amd_npu": "oga-hybrid",
-    "amd_igpu": "oga-hybrid",
-    "amd_dgpu": "oga-hybrid",
-    "cpu": "oga-cpu",
-}
 
 # Device capability priority (high -> low)
 _DEVICE_PRIORITY = ["amd_npu", "amd_igpu", "amd_dgpu", "cpu"]
@@ -318,7 +313,9 @@ class LemonadeManager:
 
     @classmethod
     def is_lemonade_installed(cls) -> bool:
-        """Check if Lemonade server is installed."""
+        """Check if Lemonade server is installed (GAIA's own or a system one)."""
+        if gaia_runs_lemonade():
+            return True
         client = LemonadeClient(verbose=False)
         return client.get_lemonade_version() is not None
 
@@ -337,12 +334,11 @@ class LemonadeManager:
         Raises:
             DaemonError: The daemon could not start it; the message names why.
         """
-        if configured_lemonade_url():
+        if not gaia_runs_lemonade():
             return False
         from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
-        embedded = EmbeddedLemonade()
-        if not embedded.is_installed() or embedded.status().running:
+        if EmbeddedLemonade().status().running:
             return False
         from gaia.daemon.client import ensure_lemonade
 
@@ -371,23 +367,16 @@ class LemonadeManager:
                 "📥 Lemonade server is not installed on your system.", file=sys.stderr
             )
             print("", file=sys.stderr)
-            print("To install Lemonade server:", file=sys.stderr)
-            print("  1. Visit: https://lemonade-server.ai", file=sys.stderr)
-            print("  2. Download the installer for your platform", file=sys.stderr)
-            print("  3. Run the installer and follow prompts", file=sys.stderr)
+            print("To install GAIA's Lemonade Server, run:", file=sys.stderr)
+            print("  gaia init", file=sys.stderr)
             print("", file=sys.stderr)
-            print("After installation, try your command again.", file=sys.stderr)
+            print("Then try your command again.", file=sys.stderr)
         else:
             print("Lemonade server is installed but not running.", file=sys.stderr)
             print("", file=sys.stderr)
+            print("To start it:", file=sys.stderr)
             print(
-                "GAIA will automatically start Lemonade Server if installed.",
-                file=sys.stderr,
-            )
-            print("If auto-start fails, you can start it manually by:", file=sys.stderr)
-            print("  • Double-clicking the desktop shortcut, or", file=sys.stderr)
-            print(
-                f"  • {describe_start_hint(min_context_size).instruction}",
+                f"  {describe_start_hint(min_context_size).instruction}",
                 file=sys.stderr,
             )
             print("", file=sys.stderr)
@@ -492,7 +481,7 @@ class LemonadeManager:
             f"Lemonade Server at {base_url} has no LLM loaded ({loaded_desc}), so "
             f"GAIA cannot confirm the {min_context_size}-token context it needs and "
             f"has no model to answer with.\n"
-            f"To fix: run `gaia init` to install and load {DEFAULT_MODEL_NAME}, or "
+            f"To fix: run `gaia init` to install and load {_preload_model()}, or "
             f"load an LLM yourself "
             f"({describe_start_hint(min_context_size).instruction}).\n"
             f"See the Lemonade server log for details "
@@ -565,10 +554,7 @@ class LemonadeManager:
             else len(_DEVICE_PRIORITY) - 1
         )
         if detected_idx <= req_idx:
-            recipe = _RECIPE_BY_DEVICE.get(highest, _RECIPE_BY_DEVICE.get("cpu"))
-            cls._log.debug(
-                f"Hardware requirement satisfied: {highest} -> recipe={recipe}"
-            )
+            cls._log.debug(f"Hardware requirement satisfied: {highest}")
         else:
             raise HardwareRequirementError(
                 _format_device_error(device, required_min_device, detected)
@@ -674,6 +660,11 @@ class LemonadeManager:
         # floor means the default, never a TypeError at the ctx comparison.
         if min_context_size is None:
             min_context_size = resolve_ctx_size(device=device)
+            # An idle server is seeded with the default model at that model's
+            # own window, so its first chat does not reload it.
+            preload_ctx = resolve_ctx_size(model=DEFAULT_MODEL_NAME)
+        else:
+            preload_ctx = min_context_size
         # Map high-level device selector to required_min_device when the
         # caller didn't pass an explicit required_min_device.
         if device and not required_min_device:
@@ -855,20 +846,6 @@ class LemonadeManager:
 
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
 
-            if base_url is None and host is None and port is None:
-                from gaia.daemon.errors import DaemonError
-
-                try:
-                    cls.start_embedded_if_stopped()
-                except DaemonError as e:
-                    cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
-                    if not quiet:
-                        print(
-                            f"❌ Could not start GAIA's Lemonade Server: {e}",
-                            file=sys.stderr,
-                        )
-                    return False
-
             try:
                 # When base_url is provided, pass it directly to LemonadeClient
                 # so it preserves the full URL (including https:// for ngrok, etc.)
@@ -886,6 +863,24 @@ class LemonadeManager:
                         keep_alive=True,
                         verbose=not quiet,
                     )
+
+                pinned = base_url is not None or host is not None or port is not None
+                if gaia_runs_lemonade(client.base_url if pinned else None):
+                    from gaia.daemon.errors import DaemonError
+
+                    try:
+                        cls.start_embedded_if_stopped()
+                    except DaemonError as e:
+                        cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
+                        if not quiet:
+                            print(
+                                f"❌ Could not start GAIA's Lemonade Server: {e}",
+                                file=sys.stderr,
+                            )
+                        return False
+                    # Its port is chosen at start, so re-resolve instead of
+                    # keeping the stopped-state default the caller passed.
+                    client = LemonadeClient(keep_alive=True, verbose=not quiet)
 
                 # Just check server status - no agent profile required
                 status = client.get_status()
@@ -941,7 +936,7 @@ class LemonadeManager:
                 just_preloaded = False
                 if context_size_value == 0 and not llm_models_loaded:
                     context_size_value, status = cls._try_preload_with_ctx(
-                        client, min_context_size, quiet, cls._lock
+                        client, preload_ctx, quiet, cls._lock
                     )
                     just_preloaded = True
                     # ``_try_preload_with_ctx`` already re-fetched status
@@ -1229,26 +1224,27 @@ class LemonadeManager:
                 command) so the user can recover manually if the auto-preload
                 cannot.
         """
+        model = _preload_model()
         # Proactive clamp (#2992): a model already downloaded from a prior
         # run has its ceiling in the catalog before we ever call /load, so
         # request the real value up front instead of relying on Lemonade's
         # own internal cap (which loads fine but keeps echoing the
         # over-large request back in status).
-        ceiling = client.get_model_max_context_window(DEFAULT_MODEL_NAME)
+        ceiling = client.get_model_max_context_window(model)
         requested_ctx = resolve_effective_ctx_size(min_context_size, ceiling)
         if ceiling is None:
             cls._log.warning(
                 "Lemonade reported no max_context_window for %s (metadata "
                 "not yet resolved); proceeding with ctx_size=%d — the "
                 "effective window may be capped lower once loaded.",
-                DEFAULT_MODEL_NAME,
+                model,
                 min_context_size,
             )
         elif requested_ctx < min_context_size:
             cls._log.warning(
                 "%s's trained context caps at %d tokens; requested %d, "
                 "loading at %d instead.",
-                DEFAULT_MODEL_NAME,
+                model,
                 ceiling,
                 min_context_size,
                 requested_ctx,
@@ -1256,12 +1252,12 @@ class LemonadeManager:
 
         cls._log.info(
             "Preloading '%s' with ctx_size=%d on idle Lemonade server",
-            DEFAULT_MODEL_NAME,
+            model,
             requested_ctx,
         )
         if not quiet:
             print(
-                f"\n⏳ Loading {DEFAULT_MODEL_NAME} with ctx_size={requested_ctx} "
+                f"\n⏳ Loading {model} with ctx_size={requested_ctx} "
                 f"tokens. This may take a moment (first run downloads the model)...",
                 flush=True,
             )
@@ -1275,14 +1271,14 @@ class LemonadeManager:
         lock.release()
         try:
             client.load_model(
-                DEFAULT_MODEL_NAME,
+                model,
                 ctx_size=requested_ctx,
                 prompt=False,
                 auto_download=True,
             )
         except Exception as e:
             raise LemonadeClientError(
-                f"Failed to preload Lemonade model {DEFAULT_MODEL_NAME!r} with "
+                f"Failed to preload Lemonade model {model!r} with "
                 f"ctx_size={requested_ctx} on idle server at "
                 f"{client.base_url}.\n"
                 f"To recover manually: stop the running server, then restart it "
@@ -1302,25 +1298,24 @@ class LemonadeManager:
         # pre-load guess.
         final_status = client.get_status()
         final_ceiling = (
-            client.get_model_max_context_window(DEFAULT_MODEL_NAME, status=final_status)
-            or ceiling
+            client.get_model_max_context_window(model, status=final_status) or ceiling
         )
         effective_ctx = resolve_effective_ctx_size(requested_ctx, final_ceiling)
         if final_ceiling:
             cls._context_ceiling = final_ceiling
-            cls._context_ceiling_model = DEFAULT_MODEL_NAME
+            cls._context_ceiling_model = model
 
         if not quiet:
             if effective_ctx < min_context_size:
                 print(
-                    f"⚠️  Loaded {DEFAULT_MODEL_NAME} with ctx_size={effective_ctx} "
+                    f"⚠️  Loaded {model} with ctx_size={effective_ctx} "
                     f"tokens (requested {min_context_size}; the model's trained "
                     f"context caps it at {effective_ctx}).",
                     flush=True,
                 )
             else:
                 print(
-                    f"✅ Loaded {DEFAULT_MODEL_NAME} with ctx_size={effective_ctx}.",
+                    f"✅ Loaded {model} with ctx_size={effective_ctx}.",
                     flush=True,
                 )
         return effective_ctx, final_status
@@ -1390,6 +1385,7 @@ class LemonadeManager:
             print(
                 f"\n⏳ Reloading model with ctx_size={requested_ctx} tokens "
                 f"(was {cls._context_size}). This may take a moment...",
+                file=sys.stderr,
                 flush=True,
             )
 

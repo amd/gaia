@@ -191,3 +191,37 @@ def test_a_refused_stderr_redirect_is_told_the_form_that_works(workdir):
 
     said = f"{result['error']} {result.get('hint', '')}"
     assert "2>/dev/null" in said, said
+
+
+@pytest.mark.parametrize("spelling", ["2>nul", "2>NUL"])
+def test_cmds_null_device_is_the_same_request_as_dev_null(spelling):
+    """On Windows a model drops stderr the way cmd.exe does; it writes nothing."""
+    from gaia.agents.tools.shell_tools import _parse_line
+
+    steps, error = _parse_line(f"git status {spelling}")
+    assert error is None, error
+    assert steps[0].stderr_modes == ("2>/dev/null",)
+    assert steps[0].segments == [["git", "status"]]
+
+
+def test_a_file_named_like_nul_is_still_refused():
+    from gaia.agents.tools.shell_tools import _parse_line
+
+    assert _parse_line("git status 2>nul.txt")[1]["status"] == "error"
+
+
+def test_cd_slash_d_is_a_plain_cd():
+    """cmd's `cd /d <dir>` only adds a drive change, which a cd makes anyway."""
+    from gaia.agents.tools.shell_tools import _parse_line
+
+    steps, error = _parse_line("cd /d /work/repo && git status")
+    assert error is None, error
+    assert steps[0].segments == [["cd", "/work/repo"]]
+    # The raw text a Windows cd target is read from loses the flag too.
+    assert steps[0].text == "cd /work/repo"
+
+
+def test_cd_with_any_other_flag_is_still_refused():
+    from gaia.agents.tools.shell_tools import _parse_line
+
+    assert _parse_line("cd -P /work/repo")[1]["status"] == "error"

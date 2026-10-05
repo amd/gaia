@@ -8,7 +8,9 @@ icon: "microphone"
   **Source Code:** [`src/gaia/talk/`](https://github.com/amd/gaia/tree/main/src/gaia/talk) · [`src/gaia/audio/`](https://github.com/amd/gaia/tree/main/src/gaia/audio)
 </Info>
 
-GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper for automatic speech recognition (ASR) and Kokoro TTS for text-to-speech (TTS). Have natural conversations with AI through your microphone and speakers.
+GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper for automatic speech recognition (ASR) and Kokoro for text-to-speech (TTS). Have natural conversations with AI through your microphone and speakers.
+
+Both models run inside Lemonade Server, the same server that runs the chat model — GAIA itself installs no speech model runtime. The first `gaia talk` downloads the Whisper model (~150 MB for `base`) and the Kokoro voice model (~350 MB) through Lemonade.
 
 <Info>
   **First time here?** Complete the [Setup](/setup) guide first to install GAIA and its dependencies.
@@ -18,20 +20,16 @@ GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper
 
 ### System Prerequisites
 
-Talk mode leans on two native libraries: PortAudio for the microphone, and espeak-ng, which Kokoro TTS falls back on for words outside its pronunciation dictionary. Install them before the talk extras.
+Talk mode needs a running Lemonade Server (`gaia init` installs it) and PortAudio for the microphone and speakers.
 
 <Tabs>
   <Tab title="Linux">
     ```bash
-    sudo apt-get install -y libportaudio2 espeak-ng
+    sudo apt-get install -y libportaudio2
     ```
   </Tab>
-  <Tab title="Windows">
-    PortAudio ships inside the `sounddevice` wheel, so the microphone needs nothing extra. espeak-ng does not:
-
-    ```powershell
-    winget install eSpeak-NG.eSpeak-NG
-    ```
+  <Tab title="Windows / macOS">
+    PortAudio ships inside the `sounddevice` wheel, so there is nothing extra to install.
   </Tab>
 </Tabs>
 
@@ -44,7 +42,7 @@ Talk mode leans on two native libraries: PortAudio for the microphone, and espea
     With GAIA installed, add the talk extras:
 
     ```bash
-    uv pip install "amd-gaia[talk]" --extra-index-url https://download.pytorch.org/whl/cpu
+    uv pip install "amd-gaia[talk]"
     ```
   </Step>
 
@@ -116,10 +114,10 @@ Customize your voice interaction experience:
     # Choose model size for speech recognition
     gaia talk --whisper-model-size medium
 
-    # Available: tiny, base, small, medium, large
+    # Available: tiny, base, small, medium, large, turbo
     ```
 
-    <Note>Larger models provide better accuracy but require more resources</Note>
+    <Note>Each size maps to a Lemonade Whisper model (`base` is `Whisper-Base`, `large` is `Whisper-Large-v3`, `turbo` is `Whisper-Large-v3-Turbo`). Larger models are more accurate but slower and a bigger first download.</Note>
   </Tab>
 
   <Tab title="Audio Device">
@@ -267,7 +265,7 @@ gaia test --test-type asr-microphone --recording-duration 15
 
 **Options:**
 - `--recording-duration`: Recording duration in seconds (default: 10)
-- `--whisper-model-size`: Model size (default: "base")
+- `--whisper-model-size`: Whisper size Lemonade transcribes with (default: "base")
 - `--audio-device-index`: Specific microphone (optional)
 
 ## Testing TTS Components
@@ -335,8 +333,12 @@ gaia test --test-type tts-audio-file \
     - Check system audio output/speaker settings
     - Verify TTS is enabled (not using `--no-tts` flag)
     - Ensure system volume is not muted
-    - Verify espeak-ng is properly installed
+    - Check that Lemonade Server is running and lists `kokoro-v1`
     - Test with: `gaia test --test-type tts-streaming`
+  </Accordion>
+
+  <Accordion title="Speech Recognition Failed">
+    `gaia talk` stops with `Speech recognition failed: …` when Lemonade cannot transcribe an utterance — usually because the server stopped. The error says how to start it on your system; then run `gaia talk` again. Talk mode never falls back to a local model.
   </Accordion>
 
   <Accordion title="Voice Input Not Recognized">

@@ -1919,3 +1919,46 @@ for line in sys.stdin:
     assert json.loads(finals[1])[0]["content"] == "first"
     assert finals[2] == "conversation_cleared"
     assert json.loads(finals[3]) == []
+
+
+def test_model_list_offers_only_models_that_chat(monkeypatch):
+    """Whisper (``transcription``) was listed as a chat-capable local model."""
+    catalog = [
+        {"id": "Gemma-4-E4B-it-GGUF", "downloaded": True, "labels": ["chat", "vision"]},
+        {
+            "id": "Qwen3.6-35B-A3B-GGUF",
+            "downloaded": True,
+            "labels": ["chat"],
+        },
+        {
+            "id": "Whisper-Large-v3-Turbo",
+            "downloaded": True,
+            "labels": ["transcription", "realtime-transcription"],
+        },
+        {
+            "id": "nomic-embed-text-v2-moe-GGUF",
+            "downloaded": True,
+            "labels": ["embeddings"],
+        },
+        {"id": "fireworks.glm-5p3", "recipe": "cloud", "labels": []},
+        {
+            "id": "Qwen2.5-Omni-3B-GGUF",
+            "downloaded": True,
+            "labels": ["chat", "chat-transcription", "transcription"],
+        },
+    ]
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        def list_models(self, show_all=False):
+            return {"data": catalog}
+
+    monkeypatch.setattr(stdio, "LemonadeClient", _Client)
+    assert stdio._lemonade_models(None) == [
+        "Gemma-4-E4B-it-GGUF",
+        "Qwen2.5-Omni-3B-GGUF",
+        "Qwen3.6-35B-A3B-GGUF",
+        "fireworks.glm-5p3",
+    ]

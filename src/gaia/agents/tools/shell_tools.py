@@ -30,6 +30,7 @@ from gaia.agents.tools.command_timeouts import (
     terminate_process_tree,
 )
 from gaia.agents.tools.shell_session import ShellSession
+from gaia.env import child_env
 from gaia.tool_cancellation import tool_cancelled
 
 logger = logging.getLogger(__name__)
@@ -762,7 +763,9 @@ _WINDOWS_NULL = "2>nul"
 
 #: A standalone token, whitespace or an end on either side, so ``2>&1x`` and
 #: ``2>/dev/null.bak`` are not one of these.
-_STDERR_REDIRECTION = re.compile(r"(?<![^\s])(?:2>&1|2>/dev/null)(?![^\s])")
+_STDERR_REDIRECTION = re.compile(
+    r"(?<![^\s])(?:2>&1|2>/dev/null|2>[nN][uU][lL])(?![^\s])"
+)
 
 #: A pipe the way ``_split_pipeline`` reads one: its own token, never ``a|b``.
 _BARE_PIPE = re.compile(r"(?<![^\s])\|(?![^\s])")
@@ -816,7 +819,10 @@ def _take_stderr_redirections(text: str) -> tuple:
     end = 0
     for match in matches:
         # sh's rule: a second redirection on one segment replaces the first.
-        modes[sum(1 for pipe in pipes if pipe < match.start())] = match.group(0)
+        # cmd.exe's 2>nul is the same request as 2>/dev/null.
+        modes[sum(1 for pipe in pipes if pipe < match.start())] = (
+            _MERGE_STDERR if match.group(0) == _MERGE_STDERR else _DROP_STDERR
+        )
         kept.append(text[end : match.start()])
         end = match.end()
     kept.append(text[end:])
@@ -1206,6 +1212,20 @@ class _Step:
     def is_cd(self) -> bool:
         return len(self.segments) == 1 and self.segments[0][0].lower() == "cd"
 
+    @property
+    def cd_target(self) -> str:
+        """The directory a ``cd`` step names.
+
+        On Windows it is read from the raw text: ``\\`` is a path separator
+        there, and the POSIX lexer would have eaten it (``C:\\a`` -> ``C:a``).
+        """
+        if os.name != "nt":
+            return self.segments[0][1]
+        target = self.text.split(None, 1)[1].strip()
+        if len(target) >= 2 and target[0] == target[-1] and target[0] in "\"'":
+            return target[1:-1]
+        return target
+
 
 def _connector_runs(connector: str, previous_code: int) -> bool:
     """sh's rule: ``&&`` needs the last status 0, ``||`` needs it non-zero.
@@ -1218,6 +1238,20 @@ def _connector_runs(connector: str, previous_code: int) -> bool:
     if connector == "||":
         return previous_code != 0
     return True
+
+
+#: The ``/d`` of a leading ``cd /d``, for the text a step keeps beside its segments.
+_CD_DRIVE_FLAG = re.compile(r"^(\s*cd)\s+/d(?=\s)", re.I)
+
+
+def _without_cd_drive_flag(segment: list) -> list:
+    """``cd /d <dir>`` as ``cd <dir>``.
+
+    cmd's /d only adds a change of drive, which setting the directory does anyway.
+    """
+    if len(segment) == 3 and segment[0].lower() == "cd" and segment[1].lower() == "/d":
+        return [segment[0], segment[2]]
+    return segment
 
 
 def _cd_shape_refusal(step: _Step) -> Optional[Dict[str, Any]]:
@@ -1328,7 +1362,8 @@ def _parse_line(command: str, bypass_gates: bool = False) -> tuple:
                 "error": (
                     "Shell operators (&, >, >>, <, `, $(), newline) are not "
                     "allowed for security reasons. The only redirections "
-                    "allowed are 2>&1 and 2>/dev/null, which write nothing."
+                    "allowed are 2>&1 and 2>/dev/null (or 2>nul), which write "
+                    "nothing."
                 ),
                 "has_errors": True,
                 "hint": (
@@ -1372,8 +1407,9 @@ def _parse_line(command: str, bypass_gates: bool = False) -> tuple:
         envs, segments, error = _take_segment_envs(segments)
         if error is not None:
             return [], error
+        segments = [_without_cd_drive_flag(segment) for segment in segments]
         step = _Step(
-            text=text.strip(),
+            text=_CD_DRIVE_FLAG.sub(r"\1", text).strip(),
             segments=segments,
             connector=connector,
             stderr_modes=tuple(modes.get(i, "") for i in range(len(segments))),
@@ -1401,12 +1437,13 @@ def _captured_stderr(mode: str, default: Any) -> Any:
 
 
 def _segment_env(assignments: Dict[str, str]) -> Dict[str, str]:
-    """This process's environment plus one segment's assignments.
+    """This process's child environment plus one segment's assignments.
 
     A copy every time: ``os.environ`` itself is never touched, so nothing a
-    command sets outlives it or reaches the agent.
+    command sets outlives it or reaches the agent. GAIA's internal credentials
+    are left out (see ``gaia.env.child_env``).
     """
-    return {**os.environ, **assignments}
+    return child_env(assignments)
 
 
 class _CommandCancelled(Exception):
@@ -2974,7 +3011,7 @@ class ShellToolsMixin:
                     step_cwds.append(walk_cwd)
                     if step.is_cd:
                         walk_cwd, error = self._resolve_cd_target(
-                            step.segments[0][1], walk_cwd
+                            step.cd_target, walk_cwd
                         )
                         if error:
                             return error

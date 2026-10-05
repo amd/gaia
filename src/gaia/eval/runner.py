@@ -16,7 +16,6 @@ Usage:
 """
 
 import contextlib
-import errno
 import functools
 import json
 import logging
@@ -26,7 +25,6 @@ import shutil
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,17 +33,10 @@ from typing import Optional
 import yaml
 
 from gaia.eval.config import DEFAULT_AGENT_TYPE
+from gaia.eval.eval_lock import exclusive_eval
 from gaia.eval.scorecard import SKIPPED_STATUSES
 
 logger = logging.getLogger(__name__)
-
-# fcntl is POSIX-only — on Windows the eval lock degrades to a no-op (the
-# Lemonade race the lock guards against doesn't happen on a contributor's
-# Windows box, where Lemonade Server isn't typically running concurrent evals).
-if sys.platform == "win32":
-    fcntl = None  # type: ignore[assignment]
-else:
-    import fcntl  # type: ignore[no-redef]
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 EVAL_DIR = REPO_ROOT / "eval"
@@ -53,6 +44,7 @@ SCENARIOS_DIR = EVAL_DIR / "scenarios"
 CORPUS_DIR = EVAL_DIR / "corpus"
 RESULTS_DIR = EVAL_DIR / "results"
 MCP_CONFIG = EVAL_DIR / "mcp-config.json"
+AGENT_UI_MCP_SERVER = "gaia-agent-ui"
 MANIFEST = CORPUS_DIR / "manifest.json"
 REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
 
@@ -91,14 +83,23 @@ def load_mcp_config_template() -> dict:
         ) from e
 
 
-def resolve_mcp_config(run_dir) -> Path:
+def resolve_mcp_config(run_dir, backend_url: str) -> Path:
     """Write a runnable copy of the MCP config into ``run_dir``; return its path.
 
     The tracked template is never modified; the resolved copy ships with the
     run's artifacts. The path is absolute because ``claude -p`` runs from
-    ``REPO_ROOT``, not the caller's cwd.
+    ``REPO_ROOT``, not the caller's cwd. The Agent UI server is pointed at
+    ``backend_url``; without it the judge drives whatever runs on the default
+    port, not the backend the run was asked to evaluate.
     """
     config = _resolved_mcp_config()
+    server = (config.get("mcpServers") or {}).get(AGENT_UI_MCP_SERVER)
+    if server is None:
+        raise ValueError(
+            f"{MCP_CONFIG} has no {AGENT_UI_MCP_SERVER!r} server, so the eval "
+            "cannot reach the Agent UI backend."
+        )
+    server["args"] = [*server.get("args", []), "--backend", backend_url]
     resolved = Path(run_dir).resolve() / "mcp-config.resolved.json"
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -120,153 +121,6 @@ def _resolved_mcp_config() -> dict:
                     server["command"],
                 )
     return config
-
-
-# ── Single-runner lock ────────────────────────────────────────────────────
-#
-# Why this exists: ``gaia eval agent`` drives Lemonade Server, which has a
-# **single-tenant LLM slot** (one model loaded at a time, one ``ctx_size``
-# in effect). When two eval runs fire concurrently against the same
-# Lemonade — e.g. an agent in ``--fix`` mode shelling out parallel
-# category invocations, or a user kicking off a manual run on top of a
-# script — they race-evict each other's models out of that slot, and
-# the user sees nondeterministic ``n_ctx=4096`` overflow errors,
-# ``model_load_error: llama-server failed to start`` failures, and
-# spurious ``BLOCKED_BY_ARCHITECTURE`` results that have nothing to do
-# with the agent under test.
-#
-# We enforce one-at-a-time execution by holding an advisory lock on
-# ``/tmp/gaia-eval-agent.lock`` for the lifetime of ``AgentEvalRunner.run()``.
-# fcntl.flock + LOCK_EX | LOCK_NB gives us "fail fast if held by another
-# process" semantics. We write our PID into the lock file so the error
-# message is actionable, and we tolerate stale locks by checking whether
-# the holder PID is alive.
-#
-# Escape hatch: ``GAIA_EVAL_NO_LOCK=1`` skips the lock — useful for the
-# unit-test suite or for callers that genuinely manage Lemonade out of
-# band.
-_LOCK_FILE = Path(tempfile.gettempdir()) / "gaia-eval-agent.lock"
-_LOCK_ENV_BYPASS = "GAIA_EVAL_NO_LOCK"
-
-
-def _is_pid_alive(pid: int) -> bool:
-    """Return True iff *pid* corresponds to a running process."""
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # We don't own the process, but it exists.
-        return True
-
-
-@contextlib.contextmanager
-def _acquire_eval_lock():
-    """Hold a process-wide advisory lock for the duration of an eval run.
-
-    Raises ``SystemExit(2)`` with an actionable error message when the
-    lock is already held by another live process.  Stale locks (holder
-    PID has exited) are reclaimed automatically.
-    """
-    if os.environ.get(_LOCK_ENV_BYPASS) == "1":
-        yield
-        return
-
-    # Windows: fcntl is unavailable — degrade to a no-op (same shape as the
-    # OSError-on-/tmp short-circuit below).
-    if fcntl is None:
-        yield
-        return
-
-    # Open / create the lock file. Mode 0o644 so it survives across users
-    # without weird permission games.
-    try:
-        fd = os.open(str(_LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o644)
-    except OSError as exc:
-        # If we can't even create the lockfile (read-only /tmp etc.),
-        # skip locking and let the run proceed — better degraded than dead.
-        print(
-            f"[WARN] Could not create eval lock at {_LOCK_FILE}: {exc}. "
-            "Skipping concurrency guard.",
-            file=sys.stderr,
-        )
-        yield
-        return
-
-    try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
-                raise
-            # Lock is held — read holder PID + age and decide.
-            try:
-                with open(_LOCK_FILE, "r", encoding="utf-8") as fh:
-                    holder_pid_str = fh.read().strip()
-                holder_pid = int(holder_pid_str) if holder_pid_str else -1
-            except (ValueError, OSError):
-                holder_pid = -1
-
-            held_age_s = (
-                time.time() - _LOCK_FILE.stat().st_mtime if _LOCK_FILE.exists() else 0
-            )
-
-            if holder_pid > 0 and not _is_pid_alive(holder_pid):
-                # Stale lock — holder is dead. Try once more to grab it.
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError:
-                    print(
-                        "[ERROR] Eval lock is held but holder PID "
-                        f"{holder_pid} is gone, and re-acquire still failed. "
-                        f"Manually delete {_LOCK_FILE} and retry.",
-                        file=sys.stderr,
-                    )
-                    os.close(fd)
-                    sys.exit(2)
-            else:
-                # A live eval run is in progress somewhere — refuse loudly.
-                print(
-                    "[ERROR] Another `gaia eval agent` run is already in "
-                    f"progress (PID {holder_pid}, started ~{int(held_age_s)}s ago).\n"
-                    "        Lemonade Server's single LLM slot can't safely "
-                    "host two evals at once — they race-evict each other's "
-                    "models and you'll see bogus n_ctx=4096 errors.\n"
-                    f"        Wait for PID {holder_pid} to finish, or "
-                    f"`kill {holder_pid}` if it's stuck.\n"
-                    "        Override (NOT recommended): "
-                    f"set {_LOCK_ENV_BYPASS}=1 in the environment.",
-                    file=sys.stderr,
-                )
-                os.close(fd)
-                sys.exit(2)
-
-        # We hold the lock — record our PID so future failers can see it.
-        try:
-            os.ftruncate(fd, 0)
-            os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
-            os.fsync(fd)
-        except OSError:
-            # PID-write failure is non-fatal; the lock itself is already held.
-            pass
-
-        try:
-            yield
-        finally:
-            # Best-effort cleanup. Releasing the flock happens implicitly
-            # when fd is closed; we also wipe our PID so a reader doesn't
-            # blame our (dead) process for a future stale-lock encounter.
-            try:
-                os.ftruncate(fd, 0)
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
-    finally:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
 
 
 REAL_WORLD_MANIFEST = REAL_WORLD_CORPUS_DIR / "manifest.json"
@@ -1341,6 +1195,14 @@ def preflight_check(backend_url, scenarios=None):
     has_memory_scenarios = scenarios is not None and any(
         (sd or {}).get("category") == "memory" for _path, sd in scenarios
     )
+    # Long-term memory defaults OFF in the Agent UI. With it off, every
+    # `remember` returns "skipped" and the scenario scores memory being off.
+    if scenarios is not None and any(
+        _scenario_needs_memory(sd) for _path, sd in scenarios
+    ):
+        memory_off_error = _probe_memory_enabled(backend_url)
+        if memory_off_error:
+            errors.append(memory_off_error)
     if has_memory_scenarios:
         memory_admin_error = _probe_memory_admin(backend_url)
         if memory_admin_error:
@@ -1441,6 +1303,67 @@ def _probe_eval_mailbox(backend_url: str) -> Optional[str]:
             f"Eval mailbox probe could not reach {backend_url}: {e}. "
             "Is the Agent UI backend running?"
         )
+
+
+#: Categories whose scenarios are about long-term memory itself.
+_MEMORY_CATEGORIES = frozenset({"memory", "gaia_memory"})
+
+
+def _scenario_needs_memory(scenario_data: Optional[dict]) -> bool:
+    """True when a scenario reads or writes long-term memory.
+
+    A scenario outside the memory categories still depends on it when its
+    setup clears or seeds the store (a preference that must survive a new
+    session, a check-in that must be recalled later).
+    """
+    scenario_data = scenario_data or {}
+    if scenario_data.get("category") in _MEMORY_CATEGORIES:
+        return True
+    setup = scenario_data.get("setup") or {}
+    return "memory_clear" in setup or "memory_seed" in setup
+
+
+def _probe_memory_enabled(backend_url: str) -> Optional[str]:
+    """Verify long-term memory is switched on in the backend under test.
+
+    Returns ``None`` when ``GET /api/memory/settings`` reports
+    ``memory_enabled: true``, otherwise an error string for the preflight list.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = f"{backend_url}/api/memory/settings"
+    enable = (
+        f"curl -X PUT {url} -H 'X-Gaia-UI: 1' -H 'Content-Type: application/json' "
+        "-d '{\"memory_enabled\": true}'"
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=5) as r:
+            settings = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return f"Memory settings probe failed with HTTP {e.code} from {url}: {e.reason}"
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+        return (
+            f"Memory settings probe could not reach {backend_url}: {e}. "
+            "Is the Agent UI backend running?"
+        )
+    except json.JSONDecodeError as e:
+        return f"Memory settings probe got a non-JSON response from {url}: {e}"
+    if not isinstance(settings, dict):
+        return (
+            f"Memory settings probe expected a JSON object from {url}, "
+            f"got {type(settings).__name__}"
+        )
+    if settings.get("memory_enabled") is True:
+        return None
+    return (
+        "Scenarios that use long-term memory are queued, but the backend at "
+        f"{backend_url} has memory switched off ({url} reports "
+        f"memory_enabled={settings.get('memory_enabled')!r}; someone turned it "
+        "off in Settings). Every `remember` would return 'skipped' and the scores would "
+        "measure memory being off. Turn it on, then re-run:\n"
+        f"    {enable}"
+    )
 
 
 def _probe_memory_admin(backend_url: str) -> Optional[str]:
@@ -1652,7 +1575,7 @@ def run_scenario_subprocess(
             "--json-schema",
             result_schema,
             "--mcp-config",
-            str(resolve_mcp_config(run_dir)),
+            str(resolve_mcp_config(run_dir, backend_url)),
             "--strict-mcp-config",
             # No built-in tools: the driver works only through the agent UI's
             # MCP tools, and holds the judge's credentials.
@@ -2154,9 +2077,9 @@ def _warn_on_judge_mismatch(baseline, current):
     print("WARNING: judge mismatch — these scorecards are not directly comparable.")
     print(f"  baseline scored by: {baseline_judge}")
     print(f"  current  scored by: {current_judge}")
-    print("Deltas below mix real behavior changes with the judge change. Regenerate")
-    print("the baseline under the current judge (`gaia eval agent --save-baseline`)")
-    print("before treating any of them as a regression.")
+    print("Deltas below mix real behavior changes with the judge change. Replace the")
+    print("committed baseline from the next nightly on the Strix Halo pool, scored by")
+    print("the current judge, before treating any of them as a regression.")
     print("=" * 78)
 
 
@@ -2522,9 +2445,9 @@ class AgentEvalRunner:
           D) compare before/after and report improvements/regressions
         repeating B-D up to max_fix_iterations or until target_pass_rate is met.
 
-        Holds a process-wide advisory lock for the lifetime of the run
-        (audit-only mode skips this — no Lemonade contention there).
-        See ``_acquire_eval_lock`` for the rationale.
+        Holds the machine-wide eval lock for the lifetime of the run
+        (audit-only mode skips it — no model is driven there); see
+        :mod:`gaia.eval.eval_lock`.
         """
 
         if audit_only:
@@ -2534,7 +2457,7 @@ class AgentEvalRunner:
             print(json.dumps(result, indent=2))
             return result
 
-        with _acquire_eval_lock():
+        with exclusive_eval("gaia eval agent"):
             return self._run_locked(
                 scenario_id=scenario_id,
                 category=category,

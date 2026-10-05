@@ -65,6 +65,11 @@ class EmbeddedLemonadeOwner:
         self._lock = threading.Lock()
         self._started_pid: Optional[int] = None
 
+    @property
+    def started_pid(self) -> Optional[int]:
+        """Pid of the server this daemon started and will stop, or None."""
+        return self._started_pid
+
     @staticmethod
     def configured_url() -> Optional[str]:
         """The server the user chose with ``LEMONADE_BASE_URL``, if any."""

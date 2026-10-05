@@ -28,6 +28,7 @@ stdlib-only by design — import direction is installer -> llm, no cycles.
 import logging
 import os
 import platform
+import posixpath
 import re
 import shlex
 import shutil
@@ -57,11 +58,6 @@ _DOWNLOAD_URL = "https://lemonade-server.ai"
 
 _VERSION_RE = re.compile(r"(\d+\.\d+\.\d+)")
 
-#: Set on every Lemonade GAIA starts. llama.cpp's Vulkan cooperative-matrix
-#: path crashes llama-server as it loads an embedding model on AMD Radeon iGPUs
-#: (8060S / gfx1151), which leaves memory and document search dead (#1831).
-LLAMACPP_ENV = {"GGML_VK_DISABLE_COOPMAT": "1"}
-
 
 @dataclass
 class LemonadeTooling:
@@ -82,7 +78,7 @@ class StartSpec:
 
     ``env`` contains ONLY the additional variables the server needs; the
     caller must merge it into the parent environment at the Popen call
-    site — ``env={**os.environ, **spec.env}`` — never replace it (a bare
+    site — ``env=child_env(spec.env)`` — never replace it (a bare
     ``env=spec.env`` drops PATH/LOCALAPPDATA and breaks LemonadeServer.exe).
     """
 
@@ -176,16 +172,17 @@ def resolve_lemonade() -> LemonadeTooling:
         # Probe the daemon (what we start), not the client — the client is
         # only needed for the version query and may be absent.
         for bin_dir in _MACOS_BIN_DIRS:
-            daemon = Path(bin_dir) / _MACOS_DAEMON_NAME
-            if not daemon.exists():
+            # posixpath: the answer is a macOS path whatever host computes it.
+            daemon = posixpath.join(bin_dir, _MACOS_DAEMON_NAME)
+            if not Path(daemon).exists():
                 continue
-            client = Path(bin_dir) / _MACOS_CLIENT_NAME
+            client = posixpath.join(bin_dir, _MACOS_CLIENT_NAME)
             log.debug("Found modern Lemonade at canonical path: %s", daemon)
             return LemonadeTooling(
                 found=True,
                 kind="modern",
-                client_path=str(client) if client.exists() else None,
-                server_launcher=str(daemon),
+                client_path=client if Path(client).exists() else None,
+                server_launcher=daemon,
             )
         # Installed under a non-standard prefix but still on PATH.
         daemon_on_path = shutil.which(_MACOS_DAEMON_NAME)
@@ -266,18 +263,15 @@ def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> St
             "LEMONADE_SERVER_PATH to an existing binary."
         )
 
-    # macOS runs llama.cpp on Metal, so the Vulkan workaround is noise there.
-    llamacpp_env = {} if platform.system() == "Darwin" else dict(LLAMACPP_ENV)
-
     if tooling.kind == "modern":
         env = {"LEMONADE_CTX_SIZE": str(ctx_size)} if ctx_size is not None else {}
         launcher = tooling.server_launcher or ""
         if launcher.lower().endswith(".exe"):
-            return StartSpec(argv=[launcher, "--silent"], env={**llamacpp_env, **env})
+            return StartSpec(argv=[launcher, "--silent"], env=env)
         if tooling.source == "env":
             # Explicit LEMONADE_SERVER_PATH override — run the named binary
             # verbatim rather than silently rerouting to systemctl.
-            return StartSpec(argv=[launcher], env={**llamacpp_env, **env})
+            return StartSpec(argv=[launcher], env=env)
         if platform.system() == "Darwin":
             # No systemd on macOS — start the daemon directly.
             if not launcher:
@@ -296,7 +290,7 @@ def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> St
             argv.append("--no-tray")
         if ctx_size is not None:
             argv.extend(["--ctx-size", str(ctx_size)])
-        return StartSpec(argv=argv, env=llamacpp_env)
+        return StartSpec(argv=argv, env={})
 
     raise ValueError(
         f"Unknown Lemonade tooling kind {tooling.kind!r} "
@@ -341,6 +335,30 @@ def render_command(spec: StartSpec) -> str:
     return _render_command(spec.argv, spec.env)
 
 
+def gaia_runs_lemonade(base_url: Optional[str] = None) -> bool:
+    """Whether the server to start for *base_url* is GAIA's own, not a system install.
+
+    The one decision every start path makes before launching anything: True
+    when ``gaia init`` installed GAIA's embedded server, ``LEMONADE_BASE_URL``
+    names no other, and *base_url* is unset or is the address GAIA resolves on
+    its own. That server is started through the daemon, never by
+    :func:`resolve_lemonade` / :func:`build_start_command`, and binds a port
+    chosen at start time -- so a caller holding the stopped-state default URL
+    must re-resolve after starting it.
+    """
+    from gaia.llm.lemonade_client import (
+        configured_lemonade_url,
+        resolve_lemonade_base_url,
+    )
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    if configured_lemonade_url() or not EmbeddedLemonade().is_installed():
+        return False
+    if base_url is None:
+        return True
+    return resolve_lemonade_base_url(base_url) == resolve_lemonade_base_url()
+
+
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     """Describe how to start Lemonade Server on THIS machine.
 
@@ -352,6 +370,15 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     ``lemonade-server serve`` CLI is only ever named when a legacy install
     was actually resolved.
     """
+    if gaia_runs_lemonade():
+        return StartHint(
+            instruction=(
+                "GAIA starts its Lemonade Server when it needs it. To start it "
+                "now, run: gaia lemonade embedded start"
+            ),
+            command="gaia lemonade embedded start",
+        )
+
     tooling = resolve_lemonade()
     system = platform.system()
 

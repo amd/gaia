@@ -15,6 +15,16 @@ except ImportError:
 # ── System ──────────────────────────────────────────────────────────────────
 
 
+def _lemonade_web_origin() -> str:
+    """Origin (``scheme://host:port``) of the Lemonade server GAIA talks to."""
+    from urllib.parse import urlparse
+
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+    parsed = urlparse(resolve_lemonade_base_url())
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 class DownloadProgress(BaseModel):
     """Progress of an in-flight Lemonade model download.
 
@@ -83,13 +93,16 @@ class SystemStatus(BaseModel):
     # LLM configuration health
     context_size_sufficient: bool = True  # False if loaded ctx < required minimum
     model_downloaded: Optional[bool] = None  # None=unknown, True/False if checked
-    default_model_name: str = "Gemma-4-E4B-it-GGUF"  # Required model for GAIA Chat
+    # Required model for GAIA Chat; None when an unreadable config hides it
+    # (``config_error`` then says why).
+    default_model_name: Optional[str] = "Gemma-4-E4B-it-GGUF"
     # Catalog-reported size of ``default_model_name``. Populated alongside
     # ``model_downloaded`` so the "not downloaded" banner can show an accurate
     # size hint instead of a hard-coded one (the previous "~25 GB" was a stale
     # remnant from when the default was Qwen3.5-35B).
     default_model_size_gb: Optional[float] = None
-    lemonade_url: str = "http://localhost:13305"  # Lemonade web UI base URL
+    # Lemonade web UI origin; resolved per response (GAIA's server picks its port).
+    lemonade_url: str = Field(default_factory=_lemonade_web_origin)
     expected_model_loaded: bool = True  # False if a different model is loaded
     # Live download progress for ``default_model_name`` (or whatever is
     # currently being pulled). ``None`` when no pull is in flight.
@@ -103,6 +116,12 @@ class SystemStatus(BaseModel):
     detected_devices: List[str] = Field(default_factory=list)
     # Active profile from ``~/.gaia/config.json`` (e.g. "chat", "npu").
     active_profile: str = "chat"
+    # Set when ``~/.gaia/config.json`` exists but cannot be loaded; the message
+    # names the file and how to fix it. ``active_profile`` is not read from it.
+    config_error: Optional[str] = None
+    # One message per status probe that failed (catalog, stats, device info,
+    # disk space); the matching fields keep their "unknown" defaults.
+    probe_warnings: List[str] = Field(default_factory=list)
 
 
 # ── Tasks ──────────────────────────────────────────────────────────────────
@@ -325,6 +344,12 @@ class SessionResponse(BaseModel):
     device: str = "gpu"
     # Mailbox FILTER (#1596): None = every connected mailbox (no pick).
     mail_provider: Optional[str] = None
+    # Where the next chat turn is answered. inference_remote is None when that
+    # can't be determined, so the UI must not claim the chat stays local.
+    inference_remote: Optional[bool] = None
+    inference_provider: Optional[str] = None
+    inference_provider_name: Optional[str] = None
+    inference_description: Optional[str] = None
 
 
 class SessionListResponse(BaseModel):

@@ -1,0 +1,305 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+"""Python-package installs on the GAIA installer's virtualenv.
+
+The installer builds ``~/.gaia/venv`` with ``uv venv`` -- no pip -- and only
+puts its ``bin`` on PATH, so nothing is activated. On that venv a bare
+``uv pip install`` finds no environment and ``python -m pip`` does not exist.
+``gaia init`` used to try both, swallow every failure and report success with
+document Q&A broken. These tests pin the argv actually executed and printed,
+and that a failed install fails init.
+"""
+
+import io
+import sys
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from gaia.agents import install_hints
+from gaia.installer import init_command
+from gaia.installer.init_command import InitCommand
+
+UV = "/home/u/.local/bin/uv"
+
+
+#: What `gaia_extra_requirements(["rag"])` resolves to: real PyPI requirements
+#: read off amd-gaia's own install metadata, never the ``amd-gaia[rag]``
+#: bracket form -- that form reinstalls GAIA itself (#4672).
+FAKE_RAG_REQUIREMENTS = ["faiss-cpu", "pymupdf"]
+
+
+@pytest.fixture
+def installer_venv(monkeypatch):
+    monkeypatch.setattr(install_hints, "_pip_available", lambda: False)
+    monkeypatch.setattr(
+        install_hints.shutil, "which", lambda name: UV if name == "uv" else None
+    )
+    monkeypatch.setattr(install_hints, "editable_gaia_root", lambda: None)
+    monkeypatch.setattr(
+        init_command, "gaia_extra_requirements", lambda extras: FAKE_RAG_REQUIREMENTS
+    )
+
+
+@pytest.fixture
+def stock_venv(monkeypatch):
+    monkeypatch.setattr(install_hints, "_pip_available", lambda: True)
+    monkeypatch.setattr(install_hints.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(install_hints, "editable_gaia_root", lambda: None)
+    monkeypatch.setattr(
+        init_command, "gaia_extra_requirements", lambda extras: FAKE_RAG_REQUIREMENTS
+    )
+
+
+def _cmd(profile="rag"):
+    cmd = InitCommand(profile=profile, yes=True)
+    printed = []
+    cmd._print = lambda msg, end="\n": printed.append(msg)
+    return cmd, printed
+
+
+def _run_extras(cmd, returncode=0, stderr=""):
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=returncode, stdout="", stderr=stderr)
+
+    with (
+        patch.object(init_command, "RICH_AVAILABLE", False),
+        patch.object(init_command.subprocess, "run", side_effect=fake_run),
+    ):
+        ok = cmd._install_pip_extras()
+    return ok, calls
+
+
+class TestExtrasInstallArgv:
+    def test_installer_venv_runs_uv_pinned_to_this_interpreter(self, installer_venv):
+        cmd, _ = _cmd()
+        ok, calls = _run_extras(cmd)
+        assert ok
+        assert calls == [
+            [UV, "pip", "install", "--python", sys.executable, *FAKE_RAG_REQUIREMENTS]
+        ]
+
+    def test_stock_venv_runs_its_own_pip(self, stock_venv):
+        cmd, _ = _cmd()
+        ok, calls = _run_extras(cmd)
+        assert ok
+        assert calls == [
+            [sys.executable, "-m", "pip", "install", *FAKE_RAG_REQUIREMENTS]
+        ]
+
+    def test_editable_checkout_never_reinstalls_gaia_itself(
+        self, installer_venv, monkeypatch, tmp_path
+    ):
+        """An editable checkout installs the extra's own requirements too --
+        never ``-e <root>[extra]``, which reinstalls GAIA and can't replace
+        the running ``gaia.exe`` on Windows (#4672)."""
+        monkeypatch.setattr(install_hints, "editable_gaia_root", lambda: str(tmp_path))
+        cmd, _ = _cmd()
+        _, calls = _run_extras(cmd)
+        assert calls == [
+            [UV, "pip", "install", "--python", sys.executable, *FAKE_RAG_REQUIREMENTS]
+        ]
+
+    def test_profile_without_extras_runs_nothing(self, installer_venv):
+        cmd, _ = _cmd(profile="minimal")
+        ok, calls = _run_extras(cmd)
+        assert ok and calls == []
+
+
+class TestExtrasInstallFailureIsLoud:
+    def test_failed_install_returns_false_and_shows_stderr(self, installer_venv):
+        cmd, printed = _cmd()
+        ok, calls = _run_extras(
+            cmd, returncode=2, stderr="error: Failed to fetch faiss-cpu\n"
+        )
+        out = "\n".join(printed)
+        assert ok is False
+        assert len(calls) == 1, "one installer, no silent retries through others"
+        assert "Failed to fetch faiss-cpu" in out
+        assert "exit 2" in out
+        retry = " ".join(FAKE_RAG_REQUIREMENTS)
+        assert f"uv pip install --python {sys.executable} {retry}" in out
+
+    def test_no_installer_at_all_fails_without_running_anything(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(install_hints, "_pip_available", lambda: False)
+        monkeypatch.setattr(install_hints.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(install_hints.Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(install_hints, "editable_gaia_root", lambda: None)
+        cmd, printed = _cmd()
+        ok, calls = _run_extras(cmd)
+        assert ok is False
+        assert calls == []
+        assert "docs.astral.sh/uv" in "\n".join(printed)
+
+    def test_stalled_install_times_out_and_fails(self, installer_venv):
+        cmd, printed = _cmd()
+        timeouts = []
+
+        def stalled(argv, **kwargs):
+            timeouts.append(kwargs.get("timeout"))
+            raise init_command.subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+        with (
+            patch.object(init_command, "RICH_AVAILABLE", False),
+            patch.object(init_command.subprocess, "run", side_effect=stalled),
+        ):
+            ok = cmd._install_pip_extras()
+        out = "\n".join(printed)
+        assert ok is False
+        assert timeouts == [900]
+        assert "timed out" in out
+        retry = " ".join(FAKE_RAG_REQUIREMENTS)
+        assert f"uv pip install --python {sys.executable} {retry}" in out
+
+    def test_failed_extras_install_fails_init(self, monkeypatch):
+        """`gaia init` must exit non-zero, not print "initialization complete"
+        with document Q&A broken."""
+        cmd = InitCommand(profile="rag", yes=True, skip_models=True)
+        cmd._print = lambda msg, end="\n": None
+        monkeypatch.setattr(cmd, "_ensure_lemonade_ready", lambda: True)
+        monkeypatch.setattr(cmd, "_install_pip_extras", lambda: False)
+        verify = MagicMock(return_value=True)
+        completion = MagicMock()
+        monkeypatch.setattr(cmd, "_verify_setup", verify)
+        monkeypatch.setattr(cmd, "_print_completion", completion)
+        monkeypatch.setattr(init_command, "stdin_is_tty", lambda: True)
+
+        assert cmd.run() == 1
+        verify.assert_not_called()
+        completion.assert_not_called()
+
+
+class TestAgentUiMissingDependencies:
+    def test_prints_an_install_command_that_targets_this_interpreter(
+        self, installer_venv, capsys
+    ):
+        import gaia.cli as gaia_cli
+
+        with (
+            patch("gaia.ui.build.ensure_webui_built"),
+            patch(
+                "gaia.ui.server.create_app",
+                side_effect=ImportError("No module named 'fastapi'"),
+            ),
+            pytest.raises(SystemExit) as exc,
+        ):
+            gaia_cli._launch_agent_ui(port=0, log=MagicMock())
+
+        assert exc.value.code == 1
+        out = capsys.readouterr().out
+        assert f'uv pip install --python {sys.executable} "amd-gaia[ui]"' in out
+        assert 'uv pip install "amd-gaia[ui]"' not in out
+
+
+class TestCompletionTuiHintRich:
+    def test_rich_output_keeps_the_installer_command_intact(
+        self, monkeypatch, tmp_path
+    ):
+        if not init_command.RICH_AVAILABLE:
+            pytest.skip("rich not installed")
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        cmd = InitCommand(profile="gaia", yes=True)
+        cmd._is_hub_agent_available = lambda _id: True
+        buf = io.StringIO()
+        cmd.console = init_command.Console(file=buf, force_terminal=False, width=200)
+        monkeypatch.setattr(init_command.shutil, "which", lambda _name: None)
+        cmd._print_completion()
+        out = buf.getvalue()
+        assert init_command._INSTALLER_HINT in out
+        assert "    gaia-tui " not in out
+
+
+class TestTuiDetection:
+    def test_tui_in_gaia_bin_counts_as_installed_when_off_path(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        monkeypatch.setattr(init_command.shutil, "which", lambda _name: None)
+        assert InitCommand._tui_installed() is False
+
+        name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin" / name).write_text("")
+        assert InitCommand._tui_installed() is True
+
+    def test_completion_does_not_tell_an_installed_user_to_reinstall(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        monkeypatch.setattr(init_command.shutil, "which", lambda _name: None)
+        name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin" / name).write_text("")
+        cmd = InitCommand(profile="gaia", yes=True)
+        cmd._is_hub_agent_available = lambda _id: True
+        printed = []
+        cmd._print = lambda msg, end="\n": printed.append(str(msg))
+        with patch.object(init_command, "RICH_AVAILABLE", False):
+            cmd._print_completion()
+        assert init_command._INSTALLER_HINT not in "\n".join(printed)
+
+
+class _FakeWinreg:
+    HKEY_CURRENT_USER = object()
+    KEY_READ = 1
+
+    def __init__(self, install_dir=None):
+        self.install_dir = install_dir
+        self.opened = []
+
+    def OpenKey(self, root, path, _reserved, _access):  # noqa: N802
+        self.opened.append(path)
+        if self.install_dir is None:
+            raise FileNotFoundError(path)
+        return self
+
+    def QueryValueEx(self, _key, name):  # noqa: N802
+        assert name == "InstallDir"
+        return str(self.install_dir), 1
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+class TestWindowsInstallerTuiDetection:
+    @pytest.fixture
+    def windows_off_path(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+        monkeypatch.setattr(init_command.shutil, "which", lambda _name: None)
+        win_sys = SimpleNamespace(**{**vars(sys), "platform": "win32"})
+        monkeypatch.setattr(init_command, "sys", win_sys)
+
+    def test_finds_tui_in_registry_install_dir(
+        self, windows_off_path, monkeypatch, tmp_path
+    ):
+        install_dir = tmp_path / "custom"
+        install_dir.mkdir()
+        fake = _FakeWinreg(install_dir)
+        monkeypatch.setitem(sys.modules, "winreg", fake)
+        assert InitCommand._tui_installed() is False
+
+        (install_dir / "gaia-tui.exe").write_text("")
+        assert InitCommand._tui_installed() is True
+        assert fake.opened[-1] == r"Software\AMD\GAIA"
+
+    def test_absent_value_uses_the_installer_default_dir(
+        self, windows_off_path, monkeypatch, tmp_path
+    ):
+        monkeypatch.setitem(sys.modules, "winreg", _FakeWinreg(None))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "lad"))
+        default_dir = tmp_path / "lad" / "Programs" / "GAIA"
+        default_dir.mkdir(parents=True)
+        assert InitCommand._tui_installed() is False
+
+        (default_dir / "gaia-tui.exe").write_text("")
+        assert InitCommand._tui_installed() is True

@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Lock, Zap, FileText, DollarSign, Terminal } from 'lucide-react';
+import { Cloud, Lock, Zap, FileText, DollarSign, Terminal } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { HubPage } from './HubPage';
+import { selectInferenceLocation } from './InferenceLocationBadge';
 import { shouldShowFirstRunTip, shouldShowNoModelTip } from '../utils/setupHints';
 import './WelcomeScreen.css';
 
@@ -51,7 +52,11 @@ const DEFAULT_SUGGESTIONS = [
 ];
 
 export function WelcomeScreen({ onNewTask, onSendPrompt, onStartAgentTask, onCreateAgent }: WelcomeScreenProps) {
-    const { systemStatus, agents, activeAgentId, setActiveAgentId } = useChatStore();
+    const { systemStatus, agents, activeAgentId, setActiveAgentId, sessions, currentSessionId } = useChatStore();
+    const location = selectInferenceLocation(sessions, currentSessionId);
+    const cloudProvider = location?.inference_remote === true
+        ? (location.inference_provider_name || 'a cloud provider')
+        : null;
 
     // A chip runs on the agent the picker is showing, starters or not --
     // routing the generic list to the flagship contradicts that selection.
@@ -156,9 +161,15 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onStartAgentTask, onCre
                 <span className="welcome-version">v{__APP_VERSION__} <span className="beta-badge">BETA</span></span>
 
                 <div className="features">
-                    <Feature icon={<Lock size={22} />} title="Private" desc="Data stays on your device"
-                        codeHint="> encrypt --local"
-                        expandedDesc="All processing happens on-device. No cloud, no tracking, complete data privacy." />
+                    {cloudProvider ? (
+                        <Feature icon={<Cloud size={22} />} title="Cloud model" desc={`Chat is sent to ${cloudProvider}`}
+                            codeHint="> chat --remote"
+                            expandedDesc={`Chat inference runs on ${cloudProvider}, a cloud provider. Everything in a conversation is sent there to be answered.`} />
+                    ) : (
+                        <Feature icon={<Lock size={22} />} title="Private" desc="Data stays on your device"
+                            codeHint="> encrypt --local"
+                            expandedDesc="All processing happens on-device. No cloud, no tracking, complete data privacy." />
+                    )}
                     <Feature icon={<Zap size={22} />} title="Fast" desc="NPU acceleration"
                         codeHint="> npu.accelerate()"
                         expandedDesc="Hardware-accelerated with AMD Ryzen AI NPU for real-time local inference." />

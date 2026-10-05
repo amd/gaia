@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
+import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
+import { InferenceLocationBadge } from './InferenceLocationBadge';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, selectUnreadCount } from '../stores/notificationStore';
+import { useNotificationStore, selectUnreadCount, PATH_ACCESS_TOOL, pathAccessQuestion } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -830,14 +831,17 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         sessionId,
                         agentName: 'GAIA',
                         title: `Allow ${toolName}?`,
-                        message: `The agent wants to execute: ${toolName}`,
+                        message: toolName === PATH_ACCESS_TOOL
+                            ? pathAccessQuestion(event.args)
+                            : `The agent wants to execute: ${toolName}`,
                         timestamp: Date.now(),
                         read: false,
                         dismissed: false,
                         priority: 'high',
                         tool: toolName,
                         toolArgs: event.args as Record<string, unknown> | undefined,
-                        timeoutSeconds: event.timeout_seconds ?? 60,
+                        // No timeout from the backend means it waits; don't invent one.
+                        timeoutSeconds: event.timeout_seconds,
                     });
                     return;
                 }
@@ -1931,10 +1935,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             <span className="input-footer-sep" />
                         </>
                     )}
-                    <span className="input-footer-item">
-                        <Lock size={10} />
-                        <span>100% local &amp; private</span>
-                    </span>
+                    <InferenceLocationBadge session={session} />
                     <span className="input-footer-sep" />
                     <span className="input-footer-item">
                         <kbd className="kbd-hint">Enter</kbd>

@@ -34,9 +34,7 @@ except ImportError:
 # at import. Treat that the same as "not installed" so a bad install can't crash
 # every module that transitively imports RAG; the loud, actionable error is
 # deferred to RAGSDK._check_dependencies() at point of use.
-# NOTE: RAG embeds via Lemonade (self.embedder.embeddings), NOT sentence-transformers.
-# sentence-transformers is intentionally NOT imported or required here — it is only
-# an optional dep of the memory cross-encoder reranker (gaia.agents.base.memory).
+# RAG embeds via Lemonade (self.embedder.embeddings); never sentence-transformers.
 try:
     import faiss
 except Exception:  # pylint: disable=broad-except
@@ -44,7 +42,12 @@ except Exception:  # pylint: disable=broad-except
 
 from gaia import config as gaia_config
 from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME
+from gaia.llm.lemonade_client import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_MODEL_NAME,
+    EMBEDDER_LLAMACPP_ARGS,
+    EMBEDDER_UBATCH_TOKENS,
+)
 from gaia.logger import get_logger
 from gaia.security import PathValidator
 
@@ -87,9 +90,47 @@ class EmptyPDFError(PDFExtractionError):
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
 # and extracted-text markdown. clear_cache() deletes nothing else.
 _CACHE_OWNED_FILE = re.compile(
-    r"^(?:[0-9a-f]{16}_[0-9a-f]{32}|[0-9a-f]{64}_notfound)\.json(?:\.sig)?$"
+    r"^(?:[0-9a-f]{16}_[0-9a-f]{32}|[0-9a-f]{64}_notfound)(?:_[0-9a-f]{8})?"
+    r"\.json(?:\.sig)?$"
     r"|_extracted\.md$"
 )
+
+
+#: Headroom for the BOS/EOS tokens the server adds to every input.
+_EMBED_RESERVED_TOKENS = 48
+#: Worst realistic ratio: Gemma's tokenizer gives every digit its own token.
+_EMBED_MIN_CHARS_PER_TOKEN = 1.0
+#: Longest text that embeds whole. No chunk is cut longer than this.
+EMBED_MAX_CHARS = int(
+    (EMBEDDER_UBATCH_TOKENS - _EMBED_RESERVED_TOKENS) * _EMBED_MIN_CHARS_PER_TOKEN
+)
+
+
+def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
+    """Split *text* into pieces of at most *max_chars*, dropping nothing but whitespace.
+
+    Breaks at the last newline, else the last space, in the back half of each
+    window; a run with neither is cut at exactly *max_chars*.
+    """
+    if max_chars < 1:
+        raise ValueError(f"max_chars must be at least 1, got {max_chars}")
+    floor = max(1, max_chars // 2)
+    pieces = []
+    rest = text.strip()
+    while len(rest) > max_chars:
+        window = rest[: max_chars + 1]
+        cut = window.rfind("\n")
+        if cut < floor:
+            cut = window.rfind(" ")
+        if cut < floor:
+            cut = max_chars
+        piece = rest[:cut].strip()
+        if piece:
+            pieces.append(piece)
+        rest = rest[cut:].strip()
+    if rest:
+        pieces.append(rest)
+    return pieces
 
 
 def default_rag_cache_dir() -> str:
@@ -110,7 +151,8 @@ class RAGConfig:
     cache_dir: str = field(default_factory=default_rag_cache_dir)
     show_stats: bool = False
     use_local_llm: bool = True
-    base_url: str = "http://localhost:13305/api/v1"  # Lemonade server API URL
+    # Lemonade API URL; None resolves at use (LEMONADE_BASE_URL, else GAIA's own).
+    base_url: Optional[str] = None
     # Memory management settings
     max_indexed_files: int = 100  # Maximum number of files to keep indexed
     max_total_chunks: int = 10000  # Maximum total chunks across all files
@@ -166,10 +208,29 @@ class RAGSDK:
         ```
     """
 
-    def __init__(self, config: Optional[RAGConfig] = None):
-        """Initialize RAG SDK."""
+    def __init__(
+        self,
+        config: Optional[RAGConfig] = None,
+        path_validator: Optional[PathValidator] = None,
+    ):
+        """Initialize RAG SDK.
+
+        Args:
+            config: RAG settings; defaults to ``RAGConfig()``.
+            path_validator: The host's validator, shared so a path the user
+                grants mid-session is readable here too. Defaults to one built
+                from ``config.allowed_paths``.
+        """
         self.config = config or RAGConfig()
         self.log = get_logger(__name__)
+        if self.config.chunk_size * 4 > EMBED_MAX_CHARS:
+            self.log.warning(
+                f"chunk_size={self.config.chunk_size} asks for ~"
+                f"{self.config.chunk_size * 4}-char chunks, but the embedder takes "
+                f"at most {EMBED_MAX_CHARS} chars, so chunks are capped there "
+                f"(~{EMBED_MAX_CHARS // 4} tokens). Set chunk_size <= "
+                f"{EMBED_MAX_CHARS // 4} to silence this."
+            )
 
         # Check dependencies
         self._check_dependencies()
@@ -218,8 +279,9 @@ class RAGSDK:
         )
         self.chat = AgentSDK(chat_config)
 
-        # Initialize path validator
-        self.path_validator = PathValidator(self.config.allowed_paths)
+        if path_validator is None:
+            path_validator = PathValidator(self.config.allowed_paths)
+        self.path_validator = path_validator
 
         self.log.debug("RAG SDK initialized")
 
@@ -426,49 +488,60 @@ class RAGSDK:
 
         return json.loads(json_bytes)
 
-    def _get_cache_path(self, file_path: str) -> str:
+    def _chunking_fingerprint(self) -> str:
+        """Short hash of the settings that shape the chunks a cache entry holds.
+
+        The embedder is deliberately absent: the cache stores text and chunks,
+        never vectors, and every load re-embeds with the configured model.
+        ``EMBED_MAX_CHARS`` is in it because it caps how long a chunk is cut.
         """
-        Get cache file path for a document using content-based hashing.
+        spec = json.dumps(
+            {
+                "chunk_size": self.config.chunk_size,
+                "chunk_overlap": self.config.chunk_overlap,
+                "use_llm_chunking": bool(self.config.use_llm_chunking),
+                "embed_max_chars": EMBED_MAX_CHARS,
+            },
+            sort_keys=True,
+        )
+        return hashlib.sha256(spec.encode("utf-8")).hexdigest()[:8]
 
-        Uses SHA-256 hash of actual file content for cache key.
-        This ensures proper cache invalidation even for:
-        - Same-size file edits
-        - Files modified within same second (low mtime resolution)
-        - Content changes that preserve size
+    def _content_key(self, file_path: str) -> str:
+        """``<path hash>_<content hash>``: the shared stem of a document's cache files.
 
-        Args:
-            file_path: Path to the document
-
-        Returns:
-            Path to cache file
+        The content hash (not mtime/size) makes same-size edits and sub-second
+        rewrites invalidate; the path hash keeps identical files apart. An
+        unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
+        then fails at extraction.
         """
         path = Path(file_path).absolute()
-
         try:
-            # Hash the actual file CONTENT for reliable cache invalidation
-            # This is more reliable than mtime + size
             hasher = hashlib.sha256()
-
-            # Read file in chunks to handle large files efficiently
-            # Use _safe_open to prevent symlink attacks
+            # _safe_open refuses symlinks.
             with self._safe_open(path, "rb") as f:
                 while chunk := f.read(8192):
                     hasher.update(chunk)
-
-            content_hash = hasher.hexdigest()
-
-            # Include path in hash to avoid collisions between identical files
-            path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
-            cache_key = f"{path_hash}_{content_hash[:32]}"
-
-            return os.path.join(self.config.cache_dir, f"{cache_key}.json")
-
-        except (OSError, IOError) as e:
-            # If file doesn't exist or can't be read, use path-based key
-            # This will fail later during indexing anyway
+        except OSError as e:
             self.log.warning(f"Cannot read file for cache key: {e}")
-            file_hash = hashlib.sha256(str(path).encode()).hexdigest()
-            return os.path.join(self.config.cache_dir, f"{file_hash}_notfound.json")
+            return f"{hashlib.sha256(str(path).encode()).hexdigest()}_notfound"
+        path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
+        return f"{path_hash}_{hasher.hexdigest()[:32]}"
+
+    def _get_cache_path(self, file_path: str, content_key: Optional[str] = None) -> str:
+        """Chunk-cache path: :meth:`_content_key` plus :meth:`_chunking_fingerprint`.
+
+        The fingerprint makes a change to ``chunk_size``, ``chunk_overlap`` or
+        ``use_llm_chunking`` re-chunk instead of reusing chunks cut to the old
+        settings. Pass ``content_key`` to skip re-hashing the file.
+        """
+        key = content_key or self._content_key(file_path)
+        return os.path.join(
+            self.config.cache_dir, f"{key}_{self._chunking_fingerprint()}.json"
+        )
+
+    def _extracted_markdown_path(self, content_key: str) -> str:
+        """Extracted text depends on content alone, so no chunking fingerprint."""
+        return os.path.join(self.config.cache_dir, f"{content_key}_extracted.md")
 
     def _load_embedder(self):
         """Load embedding model via Lemonade server for hardware acceleration.
@@ -535,14 +608,15 @@ class RAGSDK:
                 )
                 self.llm_client.load_model(
                     self.config.embedding_model,
-                    llamacpp_args="--ubatch-size 2048",
+                    llamacpp_args=EMBEDDER_LLAMACPP_ARGS,
                 )
 
             self.embedder = self.llm_client
             self.use_lemonade_embeddings = True
 
             self.log.info(
-                "Loaded embedding model (ubatch-size=2048); chat model left resident"
+                f"Loaded embedding model (ubatch-size={EMBEDDER_UBATCH_TOKENS}); "
+                "chat model left resident"
             )
 
     def _encode_texts(
@@ -559,23 +633,16 @@ class RAGSDK:
             numpy array of embeddings with shape (num_texts, embedding_dim)
         """
 
-        # Truncate texts that exceed the embedding model's context window.
-        # Lemonade GGUF embedding models silently return empty data for
-        # inputs that exceed their token limit (~512 tokens). Using 1200
-        # chars as a conservative limit (~3 chars/token average).
-        MAX_EMBED_CHARS = 1200
-        truncated = 0
-        safe_texts = []
-        for t in texts:
-            if len(t) > MAX_EMBED_CHARS:
-                safe_texts.append(t[:MAX_EMBED_CHARS])
-                truncated += 1
-            else:
-                safe_texts.append(t)
-        if truncated > 0:
-            self.log.info(
-                f"   ✂️  Truncated {truncated}/{len(texts)} chunks to {MAX_EMBED_CHARS} chars for embedding"
+        # Chunks are cut to fit, so a longer text here is a caller bug that
+        # the embedder would answer with a 500.
+        oversized = [len(t) for t in texts if len(t) > EMBED_MAX_CHARS]
+        if oversized:
+            raise ValueError(
+                f"{len(oversized)}/{len(texts)} texts exceed the embedder's "
+                f"{EMBED_MAX_CHARS}-char input limit (longest: {max(oversized)} "
+                "chars). Split them with gaia.rag.sdk.split_for_embedding first."
             )
+        safe_texts = list(texts)
 
         # Batch embedding requests to avoid timeouts
         BATCH_SIZE = 25  # Smaller batches for reliability (25 chunks ~= 12KB text)
@@ -646,6 +713,14 @@ class RAGSDK:
                         self.log.warning(
                             f"   ⚠️  Batch {batch_num} attempt {attempt + 1} failed, retrying: {e}"
                         )
+                        if "physical batch size" in str(e):
+                            self.log.warning(
+                                "   The embedder was reloaded with a smaller batch "
+                                "than RAG chunks need; reloading it with "
+                                f"{EMBEDDER_LLAMACPP_ARGS} before retrying."
+                            )
+                            self.embedder = None
+                            self._load_embedder()
                         time.sleep(2)  # Wait before retry
                     else:
                         self.log.error(
@@ -692,6 +767,14 @@ class RAGSDK:
         Falls back to ``_encode_texts`` on a miss. Stored/doc-chunk vectors
         are persisted elsewhere; this targets repeated *query* embeds only.
         """
+        if len(query) > EMBED_MAX_CHARS:
+            self.log.warning(
+                f"Search query is {len(query)} chars; only the first "
+                f"{EMBED_MAX_CHARS} are embedded, the last "
+                f"{len(query) - EMBED_MAX_CHARS} are ignored for retrieval. "
+                "Shorten the query to search on all of it."
+            )
+            query = query[:EMBED_MAX_CHARS]
         cache = self._get_embedding_cache()
         model_id = self.config.embedding_model
         cached = cache.get(model_id, None, query)
@@ -725,7 +808,7 @@ class RAGSDK:
             - page_warnings: dict[int, str], why each degraded page is listed
 
         Raises:
-            EncryptedPDFError: PDF is password-protected.
+            EncryptedPDFError: PDF needs a password to open.
             CorruptedPDFError: PDF is malformed / unreadable.
             EmptyPDFError: PDF parsed OK but contained no extractable text.
         """
@@ -759,13 +842,13 @@ class RAGSDK:
             self.log.error(f"Corrupted PDF {pdf_path}: {e}")
             raise CorruptedPDFError(msg) from e
 
-        # Step 1: Refuse password-protected PDFs up-front. Without this check
-        # pypdf silently returns empty text for every page and the document
-        # gets "indexed" with zero chunks (see issue #451).
-        if getattr(reader, "is_encrypted", False):
+        # Step 1: Refuse PDFs that need a user password up-front, or every page
+        # extracts as empty text (#451). Owner-password-only PDFs (permission
+        # restrictions, common in SEC filings) open with the empty password.
+        if getattr(reader, "is_encrypted", False) and not reader.decrypt(""):
             msg = (
                 f"PDF is password-protected: {file_name}\n"
-                "GAIA cannot index encrypted PDFs.\n"
+                "GAIA cannot index PDFs that need a password to open.\n"
                 "Suggestions:\n"
                 "  1. Remove the password with qpdf:\n"
                 "     qpdf --decrypt --password=YOUR_PASSWORD input.pdf output.pdf\n"
@@ -2061,7 +2144,9 @@ These positions indicate where to split the text."""
                 self.llm_client = LemonadeClient()
                 self.log.info("✅ Initialized LLM client for intelligent chunking")
 
-            return self._llm_based_chunking(text, chunk_size_tokens, overlap_tokens)
+            return self._fit_chunks_to_embedder(
+                self._llm_based_chunking(text, chunk_size_tokens, overlap_tokens)
+            )
 
         # Heuristic-based chunking
 
@@ -2241,12 +2326,37 @@ These positions indicate where to split the text."""
                 restored_chunks.append(restored_chunk)
             chunks = restored_chunks
 
+        chunks = self._fit_chunks_to_embedder(chunks)
+
         if self.config.show_stats:
             avg_size = sum(len(c) for c in chunks) // len(chunks) if chunks else 0
             print(f"  ✅ Created {len(chunks)} semantic chunks (avg {avg_size} chars)")
 
         self.log.info(f"📦 Created {len(chunks)} semantic chunks")
         return chunks
+
+    def _fit_chunks_to_embedder(self, chunks: List[str]) -> List[str]:
+        """Split any chunk longer than ``EMBED_MAX_CHARS`` into consecutive chunks.
+
+        Each piece is stored and embedded as its own chunk, so every vector
+        covers all of its chunk's text and nothing is left unsearchable.
+        """
+        fitted = []
+        split = pieces = 0
+        for chunk in chunks:
+            if len(chunk) <= EMBED_MAX_CHARS:
+                fitted.append(chunk)
+                continue
+            parts = split_for_embedding(chunk)
+            split += 1
+            pieces += len(parts)
+            fitted.extend(parts)
+        if split:
+            self.log.info(
+                f"Split {split} chunk(s) longer than the embedder's "
+                f"{EMBED_MAX_CHARS}-char input into {pieces}"
+            )
+        return fitted
 
     def _split_into_sentences(self, text: str) -> List[str]:
         """
@@ -2748,6 +2858,7 @@ These positions indicate where to split the text."""
                 self.log.info(f"Document already indexed: {file_path}")
                 stats["success"] = True
                 stats["already_indexed"] = True
+                stats["num_chunks"] = len(self.file_to_chunk_indices.get(file_path, []))
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 return stats
@@ -2769,14 +2880,9 @@ These positions indicate where to split the text."""
                 return stats
 
         # Check cache - the cache key is based on file content hash
-        cache_path = self._get_cache_path(file_path)
-
-        # Also check for cached Markdown file with hash-based name
-        # Extract the cache key from the cache path to find matching MD file
-        cache_filename = Path(cache_path).stem  # Remove .json extension
-        md_cache_path = os.path.join(
-            self.config.cache_dir, f"{cache_filename}_extracted.md"
-        )
+        content_key = self._content_key(file_path)
+        cache_path = self._get_cache_path(file_path, content_key)
+        md_cache_path = self._extracted_markdown_path(content_key)
 
         if os.path.exists(cache_path):
             if self.config.show_stats:
@@ -2814,6 +2920,9 @@ These positions indicate where to split the text."""
                         self.log.info(f"Document already indexed: {file_path}")
                         stats["success"] = True
                         stats["already_indexed"] = True
+                        stats["num_chunks"] = len(
+                            self.file_to_chunk_indices.get(file_path, [])
+                        )
                         stats["total_indexed_files"] = len(self.indexed_files)
                         stats["total_chunks"] = len(self.chunks)
                         return stats
@@ -2969,6 +3078,9 @@ These positions indicate where to split the text."""
                     self.log.info(f"Document already indexed: {file_path}")
                     stats["success"] = True
                     stats["already_indexed"] = True
+                    stats["num_chunks"] = len(
+                        self.file_to_chunk_indices.get(file_path, [])
+                    )
                     stats["total_indexed_files"] = len(self.indexed_files)
                     stats["total_chunks"] = len(self.chunks)
                     return stats
@@ -3041,7 +3153,9 @@ These positions indicate where to split the text."""
                     "metadata": file_metadata,
                 }
                 self._save_cache(cache_path, cache_data)
-                self._save_extracted_markdown(file_path, text, file_metadata)
+                self._save_extracted_markdown(
+                    file_path, text, file_metadata, content_key
+                )
 
                 if self.index is None:
                     self.index = new_index
@@ -3373,7 +3487,7 @@ Answer:"""
         )
 
     def _save_extracted_markdown(
-        self, file_path: str, text: str, metadata: Dict[str, Any]
+        self, file_path: str, text: str, metadata: Dict[str, Any], content_key: str
     ):
         """
         Save extracted text as markdown file in cache directory.
@@ -3386,23 +3500,12 @@ Answer:"""
             file_path: Path to original document
             text: Extracted text content
             metadata: File metadata (num_pages, vlm_pages, etc.)
+            content_key: The document's :meth:`_content_key`
         """
         try:
             from datetime import datetime
 
-            # Calculate file hash for consistency with JSON cache
-            path = Path(file_path).absolute()
-            hasher = hashlib.sha256()
-            with self._safe_open(path, "rb") as f:
-                while chunk := f.read(8192):
-                    hasher.update(chunk)
-            content_hash = hasher.hexdigest()
-
-            # Use hash-based filename similar to JSON cache
-            path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
-            cache_key = f"{path_hash}_{content_hash[:32]}"
-            md_filename = f"{cache_key}_extracted.md"
-            md_path = os.path.join(self.config.cache_dir, md_filename)
+            md_path = self._extracted_markdown_path(content_key)
 
             # Create markdown content with metadata header
             vlm_status = (
@@ -3414,7 +3517,7 @@ Answer:"""
 
 ## Metadata
 **Source File:** {file_path}
-**File Hash (SHA-256):** {content_hash[:32]}
+**Cache Key:** {content_key}
 **Extraction Date:** {datetime.now().isoformat()}
 **Pages:** {metadata.get('num_pages', 'N/A')}
 **VLM Status:** {vlm_status}
@@ -3433,8 +3536,8 @@ Answer:"""
 
             self.log.debug(f"Saved extracted markdown to {md_path}")
 
-        except Exception as e:
-            # Don't fail indexing if markdown save fails
+        except OSError as e:
+            # The markdown is a debugging aid; indexing does not depend on it.
             self.log.warning(
                 f"Failed to save markdown cache for {Path(file_path).name}: {e}"
             )

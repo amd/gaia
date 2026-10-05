@@ -219,3 +219,92 @@ def test_real_loop_ends_when_one_tool_keeps_failing_with_new_arguments(agent):
     assert agent.save_attempts == [f"inv{n}.md" for n in range(4)]
     assert "save_inventory" in result["result"]
     assert "Extract every source first" in result["result"]
+
+
+def test_different_programs_through_one_shell_are_different_walls(guard):
+    """`python` refused, `ls` denied, `pip` refused: exploring, not a loop."""
+    refused = {"status": "error", "error": "not allowed"}
+    for command in (
+        'python -c "import x"',
+        "cd repo && ls -la /elsewhere",
+        "pip show x 2>&1 | head",
+        r"cd /d C:\work && sed -n 1,5p f",
+    ):
+        assert guard.check("run_shell_command", {"command": command}) is None
+        guard.record("run_shell_command", {"command": command}, refused)
+    assert guard.check("run_shell_command", {"command": "git status"}) is None
+    assert not guard.turn_should_end
+
+
+def test_one_program_refused_with_new_arguments_still_stops(guard):
+    refused = {"status": "error", "error": "'python -c' is not allowed"}
+    for n in range(4):
+        command = rf'cd C:\repo && python -c "print({n})"'
+        assert guard.check("run_shell_command", {"command": command}) is None
+        guard.record("run_shell_command", {"command": command}, refused)
+    blocked = guard.check("run_shell_command", {"command": "python -c 'x'"})
+    assert blocked is not None and "run_shell_command (python)" in blocked["error"]
+    # Another program through the same shell is not held up by python's streak.
+    assert guard.check("run_shell_command", {"command": "git status"}) is None
+    guard.check("run_shell_command", {"command": r'C:\Py\python.exe -c "y"'})
+    assert guard.turn_should_end and guard.end_key == "run_shell_command (python)"
+
+
+def test_loading_a_table_the_turn_just_created_is_in_scope(tmp_path):
+    """Asked to load a sheet into a table and count it, the agent narrated its
+    plan, then insert_data was refused as "outside what the request touched"."""
+    scope = TurnScopeGuard(failure_limit=4)
+    scope.begin_turn("Load the Monthly sheet into a scratchpad table.", str(tmp_path))
+    scope.record(
+        "create_table", {"table_name": "Unemployment", "columns": "m TEXT"}, ok()
+    )
+    scope.mark_answered()
+
+    assert (
+        scope.check("insert_data", {"table_name": "unemployment", "data": "[]"}) is None
+    )
+    assert (
+        scope.check("query_data", {"sql": "SELECT COUNT(*) FROM unemployment"}) is None
+    )
+    assert (
+        scope.check("query_data", {"sql": "SELECT * FROM scratch_unemployment"}) is None
+    )
+    assert not scope.turn_should_end
+
+
+def test_a_table_the_turn_never_touched_is_still_new_work(tmp_path):
+    scope = TurnScopeGuard(failure_limit=4)
+    scope.begin_turn("Load the Monthly sheet into a scratchpad table.", str(tmp_path))
+    scope.record("create_table", {"table_name": "unemployment", "columns": "m"}, ok())
+    scope.mark_answered()
+
+    assert (
+        scope.check("insert_data", {"table_name": "payroll", "data": "[]"}) is not None
+    )
+    assert (
+        scope.check("query_data", {"sql": "SELECT * FROM unemployment_rates"})
+        is not None
+    )
+    assert (
+        scope.check("query_data", {"sql": "SELECT * FROM old_unemployment"}) is not None
+    )
+
+
+def test_only_a_structured_failure_keeps_a_table_out_of_scope(tmp_path):
+    """A dict failure keeps its table out of scope. The scratchpad tools report
+    failure as an "Error: ..." string, which _is_tool_failure does not classify,
+    so that table still enters scope; the later call then fails at the tool."""
+    scope = TurnScopeGuard(failure_limit=4)
+    scope.begin_turn("Load the sheet.", str(tmp_path))
+    scope.record(
+        "create_table", {"table_name": "t", "columns": "bad"}, {"status": "error"}
+    )
+    scope.record(
+        "create_table",
+        {"table_name": "u", "columns": "bad"},
+        "Error creating table 'u': near \"bad\": syntax error",
+    )
+    scope.mark_answered()
+
+    assert scope.check("insert_data", {"table_name": "t", "data": "[]"}) is not None
+    assert scope.check("insert_data", {"table_name": "u", "data": "[]"}) is None

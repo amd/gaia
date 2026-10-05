@@ -390,8 +390,9 @@ CREATE TABLE files (
     mime_type TEXT,
     size INTEGER,
     created_at TIMESTAMP,
-    modified_at TIMESTAMP,
-    -- Change detection: size + mtime is the PRIMARY method (fast, no I/O)
+    modified_at TIMESTAMP,        -- Local-time ISO string, for display/filtering
+    mtime_ns INTEGER,             -- Exact st_mtime_ns, used for change detection
+    -- Change detection: size + mtime_ns is the PRIMARY method (fast, no I/O)
     -- Content hash is OPTIONAL and computed only on user request (Phase 4)
     content_hash TEXT DEFAULT NULL,
     parent_dir TEXT NOT NULL,
@@ -2128,7 +2129,6 @@ The SQLite database at `~/.gaia/file_index.db` stores file paths, sizes, and mod
 | `ast` | Python code chunking (stdlib) |
 | `watchdog` | File system monitoring |
 | `faiss-cpu` | Vector search (RAG) |
-| `sentence-transformers` | Embeddings (RAG) |
 | `PyPDF2` / `pdfplumber` | PDF extraction |
 
 ### Extras Group

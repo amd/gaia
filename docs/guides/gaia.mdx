@@ -90,7 +90,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **96 tools** — the 66 of the Chat agent's `full` profile, plus 8 skill-library tools, 8 live-browser tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
+The default construction registers **95 tools** — the 66 of the Chat agent's `full` profile, plus 8 skill-library tools, 8 live-browser tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -107,9 +107,9 @@ The default construction registers **96 tools** — the 66 of the Chat agent's `
 | CLI setup | `check_cli_setup`, `install_cli`, `sign_in_cli` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `capture_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
-| Run control | `request_user_input`, `set_loop_state`, `sleep`, `load_tools`, `read_tool_output` |
+| Run control | `request_user_input`, `set_loop_state`, `sleep`, `read_tool_output` |
 
-That count is what the agent *can* do, not what it sees at once: per-turn tool selection sends the model a subset of the registry on any one call, and `load_tools` is the escape hatch it calls mid-turn to pull in a bundle the selector missed. No capability is lost either way.
+Every one of them is offered to the model on every turn, as in the Agent UI: a tool list that stays the same keeps the local model's prompt cache warm. `GAIA_DYNAMIC_TOOLS=1` turns on per-turn tool selection instead, which sends the model a subset on each call and adds a 96th tool, `load_tools`, that it calls mid-turn to pull in a bundle the selector missed.
 
 `run_shell_command` is rate-limited and needs your approval like the other gated tools. Anything off its read-only no-prompt list (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) — `git commit`, `npm test`, `rm notes.txt` — is shown to you and runs once you approve it, rather than being refused. A few invocations a yes/no cannot describe honestly, like `gh auth token` or an encoded PowerShell command, are always refused. A run pre-approved with `GAIA_AUTO_APPROVE_TOOLS` gets the read-only list and refuses the rest; only full access, which a person turns on and can see on screen, runs the rest unasked. Installing the specific CLIs a skill needs goes through [its own tools](#setting-up-a-cli-a-skill-needs) instead. Commands can be chained on one line (`cd src && ls | grep agent`) so looking something up and checking it is a single step — every command on the line is checked against the same allowlist before any of it runs, and one approval covers the line. A leading `VAR=value` (`PYTHONPATH=. pytest -q`) sets that one command's environment and nothing else's; the variables that decide which binary runs or what code it loads — `PATH`, `LD_PRELOAD`, `GIT_SSH_COMMAND` and their families — stay refused. A `cd` that actually ran carries to the *next* separate call, so `cd build` in one turn is still in effect on the next — `get_shell_state` reads the session's current directory, and `reset_shell_session` returns it to where the task started; an explicit `working_directory` is a one-shot override that never moves the session. `run_python` runs a Python snippet from the project root and returns its output, so the agent can compute or check something without leaving a script in your project. `sleep` waits up to five minutes per call, so the agent can wait out a rate limit before retrying; pressing Stop ends the wait within a second.
 
@@ -181,8 +181,10 @@ The browser's acting tools are gated by *situation* rather than by name: clickin
 
 <Warning>
   **Over the sidecar's `/query` stream, a gated tool asks only if you can answer.** Pass a
-  `session_id` and the stream stays open on the confirmation so your client can approve it;
-  a one-shot request that cannot be asked stops with a message saying which action it
+  `session_id` (and leave `can_answer_questions` at its default, or set it `true`) and the
+  stream stays open on the confirmation — answer it with `POST
+  /v1/gaia/query/{run_id}/tool_decision`, `{"decision": "allow" | "deny" | "always"}`. A
+  one-shot request that cannot be asked stops with a message saying which action it
   declined, rather than running it.
 </Warning>
 
@@ -202,6 +204,8 @@ That's the honest scope for a personal document agent — "ask questions about m
 - **Files that run on their own are never written.** Shell startup files (`.bashrc`, `.zshrc`, `.profile`), PowerShell profiles, `~/.config/autostart/*`, systemd user units, `LaunchAgents`, and anything inside a repo's `.git/` — hooks and config alike. Writing to one of those isn't editing a document, it's arranging for the agent's output to execute at your next login.
 
 Both are refused with a message naming the file and why. Edit such a file yourself if that's genuinely what you wanted.
+
+**Reaching outside the scope asks first.** When a tool needs a file or folder outside the allowed set, the TUI and Agent UI show the same approval dialog as a write, naming the path. The prompt waits 10 minutes, then counts as a no. Approving grants that one file, or that folder and everything inside it, until the chat's agent restarts — never saved, never "always", and each new path is asked about on its own. The grant is not read-only, but writing or editing is a gated action that still asks on its own. Paths that stay off limits whatever you answer are refused without a prompt: secrets, system and program directories, the system temp folder, a whole drive, your entire home folder, and any folder that contains one of those. Pre-approved tools (`GAIA_AUTO_APPROVE_TOOLS`) never answer this prompt; only full access does. The Agent UI scopes a chat to its attached documents, so this is how it reads or indexes a file you name in your own folders; one approval covers reading, indexing and querying it. A tool waiting on this question does not count the wait against its own time limit.
 
 To narrow the scope, construct the agent with an explicit list:
 
@@ -245,7 +249,7 @@ or in Python, which takes precedence over the environment:
 GaiaAgentConfig(skill_set="research")
 ```
 
-A name that isn't a declared set **fails at startup** naming the valid sets — it never silently falls back to a default. Today, with no sets declared, any value fails; leave it unset.
+A name that isn't a declared set **fails at startup** naming the valid sets — the sidecar exits non-zero before it binds its port, and it never silently falls back to a default. Today, with no sets declared, any value fails; leave it unset.
 
 ## Driving it over HTTP
 
@@ -261,15 +265,33 @@ The agent runs as a **sidecar** — a self-contained HTTP service the GAIA daemo
 | `POST /v1/gaia/query/{run_id}/cancel` | Cooperatively cancel a live run. |
 | `POST /v1/gaia/query/{run_id}/respond` | Answer a mid-run `needs_input` question. |
 | `POST /v1/gaia/query/{run_id}/followup` | Add to a turn already running, without interrupting it. |
+| `POST /v1/gaia/query/{run_id}/tool_decision` | Answer a mid-run `needs_confirmation` prompt (contract >= 2.14). |
+| `POST /v1/gaia/sessions/{session_id}/bypass` | Turn unattended tool approval on or off for a session. |
 
-`/query` implements the shared canonical SSE contract (API version **2.15**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically. A few details worth knowing when you write a client:
+The full, **machine-readable** contract — every field, its type, and which are required — is the committed [`openapi.gaia.json`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/openapi.gaia.json), regenerated from the live routes by `python -m gaia_agent.export_openapi` and checked for drift in CI. What follows is the summary a client author needs; the artifact is the source of truth.
 
-- **You mint the `run_id`**, not the server. Cancellation keys off it, so it has to exist before the request rather than arrive in the stream.
-- **Conversation context is pushed in the body**, never pulled. Pass `session_id` too — the agent persists its indexed-document set per session, and without it the agent forgets a document between the turn that indexed it and the next question.
+### The `/query` body
+
+```json
+{
+  "query": "What's in this directory?",
+  "run_id": "5b1f6e2a-7c34-4b4d-9b3e-2b6d9a7a1c3e",
+  "context": [],
+  "session_id": "my-session-1",
+  "can_answer_questions": true
+}
+```
+
+Only **`query`**, **`run_id`**, and **`context`** are required; everything else (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`) is optional. A request missing any of the three, or sending an unrecognized field, is rejected with **422** before the agent ever runs — the model forbids extra fields (`additionalProperties: false`) rather than silently ignoring a typo.
+
+- **`run_id` must be a UUID** (any version `uuid.UUID()` parses) — a plain string like `"my-run-1"` is a 422, not a warning. **You mint it**, not the server: cancellation (`POST /v1/gaia/query/{run_id}/cancel`) keys off it, so it has to exist before the request rather than arrive in the stream.
+- **`context` is pushed in the body**, never pulled, and must be present even when empty (`[]`) — omitting it is itself a 422. Pass `session_id` too — the agent persists its indexed-document set per session, and without it the agent forgets a document between the turn that indexed it and the next question.
 - **Set `can_answer_questions: false` for one-shot runs.** With nobody there to answer, the agent resolves ambiguity itself instead of parking on a question that reads as a hang.
 - **Idle streams emit `: keepalive` comments** every 10 seconds so a long tool call doesn't look like a dead connection.
 - **A user who says something mid-turn doesn't have to wait for it.** `POST /v1/gaia/query/{run_id}/followup` with `{"text": "…"}` hands the running turn their words; the agent folds them in at its next step and answers them alongside the work in progress. Nothing is interrupted and no second turn starts. Because context is pushed rather than pulled, record a delivered follow-up in the `context` you send next turn — between that turn's question and its answer.
-- **Confirmation-gated tools end the run with a refusal** — see [Tools that need your approval](#tools-that-need-your-approval).
+- **Confirmation-gated tools are answered over `POST /v1/gaia/query/{run_id}/tool_decision`** (contract >= 2.14) when there's a session to hold the grant and the caller declared it can answer — see [Tools that need your approval](#tools-that-need-your-approval).
+
+`/query` implements the shared canonical SSE contract (API version **2.15**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically.
 
 ### Authenticating your requests
 
@@ -278,6 +300,8 @@ Binding to loopback is not access control — this agent has shell and file tool
 - **A per-session bearer token.** Every `/v1/gaia/*` request must carry `Authorization: Bearer <token>`; without it you get **401**. The process that spawned the sidecar supplies the token, either as `GAIA_GAIA_SIDECAR_TOKEN_FILE` — a path to a `0600`, owner-only file, so the secret never sits in the environment — or directly as `GAIA_GAIA_SIDECAR_TOKEN`. When the GAIA daemon runs the agent, it mints the token and uses the file channel.
 - **A loopback `Host` allowlist.** A `Host` header that isn't `127.0.0.1`, `localhost`, or `::1` is **400** — this is what defeats DNS rebinding.
 - **Origin rejection.** A request carrying a non-loopback browser `Origin` is **403**. Non-browser clients send no `Origin` and are unaffected.
+
+The programs the agent starts (shell commands, MCP servers, CLI installs and sign-ins, native hub agents, media tools) never inherit the sidecar token or GAIA's other internal credentials. To withhold your own variables from them as well, list the names in `GAIA_CHILD_ENV_DENY`; `GAIA_NO_DOTENV=1` stops the agent loading `.env` files. Both are described in [Configuration](/sdk/configuration).
 
 `GET /health`, `GET /version`, and `GET /v1/gaia/version` skip the token — they're the probes a host polls before any token is in play, and none of them exposes your data. `Host` and `Origin` still apply to them.
 
@@ -299,7 +323,7 @@ The hint `GET /v1/gaia/init` returns also names the pull command for whichever L
 
 ### "Access denied to path"
 
-The file resolves outside the allowed paths — by default, outside your home directory. Move the file inside the scope, or construct the agent with an `allowed_paths` list that covers it (see [File access scope](#file-access-scope)).
+The file resolves outside the allowed paths — by default, outside your home directory — and either you denied the approval prompt or the path is one that is never granted (see [File access scope](#file-access-scope)). Ask again and approve the prompt when it appears (an unanswered prompt is denied after 10 minutes), or attach the file to the chat. An agent you construct in code can instead take an `allowed_paths` list that covers it.
 
 ### The sidecar won't start
 
@@ -309,5 +333,5 @@ The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<
 
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
-- **No server-side confirmation flow** — over `/query`, every [confirmation-gated tool](#tools-that-need-your-approval) ends the run with a refusal instead of prompting over the stream.
+- **Server-side confirmation needs a session** — over `/query`, a [confirmation-gated tool](#tools-that-need-your-approval) is answered with `POST /v1/gaia/query/{run_id}/tool_decision` when the request carries a `session_id` and can answer; a one-shot request (no `session_id`, or `can_answer_questions: false`) still ends the run with a refusal instead of prompting.
 - **Image generation evicts the chat model** — the SD model has to be resident to draw, so the first reply after an image waits for the chat model to reload. Ask for pictures at a natural pause, not mid-thread.

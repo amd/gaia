@@ -233,7 +233,7 @@ jobs:
     # `Windows` is load-bearing: every step is PowerShell + LemonadeServer.exe.
     # `lemonade-eval` narrows to the box carrying the label; serialization
     # comes from the concurrency group, not the label.
-    runs-on: [self-hosted, Windows, lemonade-eval]
+    runs-on: [self-hosted, Windows, xsj-dispatch, strix-halo]
     # THE SERIAL SLOT. Same group name as test_email_agent_eval.yml,
     # email_scorecard_refresh.yml and test_eval_agent_gemma_consolidation.yml
     # — `lemonade-eval`, exactly — so at most one eval touches the single
@@ -364,10 +364,9 @@ jobs:
             exit 1
           }
 
-      # Path-staging contract (tests/fixtures/gaia/README.md): GaiaAgent pins
-      # allowed_paths=[home], so scenario user messages reference
-      # ~/gaia-eval/... — repo paths would be sandbox refusals on a runner
-      # whose workspace is outside home. Skills: pre-seed the starter pack
+      # Path-staging contract (tests/fixtures/gaia/README.md): scenario user
+      # messages reference ~/gaia-eval/..., and the backend runs from there, so
+      # that folder is a session's file scope. Skills: pre-seed the starter pack
       # into the agent's skills root (scenarios that USE skills), then build
       # + sign + trust the fixture hub with a per-run ephemeral key
       # (scenarios ABOUT the install loop).
@@ -376,11 +375,6 @@ jobs:
         run: |
           python tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE"
           if ($LASTEXITCODE -ne 0) { throw "Staging the gaia_* fixtures failed; the output above says which part." }
-
-          # gaia_mcp: the agent reads its MCP config when built, so this must
-          # land before the backend starts in the next step.
-          python tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py install
-          if ($LASTEXITCODE -ne 0) { throw "stage_mcp_stub failed" }
 
       - name: Run the gaia eval categories serially
         # Own timeout so an overrun fails HERE, by name, with the collect /
@@ -421,11 +415,16 @@ jobs:
             -RedirectStandardError (Join-Path $PWD "eval-out\fixtures.err.log") `
             -NoNewWindow -PassThru
 
+          # The github-triage scenarios are written against the staged fake gh.
+          # Without it first on PATH the agent runs the runner's real gh, and
+          # auto-approved writes are aimed at real GitHub.
+          $env:PATH = (Join-Path $env:USERPROFILE ".gaia-eval-bin") + ";" + $env:PATH
+
           $outLog = Join-Path $PWD "eval-out\backend.out.log"
           $errLog = Join-Path $PWD "eval-out\backend.err.log"
           $backend = Start-Process -FilePath "python" `
             -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
-            -WorkingDirectory $PWD `
+            -WorkingDirectory (Join-Path $env:USERPROFILE "gaia-eval") `
             -RedirectStandardOutput $outLog `
             -RedirectStandardError $errLog `
             -NoNewWindow -PassThru
@@ -458,6 +457,22 @@ jobs:
               exit 1
             }
             Write-Host "Backend + fixture server healthy."
+
+            # The Agent UI's own memory switch defaults OFF, and with it off every
+            # `remember` returns "skipped". The runner's preflight refuses to start
+            # a memory scenario while it is off.
+            try {
+              $memory = Invoke-RestMethod -Method Put -Uri "$env:BACKEND_URL/api/memory/settings" `
+                -Headers @{ "X-Gaia-UI" = "1" } -ContentType "application/json" `
+                -Body '{"memory_enabled": true}' -TimeoutSec 30 -ErrorAction Stop
+            } catch {
+              Write-Host "::error::PUT $env:BACKEND_URL/api/memory/settings failed: $($_.Exception.Message). Memory scenarios cannot run with memory off."
+              exit 1
+            }
+            if ($memory.memory_enabled -ne $true) {
+              Write-Host "::error::The backend did not switch memory on (settings: $($memory | ConvertTo-Json -Compress))."
+              exit 1
+            }
 
             # Per-category wall clock, appended to the step summary the moment
             # each category ends — this is what replaces the guessed ceiling
@@ -495,6 +510,14 @@ jobs:
               Write-Host "  gaia eval agent --agent-type gaia --category $category"
               Write-Host "=================================================================="
               $swCat = [Diagnostics.Stopwatch]::StartNew()
+              # The acme MCP stub exists only for gaia_mcp; staged for any other
+              # category it would widen that category's toolset. Each session
+              # builds a fresh agent, so staging mid-run takes effect.
+              $stub = 'tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py'
+              if ($category -eq 'gaia_mcp') {
+                python $stub install
+                if ($LASTEXITCODE -ne 0) { Write-Host "::error::stage_mcp_stub install failed"; exit 1 }
+              }
               $global:LASTEXITCODE = 0
               $evalArgs = @('eval','agent','--agent-type','gaia','--category',$category,
                             '--backend',"$env:BACKEND_URL",'--model',"$env:EVAL_MODEL",
@@ -505,6 +528,10 @@ jobs:
                 Out-File -FilePath "eval-out\$category.log" -Encoding utf8
               $code = $LASTEXITCODE
               $swCat.Stop()
+              if ($category -eq 'gaia_mcp') {
+                python $stub remove
+                if ($LASTEXITCODE -ne 0) { Write-Host "::error::stage_mcp_stub remove failed"; exit 1 }
+              }
 
               $mins = [math]::Round($swCat.Elapsed.TotalMinutes, 1)
               Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min)"
@@ -522,6 +549,8 @@ jobs:
             Add-Summary "| **total** | **$([math]::Round($swTotal.Elapsed.TotalMinutes, 1))** |"
           }
           finally {
+            # Persistent runner: never leave the stub registered for the next job.
+            python tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py remove
             foreach ($proc in @($backend, $fixture)) {
               if ($proc -and -not $proc.HasExited) {
                 Write-Host "Stopping pid $($proc.Id)..."

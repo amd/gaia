@@ -6,10 +6,11 @@
 import json
 import logging
 import os
+import sqlite3
 import threading
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
@@ -21,6 +22,7 @@ from gaia.agents.base.memory_store import (
     USER_REVIEWED_CATEGORIES as _DASHBOARD_CATEGORIES,
 )
 from gaia.agents.base.memory_store import VALID_CATEGORIES as _VALID_CATEGORIES
+from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
@@ -267,8 +269,12 @@ def close_store() -> None:
         if _store is not None:
             try:
                 _store.close()
-            except Exception:
-                pass
+            except sqlite3.Error as exc:
+                logger.warning(
+                    "[memory router] closing the memory store failed; its WAL "
+                    "may not be checkpointed until the next open: %s",
+                    exc,
+                )
             finally:
                 _store = None
 
@@ -432,9 +438,60 @@ def list_knowledge(
         return store.get_all_knowledge(**base_kwargs)
 
 
+def _make_embed_fn(model: str) -> Callable[[str], bytes]:
+    """Embed text with ``model`` into the normalized float32 BLOB the store keeps.
+
+    Same vector recipe as the agent's ``MemoryMixin._embed_text``.
+    """
+    import numpy as np
+
+    from gaia.llm.providers.lemonade import LemonadeProvider
+
+    provider = LemonadeProvider(model=model)
+
+    def _embed_fn(text: str) -> bytes:
+        results = provider.embed([text], model=model)
+        vec = np.array(results[0], dtype=np.float32)
+        norm = np.linalg.norm(vec)
+        if norm > 0:
+            vec = vec / norm
+        return vec.astype(np.float32).tobytes()
+
+    return _embed_fn
+
+
+def _embed_row(store, knowledge_id: str) -> Dict[str, Any]:
+    """Embed one saved row so semantic recall finds it without a rebuild.
+
+    The row stays saved either way; a failure is reported to the caller as
+    ``embedded: false`` plus the reason, never swallowed.
+    """
+    from gaia.agents.base.memory import EMBEDDING_MODEL
+
+    item = store.get_item(knowledge_id)
+    if item is None:
+        raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
+    # The stored vectors' embedder, not a hardcoded default (#1744).
+    model = store.get_embedder_id() or EMBEDDING_MODEL
+    try:
+        store.store_embedding(knowledge_id, _make_embed_fn(model)(item["content"]))
+    except Exception as exc:  # the row is saved; only its vector is missing
+        cid = _log_server_error(f"embedding knowledge {knowledge_id} failed", exc)
+        return {
+            "embedded": False,
+            "embed_error": (
+                f"Saved, but not embedded: the embedding model '{model}' failed "
+                f"({type(exc).__name__}). Recall by meaning cannot find it until "
+                "you run Maintenance > Rebuild Embeddings (keyword recall still "
+                f"can). See server logs (id={cid})."
+            ),
+        }
+    return {"embedded": True}
+
+
 @router.post("/api/memory/knowledge")
 def create_knowledge(body: KnowledgeCreate) -> Dict:
-    """Create a knowledge entry from the dashboard."""
+    """Create a knowledge entry from the dashboard and embed it."""
     store = _get_store()
     knowledge_id = store.store(
         allow_privileged=True,  # category capped by KnowledgeCreate
@@ -448,20 +505,29 @@ def create_knowledge(body: KnowledgeCreate) -> Dict:
         source="user",
         confidence=0.8,
     )
-    return {"status": "created", "knowledge_id": knowledge_id}
+    return {
+        "status": "created",
+        "knowledge_id": knowledge_id,
+        **_embed_row(store, knowledge_id),
+    }
 
 
 @router.put("/api/memory/knowledge/{knowledge_id}")
 def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
-    """Edit a knowledge entry from the dashboard."""
+    """Edit a knowledge entry from the dashboard; re-embed changed content."""
     kwargs = {k: v for k, v in body.model_dump().items() if v is not None}
     if not kwargs:
         raise HTTPException(400, "No fields to update")
+    store = _get_store()
     # Category capped by KnowledgeUpdate.
-    success = _get_store().update(knowledge_id, allow_privileged=True, **kwargs)
+    success = store.update(knowledge_id, allow_privileged=True, **kwargs)
     if not success:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    return {"status": "updated", "knowledge_id": knowledge_id}
+    result: Dict[str, Any] = {"status": "updated", "knowledge_id": knowledge_id}
+    # A content change cleared the old vector; other edits keep it.
+    if "content" in kwargs:
+        result.update(_embed_row(store, knowledge_id))
+    return result
 
 
 @router.delete("/api/memory/knowledge/{knowledge_id}")
@@ -713,10 +779,7 @@ def rebuild_embeddings() -> Dict:
     Returns ``{backfilled: int, total_without: int}``.
     """
     try:
-        import numpy as np
-
         from gaia.agents.base.memory import EMBEDDING_MODEL
-        from gaia.llm.providers.lemonade import LemonadeProvider
 
         store = _get_store()
         # Re-embed with the embedder that produced the stored vectors, not a
@@ -725,17 +788,7 @@ def rebuild_embeddings() -> Dict:
         # Vulkan GGUF embedder that evicts the FLM chat model (#1744).
         embedder_model = store.get_embedder_id() or EMBEDDING_MODEL
         store.reconcile_embedder(embedder_model)
-        provider = LemonadeProvider(model=embedder_model)
-
-        def _embed_fn(text: str) -> bytes:
-            results = provider.embed([text], model=embedder_model)
-            vec = np.array(results[0], dtype=np.float32)
-            norm = np.linalg.norm(vec)
-            if norm > 0:
-                vec = vec / norm
-            return vec.astype(np.float32).tobytes()
-
-        result = store.backfill_embeddings(_embed_fn)
+        result = store.backfill_embeddings(_make_embed_fn(embedder_model))
         return result
     except Exception as exc:
         logger.error("[memory router] rebuild-embeddings failed: %s", exc)
@@ -810,6 +863,7 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
         vectors: List[np.ndarray] = []
         item_map: Dict[str, Any] = {}
         expected_dim: Optional[int] = None
+        undecodable = 0
 
         for item in items:
             try:
@@ -824,8 +878,18 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
                 ids.append(item["id"])
                 vectors.append(vec)
                 item_map[item["id"]] = item
-            except Exception:
-                continue
+            except (ValueError, TypeError, KeyError) as exc:
+                undecodable += 1
+                logger.debug(
+                    "[memory router] skipping item %s: %s", item.get("id"), exc
+                )
+
+        if undecodable:
+            logger.warning(
+                "[memory router] reconcile skipped %d item(s) with an unreadable "
+                "embedding; POST /api/memory/rebuild-embeddings to include them",
+                undecodable,
+            )
 
         if len(vectors) < 2 or expected_dim is None:
             return result
@@ -1341,6 +1405,10 @@ def stream_inference(include_browser: bool = Query(False)):
         try:
             from gaia.agents.base.discovery import SystemDiscovery
             from gaia.llm import create_client
+            from gaia.llm.lemonade_client import (
+                cloud_model_provider,
+                resolve_default_chat_model,
+            )
 
             discovery = SystemDiscovery()
             sections: list = []
@@ -1478,14 +1546,34 @@ def stream_inference(include_browser: bool = Query(False)):
             prompt_sections = "\n\n".join(sections)
             prompt = _INFER_PROMPT.format(sections=prompt_sections)
 
+            # The machine's default chat model, so no second model loads. Never
+            # the UI's custom_model: that may be cloud, and this data stays local.
+            model = resolve_default_chat_model()
+            if cloud_model_provider(model):
+                yield _sse(
+                    {
+                        "type": "error",
+                        "message": (
+                            f"Profile inference runs only on a local model, but "
+                            f"the default model is the cloud model '{model}'. Set "
+                            "a local one with `gaia config set default_model "
+                            "<model>` and try again."
+                        ),
+                    }
+                )
+                yield _sse({"type": "done", "total": 0})
+                return
             yield _sse(
                 {
                     "type": "log",
-                    "message": "Calling local LLM for insights (this may take ~30s)...",
+                    "message": (
+                        f"Calling local LLM ({model}) for insights "
+                        "(this may take ~30s)..."
+                    ),
                 }
             )
             try:
-                llm = create_client()
+                llm = create_client(model=model)
                 raw_response = llm.chat(
                     [{"role": "user", "content": prompt}],
                     temperature=0.2,
@@ -1681,7 +1769,7 @@ def commit_inference(body: InferenceCommit) -> Dict:
 # ---------------------------------------------------------------------------
 
 _MCP_MEMORY_ENABLED_KEY = "mcp_memory_enabled"
-_MEMORY_ENABLED_KEY = "memory_enabled"
+_MEMORY_ENABLED_KEY = MEMORY_ENABLED_KEY
 _SYSTEM_DISCOVERY_KEY = "system_discovery_consent"
 
 
@@ -1709,7 +1797,7 @@ def _get_memory_settings_dict(db: ChatDatabase) -> Dict:
     if json_consent != db_consent:
         db.set_setting(_SYSTEM_DISCOVERY_KEY, "true" if json_consent else "false")
     return {
-        "memory_enabled": db.get_setting(_MEMORY_ENABLED_KEY, "false") == "true",
+        "memory_enabled": memory_enabled(db),
         "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false")
         == "true",
         "system_discovery_consent": json_consent,
@@ -1721,7 +1809,7 @@ def get_memory_settings(db: ChatDatabase = Depends(get_db)) -> Dict:
     """Return memory-related feature settings.
 
     Keys:
-    - ``memory_enabled`` (bool): global memory on/off. Default false (beta).
+    - ``memory_enabled`` (bool): global memory on/off. Default true.
     - ``mcp_memory_enabled`` (bool): expose read tools to MCP clients. Default false.
     - ``system_discovery_consent`` (bool): allow system scanning (hardware, software,
       environment). Default false — requires explicit opt-in.
@@ -1739,7 +1827,7 @@ def update_memory_settings(
     Supported keys:
     - ``memory_enabled`` (bool): globally enable/disable all memory storage.
       When false, no knowledge or conversation data is written during any
-      chat session (equivalent to every session being private). Default false (beta).
+      chat session (equivalent to every session being private). Default true.
     - ``mcp_memory_enabled`` (bool): expose memory read tools to MCP clients
       for debug/troubleshooting. Default false.
     - ``system_discovery_consent`` (bool): allow system scanning. Default false.

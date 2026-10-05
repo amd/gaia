@@ -58,13 +58,15 @@ jobs:
       with:
         python-version: '3.12'
         install-package: '.[dev,rag]'
-        extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
     - name: Install additional test dependencies
       run: |
         uv pip install pytest-cov --python .venv/bin/python
 
     - name: Run RAG unit tests
+      env:
+        # [rag] is installed, so an import failure must fail, not skip.
+        GAIA_REQUIRE_RAG: '1'
       run: |
         echo "Running RAG unit tests..."
         pytest tests/test_rag.py tests/unit/rag/ -v -s --tb=short --cov=src/gaia/rag --cov-report=term-missing
@@ -81,7 +83,8 @@ jobs:
     runs-on:
       - self-hosted
       - Windows
-      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+      - xsj-dispatch
+      - strix-point
     # Bound a wedged model pull/load — the LemonadeClient pull timeout alone
     # is 200 min; don't let one hold the self-hosted runner for the 6h default.
     timeout-minutes: 60
@@ -96,7 +99,6 @@ jobs:
       with:
         python-version: '3.12'
         install-package: '.[dev,rag]'
-        extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
     - name: Install additional test dependencies
       shell: powershell

@@ -332,6 +332,16 @@ class OutputHandler(ABC):
         """Stop progress indicator."""
         ...
 
+    def report_progress(self, message: str) -> None:
+        """A live line for long work that has nothing else to show yet. Optional."""
+
+    def report_phase(self, phase: str, message: str, **counts: int) -> None:
+        """Name what the model is doing right now (loading, reading, reasoning).
+
+        ``phase`` is a stable id a client can phrase for itself; ``message`` is
+        the same thing in words for clients that only show text. Optional.
+        """
+
     def pause_progress(self):
         """Pause progress indicator, remembering state for later resume. Optional — default no-op."""
         ...
@@ -396,11 +406,6 @@ class OutputHandler(ABC):
     @abstractmethod
     def print_command_executing(self, command: str):
         """Print command executing message."""
-        ...
-
-    @abstractmethod
-    def print_agent_selected(self, agent_name: str, language: str, project_type: str):
-        """Print agent selected message."""
         ...
 
     # === Optional Methods (with default no-op implementations) ===
@@ -1284,26 +1289,6 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             self.console.print(f"\n[bold]Executing Command:[/bold] {command}")
         else:
             print(f"\nExecuting Command: {command}")
-
-    def print_agent_selected(
-        self, agent_name: str, language: str, project_type: str
-    ) -> None:
-        """
-        Print agent selected message.
-
-        Args:
-            agent_name: The name of the selected agent
-            language: The detected programming language
-            project_type: The detected project type
-        """
-        if self.rich_available:
-            self.console.print(
-                f"[bold]🤖 Agent Selected:[/bold] [blue]{agent_name}[/blue] (language={language}, project_type={project_type})\n"
-            )
-        else:
-            print(
-                f"{ANSI_BOLD}🤖 Agent Selected:{ANSI_RESET} {ANSI_BLUE}{agent_name}{ANSI_RESET} (language={language}, project_type={project_type})\n"
-            )
 
     def print_tool_usage(self, tool_name: str) -> None:
         """
@@ -2739,9 +2724,6 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
         """No-op implementation."""
 
     def print_command_executing(self, command: str):
-        """No-op implementation."""
-
-    def print_agent_selected(self, agent_name: str, language: str, project_type: str):
         """No-op implementation."""
 
     def print_tool_usage(self, tool_name: str):

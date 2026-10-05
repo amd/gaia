@@ -458,11 +458,31 @@ def _lemonade_health(base_url: Optional[str]) -> Dict[str, Any]:
     return state
 
 
-#: Lemonade catalog labels that mark a model as NOT a chat target (embedders,
-#: image generators, rerankers, ...). Same filter as the auto-reload gate in
-#: lemonade_manager.py — offering one of these as a `/model` switch would
-#: report success and break silently on the NEXT turn, far from the mistake.
-_NON_CHAT_LABELS = frozenset({"embeddings", "image", "reranker"})
+#: Lemonade catalog labels that mark a model as NOT a chat target. Offering one
+#: as a `/model` switch would report success and break silently on the NEXT
+#: turn, far from the mistake. Whisper (``transcription``) was offered.
+_NON_CHAT_LABELS = frozenset(
+    {
+        "embeddings",
+        "image",
+        "reranker",
+        "reranking",
+        "transcription",
+        "realtime-transcription",
+        "tts",
+        "audio-generation",
+        "voice-design",
+        "classification",
+        "upscaling",
+        "3d",
+    }
+)
+
+
+def _is_chat_target(entry: Dict[str, Any]) -> bool:
+    """``chat`` wins (an omni model also transcribes); unlabeled models count."""
+    labels = set(entry.get("labels") or [])
+    return "chat" in labels or not (_NON_CHAT_LABELS & labels)
 
 
 def _lemonade_models(base_url: Optional[str]) -> List[str]:
@@ -494,7 +514,7 @@ def _lemonade_models(base_url: Optional[str]) -> List[str]:
             if m.get("id")
             and (m.get("downloaded") or cloud_model_provider(m["id"], m))
             and cloud_model_provider(m["id"], m) in {None, "fireworks", "amd"}
-            and not (_NON_CHAT_LABELS & set(m.get("labels") or []))
+            and _is_chat_target(m)
         }
     )
 
@@ -1397,7 +1417,13 @@ def main(argv: Optional[list] = None) -> int:
     # A failure here is fatal and must say so on the turn the user actually
     # sent, not vanish into a dead pipe.
     try:
-        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+        from gaia_agent.agent import (
+            GaiaAgent,
+            GaiaAgentConfig,
+            check_skill_set_selection,
+        )
+
+        check_skill_set_selection()
 
         # streaming=True is what turns the answer into ``token`` events. Without
         # it the turn is silent for its whole length and the finished text lands

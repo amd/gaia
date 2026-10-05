@@ -36,6 +36,7 @@ import signal
 import socket
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -44,6 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 
+from gaia.env import child_env
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
 from gaia.version import LEMONADE_VERSION
@@ -77,10 +79,10 @@ _MACHINE_ALIASES = {
 # install() fail loudly; tests/integration/test_lemonade_embeddable_assets.py
 # checks them against the live release so CI catches the omission first.
 EMBEDDABLE_SHA256: Dict[str, str] = {
-    "lemonade-embeddable-2026.39.1-windows-x64.zip": "235c2361be3a9729a06b92c97e40a9530ebb8e5088bd3334524472d6da7fbbca",
-    "lemonade-embeddable-2026.39.1-ubuntu-x64.tar.gz": "d93c8c726a2c27aa7dee92db9d26f8042cf4e93a67b9c6ca8def094da15bf92a",
-    "lemonade-embeddable-2026.39.1-ubuntu-arm64.tar.gz": "4787c5a09dbf98b1e7d44fa7f499bbf57861e13539c78b0bab9bd0adb247acff",
-    "lemonade-embeddable-2026.39.1-macos-arm64.tar.gz": "36c84d7805aa716d2c0cf88112ee88bdaded2ac86a905232c219fd5be4a96b65",
+    "lemonade-embeddable-2026.40.0-windows-x64.zip": "30acbcc8beea565f0ea69ea92b229c45c7e7c756a6b35573c45840765c599e8f",
+    "lemonade-embeddable-2026.40.0-ubuntu-x64.tar.gz": "7b7ff14dfe9aea312f5d88281e6499d98fa52ad09f0272dd7ef32e6b6ada3537",
+    "lemonade-embeddable-2026.40.0-ubuntu-arm64.tar.gz": "6ab4a80e51e80f8410b1b31aa7665717e0f78926d57ff55e2bf83995d19dbb32",
+    "lemonade-embeddable-2026.40.0-macos-arm64.tar.gz": "5301b1004e95454b4b4b2a0b09206764c52d387fe6fcd6ac5340bffe55779151",
 }
 
 # lemond reads these from <config_dir>/config.json.
@@ -180,7 +182,9 @@ def pid_exists(pid: int) -> bool:
     """
     if pid <= 0:
         return False
-    if platform.system() == "Windows":
+    # The real OS, not platform.system(): on Windows signal 0 is CTRL_C_EVENT,
+    # so os.kill(pid, 0) Ctrl+Cs the process group or raises WinError 87.
+    if sys.platform == "win32":
         import ctypes
 
         process_query_limited_information = 0x1000
@@ -602,7 +606,51 @@ class EmbeddedLemonade:
         # moves the request budget with it rather than leaving a stale number.
         merged = {**existing, **_lemond_config()}
         path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+        self._pin_llamacpp_backends()
         return path
+
+    def _pin_llamacpp_backends(self) -> None:
+        """Record per-model load options Lemonade applies even when it auto-loads.
+
+        The embedder is loaded on demand by ``/embeddings`` as well as by GAIA's
+        explicit loads, so its backend and ubatch have to live in Lemonade's
+        saved options.
+        """
+        from gaia.llm.lemonade_client import (
+            DEFAULT_EMBEDDING_MODEL,
+            EMBEDDER_LLAMACPP_ARGS,
+            llamacpp_backend_for,
+        )
+
+        path = self.config_dir / "recipe_options.json"
+        options: Dict[str, object] = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                raise EmbeddedLemonadeError(
+                    f"{path} is not valid JSON ({e}); fix or delete it, then "
+                    "start again."
+                ) from e
+            if not isinstance(loaded, dict):
+                raise EmbeddedLemonadeError(
+                    f"{path} holds {type(loaded).__name__}, not a JSON object; "
+                    "fix or delete it, then start again."
+                )
+            options = loaded
+        # Lemonade keys saved options by the registered (``user.``) name.
+        for model in (DEFAULT_EMBEDDING_MODEL,):
+            backend = llamacpp_backend_for(model)
+            if backend is None:
+                continue
+            entry = options.get(model)
+            entry = dict(entry) if isinstance(entry, dict) else {}
+            entry["llamacpp_backend"] = backend
+            args = str(entry.get("llamacpp_args") or "")
+            if "--ubatch-size" not in args:
+                entry["llamacpp_args"] = f"{args} {EMBEDDER_LLAMACPP_ARGS}".strip()
+            options[model] = entry
+        path.write_text(json.dumps(options, indent=2), encoding="utf-8")
 
     # -- state ------------------------------------------------------------
 
@@ -904,11 +952,7 @@ class EmbeddedLemonade:
         port = port or _free_port()
         api_key = secrets.token_urlsafe(32)
 
-        env = dict(os.environ)
-        env["LEMONADE_API_KEY"] = api_key
-        # Vulkan's cooperative-matrix path crashes llama-server on the first
-        # embedding on Strix Halo; every installer launch path sets this too.
-        env["GGML_VK_DISABLE_COOPMAT"] = "1"
+        env = child_env({"LEMONADE_API_KEY": api_key})
 
         argv = [
             str(self.daemon_path),
@@ -1157,8 +1201,7 @@ class EmbeddedLemonade:
                 f"re-record it."
             )
 
-        env = dict(os.environ)
-        env["LEMONADE_API_KEY"] = api_key
+        env = child_env({"LEMONADE_API_KEY": api_key})
         try:
             result = subprocess.run(
                 [

@@ -14,9 +14,18 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pytest
 
+from gaia.eval import eval_lock
 from gaia.eval import flagship_tasks as ft
 from gaia.eval.bench import config as bench_config
 from gaia.eval.bench import harness
+
+
+@pytest.fixture(autouse=True)
+def _private_eval_lock(tmp_path, monkeypatch):
+    """Never take the machine-wide eval lock a real ``gaia eval`` holds."""
+    monkeypatch.delenv(eval_lock.BYPASS_ENV, raising=False)
+    monkeypatch.setattr(eval_lock, "LOCK_FILE", tmp_path / "gaia-eval.lock")
+    monkeypatch.setattr(eval_lock, "HOLDER_FILE", tmp_path / "gaia-eval.holder.json")
 
 
 @pytest.fixture
@@ -85,12 +94,12 @@ class FakeLaunch:
         )
         stderr_path.write_text("")
         answer = self.act(Path(cwd))
-        if "gaia.eval.bench.gaia_child" in cmd:
+        if harness.CHILD_BOOTSTRAP in cmd:
             return self._gaia(cmd, answer, stdout_path)
         return self._claude(answer, stdout_path)
 
     def _gaia(self, cmd, answer, stdout_path):
-        spec_path = cmd[cmd.index("gaia.eval.bench.gaia_child") + 1]
+        spec_path = cmd[cmd.index(harness.CHILD_BOOTSTRAP) + 1]
         spec = json.loads(Path(spec_path).read_text())
         tools = [e for e in self.conversation if e.get("role") == "tool"]
         Path(spec["progress"]).write_text(

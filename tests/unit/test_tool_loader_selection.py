@@ -629,6 +629,27 @@ def test_admit_tools_overshoots_the_cap_then_the_next_turn_trims():
     assert loader.select("q2", reg) == ["c1", "a1", "a2"]  # cap restored, d1 LRU
 
 
+def test_tools_loaded_in_one_clock_tick_are_evicted_oldest_first(monkeypatch):
+    """Windows' clock repeats for milliseconds; d1 is still older than a1."""
+    from gaia.agents.base import tool_loader as tool_loader_module
+
+    monkeypatch.setattr(tool_loader_module.time, "time", lambda: 1000.0)
+    tools = ["c1", "d1", "a1", "a2"]
+    embed = _make_embed_fn(
+        tools,
+        {
+            "q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0},
+            "q2": {"c1": 0.0, "d1": 0.0, "a1": 0.0, "a2": 0.0},
+        },
+    )
+    loader = ToolLoader(frozenset({"c1"}), [], embed, threshold=0.55, max_tools=3)
+    reg = _registry(tools)
+    loader.select("q", reg)
+    loader.admit_tools(["a1", "a2"], reg)
+
+    assert loader.select("q2", reg) == ["c1", "a1", "a2"]
+
+
 def test_admit_tools_does_not_count_as_an_escape_hatch():
     """The point of the feature: the skill's tools arrive without a recovery event."""
     loader, reg = _loader_with_bundles()
@@ -772,3 +793,36 @@ def _session_payload(records: list[logging.LogRecord]) -> dict:
         if msg.startswith("TOOL_LOADER_SESSION {"):
             return json.loads(msg[len("TOOL_LOADER_SESSION ") :])
     raise AssertionError("no TOOL_LOADER_SESSION line captured")
+
+
+# ── REQUESTED tier ─────────────────────────────────────────────────────────
+
+
+def test_requested_tool_wins_the_slot_over_skill_and_semantic():
+    """A tool the user named beats a recalled recipe and a higher semantic score.
+
+    The flagship failure: dozens of tools cleared the threshold, the cap filled
+    with file browsers, and ``run_shell_command`` — the tool the user asked for
+    by name — was skipped.
+    """
+    tools = ["asked", "recipe", "hi"]
+    embed = _make_embed_fn(tools, {"q": {"asked": 0.3, "recipe": 0.0, "hi": 0.9}})
+    loader = ToolLoader(frozenset(), [], embed, threshold=0.2, max_tools=1)
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loaded = loader.select(
+            "q", _registry(tools), skill_tools=["recipe"], requested_tools=["asked"]
+        )
+    assert loaded == ["asked"]
+    payload = _selection_payload(records)
+    assert payload["requested"] == ["asked"]
+    assert {"recipe", "hi"} <= set(payload["skipped_at_cap"])
+
+
+def test_requested_signal_absent_emits_no_key():
+    """No request leaves the log payload exactly as before the tier existed."""
+    tools = ["d1"]
+    embed = _make_embed_fn(tools, {"q": {"d1": 0.7}})
+    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
+    with _capture("gaia.agents.base.tool_loader") as records:
+        assert loader.select("q", _registry(tools), requested_tools=[]) == ["d1"]
+    assert "requested" not in _selection_payload(records)

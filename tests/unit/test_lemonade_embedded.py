@@ -429,8 +429,8 @@ class TestStatus:
         assert status.unresponsive_pid == 4321
         assert manager.state_path.exists(), "live daemon lost its state file"
 
-    def test_start_disables_vulkan_coopmat(self, manager, monkeypatch):
-        """Without it the embedder crashes on first use on Strix Halo (#4449)."""
+    def test_start_leaves_vulkan_coopmat_on_for_chat_models(self, manager, monkeypatch):
+        """The global flag halved chat prompt speed; the embedder runs on CPU instead."""
         monkeypatch.delenv("GGML_VK_DISABLE_COOPMAT", raising=False)
         monkeypatch.setattr(manager, "is_installed", lambda: True)
         monkeypatch.setattr(manager, "write_config", lambda: None)
@@ -445,7 +445,7 @@ class TestStatus:
 
         manager.start(port=65530)
 
-        assert spawned and spawned[0]["GGML_VK_DISABLE_COOPMAT"] == "1"
+        assert spawned and "GGML_VK_DISABLE_COOPMAT" not in spawned[0]
 
     def test_start_refuses_to_spawn_a_second_daemon(self, manager, monkeypatch):
         manager._write_state(
@@ -630,3 +630,34 @@ class TestFailureMessages:
         assert kwargs["capture_output"] is True
         assert kwargs["text"] is True
         assert kwargs["check"] is False
+
+
+def test_checking_a_live_pid_never_kills_it_when_the_os_is_faked():
+    """Tests fake ``platform.system``; the liveness probe must still be harmless."""
+    import subprocess
+    import sys
+    from unittest.mock import patch
+
+    from gaia.llm.lemonade_embedded import pid_exists
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        for faked in ("Linux", "Windows", "Darwin"):
+            with patch("platform.system", return_value=faked):
+                assert pid_exists(child.pid)
+        assert child.poll() is None, "pid_exists terminated the process it probed"
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_pinned_digests_are_bare_hex_like_the_installer_computes():
+    """The release API publishes ``sha256:<hex>``; the installer compares against
+    ``hexdigest()``, so a pasted prefix would fail every embedded install."""
+    import re
+
+    from gaia.llm.lemonade_embedded import EMBEDDABLE_SHA256
+
+    assert EMBEDDABLE_SHA256
+    for asset, digest in EMBEDDABLE_SHA256.items():
+        assert re.fullmatch(r"[0-9a-f]{64}", digest), f"{asset}: {digest!r}"

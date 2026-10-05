@@ -278,12 +278,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             """
             import faiss  # noqa: F401  # pylint: disable=unused-import
 
-            # sentence-transformers is NOT pre-imported: RAG embeds via Lemonade,
-            # and the memory cross-encoder reranker imports it lazily with graceful
-            # degradation. Eagerly importing it here pulled the fragile torch/
-            # torchcodec stack into boot and made a broken install look like a RAG
-            # failure (#RAG-embedder-switch).
-
             # Log which SWIG backend faiss actually loaded.
             # Order matters: check most-optimized first.
             _swig_variants = [
@@ -313,13 +307,16 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             import httpx
 
             from gaia.llm.lemonade_client import (
+                cloud_model_provider,
                 lemonade_auth_headers,
+                resolve_ctx_size,
                 resolve_lemonade_api_key,
+                resolve_lemonade_base_url,
             )
-            from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
+            from gaia.llm.lemonade_manager import LemonadeManager
             from gaia.ui._chat_helpers import model_load_lock
 
-            base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
             _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
 
             # Check if a chat model is already loaded.
@@ -333,9 +330,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
             from gaia.daemon.broker_client import model_lease
             from gaia.llm.lemonade_client import LemonadeClient
-            from gaia.ui.routers.system import _DEFAULT_MODEL_NAME
+            from gaia.ui.routers.system import _default_model_name
 
-            model_id = db.get_setting("custom_model") or _DEFAULT_MODEL_NAME
+            model_id = db.get_setting("custom_model") or _default_model_name()
 
             # model_load_lock guards other threads in THIS process; the broker
             # lease guards other processes sharing Lemonade's single slot
@@ -353,11 +350,19 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                         all_models2 = resp2.json().get("all_models_loaded", [])
                         if any(m.get("type") in ("llm", "vlm") for m in all_models2):
                             return
-                except Exception:
-                    pass  # proceed with load attempt
+                except (httpx.HTTPError, ValueError) as exc:
+                    # The load below reports its own failure if Lemonade is down.
+                    logger.warning(
+                        "Model preload: re-check of loaded models failed (%s); "
+                        "loading %s anyway",
+                        exc,
+                        model_id,
+                    )
 
+                if cloud_model_provider(model_id, None):
+                    return  # cloud models are never loaded locally
                 LemonadeClient(verbose=False).load_model(
-                    model_id, ctx_size=DEFAULT_CONTEXT_SIZE, prompt=False
+                    model_id, ctx_size=resolve_ctx_size(model_id), prompt=False
                 )
 
         # Dispatch startup tasks.  Jobs A and B run in parallel; Job C

@@ -1,11 +1,11 @@
 ---
 title: 'Install GAIA'
-description: 'Download and install GAIA on Windows, macOS, or Linux. The recommended way to get GAIA running on your machine.'
+description: 'Download and install GAIA on Windows, macOS, or Linux — the desktop app, the terminal, or both. The one place to start as a user.'
 icon: 'download'
 ---
 
 <Note>
-GAIA is a desktop chat application that runs AI agents locally on your machine. This is the recommended install method for most users. For the developer / CLI install path, see the [development guide](/reference/dev).
+This is the page to start from if you want to **use** GAIA. GAIA runs AI agents locally on your machine, and you can use them two ways: the **desktop app** (a window with chat, your documents and files) or the **terminal** (`gaia-tui`). Building agents or working on GAIA itself? Skip to [For developers](#for-developers).
 </Note>
 
 ## What you'll need
@@ -19,16 +19,31 @@ GAIA is a desktop chat application that runs AI agents locally on your machine. 
 
 <Tabs>
   <Tab title="Windows">
-    1. Go to [GitHub Releases](https://github.com/amd/gaia/releases/latest)
-    2. Download **`gaia-agent-ui-X.Y.Z-x64-setup.exe`**
-    3. Double-click to run the installer
-    4. Follow the wizard. Default options work for most users.
-    5. GAIA will start automatically when you sign in to Windows, matching the Slack/Discord/Zoom convention. To disable, open Task Manager → Startup tab → disable "GAIA", or use the in-app tray menu after first launch.
-    6. Click **Finish** and launch GAIA from the Start Menu or desktop shortcut.
+    One installer, for Windows 10/11 on x64. While it runs you choose how you'll use GAIA — the desktop app, the terminal, or both. At least one is required.
+
+    | Choice | What you get | Shortcut it adds |
+    |---|---|---|
+    | **Desktop app** | A window with chat, your documents and files, and every tool call shown as it runs. Starts when you sign in to Windows — turn that off from the app's tray menu or Task Manager → Startup. | **GAIA**, on the desktop and Start menu |
+    | **Terminal** | `gaia-tui` on your PATH, with a GAIA profile and font for Windows Terminal. See [Terminal UI](/guides/terminal-hub). | **GAIA Terminal Hub**, on the desktop and Start menu |
+
+    1. On [amd-gaia.ai](https://amd-gaia.ai/#install), click **Install GAIA for Windows**. The file is `gaia-<version>-win-x64-setup.exe`.
+    2. Run it. It needs no administrator rights — everything installs for your account only.
+    3. On **Choose Components**, tick the desktop app, the terminal, or both.
+    4. Click **Finish**, then open GAIA from its desktop shortcut.
+
+    Either choice also installs Lemonade Server, the local model runtime, from inside the installer, so the install itself works offline.
+
+    **Updating or adding the other one:** run a newer (or the same) installer. It starts with what you already have ticked. Unticking something does not remove it — uninstall it instead (see [Uninstalling](#windows)).
+
+    Before GAIA 0.25, Windows had two separate installers: `gaia-agent-ui-<version>-x64-setup.exe` for the desktop app and the terminal-only `gaia-<version>-win-x64-setup.exe`. The new installer updates either one in place.
 
     <Warning>
     The first time you run an unsigned installer, Windows SmartScreen may show a "Windows protected your PC" warning. Click **More info** → **Run anyway**. (We're working on Windows code signing — see [troubleshooting](/reference/install-troubleshooting#smartscreen).)
     </Warning>
+
+    <Note>
+    Windows on Arm has no installer: the desktop app has no Arm build, and neither does the agent the terminal runs. The standalone `gaia-tui` binary is in the full download list on [amd-gaia.ai](https://amd-gaia.ai/#install).
+    </Note>
   </Tab>
 
   <Tab title="macOS">
@@ -42,7 +57,9 @@ GAIA is a desktop chat application that runs AI agents locally on your machine. 
     On first launch, macOS Gatekeeper may show "GAIA cannot be opened because the developer cannot be verified." Right-click the app and choose **Open**, then click **Open** in the dialog. (We're working on Apple notarization — see [troubleshooting](/reference/install-troubleshooting#gatekeeper).)
     </Warning>
 
-    Intel Macs are not currently supported.
+    Intel Macs are not currently supported by the desktop app.
+
+    Want the terminal instead, or as well? Its `.pkg` (Apple Silicon and Intel) is on [amd-gaia.ai](https://amd-gaia.ai/#install) — see [Terminal UI](/guides/terminal-hub#installing).
   </Tab>
 
   <Tab title="Linux (Debian/Ubuntu)">
@@ -55,6 +72,8 @@ GAIA is a desktop chat application that runs AI agents locally on your machine. 
     4. Launch GAIA from your application menu, or run `gaia-desktop` from a terminal
 
     Or install via the GUI: double-click the `.deb` file and your software center will install it.
+
+    Want the terminal instead, or as well? Its `.deb` and `.rpm` are on [amd-gaia.ai](https://amd-gaia.ai/#install) — see [Terminal UI](/guides/terminal-hub#installing).
   </Tab>
 
   <Tab title="Linux (other distros)">
@@ -73,9 +92,37 @@ GAIA is a desktop chat application that runs AI agents locally on your machine. 
   </Tab>
 </Tabs>
 
-## First-launch setup
+On macOS and Linux the desktop app and the terminal still download separately; a single installer with the same choice is planned for them too.
 
-The first time you launch GAIA, it automatically sets up its Python backend. You'll see a progress dialog with these stages:
+### Silent install on Windows (IT and scripted deployment)
+
+The Windows installer is an NSIS package, so it takes the usual `/S`, plus `/COMPONENTS=` to choose what to install:
+
+```powershell
+gaia-<version>-win-x64-setup.exe /S /COMPONENTS=ui,tui
+```
+
+| Option | Meaning |
+|---|---|
+| `/S` | No windows, no prompts. |
+| `/COMPONENTS=ui,tui` | `ui` is the desktop app, `tui` the terminal; name one or both, no spaces. Without it, `/S` updates whatever is already installed, and installs both on a machine that has neither. |
+| `/D=<folder>` | The terminal's install folder. Must come last. The desktop app always uses its own folder. |
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Installed what was asked. |
+| `2` | A GAIA program it would replace is running. Nothing was changed. |
+| `3` | `/COMPONENTS=` named something unknown, or nothing. Nothing was changed. |
+| `4` | A conflicting install: a GAIA developer build, or the desktop app installed for all users. Nothing was changed. |
+| `5` | A chosen component failed. Any other component you chose was installed. |
+
+`/S` installs for the account that runs it. Deployment tools that run as SYSTEM (the SCCM and Intune default) install into SYSTEM's profile, not a user's — run it in the user's context.
+
+To uninstall silently, run each component's `QuietUninstallString` from `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall`. Both keep `~/.gaia` when silent.
+
+## First-launch setup (desktop app)
+
+The first time you launch the desktop app, it automatically sets up its Python backend. You'll see a progress dialog with these stages:
 
 1. **Pre-flight checks** (~5 seconds) — verifies free disk space and network connectivity
 2. **Download `uv`** (~30 seconds) — installs the `uv` Python package manager
@@ -119,9 +166,12 @@ cleanup prompt deletes **every file in `~/.gaia`**, including custom agents,
 connector sign-ins and permissions, memory, and shared runtimes. Other GAIA
 installations using that folder will stop working. Silent uninstalls keep it.
 
-**Settings → Apps → Installed apps → GAIA → Uninstall**
+Each part you installed has its own entry in **Settings → Apps → Installed apps**, so you can remove one and keep the other. To remove GAIA completely, uninstall both:
 
-This removes the app, the Start Menu / Desktop shortcuts, and the autostart registry entry. If you decline the cleanup prompt, it does **not** touch `~/.gaia/`. For tiered cleanup instead of deleting the whole shared folder, open a terminal (PowerShell or `cmd`) and run:
+- **GAIA** — the desktop app. Removes the app, its Start Menu / Desktop shortcuts, and the autostart registry entry.
+- **GAIA Terminal Hub** — the terminal. Removes `gaia-tui`, `gaia-agent`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
+
+Each uninstaller shows the cleanup prompt above; decline it and `~/.gaia/` is left alone. For tiered cleanup instead of deleting the whole shared folder, open a terminal (PowerShell or `cmd`) and run:
 ```powershell
 ~\.gaia\venv\Scripts\gaia uninstall --purge
 ```
@@ -173,10 +223,10 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Document Library uploads | `~/.gaia/documents/` |
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
-| Logs | `~/.gaia/gaia.log`, `~/.gaia/electron-install.log` |
+| Logs | `~/.gaia/gaia.log` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
 | Terminal hub and agent binaries (one-line installer) | `~/.gaia/bin/` |
 | Agent run traces | `~/.gaia/traces/` |
-| Daemon state (token, custody database, logs) | `~/.gaia/host/` |
+| Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |
 
 Setting `GAIA_HOME` moves Document Library uploads and chat file attachments to `$GAIA_HOME/documents/` and `$GAIA_HOME/chat/uploads/`. It must not be your home directory or one of its parents.
@@ -184,6 +234,19 @@ Setting `GAIA_HOME` moves Document Library uploads and chat file attachments to 
 ## Privacy
 
 GAIA runs entirely on your machine. **No data is sent externally** beyond the package downloads during install. There is no telemetry, no crash reporting, no usage analytics. See the [FAQ](/reference/faq) for more.
+
+## For developers
+
+The installer above is for using GAIA. To build agents, work on GAIA itself, or put one front end on a machine from a script, use one of these instead. Each installs one thing directly; the script, `pip`/`uv` and npm routes add no desktop shortcuts or Installed-apps entries:
+
+| You want | Use |
+|---|---|
+| The Python CLI and SDK, plus the terminal UI, in one command | Windows: `irm https://amd-gaia.ai/install.ps1 \| iex` · Linux/macOS: `curl -fsSL https://amd-gaia.ai/install.sh \| sh` |
+| The Python package only | `uv pip install amd-gaia` — see [Setup](/setup) and the [Quickstart](/quickstart) |
+| The desktop app from npm | `npm install -g @amd-gaia/agent-ui`, then `gaia-ui` — see [Agent UI](/guides/agent-ui) |
+| The desktop app's own installer | `gaia-agent-ui-<version>-<arch>` files on [GitHub Releases](https://github.com/amd/gaia/releases/latest) |
+| Either front end from source | [Development guide](/reference/dev); the terminal builds with `cd tui && make build`, the desktop installers as in [Packaging & Distribution](/deployment/ui) |
+| A Windows build of your own branch to hand to someone | [Shareable build](/deployment/shareable-build). Uninstall it before running the GAIA installer, which refuses to install beside it. |
 
 ## Next steps
 

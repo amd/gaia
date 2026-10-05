@@ -328,3 +328,115 @@ describe('Downloads.astro', () => {
     expect(all.filter((e) => e.tag === 'h3').map(textOf)).toEqual(['Desktop app', 'Terminal']);
   });
 });
+
+// ---- The one Windows setup (0.25.0 on) -------------------------------------
+//
+// From 0.25.0 the terminal hub's win-x64-setup is the setup that asks desktop
+// app / terminal / both. Same filename pattern as the terminal-only 0.24.1
+// setup above, which is why the card is gated on the version as well as on the
+// file being published.
+
+const SETUP_VERSION = '0.25.0';
+const SETUP_RELEASE_FILES = {
+  'win-x64': 'gaia-win-x64.exe',
+  'win-arm64': 'gaia-win-arm64.exe',
+  'darwin-x64': 'gaia-darwin-x64',
+  'darwin-arm64': 'gaia-darwin-arm64',
+  'linux-x64': 'gaia-linux-x64',
+  'linux-arm64': 'gaia-linux-arm64',
+  'win-x64-setup': 'gaia-0.25.0-win-x64-setup.exe',
+  'darwin-arm64-pkg': 'gaia-0.25.0-darwin-arm64.pkg',
+  'linux-x64-deb': 'gaia_0.25.0_amd64.deb',
+} as const;
+
+const setupUrl = (key: keyof typeof SETUP_RELEASE_FILES) =>
+  `${HUB}/agents/terminal-hub/${SETUP_VERSION}/${SETUP_RELEASE_FILES[key]}`;
+
+function terminalHubAt(files: readonly string[]) {
+  return {
+    latest_version: SETUP_VERSION,
+    versions: {
+      [SETUP_VERSION]: {
+        artifacts: files.map((f) => artifact(f, `agents/terminal-hub/${SETUP_VERSION}/${f}`)),
+      },
+    },
+  };
+}
+
+describe('Downloads.astro with the one Windows setup', () => {
+  const original = MANIFESTS['terminal-hub'];
+  afterEach(() => {
+    MANIFESTS['terminal-hub'] = original;
+  });
+
+  it('offers Windows one setup instead of a card each', async () => {
+    MANIFESTS['terminal-hub'] = terminalHubAt(Object.values(SETUP_RELEASE_FILES));
+    rendered = await render();
+    const all = descendants(rendered.root);
+
+    const setup = ctas().filter((b) => b.attrs['data-surface'] === 'setup');
+    expect(setup).toHaveLength(1);
+    expect(setup[0].attrs['data-platform']).toBe('win-x64');
+    expect('hidden' in setup[0].attrs).toBe(true);
+    expect(hrefsIn(setup[0])).toEqual([setupUrl('win-x64-setup')]);
+    expect(String(setup[0].parent?.attrs.class ?? '')).toMatch(/\bspace-y-\d/);
+    expect(textOf(setup[0])).toContain('the desktop app, the terminal, or both');
+
+    // The choice is made in the setup, so neither card offers Windows x64 a button.
+    const perSurfaceWindows = ctas().filter(
+      (b) => b.attrs['data-surface'] !== 'setup' && b.attrs['data-platform'] === 'win-x64',
+    );
+    expect(perSurfaceWindows).toEqual([]);
+
+    // The cards sit in a wrapper the script can hide; server-side it is shown.
+    const cards = all.filter((e) => 'data-dl-cards' in e.attrs);
+    expect(cards).toHaveLength(1);
+    expect('hidden' in cards[0].attrs).toBe(false);
+    expect(all.filter((e) => e.tag === 'h3').map(textOf)).toEqual([
+      'GAIA for Windows',
+      'Desktop app',
+      'Terminal',
+    ]);
+
+    const invented = descendants(rendered.root)
+      .filter((e) => e.tag === 'a' && typeof e.attrs.href === 'string')
+      .map((a) => a.attrs.href as string)
+      .filter((href) => !rendered.publishedUrls.has(href));
+    expect(invented).toEqual([]);
+  });
+
+  it('lists the setup once, and keeps the desktop-only setup and the raw binary', async () => {
+    MANIFESTS['terminal-hub'] = terminalHubAt(Object.values(SETUP_RELEASE_FILES));
+    rendered = await render();
+    const [list] = descendants(rendered.root).filter((e) => 'data-dl-list' in e.attrs);
+    const links = descendants(list).filter((e) => e.tag === 'a');
+    const hrefs = links.map((a) => a.attrs.href as string);
+
+    expect(hrefs.filter((h) => h === setupUrl('win-x64-setup'))).toHaveLength(1);
+    expect(hrefs).toContain(desktopUrl('win-x64'));
+    expect(hrefs).toContain(setupUrl('win-x64'));
+
+    const names = links.map((a) =>
+      typeof a.attrs['aria-label'] === 'string' ? a.attrs['aria-label'] : textOf(a),
+    );
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.find((n) => n.includes('Desktop app only'))).toContain('Windows (x64)');
+  });
+
+  it('keeps the two cards when 0.25.0 published no Windows setup', async () => {
+    const { 'win-x64-setup': _setup, ...rest } = SETUP_RELEASE_FILES;
+    MANIFESTS['terminal-hub'] = terminalHubAt(Object.values(rest));
+    rendered = await render();
+
+    expect(ctas().filter((b) => b.attrs['data-surface'] === 'setup')).toEqual([]);
+    const windows = Object.fromEntries(
+      ctas()
+        .filter((b) => b.attrs['data-platform'] === 'win-x64')
+        .map((b) => [b.attrs['data-surface'], hrefsIn(b)]),
+    );
+    expect(windows).toEqual({
+      desktop: [desktopUrl('win-x64')],
+      tui: [setupUrl('win-x64')],
+    });
+  });
+});

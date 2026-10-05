@@ -74,6 +74,24 @@ class TestHealthEndpoint:
 class TestSystemStatus:
     """Tests for /api/system/status endpoint."""
 
+    @patch("httpx.AsyncClient")
+    def test_system_status_names_this_pcs_default_even_with_nothing_loaded(
+        self, mock_httpx_cls, client
+    ):
+        """The UI's load and download actions target default_model_name, so it
+        must name the machine's default, not the Gemma floor, when no model is
+        loaded (a Strix Halo whose gaia init recorded Qwen3.8 Flash)."""
+        import httpx
+
+        from gaia.config import GaiaConfig
+
+        cfg = GaiaConfig()
+        cfg.default_model = "user.Qwen3.8-Flash-Next-GGUF"
+        cfg.save()
+        mock_httpx_cls.side_effect = httpx.ConnectError("down")
+        data = client.get("/api/system/status").json()
+        assert data["default_model_name"] == "user.Qwen3.8-Flash-Next-GGUF"
+
     def test_system_status_returns_200(self, client):
         resp = client.get("/api/system/status")
         assert resp.status_code == 200
@@ -95,6 +113,33 @@ class TestSystemStatus:
         from gaia.version import __version__
 
         assert data["version"] == __version__
+
+    def test_unreadable_config_is_reported_not_hidden(
+        self, client, tmp_path, monkeypatch
+    ):
+        bad = tmp_path / "config.json"
+        bad.write_text("{not json", encoding="utf-8")
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", bad)
+
+        data = client.get("/api/system/status").json()
+
+        assert data["config_error"] is not None
+        assert str(bad) in data["config_error"]
+        assert "not valid JSON" in data["config_error"]
+        # The config names the model, so an unreadable one leaves it unknown.
+        assert data["default_model_name"] is None
+
+    def test_valid_config_reports_its_profile_and_no_error(
+        self, client, tmp_path, monkeypatch
+    ):
+        good = tmp_path / "config.json"
+        good.write_text('{"profile": "npu"}', encoding="utf-8")
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", good)
+
+        data = client.get("/api/system/status").json()
+
+        assert data["config_error"] is None
+        assert data["active_profile"] == "npu"
 
     def test_system_status_has_all_fields(self, client):
         resp = client.get("/api/system/status")
@@ -218,6 +263,46 @@ class TestSystemStatus:
         assert data["model_loaded"] == "Qwen3.5-35B-A3B-GGUF"
         assert data["model_context_size"] == 4096
         assert data["context_size_sufficient"] is False
+
+    @patch("httpx.AsyncClient")
+    def test_a_cloud_model_is_never_called_too_small(self, mock_httpx_cls, client):
+        """Lemonade reports ctx_size 4096 for every cloud model — a placeholder."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "fireworks.deepseek-v4p1-flash",
+            "version": "2026.39.1",
+            "all_models_loaded": [
+                {
+                    "model_name": "fireworks.deepseek-v4p1-flash",
+                    "recipe": "cloud",
+                    "device": "none",
+                    "recipe_options": {"ctx_size": 4096},
+                }
+            ],
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            return make_response(404, {})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        data = client.get("/api/system/status").json()
+        assert data["model_loaded"] == "fireworks.deepseek-v4p1-flash"
+        assert data["model_context_size"] is None
+        assert data["context_size_sufficient"] is True
 
     @patch("httpx.AsyncClient")
     def test_system_status_context_size_sufficient(self, mock_httpx_cls, client):
@@ -502,7 +587,9 @@ class TestSystemStatus:
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return make_response(200, {"data": []})
-            raise Exception("catalog timeout")
+            import httpx
+
+            raise httpx.ReadTimeout("catalog timeout")
 
         mock_client.get = mock_get
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -515,6 +602,7 @@ class TestSystemStatus:
         assert data["model_loaded"] is None
         # Should stay None — don't report False when we couldn't check
         assert data["model_downloaded"] is None
+        assert any("catalog timeout" in w for w in data["probe_warnings"])
 
     @patch("httpx.AsyncClient")
     def test_system_status_model_name_case_insensitive_match(
@@ -1945,7 +2033,7 @@ class TestLemonadeApiKeyInjection:
     surface area for httpx calls; per-site tests for the remaining call
     sites (_chat_helpers, server.py startup) are covered by the T13 grep
     sweep + the unit tests of ``lemonade_auth_headers`` in
-    ``tests/test_lemonade_client.py``.
+    ``tests/unit/test_lemonade_client_http.py``.
     """
 
     @patch("httpx.AsyncClient")

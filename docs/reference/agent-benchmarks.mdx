@@ -203,9 +203,15 @@ breaking.
 time: each instance is read from the Hugging Face dataset (the `datasets` package
 when it is installed, the datasets-server REST API otherwise) and cached as one
 JSON file under the work root (`$GAIA_BENCH_WORK_ROOT/swebench/`), which `--fence`
-keeps out of the agent's reach. `--instances a,b,c` names the instances; without
+keeps out of the agent's reach. That cache never holds the gold patch: the judge
+fetches the patches again after the agent exits, so re-judging a run needs the
+network too. The `datasets` package keeps its own copy of the whole split, gold
+patches included, in the Hugging Face cache in your home folder, where a
+full-access agent can read it; run without `datasets` installed when that matters. `--instances a,b,c` names the instances; without
 it the run is the five-instance pilot: `psf__requests-1921`, `psf__requests-5414`,
 `pallets__flask-5014`, `pylint-dev__pylint-4970`, `sphinx-doc__sphinx-8721`.
+`--sample N` draws a seeded random N of all 500 instead (`--seed S` picks another
+draw), so a check on tasks nobody tuned on is one flag and anyone can reproduce it.
 
 **The checkout is built the way `therock` builds its own.** A bare cache per
 repository is filled by commit, to a depth of 200, so it never holds the fix that
@@ -224,6 +230,28 @@ tasks. After the agent exits, everything it changed (new files included) becomes
 one row of `DIR/predictions.jsonl` — `{"instance_id", "model_name_or_path",
 "model_patch"}`, exactly what the official harness reads. An agent that changed
 nothing fails the task then and there; there is nothing to submit.
+
+**The agent does not get the host's installed copy of the package under test.**
+GAIA's own interpreter often has a newer release of a SWE-bench repository
+installed, with the fix already in it: on `matplotlib__matplotlib-24870` the agent
+imported the host's matplotlib 3.11 and read the new code. So on a SWE-bench task
+both harnesses get a bare venv (`<work root>/swebench/toolchain/`, with nothing
+installed, not even pip) as their only Python: it is first on `PATH`, the host
+interpreter's directories are taken off `PATH`, `VIRTUAL_ENV` points at it, and
+GAIA's `run_python` / `run_python_file` run it too. An agent that imports the
+package gets `ModuleNotFoundError` and has to read the checkout; `pip install`
+fails, and is reported as web use. The venv is shared by the tasks of a work
+root and rebuilt before any task that finds something installed in it.
+`--fence` adds an OS-level deny on macOS: Claude Code loses every site-packages
+tree of the host interpreter, and GAIA loses the installed copy of the package
+under test — not the whole tree, because its own process imports from there,
+and not at all for a package GAIA itself depends on (`requests`, `sympy`); the
+run logs a warning for those.
+
+Without `--fence` (any non-macOS host) this is not a sandbox. GAIA's file tools
+stay inside the checkout unless `--full-access`, but a Python snippet or Claude
+Code's own tools can still open any file whose path the agent finds, and on
+Windows `python3` or `py -3.x` can reach another installed interpreter.
 
 **Grading runs the official harness, one instance at a time.** `run` does it after
 the suite unless `--no-evaluate`; `gaia eval tasks swebench DIR` does it later, or

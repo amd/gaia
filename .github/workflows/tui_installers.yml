@@ -1,12 +1,14 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Build the terminal hub's binaries and its native double-click installers, then
-# prove each installer installs on a machine that did not build it.
+# Build the terminal hub's binaries and its native double-click macOS and Linux
+# installers, then prove each installer installs on a machine that did not build
+# it. The Windows setup -- one installer for the desktop app and the terminal --
+# is windows_setup.yml, which reads the `tui-binaries` artifact this uploads.
 #
 # Reusable so the PR gate and the release both run THE SAME jobs. They used to
 # be inline in release_components.yml, which fires only on a `v*` tag -- so a PR
-# editing gaia-setup.nsi or build-pkg.sh got no CI at all and the first
+# editing build-pkg.sh or build-packages.sh got no CI at all and the first
 # execution of that code was a live release. A second copy in build_tui.yml
 # would have fixed the gate and created a drift problem; one workflow, two
 # callers, fixes both.
@@ -167,13 +169,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
-      # One platform's packaging tool breaking must not hide the other two.
+      # One platform's packaging tool breaking must not hide the other.
       fail-fast: false
       matrix:
         include:
-          - label: windows
-            os: windows-latest
-            platforms: win-x64
           - label: macos
             os: macos-latest
             platforms: darwin-arm64 darwin-x64
@@ -195,7 +194,7 @@ jobs:
           name: tui-binaries
           path: bin
 
-      # One staging directory per target, holding what all three build scripts
+      # One staging directory per target, holding what both build scripts
       # consume: gaia-tui, gaia-agent, LICENSE.md. A staging directory that is
       # absent afterwards means "no installer for this platform".
       #
@@ -209,12 +208,10 @@ jobs:
         run: |
           set -euo pipefail
           for p in ${PLATFORMS}; do
-            EXT=""
-            case "${p}" in win-*) EXT=".exe" ;; esac
             mkdir -p "stage/${p}"
-            cp "bin/gaia-${p}${EXT}" "stage/${p}/gaia-tui${EXT}"
+            cp "bin/gaia-${p}" "stage/${p}/gaia-tui"
             cp LICENSE.md "stage/${p}/LICENSE.md"
-            chmod +x "stage/${p}/gaia-tui${EXT}"
+            chmod +x "stage/${p}/gaia-tui"
             if [ "${SIDECAR}" = "stub" ]; then
               # A real sidecar is only safe to bundle because its digest is
               # committed, and that digest is a placeholder between releases --
@@ -222,8 +219,8 @@ jobs:
               # the TUI binary in keeps packaging, install, PATH, shortcuts and
               # uninstall under test; only the sidecar's identity is not, and
               # nothing built here is ever published.
-              cp "stage/${p}/gaia-tui${EXT}" "stage/${p}/gaia-agent${EXT}"
-              chmod +x "stage/${p}/gaia-agent${EXT}"
+              cp "stage/${p}/gaia-tui" "stage/${p}/gaia-agent"
+              chmod +x "stage/${p}/gaia-agent"
             else
               # Exit 3 is the ONE tolerated outcome: the lock carries no entry for
               # this platform, so the flagship publishes no sidecar for it. A
@@ -239,45 +236,6 @@ jobs:
             fi
             ls -l "stage/${p}"
           done
-
-      # ── Windows ──
-      # The MSI is bundled, not downloaded at install time, so the setup works
-      # offline. Same pinned source and size guard as build-installers.yml.
-      - name: Download the pinned Lemonade MSI
-        if: matrix.label == 'windows'
-        run: |
-          set -euo pipefail
-          LEMONADE_VERSION=$(grep -oE 'LEMONADE_VERSION = "[^"]+"' src/gaia/version.py | cut -d'"' -f2)
-          if [ -z "$LEMONADE_VERSION" ]; then
-            echo "::error::Could not parse LEMONADE_VERSION from src/gaia/version.py" >&2
-            exit 1
-          fi
-          URL="https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_VERSION}/lemonade-server-minimal.msi"
-          echo "Downloading Lemonade MSI v${LEMONADE_VERSION} from ${URL}"
-          curl -fsSL --retry 3 --retry-delay 5 "${URL}" -o installer/lemonade-server-minimal.msi
-          # The -minimal MSI is a bootstrap installer (~4-6MB) that fetches the
-          # Lemonade runtime on first run, so this guards against an obviously
-          # truncated download rather than pinning a size that moves between
-          # upstream minor releases.
-          SIZE=$(wc -c < installer/lemonade-server-minimal.msi)
-          echo "Downloaded MSI size: ${SIZE} bytes"
-          if [ "$SIZE" -lt 1048576 ]; then
-            echo "::error::MSI smaller than 1MB; download likely corrupt or a 404 HTML body." >&2
-            exit 1
-          fi
-
-      - name: Install NSIS
-        if: matrix.label == 'windows'
-        run: choco install nsis --no-progress -y
-
-      - name: Build the Windows setup
-        if: matrix.label == 'windows'
-        run: |
-          installer/tui/nsis/build-setup.sh \
-            --version "${{ inputs.version }}" \
-            --payload stage/win-x64 \
-            --out dist \
-            --lemonade-msi installer/lemonade-server-minimal.msi
 
       # ── macOS ──
       # The packages ship UNSIGNED today and --allow-unsigned says so out loud.
@@ -360,8 +318,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: windows
-            os: windows-latest
           - label: macos
             os: macos-latest
           - label: linux
@@ -380,84 +336,6 @@ jobs:
         with:
           name: tui-installers-${{ matrix.label }}
           path: dist
-
-      - name: Windows — install, verify, uninstall
-        if: matrix.label == 'windows'
-        shell: pwsh
-        env:
-          VERSION: ${{ inputs.version }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $name  = python installer/tui/artifacts.py names --version $env:VERSION --platform win-x64
-          $setup = "dist/$name"
-          $dir   = "$env:LOCALAPPDATA\Programs\GAIA Terminal Hub"
-          # The Agent UI's electron-builder setup owns this one and removes it
-          # recursively on uninstall, so the terminal hub must never land in it.
-          $agentUiDir = "$env:LOCALAPPDATA\Programs\GAIA"
-          if (Test-Path $dir) { throw "$dir already exists before install - this runner is not clean" }
-
-          $p = Start-Process -FilePath (Resolve-Path $setup) -ArgumentList '/S' -PassThru -Wait
-          if ($p.ExitCode -ne 0) { throw "setup exited $($p.ExitCode)" }
-
-          if (Test-Path $agentUiDir) {
-            throw "setup wrote to $agentUiDir - that is the Agent UI's install directory, whose uninstaller deletes it recursively"
-          }
-          foreach ($f in 'gaia-tui.exe','gaia-agent.exe','Uninstall.exe') {
-            if (-not (Test-Path "$dir\$f")) { throw "$f did not land in $dir" }
-          }
-          # The registry PATH, not $env:PATH: this process inherited its
-          # environment before the install, so it cannot see the change.
-          $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
-          if ($regPath -notlike "*$dir*") { throw "install dir was not added to the user PATH" }
-          if (-not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub')) {
-            throw "no Add/Remove Programs entry was registered"
-          }
-
-          $out = & "$dir\gaia-tui.exe" version 2>&1 | Out-String
-          Write-Host "gaia-tui version -> $out"
-          if ($out -notmatch [regex]::Escape($env:VERSION)) { throw "gaia-tui did not report $env:VERSION" }
-
-          # The ordinary upgrade path: run the setup again while the payload is
-          # in use. A running image is held with FILE_SHARE_READ|DELETE, so the
-          # setup cannot open it for write -- reproduced here with an exclusive
-          # handle, which is deterministic in a headless runner where the TUI
-          # itself has no terminal to stay alive in. The setup must refuse up
-          # front and leave the previous install byte-identical.
-          $before = Get-FileHash "$dir\gaia-tui.exe" -Algorithm SHA256
-          $held   = [System.IO.File]::Open("$dir\gaia-tui.exe", 'Open', 'Read', 'Read')
-          try {
-            $again = Start-Process -FilePath (Resolve-Path $setup) -ArgumentList '/S' -PassThru -Wait
-            if ($again.ExitCode -eq 0) { throw "setup reported success while gaia-tui.exe was locked" }
-            Write-Host "re-install over an in-use gaia-tui refused with exit $($again.ExitCode)"
-          } finally {
-            $held.Dispose()
-          }
-          $after = Get-FileHash "$dir\gaia-tui.exe" -Algorithm SHA256
-          if ($after.Hash -ne $before.Hash) { throw "the refused install still rewrote gaia-tui.exe" }
-          foreach ($f in 'gaia-tui.exe','gaia-agent.exe','Uninstall.exe') {
-            if (-not (Test-Path "$dir\$f")) { throw "the refused install left $f missing" }
-          }
-
-          # Data the uninstaller must not touch.
-          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.gaia" | Out-Null
-          Set-Content -Path "$env:USERPROFILE\.gaia\smoke-marker" -Value 'keep me'
-
-          $u = Start-Process -FilePath "$dir\Uninstall.exe" -ArgumentList '/S' -PassThru -Wait
-          if ($u.ExitCode -ne 0) { throw "uninstaller exited $($u.ExitCode)" }
-          # The uninstaller re-execs from a temp copy, so the original process is
-          # still exiting when Start-Process returns.
-          Start-Sleep -Seconds 12
-
-          if (Test-Path $dir) { throw "$dir survived the uninstall: $(Get-ChildItem $dir | Out-String)" }
-          $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
-          if ($regPath -like "*Programs\GAIA Terminal Hub*") { throw "install dir was left on the user PATH" }
-          if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub') {
-            throw "the Add/Remove Programs entry survived the uninstall"
-          }
-          if (-not (Test-Path "$env:USERPROFILE\.gaia\smoke-marker")) {
-            throw "the uninstaller deleted ~/.gaia - it must keep user data unless asked"
-          }
-          Write-Host "OK - installed, ran, uninstalled cleanly, user data intact"
 
       - name: macOS — install, verify, uninstall
         if: matrix.label == 'macos'

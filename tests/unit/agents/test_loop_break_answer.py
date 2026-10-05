@@ -20,7 +20,7 @@ import pytest
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
-from gaia.agents.base.verification import VERIFICATION_SCOPE_PREFIX
+from gaia.agents.base.verification import VERIFICATION_NOTE_OPENER
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
 _TOOL = "run_checks_for_loop_break_test"
@@ -66,6 +66,9 @@ def clean_registry():
     _TOOL_REGISTRY.update(snapshot)
 
 
+_NOTE = f"{VERIFICATION_NOTE_OPENER} — sentinel."
+
+
 def _make_agent(streaming: bool, model_id=DEFAULT_MODEL_NAME) -> _DummyAgent:
     """The default model takes tools natively, so the loop sends ``tools=``."""
     with patch("gaia.agents.base.agent.AgentSDK"):
@@ -76,6 +79,8 @@ def _make_agent(streaming: bool, model_id=DEFAULT_MODEL_NAME) -> _DummyAgent:
             max_consecutive_repeats=_REPEATS,
         )
     agent.streaming = streaming
+    # Most turns carry no note; pin one so "attached exactly once" is testable.
+    agent.verification_scope_statement = lambda: _NOTE
     return agent
 
 
@@ -155,7 +160,7 @@ def _answer(text: str) -> str:
 
 def _scope_lines(text: str) -> list:
     return [
-        line for line in text.splitlines() if line.startswith(VERIFICATION_SCOPE_PREFIX)
+        line for line in text.splitlines() if line.startswith(VERIFICATION_NOTE_OPENER)
     ]
 
 

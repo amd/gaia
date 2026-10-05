@@ -425,13 +425,34 @@ def fetch_manifest(
 # ---------------------------------------------------------------------------
 
 
-def _parse_version(version: str):
-    """Parse ``MAJOR.MINOR.PATCH[-prerelease]`` into a sortable key.
+def _prerelease_key(pre: str):
+    """Sortable key for a prerelease string, by SemVer identifier precedence.
 
-    A release sorts above its prereleases (1.0.0 > 1.0.0-rc.1), matching SemVer
-    precedence well enough for "is the catalog newer than what's installed".
+    Identifiers are compared dot-part by dot-part; a numeric one compares
+    numerically (``rc.2`` < ``rc.10``, which plain string order gets backwards)
+    and ranks below an alphanumeric one. A shorter identifier list sorts lower,
+    which tuple comparison gives for free.
     """
-    core, _, pre = version.partition("-")
+    key = []
+    for identifier in pre.split("."):
+        if identifier.isascii() and identifier.isdigit():
+            key.append((0, int(identifier), ""))
+        else:
+            key.append((1, 0, identifier))
+    return tuple(key)
+
+
+def _parse_version(version: str):
+    """Parse ``MAJOR.MINOR.PATCH[-prerelease][+build]`` into a sortable key.
+
+    A release sorts above its prereleases (1.0.0 > 1.0.0-rc.1) and build
+    metadata is ignored, matching the precedence the hub itself publishes
+    ``latest_version`` with (``workers/agent-hub/src/manifest.ts``).
+
+    Unreadable pieces are coerced rather than rejected: this is the catalog's
+    sort comparator, and it must order whatever the index happens to contain.
+    """
+    core, _, pre = version.partition("+")[0].partition("-")
     parts = []
     for piece in core.split("."):
         try:
@@ -441,7 +462,13 @@ def _parse_version(version: str):
     while len(parts) < 3:
         parts.append(0)
     # Release (no prerelease) ranks higher: use 1 for release, 0 for prerelease.
-    return (parts[0], parts[1], parts[2], 1 if not pre else 0, pre)
+    return (
+        parts[0],
+        parts[1],
+        parts[2],
+        1 if not pre else 0,
+        _prerelease_key(pre) if pre else (),
+    )
 
 
 def compare_versions(a: str, b: str) -> int:

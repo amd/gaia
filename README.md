@@ -22,11 +22,11 @@ The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** 
 
 ## Download
 
-[![Download for Windows](https://img.shields.io/badge/Download-Windows-0078d4?style=for-the-badge&logo=windows)](https://github.com/amd/gaia/releases/latest)
-[![Download for macOS](https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple)](https://github.com/amd/gaia/releases/latest)
-[![Download for Linux](https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/amd/gaia/releases/latest)
+[![Download for Windows](https://img.shields.io/badge/Download-Windows-0078d4?style=for-the-badge&logo=windows)](https://amd-gaia.ai/#install)
+[![Download for macOS](https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple)](https://amd-gaia.ai/#install)
+[![Download for Linux](https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://amd-gaia.ai/#install)
 
-See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/install.mdx) for setup instructions.
+One download for users: on Windows, one installer offers the desktop app, the terminal, or both. See [Install GAIA](https://amd-gaia.ai/docs/guides/install) for every platform, and its [For developers](https://amd-gaia.ai/docs/guides/install#for-developers) section for script, `pip`/`uv` and source installs.
 
 > **Note (Email agent):** the Email agent installs with `gaia hub install email`, which fetches a binary sidecar into your GAIA agents directory — no PyPI wheel and no Node.js toolchain required. An npm client is also published for embedding the agent in a JS/TS app.
 

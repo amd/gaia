@@ -14,6 +14,7 @@ from typing import Any, Dict
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.tool_cancellation import raise_if_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,51 @@ def _require_rag(host: Any) -> Any:
     return require_host_attr(host, "rag", "RAGToolsMixin", _RAG_HINT, _RAG_DOC_ANCHOR)
 
 
-def extract_page_from_chunk(chunk_text, chunk_index=-1, all_chunks=None):
+def _path_parts(path: str) -> list:
+    return [p for p in re.split(r"[\\/]+", path) if p]
+
+
+def _match_indexed_files(indexed_files, *queries: str) -> list:
+    """Resolve requested paths to indexed files, most specific tier first.
+
+    Tiers: exact path, trailing path components (``report.pdf`` or
+    ``docs/report.pdf``), then substring. The first non-empty tier wins, so
+    ``report.pdf`` never resolves to ``q3_report.pdf`` when ``report.pdf`` is
+    itself indexed. More than one result means the request is ambiguous.
+    """
+    files = sorted({str(f) for f in indexed_files})
+    queries = [q for q in queries if q]
+    query_parts = [_path_parts(q) for q in queries]
+
+    exact = [f for f in files if _path_parts(f) in query_parts]
+    if exact:
+        return exact
+
+    suffix = [
+        f
+        for f in files
+        if any(qp and _path_parts(f)[-len(qp) :] == qp for qp in query_parts)
+    ]
+    if suffix:
+        return suffix
+
+    return [f for f in files if any(q in f or str(Path(q)) in f for q in queries)]
+
+
+def _ambiguous_file_error(requested: str, candidates: list) -> Dict[str, Any]:
+    return {
+        "status": "error",
+        "error": (
+            f"Ambiguous filename '{requested}' — multiple indexed documents "
+            f"match: {candidates}. Retry with one of the full paths."
+        ),
+        "candidates": candidates,
+    }
+
+
+def extract_page_from_chunk(
+    chunk_text, chunk_index=-1, all_chunks=None, chunk_to_file=None
+):
     """
     Extract page number from chunk text or by looking at nearby chunks.
 
@@ -38,6 +83,8 @@ def extract_page_from_chunk(chunk_text, chunk_index=-1, all_chunks=None):
         chunk_text: The chunk text to extract page from
         chunk_index: Global index of this chunk (for looking backwards)
         all_chunks: List of all chunks (for looking backwards)
+        chunk_to_file: Global chunk index -> source file; when given, the
+            backward search stops at another document's chunks
 
     Returns:
         Page number as int, or None if not found
@@ -55,6 +102,11 @@ def extract_page_from_chunk(chunk_text, chunk_index=-1, all_chunks=None):
     # Strategy 3: Look backwards in previous chunks to find most recent page marker
     if chunk_index >= 0 and all_chunks:
         for prev_idx in range(chunk_index - 1, max(-1, chunk_index - 5), -1):
+            if chunk_to_file is not None and chunk_to_file.get(
+                prev_idx
+            ) != chunk_to_file.get(chunk_index):
+                # Indexed after another document: its pages are not this file's.
+                break
             if prev_idx < len(all_chunks):
                 prev_chunk = all_chunks[prev_idx]
                 match = re.search(r"\[Page (\d+)\]", prev_chunk)
@@ -82,6 +134,26 @@ class RAGToolsMixin:
     Note: File system search tools (search_file, search_directory, search_file_content)
     are provided by FileSearchToolsMixin from gaia.agents.tools.file_tools
     """
+
+    def _index_access_error(self, path: str):
+        """The refusal for indexing *path*, or None when it may be read.
+
+        Asks the user through the host's access prompt, like ``read_file``: a
+        silent refusal here left the model nothing to do but route around it.
+        """
+        validator = getattr(self, "path_validator", None)
+        if validator is not None:
+            allowed, reason = validator.validate_read(path)
+            if allowed:
+                return None
+            return {**NOT_EXECUTED, "status": "error", "error": reason}
+        if hasattr(self, "_is_path_allowed") and not self._is_path_allowed(path):
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": f"Access denied: '{path}' is not in allowed paths",
+            }
+        return None
 
     def register_rag_tools(self) -> None:
         """Register RAG-related tools."""
@@ -411,6 +483,7 @@ class RAGToolsMixin:
                         chunk,
                         chunk_indices[i] if i < len(chunk_indices) else -1,
                         rag.chunks,
+                        rag.chunk_to_file,
                     )
                     _entry = {
                         "chunk_id": i + 1,  # Sequential for display
@@ -510,6 +583,9 @@ class RAGToolsMixin:
 
         @tool(
             atomic=True,
+            # Indexes the file first when it isn't yet, so it needs index_document's
+            # cap; at the default a big PDF is abandoned mid-index and re-indexed.
+            timeout=600,
         )
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
@@ -541,37 +617,27 @@ class RAGToolsMixin:
                     else None
                 )
 
-                # Find the file in indexed files (normalize slashes for cross-platform matching)
                 auto_indexed = False
-                norm_path = str(Path(file_path))
-                matching_files = [
-                    f
-                    for f in rag.indexed_files
-                    if norm_path in str(f) or file_path in str(f)
-                ]
+                matching_files = _match_indexed_files(rag.indexed_files, file_path)
 
                 if not matching_files:
                     # Fuzzy basename fallback: agent may pass a guessed absolute path
                     # like "C:\Users\foo\document.md" when only "document.md" is indexed.
                     # Extract the basename and try an exact filename match.
                     basename = Path(file_path).name
-                    matching_files = [
-                        f for f in rag.indexed_files if Path(str(f)).name == basename
-                    ]
+                    matching_files = sorted(
+                        str(f)
+                        for f in rag.indexed_files
+                        if Path(str(f)).name == basename
+                    )
                     if len(matching_files) == 0:
                         # Auto-index the file if it exists on disk instead of failing.
                         # This avoids the slow fail → plan → index → re-query cycle.
                         if os.path.exists(file_path):
                             resolved = os.path.realpath(file_path)
-                            # Enforce path restrictions same as index_document does
-                            if hasattr(
-                                self, "_is_path_allowed"
-                            ) and not self._is_path_allowed(resolved):
-                                return {
-                                    **NOT_EXECUTED,
-                                    "status": "error",
-                                    "error": f"Access denied: '{resolved}' is not in allowed paths",
-                                }
+                            denied = self._index_access_error(resolved)
+                            if denied:
+                                return denied
                             logger.info(
                                 f"[query_specific_file] '{basename}' not indexed — "
                                 f"auto-indexing '{resolved}' before querying"
@@ -599,14 +665,9 @@ class RAGToolsMixin:
                                 # Re-match after auto-indexing
                                 # Include resolved (absolute) path since index_document
                                 # stores the absolute path, not the relative one passed in.
-                                matching_files = [
-                                    f
-                                    for f in rag.indexed_files
-                                    if norm_path in str(f)
-                                    or file_path in str(f)
-                                    or str(resolved) in str(f)
-                                    or Path(str(f)).name == basename
-                                ]
+                                matching_files = _match_indexed_files(
+                                    rag.indexed_files, resolved, file_path, basename
+                                )
                                 auto_indexed = True
                             else:
                                 return {
@@ -631,12 +692,6 @@ class RAGToolsMixin:
                                 "status": "error",
                                 "error": f"File '{file_path}' not found in indexed documents. Use search_files to find it first.",
                             }
-                    elif len(matching_files) > 1:
-                        ambiguous = [str(f) for f in matching_files]
-                        return {
-                            "status": "error",
-                            "error": f"Ambiguous filename '{basename}' — multiple matches found: {ambiguous}. Use the full path.",
-                        }
                     if auto_indexed:
                         logger.info(
                             f"[query_specific_file] Auto-indexed and resolved '{file_path}' "
@@ -648,8 +703,8 @@ class RAGToolsMixin:
                             f"resolved via basename to: {matching_files[0]}"
                         )
 
-                # For now, use the first match
-                # TODO: Let user disambiguate if multiple matches
+                if len(matching_files) > 1:
+                    return _ambiguous_file_error(file_path, matching_files)
                 target_file = matching_files[0]
 
                 # Generate search keys for better retrieval
@@ -949,6 +1004,7 @@ class RAGToolsMixin:
                         chunk,
                         chunk_indices[i] if i < len(chunk_indices) else -1,
                         rag.chunks,
+                        rag.chunk_to_file,
                     )
                     _entry = {
                         "chunk_id": i + 1,
@@ -1174,6 +1230,7 @@ class RAGToolsMixin:
         )
         def index_document(file_path: str) -> Dict[str, Any]:
             """Index a document with path validation and detailed statistics."""
+            file_path = os.path.expanduser(file_path)
             try:
                 if not self.rag:
                     return {
@@ -1208,14 +1265,9 @@ class RAGToolsMixin:
                         "total_indexed_files": len(self.indexed_files),
                     }
 
-                # Validate path with ChatAgent's internal logic (which uses allowed_paths)
-                if hasattr(self, "_is_path_allowed"):
-                    if not self._is_path_allowed(real_file_path):
-                        return {
-                            **NOT_EXECUTED,
-                            "status": "error",
-                            "error": f"Access denied: {real_file_path} is not in allowed paths",
-                        }
+                denied = self._index_access_error(real_file_path)
+                if denied:
+                    return denied
 
                 # Index the document (now returns dict with stats)
                 # Use real_file_path to ensure consistency in RAG index
@@ -1424,19 +1476,15 @@ class RAGToolsMixin:
                         "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
                     }
 
-                # Find the file in indexed files (normalize slashes for cross-platform matching)
-                norm_path = str(Path(file_path))
-                matching_files = [
-                    f
-                    for f in self.rag.indexed_files
-                    if norm_path in str(f) or file_path in str(f)
-                ]
+                matching_files = _match_indexed_files(self.rag.indexed_files, file_path)
 
                 if not matching_files:
                     return {
                         "status": "error",
                         "error": f"Document '{file_path}' not found in indexed documents. Use index_document first.",
                     }
+                if len(matching_files) > 1:
+                    return _ambiguous_file_error(file_path, matching_files)
 
                 target_file = matching_files[0]
 
@@ -1596,7 +1644,7 @@ Use the {summary_type} style for the content sections."""
                     # Use chat SDK to generate summary
                     try:
                         # Use RAG's chat SDK for summary generation
-                        response = self.rag.chat.send(prompt)
+                        response = self.rag.chat.send(prompt, no_history=True)
                         summary_text = response.text
 
                         return {
@@ -1622,6 +1670,8 @@ Use the {summary_type} style for the content sections."""
                 logger.info(f"Processing {num_sections} sections for summarization")
 
                 for section_num, section_text in enumerate(sections, 1):
+                    # An abandoned summary must stop, not keep the model busy.
+                    raise_if_cancelled()
                     logger.info(
                         f"Summarizing section {section_num}/{num_sections} ({len(section_text.split())} words)"
                     )
@@ -1638,8 +1688,9 @@ CRITICAL GROUNDING RULE: Only summarize information explicitly present in the se
 Generate a summary of this section:"""
 
                     try:
-                        # Use RAG's chat SDK for section summary
-                        response = self.rag.chat.send(section_prompt)
+                        # Each section stands alone: carried history put every
+                        # earlier section into the next request and overflowed.
+                        response = self.rag.chat.send(section_prompt, no_history=True)
                         segment_summary = response.text
 
                         section_summaries.append(
@@ -1696,7 +1747,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 
                 try:
                     # Use RAG's chat SDK for final summary synthesis
-                    response = self.rag.chat.send(final_prompt)
+                    response = self.rag.chat.send(final_prompt, no_history=True)
                     final_summary = response.text
 
                     return {
@@ -1753,17 +1804,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
                     }
 
-                # Find the file in indexed files (normalize slashes for cross-platform matching)
-                norm_name = (
-                    str(Path(file_name))
-                    if ("/" in file_name or "\\" in file_name)
-                    else file_name
-                )
-                matching_files = [
-                    f
-                    for f in self.rag.indexed_files
-                    if norm_name in str(f) or file_name in str(f)
-                ]
+                matching_files = _match_indexed_files(self.rag.indexed_files, file_name)
 
                 if not matching_files:
                     return {
@@ -1771,6 +1812,8 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         "error": f"Document '{file_name}' not found in indexed documents.",
                         "hint": "Use list_indexed_documents to see available documents.",
                     }
+                if len(matching_files) > 1:
+                    return _ambiguous_file_error(file_name, matching_files)
 
                 target_file = matching_files[0]
 
@@ -1867,7 +1910,7 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
                     }
 
-                dir_path = Path(directory_path).resolve()
+                dir_path = Path(directory_path).expanduser().resolve()
 
                 if not dir_path.exists():
                     return {

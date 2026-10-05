@@ -77,9 +77,10 @@ func (t RiskTier) Badge() string {
 // DESTRUCTIVE for everything says nothing, and crying wolf on the safe calls
 // is what makes the loud one ignorable.
 //
-// The shell tools stay Destructive because their name genuinely does not bound
-// what they do: `run_shell_command` is `pwd` on one call and `rm -rf` on the
-// next. The file writers are Write — scoped, and visible afterwards.
+// The shell and code runners stay Destructive because their name genuinely does
+// not bound what they do: `run_shell_command` is `pwd` on one call and `rm -rf`
+// on the next, `run_python` a groupby or a shutil.rmtree. The file writers and
+// CLI setup are Write — scoped, and visible afterwards.
 var confirmationRiskTiers = map[string]RiskTier{
 	"share_engineering_context":   RiskWrite,
 	"append_engineering_context":  RiskWrite,
@@ -96,6 +97,12 @@ var confirmationRiskTiers = map[string]RiskTier{
 
 	"run_shell_command":   RiskDestructive,
 	"run_cli_command":     RiskDestructive,
+	"wait_for_condition":  RiskDestructive,
+	"run_python":          RiskDestructive,
+	"execute_python_file": RiskDestructive,
+	"install_cli":         RiskWrite,
+	"sign_in_cli":         RiskWrite,
+	"notify_desktop":      RiskWrite,
 	"write_file":          RiskWrite,
 	"write_python_file":   RiskWrite,
 	"edit_file":           RiskWrite,
@@ -105,13 +112,20 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"update_gaia_md":      RiskWrite,
 	"install_skill":       RiskWrite,
 	"remove_skill":        RiskWrite,
+	// Not a tool: PathValidator asking to widen this session's scope by one path (reads and changes).
+	"allow_path_access": RiskWrite,
 }
 
 // unboundedRiskActions are tiered Destructive because their name does not bound
 // what they do — NOT because the call in front of the user is destructive.
-var unboundedRiskActions = map[string]bool{
-	"run_shell_command": true,
-	"run_cli_command":   true,
+// The value names what the user is approving, and whether it reads as a command
+// or as code decides which text on screen the warning points at.
+var unboundedRiskActions = map[string]string{
+	"run_shell_command":   "command",
+	"run_cli_command":     "command",
+	"wait_for_condition":  "command",
+	"run_python":          "code",
+	"execute_python_file": "code",
 }
 
 // destructiveWarning is the sentence shown beneath a RiskDestructive summary.
@@ -128,9 +142,13 @@ var unboundedRiskActions = map[string]bool{
 // piece of information that actually settles it: the command, already on screen
 // directly above this line.
 func destructiveWarning(action string) string {
-	if unboundedRiskActions[action] {
+	switch unboundedRiskActions[action] {
+	case "command":
 		return "A shell command can read, change, or delete anything you can — " +
 			"check the command above before approving."
+	case "code":
+		return "Python code can read, change, or delete anything you can — " +
+			"check the code above before approving."
 	}
 	return "This is a destructive action and may not be reversible."
 }

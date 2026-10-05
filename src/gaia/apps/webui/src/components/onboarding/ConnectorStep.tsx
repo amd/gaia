@@ -121,7 +121,7 @@ export function ConnectorStep({ connectorId = 'google' }: ConnectorStepProps) {
             <h2>Connect an app <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.9rem' }}>(optional)</span></h2>
             <p className="lede">
                 Some agents (like Email triage) work with your accounts. Connect now, or skip
-                and do it later from Settings.
+                and do it later from Settings → Connectors.
             </p>
 
             <div className="connector-choice">
@@ -134,11 +134,15 @@ export function ConnectorStep({ connectorId = 'google' }: ConnectorStepProps) {
                     <span className="cc-connected" data-testid="connector-connected">
                         <CheckCircle2 size={15} /> Connected
                     </span>
+                ) : !connector.configurable ? (
+                    <span className="cc-later" data-testid="connector-needs-setup">
+                        Set up later
+                    </span>
                 ) : (
                     <button
                         className="onboarding-btn primary"
                         onClick={connect}
-                        disabled={connecting || !connector.configurable}
+                        disabled={connecting}
                         data-testid="connector-connect"
                     >
                         {connecting ? <Loader2 size={15} className="onboarding-spin" /> : <Link2 size={15} />}
@@ -147,11 +151,11 @@ export function ConnectorStep({ connectorId = 'google' }: ConnectorStepProps) {
                 )}
             </div>
 
-            {!connector.configurable && connector.config_error && (
-                <div className="onboarding-banner warn">
-                    <XCircle size={18} />
-                    <div>{connector.config_error}</div>
-                </div>
+            {!connector.configurable && (
+                <p className="lede" data-testid="connector-setup-note">
+                    {connector.display_name} needs a one-time setup with your own sign-in
+                    credentials first. You can do it any time from Settings → Connectors.
+                </p>
             )}
 
             {error && (

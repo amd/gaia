@@ -167,6 +167,63 @@ def test_a_missing_binary_with_a_substitute_does_not_refuse_the_skill(monkeypatc
     assert not BINARY_POLICIES["gh"].substitute, "gh has no substitute, so it refuses"
 
 
+def _only_on_path(monkeypatch, *names):
+    monkeypatch.setattr(
+        "gaia.skills.binaries.shutil.which",
+        lambda name: f"C:/Python/{name}.exe" if name in names else None,
+    )
+
+
+@pytest.mark.parametrize(
+    "installed,missing_name",
+    [
+        # Stock Windows installs `python`, not `python3`.
+        ("python", "python3"),
+        # Debian/Ubuntu without python-is-python3 installs only `python3`.
+        ("python3", "python"),
+    ],
+)
+def test_one_missing_python_name_does_not_refuse_a_skill_that_declares_both(
+    monkeypatch, installed, missing_name
+):
+    """The coding skill declares both names, and was refused outright wherever
+    only one of them is installed."""
+    from gaia.skills.binaries import unavailable_binaries
+
+    _only_on_path(monkeypatch, installed, "git")
+    permissions = parse_permissions(
+        ["shell:execute:python", "shell:execute:python3", "shell:execute:git"],
+        skill_name="coding",
+    )
+
+    granted = resolve_binary_policies(permissions, skill_name="coding")
+
+    assert [p.binary for p in granted] == [installed, "git"]
+    (missing,) = unavailable_binaries(permissions)
+    assert missing.binary == missing_name
+    assert (
+        f"run `{installed}` wherever it says `{missing_name}`"
+        in missing.unavailable_note()
+    )
+
+
+def test_the_alias_must_be_declared_too(monkeypatch):
+    """`python` on PATH covers nothing if the skill was never granted it."""
+    _only_on_path(monkeypatch, "python")
+    permissions = parse_permissions(["shell:execute:python3"], skill_name="t")
+    with pytest.raises(SkillPermissionError, match="'python3' command"):
+        resolve_binary_policies(permissions, skill_name="t")
+
+
+def test_no_python_under_either_name_still_refuses(monkeypatch):
+    _only_on_path(monkeypatch)
+    permissions = parse_permissions(
+        ["shell:execute:python", "shell:execute:python3"], skill_name="coding"
+    )
+    with pytest.raises(SkillPermissionError, match="not on PATH"):
+        resolve_binary_policies(permissions, skill_name="coding")
+
+
 def test_an_installed_binary_is_never_reported_unavailable(monkeypatch):
     from gaia.skills.binaries import unavailable_binaries
 
@@ -1787,6 +1844,15 @@ def test_every_new_binary_is_pinned_at_all_three_tiers():
 )
 def test_an_allowed_binary_cannot_run_a_different_one(command, mechanism):
     assert verdict(command) == REFUSE, f"bypass reopened: {mechanism}"
+
+
+def test_python_c_refusal_names_the_snippet_tool():
+    """Told only "write it to a file", models wrote repro scripts into the repo."""
+    argv = shlex.split("python -c 'print(1)'")
+    decision = classify_invocation(BINARY_POLICIES["python"], argv)
+    assert decision.outcome == REFUSE
+    assert "run_python" in decision.message
+    assert "outside the repository" in decision.message
 
 
 @pytest.mark.parametrize(

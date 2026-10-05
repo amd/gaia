@@ -271,21 +271,9 @@ print(result)
     ```
   </Accordion>
 
-  <Accordion title="Voice Mode: No Module Named 'pip'">
-    If `gaia talk` fails with "No module named 'pip'", install dependencies manually:
-
-    ```bash
-    # Install talk dependencies
-    uv pip install -e ".[talk]"
-
-    # If the error persists, install pip in your environment
-    python -m ensurepip --upgrade
-    ```
-  </Accordion>
-
   <Accordion title="PDF Issues">
     - Ensure PDF has extractable text (not scanned images)
-    - Check file is not password-protected
+    - Check the PDF does not need a password to open — remove it with `qpdf --decrypt --password=YOUR_PASSWORD in.pdf out.pdf` (PDFs with only permission restrictions index fine)
     - Verify file is not corrupted
   </Accordion>
 
@@ -295,7 +283,7 @@ print(result)
     chat.enable_rag(documents=["doc.pdf"], chunk_size=300, max_chunks=2)
 
     # Better quality
-    chat.enable_rag(documents=["doc.pdf"], chunk_size=600, max_chunks=5, chunk_overlap=100)
+    chat.enable_rag(documents=["doc.pdf"], chunk_size=500, max_chunks=5, chunk_overlap=100)
 
     # Memory efficient
     chat.enable_rag(documents=["doc.pdf"], chunk_size=400, max_chunks=2)

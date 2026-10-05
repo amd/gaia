@@ -26,7 +26,7 @@ from gaia.agents.registry import (
 )
 from gaia.llm.lemonade_client import resolve_lemonade_base_url
 from gaia.llm.lemonade_launcher import describe_client_hint
-from gaia.llm.providers.lemonade import LemonadeError, LemonadeNetworkError
+from gaia.llm.providers.lemonade import LemonadeError
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -132,11 +132,10 @@ def _select_builder_model(base_url: str) -> str:
 
     Distinguishes "Lemonade unreachable" (retryable, connectivity problem)
     from "reachable but nothing usable is installed" (not retryable, needs a
-    model install) — the two need different remediation.
+    model install) — the two need different remediation. A failed lookup
+    propagates from ``get_lemonade_models`` as a typed ``LemonadeError``.
     """
     available = get_lemonade_models(base_url)
-    if available is None:
-        raise LemonadeNetworkError()
 
     selected = resolve_preferred_model(BUILDER_PREFERRED_MODELS, available)
     if selected is None:

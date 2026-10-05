@@ -129,11 +129,20 @@ does not install. Required before any query succeeds:
 
 1. Lemonade **10.2.0 or newer**, running. GAIA's daemon starts and supervises
    one, so `gaia daemon start` is normally all that is needed (`gaia init`
-   also installs and starts it on first run).
-2. The default model downloaded (`gaia init`). `gaia download` takes **no**
-   model argument — naming one makes it exit 2. To pull a single model instead,
-   repeat the command `GET /v1/gaia/init` gives you: it names the Lemonade
-   client this machine actually has. Do not invent one.
+   also installs and starts it on first run). Qwen3.8 Flash Next needs
+   **v2026.39.1 or newer**, the version `gaia init` installs; older servers
+   cannot load it.
+2. The machine's default chat model downloaded — run `gaia init`. It picks
+   `Qwen3.6-35B-A3B-GGUF` where a GPU holds it (~27 GB for models,
+   weights plus context cache — a 64 GB+ Strix Halo or a 32 GB GPU) and
+   `Gemma-4-E4B-it-GGUF` everywhere else, CPU-only PCs included, and records the pick as
+   `default_model` in `~/.gaia/config.json`. On 128 GB-class PCs the user may
+   switch to the multimodal `user.Qwen3.8-Flash-Next-GGUF` with `gaia config set
+   default_model`. `model.id` below names whichever this machine uses.
+   `gaia download` takes **no** model argument — naming one makes it exit 2. To
+   pull a single model instead, repeat the command `GET /v1/gaia/init` gives
+   you: it names the Lemonade client this machine actually has. Do not invent
+   one.
 
 Do not guess — ask the sidecar. `GET /v1/gaia/init` is a read-only preflight
 (it never pulls or loads) that probes Lemonade, compares its version to the
@@ -222,6 +231,12 @@ await shutdown(proc);   // tree-kill; auto-cleanup also reaps on exit
   file path); read it from there, don't invent one. A 401 whose `detail` names
   both env vars means you sent the wrong token or none.
 
+  The programs the agent starts (shell commands, MCP servers, CLI installs and
+  sign-ins, native hub agents, media tools) never inherit this token
+  or GAIA's other internal credentials. To withhold your own variables from
+  them too, list the names in `GAIA_CHILD_ENV_DENY` (comma or space separated);
+  `GAIA_NO_DOTENV=1` stops the sidecar loading `.env` files.
+
 Or skip the code entirely and let the CLI own it:
 
 ```bash
@@ -301,7 +316,7 @@ The canonical event shapes, as emitted:
 
 | Event | Shape |
 |---|---|
-| `status` | `{ type, message }` — progress and reasoning narration |
+| `status` | `{ type, message, phase?, words?, chars? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`) names what the model is doing; show it as the live line, not as narration |
 | `token` | `{ type, delta }` — answer text to append |
 | `tool_call` | `{ type, tool, args }` |
 | `tool_result` | `{ type, tool, data, render? }` |
@@ -341,7 +356,7 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Twelve of the agent's 96 tools mutate the machine and need explicit approval
+Twelve of the agent's 95 tools mutate the machine and need explicit approval
 before they run. Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
@@ -492,10 +507,12 @@ precedent, because loading several skill bodies into every prompt costs tokens
 and no eval has measured that trade for this agent yet. Re-enabling is
 uncommenting two blocks; no code change.
 
-So today there is nothing for `GAIA_SKILL_SET` to select — leave it unset. Once
-a release declares sets, `GAIA_SKILL_SET` is the selection channel for the
-packaged sidecar (its CLI accepts only `--host` and `--port`), and an undeclared
-name raises naming the valid sets rather than falling back to a default. Beyond
+So today there is nothing for `GAIA_SKILL_SET` to select — leave it unset; any
+value stops the agent at startup (the sidecar exits non-zero before binding its
+port). Once a release declares sets, `GAIA_SKILL_SET` is the selection channel
+for the packaged sidecar (its CLI accepts only `--host` and `--port`), and an
+undeclared name stops startup naming the valid sets rather than falling back to
+a default. Beyond
 `gaia-voice`, do not design around a skill being on by default.
 
 ## 11. The project map — two things it costs you
@@ -511,11 +528,12 @@ Two consequences an integrator needs to plan for:
 - **Up to 600 prompt tokens, every turn.** That is the enforced ceiling
   (1.8% of the NPU profile's 32K window), not a typical value — budget it
   alongside `gaia-voice`'s 702.
-- **A background embedding pass on first contact with a new repository.** If
-  the repo has no [code index](https://amd-gaia.ai/docs/guides/code-index), the
-  map starts one in a background thread so semantic search is ready when it is
-  needed. On a large monorepo that is minutes of local embedding.
-  `GAIA_PROJECT_MAP_AUTO_INDEX=0` turns it off.
+- **An embedding pass on the first semantic code search.** If the repo has no
+  [code index](https://amd-gaia.ai/docs/guides/code-index), the first
+  `search_code_index` builds it, then searches. On a large monorepo that one
+  search takes minutes of local embedding; a task that never searches pays
+  nothing. `GAIA_PROJECT_MAP_AUTO_INDEX=1` builds it in the background at task
+  start instead.
 
 The sidecar's CLI accepts only `--host` and `--port`, so pointing the map at a
 specific project means `GAIA_PROJECT_ROOT=/path/to/repo` in its environment, or

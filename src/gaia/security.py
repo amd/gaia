@@ -406,6 +406,17 @@ def _normalize_macos_symlinks(path_str: str) -> str:
     return path_str
 
 
+# A copy of a refused file is the same data: the model must ask, not relocate it.
+_NO_WORKAROUND = (
+    " Do not copy, move or convert it to another location to get around this."
+)
+
+
+def _system_temp_roots() -> Set[str]:
+    """Shared temp directories, which stay out of every agent's scope."""
+    return {tempfile.gettempdir(), "/tmp", "/var/tmp"}
+
+
 def stable_scratch_dir(anchor: str) -> Path:
     """The agent's scratch directory for *anchor* (a project), the same every session.
 
@@ -518,6 +529,7 @@ class PathValidator:
         self._on_prompt_start = on_prompt_start
         self._on_prompt_end = on_prompt_end
         self._interactive_check = interactive_check
+        self._access_prompt: Optional[Callable[[Path], bool]] = None
 
         # Load persisted paths
         self._load_persisted_paths()
@@ -625,6 +637,53 @@ class PathValidator:
         self.allowed_paths.add(Path(path).resolve())
         logger.debug(f"Added allowed path: {path}")
 
+    def set_access_prompt(self, prompt: Optional[Callable[[Path], bool]]) -> None:
+        """Ask through *prompt* instead of stdin when a path is out of scope.
+
+        Hosts whose user is not on this process's stdin (Agent UI, TUI) pass a
+        callable that shows their own confirmation dialog. It receives the
+        resolved path and returns True only when the user approved. Approval
+        adds that exact path — the folder, or the single file — to this
+        validator's in-memory scope; it is never persisted. Protected, temp,
+        secret and whole-drive/home paths are refused without asking.
+
+        Args:
+            prompt: The callable, or None to restore the stdin prompt.
+        """
+        self._access_prompt = prompt
+
+    def _unaskable_reason(self, path: Path) -> str:
+        """Why *path* stays refused whatever the user answers, or "".
+
+        Args:
+            path: A symlink-resolved path outside the allowlist.
+
+        Returns:
+            A reason when no approval may grant *path*, else "".
+        """
+        read_blocked, reason = self.is_read_blocked(str(path))
+        if read_blocked:
+            return reason
+        write_blocked, reason = self.is_write_blocked(str(path))
+        if write_blocked:
+            return reason
+        for root in _system_temp_roots():
+            if _path_is_within(path, Path(os.path.realpath(root))):
+                return f"'{path}' is inside the system temp directory '{root}'"
+        # One click must not hand over a whole drive or the home tree.
+        if path == Path(path.anchor) or _path_is_within(Path.home().resolve(), path):
+            return f"'{path}' is too broad a grant: it covers the drive or home folder"
+        # Nor a folder that holds somewhere no answer may grant.
+        refused_roots = [
+            *(os.path.realpath(root) for root in _system_temp_roots()),
+            *BLOCKED_DIRECTORIES,
+            *SECRET_DIRECTORIES,
+        ]
+        for root in refused_roots:
+            if _path_is_within(Path(root), path):
+                return f"'{path}' is too broad a grant: it contains '{root}'"
+        return ""
+
     def _can_prompt(self) -> bool:
         """True when a blocking ``input()`` would actually reach the requester."""
         if not _is_interactive():
@@ -668,14 +727,42 @@ class PathValidator:
         if self.scratch_dir is None:
             return ""
         real_path = Path(os.path.realpath(path))
-        temp_roots = {tempfile.gettempdir(), "/tmp", "/var/tmp"}
-        for root in temp_roots:
+        for root in _system_temp_roots():
             if _path_is_within(real_path, Path(os.path.realpath(root))):
                 return (
                     f" The system temp directory is off-limits; put temporary "
                     f"files in your scratch directory instead: {self.scratch_dir}"
                 )
         return ""
+
+    def access_denied_message(self, path: str) -> str:
+        """The error for an out-of-scope *path*, with a remedy this host offers.
+
+        Args:
+            path: The path that was refused.
+
+        Returns:
+            ``Access denied: '<path>' is not in allowed paths.`` followed by what
+            the user can actually do about it here.
+        """
+        message = f"Access denied: '{path}' is not in allowed paths."
+        real_path = Path(os.path.realpath(path))
+        unaskable = self._unaskable_reason(real_path)
+        if unaskable:
+            remedy = f" No approval can grant it: {unaskable.rstrip('.')}."
+        elif self._access_prompt is not None or self._can_prompt():
+            remedy = (
+                " To use it, ask again and approve access when prompted, or "
+                "attach the file to this chat."
+                f"{_NO_WORKAROUND}"
+            )
+        else:
+            remedy = (
+                " Attach the file to this session, or start the agent with an "
+                "allowed_paths list that covers it."
+                f"{_NO_WORKAROUND}"
+            )
+        return f"{message}{remedy}{self.scratch_hint(path)}"
 
     def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         """
@@ -745,8 +832,12 @@ class PathValidator:
         In non-interactive environments (Agent UI, API server, CI) ``input()``
         would block the thread indefinitely. Detect that and auto-deny so the
         agent surfaces a clean "access denied" error instead of hanging.
-        Interactive CLI usage (TTY) still prompts normally.
+        Interactive CLI usage (TTY) still prompts normally. A host-supplied
+        prompt (:meth:`set_access_prompt`) replaces both.
         """
+        if self._access_prompt is not None:
+            return self._ask_host_for_access(path)
+
         if not self._can_prompt():
             logger.warning(
                 "Path %s outside allowlist; auto-denying (no interactive "
@@ -789,6 +880,19 @@ class PathValidator:
                     return False
 
                 print("Please answer 'y', 'n', or 'a'.")
+
+    def _ask_host_for_access(self, path: Path) -> bool:
+        """Grant *path* for this session if the host's prompt approves it."""
+        reason = self._unaskable_reason(path)
+        if reason:
+            logger.warning("Path %s outside allowlist; not asking: %s", path, reason)
+            return False
+        if self._access_prompt(path) is not True:
+            logger.warning("User denied access to: %s", path)
+            return False
+        self.allowed_paths.add(path)
+        logger.info("User allowed access to %s for this session", path)
+        return True
 
     # ── Read Guardrails ───────────────────────────────────────────────
 
@@ -854,12 +958,7 @@ class PathValidator:
             Tuple of (is_allowed, reason). If not allowed, reason explains why.
         """
         if not self.is_path_allowed(path, prompt_user=prompt_user):
-            return (
-                False,
-                f"Access denied: '{path}' is not in allowed paths. Attach the "
-                f"file to this session, or start the agent with an "
-                f"allowed_paths list that covers it.{self.scratch_hint(path)}",
-            )
+            return (False, self.access_denied_message(path))
 
         is_blocked, reason = self.is_read_blocked(path)
         if is_blocked:
@@ -976,11 +1075,7 @@ class PathValidator:
         """
         # 1. Check allowlist
         if not self.is_path_allowed(path, prompt_user=prompt_user):
-            return (
-                False,
-                f"Access denied: '{path}' is not in allowed paths."
-                f"{self.scratch_hint(path)}",
-            )
+            return (False, self.access_denied_message(path))
 
         # 2. Check blocked directories and sensitive files
         is_blocked, reason = self.is_write_blocked(path)

@@ -29,6 +29,7 @@ except ImportError as _watchdog_err:
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
 from gaia_agent_chat.session import SessionManager
 from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
+from gaia_agent_chat.tool_requests import requested_tools
 
 from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.checks import (
@@ -72,8 +73,8 @@ from gaia.llm.inference_location import (
     resolve_inference_location,
 )
 from gaia.llm.lemonade_client import (
-    DEFAULT_MODEL_NAME,
     is_tool_calling_model,
+    resolve_default_chat_model,
     resolve_lemonade_base_url,
 )
 from gaia.mcp.mixin import MCPClientMixin
@@ -88,6 +89,9 @@ from gaia.vlm.mixin import VLMToolsMixin
 # (which legitimately caches ``None``) is never mistaken for "not attempted
 # yet" and rebuilt on every access.
 _UNSET = object()
+
+#: Longest request_user_input waits for an answer, in seconds.
+USER_INPUT_MAX_WAIT_S = 600
 
 # Tools that create files; an agent with none of them gets no scratch directory.
 _FILE_CREATING_TOOLS = frozenset(
@@ -366,8 +370,8 @@ class ChatAgent(
         else:
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
-        # Use the configured default model (Gemma) when no explicit model is set
-        effective_model_id = config.model_id or DEFAULT_MODEL_NAME
+        # No explicit model: the machine's default (config default_model, else Gemma)
+        effective_model_id = config.model_id or resolve_default_chat_model()
 
         # Debug logging for model selection
         logger.debug(
@@ -536,11 +540,7 @@ class ChatAgent(
             output_handler=config.output_handler,
             debug=config.debug,
             device=config.device,
-            min_context_size=(
-                config.min_context_size
-                if config.min_context_size is not None
-                else 32768
-            ),
+            min_context_size=config.min_context_size,
             max_output_tokens=config.max_output_tokens,
             context_eviction=config.context_eviction,
             context_eviction_threshold_tokens=config.context_eviction_threshold_tokens,
@@ -621,6 +621,21 @@ class ChatAgent(
         if self.watch_directories:
             self._start_watching()
 
+    def _indexed_documents_line(self) -> str:
+        """``[Indexed documents: a.pdf, b.txt]``, or "" when none are indexed."""
+        profile = getattr(self.config, "prompt_profile", "full")
+        if "doc_rag" not in get_profile_spec(profile).tool_groups:
+            return ""
+        if not (self.rag and self.rag.indexed_files):
+            return ""
+        names = sorted({Path(fp).name for fp in self.rag.indexed_files})
+        return f"[Indexed documents: {', '.join(names)}]"
+
+    def get_memory_dynamic_context(self) -> str:
+        """Per-turn context, plus which documents are indexed right now."""
+        parts = (super().get_memory_dynamic_context(), self._indexed_documents_line())
+        return "\n".join(part for part in parts if part)
+
     # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
 
     @property
@@ -630,7 +645,7 @@ class ChatAgent(
         Agent UI's ``_chat_helpers.py`` read ``agent.rag`` directly).
 
         Degrades to ``None`` on failure and never raises — the lean "chat"
-        profile still reads ``self.rag`` every turn via ``has_indexed``
+        profile still reads ``self.rag`` every turn via ``_indexed_documents_line``
         (gated so it never reaches this for chat/file/data/web, but a raise
         here would crash any profile that does). Cached after the first
         build attempt (success or failure) — never retried.
@@ -655,7 +670,8 @@ class ChatAgent(
             # was already logged there) — nothing to retry.
             return None
         try:
-            return RAGSDK(self._rag_config)
+            # Shared, so access the user grants mid-chat reaches indexing too.
+            return RAGSDK(self._rag_config, path_validator=self.path_validator)
         except Exception as e:
             logger.warning(
                 "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
@@ -842,6 +858,10 @@ class ChatAgent(
         join the same signal, ahead of recalled-procedure tools: the user's
         skill is the stronger signal. A skill stops contributing when the body
         filter hides it or it is unloaded.
+
+        Tools the current message explicitly asks for (``requested_tools``)
+        go ahead of both: semantic ranking alone dropped ``run_shell_command``
+        from "use your shell tool to run pwd".
         """
         if not self._dynamic_tools_active():
             return None
@@ -856,7 +876,10 @@ class ChatAgent(
             if name not in skill_tools:
                 skill_tools.append(name)
         return self.tool_loader.select(
-            query, self._tools_registry, skill_tools=skill_tools
+            query,
+            self._tools_registry,
+            skill_tools=skill_tools,
+            requested_tools=requested_tools(user_input, self._tools_registry),
         )
 
     def _admit_skill_tools(self, names: List[str]) -> None:
@@ -985,7 +1008,7 @@ class ChatAgent(
             else getattr(config, "model_id", None)
         )
         return resolve_inference_location(
-            model or DEFAULT_MODEL_NAME,
+            model or resolve_default_chat_model(),
             use_claude=use_claude,
             use_openai=bool(getattr(config, "use_chatgpt", False)),
         )
@@ -995,74 +1018,37 @@ class ChatAgent(
         profile = getattr(self.config, "prompt_profile", "full")
         spec = get_profile_spec(profile)
 
-        # Get list of indexed documents
-        indexed_docs_section = ""
-        # Gate on profile BEFORE touching ``self.rag`` — for chat/file/data/web
-        # (which never register RAG tools) this must never trigger the lazy
-        # RAG build (#2323 Increment 3); only doc/full read it here.
-        has_indexed = "doc_rag" in spec.tool_groups and bool(
-            self.rag and self.rag.indexed_files
-        )
+        # The indexed set changes mid-conversation; listing it here would
+        # re-read the whole prompt on every index. It arrives per turn instead
+        # (``get_memory_dynamic_context``), so these rules never change.
+        has_rag = "doc_rag" in spec.tool_groups
         has_library = hasattr(self, "library_documents") and self.library_documents
 
-        if has_indexed:
-            doc_names = sorted({Path(fp).name for fp in self.rag.indexed_files})
-            n_docs = len(doc_names)
+        indexed_docs_section = ""
+        if has_rag:
+            indexed_docs_section = """
+**INDEXED DOCUMENTS:**
+When documents are indexed, the user's message includes a line `[Indexed documents: ...]`. The one in the latest message is current — you never need to check what is indexed. With no such line in the latest message, nothing is indexed: answer general questions and greetings from your knowledge, use the SMART DISCOVERY WORKFLOW below for domain-specific questions, and do NOT call query_documents or query_specific_file.
 
-            # When exactly one doc is indexed, references like "this document",
-            # "the document", "what is this about?" are unambiguous — answer
-            # from that doc without asking for clarification. The "ask which
-            # one" rule applies only when 2+ docs are indexed (#1030 follow-up:
-            # the trim accidentally weakened this case so Gemma started asking
-            # which document with only one indexed file present).
-            if n_docs == 1:
-                only = doc_names[0]
-                resolution_rule = (
-                    f"**SINGLE-DOC RESOLUTION (CRITICAL):** Exactly one document "
-                    f'is indexed: `{only}`. References like "this document", '
-                    f'"the document", "the file", "it", "what is this '
-                    f'about?", or any unqualified question ALL refer to '
-                    f"`{only}`. NEVER ask the user to clarify which document — "
-                    f"there is only one. Call `query_specific_file` "
-                    f"with file_path=`{only}` immediately and answer from the "
-                    f"retrieved chunks."
-                )
-            else:
-                resolution_rule = (
-                    "**MULTI-DOC RESOLUTION:** Multiple documents are indexed. "
-                    "If the user's question clearly names or implies one (e.g., "
-                    '"the financial report", "the handbook"), `query_specific_file` '
-                    'that one. If the question is vague ("summarize the doc", '
-                    '"what does it say?") and could mean any of them, ask which '
-                    "one before querying. For broad cross-doc questions, use "
-                    "`query_documents` to search all indexed files at once."
-                )
+**MANDATORY RULE — RAG-FIRST:** When the user asks ANY question about the content, data, pricing, features, or details of a listed document, you MUST call `query_documents` or `query_specific_file` BEFORE answering. Do NOT answer document-specific questions from your training knowledge.
 
-            indexed_docs_section = f"""
-**CURRENTLY INDEXED DOCUMENTS:**
-You have {n_docs} document(s) already indexed and ready to search:
-{chr(10).join(f'- {name}' for name in doc_names)}
+**SINGLE-DOC RESOLUTION (CRITICAL):** When exactly one document is listed, references like "this document", "the document", "the file", "it", "what is this about?", or any unqualified question ALL refer to it. NEVER ask the user which document — call `query_specific_file` on it immediately and answer from the retrieved chunks.
 
-**MANDATORY RULE — RAG-FIRST:** When the user asks ANY question about the content, data, pricing, features, or details from these documents, you MUST call `query_documents` or `query_specific_file` BEFORE answering. Do NOT answer document-specific questions from your training knowledge — always retrieve from the indexed documents first.
+**MULTI-DOC RESOLUTION:** When several are listed and the question names or implies one (e.g., "the financial report", "the handbook"), `query_specific_file` that one. If a vague question ("summarize the doc", "what does it say?") could mean any of them, ask which one before querying. For broad cross-doc questions, use `query_documents` to search all indexed files at once.
 
-{resolution_rule}
-
-**ANTI-RE-INDEX RULE:** These documents are already indexed. Do NOT call `index_document` for any of these files again. Query them directly.
-
-You do NOT need to check what's indexed first — this list is always up-to-date.
+**ANTI-RE-INDEX RULE:** Listed documents are already indexed. Do NOT call `index_document` for them again. Query them directly.
 """
-        elif has_library:
-            # Documents are in the library but NOT yet indexed.
-            # The agent should NOT auto-index them; let the user choose.
+        if has_rag and has_library:
+            # The agent should NOT auto-index the library; let the user choose.
             lib_entries = []
             for fp in sorted(self.library_documents, key=lambda p: Path(p).name):
                 lib_entries.append(f"- {Path(fp).name} (path: {fp})")
-            indexed_docs_section = f"""
-**DOCUMENT LIBRARY (not yet indexed):**
+            indexed_docs_section += f"""
+**DOCUMENT LIBRARY:**
 The user has {len(self.library_documents)} document(s) available in their library:
 {chr(10).join(lib_entries)}
 
-These documents are NOT yet loaded into the search index. To search a document, you must first index it using the index_document tool with the file path above.
+A library document not named in the `[Indexed documents: ...]` line is not yet in the search index. To search it, first index it using the index_document tool with the file path above.
 
 **CRITICAL RULES:**
 - Do NOT automatically index all documents. Only index what the user specifically asks about.
@@ -1070,14 +1056,6 @@ These documents are NOT yet loaded into the search index. To search a document, 
 - When the user asks about a SPECIFIC document by name, index ONLY that document and then answer.
 - When the user asks "what documents do you have?" or "what's indexed?", simply list the documents above. Do NOT trigger indexing.
 - For general questions (greetings, knowledge questions), answer normally without indexing anything.
-"""
-        else:
-            indexed_docs_section = """
-**CURRENTLY INDEXED DOCUMENTS:**
-No documents are currently indexed.
-- For general questions and greetings: answer from your knowledge.
-- For domain-specific questions: use the SMART DISCOVERY WORKFLOW below.
-- Do NOT call query_documents or query_specific_file on empty indexes.
 """
 
         # Build the prompt — single consolidated platform block (current OS only)
@@ -1228,9 +1206,9 @@ No documents are currently indexed.
         # without the per-rule example explosion that was inflating the prompt
         # past Gemma's iGPU prompt-processing budget (#1030).
         rag_query_rules = ""
-        if has_indexed:
+        if has_rag:
             rag_query_rules = """
-**RAG ANSWERING RULES (documents are indexed):**
+**RAG ANSWERING RULES (when documents are indexed):**
 
 1. **FACTUAL ACCURACY RULE — always retrieve before answering.** Any factual question about indexed documents (numbers, dates, names, policies, sections) → call `query_specific_file` or `query_documents` first, then answer from the retrieved chunks. Don't answer from training knowledge, even if you "know" the topic. This applies on every turn — "indexed" means stored in the RAG index, NOT in your context window.
 
@@ -1271,9 +1249,16 @@ No documents are currently indexed.
 
 **FILE BROWSING:** browse_directory (navigate), list_recent_files (recent), get_file_info (metadata).
 
-**IMAGE GENERATION (when SD enabled):** Always CALL `generate_image` first. Don't pre-announce availability. If it errors, state unavailable in 1-2 sentences (mention `--sd` flag); don't apologize or describe what you would have done.
-
 **UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`. Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process.
+"""
+        # A rule about a tool the session lacks made the model offer images.
+        if getattr(self.config, "enable_sd_tools", False):
+            data_file_rules += """
+**IMAGE GENERATION:** Always CALL `generate_image` first. Don't pre-announce availability. If it errors, state unavailable in 1-2 sentences (mention `--sd` flag); don't apologize or describe what you would have done.
+"""
+        else:
+            data_file_rules += """
+**IMAGE GENERATION:** Not available in this session. Never offer or claim it.
 """
 
         # Native-only escape-hatch menu (#1450): non-native models already
@@ -1684,6 +1669,7 @@ No documents are currently indexed.
                 import sys
                 import time
 
+                file_path = os.path.expanduser(file_path)
                 if not self.path_validator.is_path_allowed(file_path):
                     return {
                         "status": "error",
@@ -2279,24 +2265,33 @@ No documents are currently indexed.
                 }
 
         # ── Phase 5b: TTS (voice output) ─────────────────────────────────────────
-        # Phase 5a (voice input) OMITTED: WhisperASR requires Lemonade server ASR endpoint.
 
         @tool
         def text_to_speech(
             text: str, output_path: str = "", voice: str = "af_alloy"
         ) -> dict:
-            """Convert text to speech using Kokoro TTS and save to an audio file.
+            """Convert text to speech with a Kokoro voice (served by Lemonade) and save it as a WAV file.
 
             Args:
                 text: Text to convert to speech
                 output_path: File path to save audio (WAV). If empty, saves to ~/.gaia/tts/
-                voice: Voice name to use (default: af_alloy — American English female)
+                voice: Kokoro voice, e.g. af_alloy (American female, default), af_bella, am_michael, bf_emma, bm_george
 
             Returns:
-                Dictionary with status, file_path, and duration_seconds
+                Dictionary with status, file_path, duration_seconds and voice
             """
             import time
 
+            from gaia.audio.lemonade_tts import KOKORO_VOICES, LemonadeTTSClient
+
+            if voice not in KOKORO_VOICES:
+                return {
+                    "status": "error",
+                    "error": (
+                        f"Unknown voice '{voice}'. Choose one of: "
+                        f"{', '.join(KOKORO_VOICES)}."
+                    ),
+                }
             if not output_path:
                 tts_dir = Path.home() / ".gaia" / "tts"
                 tts_dir.mkdir(parents=True, exist_ok=True)
@@ -2304,40 +2299,19 @@ No documents are currently indexed.
                 output_path = str(tts_dir / f"speech_{ts}.wav")
 
             try:
-                import numpy as np
-
-                from gaia.audio.kokoro_tts import KokoroTTS
-
-                tts = KokoroTTS()
-                audio_data, _, meta = tts.generate_speech(text)
-
-                try:
-                    import soundfile as sf
-
-                    audio_np = (
-                        np.concatenate(audio_data)
-                        if isinstance(audio_data, list)
-                        else np.array(audio_data)
-                    )
-                    sf.write(output_path, audio_np, samplerate=24000)
-                    return {
-                        "status": "success",
-                        "file_path": output_path,
-                        "duration_seconds": meta.get("duration", len(audio_np) / 24000),
-                        "voice": voice,
-                    }
-                except ImportError:
-                    return {
-                        "status": "error",
-                        "error": "soundfile not installed. Run: uv pip install -e '.[talk]'",
-                    }
-            except ImportError as e:
-                return {
-                    "status": "error",
-                    "error": f"TTS dependencies not installed. Run: uv pip install -e '[talk]'. Details: {e}",
-                }
+                client = LemonadeTTSClient(
+                    base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None))
+                )
+                client.ensure_model()
+                duration = client.synthesize_to_wav(text, output_path, voice=voice)
             except Exception as e:
                 return {"status": "error", "error": str(e)}
+            return {
+                "status": "success",
+                "file_path": output_path,
+                "duration_seconds": round(duration, 2),
+                "voice": voice,
+            }
 
         # MCP tools — load from ~/.gaia/mcp_servers.json if configured.
         # Must run last so MCP tools don't bloat context before we know the base count.
@@ -2454,7 +2428,9 @@ No documents are currently indexed.
                 msg += f" Next wakeup in {wake_in_seconds}s."
             return msg
 
-        @tool
+        # The tool watchdog must outlast the wait itself, or a slow answer is
+        # dropped and the model is told the tool "may be hung".
+        @tool(timeout=USER_INPUT_MAX_WAIT_S + 30)
         def request_user_input(
             message: str,
             choices: list = None,
@@ -2470,7 +2446,7 @@ No documents are currently indexed.
                 default_if_no_response: Value to use if no response received before
                     timeout. If not set and continue_if_no_response=True, returns
                     "__NO_RESPONSE__". Always check the return value.
-                timeout_seconds: How long to wait (min 10, default 300).
+                timeout_seconds: How long to wait (10 to 600, default 300).
                 continue_if_no_response: If True, continue after timeout.
                     If False, the loop pauses until user re-engages.
 
@@ -2478,6 +2454,7 @@ No documents are currently indexed.
                 User's response, chosen option, or "__NO_RESPONSE__" on timeout.
                 ALWAYS check for "__NO_RESPONSE__" before proceeding.
             """
+            timeout_seconds = min(int(timeout_seconds), USER_INPUT_MAX_WAIT_S)
             console = _agent.console
             if hasattr(console, "request_user_input_blocking"):
                 return console.request_user_input_blocking(

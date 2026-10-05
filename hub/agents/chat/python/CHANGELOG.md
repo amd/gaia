@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Asking for the shell by name ("use your shell tool to run pwd") or for the
+  working directory now always offers `run_shell_command`. With dynamic tool
+  selection on, most tools matched such a request and the cap dropped the shell, so
+  the agent answered the directory from a guess.
+- A GPU model now loads at its own context window on a machine whose
+  `default_device` is `npu`. Every model there used to load at the NPU's 32,768
+  tokens, so long tasks overflowed. `ChatAgentConfig.min_context_size` no longer
+  defaults to 32,768: unset, the server is checked against the device profile and
+  each model loads at its own window.
+- `text_to_speech` now synthesizes through Lemonade's `kokoro-v1` model instead of
+  a local Kokoro install, so it works without the PyTorch-based `kokoro` and
+  `soundfile` packages. The `voice` argument is now honoured (it was ignored) and an
+  unknown voice is rejected with the list of valid ones.
+- A question the agent asks with `request_user_input` now waits as long as it says
+  (up to 10 minutes) instead of being abandoned after 3 minutes as a "hung" tool;
+  an answer given after that point used to be lost.
+- File and document tools now expand a leading `~`, so `~/notes.txt` reads from the
+  home directory instead of failing with "File not found" or creating a literal `~`
+  folder.
 - `/clear-cache` no longer deletes the whole working-directory `.gaia` folder
   (all of `~/.gaia` when started from home). The RAG cache now lives in
   `~/.gaia/cache/rag`, and clearing removes only the files the cache wrote.

@@ -35,10 +35,56 @@ from gaia.agents.tools.search_scope import (
     root_depth,
     search_roots,
 )
+from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.logger import get_logger
 from gaia.security import BackupError
 
 logger = get_logger(__name__)
+
+
+#: Rows searched for a table's header below title and note rows.
+HEADER_SEARCH_ROWS = 20
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def _header_row_index(rows: List[tuple]) -> int:
+    """The row that names a sheet's columns, below any title or note rows.
+
+    Real spreadsheets put a title ("FY2024 Budget vs Actual by Department") and
+    notes above the table. Taking row 0 as the header turned every column into
+    Column_1..Column_4 and a model filled the values it could not see.
+
+    The header is the first row that spans the table's full width with text in
+    every cell. A sheet with no such row keeps row 0, as before.
+
+    Row 0 is also kept whenever it already looks like a header (2+ filled,
+    all-text cells) — otherwise a text-only sheet whose header has an unused
+    trailing column narrower than its data rows would skip row 0 for the
+    first data row, silently dropping it from the results.
+    """
+    head = rows[:HEADER_SEARCH_ROWS]
+    filled = [[c for c in r if c is not None and str(c).strip()] for r in head]
+    if len(filled[0]) >= 2 and all(isinstance(c, str) for c in filled[0]):
+        return 0
+    width = max((len(cells) for cells in filled), default=0)
+    if width < 2:
+        return 0
+    for i, cells in enumerate(filled):
+        if len(cells) == width and all(isinstance(c, str) for c in cells):
+            return i
+    return 0
+
+
+def _match_column(name: str, columns: List[str]) -> str | None:
+    """The column *name* means: exact, else the one column equal ignoring case."""
+    name = name.strip()
+    if name in columns:
+        return name
+    folded = [c for c in columns if c.strip().casefold() == name.casefold()]
+    return folded[0] if len(folded) == 1 else None
 
 
 def _python_syntax_error(source: str, filename: str) -> str | None:
@@ -60,7 +106,7 @@ def _python_syntax_error(source: str, filename: str) -> str | None:
 
 def _resolved_target(args: Dict[str, Any]) -> Path:
     """The file write_file / edit_file act on, resolved as they resolve it."""
-    return Path(args["file_path"]).resolve()
+    return Path(args["file_path"]).expanduser().resolve()
 
 
 DATE_RANGE_FORMATS = (
@@ -815,6 +861,7 @@ class FileSearchToolsMixin:
             Returns:
                 Dictionary with file content and type-specific metadata
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 # Enforce the --allowed-paths sandbox on reads. Checked before
                 # the existence probe so paths outside the sandbox can't be used
@@ -896,7 +943,10 @@ class FileSearchToolsMixin:
                     from gaia.agents.base.artifacts import read_text_page
 
                     page = read_text_page(
-                        file_path, offset, 8000 if limit is None else limit
+                        file_path,
+                        offset,
+                        8000 if limit is None else limit,
+                        encoding=text_encoding(file_path),
                     )
                     reads.note(file_path, seen)
                     return {"status": "success", "file_path": file_path, **page}
@@ -914,8 +964,7 @@ class FileSearchToolsMixin:
 
                 # Read file content
                 try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
+                    content, encoding = read_text(file_path)
                 except UnicodeDecodeError:
                     # Binary file
                     with open(file_path, "rb") as f:
@@ -944,6 +993,8 @@ class FileSearchToolsMixin:
                     "line_count": len(content.splitlines()),
                     "size_bytes": len(content.encode("utf-8")),
                 }
+                if encoding != "utf-8":
+                    result["encoding"] = encoding
 
                 # Python file - add symbol extraction
                 if ext == ".py":
@@ -1025,6 +1076,7 @@ class FileSearchToolsMixin:
             Searches actual file contents on disk, not RAG indexed documents.
             """
             try:
+                directory = os.path.expanduser(directory)
                 # Enforce the --allowed-paths sandbox before the existence probe
                 # so out-of-sandbox paths can't be used as a directory-existence
                 # oracle (mirrors read_file / get_file_info). Grepping file
@@ -1090,57 +1142,48 @@ class FileSearchToolsMixin:
                     _use_regex = False
                     _search_plain = pattern if case_sensitive else pattern.lower()
 
-                def _line_matches(line: str) -> bool:
+                def _match_span(line: str):
+                    """``(start, end)`` of the first match in *line*, or ``None``."""
                     if _use_regex:
-                        return bool(_regex.search(line))
-                    return _search_plain in (line if case_sensitive else line.lower())
+                        found = _regex.search(line)
+                        return found.span() if found else None
+                    at = (line if case_sensitive else line.lower()).find(_search_plain)
+                    return None if at == -1 else (at, at + len(_search_plain))
 
                 def search_file(file_path: Path):
                     """Search within a single file."""
                     try:
                         with open(
-                            file_path, "r", encoding="utf-8", errors="ignore"
+                            file_path,
+                            "r",
+                            encoding=text_encoding(file_path),
+                            errors="ignore",
                         ) as f:
-                            all_lines = f.readlines() if ctx > 0 else None
-                            if all_lines is None:
-                                for line_num, line in enumerate(
-                                    open(
-                                        file_path,
-                                        "r",
-                                        encoding="utf-8",
-                                        errors="ignore",
-                                    ),
-                                    1,
-                                ):
-                                    if _line_matches(line):
-                                        matches.append(
-                                            {
-                                                "file": str(file_path),
-                                                "line": line_num,
-                                                "content": line.strip()[:200],
-                                            }
+                            lines = f.readlines() if ctx > 0 else f
+                            for line_num, line in enumerate(lines, 1):
+                                span = _match_span(line)
+                                if span is None:
+                                    continue
+                                match = {
+                                    "file": str(file_path),
+                                    "line": line_num,
+                                    "content": match_excerpt(line, *span),
+                                }
+                                if ctx > 0:
+                                    start = max(0, line_num - 1 - ctx)
+                                    end = min(len(lines), line_num + ctx)
+                                    match["context"] = [
+                                        (
+                                            match_excerpt(lines[i], *span)
+                                            if i == line_num - 1
+                                            and len(lines[i].rstrip()) > 200
+                                            else lines[i].rstrip()[:200]
                                         )
-                                        if len(matches) >= 100:
-                                            return False
-                            else:
-                                for line_num, line in enumerate(all_lines, 1):
-                                    if _line_matches(line):
-                                        start = max(0, line_num - 1 - ctx)
-                                        end = min(len(all_lines), line_num + ctx)
-                                        ctx_lines = [
-                                            all_lines[i].rstrip()[:200]
-                                            for i in range(start, end)
-                                        ]
-                                        matches.append(
-                                            {
-                                                "file": str(file_path),
-                                                "line": line_num,
-                                                "content": line.strip()[:200],
-                                                "context": ctx_lines,
-                                            }
-                                        )
-                                        if len(matches) >= 100:
-                                            return False
+                                        for i in range(start, end)
+                                    ]
+                                matches.append(match)
+                                if len(matches) >= 100:
+                                    return False
                         return True
                     except (OSError, UnicodeError) as exc:
                         logger.warning("Could not search %s: %s", file_path, exc)
@@ -1231,6 +1274,7 @@ class FileSearchToolsMixin:
             6. Backup creation before overwrite
             7. Audit logging of all write operations
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 resolved_path = Path(file_path).resolve()
                 content_size = len(content.encode("utf-8"))
@@ -1429,12 +1473,14 @@ class FileSearchToolsMixin:
                     wb.close()
                     if not ws_rows:
                         return [], [], None
-                    # First row is headers
+                    header = _header_row_index(ws_rows)
                     columns = [
                         str(c) if c is not None else f"Column_{i}"
-                        for i, c in enumerate(ws_rows[0])
+                        for i, c in enumerate(ws_rows[header])
                     ]
-                    for row_vals in ws_rows[1:]:
+                    for row_vals in ws_rows[header + 1 :]:
+                        if all(v is None or not str(v).strip() for v in row_vals):
+                            continue
                         row_dict = {}
                         for i, val in enumerate(row_vals):
                             col_name = columns[i] if i < len(columns) else f"Column_{i}"
@@ -1574,6 +1620,7 @@ class FileSearchToolsMixin:
             4. Backup creation before edit
             5. Audit logging
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 import difflib
 
@@ -1770,7 +1817,7 @@ class FileSearchToolsMixin:
                 if directory_path is None:
                     directory_path = str(Path.home())
 
-                dir_path = Path(directory_path).resolve()
+                dir_path = Path(directory_path).expanduser().resolve()
 
                 if not dir_path.exists():
                     return {
@@ -1884,8 +1931,10 @@ class FileSearchToolsMixin:
                     "entries_shown": len(entries),
                     "truncated": truncated,
                     "display_message": (
-                        f"Listing {len(entries)} items in {dir_path.name or str(dir_path)} "
-                        f"({total_folders} folders, {total_files} files)"
+                        f"Listing {_count(len(entries), 'item')} in "
+                        f"{dir_path.name or str(dir_path)} "
+                        f"({_count(total_folders, 'folder')}, "
+                        f"{_count(total_files, 'file')})"
                     ),
                 }
 
@@ -1915,7 +1964,7 @@ class FileSearchToolsMixin:
                 Dictionary with file metadata and optional preview
             """
             try:
-                fp = Path(file_path)
+                fp = Path(file_path).expanduser()
 
                 # Enforce the --allowed-paths sandbox: get_file_info returns a
                 # content preview, so it must honor the same read boundary.
@@ -2002,7 +2051,13 @@ class FileSearchToolsMixin:
                     # Read content for preview
                     file_content = None
                     used_encoding = None
-                    for encoding in ("utf-8", "utf-8-sig", "latin-1", "cp1252"):
+                    bom_codec = text_encoding(fp)
+                    # latin-1 accepts any bytes, so a BOM-marked file decodes by its BOM.
+                    for encoding in (
+                        (bom_codec,)
+                        if bom_codec != "utf-8"
+                        else ("utf-8", "utf-8-sig", "latin-1", "cp1252")
+                    ):
                         try:
                             with open(fp, "r", encoding=encoding) as f:
                                 file_content = f.read()
@@ -2090,7 +2145,7 @@ class FileSearchToolsMixin:
                 Dictionary with analysis results based on the requested type
             """
             try:
-                fp = Path(file_path)
+                fp = Path(file_path).expanduser()
 
                 def _resolve_indexed_basename(target: Path):
                     """Return an already-indexed document Path whose basename
@@ -2258,7 +2313,11 @@ class FileSearchToolsMixin:
                 focus_columns = all_columns
                 if columns:
                     requested = [c.strip() for c in columns.split(",")]
-                    focus_columns = [c for c in requested if c in all_columns]
+                    focus_columns = [
+                        m
+                        for m in (_match_column(c, all_columns) for c in requested)
+                        if m
+                    ]
                     if not focus_columns:
                         return {
                             "status": "error",
@@ -2349,6 +2408,22 @@ class FileSearchToolsMixin:
                         summary[col] = col_summary
 
                     result["summary"] = summary
+                    groupable = [
+                        col
+                        for col, info in summary.items()
+                        if info["type"] != "numeric"
+                        and 1 < info.get("unique_values", 0) <= 20
+                    ]
+                    has_numeric = any(
+                        info["type"] == "numeric" for info in summary.values()
+                    )
+                    if groupable and has_numeric and not group_by:
+                        # Models read the overall sum as the answer to "which X has the most".
+                        result["per_group_totals"] = (
+                            "Not computed in this summary. Call analyze_data_file "
+                            f"again with group_by set to one of {groupable} to sum "
+                            "every numeric column per value."
+                        )
 
                     # Sample rows (first 5)
                     result["sample_rows"] = rows[:5]
@@ -2699,6 +2774,7 @@ class FileSearchToolsMixin:
 
                 # --- GROUP BY aggregation ---
                 if group_by:
+                    group_by = _match_column(group_by, all_columns) or group_by
                     if group_by not in all_columns:
                         result["group_by_error"] = (
                             f"Column '{group_by}' not found. Available: {', '.join(all_columns)}"

@@ -17,21 +17,47 @@ from typing import Any, Callable, Dict, Optional
 from gaia.agents.base.errors import missing_host_attr_message, require_host_attr
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools.edit_impact import edit_impact
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
     file_read_record,
     read_first_preflight,
     stamp_of,
 )
+from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.logger import get_logger
 from gaia.security import BackupError
 
 logger = get_logger(__name__)
 
 
+def _python_syntax_error(path: Path, content: str) -> Optional[str]:
+    """Why a just-written .py file will not run, or ``None`` when it parses.
+
+    Reported with the write itself: a model told only "success" wrote a stray
+    backslash into a print call, then called the later "unterminated string
+    literal" a parsing artifact and described output the file cannot produce.
+    """
+    if path.suffix != ".py":
+        return None
+    try:
+        ast.parse(content)
+    except SyntaxError as e:
+        return (
+            f"line {e.lineno}: {e.msg} — the file was saved but will not run. "
+            "Fix it before answering."
+        )
+    except ValueError as e:
+        # Python 3.10/3.11 raise ValueError (not SyntaxError) for null bytes;
+        # 3.12+ raises SyntaxError. Catch both so the check itself can't crash
+        # a successful write into a reported failure.
+        return f"{e} — the file was saved but will not run. Fix it before answering."
+    return None
+
+
 def _resolve_target(file_path: str, project_dir: Optional[str] = None) -> Path:
     """Where write_file / edit_file act: ``file_path``, under ``project_dir``."""
-    path = Path(file_path)
+    path = Path(file_path).expanduser()
     if project_dir and not path.is_absolute():
         path = Path(project_dir).resolve() / path
     return path.resolve()
@@ -42,7 +68,7 @@ def _project_target(args: Dict[str, Any]) -> Path:
 
 
 def _file_path_target(args: Dict[str, Any]) -> str:
-    return args["file_path"]
+    return os.path.expanduser(args["file_path"])
 
 
 def _gaia_md_target(args: Dict[str, Any]) -> str:
@@ -201,6 +227,55 @@ def _function_span(node, lines: list) -> tuple:
     return start, node.end_lineno
 
 
+#: Lines one ranged read returns at most.
+MAX_READ_LINES = 400
+#: Chars a read returns when the host has no model-sized budget.
+DEFAULT_READ_CHARS = 20000
+
+
+def _read_budget(host: Any) -> int:
+    """Chars one read may return: the host's tool-result target, so it is never truncated."""
+    budget = getattr(host, "_truncation_budget", None)
+    return budget()[1] if callable(budget) else DEFAULT_READ_CHARS
+
+
+def _line_window(
+    lines: list, start_line: Optional[int], end_line: Optional[int], max_chars: int
+) -> Dict[str, Any]:
+    """Lines *start_line*..*end_line* (1-based, inclusive), numbered like ``cat -n``."""
+    total = len(lines)
+    start = 1 if start_line is None else start_line
+    if start < 1:
+        return {"error": "start_line is 1-based: the first line is 1."}
+    if total == 0:
+        return {"content": "", "start_line": 1, "end_line": 0, "total_lines": 0}
+    if start > total:
+        return {
+            "error": f"start_line {start} is past the end: the file has {total} lines."
+        }
+    end = total if end_line is None else min(end_line, total)
+    if end < start:
+        return {"error": f"end_line {end_line} is before start_line {start}."}
+    end = min(end, start + MAX_READ_LINES - 1)
+    out, size = [], 0
+    for number in range(start, end + 1):
+        line = f"{number:>6}\t{lines[number - 1]}\n"
+        if out and size + len(line) > max_chars:
+            end = number - 1
+            break
+        out.append(line)
+        size += len(line)
+    window = {
+        "content": "".join(out),
+        "start_line": start,
+        "end_line": end,
+        "total_lines": total,
+    }
+    if end < total:
+        window["next_start_line"] = end + 1
+    return window
+
+
 _PATH_VALIDATOR_HINT = "Set self.path_validator = <PathValidator instance>."
 _PATH_VALIDATOR_DOC_ANCHOR = "docs/spec/file-io-tools-mixin.mdx#host-agent-contract"
 
@@ -287,7 +362,11 @@ class FileIOToolsMixin:
 
         @tool
         def read_file(
-            file_path: str, offset: int = 0, limit: Optional[int] = None
+            file_path: str,
+            offset: int = 0,
+            limit: Optional[int] = None,
+            start_line: Optional[int] = None,
+            end_line: Optional[int] = None,
         ) -> Dict[str, Any]:
             """Read any file and intelligently analyze based on file type.
 
@@ -296,14 +375,20 @@ class FileIOToolsMixin:
             - Markdown files (.md): Headers + code blocks + links
             - Other text files: Raw content
 
+            Read the part you need with start_line/end_line, e.g. the line a
+            search reported.
+
             Args:
                 file_path: Path to the file to read
                 offset: Zero-based character offset for a bounded text page.
                 limit: Page size (1..8000 characters); omitted preserves full analysis.
+                start_line: First line to return (1-based); the result is line-numbered.
+                end_line: Last line to return, inclusive (at most 400 lines per read).
 
             Returns:
                 Dictionary with file content and type-specific metadata
             """
+            file_path = os.path.expanduser(file_path)
             path_validator = _require_path_validator(self)
             try:
                 # Scope *and* secrets: being in an allowed directory never made
@@ -320,19 +405,41 @@ class FileIOToolsMixin:
                 reads = file_read_record(self)
                 seen = stamp_of(file_path)
 
+                if start_line is not None or end_line is not None:
+                    if offset or limit is not None:
+                        return {
+                            "status": "error",
+                            "error": "Use offset/limit (characters) or "
+                            "start_line/end_line (lines), not both.",
+                        }
+                    try:
+                        lines = read_text(file_path)[0].splitlines()
+                    except UnicodeDecodeError:
+                        return {
+                            "status": "error",
+                            "error": f"{file_path} is binary: it has no lines to read.",
+                        }
+                    page = _line_window(lines, start_line, end_line, _read_budget(self))
+                    if "error" in page:
+                        return {"status": "error", **page}
+                    reads.note(file_path, seen)
+                    return {"status": "success", "file_path": file_path, **page}
+
                 if offset or limit is not None:
                     from gaia.agents.base.artifacts import read_text_page
 
                     page = read_text_page(
-                        file_path, offset, 8000 if limit is None else limit
+                        file_path,
+                        offset,
+                        8000 if limit is None else limit,
+                        encoding=text_encoding(file_path),
                     )
                     reads.note(file_path, seen)
                     return {"status": "success", "file_path": file_path, **page}
 
                 # Read file content
                 try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
+                    content, encoding = read_text(file_path)
                 except UnicodeDecodeError:
                     # Binary file
                     with open(file_path, "rb") as f:
@@ -361,6 +468,8 @@ class FileIOToolsMixin:
                     "line_count": len(content.splitlines()),
                     "size_bytes": len(content.encode("utf-8")),
                 }
+                if encoding != "utf-8":
+                    result["encoding"] = encoding
 
                 # Python file - add syntax validation and symbol extraction
                 if ext == ".py":
@@ -457,6 +566,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with write operation results
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 # Validate syntax if requested
                 if validate:
@@ -576,6 +686,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with edit operation results
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 # Security: validate write access.
                 # Report missing setup instead of writing without a check.
@@ -698,9 +809,11 @@ class FileIOToolsMixin:
                     detail,
                 )
 
+                impact = edit_impact(Path(file_path), current_content, modified_content)
                 return {
                     "status": "success",
                     "file_path": file_path,
+                    **({"impact": impact} if impact else {}),
                     "diff": diff,
                     "backup_created": backup_path is not None,
                     "backup_path": backup_path,
@@ -769,17 +882,22 @@ class FileIOToolsMixin:
                         files_searched += 1
 
                         try:
-                            with open(file_path, "r", encoding="utf-8") as f:
-                                content = f.read()
+                            content = read_text(file_path)[0]
 
                             if pattern in content:
                                 files_with_matches += 1
                                 # Find line numbers with matches
                                 matches = []
                                 for i, line in enumerate(content.splitlines(), 1):
-                                    if pattern in line:
+                                    at = line.find(pattern)
+                                    if at != -1:
                                         matches.append(
-                                            {"line": i, "content": line.strip()}
+                                            {
+                                                "line": i,
+                                                "content": match_excerpt(
+                                                    line, at, at + len(pattern)
+                                                ),
+                                            }
                                         )
 
                                 results.append(
@@ -892,6 +1010,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with write operation results
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 content_size = len(content.encode("utf-8"))
 
@@ -1067,6 +1186,9 @@ class FileIOToolsMixin:
                     "size_bytes": content_size,
                     "file_type": path.suffix[1:] if path.suffix else "unknown",
                 }
+                syntax_error = _python_syntax_error(path, content)
+                if syntax_error:
+                    result["syntax_error"] = syntax_error
                 if backup_path:
                     result["backup_path"] = backup_path
                 if display_error:
@@ -1221,12 +1343,20 @@ class FileIOToolsMixin:
                     detail,
                 )
 
+                impact = edit_impact(path, current_content, updated_content)
                 result = {
                     "status": "success",
                     "file_path": str(path),
+                    # Ahead of the diff, so a truncated result still carries it.
+                    **({"impact": impact} if impact else {}),
                     "old_size": len(current_content),
                     "new_size": len(updated_content),
                     "file_type": path.suffix[1:] if path.suffix else "unknown",
+                    **(
+                        {"syntax_error": syntax_error}
+                        if (syntax_error := _python_syntax_error(path, updated_content))
+                        else {}
+                    ),
                     "diff": diff,
                 }
                 if backup_path:
@@ -1386,6 +1516,7 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with replacement result
             """
+            file_path = os.path.expanduser(file_path)
             try:
                 # Security: validate write access.
                 # Report missing setup instead of writing without a check.
@@ -1528,10 +1659,12 @@ class FileIOToolsMixin:
                     detail,
                 )
 
+                impact = edit_impact(Path(file_path), content, modified_content)
                 return {
                     "status": "success",
                     "file_path": file_path,
                     "function_replaced": function_name,
+                    **({"impact": impact} if impact else {}),
                     "backup_path": backup_path if backup else None,
                     "diff": diff,
                 }

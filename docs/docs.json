@@ -65,9 +65,9 @@
           {
             "group": "Python Framework",
             "pages": [
+              "guides/install",
               "setup",
               "quickstart",
-              "guides/install",
               "guides/agent-ui",
               "guides/terminal-hub",
               "guides/memory",
@@ -533,7 +533,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.24.1 \u00b7 Lemonade 2026.39.1",
+        "label": "v0.24.1 \u00b7 Lemonade 2026.40.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

@@ -162,7 +162,7 @@ jobs:
 
       - name: Open Lemonade bump PR
         if: steps.detect.outputs.should_bump == 'true'
-        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790  # v1.0.235
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
         with:
           # Prefer subscription OAuth, fall back to API key — same wiring as claude.yml.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -342,7 +342,7 @@ jobs:
             5. Dedup before filing — never open a duplicate:
                `gh issue list --repo ${{ github.repository }} --state open --search "<feature keywords> in:title"`
                If a matching open issue (or a `docs/plans/` doc) already covers it, skip.
-            6. Issue format — follow CLAUDE.md "Issue Response Guidelines" and the feature-request
+            6. Issue format — follow CLAUDE.md "How You Communicate" and the feature-request
                shape (lead with the finding; value-focused; ≤200 words). Write the body to
                /tmp/feature-N.md, then:
                ```

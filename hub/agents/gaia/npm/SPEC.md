@@ -273,6 +273,30 @@ the header.
 | `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Run gated tools without asking, for one session (≥ 2.14) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
+#### `/query` request body
+
+The full, machine-readable contract — every field, type, and which are
+required — is the committed
+[`openapi.gaia.json`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/openapi.gaia.json),
+regenerated from the live routes by `python -m gaia_agent.export_openapi` and
+checked for drift in CI — the same pattern as the email agent's own
+`openapi.email.json`. Required: **`query`**, **`run_id`**,
+**`context`** — `additionalProperties: false`, so an unrecognized field or a
+missing required one is `422` before the agent runs. `run_id` must parse as a
+UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
+(`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`) is
+optional.
+
+```json
+{
+  "query": "What's in this directory?",
+  "run_id": "5b1f6e2a-7c34-4b4d-9b3e-2b6d9a7a1c3e",
+  "context": [],
+  "session_id": "my-session-1",
+  "can_answer_questions": true
+}
+```
+
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
 
@@ -320,8 +344,9 @@ directory shape, entry points, installed commands and platform quirks, present
 whenever the agent's working directory resolves to a code repository (a VCS
 directory or a recognised manifest at its root). `GAIA_PROJECT_ROOT=<path>`
 picks the project when the working directory is not it. If that repository has
-no code index, the first turn starts one in a background thread;
-`GAIA_PROJECT_MAP_AUTO_INDEX=0` disables that. The same repository check also
+no code index, the first `search_code_index` builds one;
+`GAIA_PROJECT_MAP_AUTO_INDEX=1` builds it in a background thread at task start
+instead. The same repository check also
 makes `run_shell_command` always-on for the session instead of semantically
 selected. Neither affects the wire contract — they change what the agent
 knows, what tools it is offered, and what the first turn costs.
@@ -408,6 +433,15 @@ turn the check on. The shipped product does not rely on dev mode: the daemon
 mints a per-session token and passes it as `GAIA_GAIA_SIDECAR_TOKEN_FILE`
 (`gaia.daemon.sidecars.spec` mirrors both names as plain strings so core never
 imports this wheel).
+
+**Child processes.** The programs the agent starts — shell commands, MCP
+servers, CLI installs and sign-ins, native hub agents, media tools, the Lemonade
+server — never inherit the sidecar token or GAIA's other internal credentials
+(the model-broker token, custody secret and engineering pairing token): their
+environment comes from `gaia.env.child_env`, which also drops any name listed
+in `GAIA_CHILD_ENV_DENY` (comma or space separated). User credentials such as `GH_TOKEN` pass through unchanged.
+`GAIA_NO_DOTENV=1` in the sidecar's launch environment stops it loading `.env`
+files; a `.env` file cannot set that switch itself.
 
 ### 5.5 Other transports
 

@@ -116,7 +116,7 @@ Historical release notes describe the providers that shipped in those releases.
    - Lazy provider loading via `importlib` (load only when needed)
    - Minimal overhead from abstraction layer
    - Streaming support across all providers
-   - Default temperature of 0.1 for deterministic responses
+   - Local models run with their model card's sampling, else temperature 0.1 with penalties; cloud models keep the client default
 
 2. **Reliability**
    - Type safety through ABC pattern
@@ -419,7 +419,7 @@ class LemonadeProvider(LLMClient):
 
         Note:
             Default model is DEFAULT_MODEL_NAME (currently "Gemma-4-E4B-it-GGUF").
-            All methods use temperature=0.1 by default for deterministic responses.
+            Local models use their model card's sampling, else temperature=0.1; cloud models keep the client default.
         """
 
     # Supports all methods: generate, chat, embed, vision,
@@ -533,14 +533,42 @@ class ClaudeProvider(LLMClient):
     # embed() inherited - raises NotSupportedError
 ```
 
-### Temperature Defaults
+### Sampling Defaults
 
-All providers default to `temperature=0.1` for deterministic responses:
+A local model whose card publishes sampling settings runs with them. These live in
+`MODEL_SAMPLING_PROFILES` in `lemonade_client.py`, keyed by Lemonade model id. For example,
+`Qwen3-30B-A3B-Instruct-2507-GGUF` gets `temperature=0.7`, `top_p=0.8`, `top_k=20`,
+`min_p=0` and `presence_penalty=1.0`, per its
+[model card](https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507). A card that gives
+separate thinking and non-thinking profiles registers both. The thinking mode comes from
+`requested_thinking()`: the caller's `chat_template_kwargs={"enable_thinking": ...}` when it
+sets one, else GAIA's choice for the model (`ModelRequirement.thinking`). The provider picks
+the sampling profile from it and `LemonadeClient.chat_completions` sends it as the switch, so
+the sampling always matches the mode the model runs in.
+[`Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) runs with thinking on
+and gets its card's thinking profile for coding and precise work. Memory's short JSON side
+calls (extraction, consolidation, reconciliation, skill distillation) pass
+`no_thinking_kwargs(model)`, which turns thinking off for such a model: reasoning is billed
+against `max_tokens`, so with it on they reason to the cap and return no answer.
+
+Every other local model gets `LOCAL_SAMPLING_DEFAULTS`: `temperature=0.1` plus frequency,
+presence and repeat penalties, so it does not loop on tables and paragraphs. Cloud models get
+neither, because near-greedy sampling sends a reasoning model's thinking into a runaway. They
+keep the client default (0.7). Any sampling argument the caller passes is sent as given.
 
 ```python
 # In LemonadeProvider.chat()
-kwargs.setdefault("temperature", 0.1)
+if not self._backend.cloud_model_provider(effective_model):
+    defaults = local_sampling_defaults(
+        effective_model,
+        requested_thinking(effective_model, kwargs.get("chat_template_kwargs")),
+    )
+    for key, value in defaults.items():
+        kwargs.setdefault(key, value)
 ```
+
+`top_k`, `min_p`, `repeat_penalty` and `repeat_last_n` are llama.cpp-native. When streaming,
+they travel in the OpenAI SDK's `extra_body` and land at the top level of the request body.
 
 ### Provider-Specific Implementation
 
@@ -719,7 +747,9 @@ model initialization.
 - `test_llm_client_factory.py`: supported selection and shared interface.
 - `test_removed_llm_providers.py`: rejected legacy names and flags across the
   factory, SDK, base agent and CLI, before model initialization.
-- `test_lemonade_client.py`: supported Lemonade operations.
+- `unit/test_lemonade_client_http.py`: supported Lemonade operations and their
+  request shapes, against mocked HTTP.
+- `test_lemonade_client.py`: the same operations against a live Lemonade Server.
 - `test_lemonade_cloud_models.py`: local/cloud lifecycle separation.
 - `test_parallel_tool_calls.py`: preservation and execution of native calls.
 

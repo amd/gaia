@@ -452,10 +452,9 @@ RRF score = 0.6 / (60 + rank_vector) + 0.4 / (60 + rank_bm25)
 1. Embed query via Lemonade (`user.embeddinggemma-300m-GGUF`, 768-dim)
 2. FAISS cosine search on normalized embeddings (IndexFlatIP): top-K x 4 candidates (oversample)
 3. FTS5 BM25 search: top-K x 4 candidates (oversample)
-4. Deduplicate by ID, apply RRF weights, take top-K x 2 candidates
-5. Cross-encoder reranking (`cross-encoder/ms-marco-MiniLM-L-6-v2`, ~22MB) on the fused candidates
-6. Return final top-K results
-7. Bump confidence +0.02 and increment `use_count` on recalled items
+4. Deduplicate by ID, apply RRF weights
+5. Return the top-K results by fused score
+6. Bump confidence +0.02 and increment `use_count` on recalled items
 
 ### FTS5 Behavior
 
@@ -465,15 +464,15 @@ RRF score = 0.6 / (60 + rank_vector) + 0.4 / (60 + rank_bm25)
   match literally instead of being parsed as FTS5 syntax.
 - Input capped at 500 chars before regex processing.
 
-### Cross-Encoder Reranking
+### No Cross-Encoder Reranking
 
-After RRF fusion, a lightweight cross-encoder rescores each candidate by jointly encoding (query, document) pairs. This catches semantic matches that both vector and BM25 underrank individually.
-
-Model: `cross-encoder/ms-marco-MiniLM-L-6-v2` (~22MB, runs on CPU in &lt;50ms for 10 candidates)
-
-Why this matters: RRF fusion combines two independent rankings. The cross-encoder sees query and document together, enabling it to catch fine-grained relevance signals (negation, qualification, context-dependent meaning) that independent encoders miss. Hindsight (91.4% LongMemEval) attributes a significant portion of its retrieval precision to this step.
-
-The cross-encoder model is loaded lazily on first search and cached for the process lifetime. It does not require Lemonade — it runs via the `sentence-transformers` library already in GAIA's dependencies.
+An earlier design rescored the fused candidates with a local cross-encoder
+(`ms-marco-MiniLM-L-6-v2` via `sentence-transformers`). It needed PyTorch in
+process, and because faiss and torch each ship an OpenMP runtime, GAIA switched
+it off whenever faiss was already loaded — which is every real search. It was
+removed. Lemonade serves reranking models (`/api/v1/rerank`), so a reranker can
+return through Lemonade; that is a retrieval-quality change to be measured with
+the memory eval categories, not assumed.
 
 ### Complexity-Aware Recall Depth
 
@@ -859,7 +858,7 @@ The system prompt is split into two parts to allow LLM inference engines to reus
 
 ### Stable Prefix
 
-`get_memory_system_prompt()` -- injected once via `Agent._get_mixin_prompts()`. Contains nothing time-sensitive (no timestamps, no due dates). Stays frozen for the entire session so KV-cache can be reused. Rebuilt only when context changes.
+`get_memory_system_prompt()` -- injected once via `Agent._get_mixin_prompts()`. Contains nothing time-sensitive (no timestamps, no due dates). Stays frozen for the entire session so KV-cache can be reused: rendered once after the first turn's upkeep, and re-rendered only on a context switch, a session reset, or a `forget`/`update_memory` of an item it shows. Memories stored mid-session reach the model through the dynamic suffix.
 
 ```python
 def get_memory_system_prompt(self) -> str:
@@ -927,7 +926,7 @@ the same project does not rediscover the quirk.
 
 ### Dynamic Suffix
 
-`get_memory_dynamic_context()` -- prepended to the user message each turn. Contains current time, upcoming/overdue items, lessons learned since the stable prompt was frozen, and the memories a vector search found relevant to this message. Changes every turn.
+`get_memory_dynamic_context()` -- prepended to the user message each turn. Contains current time, upcoming/overdue items, lessons learned since the stable prompt was frozen, the memories a vector search found relevant to this message, and any learned procedures recalled for this goal. Changes every turn.
 
 ```python
 def get_memory_dynamic_context(self) -> str:
@@ -1086,7 +1085,7 @@ def recall(query: str = "", category: str = "", context: str = "",
            entity: str = "", limit: int = 5,
            time_from: str = "", time_to: str = "") -> dict:
     """Search memory for relevant knowledge.
-    With query: uses hybrid semantic+keyword search (vector + BM25, cross-encoder reranking).
+    With query: uses hybrid semantic+keyword search (vector + BM25 fused by RRF).
     Without query: returns entries filtered by category/context/entity.
     At least one of query, category, context, entity, or time range must be provided.
     time_from/time_to: ISO 8601 boundaries. Use current time from context to compute ranges.
@@ -2038,7 +2037,7 @@ class MemoryStore:
                time_to: str = None) -> List[Dict]
         """FTS5 BM25 keyword search (the lexical component of hybrid search).
         MemoryMixin orchestrates hybrid search by calling both search() and
-        search_hybrid() then fusing results via RRF + cross-encoder reranking.
+        search_hybrid() then fusing results via RRF.
         Bumps confidence +0.02 and increments use_count on recalled items.
         Filters on superseded_by IS NULL (active items only).
         Filters by context/entity if provided. Excludes sensitive by default.

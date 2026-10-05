@@ -9,8 +9,8 @@ prompt renderers (text and native) surface to the model.
 
 Selection model (binding — see the design sketch in #688)
 --------------------------------------------------------
-Per turn the loader computes ``CORE ∪ SKILL ∪ SEMANTIC(query)`` then pulls in
-whole bundles for any semantically-matched member, and accumulates the result
+Per turn the loader computes ``CORE ∪ REQUESTED ∪ SKILL ∪ SEMANTIC(query)``, then
+pulls in whole bundles for any semantically-matched member, and accumulates the result
 into a session-scoped *loaded set* that only grows ("expand-on-new-match").
 The set is returned in **admission order** — CORE in registry order, then every
 later admission appended where it happened — and never re-sorted, so a new tool
@@ -20,6 +20,12 @@ so the model backend's KV prefix cache stays warm through both.
 
 * **CORE** — a small always-on set, admitted unconditionally and exempt from
   the cap and from eviction.
+* **REQUESTED** — tools the user's own message asks for (it names the tool,
+  or asks something only a tool can answer), classified by the host and passed
+  in as plain names via ``select(requested_tools=...)``. Same admission rules
+  as SKILL, one tier ahead of it. Semantic ranking cannot be trusted here: on a
+  large registry most tools clear the threshold and the cap drops the one the
+  user named.
 * **SKILL** — the exact ``tools_required`` of any learned procedure the host
   recalled for this goal (procedural memory, #887/#1451), passed in as plain
   tool names via ``select(skill_tools=...)``. Admitted **after CORE, ahead of
@@ -131,6 +137,7 @@ class _Selection:
     matched: List[str] = field(default_factory=list)
     bundle_pulled: List[str] = field(default_factory=list)
     skill: List[str] = field(default_factory=list)
+    requested: List[str] = field(default_factory=list)
     admitted: List[str] = field(default_factory=list)
     evicted: List[str] = field(default_factory=list)
     skipped_at_cap: List[str] = field(default_factory=list)
@@ -193,6 +200,7 @@ class ToolLoader:
 
         # Per-session mutable state (cleared by reset_session()).
         self._loaded: Dict[str, _ToolState] = {}
+        self._last_stamp = 0.0
         self._turn = 0
         self._session_disabled = False
         # Escape-hatch activation counters (Part 2, #1450). Both recovery paths
@@ -258,6 +266,7 @@ class ToolLoader:
         registry: Dict[str, dict],
         *,
         skill_tools: Optional[Sequence[str]] = None,
+        requested_tools: Optional[Sequence[str]] = None,
     ) -> Optional[List[str]]:
         """Return the loaded set for this turn in admission order, or ``None``.
 
@@ -283,6 +292,9 @@ class ToolLoader:
                 CORE+SEMANTIC build (no ``skill`` key emitted). Names absent from
                 *registry* are dropped (mirrors bundle-absent handling), not
                 raised.
+            requested_tools: Tools the user's message explicitly asks for.
+                Admitted exactly like ``skill_tools`` but ahead of them; logged
+                under a ``requested`` key only when non-empty.
         """
         if self._session_disabled:
             return None
@@ -348,42 +360,12 @@ class ToolLoader:
                 self._admit(name, sel)
                 admitted_this_turn.add(name)
 
-        # SKILL tier: admit the recalled recipe's tools in recall order, deduped,
-        # before any semantic candidate — SKILL > SEMANTIC by admission order.
-        # Cap-bound (mirrors the semantic loop): under cap admit, at cap LRU-evict
-        # a non-CORE/non-this-turn tool or skip. No bundle pull-in (exact recipe).
-        # A requested tool that is already loaded is held for the turn, so an
-        # over-cap request settles instead of rotating its own tools.
-        # Self-heals each turn: recall re-runs, so an idle recipe tool LRU-evicts.
-        seen_skill: set[str] = set()
-        for name in skill_tools or ():
-            if name in self._core or name not in registry or name in seen_skill:
-                continue
-            seen_skill.add(name)
-            sel.skill.append(name)
-            if name in self._loaded:
-                # Named by the signal this turn, so protect it for this turn the
-                # same as a fresh admission. Skipping it here instead let the
-                # tier decay: a tool the signal names every turn was admitted on
-                # the first turn only, and from the second on it was an
-                # uncalled, unprotected row that the LRU picks first — so the
-                # recipe's tools evicted while the recipe was still being
-                # followed. Recency still governs: a tool the signal stops
-                # naming loses the protection on the next turn.
-                admitted_this_turn.add(name)
-                continue
-            if len(self._loaded) < self._max_tools:
-                self._admit(name, sel)
-                admitted_this_turn.add(name)
-                continue
-            victim = self._pick_eviction_victim(admitted_this_turn)
-            if victim is None:
-                sel.skipped_at_cap.append(name)
-                continue
-            del self._loaded[victim]
-            sel.evicted.append(victim)
-            self._admit(name, sel)
-            admitted_this_turn.add(name)
+        # REQUESTED then SKILL: exact names, admitted ahead of any semantic
+        # candidate — REQUESTED > SKILL > SEMANTIC by admission order.
+        self._admit_exact(
+            requested_tools, registry, sel, sel.requested, admitted_this_turn
+        )
+        self._admit_exact(skill_tools, registry, sel, sel.skill, admitted_this_turn)
 
         new_candidates = [
             n
@@ -423,7 +405,7 @@ class ToolLoader:
         """
         state = self._loaded.get(tool_name)
         if state is not None:
-            state.last_call_ts = time.time()
+            state.last_call_ts = self._stamp()
             return
         self._escape_hatch_count += 1
         logger.info(
@@ -591,10 +573,54 @@ class ToolLoader:
             return members, "+".join(b.name for b in owning)
         raise KeyError(bundle)
 
+    def _admit_exact(
+        self,
+        names: Optional[Sequence[str]],
+        registry: Dict[str, dict],
+        sel: _Selection,
+        record: List[str],
+        admitted_this_turn: set[str],
+    ) -> None:
+        """Admit exact tool *names* in order, deduped, appending each to *record*.
+
+        Cap-bound (mirrors the semantic loop): under cap admit, at cap LRU-evict
+        a non-CORE/non-this-turn tool or skip. No bundle pull-in (exact names).
+        Names absent from *registry* are dropped.
+        """
+        for name in names or ():
+            if name in self._core or name not in registry or name in record:
+                continue
+            record.append(name)
+            if name in self._loaded:
+                # Named again this turn: protect it, or the LRU evicts a tool still in use.
+                admitted_this_turn.add(name)
+                continue
+            if len(self._loaded) < self._max_tools:
+                self._admit(name, sel)
+                admitted_this_turn.add(name)
+                continue
+            victim = self._pick_eviction_victim(admitted_this_turn)
+            if victim is None:
+                sel.skipped_at_cap.append(name)
+                continue
+            del self._loaded[victim]
+            sel.evicted.append(victim)
+            self._admit(name, sel)
+            admitted_this_turn.add(name)
+
     def _admit(self, name: str, sel: _Selection) -> None:
         """Add *name* to the loaded set with fresh bookkeeping."""
-        self._loaded[name] = _ToolState(loaded_at=time.time(), load_turn=self._turn)
+        self._loaded[name] = _ToolState(loaded_at=self._stamp(), load_turn=self._turn)
         sel.admitted.append(name)
+
+    def _stamp(self) -> float:
+        """``time.time()``, strictly after the last stamp — LRU needs a total order.
+
+        Windows' clock repeats for milliseconds, and a tie falls through to the
+        tool's name, which evicts by spelling instead of by age.
+        """
+        self._last_stamp = max(time.time(), self._last_stamp + 1e-6)
+        return self._last_stamp
 
     def _trim_to_cap(self, sel: _Selection) -> None:
         """Evict back down to ``max_tools`` after a mid-turn overshoot.
@@ -699,6 +725,8 @@ class ToolLoader:
         # (no recall) log bytes byte-identical to Parts 0-2 (#1451).
         if sel.skill:
             payload["skill"] = sorted(sel.skill)
+        if sel.requested:
+            payload["requested"] = sorted(sel.requested)
         logger.info("TOOL_LOADER %s", json.dumps(payload))
 
     def _log_session_summary(self) -> None:

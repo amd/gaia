@@ -17,7 +17,7 @@ carry `# FIXTURE-SYNC:` comments naming the fixture).
 | `mini_repo/` | gaia_code (code-index) | `tempkeeper` package; see below |
 | `media/` | gaia_media | a 24.7 s voice memo + a sign image, planted facts in the contract; regenerate with `media/_gen_media.py` |
 | `fixture_hub/` | gaia_skills_lifecycle (search/install) | committed sources only; built + signed per run — see its README |
-| `mcp_stub/` | gaia_mcp | stdlib stdio MCP server as two servers (`acme_orders` answers, `acme_shipping` always fails); `stage_mcp_stub.py install` registers + activates them for the flagship before the backend starts |
+| `mcp_stub/` | gaia_mcp | stdlib stdio MCP server as two servers (`acme_orders` answers, `acme_shipping` always fails); `stage_mcp_stub.py install` registers + activates them for the flagship around `gaia_mcp` only, `remove` after |
 | `prepare_fixture_hub.py` | per-run hub build | ephemeral `eval-test-publisher` keypair, signs + trust-adds; no key committed |
 | `serve_fixtures.py` | HTTP for web/rss/hub | routed layout (below) |
 | `quality_gate_thresholds.json` / `perf_gate_thresholds.json` | eval gates | quality: `enforce: true` (0.60 judged pass rate, 5.0 average score); perf: `enforce: false` until the first runner baseline |
@@ -36,10 +36,13 @@ python tests/fixtures/gaia/serve_fixtures.py --port 8765
 # GAIA_HUB_URL=http://127.0.0.1:8765/fixture_hub → fixture_hub/_prepared/
 ```
 
-Path staging (contract): the eval setup also copies `tests/fixtures/gaia/*`
-to `~/gaia-eval/` so scenario user messages can reference files inside the
-agent's home sandbox (e.g. `~/gaia-eval/csv/sales.csv`,
-`~/gaia-eval/mini_repo/`).
+Path staging (contract): `stage_eval_env.py` copies the agent-facing fixtures
+(`csv/sales.csv`, `mini_repo/`, `media/`, `capture/`, and
+`documents/meeting_notes_q3.txt` from the corpus) to `~/gaia-eval/`, and the
+eval backend runs from that folder, so it is a session's file scope. Scenario
+user messages reference files there (e.g. `~/gaia-eval/csv/sales.csv`). Nothing
+that holds an answer — ground truth, generators, this README, the fake gh's
+data — is staged, because the agent can read whatever is.
 
 ## Planted facts (ground truth for judges)
 

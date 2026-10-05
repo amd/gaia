@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -117,6 +118,8 @@ type Model struct {
 	Provider      string   `json:"cloud_provider"`
 	Downloaded    bool     `json:"downloaded"`
 	Labels        []string `json:"labels"`
+	// Size is the download size in GB as Lemonade's catalog reports it.
+	Size float64 `json:"size"`
 }
 
 func (m Model) Cloud() bool { return m.Recipe == "cloud" || m.Provider != "" || IsCloudID(m.ID) }
@@ -134,6 +137,10 @@ func Label(provider string) string {
 	}
 	return provider
 }
+
+// ErrUnreachable is returned when nothing answered at the Lemonade address, so
+// a caller that knows Lemonade is not set up yet can say that instead.
+var ErrUnreachable = errors.New("Lemonade did not respond. Start it, check its address, and retry")
 
 type Client struct {
 	BaseURL string
@@ -179,7 +186,7 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("Lemonade did not respond. Start it, check its address, and retry")
+		return ErrUnreachable
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

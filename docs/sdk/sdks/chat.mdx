@@ -70,6 +70,12 @@ class AgentResponse:
     reasoning: Optional[str] = None  # the model's reasoning, kept apart from `text`
 ```
 
+A reasoning model (Gemma-4, Qwen3) can spend the whole `max_tokens` budget
+thinking. The reply then has empty `text`, `finish_reason == "length"`, and the
+partial thought in `reasoning`. `send()` and `send_messages()` also log a warning
+naming the budget; the streaming methods report it on the final chunk. Raise
+`max_tokens` when that happens.
+
 ### SimpleChat
 
 Lightweight wrapper for basic chat without complex configuration. Perfect for getting started quickly.
@@ -255,7 +261,7 @@ chat = AgentSDK()
 
 chat.enable_rag(
     documents=["doc1.pdf", "doc2.pdf"],
-    chunk_size=600,      # Larger chunks for more context
+    chunk_size=500,      # Largest chunks (500 is the maximum)
     max_chunks=4,        # More chunks per query
     chunk_overlap=100    # Overlap for context preservation
 )

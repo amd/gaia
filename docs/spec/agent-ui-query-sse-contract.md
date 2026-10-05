@@ -78,9 +78,9 @@ net-new agent instrumentation.
 | `run_id` | string (UUIDv4) | **yes** | **Host-minted** streaming-run handle. See §2.3. |
 | `context` | array of `{role, content}` objects | **yes** | The relevant transcript slice, **pushed in the body**. May be an empty array `[]` for a fresh conversation, but the field must be present. See §2.4. |
 | `model` | string | no | Model id override. Omitted ⇒ the sidecar's default (e.g. `Gemma-4-E4B-it-GGUF` for the email agent). |
-| `provider` | string | no | LLM provider override (`lemonade` / `claude` / `openai`). Omitted ⇒ sidecar default. |
+| `provider` | string | no | LLM provider override. The flagship (`gaia`) accepts `lemonade` / `claude`; the email agent is local-only and accepts only `lemonade`. Omitted ⇒ sidecar default. `openai` is rejected by both — #3899 retired the generic `openai`/`litellm` backends repo-wide. |
 | `max_steps` | integer ≥ 1 | no | Agent-loop step ceiling. Omitted ⇒ the sidecar's configured default. |
-| `can_answer_questions` | boolean | no | Whether **this caller** can render a `needs_input` event and POST the answer (§5.1). **Send only to a peer at contract ≥ 2.6** — an older sidecar 422s the unknown field (see §7). Defaults to **false** — the safe answer. A caller that cannot answer would otherwise park the run until the question times out, which is indistinguishable from a hang. When false, a step that would ask instead fails immediately with what the user should do on that surface. |
+| `can_answer_questions` | boolean | no | Whether **this caller** can render a `needs_input` event and POST the answer (§5.1). **Send only to a peer at contract ≥ 2.6** — an older sidecar 422s the unknown field (see §7). **The two shipped sidecars default this differently when it's omitted.** The email agent's field is a plain `bool` defaulting to `False` — the safe answer, since a caller that cannot answer would otherwise park the run until the question times out, which is indistinguishable from a hang. The flagship (`gaia`) agent's field is `Optional[bool]` defaulting to `None`, and only an *explicit* `false` turns answering off — an omitted field behaves as answerable. A client driving both sidecars with the same "omit when unsure" logic gets opposite behavior; send the field explicitly rather than relying on either default. |
 | `session_id` | string, `^[A-Za-z0-9_-]{1,128}$` | no | Opaque conversation id, host-minted once per conversation and reused across turns (#2829). **Send only to a peer at contract ≥ 2.12** — an older sidecar 422s the unknown field (see §7). Omitted ⇒ today's stateless behaviour: a throwaway agent per call. Present ⇒ the run resolves the SAME agent every other turn on this id used, so a reference to something an earlier turn surfaced (e.g. "reply to number 1") can resolve. See §2.4. |
 
 ```jsonc
@@ -165,7 +165,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
 |---|---|---|
-| `status` | `{message}` (the stdio transport adds model fields, §10.3) | progress line / spinner label |
+| `status` | `{message, phase?, words?, chars?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label |
 | `token` | `{delta}` | stream assistant text |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
@@ -187,7 +187,10 @@ indistinguishable from a dead one.
   "required": ["type", "message"],
   "properties": {
     "type":    { "const": "status" },
-    "message": { "type": "string" }
+    "message": { "type": "string" },
+    "phase":   { "type": "string" },   // optional, §4.4
+    "words":   { "type": "integer" },  // with phase "reasoning"
+    "chars":   { "type": "integer" }   // with phase "tool_call"
   } }
 
 // token
@@ -320,6 +323,23 @@ Rules every receiver implements and every producer can rely on:
 work and render consistently. A custom `render` key requires a first-party /
 AMD-verified frontend component in v1 (§0.15); until yours ships, emitting it
 degrades to the unsupported-card fallback.
+
+### 4.4 `status.phase` (additive)
+
+A `status` may carry `phase`, naming what the model is doing while nothing else
+is on the wire. It is sent when the phase actually starts, never on a timer, and
+`message` says the same thing in words for a receiver that ignores the field.
+
+| `phase` | Sent when | Count |
+|---|---|---|
+| `reading` | a model call is sent (again after a load finishes) | — |
+| `loading_model` / `downloading_model` | the agent starts loading (or first downloading) the model | — |
+| `reasoning` | the model's first reasoning output, then about once a second | `words` reasoned so far |
+| `tool_call` | a long tool call's arguments are still streaming | `chars` so far |
+
+A phase lasts until the next phase, `token`, `tool_call` or `tool_result`. A
+receiver that shows narration separately should treat a phased `status` as
+state, not narration.
 
 ---
 
@@ -464,7 +484,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 
 | Source event | Emitters (`sse_handler.py`) | Decision | → Canonical | Rationale |
 |---|---|---|---|---|
-| `status` | `print_processing_start`, `print_goal`, `print_warning`, `print_info`, `start_progress`, `print_repeated_tool_warning`, `print_completion`, `print_agent_selected`, confirm-timeout | **map** | `status` | Already the canonical shape; keep `message`, drop the `status`/`steps`/`elapsed` sub-fields (progress-only). |
+| `status` | `print_processing_start`, `print_goal`, `print_warning`, `print_info`, `start_progress`, `print_repeated_tool_warning`, `print_completion`, confirm-timeout | **map** | `status` | Already the canonical shape; keep `message`, drop the `status`/`steps`/`elapsed` sub-fields (progress-only). |
 | `step` | `print_step_header` | **fold** | `status` | Step counter is progress narration; render as a `status` line (e.g. `"Step 3/20"`). No dedicated canonical type. |
 | `thinking` | `print_thought`, `print_streaming_text` (`<think>…</think>`) | **fold** | `status` | Reasoning narration, not final assistant text — folds to `status`, **not** `token` (which is answer text the UI commits to the message). See open question Q1. |
 | `plan` | `print_plan` | **fold** | `status` | Plan preview is progress narration; join `steps` into one `status` message. |

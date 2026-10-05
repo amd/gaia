@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
+from gaia.tool_cancellation import raise_if_cancelled
 
 log = logging.getLogger(__name__)
 
@@ -211,6 +212,9 @@ class CodeIndexSDK:
         unreadable_files = []
 
         for file_path in source_files:
+            # A build the agent stopped waiting for must stop, not race the
+            # next one for the same embedder (#2600). Nothing is persisted yet.
+            raise_if_cancelled()
             rel_path = str(Path(file_path).relative_to(self._repo_root))
             try:
                 content = self._read_file_safe(file_path)
@@ -902,6 +906,7 @@ class CodeIndexSDK:
 
         all_embeddings: List[list] = []
         for batch_start in range(0, len(safe_texts), BATCH_SIZE):
+            raise_if_cancelled()
             batch = safe_texts[batch_start : batch_start + BATCH_SIZE]
             batch_embeddings = self._embed_batch_resilient(batch)
             if len(batch_embeddings) != len(batch):
@@ -933,6 +938,7 @@ class CodeIndexSDK:
         valid_embeddings = []
 
         for batch_start in range(0, len(texts), BATCH_SIZE):
+            raise_if_cancelled()
             batch_texts = texts[batch_start : batch_start + BATCH_SIZE]
             batch_chunks = chunks[batch_start : batch_start + BATCH_SIZE]
             safe_texts = [t[:MAX_EMBED_CHARS] for t in batch_texts]

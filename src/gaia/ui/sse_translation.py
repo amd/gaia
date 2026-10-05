@@ -70,6 +70,7 @@ import json
 import os
 from typing import Any, Callable, Dict, List, Optional
 
+from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
     derive_narration,
@@ -95,6 +96,10 @@ def _debug_enabled_by_env() -> bool:
 #: ``needs_input`` is deliberately NOT here: the run pauses on it and resumes on
 #: the same stream once the answer arrives (spec §5.1).
 TERMINAL_TYPES = frozenset({"final", "error"})
+
+#: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
+#: words so far, or characters of a tool call's arguments so far.
+_PHASE_COUNT_FIELDS = ("words", "chars")
 
 
 class CanonicalTranslator:
@@ -303,7 +308,15 @@ class CanonicalTranslator:
         message = str(event.get("message", ""))
         if event.get("channel") == DEBUG_CHANNEL:
             return self._debug_status(message)
-        return self._user_status(message)
+        out = self._user_status(message)
+        phase = event.get("phase")
+        if out and isinstance(phase, str) and phase:
+            out[0]["phase"] = phase
+            for key in _PHASE_COUNT_FIELDS:
+                value = event.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    out[0][key] = value
+        return out
 
     def _on_step(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         step = event.get("step")
@@ -511,6 +524,8 @@ class CanonicalTranslator:
         """
         if self._summary_renderer is not None:
             return self._summary_renderer(tool, args)
+        if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(args.get("path"), str):
+            return _path_access_question(args)
         label = self._action_labels.get(tool, f"Run {tool!r}")
         detail = render_invocation(args)
         if not detail:
@@ -536,6 +551,17 @@ class CanonicalTranslator:
         "agent_created": _on_agent_created,
         # tool_args is handled before dispatch (merges into the pending tool_call).
     }
+
+
+def _path_access_question(args: Dict[str, Any]) -> str:
+    """The question an ``allow_path_access`` prompt asks, worded for its kind."""
+    path = args.get("path")
+    kind = args.get("kind")
+    if kind == "folder":
+        return f"Allow GAIA to use the folder {path} and everything in it for this session?"
+    if kind == "file":
+        return f"Allow GAIA to use the file {path} for this session?"
+    return f"Allow GAIA to use {path} for this session?"
 
 
 def _normalize_options(event: Dict[str, Any]) -> List[Dict[str, str]]:

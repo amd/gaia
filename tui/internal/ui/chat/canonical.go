@@ -31,6 +31,12 @@ type confirmActionResultMsg struct {
 	err      error
 }
 
+// modelSwitchRecorder is a transport whose respawned agent must keep a
+// confirmed `/model` switch (client.SubprocessClient).
+type modelSwitchRecorder interface {
+	RecordModelSwitch(model string, claude bool) bool
+}
+
 // handleCanonicalEvent renders the canonical `/query` SSE vocabulary — what the
 // daemon transport streams. handled is false for anything else, so the legacy
 // in-process types (used by the subprocess transport) fall through untouched.
@@ -43,11 +49,12 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// names what the agent actually resolved, never a launch flag's guess.
 		if e.ModelID != "" {
 			// A change nobody here asked for means the agent process was
-			// replaced without a live `/model` switch in flight — a
-			// cancelled turn respawns the child from its ORIGINAL launch
-			// flags (subprocess.go), silently reverting any earlier switch.
-			// The header self-corrects either way (below); this just makes
-			// the revert visible instead of quietly true.
+			// replaced and came back on a different model. The next message
+			// respawns the child after it died (crash, external kill) or after
+			// a hard stop — Esc or Ctrl+C pressed again while a stop is
+			// pending. A first Esc only asks it to stop and keeps the process.
+			// A confirmed `/model` switch is recorded on the client so the
+			// respawn keeps it; this notice is for any change that slips past.
 			if m.modelID != "" && e.ModelID != m.modelID && !m.awaitingModelSwitch {
 				m.messages = append(m.messages, Message{
 					Role: RoleStatus,
@@ -60,6 +67,12 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			}
 			if m.awaitingModelSwitch {
 				m.switchedTo = savedChoice{provider: providerOfBackend(e.ModelBackend), model: e.ModelID}
+				// A refused switch sends no ping, so a match is the confirmation.
+				if e.ModelID == m.switchTarget {
+					if r, ok := m.client.(modelSwitchRecorder); ok {
+						r.RecordModelSwitch(e.ModelID, e.ModelBackend == "claude")
+					}
+				}
 			}
 			m.modelID = e.ModelID
 			m.modelDisplay = e.ModelDisplay
@@ -76,6 +89,13 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			// Keep the legacy flag in sync — renderClaudeChip is still the
 			// pre-first-event fallback (see renderModelChip).
 			m.claudeMode = e.ModelBackend == "claude"
+			break
+		}
+
+		// A phase report drives the live line and nothing else: it is not
+		// narration, so it never lands in the work log.
+		if e.Phase != "" {
+			m.phase = modelPhase{name: e.Phase, words: e.Words, label: truncateRunes(clean(e.Message), narrationMax)}
 			break
 		}
 
@@ -122,6 +142,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	case event.CanonicalToolCallEvent:
 		m.stashNarration()
+		m.phase = modelPhase{}
 		item := ActivityItem{
 			Kind:    "tool",
 			Tool:    e.Tool,
@@ -136,6 +157,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.activity = append(m.activity, item)
 
 	case event.CanonicalToolResultEvent:
+		m.phase = modelPhase{}
 		outcome, toolErr := event.ToolOutcomeOf(e)
 		if e.Render == "" {
 			// A tool that draws no card has no surface but its step row, so the

@@ -38,7 +38,7 @@ def test_npu_unavailable_no_gpu_falls_through_to_cpu(capsys):
     result = resolve_effective_device("npu", False, devices)
 
     assert result == "cpu"
-    assert "No GPU detected" in capsys.readouterr().out
+    assert "No GPU detected" in capsys.readouterr().err
 
 
 def test_npu_unavailable_gpu_present_ends_on_gpu(capsys):
@@ -48,7 +48,7 @@ def test_npu_unavailable_gpu_present_ends_on_gpu(capsys):
     result = resolve_effective_device("npu", False, devices)
 
     assert result == "gpu"
-    assert "No GPU detected" not in capsys.readouterr().out
+    assert "No GPU detected" not in capsys.readouterr().err
 
 
 def test_explicit_npu_unavailable_exits_nonzero_no_fallback(capsys):
@@ -86,7 +86,7 @@ def test_gpu_requested_no_gpu_falls_to_cpu(capsys):
     result = resolve_effective_device("gpu", False, devices)
 
     assert result == "cpu"
-    assert "No GPU detected" in capsys.readouterr().out
+    assert "No GPU detected" in capsys.readouterr().err
 
 
 def test_gpu_requested_metal_counts_as_gpu(capsys):
@@ -96,7 +96,7 @@ def test_gpu_requested_metal_counts_as_gpu(capsys):
     result = resolve_effective_device("gpu", False, devices)
 
     assert result == "gpu"
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().err == ""
 
 
 # ── cpu requires no validation ────────────────────────────────────────────
