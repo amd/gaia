@@ -78,6 +78,12 @@ SAVE_CLAIMS = [
         "**Plan:** the file was written to out/x.md.",
         id="plan-label-in-front-of-a-passive-claim",
     ),
+    # The "exported from" exemption names a module's source, not a save —
+    # it must not swallow every write verb followed by "from".
+    pytest.param(
+        "The report was saved from the template to `report.md`.",
+        id="saved-from-template-to-path",
+    ),
 ]
 
 NON_CLAIMS = [

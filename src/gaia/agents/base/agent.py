@@ -1016,7 +1016,7 @@ _FILE_WRITE_CLAIM_PATTERNS = (
     # "are exported from `__init__.py`" names a module's source, not a save.
     re.compile(
         rf"\b(?:has|have|had|was|were|is|are)\s+{_WRITE_ADVERBS}"
-        rf"(?:been\s+)?{_WRITE_ADVERBS}{_FILE_WRITE_VERBS}\b(?!\s+from\b)",
+        rf"(?:been\s+)?{_WRITE_ADVERBS}{_FILE_WRITE_VERBS}\b(?!(?<=exported)\s+from\b)",
         re.IGNORECASE,
     ),
     # A bare "Saved to …" / "Report saved successfully at …" opening a line.
