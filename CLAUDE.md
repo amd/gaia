@@ -181,6 +181,9 @@ This self-review step is mandatory - never skip verification of your output.
 - Feature branches: Use descriptive names (e.g., `kalin/mcp`, `feature/new-agent`)
 - Always check current branch status before making changes
 - Use pull requests for merging changes to main
+- Never `git stash` in a worktree: every worktree of a clone shares one stash
+  list, so `git stash pop` can apply another session's work to yours. Use a
+  temporary commit or a patch file.
 
 ## Development Standards
 
@@ -369,7 +372,7 @@ python -m gaia.mcp.mcp_bridge
 
 2. **Mocks prove "we called it," not "the call is valid."** At any boundary with a contract — HTTP API, subprocess, SQL, file format, IPC — a stub returning a hardcoded success only proves the method was invoked, never that the request would be accepted. Assert the *shape* of the outgoing call (required prefixes, mutually-required fields, allowed value combinations), and where the contract lives in an external service add one real integration test (e.g. `require_lemonade`) that exercises it.
 
-**#1655 is the canonical case for both:** the model-pull sent `recipe=` for a *built-in* Lemonade model, which Lemonade 400s — but only on a *fresh* pull. Every unit test mocked the client, every manual check ran on a box that already had `gemma4-it-e2b-FLM` cached, and the PR's `gaia init --profile npu` test-plan item was checked off against that warm cache. `tests/test_lemonade_client.py::test_pull_model` even documented the correct `user.`-prefix-with-`recipe` pattern, but stubbed the HTTP layer, so it couldn't catch the profile that violated it.
+**#1655 is the canonical case for both:** the model-pull sent `recipe=` for a *built-in* Lemonade model, which Lemonade 400s — but only on a *fresh* pull. Every unit test mocked the client, every manual check ran on a box that already had `gemma4-it-e2b-FLM` cached, and the PR's `gaia init --profile npu` test-plan item was checked off against that warm cache. `test_pull_model` (now in `tests/unit/test_lemonade_client_http.py`) even documented the correct `user.`-prefix-with-`recipe` pattern, but stubbed the HTTP layer, so it couldn't catch the profile that violated it.
 
 ### Tests always run against THIS checkout
 
@@ -432,6 +435,12 @@ gaia eval agent --compare \
   <printed-output-path>/scorecard.json
 ```
 
+The two-terminal recipe fits non-`gaia_*` categories. A `gaia_*` category scored
+that way is not comparable to CI: those scenarios read staged fixtures, a fixture
+web server and hub, and a fake `gh` that must be first on PATH because their tool
+calls are auto-approved. `python util/run_eval_lane.py --lane <lane>` (or
+`--category <name>`) reproduces a CI lane's setup on this machine.
+
 **Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), call it out explicitly in the PR description and replace that category's `scorecard_<category>.json` from the next nightly on the Strix Halo pool — never from a local `--save-baseline` run, which writes elsewhere and measures a different machine. The reviewer needs to see the diff between baselines, not just the new score.
 
 Report what you compared: name the baseline run, list scenarios that went PASS→FAIL (regressions) and FAIL→PASS (progress toward 80%) separately, and re-run any lone flip before trusting it.
@@ -453,7 +462,7 @@ ps aux | grep "gaia eval" | grep -v grep | wc -l    # must print "0"
 
 This applies to every `gaia eval agent` run — including `--fix` auto-fix runs and any batch fix-loop that chains them. The judge LLM (Claude) can run concurrently across scenarios — the bottleneck is the local Lemonade backend, which is single-tenant per model slot.
 
-**The constraint is the BACKEND, not the clock.** Two evals on two machines, each with its own Lemonade, cannot evict each other's model and are not covered by this rule. That is what lets [`eval_flagship.yml`](.github/workflows/eval_flagship.yml) fan the scenario eval out across parallel lanes on the ephemeral runner pool — every lane gets its own machine, and within a lane the categories still run one at a time. Do not "fix" that workflow back to a single serial job, and do not read this rule as licence to run two evals against one Lemonade because they are in different terminals.
+**The constraint is the BACKEND, not the clock.** Two evals on two machines, each with its own Lemonade, cannot evict each other's model and are not covered by this rule. That is what lets [`eval_flagship.yml`](.github/workflows/eval_flagship.yml) fan the scenario eval out across parallel lanes on the ephemeral runner pool — every lane gets its own machine, and within a lane the categories still run one at a time. Do not "fix" that workflow back to a single serial job, and do not read this rule as licence to run two evals against one Lemonade because they are in different terminals. Two Lemonades on **one** machine still share its GPU: they cannot evict each other, but each runs at a fraction of its speed and every timing in both scorecards is wrong. On a developer machine run one eval at a time, whatever backend it uses, and never set `GAIA_EVAL_NO_LOCK` to get past another session's eval.
 
 ## Development Workflow
 
