@@ -31,10 +31,11 @@ from __future__ import annotations
 import json
 import os
 import platform
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from gaia.agents.base.project_deps import declared_python_deps, missing_deps
 from gaia.agents.base.system_context import DEV_TOOL_PROBES, probe_binaries
 from gaia.agents.base.turn_metrics import count_tokens
 from gaia.logger import get_logger
@@ -53,6 +54,10 @@ logger = get_logger(__name__)
 #: smaller window is the one that has to survive the addition, and a budget that
 #: only holds on 64K is not a budget.
 PROJECT_MAP_TOKEN_BUDGET = 600
+
+#: Work roots named in the header, which sits outside the budget; persisted
+#: grants can make the full list arbitrarily long.
+_WORK_ROOTS_SHOWN = 4
 
 #: Per-section sub-caps, as a fraction of the total budget. Without these the
 #: directory listing — the one unbounded section — eats the whole allowance and
@@ -236,6 +241,10 @@ class ProjectMap:
     tools_absent: List[str] = field(default_factory=list)
     #: The subset of the above on ``run_shell_command``'s read-only list.
     shell_commands: List[str] = field(default_factory=list)
+    #: Runtime dependencies the manifest declares, and those ``python`` lacks
+    #: (``None``: not a Python project, or the interpreter could not be asked).
+    python_deps: List[str] = field(default_factory=list)
+    missing_python_deps: Optional[List[str]] = None
     quirks: PlatformQuirks = field(default_factory=detect_platform_quirks)
     fingerprint: str = ""
 
@@ -302,16 +311,21 @@ def build_project_map(root: os.PathLike | str) -> ProjectMap:
 
     cached = _MAP_CACHE.get(key)
     if cached is not None and cached[0] == fp:
-        return cached[1]
-
-    pm = _collect(path, fp)
-    _MAP_CACHE[key] = (fp, pm)
-    logger.debug(
-        "[project-map] built for %s (%d top-level dirs, %d entry points)",
-        key,
-        len(pm.top_level_dirs),
-        len(pm.entry_points),
-    )
+        pm = cached[1]
+    else:
+        pm = _collect(path, fp)
+        _MAP_CACHE[key] = (fp, pm)
+        logger.debug(
+            "[project-map] built for %s (%d top-level dirs, %d entry points)",
+            key,
+            len(pm.top_level_dirs),
+            len(pm.entry_points),
+        )
+    # Re-asked every build: an install changes none of the fingerprint's inputs.
+    missing = missing_deps(pm.python_deps)
+    if missing != pm.missing_python_deps:
+        pm = replace(pm, missing_python_deps=missing)
+        _MAP_CACHE[key] = (fp, pm)
     return pm
 
 
@@ -371,6 +385,7 @@ def _collect(path: Path, fingerprint: str) -> ProjectMap:
     # most of the toolchain is not allowlisted — ``uv`` and ``npm`` are on this
     # machine and ``run_shell_command`` runs either only once the user approves.
     shell_commands = sorted(n for n in allowlist if probed.get(n))
+    python_deps = declared_python_deps(path)
 
     return ProjectMap(
         root=str(path),
@@ -383,6 +398,7 @@ def _collect(path: Path, fingerprint: str) -> ProjectMap:
         tools_present=tools_present,
         tools_absent=tools_absent,
         shell_commands=shell_commands,
+        python_deps=python_deps,
         quirks=detect_platform_quirks(),
         fingerprint=fingerprint,
     )
@@ -527,6 +543,7 @@ def render_project_map(
     index_status: Optional[str] = None,
     token_budget: int = PROJECT_MAP_TOKEN_BUDGET,
     has_shell_tool: bool = True,
+    work_roots: Sequence[str] = (),
 ) -> str:
     """Render *pm* as a system-prompt block of at most *token_budget* tokens.
 
@@ -547,6 +564,12 @@ def render_project_map(
         header.append(f"Code repository: yes ({detail})")
     else:
         header.append("Code repository: no (no VCS directory, no known manifest)")
+    if work_roots:
+        roots = sorted(work_roots)
+        shown = "; ".join(roots[:_WORK_ROOTS_SHOWN])
+        if len(roots) > _WORK_ROOTS_SHOWN:
+            shown += f"; and {len(roots) - _WORK_ROOTS_SHOWN} more"
+        header.append(f"You can read and write without asking only under: {shown}")
 
     quirks = [
         "Platform (these three change the commands you write):",
@@ -620,6 +643,26 @@ def render_project_map(
         used += cost
 
     return "\n\n".join(out)
+
+
+def python_deps_line(pm: ProjectMap) -> str:
+    """``[Python dependencies ...]`` for the user turn, or "" when unknown.
+
+    Per turn rather than in the map: an install mid-session changes it, and a
+    changed system prompt makes a local model re-read the whole conversation.
+    """
+    if pm.missing_python_deps:
+        return (
+            f"[Python dependencies NOT installed for `python`: "
+            f"{', '.join(pm.missing_python_deps)} (of {len(pm.python_deps)} "
+            "declared). Importing the project, and running its tests, fails "
+            "until they are installed.]"
+        )
+    if pm.missing_python_deps == [] and pm.python_deps:
+        return (
+            f"[Python dependencies: all {len(pm.python_deps)} declared are installed.]"
+        )
+    return ""
 
 
 # ── agent mixin ───────────────────────────────────────────────────────────
@@ -702,7 +745,38 @@ class ProjectMapMixin:
             pm,
             index_status=self._code_index_status(pm),
             has_shell_tool=self._shell_tool_offered(),
+            work_roots=self._work_roots(),
         )
+
+    def _work_roots(self) -> List[str]:
+        """Where the agent may work without asking, as of the first render.
+
+        Frozen so a mid-session grant cannot rewrite the system prompt; the
+        grant still applies, only this line lags it.
+        """
+        if not hasattr(self, "_work_roots_cache"):
+            validator = getattr(self, "path_validator", None)
+            if validator is None:
+                return []
+            self._work_roots_cache = [
+                str(p) for p in getattr(validator, "allowed_paths", None) or ()
+            ]
+        return self._work_roots_cache
+
+    def get_memory_dynamic_context(self) -> str:
+        """Per-turn context, plus whether the project's Python deps are installed."""
+        parent = getattr(super(), "get_memory_dynamic_context", None)
+        parts = (parent() if parent else "", self._python_deps_line())
+        return "\n".join(part for part in parts if part)
+
+    def _python_deps_line(self) -> str:
+        try:
+            pm = self.materialize_project_map()
+        except OSError as e:
+            # Same as _on_task_start: a vanished root must not take the turn.
+            logger.warning("[project-map] cannot read the project root: %s", e)
+            return ""
+        return python_deps_line(pm) if pm is not None else ""
 
     def _shell_tool_offered(self) -> bool:
         """Whether *this turn* offers the shell, not whether the agent owns it.
