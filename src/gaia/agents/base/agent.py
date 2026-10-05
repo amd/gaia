@@ -63,6 +63,7 @@ from gaia.agents.base.extraction import (
     read_snapshot,
 )
 from gaia.agents.base.grounding import (
+    LOOK,
     OBSERVED_MAX_CHARS,
     grounding_correction,
     path_locator,
@@ -9123,6 +9124,8 @@ Do NOT wrap conversational replies in JSON.
                     )
                     if unlooked:
                         look_first_reprompted = True
+                        # Grounding's look gate would ask the same thing again.
+                        grounding_fired.add(LOOK)
                         logger.info(
                             "[WORKFLOW] Answer named %s without a tool call; asking "
                             "the agent to look first",
