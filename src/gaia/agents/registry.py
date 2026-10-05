@@ -24,10 +24,7 @@ from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL as LEMONADE_DEFAULT_EMBEDDING_MODEL,
 )
-from gaia.llm.lemonade_client import (
-    GPU_CTX_SIZE,
-    NPU_CTX_SIZE,
-)
+from gaia.llm.lemonade_client import GPU_CTX_SIZE, NPU_CTX_SIZE
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -1472,8 +1469,10 @@ class AgentRegistry:
             available_models = self._get_available_models()
 
         resolved = resolve_preferred_model(preferred_models, available_models)
-        changed = self._resolved_models.get(agent_id, "") != resolved
-        self._resolved_models[agent_id] = resolved
+        # Chat turns and the polled session list resolve from different threads.
+        with self._lock:
+            changed = self._resolved_models.get(agent_id, "") != resolved
+            self._resolved_models[agent_id] = resolved
         if resolved is not None:
             if changed:
                 logger.info(
