@@ -57,7 +57,8 @@ Misconfigured reverse proxies can reflect the `Authorization` header back in a 4
 - `src/gaia/ui/_chat_helpers.py` — 4 Lemonade-bound httpx call sites: auto-title POST (~337), health GET (~1006, ~1058), stats GET (~2289). (Line numbers drift — grep the call, don't trust the offset.)
 - `src/gaia/ui/server.py` — 2 health probe httpx GET sites (~299, ~311)
 - `src/gaia/agents/base/agent.py` — `_is_loaded_ctx_too_small()` is the reference for the deferred pattern (`lemonade_client` and `LemonadeManager` imported inside the method)
-- `tests/test_lemonade_client.py` — uses `responses` library for `requests` interception; `TestLemonadeClientMock` class
+- `tests/unit/test_lemonade_client_http.py` — mocked HTTP via the `responses` library (`TestLemonadeClientMock`); `_mock_cold_load` / `_assert_one_load` answer and check the pre-request ctx load
+- `tests/test_lemonade_client.py` — live-server `TestLemonadeClientIntegration` only (CI selects it with `-k Integration`)
 - `docs/.env.example` — This is a Mintlify/docs-proxy config file, NOT GAIA's env var file. GAIA env vars go in `.env.example` at the repo root.
 
 ## Conventions
@@ -106,10 +107,10 @@ next(gen)  # consume one item; don't iterate fully or it blocks
 ```
 
 ### `_ensure_model_loaded` makes its own network calls
-In `test_401_does_not_trigger_auto_download_retry`-style tests, forgetting to mock `_ensure_model_loaded` causes the test to fail because `_ensure_model_loaded` itself calls `get_status()` → `list_models()`, which makes HTTP requests that can trigger model loading. Always patch `_ensure_model_loaded` when testing `chat_completions` error paths.
+In `test_401_does_not_trigger_auto_download_retry`-style tests, forgetting to mock `_ensure_model_loaded` causes the test to fail because `_ensure_model_loaded` itself calls `get_status()` → `list_models()`, which makes HTTP requests that can trigger model loading. Always patch `_ensure_model_loaded` when testing `chat_completions` error paths. On happy paths, answer it instead (`_mock_cold_load`) and assert the `/load` body (`model_name`, `ctx_size`, `llamacpp_args`) — patching it away hides the load the user actually triggers.
 
 ### Never assume a failure is pre-existing — check `main`
-`tests/test_lemonade_client.py` has historically carried a few failures unrelated to any
+`tests/unit/test_lemonade_client_http.py` (formerly the mock class in `tests/test_lemonade_client.py`) has historically carried a few failures unrelated to any
 given change (model-name drift, removed kwargs, deprecated APIs). **Do not work from a
 remembered list** — a test that was broken last month may have been fixed since, and
 dismissing it as "pre-existing" would hide a real regression you just introduced.
@@ -117,7 +118,7 @@ dismissing it as "pre-existing" would hide a real regression you just introduced
 Confirm empirically for each failing test, every time:
 
 ```bash
-git stash && python -m pytest tests/test_lemonade_client.py::<Class>::<test> -x; git stash pop
+git stash && python -m pytest tests/unit/test_lemonade_client_http.py::<Class>::<test> -x; git stash pop
 ```
 
 Fails on a clean `main` too → pre-existing. Passes there → **you broke it.**

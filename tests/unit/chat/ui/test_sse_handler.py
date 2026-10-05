@@ -1553,6 +1553,10 @@ class TestSummarizeToolResult:
         result = _summarize_tool_result(data)
         assert result == "Indexed document (5 chunks)"
 
+    def test_indexing_an_already_indexed_document_says_so(self):
+        data = {"num_chunks": 5, "already_indexed": True, "filename": "a.pdf"}
+        assert _summarize_tool_result(data) == "Already indexed (5 chunks)"
+
     # --- File read results ---
 
     def test_file_read_result(self):
