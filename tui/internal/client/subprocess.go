@@ -550,8 +550,10 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 		if state != nil && !state.Success() {
 			stderrContent := st.stderr.String()
 			msg := describeAgentExit(state.ExitCode())
+			// Labelled: unlabelled, this process's old "Loading model" lines read
+			// as what the restart was doing.
 			if stderrContent != "" {
-				msg += "\n" + stderrContent
+				msg += "\n" + exitedOutputLabel + "\n" + stderrContent
 			}
 			emit(event.AgentErrorEvent{
 				Type:    "agent_error",
@@ -562,6 +564,9 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 
 	return ch, nil
 }
+
+// exitedOutputLabel heads the stderr a dead child wrote over its whole life.
+const exitedOutputLabel = "Output from the process that exited:"
 
 // isTerminalEvent reports whether evt ends a turn in either dialect.
 func isTerminalEvent(evt interface{}) bool {
@@ -947,23 +952,51 @@ func (s *SubprocessClient) SetModelBeforeStart(model string) bool {
 	if !s.canonical || s.started || strings.TrimSpace(model) == "" {
 		return false
 	}
-	args := make([]string, 0, len(s.args)+2)
-	for i := 0; i < len(s.args); i++ {
-		arg := s.args[i]
-		switch {
-		case arg == UseClaudeFlag, strings.HasPrefix(arg, UseClaudeFlag+"="):
-			continue
-		case arg == "--model", arg == ClaudeModelFlag:
-			if i+1 < len(s.args) && !strings.HasPrefix(s.args[i+1], "--") {
-				i++
+	s.args = append(withoutFlags(s.args, UseClaudeFlag, "--model", ClaudeModelFlag), "--model", model)
+	return true
+}
+
+// RecordModelSwitch makes a live `/model` switch the running agent confirmed
+// outlive a respawn: the next child's argv is built from s.args, so without
+// this a crashed or killed child came back on the launch model.
+//
+// The flags mirror what the agent's own switch changes: a Claude switch keeps
+// the Lemonade --model and adds the Claude pair; a Lemonade switch drops the
+// Claude pair and replaces --model.
+func (s *SubprocessClient) RecordModelSwitch(model string, claude bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.canonical || strings.TrimSpace(model) == "" {
+		return false
+	}
+	if claude {
+		s.args = append(withoutFlags(s.args, UseClaudeFlag, ClaudeModelFlag), UseClaudeFlag, ClaudeModelFlag, model)
+	} else {
+		s.args = append(withoutFlags(s.args, UseClaudeFlag, "--model", ClaudeModelFlag), "--model", model)
+	}
+	return true
+}
+
+// withoutFlags returns a copy of args with each named flag removed, in both
+// `--flag value` and `--flag=value` form. --use-claude is a bare switch, so
+// it never consumes the next argument.
+func withoutFlags(args []string, flags ...string) []string {
+	out := make([]string, 0, len(args)+3)
+	for i := 0; i < len(args); i++ {
+		arg, drop := args[i], false
+		for _, f := range flags {
+			if arg == f {
+				drop = true
+				if f != UseClaudeFlag && i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+					i++
+				}
+			} else if strings.HasPrefix(arg, f+"=") {
+				drop = true
 			}
-			continue
-		case strings.HasPrefix(arg, "--model="), strings.HasPrefix(arg, ClaudeModelFlag+"="):
-			continue
-		default:
-			args = append(args, arg)
+		}
+		if !drop {
+			out = append(out, arg)
 		}
 	}
-	s.args = append(args, "--model", model)
-	return true
+	return out
 }
