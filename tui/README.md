@@ -243,6 +243,10 @@ whichever model was already working. Backends never swap themselves: a local
 switch with Lemonade down is refused with both ways forward (start the server,
 or name a Claude id), never silently answered somewhere else.
 
+A switch the agent confirmed also survives the agent process restarting. If it
+crashes or you hard-stop it (Esc twice), your next message starts a new process
+on the model you switched to, not the one the TUI launched with.
+
 ## Running against a local clone
 
 Three independent layers, and only one of them has a flag.
