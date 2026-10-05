@@ -65,9 +65,9 @@
           {
             "group": "Python Framework",
             "pages": [
+              "guides/install",
               "setup",
               "quickstart",
-              "guides/install",
               "guides/agent-ui",
               "guides/terminal-hub",
               "guides/memory",

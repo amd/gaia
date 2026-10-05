@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Every tool is offered on every turn again, as in the Agent UI.** Per-turn
+  tool selection swapped about a dozen tools in and out at its cap, which broke
+  the local model's prompt cache (17s to first token on a one-line question,
+  0.4s without it) and left out the tool a question needed: a CSV question was
+  given web tools and fetched an unrelated page. `GAIA_DYNAMIC_TOOLS=1` turns
+  selection back on. The registered count is 95: `load_tools`, the selector's
+  escape hatch, registers only while selection is on.
 - **A turn's silent opening now says what the model is doing.** A thinking
   model sat on "Getting started" for 10-20 s while it read the prompt and then
   reasoned in a paragraph released only once finished. `status` events gain an
@@ -78,6 +85,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A file you allow is usable by every tool, including document Q&A.** Indexing
+  or querying a file outside the chat's scope was refused with no prompt, and
+  approving it through another tool still left it unreadable to the document
+  index. Indexing now asks the same question `read_file` does, and one approval
+  covers both. A tool waiting on that question is no longer abandoned at its
+  180 s limit while the question is still on screen. A refusal now tells the
+  model not to copy or move the file elsewhere to get around it.
 - **`--use-claude` works with the downloaded binary.** The release build left
   out the Anthropic client, so every Claude launch from the terminal UI, and
   every `/model` switch to Claude, failed with "The 'anthropic' package is
