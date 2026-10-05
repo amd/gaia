@@ -397,6 +397,20 @@ WRITE_FAILURE_EMBED = "embed"  # row saved, no search vector stored
 WRITE_FAILURE_INDEX = "index"  # vector stored, not in this session's index
 WRITE_FAILURE_STORE = "store"  # row not saved at all
 
+
+def memory_off_reason(agent) -> str:
+    """Why *agent* is not storing memory, in words the user can act on."""
+    reason = getattr(agent, "_incognito_reason", None)
+    if reason == "private":
+        return "This is a private chat, so nothing is saved to memory."
+    if reason == "memory_off":
+        return (
+            "Memory is turned off in Settings, so nothing is saved. "
+            "It can be turned back on there."
+        )
+    return "Memory is off for this session, so nothing is saved."
+
+
 _REEMBED_HINT = (
     "Agents re-embed missing vectors on startup (up to 100 per start) when the "
     "embedding model is loaded, or use Rebuild Embeddings in the Memory "
@@ -3867,7 +3881,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             if getattr(mixin, "_incognito", False):
                 return {
                     "status": "skipped",
-                    "message": "Memory is paused — this is a private session.",
+                    "message": memory_off_reason(mixin),
                 }
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}

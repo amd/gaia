@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.run_manager import run_manager
 
 logger = logging.getLogger(__name__)
@@ -475,8 +476,8 @@ class AgentLoop:
 
                 # Set incognito flag (respect private/memory settings)
                 if hasattr(agent, "_incognito"):
-                    memory_off = db.get_setting("memory_enabled", "false") == "false"
-                    agent._incognito = memory_off
+                    agent._incognito = not memory_enabled(db)
+                    agent._incognito_reason = "memory_off"
 
                 # Also replaces a prior streaming turn's fired cancel event.
                 agent._cancel_event = cancel_event
