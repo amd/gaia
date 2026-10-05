@@ -1,0 +1,59 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/fixture_hub/sources/unit-convert/ (1.0.0,
+# community, signed, never pre-installed) — see GAIA_FIXTURE_VALUES.md
+# "Skills, web and tool selection".
+id: skills_hub_install_use_remove
+name: "Skills — Search, Install, Load, Use, Remove in One Session"
+category: gaia_skills_lifecycle
+severity: critical
+tags: [t3_stress]
+description: |
+  The whole lifecycle chained against the fixture hub: discover a skill by
+  capability, install and load it, prove its instructions drive the answer,
+  then remove it and verify it is gone from both the installed and loaded
+  sets. Leaves the machine as it found it.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Fixture server running; GAIA_HUB_URL points at the fixture hub; unit-convert NOT installed (it is not a starter skill)."
+
+turns:
+  - turn: 1
+    objective: "Find a unit-conversion skill on the hub, install it, and load it"
+    user_message: "Is there a skill on the hub for converting units? If there is, install it and load it."
+    ground_truth:
+      expected_behavior: "search_skill_hub finds unit-convert 1.0.0; install_skill installs it at community tier; load_skill loads it"
+    success_criteria: |
+      agent_tools[] shows search_skill_hub, install_skill, and load_skill, in
+      that order, all for unit-convert. Claiming any step with no matching
+      call is a CRITICAL FAIL.
+
+  - turn: 2
+    objective: "Use the skill"
+    user_message: "Convert 5 miles to km."
+    ground_truth:
+      expected_answer: "Three lines: UNIT-CONVERT v1.0.0 / 5 mi = 8.05 km / (converted by unit-convert)"
+    success_criteria: |
+      The answer follows the skill's output format: first line exactly
+      `UNIT-CONVERT v1.0.0`, a result of 8.05 km, and the closing line
+      `(converted by unit-convert)`. A correct number without the skill's
+      format means the loaded skill did not drive the answer — FAIL.
+
+  - turn: 3
+    objective: "Remove it completely"
+    user_message: "Great, I don't need it anymore — remove it completely."
+    ground_truth:
+      expected_behavior: "remove_skill('unit-convert') deletes it and unloads it"
+    success_criteria: "agent_tools[] includes remove_skill for unit-convert and the agent confirms it was deleted. Only calling unload_skill (which leaves it installed) is a FAIL."
+
+  - turn: 4
+    objective: "Verify it is gone"
+    user_message: "Double-check: is unit-convert still installed or loaded anywhere?"
+    ground_truth:
+      expected_answer: "No — neither installed nor loaded"
+    success_criteria: "A real check (list_skills and/or skill_status in agent_tools[]) and a clear no. Saying it is still installed or loaded is a FAIL."
+
+expected_outcome: |
+  Every lifecycle step is a real tool call, the skill's format proves it was
+  in effect, and the removal is verified rather than assumed.

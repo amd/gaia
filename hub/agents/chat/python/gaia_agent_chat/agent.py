@@ -69,6 +69,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     WaitToolsMixin,
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
+from gaia.agents.tools.rag_tools import documents_still_indexing
 from gaia.llm.inference_location import (
     InferenceLocation,
     resolve_inference_location,
@@ -629,14 +630,27 @@ class ChatAgent(
             self._start_watching()
 
     def _indexed_documents_line(self) -> str:
-        """``[Indexed documents: a.pdf, b.txt]``, or "" when none are indexed."""
+        """``[Indexed documents: a.pdf, b.txt]``, or "" when none are indexed.
+
+        A document still indexing in the background is not searchable, so it
+        is named on a line of its own instead.
+        """
         profile = getattr(self.config, "prompt_profile", "full")
         if "doc_rag" not in get_profile_spec(profile).tool_groups:
             return ""
-        if not (self.rag and self.rag.indexed_files):
+        if not self.rag:
             return ""
-        names = sorted({Path(fp).name for fp in self.rag.indexed_files})
-        return f"[Indexed documents: {', '.join(names)}]"
+        lines = []
+        if self.rag.indexed_files:
+            names = sorted({Path(fp).name for fp in self.rag.indexed_files})
+            lines.append(f"[Indexed documents: {', '.join(names)}]")
+        pending = sorted({Path(fp).name for fp in documents_still_indexing(self.rag)})
+        if pending:
+            lines.append(
+                "[Still indexing in the background, not searchable yet: "
+                f"{', '.join(pending)}]"
+            )
+        return "\n".join(lines)
 
     def get_memory_dynamic_context(self) -> str:
         """Per-turn context, plus which documents are indexed right now."""

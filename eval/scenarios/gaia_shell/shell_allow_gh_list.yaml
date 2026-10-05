@@ -8,6 +8,7 @@ id: shell_allow_gh_list
 name: "Shell — ALLOW-Tier gh Read Runs Without a Prompt"
 category: gaia_shell
 severity: critical
+tags: [t2_compound, local_blocked_win_shim]
 description: |
   With the github-triage skill loaded, an ALLOW-tier read (`gh issue list`)
   runs with no confirmation prompt — loading the skill was the consent.

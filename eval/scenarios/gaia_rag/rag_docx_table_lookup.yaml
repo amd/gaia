@@ -1,0 +1,34 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/orion_onboarding.docx — see
+# GAIA_FIXTURE_VALUES.md "Documents and data".
+id: rag_docx_table_lookup
+name: "RAG — Word Document Facts, Including a Table Cell"
+category: gaia_rag
+severity: high
+tags: [t1_basic, local_blocked_no_embedder]
+description: |
+  Basic DOCX path: index a Word document and answer from its paragraphs and
+  from a cell of its only table (the week-1 schedule).
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Fixture DOCX staged at ~/gaia-eval/tiers_documents/orion_onboarding.docx."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to read ~/gaia-eval/tiers_documents/orion_onboarding.docx and say how much the laptop stipend is and where to pick up the badge"
+    user_message: "can you index ~/gaia-eval/tiers_documents/orion_onboarding.docx and tell me how much the laptop stipend is and where i get my badge"
+    ground_truth:
+      expected_answer: "$1,200 laptop stipend (reimbursed after 30 days); badge from Building C, Room 114, 9:00-11:00 AM on day one"
+    success_criteria: "agent_tools[] shows index_document on the .docx then a retrieval call. Answer states $1,200 AND Building C, Room 114. A wrong amount or room is a FAIL."
+
+  - turn: 2
+    objective: "Ask what happens on Tuesday of week 1 (a table cell)"
+    user_message: "whats on tuesday of the first week?"
+    ground_truth:
+      expected_answer: "Systems access setup"
+    success_criteria: "Agent answers 'Systems access setup' from the week-1 table. Naming another day's activity (e.g. Safety training, Robotics lab tour) is a FAIL."
+
+expected_outcome: |
+  Paragraph facts and a table cell from the DOCX are both retrieved exactly.

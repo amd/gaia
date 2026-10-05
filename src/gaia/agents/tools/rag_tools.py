@@ -6,10 +6,14 @@ RAG Tools Mixin for Chat Agent.
 Provides document retrieval, querying, and evaluation tools.
 """
 
+import contextvars
 import os
 import re
+import threading
+import time
+import weakref
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.tools.path_access import (
@@ -24,6 +28,126 @@ logger = get_logger(__name__)
 
 _RAG_HINT = "Set self.rag = <RAGSDK instance, or None to disable RAG>."
 _RAG_DOC_ANCHOR = "docs/spec/rag-tools-mixin.mdx#host-agent-contract"
+
+
+#: How long an indexing call waits before leaving the rest to a background
+#: thread. Well inside the tool timeout, so a big document never hits it.
+INDEX_FOREGROUND_BUDGET_S = 120.0
+
+_INDEX_JOBS_LOCK = threading.Lock()
+#: RAGSDK -> {path: _IndexJob}; jobs go away with the SDK that runs them.
+_INDEX_JOBS: "weakref.WeakKeyDictionary[Any, Dict[str, Any]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+class _IndexJob:
+    """One ``RAGSDK.index_document`` call running on a background thread."""
+
+    def __init__(self, path: str):
+        self.path = path
+        self.started = time.monotonic()
+        self.embed_started: Optional[float] = None
+        self.embedded = 0
+        self.total: Optional[int] = None
+        self.result: Optional[Dict[str, Any]] = None
+        self.error: Optional[BaseException] = None
+        self.done = threading.Event()
+
+    def progress(self, embedded: int, total: int) -> None:
+        if self.embed_started is None:
+            self.embed_started = time.monotonic()
+        self.embedded, self.total = embedded, total
+
+    def seconds_remaining(self) -> Optional[int]:
+        if not (self.total and self.embedded and self.embed_started):
+            return None
+        rate = self.embedded / max(time.monotonic() - self.embed_started, 1e-6)
+        return int((self.total - self.embedded) / rate)
+
+
+def _index_within_budget(
+    rag: Any, path: str, budget: Optional[float] = None
+) -> Tuple[Optional[Dict[str, Any]], _IndexJob]:
+    """Index *path*, waiting at most *budget* seconds for it.
+
+    Returns ``(result, job)``: ``result`` is ``rag.index_document``'s dict when
+    it finished in time, else ``None`` while the job keeps running. A second
+    call for the same path waits on the running job instead of starting another.
+    """
+    budget = INDEX_FOREGROUND_BUDGET_S if budget is None else budget
+    with _INDEX_JOBS_LOCK:
+        jobs = _INDEX_JOBS.setdefault(rag, {})
+        job = jobs.get(path)
+        if job is None:
+            job = _IndexJob(path)
+            jobs[path] = job
+
+            def _run():
+                try:
+                    job.result = rag.index_document(
+                        path, progress_callback=job.progress
+                    )
+                except BaseException as e:  # noqa: BLE001 — re-raised by the waiter
+                    job.error = e
+                finally:
+                    job.done.set()
+
+            ctx = contextvars.copy_context()
+            threading.Thread(
+                target=lambda: ctx.run(_run),
+                name=f"rag-index:{Path(path).name}",
+                daemon=True,
+            ).start()
+    if not job.done.wait(budget):
+        return None, job
+    with _INDEX_JOBS_LOCK:
+        if jobs.get(path) is job:
+            del jobs[path]
+    if job.error is not None:
+        raise job.error
+    return job.result, job
+
+
+def documents_still_indexing(rag: Any) -> List[str]:
+    """Paths *rag* is still indexing in the background; not searchable yet."""
+    if rag is None:
+        return []
+    with _INDEX_JOBS_LOCK:
+        jobs = _INDEX_JOBS.get(rag) or {}
+        return sorted(path for path, job in jobs.items() if not job.done.is_set())
+
+
+def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
+    """Tool result for a document that is still indexing in the background."""
+    name = Path(job.path).name
+    elapsed = int(time.monotonic() - job.started)
+    if job.total is None:
+        progress = "still extracting and splitting its text"
+    else:
+        progress = f"{job.embedded:,} of {job.total:,} chunks embedded"
+    remaining = job.seconds_remaining()
+    eta = f", about {max(1, round(remaining / 60))} min left" if remaining else ""
+    return {
+        "status": "in_progress",
+        "file_name": name,
+        "message": (
+            f"{name} is large and is still being indexed in the background "
+            f"({progress} after {elapsed}s{eta}). It cannot be searched yet; "
+            "nothing failed."
+        ),
+        "chunks_embedded": job.embedded,
+        "total_chunks": job.total,
+        "elapsed_seconds": elapsed,
+        "estimated_seconds_remaining": remaining,
+        "hint": (
+            "Tell the user the document is still indexing and how long is left. "
+            "To answer now, read the relevant part of the file directly with "
+            "another tool instead of searching it. Calling index_document again "
+            f"with the same path waits up to {int(INDEX_FOREGROUND_BUDGET_S)}s "
+            "more and returns success once the document is searchable."
+        ),
+    }
 
 
 def _require_rag(host: Any) -> Any:
@@ -627,7 +751,9 @@ class RAGToolsMixin:
                                 f"[query_specific_file] '{basename}' not indexed — "
                                 f"auto-indexing '{resolved}' before querying"
                             )
-                            idx_result = rag.index_document(resolved)
+                            idx_result, job = _index_within_budget(rag, resolved)
+                            if idx_result is None:
+                                return _indexing_in_progress(job)
                             if idx_result.get("success"):
                                 self.indexed_files.add(file_path)
                                 if (
@@ -1255,9 +1381,11 @@ class RAGToolsMixin:
                         "total_indexed_files": len(self.indexed_files),
                     }
 
-                # Index the document (now returns dict with stats)
-                # Use real_file_path to ensure consistency in RAG index
-                result = self.rag.index_document(real_file_path)
+                # A document too big to index within the budget keeps indexing
+                # in the background; say so instead of running into the timeout.
+                result, job = _index_within_budget(self.rag, real_file_path)
+                if result is None:
+                    return _indexing_in_progress(job)
 
                 if result.get("success"):
                     self.indexed_files.add(file_path)

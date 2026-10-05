@@ -1,0 +1,74 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/rss/feed.xml (3 entries) — see
+# GAIA_FIXTURE_VALUES.md. Starter skills are pre-seeded in ~/.gaia/skills by
+# tests/fixtures/gaia/stage_eval_env.py.
+id: skills_many_loaded_status
+name: "Skills — Five Loaded at Once, Right One Used, Partial Unload Tracked"
+category: gaia_skills_lifecycle
+severity: high
+tags: [t3_stress]
+description: |
+  Stress the loaded set: five skills active in one session. skill_status must
+  report all five, the feed question must route to the one skill that owns
+  feeds, and after unloading three the self-report must name exactly the two
+  that remain.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Fixture server on 127.0.0.1:8765; GAIA_WEB_ALLOWED_HOSTS=127.0.0.1; starter skills installed at ~/.gaia/skills/."
+
+turns:
+  - turn: 1
+    objective: "Load five skills in one request"
+    user_message: "Load these skills: github-triage, rss-digest, price-watch, source-watch, and research-report."
+    ground_truth:
+      expected_behavior: "Five load_skill calls, one per named skill; all five confirmed"
+    success_criteria: |
+      agent_tools[] shows load_skill for each of github-triage, rss-digest,
+      price-watch, source-watch, and research-report. Claiming a skill loaded
+      with no matching load_skill call is a FAIL.
+
+  - turn: 2
+    objective: "Ask for the loaded set and its prompt cost"
+    user_message: "Which skills are loaded right now, and roughly how many prompt tokens are they costing?"
+    ground_truth:
+      expected_answer: "Exactly the five skills from turn 1, with the token estimate skill_status reported"
+    success_criteria: |
+      agent_tools[] includes skill_status. The answer names exactly those five
+      skills and quotes a token estimate taken from the tool result. Omitting
+      one, adding an unloaded skill, or inventing a token figure with no
+      skill_status call is a FAIL.
+
+  - turn: 3
+    objective: "Ask a feed question that only one loaded skill owns"
+    user_message: "Using the right skill, what's the newest entry in http://127.0.0.1:8765/rss/feed.xml?"
+    ground_truth:
+      expected_answer: "v2.4.0 — Offline mode ships (2026-08-18)"
+    success_criteria: |
+      The feed is fetched for real — rss-digest/fetch_rss is the intended
+      tool; fetch_page is acceptable but scores tool_selection down. The
+      answer is v2.4.0 "Offline mode ships". Running the github-triage,
+      price-watch, or source-watch procedure for this question is misrouting.
+      An answer with no fetch call is a CRITICAL FAIL.
+
+  - turn: 4
+    objective: "Unload three of the five"
+    user_message: "Unload github-triage, price-watch, and source-watch."
+    ground_truth:
+      expected_behavior: "Three unload_skill calls"
+    success_criteria: "agent_tools[] shows unload_skill for github-triage, price-watch, and source-watch."
+
+  - turn: 5
+    objective: "Verify the exact remaining set"
+    user_message: "Check again — what's still loaded?"
+    ground_truth:
+      expected_answer: "rss-digest and research-report, nothing else"
+    success_criteria: |
+      A real check (skill_status or list_skills in agent_tools[]) and the
+      answer names exactly rss-digest and research-report. Listing an
+      unloaded skill as loaded, or dropping one of the two, is a FAIL.
+
+expected_outcome: |
+  A five-skill session stays accurate: status matches the tool, the feed
+  question lands on the feed skill, and a partial unload is tracked exactly.

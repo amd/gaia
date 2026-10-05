@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools import rag_tools
 from gaia.agents.tools.audio_tools import AudioToolsMixin
 from gaia.agents.tools.code_index_tools import (
     _CODE_INDEX_AVAILABLE,
@@ -28,7 +29,7 @@ from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 from gaia.agents.tools.file_monitor_tools import FileToolsMixin
 from gaia.agents.tools.file_tools import FileSearchToolsMixin
 from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
-from gaia.agents.tools.rag_tools import RAGToolsMixin
+from gaia.agents.tools.rag_tools import RAGToolsMixin, documents_still_indexing
 from gaia.agents.tools.screenshot_tools import ScreenshotToolsMixin
 from gaia.security import PathValidator
 from gaia.vlm.mixin import VLMToolsMixin
@@ -336,6 +337,7 @@ class _RagHost(RAGToolsMixin):
         self.path_validator = validator
         self.rag = MagicMock()
         self.rag.index_document.return_value = {"success": True}
+        self.rag.indexed_files = set()
         self.indexed_files = set()
         self.current_session = None
         self.rebuild_system_prompt = MagicMock()
@@ -346,6 +348,27 @@ def rag_host(validator):
     host = _RagHost(validator)
     host.register_rag_tools()
     return host
+
+
+@pytest.fixture
+def background_jobs(monkeypatch):
+    """Paths handed to the background indexer, which is where a job is queued."""
+    queued = []
+    real = rag_tools._index_within_budget
+
+    def spy(rag, path, budget=None):
+        queued.append(path)
+        return real(rag, path, budget)
+
+    monkeypatch.setattr(rag_tools, "_index_within_budget", spy)
+    return queued
+
+
+def _index_through(tool_name, path):
+    """Ask *tool_name* to index *path*: directly, or by querying an unindexed file."""
+    if tool_name == "index_document":
+        return _tool("index_document")(file_path=path)
+    return _tool("query_specific_file")(file_path=path, query="needle")
 
 
 class TestRagTools:
@@ -372,9 +395,44 @@ class TestRagTools:
         result = _tool("index_document")(file_path=str(tree.allowed / "notes.txt"))
 
         assert result["status"] == "success"
-        rag_host.rag.index_document.assert_called_once_with(
-            str(tree.allowed / "notes.txt")
+        rag_host.rag.index_document.assert_called_once()
+        assert rag_host.rag.index_document.call_args.args == (
+            str(tree.allowed / "notes.txt"),
         )
+
+    @pytest.mark.parametrize("tool_name", ["index_document", "query_specific_file"])
+    @pytest.mark.parametrize("form", OUTSIDE_FORMS)
+    def test_outside_file_never_reaches_background_indexing(
+        self, tree, rag_host, background_jobs, tool_name, form
+    ):
+        path = os.path.join(_outside(tree, form), "secret.txt")
+
+        result = _index_through(tool_name, path)
+
+        assert result["status"] == "error"
+        assert _refused(result)
+        assert _asked(rag_host.path_validator) == [tree.outside / "secret.txt"]
+        assert background_jobs == []
+        assert documents_still_indexing(rag_host.rag) == []
+
+    @pytest.mark.parametrize("tool_name", ["index_document", "query_specific_file"])
+    def test_secret_never_reaches_background_indexing(
+        self, tree, rag_host, background_jobs, tool_name
+    ):
+        (tree.allowed / ".env").write_text("TOKEN=x", encoding="utf-8")
+
+        result = _index_through(tool_name, str(tree.allowed / ".env"))
+
+        assert result["status"] == "error"
+        assert background_jobs == []
+        assert documents_still_indexing(rag_host.rag) == []
+
+    def test_query_specific_file_inside_is_auto_indexed(
+        self, tree, rag_host, background_jobs
+    ):
+        _index_through("query_specific_file", str(tree.allowed / "notes.txt"))
+
+        assert background_jobs == [str(tree.allowed / "notes.txt")]
 
     @pytest.mark.parametrize("form", OUTSIDE_FORMS)
     def test_index_directory_outside_is_refused(self, tree, rag_host, form):

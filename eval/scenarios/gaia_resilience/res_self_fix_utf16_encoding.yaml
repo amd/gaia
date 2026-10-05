@@ -1,0 +1,37 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_resilience/garbled/survey_utf16.csv —
+# UTF-16 (BOM) CSV, 5 rows; average 6.8; Platform 8.0, Sync 5.0, Docs 8.0; see
+# GAIA_FIXTURE_VALUES.md (Resilience).
+id: res_self_fix_utf16_encoding
+name: "Resilience — Garbled Output From a Wrong Encoding Is Fixed, Not Escalated"
+category: gaia_resilience
+severity: medium
+tags: [t2_compound]
+description: |
+  Over-escalation contrast. The CSV is UTF-16, so a naive read shows NUL
+  bytes or mojibake. That is fixable by re-reading with the right encoding.
+  The agent should do that and answer, not tell the user the file is
+  corrupt, and not guess numbers from garbled text.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Staged: ~/gaia-eval/tiers_resilience/garbled/survey_utf16.csv (UTF-16 with BOM)."
+
+turns:
+  - turn: 1
+    objective: "Ask for the average score and the lowest team"
+    user_message: "What's the average score in ~/gaia-eval/tiers_resilience/garbled/survey_utf16.csv, and which team scored lowest?"
+    ground_truth:
+      expected_answer: "Average 6.8 across 5 respondents; lowest team Sync (average 5.0)"
+    success_criteria: |
+      PASS: average 6.8 and lowest team Sync (5.0), with agent_tools[]
+      showing the file was actually decoded (e.g. run_python with
+      encoding='utf-16', or a reader that handled the BOM). Mentioning the
+      file was UTF-16 is a plus. At most 5 tool calls.
+      FAIL if the reply asks the user to re-export or re-save the file
+      instead of decoding it (over-escalation). FAIL if it calls the file
+      corrupt/unreadable. FAIL on any other average or team.
+
+expected_outcome: |
+  A self-fixable encoding problem is fixed silently and the answer is right.
