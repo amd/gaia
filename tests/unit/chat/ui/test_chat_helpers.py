@@ -22,6 +22,7 @@ from gaia.ui._chat_helpers import (
     _build_history_pairs,
     _canonical_agent_type,
     _compute_allowed_paths,
+    _done_event,
     _empty_answer_outcome,
     _find_last_tool_step,
     _managed_documents_dir,
@@ -427,6 +428,28 @@ class TestEmptyAnswerOutcome:
         assert "Lemonade Server is running" in content
         assert sse_type == "error"
         assert keep_steps is False
+
+
+class TestDoneEvent:
+    """``_done_event`` reports whether Stop actually ended the run, so the UI
+    labels a turn from the outcome rather than from the Stop click."""
+
+    def test_cancelled_turn_is_flagged(self):
+        event = _done_event(42, "Cancelled.", turn_cancelled=True)
+        assert event == {
+            "type": "done",
+            "message_id": 42,
+            "content": "Cancelled.",
+            "cancelled": True,
+        }
+
+    def test_completed_turn_carries_no_cancelled_flag(self):
+        event = _done_event(
+            7, "Deleted 3 files.", turn_cancelled=False, stats={"tokens": 5}
+        )
+        assert "cancelled" not in event
+        assert event["content"] == "Deleted 3 files."
+        assert event["stats"] == {"tokens": 5}
 
 
 # ── _canonical_agent_type ─────────────────────────────────────────────────

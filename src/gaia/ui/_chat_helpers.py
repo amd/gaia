@@ -1483,6 +1483,23 @@ def _empty_answer_outcome(
     return _EMPTY_ANSWER_LEMONADE_MSG, "error", False
 
 
+def _done_event(
+    msg_id: int, content: str, turn_cancelled: bool, stats: Optional[dict] = None
+) -> dict:
+    """Build the closing ``done`` SSE payload for a persisted turn.
+
+    ``cancelled`` is set only when the user's Stop actually ended the run, so
+    the UI labels the turn from what happened rather than from the click — a
+    Stop that lands after the agent already answered stays an ordinary turn.
+    """
+    event: dict = {"type": "done", "message_id": msg_id, "content": content}
+    if turn_cancelled:
+        event["cancelled"] = True
+    if stats:
+        event["stats"] = stats
+    return event
+
+
 # Tight timeout for pre-flight load_model. The default Lemonade
 # DEFAULT_MODEL_LOAD_TIMEOUT is 12000 s (200 min) — a hung Lemonade
 # would block the chat thread that long. Cold-load of a 4B GGUF on
@@ -2973,13 +2990,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     f"_titlebg:{_sid}", None
                 )
             )
-            done_event: dict = {
-                "type": "done",
-                "message_id": msg_id,
-                "content": full_response,
-            }
-            if inference_stats:
-                done_event["stats"] = inference_stats
+            done_event = _done_event(
+                msg_id, full_response, turn_cancelled, stats=inference_stats
+            )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
         else:
@@ -3017,11 +3030,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
                 )
-                done_event = {
-                    "type": "done",
-                    "message_id": msg_id,
-                    "content": content,
-                }
+                done_event = _done_event(msg_id, content, turn_cancelled)
                 yield f"data: {json.dumps(done_event)}\n\n"
 
     except Exception as e:
