@@ -135,6 +135,26 @@ class RAGToolsMixin:
     are provided by FileSearchToolsMixin from gaia.agents.tools.file_tools
     """
 
+    def _index_access_error(self, path: str):
+        """The refusal for indexing *path*, or None when it may be read.
+
+        Asks the user through the host's access prompt, like ``read_file``: a
+        silent refusal here left the model nothing to do but route around it.
+        """
+        validator = getattr(self, "path_validator", None)
+        if validator is not None:
+            allowed, reason = validator.validate_read(path)
+            if allowed:
+                return None
+            return {**NOT_EXECUTED, "status": "error", "error": reason}
+        if hasattr(self, "_is_path_allowed") and not self._is_path_allowed(path):
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": f"Access denied: '{path}' is not in allowed paths",
+            }
+        return None
+
     def register_rag_tools(self) -> None:
         """Register RAG-related tools."""
         from gaia.agents.base.tools import tool
@@ -615,15 +635,9 @@ class RAGToolsMixin:
                         # This avoids the slow fail → plan → index → re-query cycle.
                         if os.path.exists(file_path):
                             resolved = os.path.realpath(file_path)
-                            # Enforce path restrictions same as index_document does
-                            if hasattr(
-                                self, "_is_path_allowed"
-                            ) and not self._is_path_allowed(resolved):
-                                return {
-                                    **NOT_EXECUTED,
-                                    "status": "error",
-                                    "error": f"Access denied: '{resolved}' is not in allowed paths",
-                                }
+                            denied = self._index_access_error(resolved)
+                            if denied:
+                                return denied
                             logger.info(
                                 f"[query_specific_file] '{basename}' not indexed — "
                                 f"auto-indexing '{resolved}' before querying"
@@ -1251,14 +1265,9 @@ class RAGToolsMixin:
                         "total_indexed_files": len(self.indexed_files),
                     }
 
-                # Validate path with ChatAgent's internal logic (which uses allowed_paths)
-                if hasattr(self, "_is_path_allowed"):
-                    if not self._is_path_allowed(real_file_path):
-                        return {
-                            **NOT_EXECUTED,
-                            "status": "error",
-                            "error": f"Access denied: {real_file_path} is not in allowed paths",
-                        }
+                denied = self._index_access_error(real_file_path)
+                if denied:
+                    return denied
 
                 # Index the document (now returns dict with stats)
                 # Use real_file_path to ensure consistency in RAG index

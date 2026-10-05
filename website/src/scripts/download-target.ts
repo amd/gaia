@@ -97,6 +97,29 @@ export const INSTALLERS_FOR: Record<PlatformKey, InstallerKey[]> = {
 };
 
 /**
+ * The first release whose Windows setup installs the desktop app, the terminal,
+ * or both, chosen while it runs.
+ *
+ * It keeps the terminal hub's `win-x64-setup` filename, which earlier releases
+ * used for a terminal-only setup -- so the file alone cannot tell the two
+ * apart, and the version has to. Offering the choice for an older version would
+ * send Windows visitors to a setup that has no desktop app in it.
+ */
+export const WINDOWS_SETUP_SINCE = '0.25.0';
+
+/** True when `version` is at or past WINDOWS_SETUP_SINCE; false if unparseable. */
+export function windowsSetupOffersChoice(version: string): boolean {
+  const core = (v: string) => v.split('-')[0].split('.').map(Number);
+  const have = core(version);
+  const need = core(WINDOWS_SETUP_SINCE);
+  if (have.length !== 3 || have.some((n) => !Number.isInteger(n))) return false;
+  for (let i = 0; i < 3; i++) {
+    if (have[i] !== need[i]) return have[i] > need[i];
+  }
+  return true;
+}
+
+/**
  * Primary-button text per installer. Linux names the distro family in the
  * button itself: the two packages sit side by side and the visitor picks, so
  * the button has to say which one is theirs. macOS names the chip for the same

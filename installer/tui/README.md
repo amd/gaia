@@ -10,9 +10,19 @@ executables on disk and on `PATH`:
 Shipping only the first installs a front end with nothing behind it, which is
 why the sidecar is bundled rather than fetched on first run.
 
+**On Windows this is the one GAIA installer.** `nsis/gaia-setup.nsi` asks for the
+desktop app (Agent UI), the terminal, or both — at least one — and installs the
+desktop app by running the unmodified electron-builder
+`gaia-agent-ui-<version>-x64-setup.exe` it embeds. That setup stays the app's
+owner (files, Installed-apps entry, shortcuts, autostart, uninstaller) because
+electron-updater re-runs exactly that file. The terminal keeps the
+`GAIA Terminal Hub` identity the terminal-only setup used, so either earlier
+installer is upgraded in place. Silent installs take `/S /COMPONENTS=ui,tui`; the
+exit codes are listed in `gaia-setup.nsi` and [Install GAIA](../../docs/guides/install.mdx).
+
 | Platform | Builder | Artifact |
 | --- | --- | --- |
-| Windows x64 | [`nsis/build-setup.sh`](nsis/build-setup.sh) | `gaia-<version>-win-x64-setup.exe` |
+| Windows x64 | [`nsis/build-setup.sh`](nsis/build-setup.sh) | `gaia-<version>-win-x64-setup.exe` (desktop app and/or terminal) |
 | macOS arm64 / x64 | [`macos/build-pkg.sh`](macos/build-pkg.sh) | `gaia-<version>-darwin-<arch>.pkg` |
 | Linux x64 | [`linux/build-packages.sh`](linux/build-packages.sh) | `gaia_<version>_amd64.deb`, `gaia-<version>.x86_64.rpm` |
 
@@ -58,6 +68,14 @@ release zip and every face are checked against the digests committed in
 python installer/tui/fetch_fonts.py --out stage/fonts
 ```
 
+The Windows setup also needs the desktop app's setup, passed as
+`--agent-ui-setup`. [`fetch_agent_ui_setup.py`](fetch_agent_ui_setup.py) fetches
+it from a named source and checks its name, PE header and size — never "latest":
+
+```bash
+python installer/tui/fetch_agent_ui_setup.py --release v0.24.1 --out stage/agent-ui
+```
+
 On Windows the payload also needs `gaia-tui.exe` to carry its icon, which the Go
 linker only embeds when a resource object sits beside the main package:
 
@@ -68,7 +86,11 @@ python util/check_pe_resources.py bin/gaia-win-x64.exe
 
 ## Building
 
-CI does all of this in `.github/workflows/release_components.yml`, which also
-smoke-tests every installer on a runner that did not build it. Locally, each
+CI builds the macOS and Linux packages in `.github/workflows/tui_installers.yml`
+and the Windows setup in `.github/workflows/windows_setup.yml`; both smoke-test on
+a runner that did not build them, on PRs (via `build_tui.yml`) and on release
+(via `release_components.yml`). The Windows smoke test is
+[`nsis/smoke-test.ps1`](nsis/smoke-test.ps1). It installs, writes HKCU/HKLM keys,
+fonts and shortcuts, and uninstalls — run it only on a throwaway machine. Locally, each
 builder is self-contained — see the per-platform READMEs for the toolchain each
 one needs.

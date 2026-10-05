@@ -37,6 +37,8 @@ on:
       - 'util/check_pe_resources.py'
       - 'installer/tui/**'
       - '.github/workflows/build_tui.yml'
+      - '.github/workflows/tui_installers.yml'
+      - '.github/workflows/windows_setup.yml'
   pull_request:
     # NO `branches:` filter on purpose. It used to be `branches: [main]`, which
     # silences every stacked PR — one opened against another feature branch
@@ -65,6 +67,8 @@ on:
       - 'util/check_pe_resources.py'
       - 'installer/tui/**'
       - '.github/workflows/build_tui.yml'
+      - '.github/workflows/tui_installers.yml'
+      - '.github/workflows/windows_setup.yml'
   merge_group:
   workflow_dispatch:
 
@@ -323,7 +327,8 @@ jobs:
   # a live release. That is the same "its code path first executes during a real
   # release" hole worker-check was added to close, left open on the packaging.
   #
-  # Same reusable workflow the release calls, so the two cannot drift. It differs
+  # Same reusable workflows the release calls (tui_installers.yml here,
+  # windows_setup.yml below), so the two cannot drift. They differ
   # only in `sidecar: stub` — a real gaia-agent is safe to bundle because its
   # digest is committed, and that digest is a placeholder between releases, so a
   # PR genuinely cannot fetch one. Packaging, install, PATH, shortcuts and
@@ -355,3 +360,20 @@ jobs:
     with:
       version: ${{ needs.installer-version.outputs.version }}
       sidecar: stub
+
+  # The one Windows setup, on a clean runner, the same workflow the release
+  # calls. The desktop app it embeds comes from a named, published release --
+  # pinned here, never "latest" -- because this PR's own desktop app build is
+  # build-installers.yml's to test. Bump it after each release.
+  windows-setup:
+    name: Windows setup
+    needs: [installers, installer-version]
+    if: '!cancelled() && needs.installers.outputs.binaries_ok == ''true'''
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/windows_setup.yml
+    with:
+      version: ${{ needs.installer-version.outputs.version }}
+      sidecar: stub
+      agent_ui_release: v0.24.1
