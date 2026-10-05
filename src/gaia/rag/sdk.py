@@ -208,8 +208,19 @@ class RAGSDK:
         ```
     """
 
-    def __init__(self, config: Optional[RAGConfig] = None):
-        """Initialize RAG SDK."""
+    def __init__(
+        self,
+        config: Optional[RAGConfig] = None,
+        path_validator: Optional[PathValidator] = None,
+    ):
+        """Initialize RAG SDK.
+
+        Args:
+            config: RAG settings; defaults to ``RAGConfig()``.
+            path_validator: The host's validator, shared so a path the user
+                grants mid-session is readable here too. Defaults to one built
+                from ``config.allowed_paths``.
+        """
         self.config = config or RAGConfig()
         self.log = get_logger(__name__)
         if self.config.chunk_size * 4 > EMBED_MAX_CHARS:
@@ -268,8 +279,9 @@ class RAGSDK:
         )
         self.chat = AgentSDK(chat_config)
 
-        # Initialize path validator
-        self.path_validator = PathValidator(self.config.allowed_paths)
+        if path_validator is None:
+            path_validator = PathValidator(self.config.allowed_paths)
+        self.path_validator = path_validator
 
         self.log.debug("RAG SDK initialized")
 
