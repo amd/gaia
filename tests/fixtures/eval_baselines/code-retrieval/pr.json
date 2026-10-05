@@ -1,0 +1,1664 @@
+{
+  "schema": 1,
+  "component": "code",
+  "suite": "pr",
+  "parts": [
+    "quality",
+    "incremental",
+    "robustness"
+  ],
+  "started_at": "2026-10-04T21:15:07-0700",
+  "environment": {
+    "machine": "NucBox_EVO-X2",
+    "os": "Windows 11 (10.0.26200)",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logical_cpus": 32,
+    "ram_gb": 63.6,
+    "python": "3.12.10",
+    "gaia_commit": "2123667143e4e5334b44e355d0ac46f95a14f869",
+    "gaia_dirty": false,
+    "lemonade_url": "http://localhost:52393/api/v1",
+    "lemonade_version": "2026.39.1",
+    "embedding_model": "user.embeddinggemma-300m-GGUF"
+  },
+  "config": {
+    "search_depth": 200,
+    "file_ks": [
+      1,
+      5,
+      10
+    ],
+    "symbol_ks": [
+      5,
+      10
+    ],
+    "seed": 20260930,
+    "max_repo_chunks": null,
+    "nightly_max_chunks": 20000
+  },
+  "quality": {
+    "queries": [
+      {
+        "id": "mwaskom__seaborn-3069",
+        "source": "swebench-verified",
+        "repo": "mwaskom/seaborn",
+        "base_commit": "54cab15bdacfaa05a88fbc5502a5b322d99f148e",
+        "created_at": null,
+        "query_chars": 1188,
+        "gold": {
+          "files": [
+            "seaborn/_core/plot.py"
+          ],
+          "symbols": [
+            "seaborn/_core/plot.py::Plotter._setup_scales",
+            "seaborn/_core/plot.py::Plotter._finalize_figure"
+          ],
+          "created_files": [],
+          "not_in_index": []
+        },
+        "index": {
+          "seconds": 483.2,
+          "files_reparsed": 191,
+          "chunks": 4847,
+          "chunks_dropped": 0
+        },
+        "semantic": {
+          "seconds": 0.203,
+          "top_files": [
+            "doc/faq.rst",
+            "seaborn/objects.py",
+            "seaborn/_core/scales.py",
+            "tests/_core/test_plot.py",
+            "seaborn/categorical.py",
+            "doc/whatsnew/v0.12.0.rst",
+            "tests/_core/test_scales.py",
+            "seaborn/_core/properties.py",
+            "examples/marginal_ticks.py",
+            "seaborn/_oldcore.py"
+          ],
+          "top_symbols": [
+            "seaborn/_core/scales.py::Nominal",
+            "tests/_core/test_plot.py::TestScaling.test_inferred_nominal_passed_to_stat",
+            "seaborn/categorical.py::_CategoricalPlotterNew",
+            "seaborn/_core/scales.py::Ordinal",
+            "tests/_core/test_scales.py::TestNominal",
+            "seaborn/categorical.py::_CategoricalPlotterNew._adjust_cat_axis",
+            "tests/_core/test_plot.py::TestScaling",
+            "seaborn/categorical.py::catplot",
+            "seaborn/_core/properties.py::ObjectProperty",
+            "seaborn/_oldcore.py::VectorPlotter.scale_categorical"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.06666666666666667
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.05555555555555555
+          }
+        },
+        "lexical": {
+          "seconds": 0.099,
+          "identifiers": [
+            "Nominal",
+            "Plotter",
+            "_finalize_figure"
+          ],
+          "top_files": [
+            "seaborn/_core/plot.py",
+            "tests/_core/test_properties.py",
+            "tests/_core/test_scales.py",
+            "seaborn/_core/properties.py",
+            "tests/_core/test_plot.py",
+            "seaborn/_core/scales.py",
+            "seaborn/regression.py",
+            "seaborn/utils.py",
+            "doc/api.rst",
+            "seaborn/_marks/base.py"
+          ],
+          "top_symbols": [
+            "seaborn/_core/plot.py::Plot._plot",
+            "tests/_core/test_properties.py::IntervalBase.test_inference",
+            "tests/_core/test_properties.py::TestColor.test_inference",
+            "seaborn/_core/properties.py::Color.infer_scale",
+            "seaborn/_core/plot.py::Plot.plot",
+            "seaborn/_core/plot.py::Plot.scale",
+            "seaborn/_core/plot.py::Plotter._finalize_figure",
+            "seaborn/_core/plot.py::Plotter._setup_scales",
+            "seaborn/_core/properties.py::Fill.default_scale",
+            "seaborn/_core/properties.py::IntervalProperty.infer_scale"
+          ],
+          "files": {
+            "recall@1": 1.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 1.0
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "rr": 0.14285714285714285
+          }
+        }
+      },
+      {
+        "id": "mwaskom__seaborn-3187",
+        "source": "swebench-verified",
+        "repo": "mwaskom/seaborn",
+        "base_commit": "22cdfb0c93f8ec78492d87edb810f10cb7f57a31",
+        "created_at": null,
+        "query_chars": 1438,
+        "gold": {
+          "files": [
+            "seaborn/_core/scales.py",
+            "seaborn/utils.py"
+          ],
+          "symbols": [
+            "seaborn/_core/scales.py::ContinuousBase._setup",
+            "seaborn/utils.py::locator_to_legend_entries"
+          ],
+          "created_files": [],
+          "not_in_index": []
+        },
+        "index": {
+          "seconds": 237.26,
+          "files_reparsed": 31,
+          "chunks": 4931,
+          "chunks_dropped": 0
+        },
+        "semantic": {
+          "seconds": 0.293,
+          "top_files": [
+            "seaborn/objects.py",
+            "doc/faq.rst",
+            "doc/installing.rst",
+            "README.md",
+            "doc/whatsnew/v0.2.0.rst",
+            "tests/test_relational.py",
+            "seaborn/relational.py",
+            "tests/_core/test_plot.py",
+            "seaborn/_core/scales.py",
+            "seaborn/_core/plot.py"
+          ],
+          "top_symbols": [
+            "tests/test_relational.py::TestScatterPlotter",
+            "seaborn/relational.py::_RelationalPlotter",
+            "tests/_core/test_plot.py::TestScaling",
+            "seaborn/_core/scales.py::Continuous.label",
+            "seaborn/_core/plot.py::Plotter",
+            "tests/_core/test_scales.py::TestContinuous",
+            "tests/test_relational.py::TestLinePlotter",
+            "seaborn/_core/scales.py::Nominal.label",
+            "seaborn/_core/scales.py::Temporal.label",
+            "seaborn/_core/scales.py::Scale"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.5,
+            "rr": 0.1111111111111111
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.0
+          }
+        },
+        "lexical": {
+          "seconds": 1.027,
+          "identifiers": [
+            "objects",
+            "penguins",
+            "load_dataset",
+            "body_mass_g",
+            "Plot",
+            "bill_length_mm",
+            "bill_depth_mm",
+            "species",
+            "pointsize",
+            "add",
+            "Dot",
+            "ScalarFormatter",
+            "scatterplot",
+            "mpl",
+            "rcParams",
+            "formatter",
+            "png",
+            "rcParam"
+          ],
+          "top_files": [
+            "doc/sphinxext/tutorial_builder.py",
+            "seaborn/_core/scales.py",
+            "seaborn/_core/plot.py",
+            "seaborn/categorical.py",
+            "seaborn/utils.py",
+            "seaborn/_marks/dot.py",
+            "seaborn/axisgrid.py",
+            "seaborn/_oldcore.py",
+            "tests/_core/test_plot.py",
+            "tests/_marks/test_dot.py"
+          ],
+          "top_symbols": [
+            "doc/sphinxext/tutorial_builder.py::properties",
+            "seaborn/_marks/dot.py::Dot",
+            "doc/sphinxext/tutorial_builder.py::introduction",
+            "seaborn/_core/scales.py::Continuous._get_formatter",
+            "seaborn/utils.py::locator_to_legend_entries",
+            "seaborn/_marks/dot.py::Dots",
+            "seaborn/utils.py::_disable_autolayout",
+            "seaborn/_core/plot.py::Plot.on",
+            "seaborn/_oldcore.py::VectorPlotter.scale_categorical",
+            "seaborn/_core/plot.py::Plot.layout"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 0.5
+          },
+          "symbols": {
+            "recall@5": 0.5,
+            "recall@10": 0.5,
+            "rr": 0.2
+          }
+        }
+      },
+      {
+        "id": "pallets__flask-5014",
+        "source": "swebench-verified",
+        "repo": "pallets/flask",
+        "base_commit": "7ee9ceb71e868944a46e1ff00b506772a53a4f1d",
+        "created_at": null,
+        "query_chars": 195,
+        "gold": {
+          "files": [
+            "src/flask/blueprints.py"
+          ],
+          "symbols": [
+            "src/flask/blueprints.py::Blueprint.__init__"
+          ],
+          "created_files": [],
+          "not_in_index": []
+        },
+        "index": {
+          "seconds": 181.55,
+          "files_reparsed": 187,
+          "chunks": 4195,
+          "chunks_dropped": 0
+        },
+        "semantic": {
+          "seconds": 0.061,
+          "top_files": [
+            "docs/errorhandling.rst",
+            "tests/test_blueprints.py",
+            "docs/blueprints.rst",
+            "tests/test_async.py",
+            "tests/test_cli.py",
+            "docs/tutorial/views.rst",
+            "docs/cli.rst",
+            "src/flask/blueprints.py",
+            "docs/patterns/packages.rst",
+            "docs/tutorial/blog.rst"
+          ],
+          "top_symbols": [
+            "tests/test_blueprints.py::test_dotted_name_not_allowed",
+            "tests/test_blueprints.py::test_unique_blueprint_names",
+            "tests/test_blueprints.py::test_self_registration",
+            "tests/test_async.py::BlueprintError",
+            "tests/test_cli.py::test_cli_empty",
+            "src/flask/blueprints.py::Blueprint",
+            "src/flask/blueprints.py::Blueprint.register_blueprint",
+            "tests/test_async.py::_async_app.bp_error",
+            "src/flask/wrappers.py::Request.blueprint",
+            "tests/test_blueprints.py::test_template_filter_with_name"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "rr": 0.125
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.045454545454545456
+          }
+        },
+        "lexical": {
+          "seconds": 0.046,
+          "identifiers": [
+            "ValueError"
+          ],
+          "top_files": [
+            "src/flask/scaffold.py",
+            "tests/test_blueprints.py",
+            "src/flask/blueprints.py",
+            "CHANGES.rst",
+            "tests/test_helpers.py",
+            "tests/test_appctx.py",
+            "tests/typing/typing_error_handler.py",
+            "src/flask/app.py",
+            "tests/test_user_error_handler.py",
+            "docs/async-await.rst"
+          ],
+          "top_symbols": [
+            "src/flask/scaffold.py::_find_package_path",
+            "tests/test_blueprints.py::test_route_decorator_custom_endpoint_with_dots",
+            "src/flask/blueprints.py::Blueprint.add_url_rule",
+            "src/flask/scaffold.py::Scaffold._get_exc_class_and_code",
+            "tests/test_appctx.py::test_app_tearing_down_with_unhandled_exception",
+            "tests/test_blueprints.py::test_unique_blueprint_names",
+            "tests/test_user_error_handler.py::test_error_handler_no_match",
+            "tests/typing/typing_error_handler.py::handle_custom",
+            "src/flask/app.py::Flask.__init__",
+            "src/flask/app.py::Flask.url_for"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 0.3333333333333333
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.09090909090909091
+          }
+        }
+      },
+      {
+        "id": "psf__requests-1142",
+        "source": "swebench-verified",
+        "repo": "psf/requests",
+        "base_commit": "22623bd8c265b78b161542663ee980738441c307",
+        "created_at": null,
+        "query_chars": 381,
+        "gold": {
+          "files": [
+            "requests/models.py"
+          ],
+          "symbols": [
+            "requests/models.py::PreparedRequest.prepare_content_length"
+          ],
+          "created_files": [],
+          "not_in_index": []
+        },
+        "index": {
+          "seconds": 168.69,
+          "files_reparsed": 91,
+          "chunks": 1378,
+          "chunks_dropped": 0
+        },
+        "semantic": {
+          "seconds": 0.048,
+          "top_files": [
+            "docs/user/advanced.rst",
+            "requests/models.py",
+            "HISTORY.rst",
+            "test_requests.py",
+            "docs/user/quickstart.rst",
+            "docs/community/faq.rst",
+            "docs/index.rst",
+            "docs/community/updates.rst",
+            "README.rst",
+            "docs/community/out-there.rst"
+          ],
+          "top_symbols": [
+            "requests/models.py::PreparedRequest.prepare_content_length",
+            "test_requests.py::RequestsTestCase",
+            "requests/models.py::PreparedRequest",
+            "requests/packages/urllib3/response.py::HTTPResponse",
+            "test_requests.py::RequestsTestCase.test_custom_content_type",
+            "test_requests.py::RequestsTestCase.test_user_agent_transfers",
+            "test_requests.py::RequestsTestCase.test_HTTP_200_OK_GET_WITH_PARAMS",
+            "test_requests.py::RequestsTestCase.test_HTTP_200_OK_HEAD",
+            "test_requests.py::RequestsTestCase.test_HTTP_200_OK_GET_WITH_MIXED_PARAMS",
+            "requests/sessions.py::Session"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 0.5
+          },
+          "symbols": {
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 1.0
+          }
+        },
+        "lexical": {
+          "seconds": 0.068,
+          "identifiers": [],
+          "top_files": [],
+          "top_symbols": [],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.0
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.0
+          }
+        }
+      },
+      {
+        "id": "psf__requests-1724",
+        "source": "swebench-verified",
+        "repo": "psf/requests",
+        "base_commit": "1ba83c47ce7b177efe90d5f51f7760680f72eda0",
+        "created_at": null,
+        "query_chars": 7476,
+        "gold": {
+          "files": [
+            "requests/sessions.py"
+          ],
+          "symbols": [
+            "requests/sessions.py::Session.request"
+          ],
+          "created_files": [],
+          "not_in_index": []
+        },
+        "index": {
+          "seconds": 84.24,
+          "files_reparsed": 60,
+          "chunks": 1674,
+          "chunks_dropped": 0
+        },
+        "semantic": {
+          "seconds": 0.208,
+          "top_files": [
+            "test_requests.py",
+            "docs/user/quickstart.rst",
+            "requests/packages/urllib3/request.py",
+            "HISTORY.rst",
+            "docs/user/advanced.rst",
+            "docs/api.rst",
+            "docs/dev/todo.rst",
+            "docs/community/out-there.rst",
+            "README.rst",
+            "docs/community/faq.rst"
+          ],
+          "top_symbols": [
+            "test_requests.py::RequestsTestCase",
+            "test_requests.py::RequestsTestCase.test_unicode_multipart_post",
+            "test_requests.py::RequestsTestCase.test_unicode_multipart_post_fieldnames",
+            "requests/packages/urllib3/request.py::RequestMethods",
+            "test_requests.py::RequestsTestCase.test_unicode_get",
+            "requests/packages/urllib3/request.py::RequestMethods.request",
+            "test_requests.py::RequestsTestCase.test_unicode_header_name",
+            "test_requests.py::RequestsTestCase.test_different_encodings_dont_break_post",
+            "requests/packages/urllib3/request.py::RequestMethods.request_encode_body",
+            "test_requests.py::RequestsTestCase.test_conflicting_post_params"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.05555555555555555
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.034482758620689655
+          }
+        },
+        "lexical": {
+          "seconds": 1.172,
+          "identifiers": [
+            "files",
+            "usr",
+            "bin",
+            "response",
+            "method",
+            "POST",
+            "url",
+            "httpbin",
+            "post",
+            "Traceback",
+            "recent",
+            "call",
+            "last",
+            "test_requests",
+            "Library",
+            "site",
+            "packages",
+            "api",
+            "session",
+            "kwargs",
+            "sessions",
+            "resp",
+            "send",
+            "prep",
+            "send_kwargs",
+            "adapter",
+            "adapters",
+            "timeout",
+            "connectionpool",
+            "urlopen",
+            "body"
+          ],
+          "top_files": [
+            "test_requests.py",
+            "requests/sessions.py",
+            "docs/user/advanced.rst",
+            "docs/user/quickstart.rst",
+            "requests/adapters.py",
+            "requests/packages/urllib3/connectionpool.py",
+            "requests/api.py",
+            "requests/models.py",
+            "HISTORY.rst",
+            "requests/packages/urllib3/poolmanager.py"
+          ],
+          "top_symbols": [
+            "requests/sessions.py::Session.request",
+            "requests/packages/urllib3/connectionpool.py::HTTPConnectionPool.urlopen",
+            "requests/sessions.py::Session.send",
+            "requests/api.py::request",
+            "requests/adapters.py::HTTPAdapter.send",
+            "requests/sessions.py::SessionRedirectMixin.resolve_redirects",
+            "test_requests.py::RequestsTestCase.test_unicode_multipart_post_fieldnames",
+            "test_requests.py::RequestsTestCase.test_unicode_multipart_post",
+            "requests/packages/urllib3/poolmanager.py::PoolManager.urlopen",
+            "requests/packages/urllib3/request.py::RequestMethods.request_encode_body"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 0.5
+          },
+          "symbols": {
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 1.0
+          }
+        }
+      },
+      {
+        "id": "psf__requests-1766",
+        "source": "swebench-verified",
+        "repo": "psf/requests",
+        "base_commit": "847735553aeda6e6633f2b32e14ba14ba86887a4",
+        "created_at": null,
+        "query_chars": 897,
+        "gold": {
+          "files": [
+            "requests/auth.py"
+          ],
+          "symbols": [
+            "requests/auth.py::HTTPDigestAuth.build_digest_header"
+          ],
+          "created_files": [],
+          "not_in_index": []
+        },
+        "index": {
+          "seconds": 50.97,
+          "files_reparsed": 17,
+          "chunks": 1690,
+          "chunks_dropped": 0
+        },
+        "semantic": {
+          "seconds": 0.161,
+          "top_files": [
+            "requests/auth.py",
+            "docs/user/authentication.rst",
+            "test_requests.py",
+            "HISTORY.rst",
+            "requests/utils.py",
+            "docs/api.rst",
+            "docs/user/advanced.rst",
+            "docs/user/install.rst",
+            "requests/status_codes.py",
+            "requests/packages/charade/jisfreq.py"
+          ],
+          "top_symbols": [
+            "requests/auth.py::HTTPDigestAuth",
+            "requests/auth.py::HTTPDigestAuth.build_digest_header",
+            "test_requests.py::RequestsTestCase",
+            "requests/auth.py::HTTPDigestAuth.handle_401",
+            "test_requests.py::RequestsTestCase.test_cookie_quote_wrapped",
+            "test_requests.py::RequestsTestCase.test_DIGEST_STREAM",
+            "requests/utils.py::unquote_header_value",
+            "test_requests.py::RequestsTestCase.test_DIGEST_AUTH_RETURNS_COOKIE",
+            "test_requests.py::RequestsTestCase.test_DIGEST_HTTP_200_OK_GET",
+            "test_requests.py::RequestsTestCase.test_DIGESTAUTH_WRONG_HTTP_401_GET"
+          ],
+          "files": {
+            "recall@1": 1.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 1.0
+          },
+          "symbols": {
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 0.5
+          }
+        },
+        "lexical": {
+          "seconds": 0.95,
+          "identifiers": [
+            "qop",
+            "options",
+            "directive",
+            "optional",
+            "made",
+            "compatibility",
+            "RFC",
+            "implementations",
+            "compliant",
+            "Digest",
+            "scheme",
+            "present",
+            "quoted",
+            "string",
+            "supported",
+            "server",
+            "auth",
+            "authentication",
+            "curl",
+            "digest",
+            "user",
+            "passwd",
+            "com"
+          ],
+          "top_files": [
+            "docs/user/advanced.rst",
+            "test_requests.py",
+            "requests/packages/urllib3/util.py",
+            "requests/sessions.py",
+            "HISTORY.rst",
+            "requests/utils.py",
+            "requests/auth.py",
+            "docs/user/authentication.rst",
+            "requests/models.py",
+            "docs/user/quickstart.rst"
+          ],
+          "top_symbols": [
+            "requests/auth.py::HTTPDigestAuth.build_digest_header",
+            "requests/sessions.py::Session.request",
+            "requests/packages/urllib3/util.py::parse_url",
+            "requests/utils.py::parse_list_header",
+            "requests/api.py::request",
+            "requests/sessions.py::SessionRedirectMixin.resolve_redirects",
+            "test_requests.py::RequestsTestCase.test_DIGEST_HTTP_200_OK_GET",
+            "test_requests.py::RequestsTestCase.test_DIGESTAUTH_WRONG_HTTP_401_GET",
+            "test_requests.py::RequestsTestCase.test_DIGEST_STREAM",
+            "requests/packages/urllib3/util.py::make_headers"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "rr": 0.14285714285714285
+          },
+          "symbols": {
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 1.0
+          }
+        }
+      },
+      {
+        "id": "psf__requests-1921",
+        "source": "swebench-verified",
+        "repo": "psf/requests",
+        "base_commit": "3c88e520da24ae6f736929a750876e7654accc3d",
+        "created_at": null,
+        "query_chars": 708,
+        "gold": {
+          "files": [
+            "requests/sessions.py"
+          ],
+          "symbols": [
+            "requests/sessions.py::merge_setting"
+          ],
+          "created_files": [],
+          "not_in_index": []
+        },
+        "index": {
+          "seconds": 205.87,
+          "files_reparsed": 64,
+          "chunks": 1780,
+          "chunks_dropped": 0
+        },
+        "semantic": {
+          "seconds": 0.088,
+          "top_files": [
+            "docs/user/advanced.rst",
+            "HISTORY.rst",
+            "requests/sessions.py",
+            "docs/api.rst",
+            "test_requests.py",
+            "README.rst",
+            "docs/user/quickstart.rst",
+            "docs/index.rst",
+            "requests/packages/urllib3/util.py",
+            "requests/models.py"
+          ],
+          "top_symbols": [
+            "requests/sessions.py::Session",
+            "test_requests.py::RequestsTestCase",
+            "test_requests.py::RequestsTestCase.test_header_remove_is_case_insensitive",
+            "test_requests.py::RequestsTestCase.test_prepared_from_session",
+            "requests/packages/urllib3/util.py::make_headers",
+            "requests/models.py::PreparedRequest",
+            "requests/packages/urllib3/request.py::RequestMethods",
+            "requests/sessions.py::SessionRedirectMixin",
+            "requests/sessions.py::Session.prepare_request",
+            "requests/cookies.py::MockRequest"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 0.3333333333333333
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.0
+          }
+        },
+        "lexical": {
+          "seconds": 0.344,
+          "identifiers": [
+            "session",
+            "Session",
+            "send",
+            "Accept",
+            "Encoding",
+            "headers",
+            "del",
+            "docs"
+          ],
+          "top_files": [
+            "docs/user/advanced.rst",
+            "test_requests.py",
+            "requests/sessions.py",
+            "HISTORY.rst",
+            "requests/models.py",
+            "requests/adapters.py",
+            "docs/api.rst",
+            "requests/api.py",
+            "requests/structures.py",
+            "requests/utils.py"
+          ],
+          "top_symbols": [
+            "requests/api.py::request",
+            "requests/sessions.py::SessionRedirectMixin.resolve_redirects",
+            "test_requests.py::RequestsTestCase.test_fixes_1329",
+            "requests/structures.py::CaseInsensitiveDict",
+            "requests/packages/urllib3/connectionpool.py::HTTPConnectionPool.urlopen",
+            "requests/adapters.py::HTTPAdapter.send",
+            "requests/packages/urllib3/poolmanager.py::ProxyManager._set_proxy_headers",
+            "requests/sessions.py::Session.prepare_request",
+            "requests/sessions.py::Session",
+            "requests/sessions.py::Session.request"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 0.3333333333333333
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.05
+          }
+        }
+      },
+      {
+        "id": "psf__requests-2317",
+        "source": "swebench-verified",
+        "repo": "psf/requests",
+        "base_commit": "091991be0da19de9108dbe5e3752917fea3d7fdc",
+        "created_at": null,
+        "query_chars": 841,
+        "gold": {
+          "files": [
+            "requests/sessions.py"
+          ],
+          "symbols": [
+            "requests/sessions.py::Session.request"
+          ],
+          "created_files": [],
+          "not_in_index": []
+        },
+        "index": {
+          "seconds": 73.32,
+          "files_reparsed": 51,
+          "chunks": 1910,
+          "chunks_dropped": 0
+        },
+        "semantic": {
+          "seconds": 0.101,
+          "top_files": [
+            "docs/dev/todo.rst",
+            "docs/community/faq.rst",
+            "docs/user/quickstart.rst",
+            "test_requests.py",
+            "docs/index.rst",
+            "README.rst",
+            "docs/api.rst",
+            "HISTORY.rst",
+            "docs/user/advanced.rst",
+            "docs/community/out-there.rst"
+          ],
+          "top_symbols": [
+            "test_requests.py::RequestsTestCase",
+            "requests/sessions.py::Session",
+            "requests/packages/urllib3/request.py::RequestMethods",
+            "test_requests.py::UtilsTestCase",
+            "requests/packages/urllib3/request.py::RequestMethods.request_encode_url",
+            "requests/models.py::RequestEncodingMixin",
+            "test_requests.py::RequestsTestCase.test_cannot_send_unprepared_requests",
+            "test_requests.py::RequestsTestCase.test_prepare_request_with_bytestring_url",
+            "requests/packages/urllib3/request.py::RequestMethods.request",
+            "test_requests.py::RequestsTestCase.test_basicauth_with_netrc"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.07142857142857142
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.0
+          }
+        },
+        "lexical": {
+          "seconds": 0.18,
+          "identifiers": [
+            "utils",
+            "builtin_str",
+            "python3"
+          ],
+          "top_files": [
+            "requests/sessions.py",
+            "test_requests.py",
+            "requests/models.py",
+            "requests/utils.py",
+            "docs/api.rst",
+            "requests/compat.py",
+            "requests/packages/urllib3/packages/ssl_match_hostname/_implementation.py",
+            "requests/packages/urllib3/fields.py",
+            "requests/__init__.py",
+            "requests/adapters.py"
+          ],
+          "top_symbols": [
+            "requests/models.py::PreparedRequest.prepare_content_length",
+            "requests/packages/urllib3/packages/ssl_match_hostname/_implementation.py::_dnsname_match",
+            "requests/models.py::PreparedRequest.prepare_body",
+            "requests/sessions.py::Session.request",
+            "requests/utils.py::to_native_string",
+            "test_requests.py::RequestsTestCase.test_basic_auth_str_is_always_native",
+            "requests/packages/urllib3/fields.py::format_header_param",
+            "test_requests.py::RequestsTestCase.test_get_auth_from_url",
+            "test_requests.py::RequestsTestCase.test_get_auth_from_url_encoded_hashes",
+            "test_requests.py::RequestsTestCase.test_get_auth_from_url_encoded_spaces"
+          ],
+          "files": {
+            "recall@1": 1.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 1.0
+          },
+          "symbols": {
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 0.25
+          }
+        }
+      },
+      {
+        "id": "psf__requests-2931",
+        "source": "swebench-verified",
+        "repo": "psf/requests",
+        "base_commit": "5f7a3a74aab1625c2bb65f643197ee885e3da576",
+        "created_at": null,
+        "query_chars": 271,
+        "gold": {
+          "files": [
+            "requests/models.py"
+          ],
+          "symbols": [
+            "requests/models.py::RequestEncodingMixin._encode_params",
+            "requests/models.py::PreparedRequest.prepare_url"
+          ],
+          "created_files": [],
+          "not_in_index": []
+        },
+        "index": {
+          "seconds": 120.71,
+          "files_reparsed": 63,
+          "chunks": 2207,
+          "chunks_dropped": 0
+        },
+        "semantic": {
+          "seconds": 0.201,
+          "top_files": [
+            "test_requests.py",
+            "CONTRIBUTING.md",
+            "HISTORY.rst",
+            "docs/api.rst",
+            "docs/user/quickstart.rst",
+            "docs/user/advanced.rst",
+            "docs/community/support.rst",
+            "requests/packages/__init__.py",
+            "docs/community/faq.rst",
+            "README.rst"
+          ],
+          "top_symbols": [
+            "test_requests.py::TestRequests",
+            "test_requests.py::TestRequests.test_unicode_method_name_with_request_object",
+            "test_requests.py::TestRequests.test_unicode_header_name",
+            "test_requests.py::TestTimeout.test_encoded_methods",
+            "test_requests.py::TestRequests.test_unicode_method_name",
+            "test_requests.py::TestRequests.test_unicode_multipart_post",
+            "test_requests.py::TestRequests.test_header_keys_are_native",
+            "test_requests.py::TestRequests.test_different_encodings_dont_break_post",
+            "test_requests.py::TestRequests.test_unicode_multipart_post_fieldnames",
+            "test_requests.py::TestRequests.test_cannot_send_unprepared_requests"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.06666666666666667
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.037037037037037035
+          }
+        },
+        "lexical": {
+          "seconds": 0.365,
+          "identifiers": [
+            "httpbin",
+            "encode",
+            "utf",
+            "to_native_string"
+          ],
+          "top_files": [
+            "requests/models.py",
+            "test_requests.py",
+            "requests/auth.py",
+            "requests/utils.py",
+            "requests/sessions.py",
+            "docs/user/quickstart.rst",
+            "docs/user/advanced.rst",
+            "requests/packages/urllib3/fields.py",
+            "requests/adapters.py",
+            "HISTORY.rst"
+          ],
+          "top_symbols": [
+            "requests/models.py::PreparedRequest.prepare_url",
+            "test_requests.py::TestRequests.test_unicode_multipart_post",
+            "requests/models.py::RequestEncodingMixin._encode_params",
+            "requests/auth.py::HTTPDigestAuth.build_digest_header",
+            "test_requests.py::TestRequests.test_unicode_multipart_post_fieldnames",
+            "requests/models.py::RequestEncodingMixin._encode_files",
+            "requests/packages/urllib3/fields.py::format_header_param",
+            "test_requests.py::TestRequests.test_header_keys_are_native",
+            "requests/auth.py::_basic_auth_str",
+            "requests/sessions.py::SessionRedirectMixin.resolve_redirects"
+          ],
+          "files": {
+            "recall@1": 1.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 1.0
+          },
+          "symbols": {
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 1.0
+          }
+        }
+      },
+      {
+        "id": "psf__requests-5414",
+        "source": "swebench-verified",
+        "repo": "psf/requests",
+        "base_commit": "39d0fdd9096f7dceccbc8f82e1eda7dd64717a8e",
+        "created_at": null,
+        "query_chars": 1428,
+        "gold": {
+          "files": [
+            "requests/models.py"
+          ],
+          "symbols": [
+            "requests/models.py::PreparedRequest.prepare_url"
+          ],
+          "created_files": [],
+          "not_in_index": []
+        },
+        "index": {
+          "seconds": 106.29,
+          "files_reparsed": 54,
+          "chunks": 1702,
+          "chunks_dropped": 0
+        },
+        "semantic": {
+          "seconds": 0.2,
+          "top_files": [
+            "README.md",
+            "docs/community/support.rst",
+            "HISTORY.md",
+            "tests/test_requests.py",
+            "docs/api.rst",
+            "docs/community/out-there.rst",
+            "docs/user/advanced.rst",
+            "docs/index.rst",
+            "docs/user/quickstart.rst",
+            "docs/community/faq.rst"
+          ],
+          "top_symbols": [
+            "tests/test_requests.py::TestRequests",
+            "tests/test_requests.py::TestPreparingURLs",
+            "tests/test_requests.py::TestRequests.test_response_reason_unicode_fallback",
+            "tests/test_requests.py::TestRequests.test_response_reason_unicode",
+            "tests/test_requests.py::TestRequests.test_invalid_url",
+            "requests/utils.py::get_unicode_from_response",
+            "tests/test_requests.py::TestRequests.test_unicode_method_name_with_request_object",
+            "tests/test_lowlevel.py::test_chunked_encoding_error",
+            "tests/test_requests.py::TestPreparingURLs.test_preparing_bad_url",
+            "tests/test_requests.py::TestRequests.test_response_decode_unicode"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.0
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.0
+          }
+        },
+        "lexical": {
+          "seconds": 1.002,
+          "identifiers": [
+            "python3",
+            "chardet",
+            "cryptography",
+            "idna",
+            "implementation",
+            "CPython",
+            "platform",
+            "release",
+            "generic",
+            "system",
+            "Linux",
+            "pyOpenSSL",
+            "openssl_version",
+            "system_ssl",
+            "using_pyopenssl",
+            "UnicodeError",
+            "invalid",
+            "label",
+            "codec",
+            "failed",
+            "empty",
+            "long",
+            "help"
+          ],
+          "top_files": [
+            "HISTORY.md",
+            "requests/help.py",
+            "requests/models.py",
+            "docs/user/advanced.rst",
+            "tests/test_help.py",
+            "setup.py",
+            "docs/conf.py",
+            "requests/adapters.py",
+            "requests/__init__.py",
+            "docs/user/quickstart.rst"
+          ],
+          "top_symbols": [
+            "requests/help.py::info",
+            "requests/help.py::_implementation",
+            "requests/models.py::PreparedRequest.prepare_url",
+            "requests/models.py::PreparedRequest._get_idna_encoded_host",
+            "requests/models.py::Response.json",
+            "tests/test_help.py::test_idna_with_version_attribute",
+            "tests/test_help.py::test_idna_without_version_attribute",
+            "tests/test_help.py::test_system_ssl",
+            "requests/__init__.py::_check_cryptography",
+            "requests/cookies.py::_copy_cookie_jar"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 0.3333333333333333
+          },
+          "symbols": {
+            "recall@5": 1.0,
+            "recall@10": 1.0,
+            "rr": 0.3333333333333333
+          }
+        }
+      },
+      {
+        "id": "psf__requests-6028",
+        "source": "swebench-verified",
+        "repo": "psf/requests",
+        "base_commit": "0192aac24123735b3eaf9b08df46429bb770c283",
+        "created_at": null,
+        "query_chars": 1268,
+        "gold": {
+          "files": [
+            "requests/utils.py"
+          ],
+          "symbols": [
+            "requests/utils.py::prepend_scheme_if_needed"
+          ],
+          "created_files": [],
+          "not_in_index": []
+        },
+        "index": {
+          "seconds": 50.76,
+          "files_reparsed": 12,
+          "chunks": 1711,
+          "chunks_dropped": 0
+        },
+        "semantic": {
+          "seconds": 0.186,
+          "top_files": [
+            "docs/user/advanced.rst",
+            "HISTORY.md",
+            "tests/test_requests.py",
+            "docs/index.rst",
+            "docs/community/support.rst",
+            "README.md",
+            "docs/user/quickstart.rst",
+            "docs/community/faq.rst",
+            "requests/auth.py",
+            "docs/conf.py"
+          ],
+          "top_symbols": [
+            "tests/test_requests.py::TestRequests",
+            "tests/test_requests.py::TestRequests.test_proxy_error_on_bad_url",
+            "requests/auth.py::HTTPProxyAuth",
+            "tests/test_requests.py::TestRequests.test_respect_proxy_env_on_send_with_redirects",
+            "tests/test_requests.py::TestRequests.test_respect_proxy_env_on_request",
+            "tests/test_requests.py::TestRequests.test_proxy_error",
+            "tests/test_requests.py::TestRequests.test_proxy_authorization_preserved_on_request",
+            "tests/test_requests.py::TestRequests.test_respect_proxy_env_on_send_self_prepared_request",
+            "tests/test_requests.py::TestRequests.test_respect_proxy_env_on_send_session_prepared_request",
+            "requests/adapters.py::HTTPAdapter"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.043478260869565216
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.0
+          }
+        },
+        "lexical": {
+          "seconds": 1.115,
+          "identifiers": [
+            "proxies",
+            "proxy",
+            "service",
+            "status_code",
+            "chardet",
+            "null",
+            "charset_normalizer",
+            "cryptography",
+            "idna",
+            "implementation",
+            "CPython",
+            "platform",
+            "release",
+            "generic",
+            "system",
+            "Linux",
+            "pyOpenSSL",
+            "openssl_version",
+            "system_ssl",
+            "using_charset_normalizer",
+            "using_pyopenssl"
+          ],
+          "top_files": [
+            "requests/help.py",
+            "HISTORY.md",
+            "docs/user/advanced.rst",
+            "tests/test_requests.py",
+            "requests/models.py",
+            "requests/utils.py",
+            "requests/sessions.py",
+            "requests/__init__.py",
+            "requests/adapters.py",
+            "setup.py"
+          ],
+          "top_symbols": [
+            "requests/help.py::info",
+            "requests/help.py::_implementation",
+            "tests/test_utils.py::test_select_proxies",
+            "requests/utils.py::resolve_proxies",
+            "requests/utils.py::select_proxy",
+            "tests/test_requests.py::test_proxy_env_vars_override_default",
+            "requests/adapters.py::HTTPAdapter.get_connection",
+            "requests/adapters.py::HTTPAdapter.request_url",
+            "requests/sessions.py::SessionRedirectMixin.resolve_redirects",
+            "requests/sessions.py::SessionRedirectMixin.rebuild_proxies"
+          ],
+          "files": {
+            "recall@1": 0.0,
+            "recall@5": 0.0,
+            "recall@10": 1.0,
+            "rr": 0.16666666666666666
+          },
+          "symbols": {
+            "recall@5": 0.0,
+            "recall@10": 0.0,
+            "rr": 0.0
+          }
+        }
+      }
+    ],
+    "excluded": [],
+    "summary": {
+      "all": {
+        "queries": 11,
+        "queries_with_symbols": 11,
+        "semantic": {
+          "file_recall@1": 0.0909,
+          "file_recall@5": 0.2727,
+          "file_recall@10": 0.4091,
+          "file_mrr": 0.2157,
+          "symbol_recall@5": 0.1818,
+          "symbol_recall@10": 0.1818,
+          "symbol_mrr": 0.152
+        },
+        "lexical": {
+          "file_recall@1": 0.2727,
+          "file_recall@5": 0.7273,
+          "file_recall@10": 0.9091,
+          "file_mrr": 0.4827,
+          "symbol_recall@5": 0.5,
+          "symbol_recall@10": 0.5909,
+          "symbol_mrr": 0.3697
+        },
+        "semantic_vs_lexical_file_rr": {
+          "wins": 2,
+          "losses": 8,
+          "ties": 1
+        }
+      },
+      "swebench-verified": {
+        "queries": 11,
+        "queries_with_symbols": 11,
+        "semantic": {
+          "file_recall@1": 0.0909,
+          "file_recall@5": 0.2727,
+          "file_recall@10": 0.4091,
+          "file_mrr": 0.2157,
+          "symbol_recall@5": 0.1818,
+          "symbol_recall@10": 0.1818,
+          "symbol_mrr": 0.152
+        },
+        "lexical": {
+          "file_recall@1": 0.2727,
+          "file_recall@5": 0.7273,
+          "file_recall@10": 0.9091,
+          "file_mrr": 0.4827,
+          "symbol_recall@5": 0.5,
+          "symbol_recall@10": 0.5909,
+          "symbol_mrr": 0.3697
+        },
+        "semantic_vs_lexical_file_rr": {
+          "wins": 2,
+          "losses": 8,
+          "ties": 1
+        }
+      }
+    }
+  },
+  "incremental": {
+    "repo": "psf__requests",
+    "url": "https://github.com/psf/requests.git",
+    "from_commit": "b17c61b618b1824f1f5d9edcacaf16801343a295",
+    "to_commit": "611c6162cbc4ac2020a2f91c7cfa4f3abf9bbb60",
+    "commits_replayed": 10,
+    "first_index_seconds": 114.5,
+    "first_index_chunks": 1898,
+    "fresh_index_seconds": 99.4,
+    "step_seconds_p50": 0.22,
+    "step_seconds_max": 0.27,
+    "steps": [
+      {
+        "commit": "69f84847045bef7a849cc994a26fe7ba8a169e95",
+        "subject": "Bump the actions group with 3 updates (#7591)",
+        "files_changed": 1,
+        "files_reparsed": 0,
+        "chunks": 1898,
+        "seconds": 0.09
+      },
+      {
+        "commit": "ded32878c0090f6b7b32a008176df6cecf36481f",
+        "subject": "Bump https://github.com/astral-sh/ruff-pre-commit (#7597)",
+        "files_changed": 1,
+        "files_reparsed": 1,
+        "chunks": 1898,
+        "seconds": 0.22
+      },
+      {
+        "commit": "414f0513c33883adf6f2b46901d4f0b38a455851",
+        "subject": "Bump the actions group with 2 updates (#7596)",
+        "files_changed": 5,
+        "files_reparsed": 0,
+        "chunks": 1898,
+        "seconds": 0.09
+      },
+      {
+        "commit": "1f6589ec3a1ee910f9a65cc3ceac60b26677bc0e",
+        "subject": "Bump https://github.com/astral-sh/ruff-pre-commit (#7598)",
+        "files_changed": 1,
+        "files_reparsed": 1,
+        "chunks": 1898,
+        "seconds": 0.22
+      },
+      {
+        "commit": "8068356288978c4f54661ae6f95afe0e0831885e",
+        "subject": "Bump https://github.com/astral-sh/ruff-pre-commit (#7603)",
+        "files_changed": 1,
+        "files_reparsed": 1,
+        "chunks": 1898,
+        "seconds": 0.22
+      },
+      {
+        "commit": "8f8b212de8c2129d7954c6cd373762880375620a",
+        "subject": "Bump https://github.com/astral-sh/ruff-pre-commit (#7606)",
+        "files_changed": 1,
+        "files_reparsed": 1,
+        "chunks": 1898,
+        "seconds": 0.23
+      },
+      {
+        "commit": "6af0b94158bbe10c45e754e85f9701f401e6aa9c",
+        "subject": "Bump https://github.com/astral-sh/ruff-pre-commit (#7608)",
+        "files_changed": 1,
+        "files_reparsed": 1,
+        "chunks": 1898,
+        "seconds": 0.27
+      },
+      {
+        "commit": "5460f467b02e49471c0fd6cfc9ca0adab6351f98",
+        "subject": "Update lock-issues.yml to latest dependencies (#7609)",
+        "files_changed": 1,
+        "files_reparsed": 0,
+        "chunks": 1898,
+        "seconds": 0.1
+      },
+      {
+        "commit": "dae7ef63b4df6eded86637f251fc4e3a06c3b479",
+        "subject": "Bump https://github.com/astral-sh/ruff-pre-commit (#7616)",
+        "files_changed": 1,
+        "files_reparsed": 1,
+        "chunks": 1898,
+        "seconds": 0.23
+      },
+      {
+        "commit": "611c6162cbc4ac2020a2f91c7cfa4f3abf9bbb60",
+        "subject": "Bump the actions group with 3 updates (#7628)",
+        "files_changed": 1,
+        "files_reparsed": 0,
+        "chunks": 1898,
+        "seconds": 0.09
+      }
+    ],
+    "chunks_incremental": 1898,
+    "chunks_fresh": 1898,
+    "only_in_incremental": 0,
+    "only_in_fresh": 0,
+    "duplicate_count_mismatches": 0,
+    "min_vector_cosine": 1.0,
+    "probe_queries": 10,
+    "probe_identical_top10": 1.0,
+    "probe_mean_overlap@10": 1.0,
+    "correct": true
+  },
+  "robustness": {
+    "repo": "psf__requests",
+    "commit": "611c6162cbc4ac2020a2f91c7cfa4f3abf9bbb60",
+    "subdir": "src/requests",
+    "probes": [
+      "merge session cookies into the request",
+      "where is the request timeout enforced",
+      "read proxy settings from environment variables",
+      "retry a connection when the adapter fails",
+      "encode multipart form data for file uploads"
+    ],
+    "scenarios": [
+      {
+        "name": "faiss-truncated",
+        "damage": "index.faiss cut to half its size",
+        "search": {
+          "outcome": "raised",
+          "error": "RuntimeError: Failed to load FAISS index at C:\\Users\\Kalin\\AppData\\Local\\Temp\\gaia-bench\\retrieval\\index\\pr-20261004-211507\\robustness\\faiss-truncated\\cbda4e120ed0a6a9\\index.faiss: Error in void __cdecl faiss::read_xb_vector<struct faiss::MaybeOwnedVector<unsigned char>>(struct faiss::MaybeOwnedVector<unsigned ch"
+        },
+        "reindex": {
+          "outcome": "raised",
+          "error": "RuntimeError: Failed to load FAISS index at C:\\Users\\Kalin\\AppData\\Local\\Temp\\gaia-bench\\retrieval\\index\\pr-20261004-211507\\robustness\\faiss-truncated\\cbda4e120ed0a6a9\\index.faiss: Error in void __cdecl faiss::read_xb_vector<struct faiss::MaybeOwnedVector<unsigned char>>(struct faiss::MaybeOwnedVector<unsigned ch"
+        },
+        "passed": true,
+        "recovers": false
+      },
+      {
+        "name": "faiss-empty",
+        "damage": "index.faiss is zero bytes",
+        "search": {
+          "outcome": "raised",
+          "error": "RuntimeError: Failed to load FAISS index at C:\\Users\\Kalin\\AppData\\Local\\Temp\\gaia-bench\\retrieval\\index\\pr-20261004-211507\\robustness\\faiss-empty\\cbda4e120ed0a6a9\\index.faiss: Error in class std::unique_ptr<struct faiss::Index,struct std::default_delete<struct faiss::Index> > __cdecl faiss::read_index_up(struct "
+        },
+        "reindex": {
+          "outcome": "raised",
+          "error": "RuntimeError: Failed to load FAISS index at C:\\Users\\Kalin\\AppData\\Local\\Temp\\gaia-bench\\retrieval\\index\\pr-20261004-211507\\robustness\\faiss-empty\\cbda4e120ed0a6a9\\index.faiss: Error in class std::unique_ptr<struct faiss::Index,struct std::default_delete<struct faiss::Index> > __cdecl faiss::read_index_up(struct "
+        },
+        "passed": true,
+        "recovers": false
+      },
+      {
+        "name": "faiss-garbage",
+        "damage": "index.faiss overwritten with random bytes",
+        "search": {
+          "outcome": "raised",
+          "error": "RuntimeError: Failed to load FAISS index at C:\\Users\\Kalin\\AppData\\Local\\Temp\\gaia-bench\\retrieval\\index\\pr-20261004-211507\\robustness\\faiss-garbage\\cbda4e120ed0a6a9\\index.faiss: Error in class std::unique_ptr<struct faiss::Index,struct std::default_delete<struct faiss::Index> > __cdecl faiss::read_index_up(struc"
+        },
+        "reindex": {
+          "outcome": "raised",
+          "error": "RuntimeError: Failed to load FAISS index at C:\\Users\\Kalin\\AppData\\Local\\Temp\\gaia-bench\\retrieval\\index\\pr-20261004-211507\\robustness\\faiss-garbage\\cbda4e120ed0a6a9\\index.faiss: Error in class std::unique_ptr<struct faiss::Index,struct std::default_delete<struct faiss::Index> > __cdecl faiss::read_index_up(struc"
+        },
+        "passed": true,
+        "recovers": false
+      },
+      {
+        "name": "faiss-missing",
+        "damage": "index.faiss deleted, metadata kept",
+        "search": {
+          "outcome": "silent-empty"
+        },
+        "reindex": {
+          "outcome": "correct"
+        },
+        "passed": false,
+        "recovers": true
+      },
+      {
+        "name": "metadata-truncated",
+        "damage": "metadata.json cut to half (invalid JSON)",
+        "search": {
+          "outcome": "silent-empty"
+        },
+        "reindex": {
+          "outcome": "correct"
+        },
+        "passed": false,
+        "recovers": true
+      },
+      {
+        "name": "metadata-empty",
+        "damage": "metadata.json is zero bytes",
+        "search": {
+          "outcome": "silent-empty"
+        },
+        "reindex": {
+          "outcome": "correct"
+        },
+        "passed": false,
+        "recovers": true
+      },
+      {
+        "name": "metadata-missing",
+        "damage": "metadata.json deleted, index kept",
+        "search": {
+          "outcome": "silent-empty"
+        },
+        "reindex": {
+          "outcome": "correct"
+        },
+        "passed": false,
+        "recovers": true
+      },
+      {
+        "name": "metadata-chunk-dropped",
+        "damage": "one chunk entry removed (vector count no longer matches)",
+        "search": {
+          "outcome": "silent-empty"
+        },
+        "reindex": {
+          "outcome": "silent-wrong",
+          "overlap@10": 0.98
+        },
+        "passed": false,
+        "recovers": false
+      },
+      {
+        "name": "metadata-old-version",
+        "damage": "cache written by an older schema version",
+        "search": {
+          "outcome": "silent-empty"
+        },
+        "reindex": {
+          "outcome": "correct"
+        },
+        "passed": false,
+        "recovers": true
+      },
+      {
+        "name": "metadata-other-model",
+        "damage": "index built with a different embedding model",
+        "search": {
+          "outcome": "raised",
+          "error": "ValueError: Embedding-model mismatch: index built with 'user.some-other-embedder', current config is 'user.embeddinggemma-300m-GGUF'. Re-run `index_repository()` (or `clear_index()` first) to rebuild with the new model."
+        },
+        "reindex": {
+          "outcome": "correct"
+        },
+        "passed": true,
+        "recovers": true
+      },
+      {
+        "name": "leftover-temp-files",
+        "damage": "a crashed save left its temp files behind",
+        "search": {
+          "outcome": "correct"
+        },
+        "reindex": {
+          "outcome": "correct"
+        },
+        "passed": true,
+        "recovers": true
+      },
+      {
+        "name": "interrupted-save",
+        "damage": "index.faiss from a newer save next to the older metadata.json",
+        "search": {
+          "outcome": "silent-wrong",
+          "overlap@10": 0.98
+        },
+        "reindex": {
+          "outcome": "silent-wrong",
+          "overlap@10": 0.98
+        },
+        "passed": false,
+        "recovers": false
+      }
+    ],
+    "tree": [
+      {
+        "name": "binary-with-code-extension",
+        "hazard": "a .py file holding NUL bytes",
+        "status": "pass",
+        "detail": "not indexed"
+      },
+      {
+        "name": "nul-after-sniff-window",
+        "hazard": "a .py file whose first NUL is past the 8 KB binary sniff",
+        "status": "pass",
+        "detail": "not indexed"
+      },
+      {
+        "name": "oversized-file",
+        "hazard": "a 1.2 MB .py file (limit 1 MB)",
+        "status": "pass",
+        "detail": "not indexed"
+      },
+      {
+        "name": "latin-1-file",
+        "hazard": "a .py file that is not valid UTF-8",
+        "status": "pass",
+        "detail": "indexed"
+      },
+      {
+        "name": "file-link-out-of-repo",
+        "hazard": "a .py link to a file outside the repository",
+        "status": "not-run",
+        "detail": "file symlinks need Developer Mode or admin rights on Windows"
+      },
+      {
+        "name": "dir-link-out-of-repo",
+        "hazard": "a directory link to a directory outside the repository",
+        "status": "pass",
+        "detail": "walked 1 path(s) through the link; the path check rejected them"
+      },
+      {
+        "name": "directory-loop",
+        "hazard": "a directory link back to the repository root",
+        "status": "fail",
+        "detail": "indexing aborts: Code index scan of C:\\Users\\Kalin\\AppData\\Local\\Temp\\gaia-bench\\retrieval\\index\\pr-20261004-211507\\robustness\\link-directory-loop failed: [WinError 1921] The name of the file cannot be resolved by the"
+      },
+      {
+        "name": "dangling-link",
+        "hazard": "a directory link to a path that does not exist",
+        "status": "not-run",
+        "detail": "could not create a directory junction here: [WinError 2] The system cannot find the file specified"
+      }
+    ],
+    "passed": 10,
+    "failed": 8,
+    "not_run": 2
+  },
+  "duration_s": 2405.1
+}

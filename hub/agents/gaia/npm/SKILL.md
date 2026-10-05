@@ -489,7 +489,8 @@ matching bodies in full — the rest collapse to a one-line menu entry, and the
 model (or the user) re-activates one by calling `load_skill` on it again.
 `GAIA_DYNAMIC_SKILLS=0` disables the per-turn selection (every loaded body
 renders every turn); `GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides the match
-threshold. Manifest `skills:` entries are always-on and never collapse. If the
+threshold. Manifest `skills:` entries are always-on and never collapse, and a
+turn with only always-on skills loaded embeds nothing. If the
 embedder is unavailable, selection disables itself for the session and every
 body renders — capability is never silently lost to a failed match.
 
@@ -499,7 +500,7 @@ turn — budget for it. It is not a task recipe but the agent's honesty floor: d
 not claim work you did not do, do not present empty output as a result, do not
 substitute a near-miss and report success. Those failures corrupt an answer
 whatever the task is, which is why it cannot live in an opt-in bundle. It
-declares no tools, and its body measures 702 tokens (tiktoken `cl100k`).
+declares no tools, and its body measures 790 tokens (tiktoken `cl100k`).
 
 **`document-extract` ships bundled but not enabled.** `gaia-voice` routes a
 request for every item in a document to it, and it drives
@@ -534,7 +535,7 @@ Two consequences an integrator needs to plan for:
 
 - **Up to 600 prompt tokens, every turn.** That is the enforced ceiling
   (1.8% of the NPU profile's 32K window), not a typical value — budget it
-  alongside `gaia-voice`'s 702.
+  alongside `gaia-voice`'s 790.
 - **An embedding pass on the first semantic code search.** If the repo has no
   [code index](https://amd-gaia.ai/docs/guides/code-index), the first
   `search_code_index` builds it, then searches. On a large monorepo that one

@@ -300,24 +300,36 @@ def _make_entry(category: str, index: int) -> str:
     return f"{content} [ref:{index:06d}]"
 
 
-def _seed_entries(store: MemoryStore, n: int, context: str = "global") -> int:
-    """Store *n* entries evenly split across USER_CATEGORIES.
+def _entry_items(n: int, context: str = "global") -> List[Dict]:
+    """*n* entries evenly split across USER_CATEGORIES."""
+    return [
+        {
+            "category": USER_CATEGORIES[i % len(USER_CATEGORIES)],
+            "content": _make_entry(USER_CATEGORIES[i % len(USER_CATEGORIES)], i),
+            "confidence": 0.5 + (i % 5) * 0.1,
+            "context": context,
+        }
+        for i in range(n)
+    ]
+
+
+def _store_entries(store: MemoryStore, n: int, context: str = "global") -> int:
+    """Store *n* entries one at a time through ``store()``, dedup included.
 
     Returns the number of DISTINCT rows actually stored (post-dedup), so a
     caller can confirm dedup did not silently collapse the intended N.
     """
-    stored_ids = set()
-    for i in range(n):
-        category = USER_CATEGORIES[i % len(USER_CATEGORIES)]
-        content = _make_entry(category, i)
-        kid = store.store(
-            category=category,
-            content=content,
-            confidence=0.5 + (i % 5) * 0.1,
-            context=context,
-        )
-        stored_ids.add(kid)
-    return len(stored_ids)
+    return len({store.store(**item) for item in _entry_items(n, context)})
+
+
+def _seed_entries(store: MemoryStore, n: int, context: str = "global") -> int:
+    """Seed *n* entries in one transaction and return the row count.
+
+    ``store()`` commits per row, and hundreds of fsyncs timed out a loaded
+    Windows runner. Skipping dedup is safe: _make_entry() is unique by
+    construction and test_dedup_did_not_collapse_seeded_entries proves it.
+    """
+    return len(store.seed_bulk(_entry_items(n, context)))
 
 
 class _MemoryPromptHost(MemoryMixin):
@@ -348,7 +360,7 @@ _TOKEN_THRESHOLDS = [8192, 32768]
 def measure_memory_prompt(tmp_path: Path, n: int) -> Dict[str, object]:
     """Seed *n* entries into an isolated store and measure the memory block.
 
-    Returns a dict with n, stored (post-dedup row count), memory_chars,
+    Returns a dict with n, stored (rows seeded), memory_chars,
     approx_tokens, and truncated (bool).
     """
     db_path = tmp_path / f"memory_n{n}.db"
@@ -406,7 +418,7 @@ class TestMemoryPromptGrowth:
             db_path = tmp_path / f"dedup_check_{n}.db"
             store = MemoryStore(db_path=db_path)
             try:
-                stored = _seed_entries(store, n)
+                stored = _store_entries(store, n)
             finally:
                 store.close()
             assert stored == n, (
