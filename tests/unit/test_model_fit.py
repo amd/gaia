@@ -75,6 +75,8 @@ QWEN = lc.find_model_requirement(lc.LARGE_DEFAULT_MODEL_NAME)
 FLASH = lc.find_model_requirement(lc.FLASH_OPTION_MODEL_NAME)
 # Qwen3.6's KV cache at its 64K floor, the least it ever loads with.
 QWEN_KV = model_fit.kv_cache_gb(QWEN.kv_bytes_per_token, QWEN.min_ctx_size)
+# Flash Next's KV cache at the 64K window it always loads with.
+FLASH_KV = model_fit.kv_cache_gb(FLASH.kv_bytes_per_token, FLASH.min_ctx_size)
 
 
 class TestCapacity:
@@ -147,8 +149,32 @@ class TestFit:
         # Flash's 82.86 GB (with the vision projector) still needs the full
         # 128 GB Strix Halo class — this is why it stays a manual opt-in
         # rather than something smaller machines get offered.
-        verdict = check_fit(FLASH.size_gb, capacity_from_system_info(STRIX_HALO_64))
-        assert not verdict.fits and "memory" in verdict.reason
+        verdict = check_fit(
+            FLASH.size_gb, capacity_from_system_info(STRIX_HALO_64), FLASH_KV
+        )
+        assert not verdict.fits and "~90 GB" in verdict.reason
+
+    def test_flash_fits_a_128gb_strix_halo_inside_its_gpu_carve_out(self):
+        # ~90 GB fits the 96 GB carve-out alone, so the OS keeps its own RAM.
+        need = model_fit.required_memory_gb(FLASH.size_gb, FLASH_KV)
+        assert need == pytest.approx(89.6, abs=0.05) and need < 96.0
+        assert check_fit(
+            FLASH.size_gb, capacity_from_system_info(STRIX_HALO_128), FLASH_KV
+        ).fits
+
+    def test_flash_kv_cache_is_its_sparse_attention_layers_at_64k(self):
+        # 12 of 48 layers are Qwen Sparse Attention; the rest are Gated DeltaNet.
+        per_token = 12 * 2 * 256 * 2 * 2  # layers x KV heads x dims x K+V x f16
+        assert FLASH.kv_bytes_per_token == per_token
+        assert FLASH_KV == pytest.approx(1.6, abs=0.05)
+
+    def test_flash_keeps_its_64k_window_on_every_machine(self):
+        # It declares no native maximum, so it does not opt in to memory sizing.
+        assert not FLASH.scales_with_memory
+        for info in (STRIX_HALO_128, DGPU):
+            cap = capacity_from_system_info(info)
+            assert lc.context_for_capacity(FLASH, cap) == lc.GPU_CTX_SIZE
+            assert lc.kv_cache_for(FLASH, cap) == pytest.approx(FLASH_KV)
 
     def test_disk_is_part_of_fit(self):
         cap = MachineCapacity(memory_gb=112, memory_source="AMD iGPU", disk_free_gb=10)
@@ -217,6 +243,27 @@ def _recommend(system_info):
     client.health_check.return_value = {"status": "ok", "version": "2026.40.0"}
     model_id, skipped, _ = lc.recommend_default_chat_model(client)
     return model_id, dict(skipped)
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        STRIX_HALO_128,
+        STRIX_HALO_64,
+        CPU_ONLY,
+        {
+            "Physical Memory": "512 GB",
+            "devices": {"amd_gpu": [{"available": True, "vram_gb": 400.0}]},
+            "model_storage": {"free_bytes": 4000e9},
+        },
+    ],
+)
+def test_flash_is_never_picked_as_a_default(info):
+    """Opt-in only: no capacity, however large, makes gaia init choose it."""
+    model_id, skipped = _recommend(info)
+    assert not lc._model_ids_match(model_id, lc.FLASH_OPTION_MODEL_NAME)
+    assert lc.FLASH_OPTION_MODEL_NAME not in skipped
+    assert lc.FLASH_OPTION_MODEL_NAME not in lc.DEFAULT_MODEL_LADDER
 
 
 class TestDefaultFollowsTheGpu:
