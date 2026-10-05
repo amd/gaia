@@ -4209,6 +4209,8 @@ Do NOT wrap conversational replies in JSON.
                 desc = param_info.get("description", "")
                 if desc:
                     prop["description"] = desc
+                if param_info.get("enum"):
+                    prop["enum"] = list(param_info["enum"])
                 properties[param_name] = prop
                 if param_info.get("required", True):
                     required.append(param_name)
