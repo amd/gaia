@@ -159,6 +159,38 @@ def test_sleep_is_offered_on_a_turn_that_never_mentions_waiting(monkeypatch):
     assert "sleep" in selected
 
 
+def test_shell_is_offered_when_the_user_asks_for_it(monkeypatch):
+    """Asking for the shell by name must put the shell on offer.
+
+    The stub embedder scores every tool the same, so all of them clear the
+    threshold and the cap decides. That is the real-embedder failure: about 90
+    tools matched "use your shell tool to run pwd" and run_shell_command was
+    skipped at the cap, so the agent guessed the directory.
+    """
+    monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    monkeypatch.setattr(
+        GaiaAgent, "_embed_text", lambda _self, _t: np.ones(8, dtype=np.float32)
+    )
+    monkeypatch.setattr(
+        GaiaAgent,
+        "_embed_texts_batch",
+        lambda _self, texts: np.ones((len(texts), 8), dtype=np.float32),
+    )
+    with _isolated_registry():
+        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True, dynamic_tools=True))
+        agent._memory_store = object()
+        unrelated = agent._select_tools_for_turn("Summarize my meeting notes.")
+        agent.tool_loader.reset_session()
+        asked = agent._select_tools_for_turn(
+            "Use your shell tool to run pwd and tell me the directory."
+        )
+
+    assert unrelated is not None and asked is not None
+    assert "run_shell_command" not in unrelated, "the cap is not full; proves nothing"
+    assert {"run_shell_command", "get_shell_state"} <= set(asked)
+
+
 def test_skill_catalogue_renders_for_the_flagship():
     """A skill the model cannot see is a skill it never loads (#3764)."""
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:

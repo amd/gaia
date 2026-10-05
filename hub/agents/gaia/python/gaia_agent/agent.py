@@ -608,7 +608,9 @@ class GaiaAgent(
         if not self._dynamic_skills_active():
             return None
         query = self._build_tool_selection_query(user_input)
-        return self.skill_loader.select(query, self.loaded_skills)
+        return self.skill_loader.select(
+            query, self.loaded_skills, always_on=self._always_on_skill_names
+        )
 
     def select_skill_set(self) -> Optional[str]:
         """Resolve which declared skill set to load at startup.

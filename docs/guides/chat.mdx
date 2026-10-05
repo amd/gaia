@@ -273,7 +273,7 @@ print(result)
 
   <Accordion title="PDF Issues">
     - Ensure PDF has extractable text (not scanned images)
-    - Check file is not password-protected
+    - Check the PDF does not need a password to open — remove it with `qpdf --decrypt --password=YOUR_PASSWORD in.pdf out.pdf` (PDFs with only permission restrictions index fine)
     - Verify file is not corrupted
   </Accordion>
 

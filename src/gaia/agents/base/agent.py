@@ -382,6 +382,35 @@ class ToolCallTruncated(ValueError):
         )
 
 
+class _UserWaitClock:
+    """Time a tool body spends blocked on the user, which its timeout excludes."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._done = 0.0
+        self._open: List[float] = []
+
+    def begin(self) -> None:
+        with self._lock:
+            self._open.append(time.monotonic())
+
+    def end(self) -> None:
+        with self._lock:
+            self._done += time.monotonic() - self._open.pop()
+
+    def waited(self) -> float:
+        """Seconds waited so far, including a question still on screen."""
+        now = time.monotonic()
+        with self._lock:
+            return self._done + sum(now - started for started in self._open)
+
+
+# Set inside a bounded tool worker so a prompt raised from its body pauses its clock.
+_TOOL_USER_WAIT: contextvars.ContextVar[Optional[_UserWaitClock]] = (
+    contextvars.ContextVar("gaia_tool_user_wait", default=None)
+)
+
+
 class ToolExecutionTimeout(Exception):
     """Raised when a tool body exceeds its bounded execution window.
 
@@ -991,6 +1020,66 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     ):
         return "narration"
     return None
+
+
+# First-person intent that announces the call it rides with ("I'll read it").
+_TOOL_STEP_INTENT_PATTERN = re.compile(
+    r"^(?:(?:ok(?:ay)?|so|alright|now|first|next|then)[,.]?\s+)*"
+    r"(?:i'll|i will|i'm going to|i am going to|let's"
+    r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b))\b",
+    re.IGNORECASE,
+)
+_TRAILING_SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+|\n+")
+# A call that fetches something feeds the reply after it, so text sent beside
+# it is progress, never the answer. Executors count too: they may be lookups.
+_LOOKUP_TOOL_PATTERN = re.compile(
+    r"^(?:read|search|find|list|get|browse|query|analy[sz]e|fetch|recall|describe"
+    r"|inspect|check|view|show|grep|lookup|look|load|open|summari[sz]e|extract"
+    r"|transcribe|download|web|run|execute)(?:_|$)"
+)
+
+
+def _answer_beside_tool_calls(
+    content: Any, tool_calls: Optional[list] = None
+) -> Optional[str]:
+    """The answer in text sent alongside tool calls, or ``None`` if it has none.
+
+    Only beside closing actions ("drop_table", "remember"): beside a lookup the
+    reply that follows is the answer. Reasoning and trailing next-step
+    narration ("Let me drop the table.") are removed; what remains counts only
+    if it is not itself a plan or narration.
+    """
+    if not isinstance(content, str):
+        return None
+    if any(
+        _LOOKUP_TOOL_PATTERN.match(str(call.get("name", "")))
+        for call in tool_calls or []
+    ):
+        return None
+    text, _ = _split_reasoning(content)
+    while text:
+        last = _TRAILING_SENTENCE_PATTERN.split(text)[-1]
+        sentence = re.sub(r"[*_`#>]", "", last).replace("’", "'").strip()
+        if not (
+            _NEXT_STEP_INTENT_PATTERN.match(sentence)
+            or _TOOL_STEP_INTENT_PATTERN.match(sentence)
+        ):
+            break
+        text = text[: text.rfind(last)].rstrip()
+    if not text or _unfinished_answer_kind(text):
+        return None
+    return text
+
+
+def _with_answer_beside_tool_calls(answer: str, beside: Optional[str]) -> str:
+    """Put the answer sent alongside the turn's last tool calls ahead of *answer*.
+
+    Only when *answer* is a shorter wrap-up ("Scratch table cleaned up.");
+    a reply that restates or outgrows it already stands on its own.
+    """
+    if not beside or beside in answer or len(answer.strip()) >= len(beside):
+        return answer
+    return f"{beside}\n\n{answer.strip()}" if answer.strip() else beside
 
 
 #: Any one of these lets the agent look at a file the request names.
@@ -2260,12 +2349,17 @@ Do NOT wrap conversational replies in JSON.
         elif path.is_file():
             args["kind"] = "file"
         started = time.perf_counter()
+        clock = _TOOL_USER_WAIT.get()
+        if clock is not None:
+            clock.begin()
         try:
             return (
                 self.console.confirm_tool_execution(PATH_ACCESS_PROMPT_TOOL, args)
                 is True
             )
         finally:
+            if clock is not None:
+                clock.end()
             self._confirmation_wait_s += time.perf_counter() - started
 
     def _check_extraction_sources(self):
@@ -4853,9 +4947,11 @@ Do NOT wrap conversational replies in JSON.
         timeout = self._resolve_tool_timeout(tool_name)
         holder: Dict[str, Any] = {}
         cancel = threading.Event()
+        user_wait = _UserWaitClock()
 
         def _target():
             set_tool_cancel_event(cancel)
+            _TOOL_USER_WAIT.set(user_wait)
             try:
                 holder["result"] = tool(**tool_args)
             except BaseException as exc:  # noqa: BLE001 — re-raised in caller
@@ -4873,7 +4969,14 @@ Do NOT wrap conversational replies in JSON.
             target=lambda: ctx.run(_target), name=f"tool:{tool_name}", daemon=True
         )
         worker.start()
-        worker.join(timeout)
+        # Time spent on a question the body raised (e.g. path access) is the
+        # user's, not the tool's: abandoning there strands a live prompt.
+        started = time.monotonic()
+        while worker.is_alive():
+            remaining = started + timeout + user_wait.waited() - time.monotonic()
+            if remaining <= 0:
+                break
+            worker.join(min(remaining, 0.5))
         if worker.is_alive():
             cancel.set()
             raise ToolExecutionTimeout(tool_name, timeout)
@@ -7149,6 +7252,8 @@ Do NOT wrap conversational replies in JSON.
         cut_off_continuations = 0
         completion_corrections = 0
         completion_gaps = []
+        # Answer text the model sent alongside its latest tool calls.
+        answer_beside_tool_calls: Optional[str] = None
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -8130,6 +8235,11 @@ Do NOT wrap conversational replies in JSON.
             # shape for native tool_calls, raw text otherwise — see
             # ``_build_assistant_message`` for the why).
             messages.append(self._build_assistant_message(response, parsed, reasoning))
+            if "answer" not in parsed:
+                answer_beside_tool_calls = _answer_beside_tool_calls(
+                    parsed.get("content") if parsed.get("tool_calls") else None,
+                    parsed.get("tool_calls"),
+                )
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
@@ -8929,7 +9039,10 @@ Do NOT wrap conversational replies in JSON.
 
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
-                answer_candidate = parsed["answer"]
+                # Every check below must see the text the user will see.
+                answer_candidate = _with_answer_beside_tool_calls(
+                    parsed["answer"], answer_beside_tool_calls
+                )
                 completion_gaps = []
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after

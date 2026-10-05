@@ -29,6 +29,7 @@ except ImportError as _watchdog_err:
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
 from gaia_agent_chat.session import SessionManager
 from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
+from gaia_agent_chat.tool_requests import requested_tools
 
 from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.checks import (
@@ -237,6 +238,9 @@ class ChatAgentConfig:
 
     # Session persistence (UI session ID for cross-turn document retention)
     ui_session_id: Optional[str] = None
+    # Memory starts off (private chat / memory off in the UI): the embedder
+    # loads only once memory is actually used.
+    memory_incognito: bool = False
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
     enable_sd_tools: bool = False  # Stable Diffusion image generation
@@ -506,7 +510,10 @@ class ChatAgent(
         self.tool_loader = self._maybe_build_tool_loader()
 
         # Initialize memory subsystem (before super().__init__ which calls _register_tools)
-        self.init_memory(embedding_model=effective_embedding_model)
+        self.init_memory(
+            embedding_model=effective_embedding_model,
+            incognito=config.memory_incognito,
+        )
 
         # Store base URL for use in _register_tools() (VLM, etc.)
         self._base_url = effective_base_url
@@ -669,7 +676,8 @@ class ChatAgent(
             # was already logged there) — nothing to retry.
             return None
         try:
-            return RAGSDK(self._rag_config)
+            # Shared, so access the user grants mid-chat reaches indexing too.
+            return RAGSDK(self._rag_config, path_validator=self.path_validator)
         except Exception as e:
             logger.warning(
                 "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
@@ -856,6 +864,10 @@ class ChatAgent(
         join the same signal, ahead of recalled-procedure tools: the user's
         skill is the stronger signal. A skill stops contributing when the body
         filter hides it or it is unloaded.
+
+        Tools the current message explicitly asks for (``requested_tools``)
+        go ahead of both: semantic ranking alone dropped ``run_shell_command``
+        from "use your shell tool to run pwd".
         """
         if not self._dynamic_tools_active():
             return None
@@ -870,7 +882,10 @@ class ChatAgent(
             if name not in skill_tools:
                 skill_tools.append(name)
         return self.tool_loader.select(
-            query, self._tools_registry, skill_tools=skill_tools
+            query,
+            self._tools_registry,
+            skill_tools=skill_tools,
+            requested_tools=requested_tools(user_input, self._tools_registry),
         )
 
     def _admit_skill_tools(self, names: List[str]) -> None:
@@ -1173,7 +1188,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.config, "enable_scratchpad", False
         ):
             scratchpad_section = """
-**DATA ANALYSIS WORKFLOW (Scratchpad):** find_files → create_table → read_file + insert_data per doc → query_data (SQL: SUM/AVG/GROUP BY) → drop_table when done.
+**DATA ANALYSIS WORKFLOW (Scratchpad):** find_files → create_table → read_file + insert_data per doc → query_data (SQL: SUM/AVG/GROUP BY) → drop_table → final answer built from the query results.
 """
 
         browser_section = ""

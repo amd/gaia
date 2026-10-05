@@ -168,6 +168,8 @@ class RAGConfig:
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
     vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
+    # False skips image text extraction even when the VLM is installed
+    use_vlm: bool = True
     # Security settings
     allowed_paths: Optional[List[str]] = None
 
@@ -208,8 +210,19 @@ class RAGSDK:
         ```
     """
 
-    def __init__(self, config: Optional[RAGConfig] = None):
-        """Initialize RAG SDK."""
+    def __init__(
+        self,
+        config: Optional[RAGConfig] = None,
+        path_validator: Optional[PathValidator] = None,
+    ):
+        """Initialize RAG SDK.
+
+        Args:
+            config: RAG settings; defaults to ``RAGConfig()``.
+            path_validator: The host's validator, shared so a path the user
+                grants mid-session is readable here too. Defaults to one built
+                from ``config.allowed_paths``.
+        """
         self.config = config or RAGConfig()
         self.log = get_logger(__name__)
         if self.config.chunk_size * 4 > EMBED_MAX_CHARS:
@@ -268,8 +281,9 @@ class RAGSDK:
         )
         self.chat = AgentSDK(chat_config)
 
-        # Initialize path validator
-        self.path_validator = PathValidator(self.config.allowed_paths)
+        if path_validator is None:
+            path_validator = PathValidator(self.config.allowed_paths)
+        self.path_validator = path_validator
 
         self.log.debug("RAG SDK initialized")
 
@@ -489,6 +503,8 @@ class RAGSDK:
                 "chunk_overlap": self.config.chunk_overlap,
                 "use_llm_chunking": bool(self.config.use_llm_chunking),
                 "embed_max_chars": EMBED_MAX_CHARS,
+                # Only when off, so existing caches keep their keys.
+                **({} if self.config.use_vlm else {"use_vlm": False}),
             },
             sort_keys=True,
         )
@@ -796,7 +812,7 @@ class RAGSDK:
             - page_warnings: dict[int, str], why each degraded page is listed
 
         Raises:
-            EncryptedPDFError: PDF is password-protected.
+            EncryptedPDFError: PDF needs a password to open.
             CorruptedPDFError: PDF is malformed / unreadable.
             EmptyPDFError: PDF parsed OK but contained no extractable text.
         """
@@ -830,13 +846,13 @@ class RAGSDK:
             self.log.error(f"Corrupted PDF {pdf_path}: {e}")
             raise CorruptedPDFError(msg) from e
 
-        # Step 1: Refuse password-protected PDFs up-front. Without this check
-        # pypdf silently returns empty text for every page and the document
-        # gets "indexed" with zero chunks (see issue #451).
-        if getattr(reader, "is_encrypted", False):
+        # Step 1: Refuse PDFs that need a user password up-front, or every page
+        # extracts as empty text (#451). Owner-password-only PDFs (permission
+        # restrictions, common in SEC filings) open with the empty password.
+        if getattr(reader, "is_encrypted", False) and not reader.decrypt(""):
             msg = (
                 f"PDF is password-protected: {file_name}\n"
-                "GAIA cannot index encrypted PDFs.\n"
+                "GAIA cannot index PDFs that need a password to open.\n"
                 "Suggestions:\n"
                 "  1. Remove the password with qpdf:\n"
                 "     qpdf --decrypt --password=YOUR_PASSWORD input.pdf output.pdf\n"
@@ -866,11 +882,13 @@ class RAGSDK:
                 vlm = VLMClient(
                     vlm_model=self.config.vlm_model, base_url=self.config.base_url
                 )
-                vlm_available = vlm.check_availability()
+                vlm_available = self.config.use_vlm and vlm.check_availability()
 
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from images")
-                elif not vlm_available and self.config.show_stats:
+                elif (
+                    not vlm_available and self.config.use_vlm and self.config.show_stats
+                ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
                     print(
@@ -1244,11 +1262,13 @@ class RAGSDK:
                 vlm = VLMClient(
                     vlm_model=self.config.vlm_model, base_url=self.config.base_url
                 )
-                vlm_available = vlm.check_availability()
+                vlm_available = self.config.use_vlm and vlm.check_availability()
 
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from slide images")
-                elif not vlm_available and self.config.show_stats:
+                elif (
+                    not vlm_available and self.config.use_vlm and self.config.show_stats
+                ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
                     print(

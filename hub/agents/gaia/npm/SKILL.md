@@ -482,7 +482,8 @@ matching bodies in full — the rest collapse to a one-line menu entry, and the
 model (or the user) re-activates one by calling `load_skill` on it again.
 `GAIA_DYNAMIC_SKILLS=0` disables the per-turn selection (every loaded body
 renders every turn); `GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides the match
-threshold. Manifest `skills:` entries are always-on and never collapse. If the
+threshold. Manifest `skills:` entries are always-on and never collapse, and a
+turn with only always-on skills loaded embeds nothing. If the
 embedder is unavailable, selection disables itself for the session and every
 body renders — capability is never silently lost to a failed match.
 
