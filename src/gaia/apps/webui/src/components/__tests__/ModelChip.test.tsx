@@ -51,6 +51,7 @@ beforeEach(() => {
             : [model('fireworks.accounts/fireworks/models/kimi-k2', { rank: 1, note: 'best overall' })],
     }));
     mockedApi.selectModel.mockResolvedValue(CLOUD_ACTIVE);
+    mockedApi.listSessions.mockResolvedValue({ sessions: [SESSION], total: 1 });
 });
 
 async function openPicker() {
@@ -83,6 +84,67 @@ describe('ModelChip', () => {
     it('labels a cloud model with its provider', () => {
         useModelStore.setState({ active: CLOUD_ACTIVE });
         render(<ModelChip />);
+        expect(screen.getByRole('button', { name: /kimi-k2 · Fireworks AI/ })).toBeInTheDocument();
+    });
+
+    it("names the open chat's model, not the picked one", () => {
+        useChatStore.setState({ sessions: [{ ...SESSION, effective_model: 'Qwen3-30B-A3B-Instruct-2507-GGUF' }] });
+        render(<ModelChip />);
+        const chip = screen.getByRole('button', { name: /Qwen3-30B-A3B-Instruct-2507-GGUF · Local/ });
+        expect(chip.textContent).not.toContain('Gemma');
+    });
+
+    it('names the model the backend resolves when it differs from the stored one', () => {
+        useChatStore.setState({ sessions: [{ ...SESSION, model: 'qwen', effective_model: 'my-custom-model' }] });
+        render(<ModelChip />);
+        expect(screen.getByRole('button', { name: /my-custom-model · Local/ })).toBeInTheDocument();
+    });
+
+    it('names the Claude model a chat runs under the eval provider', () => {
+        useChatStore.setState({
+            sessions: [{
+                ...SESSION, effective_model: 'claude-sonnet-4-5', inference_remote: true,
+                inference_provider: 'claude', inference_provider_name: 'Anthropic',
+            }],
+        });
+        render(<ModelChip />);
+        expect(screen.getByRole('button', { name: /claude-sonnet-4-5 · Anthropic/ })).toBeInTheDocument();
+    });
+
+    it('names the picked model when no chat is open', () => {
+        useChatStore.setState({
+            sessions: [{ ...SESSION, effective_model: 'Qwen3-30B-A3B-Instruct-2507-GGUF' }],
+            currentSessionId: null,
+        });
+        render(<ModelChip />);
+        expect(screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF · Local/ })).toBeInTheDocument();
+    });
+
+    it("shows the chat's new model as soon as a switch lands", async () => {
+        useChatStore.setState({ sessions: [{ ...SESSION, effective_model: 'Gemma-4-E4B-it-GGUF' }] });
+        mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF', is_default: false });
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id, models: id === 'local' ? [model('Gemma-4-E4B-it-GGUF'), model('Qwen3-8B-GGUF')] : [],
+        }));
+        mockedApi.listSessions.mockResolvedValue({
+            sessions: [{ ...SESSION, effective_model: 'Qwen3-8B-GGUF' }], total: 1,
+        });
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        fireEvent.click(await within(dialog).findByRole('button', { name: /Qwen3-8B-GGUF/ }));
+
+        expect(await screen.findByRole('button', { name: /Qwen3-8B-GGUF · Local/ })).toBeInTheDocument();
+        expect(mockedApi.listSessions).toHaveBeenCalledTimes(1);
+    });
+
+    it('still switches when the chat list cannot be refreshed', async () => {
+        mockedApi.listSessions.mockRejectedValue(new Error('backend restarting'));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        fireEvent.click(await within(dialog).findByRole('button', { name: /kimi-k2/ }));
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Use kimi-k2' }));
+
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
         expect(screen.getByRole('button', { name: /kimi-k2 · Fireworks AI/ })).toBeInTheDocument();
     });
 

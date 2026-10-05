@@ -1762,7 +1762,10 @@ class InitCommand:
                     f"   [dim]Ensuring {min_ctx} token context for {self.profile} profile...[/dim]"
                 )
                 success = LemonadeManager.ensure_ready(
-                    min_context_size=min_ctx, quiet=True
+                    min_context_size=min_ctx,
+                    quiet=True,
+                    # The local model set up above, even when default_model is cloud.
+                    model=self._chat_model(client),
                 )
                 if success:
                     self._print_success(f"Context size verified: {min_ctx} tokens")

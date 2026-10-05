@@ -2581,6 +2581,21 @@
     "title": "ScheduleResultsResponse",
     "type": "object"
   },
+  "ScriptedUserRequest": {
+    "description": "Commands the eval's scripted user declines; empty turns it off.",
+    "properties": {
+      "decline_commands": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "title": "Decline Commands",
+        "type": "array"
+      }
+    },
+    "title": "ScriptedUserRequest",
+    "type": "object"
+  },
   "SelectModelRequest": {
     "properties": {
       "model": {
@@ -2639,6 +2654,17 @@
         },
         "title": "Document Ids",
         "type": "array"
+      },
+      "effective_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Effective Model"
       },
       "id": {
         "title": "Id",

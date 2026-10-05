@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import * as api from '../services/api';
 import { useChatStore } from './chatStore';
+import { log } from '../utils/logger';
 import type { ActiveModel, Session } from '../types';
 
 interface ModelState {
@@ -48,7 +49,16 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
     select: async (model) => {
         const active = await api.selectModel(model);
+        // Sessions name the model they run; refetch so the chip doesn't lag a poll behind.
+        let sessions: Session[] | null = null;
+        try {
+            sessions = (await api.listSessions()).sessions;
+        } catch (err) {
+            log.system.error('Could not refresh chats after a model switch; the next poll will', err);
+        }
         set({ active, error: null, restoreNotice: null });
+        // An empty list has no model to report, and must not wipe the sidebar.
+        if (sessions?.length) useChatStore.getState().setSessions(sessions);
     },
     dismissRestoreNotice: () => set({ restoreNotice: null }),
 }));
@@ -116,6 +126,19 @@ export function useInferencePlace(): InferencePlace | null {
     const active = useModelStore((s) => s.active);
     const location = useChatStore((s) => selectInferenceLocation(s.sessions, s.currentSessionId));
     return inferencePlace(active, location);
+}
+
+/**
+ * The model the open chat's next turn runs, as the backend resolved it for that
+ * session. With no chat open, the picked model, which a new chat starts on.
+ */
+export function selectChipModel(
+    active: ActiveModel | null,
+    sessions: Session[],
+    currentSessionId: string | null,
+): string | null {
+    const session = sessions.find((s) => s.id === currentSessionId);
+    return session?.effective_model || active?.model || null;
 }
 
 /** The model name without its provider prefix or catalogue path. */

@@ -20,6 +20,17 @@ stage_eval_env = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(stage_eval_env)
 
 
+@pytest.fixture(scope="module")
+def staged(tmp_path_factory):
+    # One staging for the whole file: each takes ~30 s on the Windows runner.
+    home = tmp_path_factory.mktemp("home")
+    stale = home / "gaia-eval" / "stale.txt"
+    stale.parent.mkdir()
+    stale.write_text("left from an earlier run")
+    skills_root = stage_eval_env.stage(home)
+    return home, skills_root
+
+
 def test_home_is_required():
     with pytest.raises(SystemExit):
         stage_eval_env.main([])
@@ -30,14 +41,10 @@ def test_missing_home_is_refused(tmp_path):
         stage_eval_env.stage(tmp_path / "nope")
 
 
-def test_stages_fixtures_skills_and_a_trusted_fixture_hub(tmp_path):
-    stale = tmp_path / "gaia-eval" / "stale.txt"
-    stale.parent.mkdir()
-    stale.write_text("left from an earlier run")
-
-    skills_root = stage_eval_env.stage(tmp_path)
-
-    staged = tmp_path / "gaia-eval"
+def test_stages_fixtures_skills_and_a_trusted_fixture_hub(staged):
+    home, skills_root = staged
+    stale = home / "gaia-eval" / "stale.txt"
+    staged = home / "gaia-eval"
     assert (staged / "csv" / "sales.csv").is_file()
     assert (staged / "mini_repo" / "tempkeeper" / "convert.py").is_file()
     assert (staged / "media" / "bakery_sign.png").is_file()
@@ -45,7 +52,7 @@ def test_stages_fixtures_skills_and_a_trusted_fixture_hub(tmp_path):
     assert (staged / "documents" / "meeting_notes_q3.txt").is_file()
     assert not stale.exists(), "an earlier staging must be replaced, not merged"
 
-    assert skills_root == tmp_path / ".gaia" / "skills"
+    assert skills_root == home / ".gaia" / "skills"
     hub_skills = {
         p.name for p in (REPO_ROOT / "hub" / "skills").iterdir() if p.is_dir()
     }
@@ -59,10 +66,9 @@ def test_stages_fixtures_skills_and_a_trusted_fixture_hub(tmp_path):
     assert any((staged / "tiers_git_code").glob("*/.git"))
 
 
-def test_nothing_that_holds_an_answer_is_staged(tmp_path):
+def test_nothing_that_holds_an_answer_is_staged(staged):
     """The backend runs from the staged folder, so the agent can read all of it."""
-    stage_eval_env.stage(tmp_path)
-    staged = tmp_path / "gaia-eval"
+    staged = staged[0] / "gaia-eval"
 
     names = {p.name for p in staged.rglob("*")}
     assert "ground_truth.json" not in names
@@ -75,9 +81,8 @@ def test_nothing_that_holds_an_answer_is_staged(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="drives the POSIX gh shim")
-def test_staged_fake_gh_answers_ahead_of_any_real_gh(tmp_path):
-    stage_eval_env.stage(tmp_path)
-    bin_dir = tmp_path / ".gaia-eval-bin"
+def test_staged_fake_gh_answers_ahead_of_any_real_gh(staged):
+    bin_dir = staged[0] / ".gaia-eval-bin"
     path = os.pathsep.join([str(bin_dir), os.environ.get("PATH", "")])
 
     assert shutil.which("gh", path=path) == str(bin_dir / "gh")
@@ -111,18 +116,18 @@ def test_on_windows_the_fake_gh_gets_an_exe_launcher(tmp_path, monkeypatch):
     assert built == [stage_eval_env.HERE / "fake_gh" / "gh.py"]
 
 
-def test_restaging_clears_read_only_files(tmp_path):
-    stage_eval_env.stage(tmp_path)
-    locked = tmp_path / "gaia-eval" / "locked.txt"
+def test_restaging_clears_read_only_files_and_built_repositories(staged):
+    # The builders write objects read-only; a second staging must still clear them.
+    home = staged[0]
+    locked = home / "gaia-eval" / "locked.txt"
     locked.write_text("x")
     locked.chmod(0o444)
-    stage_eval_env.stage(tmp_path)
+    journal_git = home / "gaia-eval" / "tiers_resilience" / "journal" / ".git"
+    marker = journal_git / "left-from-the-first-staging"
+    marker.write_text("x")
+
+    stage_eval_env.stage(home)
+
     assert not locked.exists()
-    assert (tmp_path / "gaia-eval" / "csv" / "sales.csv").is_file()
-
-
-def test_restaging_replaces_built_repositories(tmp_path):
-    # The builders write objects read-only; a second staging must still clear them.
-    stage_eval_env.stage(tmp_path)
-    stage_eval_env.stage(tmp_path)
-    assert (tmp_path / "gaia-eval" / "tiers_resilience" / "journal" / ".git").is_dir()
+    assert journal_git.is_dir() and not marker.exists()
+    assert (home / "gaia-eval" / "csv" / "sales.csv").is_file()

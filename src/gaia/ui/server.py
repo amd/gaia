@@ -292,10 +292,13 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         def _check_lemonade():
             """Pre-warm LemonadeManager — check reachability only."""
             from gaia.llm.lemonade_manager import LemonadeManager
+            from gaia.ui.routers.system import _default_model_name
 
             LemonadeManager.ensure_ready(
                 quiet=True,
                 min_context_size=0,  # Only check reachability — don't trigger model reloads
+                # The selected model, so a cloud pick never seeds a local one.
+                model=db.get_setting("custom_model") or _default_model_name(),
             )
 
         def _import_modules():

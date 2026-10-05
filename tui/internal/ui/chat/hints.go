@@ -42,6 +42,10 @@ const (
 	// while full access is on, every frame the user cannot see this is a frame in
 	// which tools are running unasked and they do not know how to stop it.
 	rankFullAccess = 110
+	// Which permission mode is on. Outranks the scroll hints: whether the next
+	// tool asks first is something the user needs before they need anything
+	// about scrolling.
+	rankMode = 80
 	// How to get out. Survives to the last column: a user who cannot see this
 	// closes the terminal window.
 	rankEscape = 100
@@ -58,6 +62,10 @@ const (
 	// who tries to drag and gets nothing needs the way out — but it loses to
 	// every hint that says what is happening right now.
 	rankSecondary = 25
+	// The default "ask" mode and the key that leaves it. Worth a spare column,
+	// but it is the one mode nobody has to be warned about, so it yields to
+	// anything saying what is happening right now.
+	rankDefaultMode = 30
 	// Numbers for whoever is tuning the machinery. First to go.
 	rankDiagnostic = 10
 )
@@ -70,6 +78,17 @@ func (m ChatModel) statusHints() []hint {
 	// the one row that is always drawn.
 	if m.fullAccess {
 		hints = append(hints, hint{text: "/full-access off", rank: rankFullAccess})
+	}
+	// A mode the user switched into outranks the scroll hints; the default one
+	// only takes a column nothing else wanted.
+	// A pending prompt names the mode itself, one row up.
+	pending := m.confirmation != nil && m.confirmation.Pending()
+	if mode := m.permissionModeStatus(); mode != "" && !(pending && m.permissionMode() == modeAsk) {
+		rank := rankMode
+		if m.permissionMode() == modeAsk {
+			rank = rankDefaultMode
+		}
+		hints = append(hints, hint{text: mode, rank: rank})
 	}
 
 	if m.dev && m.totalSteps > 0 {

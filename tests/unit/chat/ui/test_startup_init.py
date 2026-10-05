@@ -137,3 +137,59 @@ def test_startup_dispatches_visible_tasks(app):
         assert "Checking LLM server" in names
         assert "Loading ML libraries" in names
         assert "Loading AI model" in names
+
+
+# ── Boot never seeds a local model for a cloud selection ──────────────────
+
+
+def _run_boot_check(app):
+    """Run the lifespan until the "Checking LLM server" job finishes."""
+    import time
+
+    from gaia.ui.dispatch import JobStatus
+
+    with TestClient(app):
+        queue = app.state.dispatch_queue
+        job = next(j for j in queue.get_all_jobs() if j.name == "Checking LLM server")
+        deadline = time.monotonic() + 10
+        while job.status not in (JobStatus.DONE, JobStatus.FAILED):
+            assert time.monotonic() < deadline, "boot check never finished"
+            time.sleep(0.05)
+        return job
+
+
+@pytest.mark.parametrize(
+    "selected,expect_load",
+    [("fireworks.deepseek-v4p1-flash", False), ("Gemma-4-E4B-it-GGUF", True)],
+)
+def test_boot_check_preloads_only_a_local_selection(app, selected, expect_load):
+    """A UI whose selected model is cloud must not load a local model on an idle
+    Lemonade at boot; a local selection still gets the idle-server preload."""
+    from unittest.mock import MagicMock, patch
+
+    from gaia.llm.lemonade_client import LemonadeStatus
+    from gaia.llm.lemonade_manager import LemonadeManager
+    from gaia.ui.dispatch import JobStatus
+
+    app.state.db.set_setting("custom_model", selected)
+    client = MagicMock()
+    client.base_url = "http://localhost:13305/api/v1"
+    client.get_model_max_context_window.return_value = None
+    client.get_status.return_value = LemonadeStatus(
+        running=True, context_size=0, loaded_models=[]
+    )
+
+    LemonadeManager.reset()
+    try:
+        with patch("gaia.llm.lemonade_manager.LemonadeClient", return_value=client):
+            job = _run_boot_check(app)
+    finally:
+        LemonadeManager.reset()
+
+    assert job.status == JobStatus.DONE
+    if expect_load:
+        client.load_model.assert_called_once()
+        assert client.load_model.call_args.args[0] == selected
+        assert client.load_model.call_args.kwargs["ctx_size"] > 0
+    else:
+        client.load_model.assert_not_called()

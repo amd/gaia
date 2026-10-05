@@ -1142,3 +1142,34 @@ def test_a_one_shot_still_refuses_a_gated_tool(built):
     final = [e for e in events if e.get("type") == "final"]
     assert final, events
     assert "needs your explicit approval" in final[-1].get("answer", "")
+
+
+def test_a_caller_that_cannot_answer_is_never_asked(built):
+    """A question on a run nobody can answer would wait out its whole timeout."""
+    client, agents = built
+    asked = []
+
+    class _Asking(_ScriptedAgent):
+        def process_query(self, query, max_steps=None):
+            started = time.monotonic()
+            reply = self.console.request_user_input_blocking(
+                "Allow it once?", choices=["Allow once"], timeout_seconds=300
+            )
+            asked.append((reply, time.monotonic() - started))
+            return {"answer": reply}
+
+    def arm(**kw):
+        agent = _Asking(**kw)
+        agents.append(agent)
+        return agent
+
+    with mock.patch.object(server_mod, "build_query_agent", arm):
+        response = client.post("/v1/gaia/query", json=_body(can_answer_questions=False))
+
+    assert response.status_code == 200, response.text
+    [(reply, waited)] = asked
+    assert reply == "__NO_RESPONSE__"
+    assert waited < 5
+    assert agents[0].console.answers_questions is False
+    types = [e.get("type") for e in _events(response)]
+    assert "needs_input" not in types, types

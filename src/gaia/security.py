@@ -19,7 +19,7 @@ import stat
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, List, Optional, Set, Tuple
+from typing import Any, Callable, List, Optional, Set, Tuple
 
 from gaia.utils.terminal import stdin_is_interactive
 
@@ -386,6 +386,15 @@ GAIA_STATE_DIRECTORIES: Set[str] = _gaia_state_dirs()
 SECRET_DIRECTORIES: Set[str] = _secret_directories()
 
 
+def _real_path(path: Any) -> str:
+    """*path* with ``~`` expanded and every symlink and ``..`` resolved.
+
+    Tools expand ``~`` before they open a path, so the check must judge the
+    same path — not a literal ``<cwd>/~`` that happens to sit inside the CWD.
+    """
+    return os.path.realpath(os.path.expanduser(os.fspath(path)))
+
+
 def _normalize_macos_symlinks(path_str: str) -> str:
     """Strip the macOS ``/private/`` prefix so symlinked system dirs match.
 
@@ -726,7 +735,7 @@ class PathValidator:
         """
         if self.scratch_dir is None:
             return ""
-        real_path = Path(os.path.realpath(path))
+        real_path = Path(_real_path(path))
         for root in _system_temp_roots():
             if _path_is_within(real_path, Path(os.path.realpath(root))):
                 return (
@@ -746,7 +755,7 @@ class PathValidator:
             the user can actually do about it here.
         """
         message = f"Access denied: '{path}' is not in allowed paths."
-        real_path = Path(os.path.realpath(path))
+        real_path = Path(_real_path(path))
         unaskable = self._unaskable_reason(real_path)
         if unaskable:
             remedy = f" No approval can grant it: {unaskable.rstrip('.')}."
@@ -778,7 +787,7 @@ class PathValidator:
         try:
             # Resolve path using os.path.realpath to follow symlinks
             # This prevents TOCTOU attacks by resolving at check time
-            real_path = Path(os.path.realpath(path)).resolve()
+            real_path = Path(_real_path(path)).resolve()
             real_path_str = str(real_path)
 
             # macOS /var symlink handling: normalize by removing /private prefix.
@@ -911,7 +920,7 @@ class PathValidator:
             Tuple of (is_blocked, reason). If blocked, reason explains why.
         """
         try:
-            real_path = Path(os.path.realpath(path))
+            real_path = Path(_real_path(path))
             file_name = real_path.name.lower()
             file_ext = real_path.suffix.lower()
 
@@ -988,7 +997,7 @@ class PathValidator:
             # Use os.path.realpath exclusively for symlink resolution — do NOT
             # chain Path.resolve(), which re-resolves on Python <3.12 via a
             # separate code path and can disagree with realpath.
-            real_path_str = os.path.realpath(path)
+            real_path_str = _real_path(path)
             real_path = Path(real_path_str)
             # Apply macOS /private normalization so /etc, /var/run, etc. match
             # the BLOCKED_DIRECTORIES entries (they're stored unprefixed).
@@ -1093,7 +1102,7 @@ class PathValidator:
             )
 
         # 4. Overwrite confirmation for existing files
-        real_path = Path(os.path.realpath(path)).resolve()
+        real_path = Path(_real_path(path)).resolve()
         if real_path.exists() and prompt_user:
             try:
                 existing_size = real_path.stat().st_size

@@ -396,6 +396,23 @@ func TestSpawnArgsFollowTheSessionMode(t *testing.T) {
 	}
 }
 
+// A mode picked with Shift+Tab survives a respawn, and is dropped once turned off.
+func TestSpawnArgsCarryAcceptEdits(t *testing.T) {
+	c := NewSubprocessClient("agent", []string{"--dev"}, false)
+	if err := c.SetAcceptEdits(true); err != nil {
+		t.Fatalf("SetAcceptEdits before any turn: %v", err)
+	}
+	if got, want := c.spawnArgs(false), []string{"--dev", AcceptEditsFlag}; !reflect.DeepEqual(got, want) {
+		t.Errorf("spawnArgs = %v, want %v", got, want)
+	}
+	if err := c.SetAcceptEdits(false); err != nil {
+		t.Fatalf("SetAcceptEdits(false): %v", err)
+	}
+	if got, want := c.spawnArgs(false), []string{"--dev"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("spawnArgs = %v, want %v", got, want)
+	}
+}
+
 func TestFailedFullAccessWriteKeepsRespawnInSafeMode(t *testing.T) {
 	for _, enable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("enable=%t", enable), func(t *testing.T) {

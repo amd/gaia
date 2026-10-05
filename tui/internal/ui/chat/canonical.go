@@ -219,10 +219,12 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.stashNarration()
 		m.awaitApproval(e.Action)
 
-		cm := components.NewConfirmationModel(e.RunID, e.Action, e.Summary, e.ConfirmURL)
+		cm := components.NewConfirmationModel(e.RunID, e.Action, e.Summary, e.ConfirmURL).
+			WithRisk(e.Risk)
 		if m.canRespondToPermission() {
 			cm = cm.WithLiveChannel(e.ConfirmID, e.AlwaysScope)
 		}
+		cm.SetModeHint(m.permissionModeHint())
 		cm.SetWidth(m.cardWidth())
 		m.confirmation = &cm
 		// resize() reserves the modal's rows out of the transcript, so the
@@ -502,6 +504,9 @@ func (m ChatModel) respondToolPermission(msg components.ConfirmationDecidedMsg) 
 	}
 	decision := client.PermissionDeny
 	switch {
+	case msg.TimedOut:
+		// Said as a timeout, so the agent does not tell the user they refused.
+		decision = client.PermissionTimeout
 	case msg.Always:
 		decision = client.PermissionAlways
 	case msg.Approved:
@@ -522,9 +527,10 @@ func (m ChatModel) respondToolPermission(msg components.ConfirmationDecidedMsg) 
 func confirmationOutcomeText(msg components.ConfirmationDecidedMsg) (text string, success bool) {
 	switch {
 	case msg.TimedOut:
-		return "denied — no answer in " + components.HumanTimeout(msg.Timeout), false
+		return "not answered in " + components.HumanTimeout(msg.Timeout) +
+			" — skipped, and the agent was told it timed out", false
 	case msg.Always:
-		return "always allowed '" + clean(msg.AlwaysScope) + "'", true
+		return "approved — '" + clean(msg.AlwaysScope) + "' won't ask again this session", true
 	case msg.Approved && (msg.Deliverable || msg.ConfirmURL != ""):
 		return "approved", true
 	case msg.Approved:
