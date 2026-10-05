@@ -336,6 +336,8 @@ class SessionResponse(BaseModel):
     created_at: str
     updated_at: str
     model: str
+    # The model a turn actually runs: custom override, agent preference, device.
+    effective_model: Optional[str] = None
     system_prompt: Optional[str] = None
     message_count: int = 0
     document_ids: List[str] = Field(default_factory=list)

@@ -604,6 +604,8 @@ class AgentRegistry:
         self._agents: Dict[str, AgentRegistration] = {}
         self._lemonade_models: Optional[List[str]] = None  # cache
         self._lemonade_models_last_fail: Optional[float] = None  # monotonic timestamp
+        # Last resolve_model() outcome per agent; the session list polls it.
+        self._resolved_models: Dict[str, Optional[str]] = {}
         self._lock = threading.Lock()
         # Records agent IDs whose load failed during discover() / register_from_dir().
         # Populated by _record_load_error(); read by get_load_error() and Stage D.
@@ -1470,19 +1472,25 @@ class AgentRegistry:
             available_models = self._get_available_models()
 
         resolved = resolve_preferred_model(preferred_models, available_models)
+        # Chat turns and the polled session list resolve from different threads.
+        with self._lock:
+            changed = self._resolved_models.get(agent_id, "") != resolved
+            self._resolved_models[agent_id] = resolved
         if resolved is not None:
-            logger.info(
-                "registry: Agent %s: preferred model %s available",
-                agent_id,
-                resolved,
-            )
+            if changed:
+                logger.info(
+                    "registry: Agent %s: preferred model %s available",
+                    agent_id,
+                    resolved,
+                )
             return resolved
 
-        logger.warning(
-            "registry: Agent %s: no preferred models available (%s), using server default",
-            agent_id,
-            preferred_models,
-        )
+        if changed:
+            logger.warning(
+                "registry: Agent %s: no preferred models available (%s), using server default",
+                agent_id,
+                preferred_models,
+            )
         return None
 
     _LEMONADE_RETRY_INTERVAL = 10.0  # seconds between retries when offline

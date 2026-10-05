@@ -12,6 +12,8 @@ export interface Session {
     created_at: string;
     updated_at: string;
     model: string;
+    /** The model a turn actually runs (custom override, agent preference, device). */
+    effective_model?: string | null;
     system_prompt: string | null;
     message_count: number;
     document_ids: string[];

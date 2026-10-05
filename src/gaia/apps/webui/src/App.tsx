@@ -257,10 +257,11 @@ function App() {
 
         /** Build a cheap fingerprint string for a session list so we can detect
          *  any change — new/deleted sessions, title edits, updated_at bumps,
-         *  and a changed inference location (a model override reaches the footer). */
+         *  and a changed model or inference location (an override reaches the
+         *  header badge and footer). */
         const fingerprint = (sessions: Session[]) =>
             sessions
-                .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}`)
+                .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}|${s.effective_model}`)
                 .join('\n');
 
         const openPendingUrlTarget = (serverSessions: Array<{ id: string }>) => {

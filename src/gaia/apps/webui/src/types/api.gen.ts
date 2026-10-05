@@ -749,6 +749,7 @@ export interface SessionResponse {
   created_at: string;
   device?: string;
   document_ids?: string[];
+  effective_model?: string | null;
   id: string;
   inference_description?: string | null;
   inference_provider?: string | null;

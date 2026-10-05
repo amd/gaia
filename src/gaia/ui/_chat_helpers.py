@@ -610,11 +610,37 @@ def _apply_device_model(
     device_is_explicit = device != "gpu"
     if dev_model == model_id or is_default_model or device_is_explicit:
         if dev_model != model_id:
-            logger.info(
+            logger.debug(
                 "chat: device=%s -> model %s (was %s)", device, dev_model, model_id
             )
         return dev_model, dev_ctx
     return model_id, None
+
+
+def resolve_session_model(
+    session: dict,
+    agent_type: str,
+    custom_model: str | None,
+    registry=None,
+) -> tuple[str | None, int | None]:
+    """Return ``(model_id, device_ctx)`` for the model a turn in ``session`` runs.
+
+    The user's ``custom_model`` override wins; otherwise the agent's preferred
+    model replaces the session's stored one; then the device config applies.
+    """
+    model_id = custom_model or session.get("model")
+    if not custom_model and registry:
+        preferred = registry.resolve_model(agent_type)
+        if preferred:
+            # Debug: the polled session list runs this for every session.
+            logger.debug(
+                "chat: Agent %s prefers model %s (was %s)",
+                agent_type,
+                preferred,
+                model_id,
+            )
+            model_id = preferred
+    return _apply_device_model(session, agent_type, model_id, custom_model, registry)
 
 
 def _ui_cloud_provider(model_id: str) -> str | None:
@@ -1731,23 +1757,10 @@ async def _get_chat_response(
             )
         logger.info("chat: Session %s using agent type: %s", session_id[:8], agent_type)
 
-        # Honour agent model preferences from the registry (skipped when the
-        # user has set a custom model override, which always takes priority).
-        if not custom_model and registry:
-            preferred = registry.resolve_model(agent_type)
-            if preferred:
-                logger.info(
-                    "chat: Agent %s prefers model %s (was %s)",
-                    agent_type,
-                    preferred,
-                    model_id,
-                )
-                model_id = preferred
-
         # The UI device dropdown drives the model + ctx window.
         device = session.get("device")
-        model_id, device_ctx = _apply_device_model(
-            session, agent_type, model_id, custom_model, registry
+        model_id, device_ctx = resolve_session_model(
+            session, agent_type, custom_model, registry
         )
 
         # ── Agent cache ──────────────────────────────────────────────────────
@@ -2123,23 +2136,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             agent_type,
         )
 
-        # Honour agent model preferences from the registry (skipped when the
-        # user has set a custom model override, which always takes priority).
-        if not custom_model and registry:
-            preferred = registry.resolve_model(agent_type)
-            if preferred:
-                logger.info(
-                    "chat: Agent %s prefers model %s (was %s) (streaming)",
-                    agent_type,
-                    preferred,
-                    model_id,
-                )
-                model_id = preferred
-
         # The UI device dropdown drives the model + ctx window.
         device = session.get("device")
-        model_id, device_ctx = _apply_device_model(
-            session, agent_type, model_id, custom_model, registry
+        model_id, device_ctx = resolve_session_model(
+            session, agent_type, custom_model, registry
         )
 
         # Move ALL slow work into the background thread so the SSE generator
