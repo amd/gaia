@@ -18,6 +18,8 @@ import {
   placeOs,
   resolveArch,
   resolveTargets,
+  windowsSetupOffersChoice,
+  WINDOWS_SETUP_SINCE,
   type DownloadKey,
   type NavigatorLike,
   type PlatformKey,
@@ -440,5 +442,31 @@ describe('offering the desktop app to a machine', () => {
     expect(targets).toEqual([]);
     expect(desktopOptionFor(targets)).toEqual([]);
     expect(ORDER.filter((p) => targets.includes(p))).toEqual([]);
+  });
+});
+
+// The Windows setup kept the terminal-only setup's filename, so only the version
+// says which one the hub is serving. 0.24.1 is the last terminal-only one.
+describe('windowsSetupOffersChoice', () => {
+  it('starts at 0.25.0', () => {
+    expect(WINDOWS_SETUP_SINCE).toBe('0.25.0');
+  });
+
+  it('is false for the terminal-only setups that came before', () => {
+    for (const v of ['0.24.1', '0.24.99', '0.9.0', '0.0.1']) {
+      expect(windowsSetupOffersChoice(v), v).toBe(false);
+    }
+  });
+
+  it('is true from 0.25.0 on, compared numerically rather than as text', () => {
+    for (const v of ['0.25.0', '0.25.1', '0.100.0', '1.0.0']) {
+      expect(windowsSetupOffersChoice(v), v).toBe(true);
+    }
+  });
+
+  it('is false for a version it cannot read, rather than guessing', () => {
+    for (const v of ['', 'latest', '0.25', '0.25.x']) {
+      expect(windowsSetupOffersChoice(v), v).toBe(false);
+    }
   });
 });

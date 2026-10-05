@@ -12,6 +12,13 @@ file, and nothing else.
 Lemonade and the models are deliberately **not** bundled. They are gigabytes, and
 `gaia init` already owns downloading them on first run.
 
+<Warning>
+  This is a developer build, not what users install — they use
+  [Install GAIA](/guides/install). It puts its own `gaia-tui` on your PATH under
+  its own **GAIA** entry in Installed apps, so the GAIA installer refuses to run
+  while it is installed (exit code 4) rather than leave two of each. Uninstall it from **Installed apps → GAIA** first.
+</Warning>
+
 ## Build it
 
 The packaging script packages binaries — it does not build them. Build both first:
