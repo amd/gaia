@@ -2699,8 +2699,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             "  for the rest of the session, even though it is still in the chat: never\n"
             "  repeat it or anything computed from it; offer to redo it if they re-share.\n"
             "- 'As I told you…' / 'you forgot X' → check with recall() or\n"
-            "  search_past_conversations(). Nothing found → say plainly it was never\n"
-            "  mentioned. Don't apologise or guess it got lost; offer to store it now.\n"
+            "  search_past_conversations(). Nothing found (and not forgotten at their\n"
+            "  own request) → say plainly it was never mentioned. Don't apologise or\n"
+            "  guess it got lost; offer to store it now.\n"
             "- NEVER say 'Noted', 'Logged', 'Stored' — call the tool silently and respond naturally.\n"
         )
 
