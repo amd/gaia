@@ -1286,14 +1286,25 @@ def test_the_tool_refuses_a_bad_section_and_lists_the_real_ones(store):
     assert "procedure" in result["message"]
 
 
-def test_the_tool_refuses_to_save_in_a_private_session(store):
+@pytest.mark.parametrize(
+    "reason, why",
+    [
+        (None, "Memory is off for this session"),
+        ("private", "private chat"),
+        ("memory_off", "turned off in Settings"),
+    ],
+)
+def test_the_tool_refuses_to_save_while_memory_is_off(store, reason, why):
     agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
     agent._incognito = True
+    agent._incognito_reason = reason
     result = agent.call(
         skill="github-triage", section="procedure", corrected_text=INBOX_PROCEDURE
     )
     assert result["status"] == "error"
-    assert "private session" in result["message"]
+    assert why in result["message"]
+    assert "nothing is saved" in result["message"]
+    assert "once memory is on" in result["message"]
     assert store.search_deltas(base_name="github-triage") == []
 
 

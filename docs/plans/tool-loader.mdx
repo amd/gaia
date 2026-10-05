@@ -534,6 +534,16 @@ The skill-driven tier has shipped (Part 3, #1451): `select()` takes a keyword-on
 which flattens the `tools_required` of the procedures `recall_skill` matched this
 turn — reusing the per-turn recall cache, so the tier adds no extra embed/FAISS
 cost and stays byte-identical to Parts 1–2 whenever no procedure matches.
+A **REQUESTED** tier sits one step ahead of SKILL: `select()` also takes
+`requested_tools`, the tools the user's message asks for outright — a tool name
+written out, or a request only the shell can answer ("use your shell tool",
+"run pwd", "what's the working directory"). It is classified by
+`gaia_agent_chat.tool_requests.requested_tools`. Semantic ranking could not carry
+this on the flagship's ~90-tool registry: nearly every tool cleared τ, the cap
+decided, and "use your shell tool to run pwd" lost `run_shell_command` to the file
+browsers, so the agent guessed the directory. The classifier is deliberately
+narrow — it is a signal for explicit asks, not a return to keyword activation of
+bundles.
 
 ## How #800 (scratchpad/memory collision) is resolved
 
