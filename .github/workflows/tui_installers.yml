@@ -266,6 +266,11 @@ jobs:
             exit 1
           fi
 
+      # Verified against the digests committed in installer/tui/fonts/fonts.lock.json.
+      - name: Stage the pinned IBM Plex Mono fonts
+        if: matrix.label == 'windows'
+        run: python installer/tui/fetch_fonts.py --out stage/fonts
+
       - name: Install NSIS
         if: matrix.label == 'windows'
         run: choco install nsis --no-progress -y
@@ -277,7 +282,8 @@ jobs:
             --version "${{ inputs.version }}" \
             --payload stage/win-x64 \
             --out dist \
-            --lemonade-msi installer/lemonade-server-minimal.msi
+            --lemonade-msi installer/lemonade-server-minimal.msi \
+            --fonts stage/fonts
 
       # ── macOS ──
       # The packages ship UNSIGNED today and --allow-unsigned says so out loud.
@@ -413,6 +419,38 @@ jobs:
             throw "no Add/Remove Programs entry was registered"
           }
 
+          # Terminal profile: the per-user fonts, their HKCU registration, and a
+          # Windows Terminal fragment that parses and names the bundled family.
+          $lock      = Get-Content installer/tui/fonts/fonts.lock.json -Raw | ConvertFrom-Json
+          $fontsDir  = "$env:LOCALAPPDATA\Microsoft\Windows\Fonts"
+          $fontsReg  = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Fonts'
+          $fragment  = "$env:LOCALAPPDATA\Microsoft\Windows Terminal\Fragments\GAIA\gaia.json"
+          foreach ($f in $lock.fonts) {
+            if (-not (Test-Path "$fontsDir\$($f.filename)")) { throw "$($f.filename) was not installed to $fontsDir" }
+            $reg = (Get-ItemProperty -Path $fontsReg -Name "$($f.full_name) (TrueType)" -ErrorAction Stop)."$($f.full_name) (TrueType)"
+            if ($reg -ne "$fontsDir\$($f.filename)") { throw "$($f.full_name) is registered as '$reg'" }
+          }
+          if (-not (Test-Path "$dir\$($lock.license.filename)")) { throw "the font licence did not land in $dir" }
+          if (-not (Test-Path $fragment)) { throw "no Windows Terminal fragment at $fragment" }
+          $bytes = [System.IO.File]::ReadAllBytes($fragment)
+          $text  = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($bytes)
+          $wt    = $text | ConvertFrom-Json
+          $wtProfile = $wt.profiles[0]
+          if ($wtProfile.font.face -ne $lock.family) { throw "fragment names font '$($wtProfile.font.face)', setup ships '$($lock.family)'" }
+          if ($wtProfile.commandline -ne "`"$dir\gaia-tui.exe`"") { throw "fragment commandline is '$($wtProfile.commandline)'" }
+          if ($text -match '__GAIA_INSTDIR__') { throw "fragment still carries the install-dir placeholder" }
+
+          # Shortcuts go through Windows Terminal only when it is installed --
+          # detected the way the setup does: the app alias, then PATH.
+          $wtExe = (Test-Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\wt.exe") -or [bool](Get-Command wt.exe -ErrorAction SilentlyContinue)
+          $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\GAIA\GAIA Terminal Hub.lnk")
+          Write-Host "shortcut -> $($lnk.TargetPath) $($lnk.Arguments) (wt.exe on runner: $wtExe)"
+          if ($wtExe) {
+            if ($lnk.TargetPath -notlike '*wt.exe' -or $lnk.Arguments -notlike "*$($wtProfile.guid)*") { throw "Windows Terminal is installed but the shortcut does not open the GAIA profile" }
+          } elseif ($lnk.TargetPath -ne "$dir\gaia-tui.exe") {
+            throw "Windows Terminal is absent but the shortcut targets '$($lnk.TargetPath)'"
+          }
+
           $out = & "$dir\gaia-tui.exe" version 2>&1 | Out-String
           Write-Host "gaia-tui version -> $out"
           if ($out -notmatch [regex]::Escape($env:VERSION)) { throw "gaia-tui did not report $env:VERSION" }
@@ -454,10 +492,17 @@ jobs:
           if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub') {
             throw "the Add/Remove Programs entry survived the uninstall"
           }
+          foreach ($f in $lock.fonts) {
+            if (Test-Path "$fontsDir\$($f.filename)") { throw "$($f.filename) survived the uninstall" }
+            if ((Get-ItemProperty -Path $fontsReg -ErrorAction SilentlyContinue).PSObject.Properties.Name -contains "$($f.full_name) (TrueType)") {
+              throw "$($f.full_name) is still registered after the uninstall"
+            }
+          }
+          if (Test-Path $fragment) { throw "the Windows Terminal fragment survived the uninstall" }
           if (-not (Test-Path "$env:USERPROFILE\.gaia\smoke-marker")) {
             throw "the uninstaller deleted ~/.gaia - it must keep user data unless asked"
           }
-          Write-Host "OK - installed, ran, uninstalled cleanly, user data intact"
+          Write-Host "OK - installed, ran, uninstalled cleanly, terminal profile removed, user data intact"
 
       - name: macOS — install, verify, uninstall
         if: matrix.label == 'macos'

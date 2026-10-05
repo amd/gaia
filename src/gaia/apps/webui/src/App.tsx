@@ -27,6 +27,7 @@ import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { planNewTask } from './utils/newTask';
+import type { Session } from './types';
 
 /** Wrapper that delays unmount to allow CSS exit animations to play. */
 function AnimatedPresence({ show, children, duration = 250 }: {
@@ -255,9 +256,12 @@ function App() {
         const t = log.system.time();
 
         /** Build a cheap fingerprint string for a session list so we can detect
-         *  any change — new/deleted sessions, title edits, updated_at bumps. */
-        const fingerprint = (sessions: Array<{ id: string; updated_at: string; title: string }>) =>
-            sessions.map((s) => `${s.id}|${s.updated_at}|${s.title}`).join('\n');
+         *  any change — new/deleted sessions, title edits, updated_at bumps,
+         *  and a changed inference location (a model override reaches the footer). */
+        const fingerprint = (sessions: Session[]) =>
+            sessions
+                .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}`)
+                .join('\n');
 
         const openPendingUrlTarget = (serverSessions: Array<{ id: string }>) => {
             const target = pendingUrlTargetRef.current;

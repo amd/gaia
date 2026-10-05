@@ -49,7 +49,7 @@ def flagship():
     """
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
-        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True, dynamic_tools=True))
         agent._registry_snapshot = dict(agent._tools_registry)
         yield agent
 

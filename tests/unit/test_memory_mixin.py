@@ -4851,6 +4851,16 @@ class TestStableMemorySectionIsFrozen:
         rebuild.assert_not_called()
         assert composing_host.system_prompt == before
 
+    def test_forget_result_puts_the_value_off_limits(self, composing_host):
+        """The deleted value still sits in the chat history; the result says not to use it."""
+        kid = composing_host._memory_store.store(category="fact", content=self.FACT)
+
+        result = self._tool(composing_host, "forget")(kid)
+
+        assert result["status"] == "removed"
+        assert "derived from it" in result["message"]
+        assert "chat history" in result["message"]
+
     def test_a_context_switch_re_renders_it(self, composing_host):
         assert self.FACT not in composing_host.system_prompt
         composing_host._memory_store.store(category="fact", content=self.FACT)

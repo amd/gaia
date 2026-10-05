@@ -48,6 +48,16 @@ the installer build fails until it is regenerated with
 `hub/agents/gaia/python/packaging/gen_binaries_lock.py`. That is the intended
 state — the same placeholder already blocks `npx @amd-gaia/gaia`.
 
+The Windows setup also bundles IBM Plex Mono for its Windows Terminal profile.
+Stage it separately and pass the directory as `--fonts`. Same contract: the
+release zip and every face are checked against the digests committed in
+[`fonts/fonts.lock.json`](fonts/fonts.lock.json), and the
+[fonts README](fonts/README.md) records the pinned version:
+
+```bash
+python installer/tui/fetch_fonts.py --out stage/fonts
+```
+
 On Windows the payload also needs `gaia-tui.exe` to carry its icon, which the Go
 linker only embeds when a resource object sits beside the main package:
 

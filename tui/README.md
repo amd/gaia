@@ -34,6 +34,18 @@ gaia-tui
 machine. Skip it and the readiness gate stops you before the agent starts and
 tells you the same thing.
 
+### Or use the Windows setup
+
+`gaia-<version>-win-x64-setup.exe` from the
+[GitHub release](https://github.com/amd/gaia/releases/latest) installs `gaia-tui`
+and `gaia-agent` per-user, plus a **GAIA** Windows Terminal profile (IBM Plex Mono
+and a dark GAIA colour scheme). Its Start menu and desktop shortcuts open that
+profile when Windows Terminal is installed. Without Windows Terminal they run
+`gaia-tui` in the default console. Uninstalling removes the profile and the fonts
+it added. See the
+[Terminal Hub guide](https://amd-gaia.ai/docs/guides/terminal-hub#installing) for
+exactly what it writes.
+
 ### Or download the binary directly
 
 The installer fetches these and verifies their SHA-256; you can also take one
@@ -242,6 +254,10 @@ refuse the switch with an actionable message and leave the session on
 whichever model was already working. Backends never swap themselves: a local
 switch with Lemonade down is refused with both ways forward (start the server,
 or name a Claude id), never silently answered somewhere else.
+
+A switch the agent confirmed also survives the agent process restarting. If it
+crashes or you hard-stop it (Esc twice), your next message starts a new process
+on the model you switched to, not the one the TUI launched with.
 
 ## Running against a local clone
 
