@@ -283,7 +283,9 @@ def test_real_loop_requires_correct_file_write_and_readback(agent, tmp_path):
     result = agent.process_query(
         "Summarize the video and save to `summary.md`", max_steps=10
     )
-    assert "[check:completion]" in sent[2][-1]["content"]
+    correction = sent[2][-1]["content"]
+    assert "[check:completion]" in correction
+    assert "without mentioning it or the read's offset and pages" in correction
     assert (tmp_path / "summary.md").read_text() == "alpha\nbeta\n"
     assert result["status"] == "success"
     assert not result["completion_gaps"]
