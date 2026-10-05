@@ -3,10 +3,11 @@
 """Tests for acoustic speaker diarization."""
 
 import subprocess
+import sys
 import tarfile
 import wave
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -30,6 +31,11 @@ def _write_wav(path: Path, seconds=1.0, rate=16000, channels=1, width=2):
 
 class TestAudioValidation:
     """Bad audio must be named precisely, not fail deep inside the model."""
+
+    @pytest.fixture(autouse=True)
+    def _engine_importable(self, monkeypatch):
+        # Validation runs before the engine is used; the [diarize] extra is optional.
+        monkeypatch.setitem(sys.modules, "sherpa_onnx", MagicMock())
 
     def test_missing_file(self, tmp_path):
         with pytest.raises(DiarizationError, match="No such audio file"):
