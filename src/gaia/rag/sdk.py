@@ -734,7 +734,7 @@ class RAGSDK:
             - page_warnings: dict[int, str], why each degraded page is listed
 
         Raises:
-            EncryptedPDFError: PDF is password-protected.
+            EncryptedPDFError: PDF needs a password to open.
             CorruptedPDFError: PDF is malformed / unreadable.
             EmptyPDFError: PDF parsed OK but contained no extractable text.
         """
@@ -768,13 +768,13 @@ class RAGSDK:
             self.log.error(f"Corrupted PDF {pdf_path}: {e}")
             raise CorruptedPDFError(msg) from e
 
-        # Step 1: Refuse password-protected PDFs up-front. Without this check
-        # pypdf silently returns empty text for every page and the document
-        # gets "indexed" with zero chunks (see issue #451).
-        if getattr(reader, "is_encrypted", False):
+        # Step 1: Refuse PDFs that need a user password up-front, or every page
+        # extracts as empty text (#451). Owner-password-only PDFs (permission
+        # restrictions, common in SEC filings) open with the empty password.
+        if getattr(reader, "is_encrypted", False) and not reader.decrypt(""):
             msg = (
                 f"PDF is password-protected: {file_name}\n"
-                "GAIA cannot index encrypted PDFs.\n"
+                "GAIA cannot index PDFs that need a password to open.\n"
                 "Suggestions:\n"
                 "  1. Remove the password with qpdf:\n"
                 "     qpdf --decrypt --password=YOUR_PASSWORD input.pdf output.pdf\n"
