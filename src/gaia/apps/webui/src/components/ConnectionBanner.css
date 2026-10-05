@@ -31,12 +31,6 @@
     border-bottom: 1px solid color-mix(in srgb, var(--accent-yellow) 28%, var(--bg-primary));
 }
 
-.connection-banner--device {
-    background: color-mix(in srgb, var(--accent-cyan) 8%, var(--bg-primary));
-    color: var(--accent-cyan);
-    border-bottom: 1px solid color-mix(in srgb, var(--accent-cyan) 28%, var(--bg-primary));
-}
-
 .connection-banner--init {
     background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-primary));
     color: var(--accent-blue);
@@ -66,15 +60,6 @@
     border-radius: var(--radius-sm);
     background: var(--tint-hover);
     font-size: 11px;
-}
-
-.connection-banner__link {
-    color: inherit;
-    text-decoration: underline;
-    opacity: 0.85;
-}
-.connection-banner__link:hover {
-    opacity: 1;
 }
 
 .connection-banner__dismiss {
@@ -121,12 +106,6 @@
 .connection-banner--warning .connection-banner__retry:hover {
     background: color-mix(in srgb, var(--accent-yellow) 82%, var(--text-primary));
 }
-
-.connection-banner__retry--secondary {
-    opacity: 0.7;
-    margin-left: -4px;
-}
-.connection-banner__retry--secondary:hover { opacity: 1; }
 
 .connection-banner__loading {
     flex-shrink: 0;

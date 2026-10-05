@@ -29,7 +29,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
-import { useNotificationStore, selectActivePermissionPrompt } from '../../stores/notificationStore';
+import { useNotificationStore, selectSessionPermissionPrompt } from '../../stores/notificationStore';
 import type { AgentInfo, Session, StreamEvent } from '../../types';
 import * as api from '../../services/api';
 
@@ -47,7 +47,7 @@ const SESSION: Session = {
     system_prompt: null,
     message_count: 0,
     document_ids: [],
-    agent_type: 'doc',
+    agent_type: 'gaia',
 };
 
 const DOC_AGENT: AgentInfo = {
@@ -81,6 +81,7 @@ beforeEach(() => {
 
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
     mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+    mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({
         documents: [],
         total: 0,
@@ -101,7 +102,6 @@ beforeEach(() => {
 
     useChatStore.setState({
         agents: [DOC_AGENT],
-        activeAgentId: 'doc',
         sessions: [SESSION],
         currentSessionId: SESSION.id,
         messages: [],
@@ -131,10 +131,10 @@ async function driveSend() {
     render(<ChatView sessionId={SESSION.id} />);
 
     await act(async () => {
-        fireEvent.change(screen.getByLabelText('Message input'), {
+        fireEvent.change(screen.getByLabelText('Message'), {
             target: { value: 'send the drafted email' },
         });
-        fireEvent.click(screen.getByLabelText('Send message'));
+        fireEvent.click(screen.getByLabelText('Send'));
     });
 
     expect(capturedCallbacks).not.toBeNull();
@@ -236,17 +236,17 @@ describe('ChatView needs_confirmation wiring (#2109, stateless D1)', () => {
 
         // Baseline: nothing pending before the event.
         expect(useNotificationStore.getState().notifications).toEqual([]);
-        expect(selectActivePermissionPrompt(useNotificationStore.getState())).toBeNull();
+        expect(selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState())).toBeNull();
 
         act(() => {
             capturedCallbacks!.onAgentEvent(needsConfirmationEvent);
         });
 
         // needs_confirmation must never create a permission_request
-        // notification — PermissionPrompt (mounted at the App level, keyed
-        // off selectActivePermissionPrompt) must stay entirely uninvolved.
+        // notification — PermissionPrompt (inline above the composer, keyed
+        // off selectSessionPermissionPrompt) must stay entirely uninvolved.
         expect(useNotificationStore.getState().notifications).toEqual([]);
-        expect(selectActivePermissionPrompt(useNotificationStore.getState())).toBeNull();
+        expect(selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState())).toBeNull();
     });
 
     it('does not call confirmTool for a needs_confirmation event', async () => {
@@ -261,28 +261,41 @@ describe('ChatView needs_confirmation wiring (#2109, stateless D1)', () => {
 });
 
 
-describe('engineering permission requests require a fresh user decision', () => {
+describe('permission requests wait for the user', () => {
     afterEach(() => {
-        useNotificationStore.setState({ alwaysAllowGrants: [] });
+        useNotificationStore.setState({ notifications: [] });
+    });
+
+    it('shows the prompt inline with the offered scope and never answers it itself', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'permission_request', tool: 'run_shell_command', confirm_id: 'c-7',
+                args: { command: 'git status' }, always_scope: 'git status',
+            } as unknown as StreamEvent);
+        });
+        expect(mockedApi.confirmTool).not.toHaveBeenCalled();
+        const prompt = selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState());
+        expect(prompt).toMatchObject({ id: 'c-7', confirmId: 'c-7', alwaysScope: 'git status', sessionId: SESSION.id });
+        expect(screen.getByRole('button', { name: 'Allow once' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Always allow git status in this chat/ })).toBeInTheDocument();
     });
 
     it.each(['share_engineering_context', 'append_engineering_context', 'approve_engineering_code'])(
-        'ignores a chat grant for %s and shows the prompt', async (tool) => {
-            useNotificationStore.setState({
-                alwaysAllowGrants: [{ sessionId: SESSION.id, tool, grantedAt: 1 }],
-            });
+        'offers no always option for %s', async (tool) => {
             await driveSend();
             act(() => {
                 capturedCallbacks!.onAgentEvent({
                     type: 'permission_request', tool, confirm_id: 'fresh-decision',
-                    args: { context: 'selected evidence' },
+                    args: { context: 'selected evidence' }, always_scope: tool,
                 } as unknown as StreamEvent);
             });
             expect(mockedApi.confirmTool).not.toHaveBeenCalled();
-            const prompt = selectActivePermissionPrompt(useNotificationStore.getState());
+            const prompt = selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState());
             expect(prompt?.id).toBe('fresh-decision');
-            expect(prompt?.tool).toBe(tool);
             expect(prompt?.toolArgs).toEqual({ context: 'selected evidence' });
+            expect(screen.getByRole('button', { name: 'Allow once' })).toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: /Always allow/ })).not.toBeInTheDocument();
         }
     );
 });
@@ -301,7 +314,7 @@ describe('ChatView path-access permission_request', () => {
             } as unknown as StreamEvent);
         });
 
-        const prompt = selectActivePermissionPrompt(useNotificationStore.getState());
+        const prompt = selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState());
         expect(prompt?.message).toBe(
             'GAIA wants to use the file C:\\Users\\me\\sales.csv, which this chat cannot reach yet. Allow it for this chat?'
         );
@@ -320,6 +333,6 @@ describe('ChatView path-access permission_request', () => {
             } as unknown as StreamEvent);
         });
 
-        expect(selectActivePermissionPrompt(useNotificationStore.getState())?.timeoutSeconds).toBeUndefined();
+        expect(selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState())?.timeoutSeconds).toBeUndefined();
     });
 });

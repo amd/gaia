@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { AlertTriangle, Cpu, Download, Layers, Loader2, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Download, Layers, Loader2, WifiOff, X } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { useChatStore } from '../stores/chatStore';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
@@ -23,7 +23,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
     const hasActiveConversation = !!currentSessionId && messages.length > 0;
 
     const modelName = systemStatus?.default_model_name ?? DEFAULT_MODEL_NAME;
-    const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(modelName);
+    const { isDownloadingModel, downloadModel } = useModelActions(modelName);
 
     // Track previous warning-worthy states so the banner reappears when
     // a new issue is detected after being dismissed.
@@ -72,13 +72,14 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
     // suppressing during an active conversation: if the download fails
     // mid-chat we still want to surface the failure prominently.
     const activeProgress = systemStatus?.download_progress ?? null;
+    const downloadName = activeProgress?.model_name || modelName;
     const isActiveDownload =
         isDownloadingModel ||
         activeProgress?.state === 'downloading' ||
         activeProgress?.state === 'starting';
     if (isActiveDownload || activeProgress?.state === 'error') {
-        const sizeHint = systemStatus?.default_model_size_gb
-            ? `~${systemStatus.default_model_size_gb.toFixed(1)} GB`
+        const sizeHint = activeProgress?.total_bytes
+            ? `${(activeProgress.total_bytes / 1e9).toFixed(1)} GB`
             : 'large download';
         const isError = activeProgress?.state === 'error';
         return (
@@ -94,14 +95,14 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                 <div className="connection-banner__text">
                     {isError ? (
                         <>
-                            Download of <strong>{modelName}</strong> failed.{' '}
+                            Download of <strong>{downloadName}</strong> failed.{' '}
                             {activeProgress?.message && (
                                 <span className="connection-banner__hint">{activeProgress.message}</span>
                             )}
                         </>
                     ) : (
                         <>
-                            Downloading <strong>{modelName}</strong> ({sizeHint}).
+                            Downloading <strong>{downloadName}</strong> ({sizeHint}).
                             {activeProgress?.state === 'downloading' && activeProgress.file && (
                                 <>
                                     {' '}
@@ -116,7 +117,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                 {isError ? (
                     <button
                         className="connection-banner__retry"
-                        onClick={() => downloadModel(false)}
+                        onClick={() => downloadModel(false, downloadName)}
                     >
                         Retry
                     </button>
@@ -200,9 +201,9 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                     <WifiOff size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    Cannot connect to GAIA server.{' '}
+                    Lost the connection to GAIA.{' '}
                     <span className="connection-banner__hint">
-                        Start it with: <code>gaia chat --ui</code>
+                        Check that GAIA is still running, then retry.
                     </span>
                 </div>
                 {onRetry && (
@@ -245,13 +246,15 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                 </div>
                 <div className="connection-banner__text">
                     {queryFailed
-                        ? 'Could not query the LLM server status.'
-                        : 'LLM server is not responding — it may be busy or not running.'}{' '}
-                    <span className="connection-banner__hint">
-                        {systemStatus.start_command
-                            ? <>If not started, run: <code>{systemStatus.start_command}</code></>
-                            : (systemStatus.start_instruction ?? 'Start Lemonade Server, then retry.')}
-                    </span>
+                        ? `Could not read the model server's status: ${systemStatus.lemonade_error}`
+                        : 'The model server stopped responding.'}{' '}
+                    {systemStatus.start_command ? (
+                        <span className="connection-banner__hint">
+                            To start it by hand, run <code>{systemStatus.start_command}</code>
+                        </span>
+                    ) : systemStatus.start_instruction && (
+                        <span className="connection-banner__hint">{systemStatus.start_instruction}</span>
+                    )}
                 </div>
                 {onRetry && (
                     <button className="connection-banner__retry" onClick={onRetry}>
@@ -269,104 +272,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         );
     }
 
-    // Case 3: Lemonade is running but the required default model is not
-    // downloaded AND no download is currently in flight. (The
-    // top-priority block above handles ``downloading``/``starting``/
-    // ``error`` states regardless of init or dismiss state.)
-    if (
-        systemStatus &&
-        systemStatus.lemonade_running &&
-        !systemStatus.model_loaded &&
-        systemStatus.model_downloaded === false
-    ) {
-        const sizeHint = systemStatus.default_model_size_gb
-            ? `~${systemStatus.default_model_size_gb.toFixed(1)} GB`
-            : 'large download';
-        return (
-            <div className="connection-banner connection-banner--warning" role="status">
-                <div className="connection-banner__icon">
-                    <Download size={16} />
-                </div>
-                <div className="connection-banner__text">
-                    Required model <strong>{modelName}</strong> is not downloaded ({sizeHint}).
-                </div>
-                <button
-                    className="connection-banner__retry"
-                    onClick={() => downloadModel(false)}
-                >
-                    Download
-                </button>
-                {onRetry && (
-                    <button className="connection-banner__retry connection-banner__retry--secondary" onClick={onRetry}>
-                        Recheck
-                    </button>
-                )}
-                <button
-                    className="connection-banner__dismiss"
-                    onClick={() => setDismissed(true)}
-                    aria-label="Dismiss"
-                >
-                    <X size={14} />
-                </button>
-            </div>
-        );
-    }
-
-    // Case 4: A model is loaded but it is not the expected one.
-    // Suppressed when the embedding model is the currently active model — that
-    // is a normal transient state after indexing. The backend pre-flight check
-    // in _chat_helpers.py loads the correct LLM before the first query executes.
-    if (
-        systemStatus &&
-        systemStatus.lemonade_running &&
-        systemStatus.model_loaded &&
-        systemStatus.expected_model_loaded === false &&
-        !systemStatus.embedding_model_loaded
-    ) {
-        const currentModel = systemStatus.model_loaded;
-        const contextAlsoSmall = systemStatus.context_size_sufficient === false;
-        return (
-            <div className="connection-banner connection-banner--warning" role="status">
-                <div className="connection-banner__icon">
-                    <Cpu size={16} />
-                </div>
-                <div className="connection-banner__text">
-                    Wrong model loaded: <strong>{currentModel}</strong>.{' '}
-                    GAIA Chat requires <strong>{modelName}</strong>.
-                    {contextAlsoSmall && (
-                        <>{' '}Context window is also too small.</>
-                    )}
-                </div>
-                {isLoadingModel ? (
-                    <span className="connection-banner__loading">
-                        <Loader2 size={13} className="connection-banner__spinner" />
-                        Loading…
-                    </span>
-                ) : (
-                    <button
-                        className="connection-banner__retry"
-                        onClick={() => loadModel()}
-                    >
-                        Load Now
-                    </button>
-                )}
-                {onRetry && !isLoadingModel && (
-                    <button className="connection-banner__retry connection-banner__retry--secondary" onClick={onRetry}>
-                        Recheck
-                    </button>
-                )}
-                <button
-                    className="connection-banner__dismiss"
-                    onClick={() => setDismissed(true)}
-                    aria-label="Dismiss"
-                >
-                    <X size={14} />
-                </button>
-            </div>
-        );
-    }
-
-    // Case 5: Model is loaded but context window is too small
+    // Case 3: the loaded model's context window is too small.
     if (
         systemStatus &&
         systemStatus.lemonade_running &&
@@ -374,7 +280,6 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         systemStatus.context_size_sufficient === false
     ) {
         const current = systemStatus.model_context_size ?? 0;
-        const lemonadeUI = systemStatus.lemonade_url ?? 'http://localhost:13305';
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
@@ -384,19 +289,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                     LLM context window is too small ({current.toLocaleString()} tokens;{' '}
                     {MIN_CONTEXT_SIZE.toLocaleString()} required).{' '}
                     <span className="connection-banner__hint">
-                        In{' '}
-                        <a
-                            className="connection-banner__link"
-                            href={lemonadeUI}
-                            target="_blank"
-                            rel="noreferrer"
-                        >
-                            Lemonade
-                        </a>
-                        , set ctx&#8209;size to {MIN_CONTEXT_SIZE.toLocaleString()} and reload the model.{' '}
-                        {systemStatus?.start_command
-                            ? <>Restart command: <code>{systemStatus.start_command}</code></>
-                            : systemStatus?.start_instruction}
+                        Reload it with a larger context in Settings → Advanced.
                     </span>
                 </div>
                 {onRetry && (

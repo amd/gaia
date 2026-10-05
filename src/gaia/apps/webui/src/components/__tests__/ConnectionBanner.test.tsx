@@ -11,28 +11,40 @@ beforeEach(() => {
     useChatStore.setState({ backendConnected: true, currentSessionId: null, messages: [] });
 });
 
-describe('context-size remediation comes from the backend', () => {
+describe('the model server is down', () => {
     it.each([
         '/usr/bin/lemonade-server serve --ctx-size 32768',
         'LEMONADE_CTX_SIZE=32768 /usr/bin/lemond',
-    ])('prints %s verbatim without appending flags', (command) => {
-        useChatStore.setState({ systemStatus: {
-            lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF', model_downloaded: true, expected_model_loaded: true,
-            context_size_sufficient: false, model_context_size: 8192, start_command: command,
-        } as SystemStatus });
+    ])('prints the backend start command %s verbatim', (command) => {
+        useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: command } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
         expect(container.querySelector('code')?.textContent).toBe(command);
     });
 
-    it('prints model-reload instructions when there is no restart command', () => {
-        const instruction = 'Set the context size to 32768 and reload the model.';
+    it('never invents a start command the backend did not give', () => {
+        useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null } as SystemStatus });
+        const { container } = render(<ConnectionBanner />);
+        expect(screen.getByText(/The model server stopped responding/)).toBeInTheDocument();
+        expect(container.querySelector('code')).toBeNull();
+        expect(container).not.toHaveTextContent('lemonade-server serve');
+    });
+
+    it('says why the status could not be read', () => {
+        useChatStore.setState({ systemStatus: { lemonade_running: false, lemonade_error: 'connection refused' } as SystemStatus });
+        render(<ConnectionBanner />);
+        expect(screen.getByText(/Could not read the model server's status: connection refused/)).toBeInTheDocument();
+    });
+});
+
+describe('context window too small', () => {
+    it('points at Settings instead of a shell command', () => {
         useChatStore.setState({ systemStatus: {
             lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF', model_downloaded: true, expected_model_loaded: true,
-            context_size_sufficient: false, model_context_size: 8192,
-            start_command: null, start_instruction: instruction,
+            context_size_sufficient: false, model_context_size: 8192, start_command: 'LEMONADE_CTX_SIZE=32768 /usr/bin/lemond',
         } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(screen.getByText(instruction, { exact: false })).toBeInTheDocument();
+        expect(screen.getByText(/LLM context window is too small/)).toBeInTheDocument();
+        expect(screen.getByText(/Settings → Advanced/)).toBeInTheDocument();
         expect(container.querySelector('code')).toBeNull();
     });
 });

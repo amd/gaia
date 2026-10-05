@@ -8,19 +8,15 @@ TypeScript cannot see a Python response, so an optional field on the frontend
 #2970 shipped that way (the Hub Details modal read ``version``, the catalog
 sends ``installed_version``), and #3842 found two more of the same shape.
 
-This test pins the contract from the *real* emitters rather than a hand-built
-mock: the pydantic model behind ``GET /api/agents`` and an actual
-``merge_with_registry`` payload. Declaring a field neither one produces fails
-here instead of silently at runtime.
+The Agent UI now reads agents only from ``GET /api/agents`` (it no longer
+merges the Hub catalog), so the contract is pinned to the pydantic model behind
+that endpoint. A catalog-only field declared on ``AgentInfo`` would read as
+``undefined`` and fails here.
 """
 
-import inspect
 import re
 from pathlib import Path
 
-import pytest
-
-from gaia.hub.catalog import merge_with_registry
 from gaia.ui.models import AgentInfo as BackendAgentInfo
 
 TYPES_TS = (
@@ -37,21 +33,25 @@ TYPES_TS = (
 # Fields the frontend synthesizes client-side and no endpoint sends. Each one
 # must be documented as such in ``types/index.ts``; adding an entry here is a
 # deliberate choice to normalize a field in the UI, not a place to park a
-# mismatch.
-CLIENT_DERIVED_FIELDS = {
-    # mergeCatalogStatus maps the catalog's installed_version onto this so
-    # components have one place to read "the version to display" (#3819).
+# mismatch. Empty since the catalog-only ``version`` left the type.
+CLIENT_DERIVED_FIELDS: set = set()
+
+# Catalog-only fields the UI dropped with the Hub page. Re-declaring one without
+# a ``GET /api/agents`` emitter is the #2970 / #3842 regression.
+_RETIRED_CATALOG_FIELDS = (
     "version",
-}
+    "installed_version",
+    "latest_version",
+    "status",
+    "compatibility",
+    "avatar_url",
+)
 
 _COMMENT_LINE = re.compile(r"^\s*(//|/\*|\*)")
 _TRAILING_COMMENT = re.compile(r"//.*$")
 # Any indentation: the depth == 1 guard, not the column, is what restricts this
 # to top-level members.
 _FIELD_DECL = re.compile(r"^\s+(\w+)\??\s*:")
-# ``merge_with_registry`` emits optional keys with this idiom; see
-# _catalog_payload_keys.
-_CONDITIONAL_EMIT = re.compile(r'if "(\w+)" in entry:')
 
 
 def _declared_agent_info_fields() -> set:
@@ -95,88 +95,36 @@ def _declared_agent_info_fields() -> set:
     return fields
 
 
-class _FakeReg:
-    """Minimal registry stand-in — ``merge_with_registry`` only calls list()."""
-
-    def list(self):
-        return []
-
-
-def _catalog_payload_keys() -> set:
-    """Keys a real ``GET /api/agents/catalog`` agent entry carries.
-
-    Built by running the actual merge over a catalog index entry. The
-    unconditional keys are hand-declared below; the conditionally-emitted ones
-    are read out of ``merge_with_registry``'s own source, so adding an emit
-    there cannot leave this fixture stale and fail the contract on a field that
-    is genuinely on the wire.
-    """
-    entry = {
-        "id": "demo",
-        "name": "Demo",
-        "description": "demo agent",
-        "category": "general",
-        "type": "agent",
-        "latest_version": "1.2.0",
-        "icon": "",
-        "language": "python",
-        "author": "AMD",
-        "security_tier": "verified",
-        "permissions": ["fs:read"],
-        "download_size_bytes": 1000,
-        "requirements": {"platforms": ["linux-x64"]},
-        "deprecated": False,
-        "eval_score": 91,
-        "eval_scorecard_url": "https://hub.test/demo/scorecard.md",
-    }
-    conditional = set(_CONDITIONAL_EMIT.findall(inspect.getsource(merge_with_registry)))
-    assert conditional, (
-        "found no 'if \"<key>\" in entry:' emits in gaia.hub.catalog."
-        "merge_with_registry — the idiom changed, so this test's introspection no "
-        "longer sees conditionally-emitted fields and will fail on fields that are "
-        "really on the wire. Update _CONDITIONAL_EMIT to match the new idiom."
-    )
-    for key in conditional:
-        entry.setdefault(key, "present")
-
-    merged = merge_with_registry([entry], _FakeReg(), {"demo": "1.1.0"})
-    assert len(merged) == 1, merged
-    return set(merged[0])
-
-
 def test_every_declared_agent_info_field_has_a_backend_emitter():
     declared = _declared_agent_info_fields()
-    emitted = set(BackendAgentInfo.model_fields) | _catalog_payload_keys()
+    emitted = set(BackendAgentInfo.model_fields)
 
     unsent = declared - emitted - CLIENT_DERIVED_FIELDS
     assert not unsent, (
-        "src/gaia/apps/webui/src/types/index.ts declares AgentInfo field(s) that no "
-        f"backend endpoint sends: {sorted(unsent)}. They will read as undefined at "
-        "runtime and any UI behind them is dead (#2970, #3842). Either emit them from "
-        "gaia.ui.models.AgentInfo / gaia.hub.catalog.merge_with_registry, drop them "
-        "from the type, or — if the UI genuinely synthesizes the value — document it "
-        "in the type and add it to CLIENT_DERIVED_FIELDS."
+        "src/gaia/apps/webui/src/types/index.ts declares AgentInfo field(s) that "
+        f"GET /api/agents does not send: {sorted(unsent)}. They will read as "
+        "undefined at runtime and any UI behind them is dead (#2970, #3842). Either "
+        "emit them from gaia.ui.models.AgentInfo, drop them from the type, or — if "
+        "the UI genuinely synthesizes the value — document it in the type and add "
+        "it to CLIENT_DERIVED_FIELDS."
     )
 
 
-@pytest.mark.parametrize("field", sorted(CLIENT_DERIVED_FIELDS))
-def test_client_derived_fields_are_still_declared(field):
+def test_client_derived_fields_are_still_declared():
     """Guard the allowlist against rot: a stale entry hides a real mismatch."""
-    assert field in _declared_agent_info_fields(), (
-        f"CLIENT_DERIVED_FIELDS lists '{field}' but AgentInfo no longer declares it — "
-        "remove the allowlist entry."
+    stale = CLIENT_DERIVED_FIELDS - _declared_agent_info_fields()
+    assert not stale, (
+        f"CLIENT_DERIVED_FIELDS lists {sorted(stale)} but AgentInfo no longer "
+        "declares them — remove the allowlist entries."
     )
 
 
-def test_the_two_fields_from_issue_3842_stay_gone():
-    """``compatibility``/``avatar_url`` were declared but never emitted (#3842).
-
-    Explicit because re-adding either is the exact regression: both were read
-    defensively, so the UI degraded quietly instead of failing.
-    """
+def test_retired_catalog_fields_stay_gone():
+    """Catalog-only fields must not come back without a real emitter (#3842)."""
     declared = _declared_agent_info_fields()
-    for field in ("compatibility", "avatar_url"):
-        assert field not in declared or field in _catalog_payload_keys(), (
-            f"AgentInfo declares '{field}' again without a backend emitter. Implement "
-            "it in gaia.hub.catalog.merge_with_registry first (#3842)."
+    for field in _RETIRED_CATALOG_FIELDS:
+        assert field not in declared or field in BackendAgentInfo.model_fields, (
+            f"AgentInfo declares '{field}' again, but GET /api/agents does not send "
+            "it and the Agent UI no longer reads the Hub catalog. Emit it from "
+            "gaia.ui.models.AgentInfo first (#2970, #3842)."
         )

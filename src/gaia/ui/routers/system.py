@@ -804,8 +804,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         )
 
     # Initialized check
-    init_marker = Path.home() / ".gaia" / "chat" / "initialized"
-    status.initialized = init_marker.exists()
+    from gaia.ui.setup_runner import is_initialized
+
+    status.initialized = is_initialized()
 
     from gaia.device import get_processor_name
 

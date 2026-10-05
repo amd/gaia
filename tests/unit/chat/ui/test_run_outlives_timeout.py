@@ -56,7 +56,7 @@ def runtime():
     state = SimpleNamespace(
         session_locks={}, chat_semaphore=asyncio.BoundedSemaphore(1)
     )
-    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    request = SimpleNamespace(app=SimpleNamespace(state=state), headers={})
     server = SimpleNamespace(
         _stream_chat_response=helpers._stream_chat_response,
         _get_chat_response=helpers._get_chat_response,
@@ -159,14 +159,14 @@ async def test_timed_out_goal_tick_holds_session_until_worker_exits(
     db.set_setting("agent_mode", "goal_driven")
     session = db.get_session(sid)
 
-    # The tick imports ChatAgent before it checks the cache; a cache hit never uses it.
-    fake_mod = types.ModuleType("gaia_agent_chat.agent")
-    fake_mod.ChatAgent = fake_mod.ChatAgentConfig = object
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat", types.ModuleType("x"))
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat.agent", fake_mod)
+    # The tick imports GaiaAgent before it checks the cache; a cache hit never uses it.
+    fake_mod = types.ModuleType("gaia_agent.agent")
+    fake_mod.GaiaAgent = fake_mod.GaiaAgentConfig = object
+    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("x"))
+    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
     (tmp_path / ".gaia" / "chat").mkdir(parents=True)
     (tmp_path / ".gaia" / "chat" / "initialized").touch()
-    monkeypatch.setattr(agent_loop_mod.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / ".gaia"))
     goal = types.SimpleNamespace(priority="high", title="t", description="")
     monkeypatch.setattr(
         agent_loop_mod.AgentLoop, "_get_actionable_goals", lambda s: [goal]

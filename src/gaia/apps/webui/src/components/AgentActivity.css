@@ -3,10 +3,8 @@
 /* Agent Activity - terminal-style flow layout with thinking + inline tool cards */
 
 .agent-activity {
-    max-width: 900px;
-    margin: 0 auto;
     width: 100%;
-    padding: 0 24px;
+    margin-bottom: 6px;
 }
 
 /* ── Summary bar — subtle by default, expands on hover ─────────────
@@ -28,17 +26,15 @@
     border-radius: var(--radius-xs);
     background: transparent;
     border: 1px solid transparent;
-    font-size: 10px;
-    font-family: var(--font-mono);
-    color: var(--text-muted);
-    opacity: 0.55;
+    font-size: 12.5px;
+    font-family: var(--font-sans);
+    color: var(--text-secondary);
+    opacity: 0.85;
     transition: opacity var(--duration-fast) var(--ease),
                 background var(--duration-fast) var(--ease),
                 border-color var(--duration-fast) var(--ease),
                 color var(--duration-fast) var(--ease);
     cursor: pointer;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
 }
 .agent-summary-bar:hover,
 .agent-summary-bar:focus-visible {
@@ -85,17 +81,6 @@
 .agent-icon-error { color: var(--danger); }
 .agent-activity.has-policy-alerts .agent-icon-done { color: var(--accent-yellow); }
 
-/* Spinner */
-.agent-spinner-wrap {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.agent-spinner {
-    animation: spin 1s linear infinite;
-    color: var(--accent);
-}
 /* @keyframes spin defined in global index.css */
 
 /* No visual difference between active/done states — bar stays stable */
@@ -994,7 +979,6 @@
 
 /* ── Accessibility: reduced motion ────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
-    .agent-spinner,
     .flow-tool-spinner {
         animation: none;
     }

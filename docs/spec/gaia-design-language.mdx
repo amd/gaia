@@ -137,6 +137,13 @@ colour that clears its floor in truecolor can drop below it once rounded. See
 | Agent UI / Electron | `src/gaia/apps/webui/src/styles/index.css` | `html[data-theme]`, `localStorage` key `gaia-chat-theme` | `npm test` in `src/gaia/apps/webui/` |
 | TUI | `tui/internal/ui/theme/theme.go` (`lipgloss.AdaptiveColor`) | terminal background query, `GAIA_TUI_THEME` override | `go test ./internal/ui/...` in `tui/` |
 
+**The Agent UI's light theme is neutral, not porcelain.** Its light canvas is
+white (`#FFFFFF`) with faintly cool greys for raised surfaces, rules and hover,
+because the warm stone read as brown in a full-window app. The accent, the accent
+fill and every status hue are the shared values above, and the dark theme is the
+shared graphite; the website and the TUI keep porcelain. `contrast.test.ts` holds
+the Agent UI's values to the same floors.
+
 Both web surfaces keep their own `localStorage` key on purpose — the website and
 the app are independently themeable, and sharing a key would make changing one
 silently change the other.
@@ -173,18 +180,15 @@ Shared starting points, not pixel-matched measurements:
 - Light, dark, and system appearance; motion that honours `prefers-reduced-motion`;
   visible keyboard focus at every interactive element.
 
-Four gaps stand between those rules and what ships today. "No glow" and "no
+Three gaps stand between those rules and what ships today. "No glow" and "no
 gradient-filled panels" are enforced by a test on both web surfaces
 (`styles/__tests__/contrast.test.ts` in the app, `design/literals.test.ts` on
 the site); the rest are held by review. Where each gap is scheduled in the
 [redesign plan](/plans/gaia-ui-redesign):
 
-- The welcome screen types its headline on a randomised per-character delay —
-  simulated typing, with nothing streaming. Its cursors no longer outlive the
-  text they were writing (`WelcomeScreen.cursor.test.tsx`); the fake typing
-  itself goes when Milestone 2 replaces that screen.
-- Neither web surface follows the OS appearance. An unset preference stays dark
-  by design, and the stored theme has no `system` value to hold. Milestone 4.
+- The website does not follow the OS appearance; an unset preference stays
+  dark by design. The Agent UI offers Light, Dark and Match system (the stored
+  `gaia-chat-theme` value `system`). Milestone 4 for the website.
 - `outline: none` appears in most component stylesheets. Most sit on a `:focus`
   rule that draws a border or ring in its place, but the pairing is unverified
   and nothing fails when it is missing. Milestone 3 covers keyboard behaviour.

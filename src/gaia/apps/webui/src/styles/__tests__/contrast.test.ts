@@ -179,7 +179,6 @@ const CASES: Case[] = [
     ['--code-success', '--bg-code', 'text'],
     ['--code-warning', '--bg-code', 'text'],
     ['--code-danger', '--bg-code', 'text'],
-    ['--code-info', '--bg-code', 'text'],
     ['--text-code-dim', '--bg-code', 'recessive'],
     ['--text-code-dim', '--bg-code-raised', 'recessive'],
     ['--border-code', '--bg-code', 'chrome'],
@@ -262,7 +261,6 @@ const SHARED_WITH_LIGHT = new Set([
     '--code-success',
     '--code-warning',
     '--code-danger',
-    '--code-info',
 ]);
 
 describe('token declarations', () => {
@@ -385,9 +383,10 @@ describe('keyboard focus stays visible', () => {
      * so is named here with where it went.
      */
     const RING_ELSEWHERE: Record<string, { ring: string; why: string }> = {
-        '.msg-input': { ring: '.input-box:focus-within', why: 'rings the whole composer' },
-        '.msg-input:focus-visible': { ring: '.input-box:focus-within', why: 'rings the whole composer' },
-        '.agent-hub-search input': { ring: '.agent-hub-search:focus-within', why: 'rings the search box' },
+        '.composer-input': { ring: '.composer:focus-within', why: 'rings the whole composer' },
+        '.composer-input:focus-visible': { ring: '.composer:focus-within', why: 'rings the whole composer' },
+        '.sb-search input': { ring: '.sb-search:focus-within', why: 'rings the search box' },
+        '.sb-search input:focus-visible': { ring: '.sb-search:focus-within', why: 'rings the search box' },
     };
 
     const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
@@ -735,9 +734,6 @@ describe('code surfaces stay on the code roles', () => {
      */
     const CODE_SURFACES = [
         '.cmd-',
-        '.terminal-content',
-        '.terminal-line',
-        '.terminal-empty',
         '.code-block',
         '.code-header',
         '.code-lang',
@@ -757,20 +753,11 @@ describe('code surfaces stay on the code roles', () => {
 
     /** Caught by a prefix but painted on the page -- the name lies. */
     const EXEMPT: Record<string, string> = {
-        '.terminal-line-count': 'the header\'s "N lines" tally, not a line in the pane',
     };
 
     const onCodeSurface = RULES.filter(
         (r) => CODE_SURFACES.some((p) => r.selector.includes(p)) && !(r.selector in EXEMPT),
     );
-
-    /**
-     * Modules that paint into such a pane from JS rather than a stylesheet.
-     * The terminal hands each line its colour as an inline style prop, so the
-     * rule sweep above never sees it -- which is how `stdout` shipped on
-     * `--text-secondary`, a role that flips to near-black on `--bg-code`.
-     */
-    const CODE_SURFACE_MODULES = ['/src/components/AgentTerminal.tsx'];
 
     it('keeps the exemptions honest -- every one still names a rule', () => {
         const stale = Object.keys(EXEMPT).filter(
@@ -796,30 +783,6 @@ describe('code surfaces stay on the code roles', () => {
             (p) => !RULES.some((r) => r.selector.includes(p)),
         );
         expect(stale, 'renamed or deleted -- drop the prefix').toEqual([]);
-    });
-
-    it('reads a colour out of every module it claims to police', () => {
-        // A renamed or moved module would leave the check below sweeping an
-        // empty string and passing on nothing at all.
-        for (const path of CODE_SURFACE_MODULES) {
-            const source = TS_SOURCES[path];
-            expect(source, `${path}: no longer in the /src glob`).toBeTruthy();
-            expect(
-                [...source.matchAll(/['"]var\(\s*(--[\w-]+)\s*\)['"]/g)].length,
-                `${path}: names no token -- it no longer paints from JS`,
-            ).toBeGreaterThan(0);
-        }
-    });
-
-    it('uses no page-theme colour from a module that paints into one', () => {
-        const offenders: string[] = [];
-        for (const path of CODE_SURFACE_MODULES)
-            for (const m of (TS_SOURCES[path] ?? '').matchAll(/['"]var\(\s*(--[\w-]+)\s*\)['"]/g))
-                if (FLIPPING.has(m[1])) offenders.push(`${path} -> ${m[1]}`);
-        expect(
-            [...new Set(offenders)],
-            'use the --*-code / --code-* roles: these flip to near-black on --bg-code',
-        ).toEqual([]);
     });
 });
 
@@ -946,20 +909,17 @@ describe('status hues stay on status', () => {
 
     /** A selector naming any of these is claiming a status, so it may paint one. */
     const STATUS_WORDS = [
-        'error', 'danger', 'fail', 'warn', 'deny', 'revoke', 'cancel', 'uninstall',
+        'error', 'danger', 'fail', 'warn', 'deny', 'cancel',
         'delete', 'remove', 'clear', 'confirm', 'stop', 'invalid', 'overdue',
-        'urgent', 'critical', 'missing', 'deprecated', 'unsupported', 'bad',
+        'urgent', 'missing', 'unsupported', 'bad',
     ];
 
     /** Status by meaning, not by name. Each entry says which status. */
     const ALSO_STATUS: Record<string, string> = {
         '.btn-retry:hover': 'the retry inside an error banner',
-        '.install-confirm-icon': 'the destructive-install confirmation',
         '.mem-cat-badge.reminder': 'a reminder is the attention category',
         '.mem-priority-high': 'highest priority, ranked against the other tints',
         '.mem-success-rate.low': 'a failing success rate',
-        '.permission-countdown': 'a grant about to expire',
-        '.permission-header': 'the caution surface over a permission prompt',
     };
 
     // A `[data-theme]` override is the same control in the other theme, so it

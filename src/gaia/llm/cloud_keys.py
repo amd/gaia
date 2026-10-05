@@ -175,7 +175,12 @@ def _request(
     }
     try:
         response = requests.request(
-            method, url, json=payload, headers=headers, timeout=_TIMEOUT
+            method,
+            url,
+            json=payload,
+            headers=headers,
+            timeout=_TIMEOUT,
+            allow_redirects=False,
         )
     except requests.RequestException as e:
         raise CloudKeyError(f"Lemonade is not reachable at {base_url}: {e}") from e

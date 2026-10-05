@@ -1,24 +1,18 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useCallback, useState, useRef } from 'react';
-import { Menu, Smartphone } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Menu, X } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
-import { WelcomeScreen } from './components/WelcomeScreen';
-import { DocumentLibrary } from './components/DocumentLibrary';
-import { FileBrowser } from './components/FileBrowser';
-import { MemoryDashboard } from './components/MemoryDashboard';
-import { ScheduleManager } from './components/ScheduleManager';
-import { SettingsPage } from './components/SettingsPage';
-import { HubPage } from './components/HubPage';
-import { MobileAccessModal } from './components/MobileAccessModal';
+import { NewChat } from './components/NewChat';
+import { SetupScreen } from './components/SetupScreen';
+import { SettingsDialog } from './components/settings/SettingsDialog';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
-import { PermissionPrompt } from './components/PermissionPrompt';
 import { NotificationCenter } from './components/NotificationCenter';
-import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
 import { useChatStore } from './stores/chatStore';
+import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
@@ -26,389 +20,210 @@ import { getSessionHash } from './utils/format';
 import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
-import { planNewTask } from './utils/newTask';
-import type { Session } from './types';
+import { FLAGSHIP_AGENT_ID } from './utils/newTask';
+import type { SetupCheck } from './types';
 
-/** Wrapper that delays unmount to allow CSS exit animations to play. */
-function AnimatedPresence({ show, children, duration = 250 }: {
-    show: boolean;
-    children: React.ReactNode;
-    duration?: number;
-}) {
-    const [shouldRender, setShouldRender] = useState(false);
-    const [animState, setAnimState] = useState<'entering' | 'exiting' | 'idle'>('idle');
+// Heavy, occasional screens load on first use.
+const MemoryDashboard = lazy(() => import('./components/MemoryDashboard').then((m) => ({ default: m.MemoryDashboard })));
+const ScheduleManager = lazy(() => import('./components/ScheduleManager').then((m) => ({ default: m.ScheduleManager })));
+const DocumentLibrary = lazy(() => import('./components/DocumentLibrary').then((m) => ({ default: m.DocumentLibrary })));
+const FileBrowser = lazy(() => import('./components/FileBrowser').then((m) => ({ default: m.FileBrowser })));
+const MobileAccessModal = lazy(() => import('./components/MobileAccessModal').then((m) => ({ default: m.MobileAccessModal })));
 
-    useEffect(() => {
-        if (show) {
-            setShouldRender(true);
-            // Use rAF to ensure DOM has mounted before applying entering class
-            requestAnimationFrame(() => setAnimState('entering'));
-        } else if (shouldRender) {
-            setAnimState('exiting');
-            const timer = setTimeout(() => {
-                setShouldRender(false);
-                setAnimState('idle');
-            }, duration);
-            return () => clearTimeout(timer);
-        }
-    }, [show, shouldRender, duration]);
+/** `checking` until `gaia init --check` answers; `needed` shows first-run setup. */
+type SetupGate =
+    | { state: 'checking' }
+    | { state: 'ready' }
+    | { state: 'needed'; check: SetupCheck }
+    | { state: 'unknown'; error: string };
 
-    if (!shouldRender) return null;
+const LEMONADE_FAIL_THRESHOLD = 3;
 
-    return (
-        <div className={`animated-presence ${animState}`} data-duration={duration}>
-            {children}
-        </div>
-    );
+function Loading() {
+    return <div className="loading-spinner" role="status" aria-label="Loading" />;
 }
 
 function App() {
-    const {
-        agents,
-        activeAgentId,
-        setActiveAgentId,
-        currentSessionId,
-        setSessions,
-        setCurrentSession,
-        addSession,
-        removeSession,
-        updateSessionInList,
-        setMessages,
-        resetStreaming,
-        showDocLibrary,
-        showFileBrowser,
-        showSettings,
-        setShowSettings,
-        showMemoryDashboard,
-        setShowMemoryDashboard,
-        showSchedules,
-        setShowSchedules,
-        showHub,
-        setShowHub,
-        sidebarOpen,
-        toggleSidebar,
-        setSidebarOpen,
-        systemStatus,
-        setSystemStatus,
-        setBackendConnected,
-        setAgents,
-        setAgentsError,
-        setRunningSessions,
-    } = useChatStore();
+    const currentSessionId = useChatStore((s) => s.currentSessionId);
+    const setSessions = useChatStore((s) => s.setSessions);
+    const setCurrentSession = useChatStore((s) => s.setCurrentSession);
+    const addSession = useChatStore((s) => s.addSession);
+    const setMessages = useChatStore((s) => s.setMessages);
+    const resetStreaming = useChatStore((s) => s.resetStreaming);
+    const showDocLibrary = useChatStore((s) => s.showDocLibrary);
+    const showFileBrowser = useChatStore((s) => s.showFileBrowser);
+    const showMemoryDashboard = useChatStore((s) => s.showMemoryDashboard);
+    const showSchedules = useChatStore((s) => s.showSchedules);
+    const sidebarOpen = useChatStore((s) => s.sidebarOpen);
+    const setSidebarOpen = useChatStore((s) => s.setSidebarOpen);
+    const setSystemStatus = useChatStore((s) => s.setSystemStatus);
+    const setBackendConnected = useChatStore((s) => s.setBackendConnected);
+    const setAgents = useChatStore((s) => s.setAgents);
+    const setRunningSessions = useChatStore((s) => s.setRunningSessions);
+    const setPendingPrompt = useChatStore((s) => s.setPendingPrompt);
+    const setDefaultPermissionMode = useChatStore((s) => s.setDefaultPermissionMode);
+    const openSettings = useChatStore((s) => s.openSettings);
+    const settingsSection = useChatStore((s) => s.settingsSection);
+    const syncSystemTheme = useChatStore((s) => s.syncSystemTheme);
+    const restoreNotice = useModelStore((s) => s.restoreNotice);
+    const dismissRestoreNotice = useModelStore((s) => s.dismissRestoreNotice);
     const showNotificationPanel = useNotificationStore((s) => s.showPanel);
     const setShowNotificationPanel = useNotificationStore((s) => s.setShowPanel);
 
-    // Load agent list on mount, then poll every 30s.
-    // Fingerprinting avoids re-renders when the list is unchanged.
-    // The SSE stream emits agent_created events for immediate updates;
-    // polling is a safety net for manually created / dropped agents.
-    const lastAgentFingerprintRef = useRef<string>('');
-    const loadAgents = useCallback(async () => {
-        try {
-            const data = await api.listAgents();
-            const agents = data.agents || [];
-            const fp = agents.map((a) => a.id).sort().join(',');
-            if (fp !== lastAgentFingerprintRef.current) {
-                lastAgentFingerprintRef.current = fp;
-                setAgents(agents);
-            }
-            setAgentsError(null);
-        } catch (err) {
-            // Fail loudly: agent discovery powering the Hub/picker must never be
-            // a silent dead button (#2118). The error surfaces in the Hub view;
-            // the poll keeps retrying so a transient blip self-heals.
-            const msg = err instanceof Error ? err.message : 'agent discovery failed';
-            log.api.warn('[App] agent list load failed', err);
-            setAgentsError(msg);
-        }
-    }, [setAgents, setAgentsError]);
-
-    useEffect(() => {
-        loadAgents();
-        const interval = setInterval(loadAgents, 30_000);
-        return () => clearInterval(interval);
-    }, [loadAgents]);
-
-    // ── First-run onboarding (#1726/#1727) ───────────────────────────
-    // Show the wizard until the ``initialized`` marker exists. Checked once on
-    // mount via a dedicated endpoint so the gate doesn't depend on the heavier
-    // system-status poll or its lemonade-fail debounce.
-    const [showOnboarding, setShowOnboarding] = useState(false);
-    useEffect(() => {
-        let cancelled = false;
-        api.getOnboardingStatus()
-            .then((s) => { if (!cancelled) setShowOnboarding(!s.initialized); })
-            .catch((err) => {
-                // Can't tell — default to NOT blocking an existing user behind a
-                // wizard on a transient error; they can re-run `gaia init`.
-                log.system.warn('Onboarding status check failed', err);
-            });
-        return () => { cancelled = true; };
-    }, []);
-
-    // Mobile gateway state
+    const [setup, setSetup] = useState<SetupGate>({ state: 'checking' });
+    const [createError, setCreateError] = useState<string | null>(null);
     const [showMobileAccess, setShowMobileAccess] = useState(false);
     const [tunnelActive, setTunnelActive] = useState(false);
-    const [tunnelLoading, setTunnelLoading] = useState(false);
     const [tunnelError, setTunnelError] = useState<string | null>(null);
 
-    // ── Check system status (Lemonade, backend connectivity) ────────
-    const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    // Track consecutive "lemonade not running" reports so a single slow
-    // health-check under heavy load doesn't immediately show the warning banner.
-    const lemonadeFailCountRef = useRef(0);
-    const LEMONADE_FAIL_THRESHOLD = 3; // require 3 consecutive failures (~45s)
+    // ── First run: is GAIA set up? Same question the TUI asks. ──────────
+    const checkSetup = useCallback(async () => {
+        setSetup({ state: 'checking' });
+        try {
+            await useModelStore.getState().refresh();
+            const active = useModelStore.getState().active;
+            const check = await api.checkSetup(!!active?.remote);
+            setSetup(check.ready ? { state: 'ready' } : { state: 'needed', check });
+        } catch (err) {
+            // Could not ask — not the same as "not set up"; the chat still works if it is.
+            const error = err instanceof Error ? err.message : String(err);
+            log.system.warn('Setup check could not be answered', err);
+            setSetup({ state: 'unknown', error });
+        }
+    }, []);
 
+    useEffect(() => {
+        logBanner(__APP_VERSION__);
+        void checkSetup();
+        api.listAgents()
+            .then((d) => setAgents(d.agents || []))
+            .catch((err) => log.api.warn('Agent list unavailable; connector grants will be empty', err));
+        // A new chat starts in the configured mode (`full_access` in config).
+        api.listAllPermissions()
+            .then((d) => setDefaultPermissionMode(d.default_mode))
+            .catch((err) => log.api.warn('Default permission mode unavailable; new chats will ask', err));
+    }, [checkSetup, setAgents, setDefaultPermissionMode]);
+
+    // ── Backend and model-server health ─────────────────────────────────
+    const failCount = useRef(0);
     const checkSystemStatus = useCallback(async () => {
         try {
             const status = await api.getSystemStatus();
             setBackendConnected(true);
-
-            // Propagate detected devices to the store
-            if (status.detected_devices && status.detected_devices.length > 0) {
-                useChatStore.getState().setDetectedDevices(status.detected_devices);
-            }
-
-            if (status.lemonade_running) {
-                // Server confirmed running — reset failure counter
-                lemonadeFailCountRef.current = 0;
+            if (status.detected_devices?.length) useChatStore.getState().setDetectedDevices(status.detected_devices);
+            // One slow health probe under load is not an outage.
+            failCount.current = status.lemonade_running ? 0 : failCount.current + 1;
+            const prev = useChatStore.getState().systemStatus;
+            if (status.lemonade_running || failCount.current >= LEMONADE_FAIL_THRESHOLD || !prev?.lemonade_running) {
                 setSystemStatus(status);
             } else {
-                // Server reported Lemonade not running — might be a transient
-                // timeout when the LLM is overwhelmed with parallel requests.
-                lemonadeFailCountRef.current += 1;
-                log.system.warn(
-                    `Lemonade health check failed (${lemonadeFailCountRef.current}/${LEMONADE_FAIL_THRESHOLD})`
-                );
-
-                if (lemonadeFailCountRef.current >= LEMONADE_FAIL_THRESHOLD) {
-                    // Enough consecutive failures — propagate the "not running" state
-                    setSystemStatus(status);
-                } else {
-                    // Below threshold — keep the previous (good) status to avoid
-                    // flashing the warning banner on transient timeouts.
-                    // Still update non-lemonade fields (disk, memory, etc).
-                    const prev = useChatStore.getState().systemStatus;
-                    if (prev && prev.lemonade_running) {
-                        setSystemStatus({ ...prev, disk_space_gb: status.disk_space_gb, memory_available_gb: status.memory_available_gb });
-                    } else {
-                        // No previous good status — show what we have
-                        setSystemStatus(status);
-                    }
-                }
+                setSystemStatus({ ...prev, download_progress: status.download_progress });
             }
-
-            log.system.info('System status:', {
-                lemonade: status.lemonade_running,
-                model: status.model_loaded,
-                failCount: lemonadeFailCountRef.current,
-            });
         } catch (err) {
             log.system.warn('System status check failed', err);
-            // The system/status endpoint is lightweight and should always succeed
-            // if the backend is running. Any failure means the backend is unreachable
-            // (either a network error, or the Vite proxy returning 500/502).
             setBackendConnected(false);
             setSystemStatus(null);
         }
-    }, [setSystemStatus, setBackendConnected]);
-
-    // Check status on mount, then poll adaptively:
-    // 3s while init_state === 'initializing', 15s otherwise.
-    const currentPollIntervalRef = useRef(3_000);
+    }, [setBackendConnected, setSystemStatus]);
 
     useEffect(() => {
-        checkSystemStatus();
-        currentPollIntervalRef.current = 3_000; // Start fast during potential init
-        statusPollRef.current = setInterval(checkSystemStatus, 3_000);
-        return () => {
-            if (statusPollRef.current) clearInterval(statusPollRef.current);
-        };
+        void checkSystemStatus();
+        const fast = useChatStore.getState().systemStatus?.download_progress ? 2_000 : 5_000;
+        const t = setInterval(checkSystemStatus, fast);
+        return () => clearInterval(t);
     }, [checkSystemStatus]);
 
-    // Adjust poll interval when init completes.
-    // Keep 3s fast-poll while systemStatus is null (first response pending)
-    // or init_state is 'initializing'. Switch to 15s only after a definitive
-    // 'ready' or 'degraded' state arrives.
+    // ── Chats ───────────────────────────────────────────────────────────
+    const sessionFingerprint = useRef('');
     useEffect(() => {
-        const initState = systemStatus?.init_state;
-        // Stay fast while waiting for first response or during init
-        if (!initState || initState === 'initializing') return;
-        const desiredInterval = 15_000;
-        if (desiredInterval !== currentPollIntervalRef.current) {
-            currentPollIntervalRef.current = desiredInterval;
-            if (statusPollRef.current) clearInterval(statusPollRef.current);
-            statusPollRef.current = setInterval(checkSystemStatus, desiredInterval);
-        }
-    }, [systemStatus?.init_state, checkSystemStatus]);
-
-    // Startup banner + load sessions on mount, then poll for changes
-    const sessionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    /** Fingerprint of the last server session list (id:updated_at:title per session). */
-    const lastSessionFingerprintRef = useRef<string>('');
-    // The session the page was opened on, read before the hash-sync effect
-    // below clears the hash for "no session yet"; resolved once the list loads.
-    const pendingUrlTargetRef = useRef<string | null>(readUrlTarget(window.location));
-
-    useEffect(() => {
-        logBanner(__APP_VERSION__);
-        log.system.info('App mounting, loading sessions...');
-        const t = log.system.time();
-
-        /** Build a cheap fingerprint string for a session list so we can detect
-         *  any change — new/deleted sessions, title edits, updated_at bumps,
-         *  and a changed model or inference location (an override reaches the
-         *  header badge and footer). */
-        const fingerprint = (sessions: Session[]) =>
-            sessions
-                .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}|${s.effective_model}`)
-                .join('\n');
-
-        const openPendingUrlTarget = (serverSessions: Array<{ id: string }>) => {
-            const target = pendingUrlTargetRef.current;
-            if (!target) return;
-            pendingUrlTargetRef.current = null;
-            const matchId = resolveUrlNavTarget(
-                target,
-                useChatStore.getState().currentSessionId,
-                serverSessions,
-            );
-            if (matchId) {
-                log.nav.info(`URL session navigation: ${target}`);
-                setCurrentSession(matchId);
-                setMessages([]);
-            } else if (!useChatStore.getState().currentSessionId) {
-                // A link to a deleted chat: drop it, as the hash-sync effect would.
-                window.history.replaceState(null, '', window.location.pathname + window.location.search);
-            }
-        };
-
-        const loadSessions = (isInitial = false) => {
+        const load = (initial: boolean) => {
             api.listSessions()
                 .then((data) => {
-                    const serverSessions = data.sessions || [];
-                    if (isInitial) {
-                        setSessions(serverSessions);
-                        setBackendConnected(true);
-                        lastSessionFingerprintRef.current = fingerprint(serverSessions);
-                        log.system.timed(`Loaded ${serverSessions.length} session(s)`, t);
-                        openPendingUrlTarget(serverSessions);
-                        return;
-                    }
-
-                    // Guard: never replace a populated sidebar with an empty list.
-                    // This prevents transient backend glitches (restart, slow DB)
-                    // from wiping the user's session list.
-                    const localSessions = useChatStore.getState().sessions;
-                    if (serverSessions.length === 0 && localSessions.length > 0) {
-                        log.system.warn(
-                            'Session poll returned 0 sessions but sidebar has '
-                            + `${localSessions.length} — skipping update to prevent data loss`
-                        );
-                        return;
-                    }
-
-                    // Compare fingerprints to detect ANY change (count, titles,
-                    // updated_at timestamps) — not just count changes.
-                    const fp = fingerprint(serverSessions);
-                    if (fp !== lastSessionFingerprintRef.current) {
-                        log.system.info(
-                            `Session list changed (${localSessions.length} → ${serverSessions.length} sessions)`
-                        );
-                        setSessions(serverSessions);
-                        lastSessionFingerprintRef.current = fp;
-                    }
-                    openPendingUrlTarget(serverSessions);
+                    const list = data.sessions || [];
+                    // Never wipe a populated list on a transient empty reply.
+                    if (!initial && list.length === 0 && useChatStore.getState().sessions.length > 0) return;
+                    // Includes the model and inference location, so a model change reaches the indicators.
+                    const fp = list
+                        .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}|${s.effective_model}`)
+                        .join('\n');
+                    if (fp === sessionFingerprint.current) return;
+                    sessionFingerprint.current = fp;
+                    setSessions(list);
                 })
-                .catch((err) => {
-                    if (isInitial) {
-                        log.system.error('Failed to load sessions from backend', err);
-                        log.system.warn('Is the Python backend running? Start it with: gaia chat --ui');
-                    }
-                });
+                .catch((err) => { if (initial) log.system.error('Could not load chats', err); });
         };
+        load(true);
+        const t = setInterval(() => load(false), 5_000);
+        return () => clearInterval(t);
+    }, [setSessions]);
 
-        loadSessions(true);
-
-        // Poll every 5s so sessions created by external tools (MCP, API) appear
-        sessionPollRef.current = setInterval(() => loadSessions(false), 5_000);
-        return () => {
-            if (sessionPollRef.current) clearInterval(sessionPollRef.current);
-        };
-    }, [setSessions, addSession, removeSession, updateSessionInList, setBackendConnected, setCurrentSession, setMessages]);
-
-    // Poll which sessions have a running turn so the sidebar can show a
-    // "still running" spinner on backgrounded runs. Backend-truth
-    // (/api/chat/active), independent of any open SSE stream (#1580).
-    const activeRunsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     useEffect(() => {
         const poll = () => {
             api.getActiveRuns()
-                .then((data) => setRunningSessions(data.session_ids || []))
-                .catch(() => { /* non-critical — sidebar just won't show spinners */ });
+                .then((d) => setRunningSessions(d.session_ids || []))
+                .catch((err) => log.api.debug('Active-run poll failed', err));
         };
         poll();
-        // 2.6s (off the :00/:30 marks) — responsive enough to feel live without
-        // hammering the backend.
-        activeRunsPollRef.current = setInterval(poll, 2_600);
-        return () => {
-            if (activeRunsPollRef.current) clearInterval(activeRunsPollRef.current);
-        };
+        const t = setInterval(poll, 2_600);
+        return () => clearInterval(t);
     }, [setRunningSessions]);
 
-    // Support URL-based session navigation (?session=<id> or #<hash>) after
-    // load: the user pasting a URL or using browser back/forward
-    // (hashchange/popstate). The URL the page opened on is resolved by the
-    // initial session load above. The app's own session switches update the
-    // hash via replaceState (below), which does NOT fire hashchange/popstate,
-    // so this effect never fights a programmatic switch and can't oscillate
-    // with the SSE-activation handler.
+    // Open a chat named in the URL (?session= or #hash), on load and on back/forward.
+    const urlResolved = useRef(false);
     useEffect(() => {
-        const navigateFromUrl = () => {
+        const navigate = () => {
             const target = readUrlTarget(window.location);
             const { currentSessionId: cur, sessions } = useChatStore.getState();
-            const matchId = resolveUrlNavTarget(target, cur, sessions);
-            if (matchId) {
-                log.nav.info(`URL session navigation: ${target}`);
-                setCurrentSession(matchId);
+            const id = resolveUrlNavTarget(target, cur, sessions);
+            if (id) {
+                setCurrentSession(id);
                 setMessages([]);
             }
+            return id;
         };
-        window.addEventListener('hashchange', navigateFromUrl);
-        window.addEventListener('popstate', navigateFromUrl);
+        // The link can only resolve once the chat list has loaded.
+        const first = () => {
+            if (urlResolved.current) return;
+            urlResolved.current = true;
+            // A link to a deleted chat: drop it, as the hash-sync effect would.
+            if (!navigate() && !useChatStore.getState().currentSessionId && window.location.hash) {
+                window.history.replaceState(null, '', window.location.pathname + window.location.search);
+            }
+        };
+        const unsubscribe = useChatStore.subscribe((state) => { if (state.sessions.length > 0) first(); });
+        if (useChatStore.getState().sessions.length > 0) first();
+        window.addEventListener('hashchange', navigate);
+        window.addEventListener('popstate', navigate);
         return () => {
-            window.removeEventListener('hashchange', navigateFromUrl);
-            window.removeEventListener('popstate', navigateFromUrl);
+            unsubscribe();
+            window.removeEventListener('hashchange', navigate);
+            window.removeEventListener('popstate', navigate);
         };
     }, [setCurrentSession, setMessages]);
 
-    // Subscribe to system session-activation events (MCP bridge P1)
+    // Another client (MCP bridge) can ask this window to show a chat.
     useEffect(() => {
-        const url = `${getApiBase()}/sessions/events`;
         let es: EventSource | null = null;
         let backoff = 2_000;
         let cancelled = false;
         let timer: ReturnType<typeof setTimeout> | null = null;
-
         const connect = () => {
             if (cancelled) return;
-            es = new EventSource(url);
+            es = new EventSource(`${getApiBase()}/sessions/events`);
             es.onopen = () => { backoff = 2_000; };
             es.onmessage = (ev) => {
+                let data: { type?: string; session_id?: string };
                 try {
-                    const data = JSON.parse(ev.data) as { type: string; session_id?: string };
-                    if (data.type === 'set_active_session' && data.session_id) {
-                        // Only switch (and clear messages) when it's actually a
-                        // different session — re-activating the current one must
-                        // not wipe the visible conversation.
-                        const cur = useChatStore.getState().currentSessionId;
-                        if (data.session_id !== cur) {
-                            log.nav.info(`MCP activate session: ${data.session_id}`);
-                            setCurrentSession(data.session_id);
-                            setMessages([]);
-                        }
-                    }
-                } catch { /* malformed event — ignore */ }
+                    data = JSON.parse(ev.data);
+                } catch (err) {
+                    log.api.warn('Malformed session event', err);
+                    return;
+                }
+                if (data.type === 'set_active_session' && data.session_id
+                    && data.session_id !== useChatStore.getState().currentSessionId) {
+                    setCurrentSession(data.session_id);
+                    setMessages([]);
+                }
             };
             es.onerror = () => {
                 es?.close();
@@ -418,7 +233,6 @@ function App() {
                 backoff = Math.min(backoff * 2, 30_000);
             };
         };
-
         connect();
         return () => {
             cancelled = true;
@@ -427,285 +241,150 @@ function App() {
         };
     }, [setCurrentSession, setMessages]);
 
-    // Update URL hash when the current session changes
     useEffect(() => {
         if (currentSessionId) {
             const hash = getSessionHash(currentSessionId);
-            if (window.location.hash !== `#${hash}`) {
-                window.history.replaceState(null, '', `#${hash}`);
-            }
-        } else if (window.location.hash && !pendingUrlTargetRef.current) {
+            if (window.location.hash !== `#${hash}`) window.history.replaceState(null, '', `#${hash}`);
+        } else if (urlResolved.current && window.location.hash) {
             window.history.replaceState(null, '', window.location.pathname + window.location.search);
         }
     }, [currentSessionId]);
 
-    // Check tunnel status on mount
-    useEffect(() => {
-        api.getTunnelStatus()
-            .then((status) => {
-                setTunnelActive(status.active === true);
-            })
-            .catch(() => {
-                // Ignore - tunnel feature may not be available
-            });
-    }, []);
-
-    // Close sidebar on resize to desktop
-    useEffect(() => {
-        const handleResize = () => {
-            if (window.innerWidth > 768) {
-                setSidebarOpen(true);
-            }
-        };
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, [setSidebarOpen]);
-
-    // Create new task
-    const [createError, setCreateError] = useState<string | null>(null);
-
-    // Core create path. `explicitAgentId` is for deliberate choices only (Agent
-    // Hub, agent switch); leaving it out means the flagship, never whatever
-    // agent the last-viewed session happened to use.
-    const createTask = useCallback(async (explicitAgentId?: string) => {
-        log.chat.info('Creating new task session...');
+    // A new chat's first message: make the chat, then hand ChatView the text.
+    const startChat = useCallback(async (text: string) => {
         setCreateError(null);
+        const store = useChatStore.getState();
+        const session = await api.createSession({
+            title: 'New Task',
+            agent_type: FLAGSHIP_AGENT_ID,
+            device: store.activeDevice,
+        });
+        addSession(session);
+        setCurrentSession(session.id);
+        setMessages([]);
+        // Always sent, so the chat runs in exactly the mode its chip showed.
         try {
-            const store = useChatStore.getState();
-            const outgoingId = store.currentSessionId;
-            const outgoing = store.sessions.find((s) => s.id === outgoingId);
-            const outgoingIsDraft = outgoingId != null && isAbandonedDraft(outgoingId, {
-                sessions: store.sessions,
-                currentSessionId: store.currentSessionId,
-                messages: store.messages,
-                isStreaming: store.isStreaming,
-                runningSessionIds: store.runningSessionIds,
-            });
-            const plan = planNewTask({
-                explicitAgentId,
-                outgoingSession: outgoing,
-                outgoingIsDraft,
-                agents: store.agents,
-                modelTier: store.activeModelTier,
-            });
-            if (plan.action === 'reuse-draft') {
-                log.chat.info(`Reusing existing empty draft ${outgoingId} for agent ${outgoing?.agent_type}`);
-                if (window.innerWidth <= 768) setSidebarOpen(false);
-                return;
-            }
-            const session = await api.createSession({
-                title: 'New Task',
-                agent_type: plan.agentType,
-                device: store.activeDevice,
-                ...(plan.model ? { model: plan.model } : {}),
-            });
-            log.chat.info(`Session created: id=${session.id}, title="${session.title}"`);
-            addSession(session);
-            // Discard the draft we're leaving behind (different agent, or a
-            // stale empty draft) so it doesn't linger in the sidebar (#2119).
-            void cleanupAbandonedDraft(outgoingId);
-            setCurrentSession(session.id);
-            setMessages([]);
-            // Auto-close sidebar on mobile
-            if (window.innerWidth <= 768) setSidebarOpen(false);
+            await api.setPermissionMode(session.id, store.draftPermissionMode);
         } catch (err) {
-            log.chat.error('Failed to create session', err);
-            // Trigger a status recheck to update the banner
-            checkSystemStatus();
-            setCreateError('Failed to create task. Is the server running?');
-            // Auto-clear error after a few seconds
-            setTimeout(() => setCreateError(null), 6000);
-        }
-    }, [addSession, setCurrentSession, setMessages, setSidebarOpen, checkSystemStatus]);
-
-    // Takes no arguments on purpose: it is wired straight to onClick in the
-    // sidebar and welcome screen, so any parameter here would be a MouseEvent.
-    const handleNewTask = useCallback(async () => {
-        await createTask();
-    }, [createTask]);
-
-    // Switch to a different agent — creates a new session with the chosen agent
-    const handleAgentChange = useCallback(async (newAgentId: string) => {
-        useChatStore.getState().setActiveAgentId(newAgentId);
-        await createTask(newAgentId);
-    }, [createTask]);
-
-    // Create task with a pre-filled prompt — stores the prompt in Zustand
-    // so ChatView can consume it reliably on mount (no timing race).
-    const { setPendingPrompt } = useChatStore();
-    const handleNewTaskWithPrompt = useCallback(async (prompt: string) => {
-        log.chat.info(`New task with prompt: "${prompt.slice(0, 60)}..."`);
-        setPendingPrompt(prompt);
-        await createTask();
-    }, [createTask, setPendingPrompt]);
-
-    // Launch a task with an explicitly-chosen agent (from the Agent Hub). Pins
-    // the agent for the new session and leaves the Hub view. The chosen agent
-    // becomes the session's persisted agent_type (#2179) — passed down
-    // explicitly rather than read back out of the picker.
-    const handleStartAgentTask = useCallback(async (agentId: string, prompt?: string) => {
-        useChatStore.getState().setActiveAgentId(agentId);
-        setShowHub(false);
-        if (prompt) {
-            log.chat.info(`New task with prompt: "${prompt.slice(0, 60)}..."`);
-            setPendingPrompt(prompt);
-        }
-        await createTask(agentId);
-    }, [createTask, setPendingPrompt, setShowHub]);
-
-    // Launch the Gaia Builder Agent in a new session.
-    // Uses a dedicated agent_type so the session always gets the builder,
-    // regardless of the user's currently selected agent.
-    const handleNewBuilderTask = useCallback(async () => {
-        log.chat.info('Creating builder agent session...');
-        setCreateError(null);
-        const outgoingId = useChatStore.getState().currentSessionId;
-        try {
-            setPendingPrompt("Hi, I'd like to create a new custom agent.");
-            // Pass the active device like the normal New Task flow — otherwise the
-            // builder session silently defaults to gpu on npu-profile machines (#2243).
-            const { activeDevice } = useChatStore.getState();
-            const session = await api.createSession({ title: 'New Agent', agent_type: 'builder', device: activeDevice });
-            log.chat.info(`Builder session created: id=${session.id}`);
-            addSession(session);
-            // Leaving an untouched "New Task" draft behind — drop it (#2119).
-            void cleanupAbandonedDraft(outgoingId);
-            setCurrentSession(session.id);
-            setMessages([]);
-            if (window.innerWidth <= 768) setSidebarOpen(false);
-        } catch (err) {
-            // Clear the pending prompt so it doesn't leak into the next session
-            setPendingPrompt(null);
-            log.chat.error('Failed to create builder session', err);
-            checkSystemStatus();
-            setCreateError('Failed to create task. Is the server running?');
-            setTimeout(() => setCreateError(null), 6000);
-        }
-    }, [addSession, setCurrentSession, setMessages, setSidebarOpen, checkSystemStatus, setPendingPrompt]);
-
-    // Mobile gateway toggle: the sidebar button ALWAYS opens the modal
-    // (so the user can re-capture the QR / URL if they missed it the first
-    // time).  Stopping the tunnel is done via the explicit "Stop Tunnel"
-    // button inside the modal (see handleMobileStop).
-    const handleMobileToggle = useCallback(async () => {
-        if (tunnelActive) {
-            // Tunnel already running -- just reopen the modal so the user
-            // can copy the URL or scan the QR again.
-            log.system.info('Reopening mobile access modal (tunnel already running)');
-            setTunnelError(null);
-            setShowMobileAccess(true);
+            setCreateError(
+                `The chat was created, but its permission mode could not be set, so your message was not sent: ${
+                    err instanceof Error ? err.message : err}`,
+            );
             return;
         }
+        store.setDraftPermissionMode(store.defaultPermissionMode);
+        setPendingPrompt(text);
+    }, [addSession, setCurrentSession, setMessages, setPendingPrompt]);
 
-        // Tunnel is not running -- start it.
-        log.system.info('Starting mobile access tunnel...');
+    const newChat = useCallback(() => {
+        const store = useChatStore.getState();
+        const outgoing = store.currentSessionId;
+        if (outgoing && isAbandonedDraft(outgoing, store)) void cleanupAbandonedDraft(outgoing);
+        store.setShowMemoryDashboard(false);
+        store.setShowSchedules(false);
+        setCurrentSession(null);
+        setMessages([]);
+    }, [setCurrentSession, setMessages]);
+
+    const useSkill = useCallback((name: string) => {
+        newChat();
+        startChat(`Load the \`${name}\` skill, then tell me briefly what it lets you do.`)
+            .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
+    }, [newChat, startChat]);
+
+    // ── Keyboard shortcuts ─────────────────────────────────────────────
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            const mod = e.ctrlKey || e.metaKey;
+            if (!mod) return;
+            if (e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); newChat(); }
+            else if (!e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); window.dispatchEvent(new CustomEvent('gaia:focus-search')); }
+            else if (!e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); useChatStore.getState().toggleSidebarCollapsed(); }
+            else if (!e.shiftKey && e.key === ',') { e.preventDefault(); openSettings(); }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [newChat, openSettings]);
+
+    // The sidebar is a drawer on narrow windows: closed on load and when a
+    // window narrows, open again when it widens (collapse is separate there).
+    useEffect(() => {
+        const mq = window.matchMedia?.('(max-width: 768px)');
+        if (!mq) return;
+        const sync = () => setSidebarOpen(!mq.matches);
+        sync();
+        mq.addEventListener('change', sync);
+        return () => mq.removeEventListener('change', sync);
+    }, [setSidebarOpen]);
+
+    // Follow the OS appearance when the preference is "match system".
+    useEffect(() => {
+        if (typeof window.matchMedia !== 'function') return;
+        const mq = window.matchMedia('(prefers-color-scheme: light)');
+        mq.addEventListener('change', syncSystemTheme);
+        return () => mq.removeEventListener('change', syncSystemTheme);
+    }, [syncSystemTheme]);
+
+    // Drop the previous chat's in-flight stream state when switching (#1580).
+    useEffect(() => { resetStreaming(); }, [currentSessionId, resetStreaming]);
+
+    // ── Mobile access ──────────────────────────────────────────────────
+    useEffect(() => {
+        api.getTunnelStatus()
+            .then((s) => setTunnelActive(s.active === true))
+            .catch((err) => log.system.debug('Mobile access unavailable', err));
+    }, []);
+
+    const openMobileAccess = useCallback(async () => {
         setShowMobileAccess(true);
-        setTunnelLoading(true);
         setTunnelError(null);
+        if (tunnelActive) return;
         try {
             const status = await api.startTunnel();
-            if (status.error) {
-                log.system.error('Tunnel failed to start:', status.error);
-                setTunnelActive(false);
-                setTunnelError(status.error);
-            } else {
-                setTunnelActive(true);
-                log.system.info('Tunnel started successfully');
-            }
+            if (status.error) setTunnelError(status.error);
+            else setTunnelActive(true);
         } catch (err) {
-            log.system.error('Tunnel start error:', err);
-            setTunnelActive(false);
-            setTunnelError(err instanceof Error ? err.message : 'Failed to connect');
-        } finally {
-            setTunnelLoading(false);
+            setTunnelError(err instanceof Error ? err.message : 'Could not start mobile access');
         }
     }, [tunnelActive]);
 
-    // Explicit "Stop Tunnel" action (triggered from inside the modal).
-    const handleMobileStop = useCallback(async () => {
-        log.system.info('Stopping mobile access tunnel...');
+    const stopMobileAccess = useCallback(async () => {
         try {
             await api.stopTunnel();
+            setTunnelActive(false);
+            setShowMobileAccess(false);
         } catch (err) {
-            log.system.warn('stopTunnel call failed (continuing)', err);
+            setTunnelError(err instanceof Error ? err.message : 'Could not stop mobile access');
         }
-        setTunnelActive(false);
-        setTunnelError(null);
-        setShowMobileAccess(false);
     }, []);
 
-    // Sync agent picker to the selected session's agent_type
-    useEffect(() => {
-        const { sessions, setActiveAgentId } = useChatStore.getState();
-        const session = sessions.find((s) => s.id === currentSessionId);
-        if (session?.agent_type) {
-            setActiveAgentId(session.agent_type);
-        }
-    }, [currentSessionId]);
+    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
 
-    // Log view transitions
-    useEffect(() => {
-        if (currentSessionId) {
-            log.nav.info(`Viewing session: ${currentSessionId}`);
-        } else {
-            log.nav.info('Viewing welcome screen (no session selected)');
-        }
-    }, [currentSessionId]);
+    if (setup.state === 'needed') {
+        return (
+            <div className="app">
+                <SetupScreen initial={setup.check} onReady={() => { setSetup({ state: 'ready' }); void checkSystemStatus(); }} />
+            </div>
+        );
+    }
 
-    useEffect(() => {
-        if (showDocLibrary) log.ui.info('Document Library opened');
-    }, [showDocLibrary]);
-
-    useEffect(() => {
-        if (showSettings) log.ui.info('Settings page opened');
-    }, [showSettings]);
-
-    // Reactive mobile detection — updates on resize
-    const [isMobile, setIsMobile] = useState(
-        typeof window !== 'undefined' && window.innerWidth <= 768
+    const main = showMemoryDashboard ? (
+        <Suspense fallback={<Loading />}><MemoryDashboard /></Suspense>
+    ) : showSchedules ? (
+        <Suspense fallback={<Loading />}><ScheduleManager /></Suspense>
+    ) : currentSessionId ? (
+        <ChatView key={currentSessionId} sessionId={currentSessionId} />
+    ) : (
+        <NewChat onSend={startChat} />
     );
-    useEffect(() => {
-        const handleResize = () => setIsMobile(window.innerWidth <= 768);
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
-
-    // ── Welcome -> Chat crossfade transition ─────────────────────────
-    const [isViewTransitioning, setIsViewTransitioning] = useState(false);
-    const [displayedSessionId, setDisplayedSessionId] = useState<string | null>(null);
-
-    useEffect(() => {
-        if (currentSessionId !== displayedSessionId) {
-            setIsViewTransitioning(true);
-            // Allow fade-out to complete, then swap content
-            const timer = setTimeout(() => {
-                // Drop the previous session's in-flight stream state so the
-                // incoming view starts clean instead of mirroring it (#1580).
-                resetStreaming();
-                setDisplayedSessionId(currentSessionId);
-                // Brief delay before removing transition class (allows new content to mount)
-                requestAnimationFrame(() => {
-                    requestAnimationFrame(() => {
-                        setIsViewTransitioning(false);
-                    });
-                });
-            }, 220); // matches CSS transition duration
-            return () => clearTimeout(timer);
-        }
-    }, [currentSessionId, displayedSessionId, resetStreaming]);
 
     return (
         <div className="app">
-            {/* Mobile sidebar toggle */}
-            <button
-                className="sidebar-toggle"
-                onClick={toggleSidebar}
-                aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
-            >
-                <Menu size={18} />
-            </button>
-
-            {/* Mobile overlay when sidebar is open */}
+            {!sidebarOpen && (
+                <button className="sidebar-toggle" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar">
+                    <Menu size={18} />
+                </button>
+            )}
             <div
                 className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`}
                 onClick={() => setSidebarOpen(false)}
@@ -713,89 +392,55 @@ function App() {
             />
 
             <Sidebar
-                onNewTask={handleNewTask}
-                onHome={() => { void cleanupAbandonedDraft(currentSessionId); setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); setShowSchedules(false); setShowHub(true); window.history.replaceState(null, '', window.location.pathname); }}
+                onNewChat={newChat}
+                onMobileAccess={isMobile ? undefined : () => void openMobileAccess()}
                 tunnelActive={tunnelActive}
-                tunnelLoading={tunnelLoading}
-                onMobileToggle={handleMobileToggle}
             />
 
             <div className="main-content">
-                {showSettings ? (
-                    <SettingsPage />
-                ) : showMemoryDashboard ? (
-                    <MemoryDashboard />
-                ) : showSchedules ? (
-                    <ScheduleManager />
-                ) : showHub ? (
-                    <HubPage
-                        agents={agents}
-                        activeAgentId={activeAgentId}
-                        onSelect={setActiveAgentId}
-                        onStartChat={handleStartAgentTask}
-                        onCreateAgent={handleNewBuilderTask}
-                    />
-                ) : (
-                    <>
-                        {/* Connection / LLM status banner */}
-                        <ConnectionBanner onRetry={checkSystemStatus} />
-
-                        <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
-                            {displayedSessionId ? (
-                                <ChatView key={displayedSessionId} sessionId={displayedSessionId} onCreateAgent={handleNewBuilderTask} onAgentChange={handleAgentChange} />
-                            ) : (
-                                <WelcomeScreen
-                                    onNewTask={handleNewTask}
-                                    onSendPrompt={handleNewTaskWithPrompt}
-                                    onStartAgentTask={handleStartAgentTask}
-                                    onCreateAgent={handleNewBuilderTask}
-                                />
-                            )}
-                        </div>
-                    </>
+                {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} />}
+                {setup.state === 'unknown' && (
+                    <div className="app-notice is-warning" role="status">
+                        <span>Could not check whether GAIA is set up: {setup.error}</span>
+                        <button type="button" className="link-btn" onClick={() => void checkSetup()}>Check again</button>
+                    </div>
                 )}
+                {restoreNotice && (
+                    <div className={`app-notice${restoreNotice.ok ? '' : ' is-warning'}`} role="status">
+                        <span>{restoreNotice.message}</span>
+                        {!restoreNotice.ok && (
+                            <button type="button" className="link-btn" onClick={() => { dismissRestoreNotice(); openSettings('model'); }}>
+                                Pick a model
+                            </button>
+                        )}
+                        <button type="button" className="app-notice-close" onClick={dismissRestoreNotice} aria-label="Dismiss">
+                            <X size={14} />
+                        </button>
+                    </div>
+                )}
+                {main}
             </div>
 
-            <AnimatedPresence show={showDocLibrary}>
-                <DocumentLibrary />
-            </AnimatedPresence>
-            <AnimatedPresence show={showFileBrowser}>
-                <FileBrowser />
-            </AnimatedPresence>
-            <AnimatedPresence show={showNotificationPanel}>
+            {showDocLibrary && <Suspense fallback={null}><DocumentLibrary /></Suspense>}
+            {showFileBrowser && <Suspense fallback={null}><FileBrowser /></Suspense>}
+            {showNotificationPanel && (
                 <div className="notification-center-popover">
                     <NotificationCenter onClose={() => setShowNotificationPanel(false)} />
                 </div>
-            </AnimatedPresence>
-
-            {/* Mobile Access Modal */}
-            {!isMobile && (
-                <AnimatedPresence show={showMobileAccess}>
+            )}
+            {showMobileAccess && (
+                <Suspense fallback={null}>
                     <MobileAccessModal
                         isOpen={showMobileAccess}
                         onClose={() => setShowMobileAccess(false)}
-                        onStop={handleMobileStop}
+                        onStop={() => void stopMobileAccess()}
                         error={tunnelError}
                     />
-                </AnimatedPresence>
+                </Suspense>
             )}
-
-            {/* Tool confirmation popup */}
-            <PermissionPrompt />
-
-            {/* Phase F: desktop auto-update status chip (only renders in the
-                Electron app; the hook no-ops when window.gaiaUpdater is absent). */}
+            {settingsSection && <SettingsDialog onUseSkill={useSkill} />}
             <UpdateIndicator />
-
-            {/* Session creation error toast */}
-            {createError && (
-                <div className="toast" role="alert">{createError}</div>
-            )}
-
-            {/* First-run onboarding wizard — overlays the app until setup completes */}
-            {showOnboarding && (
-                <OnboardingWizard onComplete={() => { setShowOnboarding(false); checkSystemStatus(); }} />
-            )}
+            {createError && <div className="toast" role="alert">{createError}</div>}
         </div>
     );
 }
