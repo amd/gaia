@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from gaia.agents.base.checks import (
     CheckResult,
@@ -102,6 +102,8 @@ _SCOPE_BODY_RE = re.compile(
     + r"|I\s+haven['’]t\s+confirmed\s+this\s+works\s*—.*(?:"
     + r"didn['’]t\s+pass|didn['’]t\.|blocked\s+before"
     + r"|didn['’]t\s+run\s+(?:the\s+tests|anything)"
+    # The grounding reasons (gaia.agents.base.grounding).
+    + r"|\bthis\s+turn\b"
     # A note cut at VERIFICATION_SCOPE_MAX_CHARS loses its ending.
     + r"|…[\s*_~`]*$)"
 )
@@ -253,7 +255,9 @@ def _mixed(passed: List[Dict[str, Any]], failed: List[Dict[str, Any]]) -> str:
 
 
 def verification_summary(
-    executions: List[Dict[str, Any]], unchecked_change: Optional[str] = None
+    executions: List[Dict[str, Any]],
+    unchecked_change: Optional[str] = None,
+    ungrounded: Sequence[str] = (),
 ) -> Dict[str, Any]:
     """What this turn's checks showed, as data for tooling.
 
@@ -261,7 +265,8 @@ def verification_summary(
     after them), ``partially verified`` (checks ran, not all passed or some
     never ran) or ``unverified`` (no check ran). ``passed``, ``failed`` and
     ``not_run`` name the checks; ``unchecked_change`` is the last project change
-    no check ran after, when the caller knows it.
+    no check ran after, when the caller knows it; ``ungrounded`` lists the
+    answer's claims the tool record does not back.
 
     A check that ran more than once counts once, by its most recent run: a
     test that failed and then passed after a fix is verified, and one that
@@ -282,7 +287,7 @@ def verification_summary(
     ran, passed, failed, blocked = _partition(executions)
     if not passed and not failed:
         state = "unverified"
-    elif failed or blocked or unchecked_change:
+    elif failed or blocked or unchecked_change or ungrounded:
         state = "partially verified"
     else:
         state = "verified"
@@ -293,6 +298,7 @@ def verification_summary(
         "failed": _labels(failed),
         "not_run": _labels(blocked),
         "unchecked_change": unchecked_change,
+        "ungrounded": list(ungrounded),
     }
 
 
@@ -325,6 +331,7 @@ def build_verification_scope(
     executions: List[Dict[str, Any]],
     unchecked_change: Optional[str] = None,
     has_tests: bool = True,
+    ungrounded: Sequence[str] = (),
 ) -> str:
     """A plain-English note when the turn's work is NOT confirmed, else ``""``.
 
@@ -332,7 +339,9 @@ def build_verification_scope(
     happened — a conversational turn, a lookup, a read. It speaks up when a
     check failed, when a check was refused before it could run, and when
     *unchecked_change* names a change nothing checked afterwards — no test run
-    when *has_tests*, no check at all otherwise. Bounded by
+    when *has_tests*, no check at all otherwise — and for each *ungrounded*
+    reason, a gap between the answer and the tool record that survived its
+    correction (:func:`gaia.agents.base.grounding.unverified_reasons`). Bounded by
     ``VERIFICATION_SCOPE_MAX_CHARS`` because it rides in the answer.
     """
     _ran, passed, failed, blocked = _partition(executions)
@@ -352,6 +361,7 @@ def build_verification_scope(
     if unchecked_change:
         what = "the tests afterwards" if has_tests else "anything to check it"
         reasons.append(f"I changed `{unchecked_change}` and didn't run {what}")
+    reasons.extend(ungrounded)
     if not reasons:
         return ""
     if len(reasons) == 1:
