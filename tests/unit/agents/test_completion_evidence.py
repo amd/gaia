@@ -1068,3 +1068,15 @@ def test_loop_still_rejects_a_false_save_after_a_denied_write(agent, tmp_path):
     assert "[check:completion]" in correction
     assert "Use `write_file`" not in correction
     assert "Do not retry that write" in correction
+
+
+def test_a_folder_named_by_its_variable_is_backed_by_a_write_inside_it(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GAIA_TEST_TEMP", str(tmp_path / "temp"))
+    ledger = CompletionEvidence("Walk me through the flow.", str(tmp_path))
+    script = str(tmp_path / "temp" / "scratch" / "trace.py")
+    write(ledger, script)
+    read(ledger, script)
+    variable = "%GAIA_TEST_TEMP%" if sys.platform == "win32" else "$GAIA_TEST_TEMP"
+    assert gaps(ledger, f"I wrote a throwaway script in `{variable}`.") == []

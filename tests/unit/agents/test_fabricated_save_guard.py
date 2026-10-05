@@ -85,6 +85,11 @@ NON_CLAIMS = [
         "I created a summary of the meeting for you.", id="created-no-file-target"
     ),
     pytest.param(
+        "`celsius_to_fahrenheit` exists and is exported from `__init__.py`, "
+        "but nothing in `io.py` or `store.py` calls it.",
+        id="exported-from-module",
+    ),
+    pytest.param(
         "I wrote a helper that normalizes the timestamps.", id="wrote-code-not-file"
     ),
     pytest.param(
