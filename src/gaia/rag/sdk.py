@@ -42,7 +42,12 @@ except Exception:  # pylint: disable=broad-except
 
 from gaia import config as gaia_config
 from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME
+from gaia.llm.lemonade_client import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_MODEL_NAME,
+    EMBEDDER_LLAMACPP_ARGS,
+    EMBEDDER_UBATCH_TOKENS,
+)
 from gaia.logger import get_logger
 from gaia.security import PathValidator
 
@@ -89,6 +94,43 @@ _CACHE_OWNED_FILE = re.compile(
     r"\.json(?:\.sig)?$"
     r"|_extracted\.md$"
 )
+
+
+#: Headroom for the BOS/EOS tokens the server adds to every input.
+_EMBED_RESERVED_TOKENS = 48
+#: Worst realistic ratio: Gemma's tokenizer gives every digit its own token.
+_EMBED_MIN_CHARS_PER_TOKEN = 1.0
+#: Longest text that embeds whole. No chunk is cut longer than this.
+EMBED_MAX_CHARS = int(
+    (EMBEDDER_UBATCH_TOKENS - _EMBED_RESERVED_TOKENS) * _EMBED_MIN_CHARS_PER_TOKEN
+)
+
+
+def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
+    """Split *text* into pieces of at most *max_chars*, dropping nothing but whitespace.
+
+    Breaks at the last newline, else the last space, in the back half of each
+    window; a run with neither is cut at exactly *max_chars*.
+    """
+    if max_chars < 1:
+        raise ValueError(f"max_chars must be at least 1, got {max_chars}")
+    floor = max(1, max_chars // 2)
+    pieces = []
+    rest = text.strip()
+    while len(rest) > max_chars:
+        window = rest[: max_chars + 1]
+        cut = window.rfind("\n")
+        if cut < floor:
+            cut = window.rfind(" ")
+        if cut < floor:
+            cut = max_chars
+        piece = rest[:cut].strip()
+        if piece:
+            pieces.append(piece)
+        rest = rest[cut:].strip()
+    if rest:
+        pieces.append(rest)
+    return pieces
 
 
 def default_rag_cache_dir() -> str:
@@ -166,10 +208,29 @@ class RAGSDK:
         ```
     """
 
-    def __init__(self, config: Optional[RAGConfig] = None):
-        """Initialize RAG SDK."""
+    def __init__(
+        self,
+        config: Optional[RAGConfig] = None,
+        path_validator: Optional[PathValidator] = None,
+    ):
+        """Initialize RAG SDK.
+
+        Args:
+            config: RAG settings; defaults to ``RAGConfig()``.
+            path_validator: The host's validator, shared so a path the user
+                grants mid-session is readable here too. Defaults to one built
+                from ``config.allowed_paths``.
+        """
         self.config = config or RAGConfig()
         self.log = get_logger(__name__)
+        if self.config.chunk_size * 4 > EMBED_MAX_CHARS:
+            self.log.warning(
+                f"chunk_size={self.config.chunk_size} asks for ~"
+                f"{self.config.chunk_size * 4}-char chunks, but the embedder takes "
+                f"at most {EMBED_MAX_CHARS} chars, so chunks are capped there "
+                f"(~{EMBED_MAX_CHARS // 4} tokens). Set chunk_size <= "
+                f"{EMBED_MAX_CHARS // 4} to silence this."
+            )
 
         # Check dependencies
         self._check_dependencies()
@@ -218,8 +279,9 @@ class RAGSDK:
         )
         self.chat = AgentSDK(chat_config)
 
-        # Initialize path validator
-        self.path_validator = PathValidator(self.config.allowed_paths)
+        if path_validator is None:
+            path_validator = PathValidator(self.config.allowed_paths)
+        self.path_validator = path_validator
 
         self.log.debug("RAG SDK initialized")
 
@@ -431,12 +493,14 @@ class RAGSDK:
 
         The embedder is deliberately absent: the cache stores text and chunks,
         never vectors, and every load re-embeds with the configured model.
+        ``EMBED_MAX_CHARS`` is in it because it caps how long a chunk is cut.
         """
         spec = json.dumps(
             {
                 "chunk_size": self.config.chunk_size,
                 "chunk_overlap": self.config.chunk_overlap,
                 "use_llm_chunking": bool(self.config.use_llm_chunking),
+                "embed_max_chars": EMBED_MAX_CHARS,
             },
             sort_keys=True,
         )
@@ -544,14 +608,15 @@ class RAGSDK:
                 )
                 self.llm_client.load_model(
                     self.config.embedding_model,
-                    llamacpp_args="--ubatch-size 2048",
+                    llamacpp_args=EMBEDDER_LLAMACPP_ARGS,
                 )
 
             self.embedder = self.llm_client
             self.use_lemonade_embeddings = True
 
             self.log.info(
-                "Loaded embedding model (ubatch-size=2048); chat model left resident"
+                f"Loaded embedding model (ubatch-size={EMBEDDER_UBATCH_TOKENS}); "
+                "chat model left resident"
             )
 
     def _encode_texts(
@@ -568,23 +633,16 @@ class RAGSDK:
             numpy array of embeddings with shape (num_texts, embedding_dim)
         """
 
-        # Truncate texts that exceed the embedding model's context window.
-        # Lemonade GGUF embedding models silently return empty data for
-        # inputs that exceed their token limit (~512 tokens). Using 1200
-        # chars as a conservative limit (~3 chars/token average).
-        MAX_EMBED_CHARS = 1200
-        truncated = 0
-        safe_texts = []
-        for t in texts:
-            if len(t) > MAX_EMBED_CHARS:
-                safe_texts.append(t[:MAX_EMBED_CHARS])
-                truncated += 1
-            else:
-                safe_texts.append(t)
-        if truncated > 0:
-            self.log.info(
-                f"   ✂️  Truncated {truncated}/{len(texts)} chunks to {MAX_EMBED_CHARS} chars for embedding"
+        # Chunks are cut to fit, so a longer text here is a caller bug that
+        # the embedder would answer with a 500.
+        oversized = [len(t) for t in texts if len(t) > EMBED_MAX_CHARS]
+        if oversized:
+            raise ValueError(
+                f"{len(oversized)}/{len(texts)} texts exceed the embedder's "
+                f"{EMBED_MAX_CHARS}-char input limit (longest: {max(oversized)} "
+                "chars). Split them with gaia.rag.sdk.split_for_embedding first."
             )
+        safe_texts = list(texts)
 
         # Batch embedding requests to avoid timeouts
         BATCH_SIZE = 25  # Smaller batches for reliability (25 chunks ~= 12KB text)
@@ -655,6 +713,14 @@ class RAGSDK:
                         self.log.warning(
                             f"   ⚠️  Batch {batch_num} attempt {attempt + 1} failed, retrying: {e}"
                         )
+                        if "physical batch size" in str(e):
+                            self.log.warning(
+                                "   The embedder was reloaded with a smaller batch "
+                                "than RAG chunks need; reloading it with "
+                                f"{EMBEDDER_LLAMACPP_ARGS} before retrying."
+                            )
+                            self.embedder = None
+                            self._load_embedder()
                         time.sleep(2)  # Wait before retry
                     else:
                         self.log.error(
@@ -701,6 +767,14 @@ class RAGSDK:
         Falls back to ``_encode_texts`` on a miss. Stored/doc-chunk vectors
         are persisted elsewhere; this targets repeated *query* embeds only.
         """
+        if len(query) > EMBED_MAX_CHARS:
+            self.log.warning(
+                f"Search query is {len(query)} chars; only the first "
+                f"{EMBED_MAX_CHARS} are embedded, the last "
+                f"{len(query) - EMBED_MAX_CHARS} are ignored for retrieval. "
+                "Shorten the query to search on all of it."
+            )
+            query = query[:EMBED_MAX_CHARS]
         cache = self._get_embedding_cache()
         model_id = self.config.embedding_model
         cached = cache.get(model_id, None, query)
@@ -2070,7 +2144,9 @@ These positions indicate where to split the text."""
                 self.llm_client = LemonadeClient()
                 self.log.info("✅ Initialized LLM client for intelligent chunking")
 
-            return self._llm_based_chunking(text, chunk_size_tokens, overlap_tokens)
+            return self._fit_chunks_to_embedder(
+                self._llm_based_chunking(text, chunk_size_tokens, overlap_tokens)
+            )
 
         # Heuristic-based chunking
 
@@ -2250,12 +2326,37 @@ These positions indicate where to split the text."""
                 restored_chunks.append(restored_chunk)
             chunks = restored_chunks
 
+        chunks = self._fit_chunks_to_embedder(chunks)
+
         if self.config.show_stats:
             avg_size = sum(len(c) for c in chunks) // len(chunks) if chunks else 0
             print(f"  ✅ Created {len(chunks)} semantic chunks (avg {avg_size} chars)")
 
         self.log.info(f"📦 Created {len(chunks)} semantic chunks")
         return chunks
+
+    def _fit_chunks_to_embedder(self, chunks: List[str]) -> List[str]:
+        """Split any chunk longer than ``EMBED_MAX_CHARS`` into consecutive chunks.
+
+        Each piece is stored and embedded as its own chunk, so every vector
+        covers all of its chunk's text and nothing is left unsearchable.
+        """
+        fitted = []
+        split = pieces = 0
+        for chunk in chunks:
+            if len(chunk) <= EMBED_MAX_CHARS:
+                fitted.append(chunk)
+                continue
+            parts = split_for_embedding(chunk)
+            split += 1
+            pieces += len(parts)
+            fitted.extend(parts)
+        if split:
+            self.log.info(
+                f"Split {split} chunk(s) longer than the embedder's "
+                f"{EMBED_MAX_CHARS}-char input into {pieces}"
+            )
+        return fitted
 
     def _split_into_sentences(self, text: str) -> List[str]:
         """
