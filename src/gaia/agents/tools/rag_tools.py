@@ -14,7 +14,7 @@ import threading
 import time
 import weakref
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.verification import NOT_EXECUTED
@@ -103,6 +103,15 @@ def _index_within_budget(
     if job.error is not None:
         raise job.error
     return job.result, job
+
+
+def documents_still_indexing(rag: Any) -> List[str]:
+    """Paths *rag* is still indexing in the background; not searchable yet."""
+    if rag is None:
+        return []
+    with _INDEX_JOBS_LOCK:
+        jobs = _INDEX_JOBS.get(rag) or {}
+        return sorted(path for path, job in jobs.items() if not job.done.is_set())
 
 
 def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:

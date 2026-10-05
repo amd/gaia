@@ -9,6 +9,7 @@ and says so; the SDK embeds outside its state lock so searches keep working.
 """
 
 import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -103,6 +104,31 @@ def test_slow_index_returns_in_progress_then_success(tmp_path, slow_rag):
     assert rag.index_document.call_count == 1
     assert str(doc) in host.indexed_files
     host.rebuild_system_prompt.assert_called()
+
+
+def test_still_indexing_lists_a_document_only_until_it_is_searchable(
+    tmp_path, slow_rag
+):
+    rag, release = slow_rag
+    doc = tmp_path / "big.pdf"
+    doc.write_bytes(b"%PDF-1.4")
+    host = _RagHost(rag)
+    host.register_rag_tools()
+    assert rag_tools.documents_still_indexing(rag) == []
+    assert rag_tools.documents_still_indexing(None) == []
+
+    assert _call("index_document", file_path=str(doc))["status"] == "in_progress"
+    (pending,) = rag_tools.documents_still_indexing(rag)
+    assert pending.endswith("big.pdf")
+    assert not rag.indexed_files
+
+    # Finished in the background: searchable, with nobody having asked again.
+    release.set()
+    deadline = time.monotonic() + CALL_DEADLINE_S
+    while rag_tools.documents_still_indexing(rag) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert rag_tools.documents_still_indexing(rag) == []
+    assert rag.indexed_files
 
 
 def test_query_specific_file_does_not_block_on_auto_index(tmp_path, slow_rag):
