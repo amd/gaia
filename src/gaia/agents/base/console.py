@@ -163,6 +163,7 @@ def edit_target(tool_args: Any) -> str:
     target = path_argument(tool_args)
     if not target:
         return ""
+    target = os.path.expanduser(target)
     project_dir = tool_args.get("project_dir") if isinstance(tool_args, dict) else None
     if project_dir and not os.path.isabs(target):
         target = os.path.join(os.path.realpath(str(project_dir)), target)

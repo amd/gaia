@@ -669,9 +669,31 @@ def test_edit_target_matches_the_file_tools_resolution(tmp_path):
         {"file_path": "a/b.py"},
         {"file_path": "a/b.py", "project_dir": str(tmp_path)},
         {"file_path": str(tmp_path / "c.py"), "project_dir": "/elsewhere"},
+        {"file_path": "~/a/b.py"},
+        {"file_path": "~/a/b.py", "project_dir": str(tmp_path)},
     ):
         expected = _resolve_target(args["file_path"], args.get("project_dir"))
         assert os.path.realpath(edit_target(args)) == str(expected)
+
+
+def test_a_home_relative_path_is_not_read_as_inside_the_workspace(
+    tmp_path, monkeypatch
+):
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    home = tmp_path / "home"
+    workspace = tmp_path / "ws"
+    home.mkdir()
+    workspace.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.chdir(workspace)
+
+    handler = SSEOutputHandler()
+    handler.accept_edits = True
+    handler.edit_roots = (str(workspace),)
+    assert handler.edit_is_auto_accepted("write_file", {"file_path": "a/b.py"})
+    assert not handler.edit_is_auto_accepted("write_file", {"file_path": "~/a/b.py"})
 
 
 def test_a_file_that_would_shadow_a_program_is_never_auto_accepted(
