@@ -10,10 +10,19 @@
   approve for the chat is now readable by document indexing too. Symlinks and
   `..` are resolved before the check, and secrets such as `.env` inside an allowed
   folder are no longer indexed.
+- `ChatAgentConfig.memory_incognito` starts a session with memory off and does
+  not load the embedding model until memory is used. The Agent UI sets it for
+  private chats and when memory is switched off, which used to load the ~300 MB
+  embedder on the first turn for nothing.
 - Asking for the shell by name ("use your shell tool to run pwd") or for the
   working directory now always offers `run_shell_command`. With dynamic tool
   selection on, most tools matched such a request and the cap dropped the shell, so
   the agent answered the directory from a guess.
+- An answer the model writes alongside its last tool call (typically the
+  scratchpad `drop_table` cleanup) now reaches the user. The reply used to end on
+  the short wrap-up that followed, such as "Scratch table cleaned up.", and the
+  answer itself was dropped. The data-analysis workflow prompt now also places
+  `drop_table` before the final answer.
 - A GPU model now loads at its own context window on a machine whose
   `default_device` is `npu`. Every model there used to load at the NPU's 32,768
   tokens, so long tasks overflowed. `ChatAgentConfig.min_context_size` no longer

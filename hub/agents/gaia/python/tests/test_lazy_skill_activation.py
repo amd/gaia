@@ -165,3 +165,20 @@ def test_active_query_is_previous_plus_current_message(monkeypatch):
     # The skill doc embeds first, the query last — the last call the fake
     # embedder saw is what was actually searched for.
     assert seen["last"] == "earlier message\ncurrent message"
+
+
+def test_only_always_on_skills_loaded_never_embeds(monkeypatch):
+    """gaia-voice is the manifest's always-on skill: alone, it is nothing to
+    choose between, so the turn must not load the embedder to score it."""
+
+    def _boom(_text):
+        raise AssertionError("always-on only — embed_fn must not be called")
+
+    agent = _agent_with_loader(monkeypatch, memory_store=object(), embed_fn=_boom)
+    assert "gaia-voice" in agent._always_on_skill_names
+    agent._loaded_skills = {
+        "gaia-voice": SimpleNamespace(name="gaia-voice", description="Always on")
+    }
+
+    assert agent._select_skills_for_turn("hello") == []
+    assert agent._dynamic_skills_active() is True

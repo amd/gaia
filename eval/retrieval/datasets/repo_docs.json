@@ -1,0 +1,1005 @@
+{
+  "id": "repo_docs",
+  "description": "Hand-labelled questions over real documents already committed to this repo. Offline: no download needed.",
+  "documents": [
+    {
+      "id": "oil_gas_manual",
+      "path": "data/pdf/Oil-and-Gas-Activity-Operations-Manual-1-10.pdf"
+    },
+    {
+      "id": "fed_rate_nov2024",
+      "path": "eval/corpus/real_world/financial/fed_rate_decision_nov2024.txt"
+    },
+    {
+      "id": "alphabet_10k_2024",
+      "path": "eval/corpus/real_world/financial/sec_10k_alphabet_2024_excerpt.txt"
+    },
+    {
+      "id": "treasury_fy2024",
+      "path": "eval/corpus/real_world/financial/treasury_fy2024_budget_results.txt"
+    },
+    {
+      "id": "bls_employment_dec2025",
+      "path": "eval/corpus/real_world/government/bls_employment_december_2025.txt"
+    },
+    {
+      "id": "nist_csf2",
+      "path": "eval/corpus/real_world/government/nist_csf_2_overview.txt"
+    },
+    {
+      "id": "apache_license",
+      "path": "eval/corpus/real_world/legal/apache_license_2.0.txt"
+    },
+    {
+      "id": "gdpr_article17",
+      "path": "eval/corpus/real_world/legal/gdpr_article_17_right_to_erasure.txt"
+    },
+    {
+      "id": "github_tos",
+      "path": "eval/corpus/real_world/legal/github_terms_of_service_excerpt.txt"
+    },
+    {
+      "id": "mit_license",
+      "path": "eval/corpus/real_world/legal/mit_license.txt"
+    },
+    {
+      "id": "attention_paper",
+      "path": "eval/corpus/real_world/scientific/attention_transformer_arxiv.txt"
+    },
+    {
+      "id": "cdc_flu_2023_2024",
+      "path": "eval/corpus/real_world/scientific/cdc_influenza_2023_2024.txt"
+    },
+    {
+      "id": "python311_whats_new",
+      "path": "eval/corpus/real_world/technical/python311_whats_new.txt"
+    },
+    {
+      "id": "raspberry_pi4",
+      "path": "eval/corpus/real_world/technical/raspberry_pi4_specifications.txt"
+    },
+    {
+      "id": "rfc7231",
+      "path": "eval/corpus/real_world/technical/rfc7231_http_semantics.txt"
+    },
+    {
+      "id": "usb20",
+      "path": "eval/corpus/real_world/technical/usb20_specification_overview.txt"
+    },
+    {
+      "id": "acme_q3_report",
+      "path": "eval/corpus/documents/acme_q3_report.md"
+    },
+    {
+      "id": "budget_2025",
+      "path": "eval/corpus/documents/budget_2025.md"
+    },
+    {
+      "id": "employee_handbook",
+      "path": "eval/corpus/documents/employee_handbook.md"
+    },
+    {
+      "id": "meeting_notes_q3",
+      "path": "eval/corpus/documents/meeting_notes_q3.txt"
+    },
+    {
+      "id": "safety_handbook_cc0",
+      "path": "eval/corpus/documents/safety_handbook_cc0.txt"
+    }
+  ],
+  "questions": [
+    {
+      "id": "repo-001",
+      "doc": "oil_gas_manual",
+      "question": "When did version 1.43 of the BC Energy Regulator's Oil and Gas Activity Operations Manual take effect?",
+      "answer": "May 1, 2025",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 6,
+          "quote": "1.43 April 17, 2025 May 1, 2025 Various"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "government",
+        "technical",
+        "table"
+      ]
+    },
+    {
+      "id": "repo-002",
+      "doc": "oil_gas_manual",
+      "question": "What email address does the BC Energy Regulator give for feedback on the operations manual?",
+      "answer": "Systems@bc-er.ca",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 6,
+          "quote": "Stakeholders are invited to provide input or feedback on Regulator documentation to Systems@bc-er.ca"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "government",
+        "technical"
+      ]
+    },
+    {
+      "id": "repo-003",
+      "doc": "oil_gas_manual",
+      "question": "Which piece of legislation sets out the BC Energy Regulator's authority to issue oil and gas activity permits?",
+      "answer": "Energy Resource Activities Act",
+      "answer_aliases": [
+        "ERAA"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 7,
+          "quote": "The Regulator’s role in permitting oil and gas activities is defined by the Energy Resource Activities Act (ERAA)."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "government",
+        "technical"
+      ]
+    },
+    {
+      "id": "repo-004",
+      "doc": "oil_gas_manual",
+      "question": "Under which Act does the BC Energy Regulator grant master licences to cut and cutting permits?",
+      "answer": "Forest Act",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 8,
+          "quote": "Master licences to cut and cutting permits under the Forest Act."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "government",
+        "technical"
+      ]
+    },
+    {
+      "id": "repo-005",
+      "doc": "oil_gas_manual",
+      "question": "Submissions to the BC Energy Regulator that involve professional engineering or geoscience work must comply with which Act?",
+      "answer": "Professional Governance Act",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 9,
+          "quote": "are expected to accord with the Professional Governance Act, [SBC 2018], c. 47"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "government",
+        "technical"
+      ]
+    },
+    {
+      "id": "repo-006",
+      "doc": "oil_gas_manual",
+      "question": "Once pre-application requirements are done, through what system do companies file their oil and gas applications with the BC Energy Regulator?",
+      "answer": "Application Management System",
+      "answer_aliases": [
+        "AMS"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 9,
+          "quote": "Once pre-application requirements are complete, companies prepare and compile the relevant information for submission to the"
+        },
+        {
+          "page": 10,
+          "quote": "Regulator’s Application Management System (AMS). Following application submission"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "government",
+        "technical",
+        "multi_evidence"
+      ]
+    },
+    {
+      "id": "repo-007",
+      "doc": "oil_gas_manual",
+      "question": "What was added to the Pipelines section of the oil and gas operations manual in version 1.43?",
+      "answer": "hydrogen",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 6,
+          "quote": "Minor changes in Section 11 Pipelines - added hydrogen"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "government",
+        "technical",
+        "table"
+      ]
+    },
+    {
+      "id": "repo-010",
+      "doc": "fed_rate_nov2024",
+      "question": "What target range for the federal funds rate did the FOMC set at its November 2024 meeting?",
+      "answer": "4.50% to 4.75%",
+      "answer_aliases": [
+        "4-1/2 to 4-3/4 percent"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "set the target range for the federal funds rate at 4-1/2 to 4-3/4 percent (4.50% to 4.75%)"
+        }
+      ],
+      "tags": [
+        "text",
+        "financial",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-011",
+      "doc": "fed_rate_nov2024",
+      "question": "How many FOMC members voted in favor of the November 2024 rate cut?",
+      "answer": "12",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "The vote on the policy action was unanimous: 12 in favor and 0 against."
+        }
+      ],
+      "tags": [
+        "text",
+        "financial",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-012",
+      "doc": "alphabet_10k_2024",
+      "question": "What were Alphabet's total revenues for fiscal year 2024?",
+      "answer": "$350,018 million",
+      "answer_aliases": [
+        "$350.0 billion",
+        "$350 billion",
+        "$350.0"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "Alphabet reported total revenues of $350,018 million ($350.0 billion), an increase of approximately 14%"
+        },
+        {
+          "quote": "Total revenues of $350,018 million for the year ended December 31, 2024 grew approximately 14%"
+        }
+      ],
+      "tags": [
+        "text",
+        "financial",
+        "numeric",
+        "multi_evidence"
+      ]
+    },
+    {
+      "id": "repo-013",
+      "doc": "alphabet_10k_2024",
+      "question": "How many full-time employees did Alphabet have at the end of 2024?",
+      "answer": "183,323",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "As of December 31, 2024, Alphabet had 183,323 full-time employees worldwide."
+        }
+      ],
+      "tags": [
+        "text",
+        "financial",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-014",
+      "doc": "treasury_fy2024",
+      "question": "How large was the U.S. federal budget deficit in fiscal year 2024?",
+      "answer": "$1.833 trillion",
+      "answer_aliases": [
+        "$1.833"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "Federal budget deficit: $1.833 trillion"
+        }
+      ],
+      "tags": [
+        "text",
+        "financial",
+        "government",
+        "numeric",
+        "table"
+      ]
+    },
+    {
+      "id": "repo-015",
+      "doc": "treasury_fy2024",
+      "question": "At the end of FY2024, what was federal debt held by the public as a percentage of GDP?",
+      "answer": "98%",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "Public debt as a share of GDP: 98%"
+        }
+      ],
+      "tags": [
+        "text",
+        "financial",
+        "government",
+        "numeric",
+        "table"
+      ]
+    },
+    {
+      "id": "repo-016",
+      "doc": "bls_employment_dec2025",
+      "question": "What was the U.S. unemployment rate in December 2025 according to the BLS employment situation summary?",
+      "answer": "4.4%",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "Nonfarm payroll employment rose by 50,000 in December 2025. The unemployment rate was 4.4%"
+        }
+      ],
+      "tags": [
+        "text",
+        "government",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-017",
+      "doc": "bls_employment_dec2025",
+      "question": "Which industry gained the most jobs in the December 2025 U.S. jobs report?",
+      "answer": "leisure and hospitality",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "The leisure and hospitality sector added the most jobs of any industry, gaining +47,000 in December."
+        }
+      ],
+      "tags": [
+        "text",
+        "government"
+      ]
+    },
+    {
+      "id": "repo-018",
+      "doc": "nist_csf2",
+      "question": "What core function was newly added in NIST Cybersecurity Framework 2.0?",
+      "answer": "GOVERN",
+      "answer_aliases": [
+        "Govern (GV)"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "version 2.0 introduces a sixth core function, GOVERN (abbreviated GV), which was not present in version 1.1."
+        }
+      ],
+      "tags": [
+        "text",
+        "government",
+        "technical"
+      ]
+    },
+    {
+      "id": "repo-019",
+      "doc": "nist_csf2",
+      "question": "How many subcategories does NIST CSF 2.0 contain in total?",
+      "answer": "106",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "CSF 2.0 contains a total of 106 subcategories across the six functions"
+        }
+      ],
+      "tags": [
+        "text",
+        "government",
+        "technical",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-020",
+      "doc": "apache_license",
+      "question": "Under the Apache License 2.0, what action by a licensee causes their patent licenses for the Work to terminate?",
+      "answer": "patent litigation",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "If You institute patent litigation against any entity (including a cross-claim or counterclaim in a lawsuit)"
+        }
+      ],
+      "tags": [
+        "text",
+        "legal"
+      ]
+    },
+    {
+      "id": "repo-021",
+      "doc": "apache_license",
+      "question": "Which numbered section of the Apache License 2.0 deals with trademarks?",
+      "answer": "Section 6",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "SECTION 6. TRADEMARKS This License does not grant permission to use the trade names, trademarks,"
+        }
+      ],
+      "tags": [
+        "text",
+        "legal"
+      ]
+    },
+    {
+      "id": "repo-022",
+      "doc": "gdpr_article17",
+      "question": "How many grounds for erasure are listed in GDPR Article 17(1)?",
+      "answer": "six",
+      "answer_aliases": [
+        "6"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "In total, six grounds for erasure (a through f) are enumerated in Article 17(1)."
+        }
+      ],
+      "tags": [
+        "text",
+        "legal",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-023",
+      "doc": "gdpr_article17",
+      "question": "Which GDPR article covers administrative fines, as opposed to the right to erasure?",
+      "answer": "Article 83",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "penalties for infringements of GDPR provisions are addressed separately in Article 83"
+        }
+      ],
+      "tags": [
+        "text",
+        "legal"
+      ]
+    },
+    {
+      "id": "repo-024",
+      "doc": "github_tos",
+      "question": "What is the minimum age to open a personal GitHub account?",
+      "answer": "13",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "The minimum age to create a GitHub account is 13 years old."
+        }
+      ],
+      "tags": [
+        "text",
+        "legal",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-025",
+      "doc": "github_tos",
+      "question": "What does the GitHub terms-of-service excerpt call the accounts created by automated methods that it forbids?",
+      "answer": "machine accounts",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "\"machine accounts\" or accounts created by automated methods are not permitted under these terms."
+        }
+      ],
+      "tags": [
+        "text",
+        "legal"
+      ]
+    },
+    {
+      "id": "repo-026",
+      "doc": "mit_license",
+      "question": "What must be included in all copies or substantial portions of software released under the MIT License?",
+      "answer": "copyright notice and this permission notice",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "the above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software."
+        }
+      ],
+      "tags": [
+        "text",
+        "legal"
+      ]
+    },
+    {
+      "id": "repo-027",
+      "doc": "mit_license",
+      "question": "Does the MIT License give an explicit patent grant the way Apache 2.0 does?",
+      "answer": "No. The MIT License grants only copyright permissions and has no explicit patent grant, unlike Apache 2.0.",
+      "answer_aliases": [],
+      "answer_type": "judge",
+      "evidence": [
+        {
+          "quote": "Unlike the Apache License 2.0, the MIT License does not include an explicit patent grant."
+        }
+      ],
+      "tags": [
+        "text",
+        "legal"
+      ]
+    },
+    {
+      "id": "repo-028",
+      "doc": "attention_paper",
+      "question": "What BLEU score did the Transformer reach on WMT 2014 English-to-German translation?",
+      "answer": "28.4",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "WMT 2014 English-to-German: 28.4 BLEU"
+        }
+      ],
+      "tags": [
+        "text",
+        "scientific",
+        "numeric",
+        "table"
+      ]
+    },
+    {
+      "id": "repo-029",
+      "doc": "attention_paper",
+      "question": "Who is the first author of the paper that introduced the Transformer architecture?",
+      "answer": "Ashish Vaswani",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "The first two authors are Ashish Vaswani and Noam Shazeer."
+        }
+      ],
+      "tags": [
+        "text",
+        "scientific"
+      ]
+    },
+    {
+      "id": "repo-030",
+      "doc": "cdc_flu_2023_2024",
+      "question": "How many children died of laboratory-confirmed influenza in the 2023-2024 U.S. flu season?",
+      "answer": "197",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "A total of 197 laboratory-confirmed influenza-associated pediatric deaths were reported during the 2023-2024 season."
+        }
+      ],
+      "tags": [
+        "text",
+        "scientific",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-031",
+      "doc": "cdc_flu_2023_2024",
+      "question": "What was the peak outpatient influenza positivity rate during the 2023-2024 season?",
+      "answer": "18.3%",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "The peak outpatient ILI positivity rate that week reached 18.3%."
+        }
+      ],
+      "tags": [
+        "text",
+        "scientific",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-032",
+      "doc": "python311_whats_new",
+      "question": "Which standard-library module for reading TOML files arrived in Python 3.11?",
+      "answer": "tomllib",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "Python 3.11 added a new standard-library module for parsing TOML files: tomllib."
+        }
+      ],
+      "tags": [
+        "text",
+        "technical"
+      ]
+    },
+    {
+      "id": "repo-033",
+      "doc": "python311_whats_new",
+      "question": "On what date was Python 3.11 released?",
+      "answer": "October 24, 2022",
+      "answer_aliases": [
+        "2022-10-24"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "Python 3.11 was released on October 24, 2022."
+        }
+      ],
+      "tags": [
+        "text",
+        "technical"
+      ]
+    },
+    {
+      "id": "repo-034",
+      "doc": "raspberry_pi4",
+      "question": "Which system-on-chip powers the Raspberry Pi 4 Model B?",
+      "answer": "Broadcom BCM2711",
+      "answer_aliases": [
+        "BCM2711"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "The Raspberry Pi 4 uses a Broadcom BCM2711 system-on-chip."
+        }
+      ],
+      "tags": [
+        "text",
+        "technical"
+      ]
+    },
+    {
+      "id": "repo-035",
+      "doc": "raspberry_pi4",
+      "question": "How many watts of power does the Raspberry Pi 4 draw through its USB-C input?",
+      "answer": "15 W",
+      "answer_aliases": [
+        "15W",
+        "15 watts"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "The board is powered via the USB-C port at 5 V / 3 A (15 W)."
+        }
+      ],
+      "tags": [
+        "text",
+        "technical",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-036",
+      "doc": "rfc7231",
+      "question": "Which request methods must every general-purpose HTTP/1.1 server support under RFC 7231?",
+      "answer": "GET and HEAD",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "A general-purpose HTTP/1.1 server is required to support the GET and HEAD methods."
+        }
+      ],
+      "tags": [
+        "text",
+        "technical"
+      ]
+    },
+    {
+      "id": "repo-037",
+      "doc": "rfc7231",
+      "question": "In RFC 7231, what is the agent-driven form of content negotiation called?",
+      "answer": "reactive",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "RFC 7231 defines the proactive (server-driven) and reactive (agent-driven) content negotiation models"
+        }
+      ],
+      "tags": [
+        "text",
+        "technical"
+      ]
+    },
+    {
+      "id": "repo-038",
+      "doc": "usb20",
+      "question": "What is the maximum signaling rate of USB 2.0 High Speed mode?",
+      "answer": "480 Mbit/s",
+      "answer_aliases": [
+        "480 Mbps"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "Full Speed: 12 Mbit/s High Speed: 480 Mbit/s"
+        }
+      ],
+      "tags": [
+        "text",
+        "technical",
+        "numeric",
+        "table"
+      ]
+    },
+    {
+      "id": "repo-039",
+      "doc": "usb20",
+      "question": "How many devices can a single USB 2.0 host controller address at once?",
+      "answer": "127",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "A USB 2.0 host controller can address up to 127 devices simultaneously"
+        }
+      ],
+      "tags": [
+        "text",
+        "technical",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-040",
+      "doc": "acme_q3_report",
+      "question": "How much revenue did Acme Corp earn in Europe in Q3 2025?",
+      "answer": "$3.9 million",
+      "answer_aliases": [
+        "$3.9"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "| Europe | $3.9 million | 27% |"
+        }
+      ],
+      "tags": [
+        "text",
+        "financial",
+        "numeric",
+        "table"
+      ]
+    },
+    {
+      "id": "repo-041",
+      "doc": "acme_q3_report",
+      "question": "How many units of Widget Pro X did Acme sell in Q3 2025?",
+      "answer": "40,500",
+      "answer_aliases": [
+        "40500"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "| Widget Pro X | $8.1 million | 57% | 40,500 |"
+        }
+      ],
+      "tags": [
+        "text",
+        "financial",
+        "numeric",
+        "table"
+      ]
+    },
+    {
+      "id": "repo-042",
+      "doc": "budget_2025",
+      "question": "What is the total approved budget in the 2025 budget plan?",
+      "answer": "$4.2M",
+      "answer_aliases": [
+        "$4.2 million",
+        "$4.2"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "This document outlines the annual budget allocation for fiscal year 2025. Total approved budget: **$4.2M**."
+        }
+      ],
+      "tags": [
+        "text",
+        "financial",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-043",
+      "doc": "budget_2025",
+      "question": "Above what expense amount does the 2025 budget plan require CFO approval?",
+      "answer": "$50K",
+      "answer_aliases": [
+        "$50,000"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "Quarterly reforecast based on actuals vs. plan - CFO approval required for expenses >$50K"
+        }
+      ],
+      "tags": [
+        "text",
+        "financial",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-044",
+      "doc": "employee_handbook",
+      "question": "How many days of paid time off does a first-year Acme Corp employee get?",
+      "answer": "15",
+      "answer_aliases": [
+        "15 days"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "**First-year employees receive 15 days of paid time off**, which begins accruing from the employee's start date"
+        }
+      ],
+      "tags": [
+        "text",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-045",
+      "doc": "employee_handbook",
+      "question": "Whose approval does an Acme Corp employee need to work fully remote?",
+      "answer": "VP-level",
+      "answer_aliases": [
+        "VP-level approval",
+        "vice president"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "Fully remote work arrangements (working remotely 5 days per week on an ongoing basis) **require VP-level approval**"
+        }
+      ],
+      "tags": [
+        "text"
+      ]
+    },
+    {
+      "id": "repo-046",
+      "doc": "employee_handbook",
+      "question": "Up to what percentage of salary does Acme Corp match 401(k) contributions dollar for dollar?",
+      "answer": "3%",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "Acme Corp matches 100% of employee contributions up to 3% of salary, and 50% of contributions from 3% to 5%."
+        }
+      ],
+      "tags": [
+        "text",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-047",
+      "doc": "meeting_notes_q3",
+      "question": "What was Acme's weighted Q4 sales pipeline presented at the September 2025 Q3 business review?",
+      "answer": "$19.2 million",
+      "answer_aliases": [
+        "$19.2"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "quote": "Q4 pipeline (weighted): $19.2 million"
+        }
+      ],
+      "tags": [
+        "text",
+        "numeric"
+      ]
+    },
+    {
+      "id": "repo-048",
+      "doc": "meeting_notes_q3",
+      "question": "Which director missed the Q3 2025 business review because he was traveling?",
+      "answer": "Carlos Rivera",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "Carlos Rivera, Director of Operations (traveling)"
+        }
+      ],
+      "tags": [
+        "text"
+      ]
+    },
+    {
+      "id": "repo-049",
+      "doc": "meeting_notes_q3",
+      "question": "Who is responsible for the customer communication plan about the deprecated legacy API endpoints, and when is it due?",
+      "answer": "Tom Nguyen",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "Tom Nguyen agreed to draft a customer communication plan by October 10."
+        },
+        {
+          "quote": "| Tom Nguyen | Draft API deprecation customer comm plan | Oct 10, 2025 |"
+        }
+      ],
+      "tags": [
+        "text",
+        "multi_evidence",
+        "table"
+      ]
+    },
+    {
+      "id": "repo-050",
+      "doc": "safety_handbook_cc0",
+      "question": "Which section of the short CC0 safety handbook excerpt covers emergency procedures?",
+      "answer": "Section 7",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "quote": "Section 7: Emergency Procedures - In case of water contamination, isolate affected area and notify safety officer."
+        }
+      ],
+      "tags": [
+        "text"
+      ]
+    }
+  ]
+}

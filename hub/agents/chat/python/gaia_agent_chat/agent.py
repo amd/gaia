@@ -239,6 +239,9 @@ class ChatAgentConfig:
 
     # Session persistence (UI session ID for cross-turn document retention)
     ui_session_id: Optional[str] = None
+    # Memory starts off (private chat / memory off in the UI): the embedder
+    # loads only once memory is actually used.
+    memory_incognito: bool = False
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
     enable_sd_tools: bool = False  # Stable Diffusion image generation
@@ -508,7 +511,10 @@ class ChatAgent(
         self.tool_loader = self._maybe_build_tool_loader()
 
         # Initialize memory subsystem (before super().__init__ which calls _register_tools)
-        self.init_memory(embedding_model=effective_embedding_model)
+        self.init_memory(
+            embedding_model=effective_embedding_model,
+            incognito=config.memory_incognito,
+        )
 
         # Store base URL for use in _register_tools() (VLM, etc.)
         self._base_url = effective_base_url
@@ -1183,7 +1189,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.config, "enable_scratchpad", False
         ):
             scratchpad_section = """
-**DATA ANALYSIS WORKFLOW (Scratchpad):** find_files → create_table → read_file + insert_data per doc → query_data (SQL: SUM/AVG/GROUP BY) → drop_table when done.
+**DATA ANALYSIS WORKFLOW (Scratchpad):** find_files → create_table → read_file + insert_data per doc → query_data (SQL: SUM/AVG/GROUP BY) → drop_table → final answer built from the query results.
 """
 
         browser_section = ""
