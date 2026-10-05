@@ -164,6 +164,7 @@ _TARGET = re.compile(r"`([^`\n]+)`|\"([^\"\n]+)\"|'([^'\n]+)'|([^\s`\"'<>]+)")
 # Write-tool errors from the path allowlist or the overwrite prompt (security.py).
 _PERMISSION_REFUSALS = ("Access denied:", "User declined to overwrite")
 _REFUSED = ", so nothing was saved there."
+_UNCONFIRMED = f"{_REFUSED} Nobody refused it, so it can be tried again."
 # The answer owns up that the write did not happen.
 _ADMITS_UNSAVED = re.compile(
     r"\b(?:can(?:no|')t|could(?:n't| not)|unable|did(?:n't| not)|was(?:n't| not)|"
@@ -393,6 +394,8 @@ class CompletionEvidence:
         self.uninspectable: dict[str, str] = {}
         # Writes the permission boundary turned down: key -> what to tell the user.
         self.refused: dict[str, str] = {}
+        # The subset of refused reasons that were prompts nobody answered.
+        self.unconfirmed: set[str] = set()
         self.requested, self.save_requested = save_obligations(query)
         self.instructed = save_instructed(query)
         self.disk_tool_ran = False
@@ -549,7 +552,10 @@ class CompletionEvidence:
             return
         data = _payload(result)
         error = data.get("error")
-        if data.get("status") == "denied":
+        if data.get("status") == "denied" and data.get("timed_out") is True:
+            reason = f"The write to `{path}` wasn't confirmed in time{_UNCONFIRMED}"
+            self.unconfirmed.add(reason)
+        elif data.get("status") == "denied":
             reason = f"The write to `{path}` was declined{_REFUSED}"
         elif isinstance(error, str) and error.startswith(_PERMISSION_REFUSALS):
             reason = f"Writing `{path}` was not permitted{_REFUSED}"
@@ -849,7 +855,7 @@ class CompletionEvidence:
 
 def incomplete_answer(gaps: list[str]) -> str:
     """Framework-owned result; never repeat the unsupported candidate answer."""
-    if gaps and all(gap.endswith(_REFUSED) for gap in gaps):
+    if gaps and all(gap.endswith((_REFUSED, _UNCONFIRMED)) for gap in gaps):
         # Nothing is left to finish: the user's side turned the write down.
         return "\n".join(gaps)
     return (

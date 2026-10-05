@@ -115,6 +115,16 @@ class TestSessionResponseFields:
             assert data["inference_provider"] == "fireworks"
             assert data["inference_provider_name"] == "Fireworks AI"
             assert "Fireworks AI via Lemonade" in data["inference_description"]
+            # The header badge names the same model the location classified.
+            assert data["effective_model"] == "fireworks.deepseek-v4p1-flash"
+
+    def test_badge_names_the_eval_claude_model(self, client, monkeypatch):
+        monkeypatch.setenv("GAIA_EVAL_AGENT_PROVIDER", "claude")
+        monkeypatch.setenv("GAIA_EVAL_CLAUDE_MODEL", "claude-haiku-4-5")
+        created = client.post("/api/sessions", json={"title": "t"}).json()
+        data = client.get(f"/api/sessions/{created['id']}").json()
+        assert data["inference_remote"] is True
+        assert data["effective_model"] == "claude-haiku-4-5"
 
     def test_clearing_override_goes_back_to_local(self, client):
         created = client.post("/api/sessions", json={"title": "t"}).json()

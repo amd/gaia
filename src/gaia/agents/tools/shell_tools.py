@@ -6,6 +6,8 @@ Shell Tools Mixin for Chat Agent.
 Provides shell command execution capabilities for file operations and system queries.
 """
 
+import base64
+import binascii
 import logging
 import os
 import re
@@ -860,6 +862,293 @@ def _skips_path_scan(token: str, granted: frozenset) -> bool:
 
     policy = BINARY_POLICIES.get(normalize_binary(token))
     return policy is not None and policy.remote_operands
+
+
+#: Interpreters that take a script as an operand, and how that script quotes.
+_SCRIPT_DIALECTS = {
+    "powershell": "powershell",
+    "cmd": "cmd",
+    **{shell: "posix" for shell in ("sh", "bash", "zsh", "dash", "ksh")},
+    **{lang: "code" for lang in ("python", "py", "node", "perl", "ruby")},
+}
+
+#: The flags whose next operand is inline code, per code interpreter.
+_CODE_SCRIPT_FLAGS = {
+    "python": ("-c",),
+    "py": ("-c",),
+    "node": ("-e", "--eval", "-p", "--print"),
+    "perl": ("-e", "-E"),
+    "ruby": ("-e",),
+}
+
+#: What ends a word inside a script, per dialect. Path separators never do.
+_SCRIPT_BREAKS = {
+    "powershell": frozenset(" \t\r\n|;&<>(){},"),
+    "cmd": frozenset(" \t\r\n|&<>()"),
+    "code": frozenset(" \t\r\n|;&<>(){}[],=+"),
+}
+_SCRIPT_QUOTES = {"powershell": "'\"", "cmd": '"', "code": "'\"`"}
+
+#: Marks a ``-EncodedCommand`` operand, which is base64 of UTF-16LE PowerShell.
+_PS_ENCODED = "powershell-encoded"
+
+#: Marks an interpreter's own ``/switch``: an option on every OS, never a path.
+_SWITCH = "switch"
+
+#: Marks ``/cdir``-style operands: cmd's run switch with the script attached.
+_CMD_ATTACHED = "cmd-attached"
+
+#: cmd.exe's own switches; ``/c``, ``/k`` and ``/r`` start the script.
+_CMD_RUN_SWITCH = re.compile(r"/[ckr]", re.IGNORECASE)
+_CMD_OWN_SWITCH = re.compile(r"/(?:[sqdauxy?]|[tefv]:[^/\\]*)", re.IGNORECASE)
+
+#: PowerShell's own parameters, which it also accepts as ``/Name``.
+_POWERSHELL_SWITCHES = (
+    "command",
+    "configurationname",
+    "custompipename",
+    "encodedarguments",
+    "encodedcommand",
+    "ec",
+    "executionpolicy",
+    "file",
+    "help",
+    "inputformat",
+    "interactive",
+    "login",
+    "mta",
+    "noexit",
+    "nologo",
+    "noninteractive",
+    "noprofile",
+    "outputformat",
+    "settingsfile",
+    "sta",
+    "version",
+    "windowstyle",
+    "workingdirectory",
+    "?",
+)
+
+
+def _is_slash_switch(word: str) -> bool:
+    """Whether *word* has the ``/name`` shape of a Windows switch, on any host."""
+    return re.fullmatch(r"/[^/\\]+", word) is not None and ".." not in word
+
+
+def _is_powershell_switch(token: str) -> bool:
+    """Whether *token* is ``/Name`` for one of PowerShell's own parameters."""
+    if not _is_slash_switch(token):
+        return False
+    name = token[1:].lower()
+    return any(switch.startswith(name) for switch in _POWERSHELL_SWITCHES)
+
+
+def _interpreter_name(token: str) -> str:
+    """*token* as the interpreter it runs: ``C:\\...\\pwsh.exe`` -> ``powershell``."""
+    name = re.split(r"[\\/]", token)[-1].lower()
+    if name.endswith(".exe"):
+        name = name[: -len(".exe")]
+    if re.fullmatch(r"python[\d.]*w?", name):
+        return "python"
+    return _PROGRAM_ALIASES.get(name, name)
+
+
+def _powershell_script_positions(argv: list) -> Dict[int, str]:
+    """Which of PowerShell's operands are script text.
+
+    PowerShell runs everything from ``-Command`` (any prefix of it) or from its
+    first non-switch operand onward as one script, so all of those are script.
+    """
+    positions: Dict[int, str] = {}
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        if not token.startswith(("-", "/")):
+            break
+        if _is_powershell_switch(token):
+            positions[index] = _SWITCH
+        name = token[1:].split(":", 1)[0].lower()
+        if name and "command".startswith(name):
+            index += 1
+            break
+        if name in ("e", "ec") or (
+            len(name) >= 3 and "encodedcommand".startswith(name)
+        ):
+            if index + 1 < len(argv):
+                positions[index + 1] = _PS_ENCODED
+            index += 2
+            continue
+        if name and "file".startswith(name):
+            # A script file and its arguments: ordinary operands, not script.
+            return positions
+        index += 1
+    for body in range(index, len(argv)):
+        positions[body] = "powershell"
+    return positions
+
+
+def _inline_script_positions(argv: list) -> Dict[int, str]:
+    """``{index: dialect}`` for each operand of *argv* that is inline script.
+
+    Only the interpreters in ``_SCRIPT_DIALECTS``, and only the operand their
+    script flag names. Any other operand stays a single path candidate, except
+    cmd's and PowerShell's own ``/switch`` operands, marked ``_SWITCH``.
+    """
+    program = _interpreter_name(argv[0])
+    dialect = _SCRIPT_DIALECTS.get(program)
+    if dialect is None:
+        return {}
+    if dialect == "powershell":
+        return _powershell_script_positions(argv)
+    if dialect == "cmd":
+        positions: Dict[int, str] = {}
+        for index, token in enumerate(argv[1:], start=1):
+            if _CMD_RUN_SWITCH.match(token):
+                # cmd runs the rest of the line; '/cdir' carries it attached.
+                positions[index] = _SWITCH if len(token) == 2 else _CMD_ATTACHED
+                for body in range(index + 1, len(argv)):
+                    positions[body] = "cmd"
+                break
+            if _CMD_OWN_SWITCH.fullmatch(token):
+                positions[index] = _SWITCH
+        return positions
+    positions = {}
+    reads_script = False
+    for index, token in enumerate(argv[1:], start=1):
+        if dialect == "posix":
+            if reads_script and not token.startswith(("-", "+")):
+                return {index: dialect}
+            if token.startswith("-") and not token.startswith("--"):
+                reads_script = reads_script or "c" in token[1:]
+                continue
+            if token.startswith(("--", "+")):
+                continue
+            return {}
+        # A code interpreter: its script flag takes the next operand, or
+        # carries the code attached ('-cprint(1)', '--eval=...').
+        if reads_script:
+            positions[index] = dialect
+            reads_script = False
+            continue
+        if not token.startswith("-"):
+            break
+        flags = _CODE_SCRIPT_FLAGS[program]
+        if token in flags or any(
+            len(flag) == 2 and re.fullmatch(rf"-[A-Za-z]+{flag[1]}", token)
+            for flag in flags
+        ):
+            # '-Ic' ends a cluster of single-letter flags with the script flag.
+            reads_script = True
+        elif any(
+            token.startswith(flag + "=") or (len(flag) == 2 and token.startswith(flag))
+            for flag in flags
+        ):
+            positions[index] = dialect
+    return positions
+
+
+def _split_script(body: str, dialect: str) -> list:
+    """The words of an inline *body*, quotes removed, never raising.
+
+    A quote-aware split rather than a full parser: it exists to find the path
+    operands a script names, so an unterminated quote keeps its text as one word.
+    In ``code``, a string literal is a word of its own and escapes are kept.
+    """
+    breaks = _SCRIPT_BREAKS[dialect]
+    quotes = _SCRIPT_QUOTES[dialect]
+    words: list = []
+    current: list = []
+    quote: Optional[str] = None
+
+    def flush() -> None:
+        if current:
+            words.append("".join(current))
+            current.clear()
+
+    index = 0
+    while index < len(body):
+        char = body[index]
+        nxt = body[index + 1 : index + 2]
+        if quote is not None:
+            if char == quote:
+                if dialect == "powershell" and quote == "'" and nxt == "'":
+                    current.append("'")
+                    index += 2
+                    continue
+                quote = None
+                if dialect == "code":
+                    flush()
+            elif nxt and (
+                (dialect == "code" and char == "\\")
+                or (dialect == "powershell" and quote == '"' and char == "`")
+            ):
+                current.append(char + nxt if dialect == "code" else nxt)
+                index += 2
+                continue
+            else:
+                current.append(char)
+        elif char in quotes:
+            if dialect == "code":
+                flush()
+            quote = char
+        elif char in breaks:
+            flush()
+        else:
+            current.append(char)
+        index += 1
+    flush()
+    return words
+
+
+def _script_words(body: str, dialect: str) -> list:
+    """The words an inline script operand names, for the path check."""
+    if dialect == _PS_ENCODED:
+        try:
+            body = base64.b64decode(body, validate=True).decode("utf-16-le")
+        except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
+            logger.debug("-EncodedCommand operand is not base64 UTF-16LE: %s", exc)
+            return [body]
+        dialect = "powershell"
+    if dialect == _CMD_ATTACHED:
+        body, dialect = body[2:], "cmd"
+    if dialect == "posix":
+        try:
+            return _tokenize(body, bypass_gates=True)
+        except ValueError:
+            # sh refuses an unbalanced quote too; still check every word in it.
+            return _split_script(body, "code")
+    words = _split_script(body, dialect)
+    if dialect == "powershell":
+        # '-Path:C:\x' binds its value with a colon.
+        words = [
+            w.split(":", 1)[1] if w.startswith("-") and ":" in w else w for w in words
+        ]
+    if dialect == "cmd":
+        # 'dir /b' inside the script: a switch whichever OS checks the line.
+        words = [w for w in words if not _is_slash_switch(w)]
+    return words
+
+
+def _path_operands(argv: list) -> list:
+    """``(label, operand)`` for every operand of *argv* the path check reads.
+
+    An inline script is never one path: joined onto the cwd it named a file
+    that does not exist and put the script text in the access prompt. Each
+    word inside it is checked instead, so ``'C:\\x\\server.log'`` still is.
+    """
+    positions = _inline_script_positions(argv)
+    operands = []
+    for index, token in enumerate(argv[1:], start=1):
+        dialect = positions.get(index)
+        if dialect is None:
+            operands.append(("Argument", token))
+            continue
+        if dialect == _SWITCH:
+            continue
+        label = f"Path in the {_interpreter_name(argv[0])} script"
+        operands.extend((label, word) for word in _script_words(token, dialect))
+    return operands
 
 
 def _grant_route(binary: str, skill_manager: Any) -> str:
@@ -2161,7 +2450,9 @@ class ShellToolsMixin:
     ) -> Optional[Dict[str, Any]]:
         """Refuse an argument that resolves outside the allowed paths.
 
-        This prevents "cat ../secret.txt" even if "cat" is allowed. Exempt per
+        This prevents "cat ../secret.txt" even if "cat" is allowed, and
+        ``bash -c "cat ../secret.txt"`` too: an interpreter's inline script is
+        checked word by word, never as one path. Exempt per
         SEGMENT, never per line: a granted CLI's operands are remote ids, but
         'gh … | cat ../secret' must still be checked. And only for a CLI whose
         operands really are remote — a granted 'git'/'python' still gets
@@ -2182,7 +2473,7 @@ class ShellToolsMixin:
             for seg in segments
             if not _skips_path_scan(policy_argv(seg)[0], granted)
         ]
-        candidates = [("Argument", a) for seg in scanned for a in seg[1:]]
+        candidates = [operand for seg in scanned for operand in _path_operands(seg)]
         candidates += [
             (f"'{name}='", entry)
             for env in step.envs or ()

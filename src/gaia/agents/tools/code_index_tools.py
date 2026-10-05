@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
 from gaia.agents.base.tools import tool
+from gaia.agents.tools.path_access import read_access_error
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -167,6 +168,10 @@ class CodeIndexToolsMixin:
                 # and a model following that advice literally must not get
                 # "<cwd>/~/..." back.
                 resolved = os.path.abspath(os.path.expanduser(repo_path))
+                # Before the existence probe, as in read_file.
+                denied = read_access_error(self, resolved)
+                if denied:
+                    return json.dumps({"error": denied["error"]})
                 if not os.path.isdir(resolved):
                     return json.dumps({"error": f"Not a directory: {resolved}"})
                 # Restrict to the agent's original repo_path to prevent

@@ -153,7 +153,7 @@ These tools give the agent the ability to **browse and understand** the file sys
 
 > **IMPORTANT — Tool Decorator Pattern:** GAIA's `@tool` decorator (`src/gaia/agents/base/tools.py`) extracts descriptions from **docstrings**, not from a `description=` parameter. All tool code examples below use the correct pattern.
 
-> **IMPORTANT — Path Validation:** Every tool that accepts a `path` parameter MUST validate it through `PathValidator.is_path_allowed()` before any filesystem access. This is enforced at the mixin level via a `_validate_path()` helper.
+> **IMPORTANT — Path Validation:** Every tool that accepts a `path` parameter MUST validate it through `PathValidator.validate_read()` (or `validate_write()` for a path it saves to) before any filesystem access. This is enforced at the mixin level via a `_validate_path()` helper, which goes through `gaia.agents.tools.path_access`.
 
 #### 5.1.1 `browse_directory(path, show_hidden, sort_by, filter_type)`
 
@@ -1676,8 +1676,9 @@ class FileSystemToolsMixin:
         All tools call this before any filesystem access.
         """
         resolved = Path(path).expanduser().resolve()
-        if self._path_validator and not self._path_validator.is_path_allowed(str(resolved)):
-            raise ValueError(f"Access denied: {resolved}")
+        denied = read_access_error(self, resolved)  # gaia.agents.tools.path_access
+        if denied:
+            raise ValueError(f"Access denied: {denied['error']}")
         return resolved
 
     def register_filesystem_tools(self):
@@ -1894,7 +1895,7 @@ def add_fs_parser(subparsers):
 
 | Control | Implementation |
 |---------|----------------|
-| **Path validation** | Every tool calls `_validate_path()` which uses `PathValidator.is_path_allowed()` |
+| **Path validation** | Every tool calls `_validate_path()` which uses `PathValidator.validate_read()` |
 | **Symlink handling** | `Path.resolve()` follows symlinks to real path; on Windows, check for junction points via `os.path.islink()` |
 | **Sensitive file detection** | Three-tier response: BLOCK, SKIP, or WARN (see below) |
 | **Configurable exclusions** | Platform-conditional defaults merged with user config |

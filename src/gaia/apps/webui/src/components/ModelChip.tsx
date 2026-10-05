@@ -6,7 +6,7 @@ import { Check, ChevronDown, Cloud, Cpu, HelpCircle, Loader2 } from 'lucide-reac
 import { Popover } from './Popover';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
-import { useModelStore, useInferencePlace, shortModelName, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
+import { useModelStore, useInferencePlace, selectChipModel, shortModelName, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
 import type { ProviderInfo, ProviderModel } from '../types';
 
 interface ProviderModels {
@@ -15,11 +15,12 @@ interface ProviderModels {
     error?: string;
 }
 
-/** The model new turns run on, where it runs, and a picker to change it. */
+/** The model the open chat runs on, where it runs, and a picker to change it. */
 export function ModelChip({ disabled }: { disabled?: boolean }) {
     const active = useModelStore((s) => s.active);
     const select = useModelStore((s) => s.select);
     const place = useInferencePlace();
+    const chipModel = useChatStore((s) => selectChipModel(active, s.sessions, s.currentSessionId));
     const openSettings = useChatStore((s) => s.openSettings);
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
@@ -74,8 +75,8 @@ export function ModelChip({ disabled }: { disabled?: boolean }) {
     }, [active?.remote, pendingCloud, select]);
 
     const Icon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
-    const label = active
-        ? `${shortModelName(active.model)}${place ? ` · ${place.label}` : ''}`
+    const label = chipModel
+        ? `${shortModelName(chipModel)}${place ? ` · ${place.label}` : ''}`
         : 'Model';
     const title = !place
         ? UNKNOWN_PLACE_TITLE

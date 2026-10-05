@@ -4,14 +4,15 @@
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
-from gaia.agents.base.tool_grants import grant_scope
+from gaia.agents.base.tool_grants import PATH_TOOLS, grant_scope, path_argument
 from gaia.agents.base.tools import get_tool_display_name
 
 logger = logging.getLogger(__name__)
@@ -112,9 +113,32 @@ def unattended_denial_message(tool_name: str) -> str:
     )
 
 
+class Denial(NamedTuple):
+    """Why a gated call did not run, bound to the tool it was asked for."""
+
+    tool: str
+    reason: str
+    #: Nobody answered in time: not a refusal, so the call may be offered again.
+    timed_out: bool = False
+
+
 def user_denial_message(tool_name: str) -> str:
     """Denial text for a human who was asked and said no."""
     return f"Tool '{tool_name}' was denied by the user."
+
+
+def timeout_denial_message(tool_name: str, waited: str) -> str:
+    """Denial text for a prompt nobody answered.
+
+    Never worded as a refusal: the user did not say no, they did not see it or
+    were away. Telling them "you denied it" is false, and it teaches the model
+    to stop offering something the user still wants.
+    """
+    return (
+        f"Nobody answered the confirmation for '{tool_name}' within {waited}, "
+        "so it did not run. The prompt timed out — the user did NOT refuse it. "
+        "Tell the user the approval request expired and ask whether to try again."
+    )
 
 
 def unaskable_denial_message(tool_name: str) -> str:
@@ -129,6 +153,80 @@ def unaskable_denial_message(tool_name: str) -> str:
         "from a working interactive terminal, or set "
         f"{AUTO_APPROVE_ENV_VAR}=1 for a trusted automated run."
     )
+
+
+def edit_target(tool_args: Any) -> str:
+    """Where a file-writing call lands — the same rule the file tools apply
+    (``gaia.agents.tools.file_io_tools._resolve_target``): a relative
+    ``file_path`` sits under ``project_dir`` when one is given, else under the
+    process cwd. "" when the call names no file."""
+    target = path_argument(tool_args)
+    if not target:
+        return ""
+    target = os.path.expanduser(target)
+    project_dir = tool_args.get("project_dir") if isinstance(tool_args, dict) else None
+    if project_dir and not os.path.isabs(target):
+        target = os.path.join(os.path.realpath(str(project_dir)), target)
+    return target
+
+
+def edit_is_inside(target: str, roots: Tuple[str, ...]) -> bool:
+    """True when *target* resolves inside one of *roots*, and is not a place a
+    write there would run code nobody approved.
+
+    Never auto-accepted, even inside a workspace: anything under ``.git`` (a
+    hook or config runs on the next git command), any hidden file or folder
+    (``.bashrc``, ``.envrc``, ``.github/workflows`` run code on their own), a
+    file in a folder on ``PATH``, and on Windows a file cmd.exe would run in
+    place of a real program (``git.bat`` in the folder a command runs from).
+    A home folder or drive root is never a workspace: started there, every
+    file the user owns would be "inside".
+    """
+    roots = tuple(r for r in roots if not _too_broad_to_be_a_workspace(r))
+    if not roots:
+        return False
+    try:
+        resolved = os.path.realpath(target)
+    except (OSError, ValueError):
+        return False
+    parts = {part.lower() for part in resolved.replace("\\", "/").split("/")}
+    if ".git" in parts:
+        return False
+    parent = os.path.normcase(os.path.dirname(resolved))
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if entry and os.path.normcase(os.path.realpath(entry)) == parent:
+            return False
+    if _shadows_a_program(resolved):
+        return False
+    for root in roots:
+        real_root = os.path.realpath(root)
+        try:
+            if os.path.commonpath(
+                [os.path.normcase(real_root), os.path.normcase(resolved)]
+            ) != os.path.normcase(real_root):
+                continue
+        except ValueError:
+            continue  # different drives on Windows
+        inside = os.path.relpath(resolved, real_root).replace("\\", "/").split("/")
+        return not any(part.startswith(".") and part != "." for part in inside)
+    return False
+
+
+def _too_broad_to_be_a_workspace(root: str) -> bool:
+    """A home folder or a drive root holds everything the user owns."""
+    real = os.path.normcase(os.path.realpath(root))
+    home = os.path.normcase(os.path.realpath(os.path.expanduser("~")))
+    return real == home or os.path.dirname(real) == real
+
+
+def _shadows_a_program(path: str) -> bool:
+    """On Windows, cmd.exe looks in the current folder before ``PATH``, so a
+    ``git.bat`` written into the workspace runs instead of git."""
+    if os.name != "nt":
+        return False
+    stem, ext = os.path.splitext(os.path.basename(path))
+    pathext = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").lower().split(";")
+    return ext.lower() in pathext and shutil.which(stem) is not None
 
 
 def terminal_is_interactive() -> bool:
@@ -237,8 +335,18 @@ class OutputHandler(ABC):
     control channel, and the next gated call sees the new value.
     """
 
-    _last_denial: Optional[Tuple[str, str]] = None
-    """``(tool_name, reason)`` for the most recent denial (#2210).
+    accept_edits: bool = False
+    """The user chose "accept edits": file edits inside :attr:`edit_roots` run
+    without asking. Shell commands and code still ask, and everything outside
+    the roots still asks. Set by ``PermissionState`` from the TUI's Shift+Tab
+    mode toggle; mutable mid-session like :attr:`full_access`.
+    """
+
+    edit_roots: Tuple[str, ...] = ()
+    """Folders "accept edits" may write into — the session's workspace."""
+
+    _last_denial: Optional[Denial] = None
+    """The most recent denial (#2210).
 
     Bound to the tool so a handler that denies without recording a reason can
     never inherit the previous tool's explanation.
@@ -472,6 +580,13 @@ class OutputHandler(ABC):
         """True when this handler may approve gated tools without asking."""
         return bool(self.auto_approve_gated_tools) or auto_approve_env_enabled()
 
+    def edit_is_auto_accepted(self, tool_name: str, tool_args: Any) -> bool:
+        """True when "accept edits" covers this call: a file edit in the workspace."""
+        if not self.accept_edits or tool_name not in PATH_TOOLS:
+            return False
+        target = edit_target(tool_args)
+        return bool(target) and edit_is_inside(target, self.edit_roots)
+
     # -- "always allow" grants ---------------------------------------------
     #
     # Scoped to the INVOCATION, for the life of this console — never to the bare
@@ -487,7 +602,8 @@ class OutputHandler(ABC):
     def call_is_granted(self, tool_name: str, tool_args: Any) -> bool:
         """True when an earlier "always" already covers THIS exact call."""
         scope = grant_scope(tool_name, tool_args)
-        return scope is not None and scope.key in self.session_grants()
+        grants = self.session_grants()
+        return scope is not None and all(key in grants for key in scope.keys)
 
     def grant_call_for_session(self, tool_name: str, tool_args: Any) -> Optional[str]:
         """Record an "always allow" for this call; return what was granted.
@@ -504,7 +620,7 @@ class OutputHandler(ABC):
                 tool_name,
             )
             return None
-        self.session_grants().add(scope.key)
+        self.session_grants().update(scope.keys)
         self._last_denial = None
         logger.info("User granted '%s' for the remainder of this session", scope.label)
         return scope.label
@@ -540,9 +656,11 @@ class OutputHandler(ABC):
             AUTO_APPROVE_ENV_VAR,
         )
 
-    def deny_tool_execution(self, tool_name: str, reason: str) -> bool:
+    def deny_tool_execution(
+        self, tool_name: str, reason: str, timed_out: bool = False
+    ) -> bool:
         """Record and log a denial, then return False for the caller to return."""
-        self._last_denial = (tool_name, reason)
+        self._last_denial = Denial(tool_name, reason, timed_out)
         logger.warning("Denied confirmation-gated tool '%s': %s", tool_name, reason)
         return False
 
@@ -555,9 +673,14 @@ class OutputHandler(ABC):
         unless the recorded denial is for this exact tool.
         """
         recorded = self._last_denial
-        if recorded and recorded[0] == tool_name:
-            return recorded[1]
+        if recorded and recorded.tool == tool_name:
+            return recorded.reason
         return user_denial_message(tool_name)
+
+    def confirmation_timed_out(self, tool_name: str) -> bool:
+        """True when this tool's most recent denial was a prompt nobody answered."""
+        recorded = self._last_denial
+        return bool(recorded and recorded.tool == tool_name and recorded.timed_out)
 
     def print_policy_alert(
         self,
@@ -1406,7 +1529,6 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             Rendered ANSI string, or empty string on failure
         """
         try:
-            import shutil
             from pathlib import Path
 
             from PIL import Image

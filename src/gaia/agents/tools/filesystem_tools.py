@@ -11,7 +11,6 @@ bookmarks, and enhanced file reading for GAIA agents.
 
 import datetime
 import json
-import logging
 import mimetypes
 import os
 import sys
@@ -19,9 +18,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from gaia.agents.tools.file_edit import file_read_record, stamp_of
+from gaia.agents.tools.path_access import read_access_error
 from gaia.agents.tools.search_scope import root_depth, search_roots
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Hard cap on how many bytes ``read_file`` will pull into memory. The LLM can
 # be asked to read arbitrary files; without a cap, a single tool call against
@@ -109,10 +110,9 @@ class FileSystemToolsMixin:
     def _validate_path(self, path: str) -> Path:
         """Validate and resolve a path. Raises ValueError if blocked."""
         resolved = Path(path).expanduser().resolve()
-        if self._path_validator:
-            allowed, reason = self._path_validator.validate_read(str(resolved))
-            if not allowed:
-                raise ValueError(f"Access denied: {reason}")
+        denied = read_access_error(self, resolved)
+        if denied:
+            raise ValueError(f"Access denied: {denied['error']}")
         return resolved
 
     def workspace_roots(self) -> list:
@@ -696,8 +696,10 @@ class FileSystemToolsMixin:
 
                 # Validate a caller supplied scope before any search path can
                 # answer; named scopes fan out over folders that need not exist.
+                # The named scopes are wider than the allowed folders on purpose:
+                # a name search returns paths, and opening one is checked.
                 if scope not in ("smart", "home", "cwd", "everywhere"):
-                    scope_root = Path(scope).expanduser().resolve()
+                    scope_root = mixin._validate_path(scope)
                     if not scope_root.exists():
                         return (
                             f"Error: '{scope_root}' does not exist. Pass an existing "

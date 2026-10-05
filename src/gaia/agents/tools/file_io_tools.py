@@ -24,6 +24,7 @@ from gaia.agents.tools.file_edit import (
     read_first_preflight,
     stamp_of,
 )
+from gaia.agents.tools.path_access import readable_entry
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.logger import get_logger
 from gaia.security import BackupError
@@ -854,15 +855,11 @@ class FileIOToolsMixin:
                 Dictionary with search results
             """
             path_validator = _require_path_validator(self)
+            directory = os.path.expanduser(directory)
             try:
-                # Security check
-                if not path_validator.is_path_allowed(directory):
-                    return {
-                        **NOT_EXECUTED,
-                        "status": "error",
-                        "error": f"Access denied: {directory} is not in allowed paths."
-                        f"{path_validator.scratch_hint(directory)}",
-                    }
+                is_allowed, reason = path_validator.validate_read(directory)
+                if not is_allowed:
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 results = []
                 files_searched = 0
@@ -874,10 +871,8 @@ class FileIOToolsMixin:
                             continue
 
                         file_path = os.path.join(root, file)
-                        # A directory-wide grep must not be the way a secret gets
-                        # read back that read_file would have refused outright.
-                        blocked, _ = path_validator.is_read_blocked(file_path)
-                        if blocked:
+                        # A link out of the folder, or a secret in it, is not grepped.
+                        if not readable_entry(self, file_path):
                             continue
                         files_searched += 1
 
@@ -944,6 +939,7 @@ class FileIOToolsMixin:
                 Dictionary with diff information
             """
             path_validator = _require_path_validator(self)
+            file_path = os.path.expanduser(file_path)
             try:
                 # A diff prints the original file, so it is a read.
                 is_allowed, reason = path_validator.validate_read(file_path)
@@ -1407,9 +1403,11 @@ class FileIOToolsMixin:
             try:
                 from datetime import datetime
 
-                gaia_path = os.path.join(project_root, "GAIA.md")
+                gaia_path = os.path.join(os.path.expanduser(project_root), "GAIA.md")
 
-                # Security check
+                is_blocked, reason = path_validator.is_write_blocked(gaia_path)
+                if is_blocked:
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
                 if not path_validator.is_path_allowed(gaia_path):
                     return {
                         **NOT_EXECUTED,

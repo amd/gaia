@@ -386,19 +386,26 @@ Design a workflow around the approval path, not around a fixed tool list.
 carrying a `confirm_id` and then **stays open** while the agent waits:
 
 ```
-data: {"type":"needs_confirmation","run_id":"…","action":"write_file","summary":"Run 'write_file'?","confirm_id":"…","always_scope":"write_file"}
+data: {"type":"needs_confirmation","run_id":"…","action":"run_shell_command","summary":"python -m pytest -q tests/","confirm_id":"…","always_scope":"pytest","risk":"execute"}
 ```
 
 Answer it on the same run, then keep reading the stream:
 
 ```
 POST /v1/gaia/query/{run_id}/tool_decision
-{ "decision": "allow" | "deny" | "always", "confirm_id": "…" }
+{ "decision": "allow" | "deny" | "always" | "timeout", "confirm_id": "…" }
 ```
 
-`always` grants the pending call's scope for the rest of the session — say so in
-your UI, because it stops asking. Unknown run → **404**; a prompt that is no
-longer pending → **409**; any decision outside those three → **422**. All loud,
+`summary` is the command or call itself, shown once — your UI supplies the
+question. `risk` says what the call does (`read`, `write`, `execute`,
+`destructive`); label by it rather than by tool name, since `run_shell_command`
+is `pytest` on one call and `rm -rf` on the next. `always` grants the family
+named in `always_scope` for the rest of the session (`pytest` covers every
+spelling of a test run) — say so in your UI, because it stops asking; no
+`always_scope` means don't offer it. If your prompt expires unanswered, send
+`timeout`, not `deny`: it still refuses, but the agent tells the user the
+request timed out instead of claiming they said no. Unknown run → **404**; a
+prompt that is no longer pending → **409**; any other decision → **422**. All loud,
 never a silent drop. Send `confirm_id`: without it a late answer resolves
 whichever prompt replaced the one it was typed against.
 
