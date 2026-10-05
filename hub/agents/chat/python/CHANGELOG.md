@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `ChatAgentConfig.memory_incognito` starts a session with memory off and does
+  not load the embedding model until memory is used. The Agent UI sets it for
+  private chats and when memory is switched off, which used to load the ~300 MB
+  embedder on the first turn for nothing.
 - Asking for the shell by name ("use your shell tool to run pwd") or for the
   working directory now always offers `run_shell_command`. With dynamic tool
   selection on, most tools matched such a request and the cap dropped the shell, so

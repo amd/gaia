@@ -1137,6 +1137,7 @@ def _session_agent_kwargs(
     allowed: list,
     session_id: str,
     dynamic_tools: bool = False,
+    memory_incognito: bool = False,
 ) -> dict:
     """Build the session-scoped ChatAgentConfig fields.
 
@@ -1165,7 +1166,13 @@ def _session_agent_kwargs(
         "allowed_paths": allowed,
         "ui_session_id": session_id,
         "dynamic_tools": dynamic_tools,
+        "memory_incognito": memory_incognito,
     }
+
+
+def _memory_off(session: dict, db) -> bool:
+    """Whether memory is off for *session*: a private chat, or memory disabled."""
+    return bool(session.get("private", 0)) or not memory_enabled(db)
 
 
 def _session_mail_provider(session: dict) -> str | None:
@@ -1839,6 +1846,7 @@ async def _get_chat_response(
                         allowed=allowed,
                         session_id=session_id,
                         dynamic_tools=dynamic_tools,
+                        memory_incognito=_memory_off(session, db),
                     ),
                     # Forwarded only here (not via _session_agent_kwargs, which
                     # also feeds the strict ChatAgentConfig). Non-email factories
@@ -2211,6 +2219,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         allowed=allowed,
                         session_id=session_id,
                         dynamic_tools=dynamic_tools,
+                        memory_incognito=_memory_off(session, db),
                     )
                     config = ChatAgentConfig(
                         model_id=model_id,
@@ -2375,6 +2384,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 allowed=allowed,
                                 session_id=session_id,
                                 dynamic_tools=dynamic_tools,
+                                memory_incognito=_memory_off(session, db),
                             ),
                             # See the non-streaming path: email-only kwarg,
                             # filtered out by non-email factories. None = scan
