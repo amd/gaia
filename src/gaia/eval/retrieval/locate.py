@@ -6,6 +6,9 @@ The chunker re-joins words with single spaces, so a chunk is not a verbatim
 slice of the extracted text — but it is an exact substring once whitespace is
 collapsed. Every position here is an offset into that whitespace-normalized
 text, and pages come from the ``[Page N]`` markers the PDF extractor writes.
+
+Chunks start in document order, except right after a chunk that was split to
+fit the embedder: the next chunk's overlap can begin before the split's tail.
 """
 
 from __future__ import annotations
@@ -106,18 +109,25 @@ def locate_chunks(
     unlocated: List[int] = []
     for path, indices in file_chunks.items():
         doc = docs[path]
-        cursor = 0
+        cursor = before = 0
         for idx in indices:
             needle = norm(chunks[idx])
             # Chunks come in document order; a match before the previous chunk
             # could be repeated text elsewhere, so it counts as unlocated.
             pos = doc.text.find(needle, cursor) if needle else -1
+            if pos < 0 and needle:
+                # One exception: the previous chunk is the short tail of a chunk
+                # split to fit the embedder, and this one's overlap, cut from the
+                # unsplit chunk, starts before that tail and runs through it.
+                pos = doc.text.find(needle, before, cursor + len(needle))
+                if pos + len(needle) <= cursor:
+                    pos = -1
             if pos < 0:
                 unlocated.append(idx)
                 continue
             end = pos + len(needle)
             spans[idx] = ChunkSpan(idx, path, pos, end, doc.pages_between(pos, end))
-            cursor = pos
+            before, cursor = cursor, pos
     return spans, unlocated
 
 

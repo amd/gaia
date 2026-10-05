@@ -160,6 +160,26 @@ def test_every_chunk_the_real_chunker_cuts_maps_back_to_its_page(tmp_path):
     assert all(spans[i].pages for i in spans)
 
 
+def test_a_chunk_split_to_fit_the_embedder_does_not_hide_the_next_one(tmp_path):
+    rag = _fake_make_rag(tmp_path / "c", [tmp_path])
+    full = (
+        ". ".join(
+            f"Sentence {i} " + " ".join(f"tok{i}x{j}" for j in range(11))
+            for i in range(120)
+        )
+        + "."
+    )
+    chunks = rag._split_text_into_chunks(full)
+    doc = DocText.from_full_text("d.txt", full)
+    spans, unlocated = locate_chunks(
+        chunks, {"d.txt": list(range(len(chunks)))}, {"d.txt": doc}
+    )
+    assert unlocated == []
+    # The case under test: an overlap that starts before the split's short tail.
+    assert any(spans[i].start < spans[i - 1].start for i in range(1, len(chunks)))
+    assert all(spans[i].end > spans[i - 1].start for i in range(1, len(chunks)))
+
+
 def test_both_pipelines_find_the_labelled_evidence(dataset, tmp_path):
     _needs_chat_agent()
     bench = harness.index_dataset(dataset, tmp_path / "work")

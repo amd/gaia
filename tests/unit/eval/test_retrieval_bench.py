@@ -149,6 +149,25 @@ def test_chunks_are_located_after_whitespace_normalization():
     assert spans[1].pages == {2, 3}
 
 
+def test_a_chunk_may_start_before_the_previous_one_only_if_it_runs_through_it():
+    doc = DocText.from_full_text("d.txt", "alpha beta gamma delta epsilon zeta eta")
+    paths, docs = {"d.txt": [0, 1, 2]}, {"d.txt": doc}
+    # "delta" is the short tail of a split chunk; the next overlaps back past it.
+    spans, unlocated = locate_chunks(
+        ["alpha beta gamma", "delta", "gamma delta epsilon"], paths, docs
+    )
+    assert unlocated == []
+    assert spans[2].start < spans[1].start < spans[2].end
+    # Text that ends before the previous chunk is a repeat from elsewhere.
+    _, unlocated = locate_chunks(["alpha beta", "epsilon", "gamma delta"], paths, docs)
+    assert unlocated == [2]
+    # And nothing reaches back past the chunk before the previous one.
+    _, unlocated = locate_chunks(
+        ["gamma", "zeta", "alpha beta gamma delta"], paths, docs
+    )
+    assert unlocated == [2]
+
+
 def test_a_quote_resolves_only_on_its_labelled_page():
     doc = DocText.from_full_text("d.pdf", PAGED)
     ev = resolve_evidence(Evidence("d.pdf", 2, "pump rate is 42"), doc)
