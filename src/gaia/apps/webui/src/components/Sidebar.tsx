@@ -10,6 +10,7 @@ import { getSessionHash } from '../utils/format';
 import { groupSessionsByAgent, resolveAgentName, resolveAgentIcon } from '../utils/sessionGrouping';
 import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
 import { getAgentIcon } from './agentIcons';
+import { selectInferenceLocation } from './InferenceLocationBadge';
 import gaiaRobot from '../assets/gaia-robot.png';
 import type { Session } from '../types';
 import './Sidebar.css';
@@ -134,6 +135,7 @@ export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobi
         addPendingDelete, removePendingDelete,
         runningSessionIds, agents,
     } = useChatStore();
+    const location = selectInferenceLocation(sessions, currentSessionId);
 
     const [search, setSearch] = useState('');
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
@@ -449,9 +451,19 @@ export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobi
             </nav>
 
             <div className="sidebar-bottom">
-                <div className="privacy-badge">
-                    <span className="privacy-dot" aria-hidden="true" />
-                    <span>100% Local</span>
+                <div className="privacy-badge" title={location?.inference_description ?? undefined}>
+                    {location?.inference_remote === false && (
+                        <>
+                            <span className="privacy-dot" aria-hidden="true" />
+                            <span>100% Local</span>
+                        </>
+                    )}
+                    {location?.inference_remote === true && (
+                        <>
+                            <span className="privacy-dot privacy-dot-cloud" aria-hidden="true" />
+                            <span>Cloud: {location.inference_provider_name || 'remote'}</span>
+                        </>
+                    )}
                     <span className="version-badge">v{__APP_VERSION__}</span>
                 </div>
                 <div className="sidebar-actions">

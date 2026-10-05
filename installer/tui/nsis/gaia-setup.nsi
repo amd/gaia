@@ -23,6 +23,7 @@
 ;            -DLEMONADE_MSI=<path to lemonade-server-minimal.msi> \
 ;            -DLEMONADE_VERSION=<LEMONADE_VERSION from src/gaia/version.py> \
 ;            -DICON=<path to gaia.ico> \
+;            -DFONTS_DIR=<dir staged by installer/tui/fetch_fonts.py> \
 ;            -DOUTFILE=gaia-<version>-win-x64-setup.exe \
 ;            installer/tui/nsis/gaia-setup.nsi
 
@@ -49,6 +50,9 @@ Unicode true
 !ifndef OUTFILE
   !error "OUTFILE is required: -DOUTFILE=gaia-<version>-win-x64-setup.exe"
 !endif
+!ifndef FONTS_DIR
+  !error "FONTS_DIR is required: the IBM Plex Mono faces staged and verified by installer/tui/fetch_fonts.py"
+!endif
 
 !define PRODUCT_NAME      "GAIA Terminal Hub"
 !define PRODUCT_PUBLISHER "Advanced Micro Devices, Inc."
@@ -57,6 +61,17 @@ Unicode true
 !define TUI_EXE           "gaia-tui.exe"
 !define AGENT_EXE         "gaia-agent.exe"
 !define LEMONADE_MSI_NAME "lemonade-server-minimal.msi"
+
+; Windows Terminal reads per-user fragments from here; settings.json is never touched.
+!define WT_FRAGMENT_DIR   "$LOCALAPPDATA\Microsoft\Windows Terminal\Fragments\GAIA"
+!define WT_FRAGMENT_FILE  "gaia.json"
+; Must match the guid in wt-fragment.json.
+!define WT_PROFILE_GUID   "{6b5d7d70-4ed6-471b-b773-f1cafc56246f}"
+!define USER_FONTS_DIR    "$LOCALAPPDATA\Microsoft\Windows\Fonts"
+!define FONTS_REG         "Software\Microsoft\Windows NT\CurrentVersion\Fonts"
+; Which faces THIS setup installed, so uninstall never removes a copy the user had.
+!define GAIA_FONTS_KEY    "Software\GAIA\TerminalHub\Fonts"
+!define FONT_LICENSE      "IBM-Plex-Mono-OFL.txt"
 
 Name "${PRODUCT_NAME} ${VERSION}"
 OutFile "${OUTFILE}"
@@ -87,15 +102,21 @@ VIAddVersionKey "LegalCopyright"  "Copyright (C) 2025-2026 ${PRODUCT_PUBLISHER}"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
 !include "WinMessages.nsh"
+!include "WordFunc.nsh"
 
 !insertmacro GetSize
+
+; What the shortcuts and the Finish page launch: wt.exe with the GAIA profile
+; when Windows Terminal is present, gaia-tui.exe directly otherwise.
+Var LaunchExe
+Var LaunchArgs
 
 !define MUI_ICON   "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING
-; Unquoted on purpose -- MUI2's Finish.nsh emits Exec "$\"${MUI_FINISHPAGE_RUN}$\"",
-; so quoting here would double-quote a path that already contains a space.
-!define MUI_FINISHPAGE_RUN "$INSTDIR\${TUI_EXE}"
+; Launched through a function so the Finish page opens GAIA the way the shortcuts do.
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchGaia
 !define MUI_FINISHPAGE_RUN_TEXT "Start ${PRODUCT_NAME}"
 !define MUI_FINISHPAGE_LINK "GAIA documentation"
 !define MUI_FINISHPAGE_LINK_LOCATION "${PRODUCT_URL}"
@@ -301,6 +322,7 @@ Section "GAIA Terminal Hub" SecMain
   File "${PAYLOAD_DIR}\${AGENT_EXE}"
   File "${PAYLOAD_DIR}\LICENSE.md"
   File "/oname=gaia.ico" "${ICON}"
+  File "${FONTS_DIR}\${FONT_LICENSE}"
 
   WriteRegStr HKCU "Software\GAIA\TerminalHub" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\GAIA\TerminalHub" "Version"    "${VERSION}"
@@ -320,17 +342,218 @@ Section "GAIA Terminal Hub" SecMain
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
 
-  ; ── Shortcuts ──
-  ; Both point at gaia-tui.exe. cobra's Explorer guard is disabled in the binary
-  ; (tui/internal/cli/root.go); left at its default it would make every one of
-  ; these shortcuts print "This is a command line tool" and exit, because a
-  ; shortcut launches via Explorer -- exactly the case mousetrap trips on.
-  CreateDirectory "$SMPROGRAMS\GAIA"
-  CreateShortcut "$SMPROGRAMS\GAIA\${PRODUCT_NAME}.lnk" "$INSTDIR\${TUI_EXE}" "" "$INSTDIR\gaia.ico" 0
-  CreateShortcut "$SMPROGRAMS\GAIA\Uninstall ${PRODUCT_NAME}.lnk" "$INSTDIR\Uninstall.exe"
-  CreateShortcut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\${TUI_EXE}" "" "$INSTDIR\gaia.ico" 0
-
   Call AddToUserPath
+SectionEnd
+
+; ─── Terminal profile: font, Windows Terminal fragment, shortcuts ──────────
+
+; Per-user font install: no admin, nothing under C:\Windows\Fonts. A face the
+; user already has (per-user or machine-wide) is left alone and not recorded,
+; so the uninstaller never removes it.
+Function ShouldInstallFont
+  ; in : $R8 = file name, $R9 = registry value name ("<full name> (TrueType)")
+  ; out: $R0 = 1 install it, 0 leave it
+  ; clobbers $R1
+  ClearErrors
+  ReadRegStr $R1 HKCU "${GAIA_FONTS_KEY}" "$R8"
+  ${IfNot} ${Errors}
+    ; Ours from an earlier install. Windows Terminal holds an open font file, and
+    ; the pinned bytes are identical, so an in-use copy is kept rather than
+    ; failing the upgrade on it.
+    ${If} ${FileExists} "${USER_FONTS_DIR}\$R8"
+      ClearErrors
+      FileOpen $R1 "${USER_FONTS_DIR}\$R8" a
+      ${If} ${Errors}
+        DetailPrint "$R8 is in use - keeping the copy this setup installed earlier."
+        StrCpy $R0 0
+        Return
+      ${EndIf}
+      FileClose $R1
+    ${EndIf}
+    StrCpy $R0 1
+    Return
+  ${EndIf}
+  StrCpy $R0 0
+  ClearErrors
+  ReadRegStr $R1 HKCU "${FONTS_REG}" "$R9"
+  ${IfNot} ${Errors}
+    DetailPrint "$R9 is already installed for this user - leaving it as it is."
+    Return
+  ${EndIf}
+  ClearErrors
+  ReadRegStr $R1 HKLM "${FONTS_REG}" "$R9"
+  ${IfNot} ${Errors}
+    DetailPrint "$R9 is already installed for all users - leaving it as it is."
+    Return
+  ${EndIf}
+  ${If} ${FileExists} "$FONTS\$R8"
+    DetailPrint "$R8 is already in the Windows fonts folder - leaving it as it is."
+    Return
+  ${EndIf}
+  ; In the per-user folder but registered nowhere: no font Windows offers, so
+  ; it is replaced and registered rather than left as an unusable stray.
+  ${If} ${FileExists} "${USER_FONTS_DIR}\$R8"
+    ClearErrors
+    FileOpen $R1 "${USER_FONTS_DIR}\$R8" a
+    ${If} ${Errors}
+      DetailPrint "$R8 is in your fonts folder but unregistered and in use - close Windows Terminal and run Setup again to install it."
+      Return
+    ${EndIf}
+    FileClose $R1
+  ${EndIf}
+  StrCpy $R0 1
+FunctionEnd
+
+!macro InstallFontFace FILE FULL_NAME
+  StrCpy $R8 "${FILE}"
+  StrCpy $R9 "${FULL_NAME} (TrueType)"
+  Call ShouldInstallFont
+  ${If} $R0 == 1
+    SetOutPath "${USER_FONTS_DIR}"
+    File "${FONTS_DIR}\${FILE}"
+    WriteRegStr HKCU "${FONTS_REG}" "${FULL_NAME} (TrueType)" "${USER_FONTS_DIR}\${FILE}"
+    WriteRegStr HKCU "${GAIA_FONTS_KEY}" "${FILE}" "${FULL_NAME} (TrueType)"
+    ; Makes the face usable now rather than after the next sign-in.
+    System::Call 'gdi32::AddFontResourceW(w "${USER_FONTS_DIR}\${FILE}") i .r0'
+    ${If} $0 == 0
+      DetailPrint "Installed font ${FULL_NAME} for this user; it becomes available after you next sign in."
+    ${Else}
+      DetailPrint "Installed font ${FULL_NAME} for this user."
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+; Writes $R3 to the open handle $R1 as UTF-8. FileWrite would write the ANSI
+; code page, and Windows Terminal rejects a fragment that is not UTF-8 -- which
+; any non-ASCII user name in the install path would produce.
+Function WriteUtf8
+  ClearErrors
+  System::Call 'kernel32::WideCharToMultiByte(i 65001, i 0, w R3, i -1, p 0, i 0, p 0, p 0) i .r5'
+  ${If} $5 <= 0
+    SetErrors
+    Return
+  ${EndIf}
+  System::Alloc $5
+  Pop $6
+  System::Call 'kernel32::WideCharToMultiByte(i 65001, i 0, w R3, i -1, p r6, i r5, p 0, p 0) i .r5'
+  ; Drop the terminating NUL the -1 length counted.
+  IntOp $5 $5 - 1
+  System::Call 'kernel32::WriteFile(p R1, p r6, i r5, *i .r7, p 0) i .r8'
+  System::Free $6
+  ${If} $8 == 0
+  ${OrIf} $7 != $5
+    SetErrors
+  ${EndIf}
+FunctionEnd
+
+; out: error flag set when the fragment could not be written whole.
+Function WriteTerminalFragment
+  ; A JSON string needs every backslash in the path doubled.
+  ${WordReplace} "$INSTDIR" "\" "\\" "+" $R2
+  SetOutPath "$PLUGINSDIR"
+  File "/oname=wt-fragment.json" "${__FILEDIR__}\wt-fragment.json"
+  CreateDirectory "${WT_FRAGMENT_DIR}"
+  ClearErrors
+  FileOpen $R0 "$PLUGINSDIR\wt-fragment.json" r
+  ${If} ${Errors}
+    Return
+  ${EndIf}
+  FileOpen $R1 "${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}" w
+  ${If} ${Errors}
+    FileClose $R0
+    SetErrors
+    Return
+  ${EndIf}
+  StrCpy $R4 0
+  ${Do}
+    ClearErrors
+    FileRead $R0 $R3
+    ${If} ${Errors}
+      ${Break}
+    ${EndIf}
+    ${WordReplace} "$R3" "__GAIA_INSTDIR__" "$R2" "+" $R3
+    ; WordReplace flags "no match", which is every line but two.
+    ClearErrors
+    Call WriteUtf8
+    ${If} ${Errors}
+      StrCpy $R4 1
+      ${Break}
+    ${EndIf}
+  ${Loop}
+  FileClose $R0
+  FileClose $R1
+  ClearErrors
+  ${If} $R4 == 1
+    Delete "${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}"
+    SetErrors
+  ${EndIf}
+FunctionEnd
+
+; out: $R0 = path to wt.exe, or "" when Windows Terminal is not installed
+Function FindWindowsTerminal
+  ; The Store build exposes wt.exe as an app execution alias here.
+  StrCpy $R0 "$LOCALAPPDATA\Microsoft\WindowsApps\wt.exe"
+  ${If} ${FileExists} "$R0"
+    Return
+  ${EndIf}
+  SearchPath $R0 "wt.exe"
+FunctionEnd
+
+Function LaunchGaia
+  Exec '"$LaunchExe" $LaunchArgs'
+FunctionEnd
+
+Section "-Terminal profile" SecTerminalProfile
+  !insertmacro InstallFontFace "IBMPlexMono-Regular.ttf"    "IBM Plex Mono"
+  !insertmacro InstallFontFace "IBMPlexMono-Bold.ttf"       "IBM Plex Mono Bold"
+  !insertmacro InstallFontFace "IBMPlexMono-Italic.ttf"     "IBM Plex Mono Italic"
+  !insertmacro InstallFontFace "IBMPlexMono-BoldItalic.ttf" "IBM Plex Mono Bold Italic"
+  SendMessage ${HWND_BROADCAST} ${WM_FONTCHANGE} 0 0 /TIMEOUT=5000
+  SetOutPath "$INSTDIR"
+
+  ; Written even without Windows Terminal: it is inert until WT is installed,
+  ; and then the GAIA profile simply appears.
+  StrCpy $R5 1
+  Call WriteTerminalFragment
+  ${If} ${Errors}
+    StrCpy $R5 0
+  ${EndIf}
+  ; Shortcuts take $OUTDIR as their start-in folder, and the function left it on $PLUGINSDIR.
+  SetOutPath "$INSTDIR"
+  ${If} $R5 == 0
+    DetailPrint "Could not write the Windows Terminal profile to ${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}."
+    ; /SD IDOK, or a silent install blocks forever on a dialog nobody can see.
+    MessageBox MB_OK|MB_ICONEXCLAMATION \
+      "GAIA is installed, but Setup could not write its Windows Terminal profile to:$\r$\n$\r$\n${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}$\r$\n$\r$\nThe shortcuts will run gaia-tui in the default console instead. Check that folder is writable, then run Setup again." \
+      /SD IDOK
+  ${Else}
+    DetailPrint "Added the GAIA profile to Windows Terminal (${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE})."
+  ${EndIf}
+
+  ; ── Shortcuts ──
+  ; cobra's Explorer guard is disabled in gaia-tui (tui/internal/cli/root.go);
+  ; left at its default, a shortcut that runs it directly would print "This is
+  ; a command line tool" and exit, because a shortcut launches via Explorer.
+  Call FindWindowsTerminal
+  ${If} $R0 != ""
+  ${AndIf} $R5 == 1
+    StrCpy $LaunchExe "$R0"
+    StrCpy $LaunchArgs '-p "${WT_PROFILE_GUID}"'
+    DetailPrint "Shortcuts open GAIA in Windows Terminal with the GAIA profile."
+  ${Else}
+    StrCpy $LaunchExe "$INSTDIR\${TUI_EXE}"
+    StrCpy $LaunchArgs ""
+    ${If} $R0 == ""
+      ; Explicit, not a fallback: the console host cannot load a WT profile.
+      DetailPrint "Windows Terminal is not installed - shortcuts run gaia-tui in the default console, without the GAIA font and colours. Install Windows Terminal and re-run Setup to use the GAIA profile."
+    ${Else}
+      DetailPrint "Shortcuts run gaia-tui in the default console because the Windows Terminal profile could not be written."
+    ${EndIf}
+  ${EndIf}
+  CreateDirectory "$SMPROGRAMS\GAIA"
+  CreateShortcut "$SMPROGRAMS\GAIA\${PRODUCT_NAME}.lnk" "$LaunchExe" "$LaunchArgs" "$INSTDIR\gaia.ico" 0
+  CreateShortcut "$SMPROGRAMS\GAIA\Uninstall ${PRODUCT_NAME}.lnk" "$INSTDIR\Uninstall.exe"
+  CreateShortcut "$DESKTOP\${PRODUCT_NAME}.lnk" "$LaunchExe" "$LaunchArgs" "$INSTDIR\gaia.ico" 0
 SectionEnd
 
 !macro RefusePathEdit
@@ -415,11 +638,40 @@ SectionEnd
 
 ; ─── Uninstall ─────────────────────────────────────────────────────────────
 
+; Removes a face only when this setup recorded installing it.
+!macro UninstallFontFace FILE FULL_NAME
+  ClearErrors
+  ReadRegStr $R0 HKCU "${GAIA_FONTS_KEY}" "${FILE}"
+  ${IfNot} ${Errors}
+    System::Call 'gdi32::RemoveFontResourceW(w "${USER_FONTS_DIR}\${FILE}") i .r0'
+    Delete "${USER_FONTS_DIR}\${FILE}"
+    ; Registration goes only with the file, so a face still in use stays a
+    ; working installed font rather than an unregistered stray.
+    ${If} ${FileExists} "${USER_FONTS_DIR}\${FILE}"
+      DetailPrint "${FULL_NAME} is still installed - Windows Terminal has it open. Close Windows Terminal, then remove it from Settings > Personalization > Fonts."
+    ${Else}
+      DeleteRegValue HKCU "${FONTS_REG}" "${FULL_NAME} (TrueType)"
+      DetailPrint "Removed font ${FULL_NAME}."
+    ${EndIf}
+  ${EndIf}
+!macroend
+
 Section "Uninstall"
   Delete "$INSTDIR\${TUI_EXE}"
   Delete "$INSTDIR\${AGENT_EXE}"
   Delete "$INSTDIR\LICENSE.md"
   Delete "$INSTDIR\gaia.ico"
+  Delete "$INSTDIR\${FONT_LICENSE}"
+
+  ; Before the GAIA key is deleted: it records which faces are ours to remove.
+  !insertmacro UninstallFontFace "IBMPlexMono-Regular.ttf"    "IBM Plex Mono"
+  !insertmacro UninstallFontFace "IBMPlexMono-Bold.ttf"       "IBM Plex Mono Bold"
+  !insertmacro UninstallFontFace "IBMPlexMono-Italic.ttf"     "IBM Plex Mono Italic"
+  !insertmacro UninstallFontFace "IBMPlexMono-BoldItalic.ttf" "IBM Plex Mono Bold Italic"
+  SendMessage ${HWND_BROADCAST} ${WM_FONTCHANGE} 0 0 /TIMEOUT=5000
+
+  Delete "${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}"
+  RMDir  "${WT_FRAGMENT_DIR}"
 
   ; The original Uninstall.exe is still exiting here and Windows will not delete
   ; a running image, so a single Delete loses that race. Not /REBOOTOK either:

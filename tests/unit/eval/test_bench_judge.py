@@ -79,7 +79,7 @@ def test_the_judge_is_shown_the_tool_record_and_the_checks_that_ran(monkeypatch)
     # The rubric tells the judge to grade claims against the record, not the footer.
     rubric = " ".join(payload.split())
     assert "supported by the diff or by a tool result in the record" in rubric
-    assert "footer in an answer is written by the harness" in rubric
+    assert "footer) is written by the harness" in rubric
     assert "CHECKS lists no run at all, score 1-2" in rubric
 
 

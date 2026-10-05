@@ -117,6 +117,17 @@ def _infer_param_type(annotation: Any) -> str:
         return "unknown"
 
 
+def _literal_choices(annotation: Any) -> Optional[list]:
+    """The values of a ``Literal[...]`` (or ``Optional[Literal[...]]``), else None."""
+    origin = typing.get_origin(annotation)
+    if origin is typing.Union or origin is types.UnionType:
+        non_none = [a for a in typing.get_args(annotation) if a is not types.NoneType]
+        return _literal_choices(non_none[0]) if len(non_none) == 1 else None
+    if origin is typing.Literal:
+        return list(typing.get_args(annotation))
+    return None
+
+
 def _parse_arg_descriptions(docstring: Optional[str]) -> Dict[str, str]:
     """Extract per-argument text from a Google-style ``Args:`` block.
 
@@ -266,6 +277,11 @@ def tool(
                 "type": _infer_param_type(annotation),
                 "required": param.default == inspect.Parameter.empty,
             }
+            choices = _literal_choices(annotation)
+            if choices:
+                # An enum lets the server's tool-call grammar rule out bad values.
+                param_info["type"] = _infer_param_type(type(choices[0]))
+                param_info["enum"] = choices
 
             description = arg_descriptions.get(name, "").strip()
             if description:
