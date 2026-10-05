@@ -424,9 +424,6 @@ def _generate_search_keys(self, query: str) -> List[str]:
     # Use semantic chunking (slower, more accurate)
     config = ChatAgentConfig(use_llm_chunking=True)
 
-    # Larger chunks for more context
-    config = ChatAgentConfig(chunk_size=800)
-
     # Debug what's being retrieved
     config = ChatAgentConfig(debug=True)
     ```
@@ -534,7 +531,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     |---------|-----------|------------|------------------|----------|-------------------|
     | Fast | 300 | 3 | False | Development, quick FAQs | ~2-3s per PDF (NPU) |
     | Balanced | 500 | 5 | False | Production default | ~5-7s per PDF (NPU) |
-    | Accurate | 800 | 7 | True | Complex technical queries | ~10-15s per PDF (NPU+LLM) |
+    | Accurate | 500 | 7 | True | Complex technical queries | ~10-15s per PDF (NPU+LLM) |
 
     ```python
     # Development (fast)
@@ -553,7 +550,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
 
     # Research (accurate)
     config = ChatAgentConfig(
-        chunk_size=800,
+        chunk_size=500,
         max_chunks=7,
         use_llm_chunking=True
     )
