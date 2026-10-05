@@ -126,3 +126,34 @@ def test_ctx_state_does_not_leak_between_models():
     sd_line = next(line for line in printed.splitlines() if "SDXL-Turbo" in line)
     assert "ctx:" not in sd_line
     assert "Context unverified" not in sd_line
+
+
+def test_ctx_check_targets_the_local_model_set_up_even_with_a_cloud_default():
+    """With ``default_model`` on Fireworks, init still sets up a local chat
+    model, so its context check must load that model — not skip the preload
+    and print "verified" for a window nobody loaded."""
+    from gaia.config import GaiaConfig
+    from gaia.installer.init_command import ChatModelChoice
+
+    cfg = GaiaConfig()
+    cfg.default_model = "fireworks.deepseek-v4p1-flash"
+    cfg.save()
+
+    cmd = InitCommand(profile="chat", yes=True)
+    cmd.console = MagicMock()
+    cmd._chat_choice = ChatModelChoice(
+        model_id="Gemma-4-E4B-it-GGUF", user_set=False, skipped=[]
+    )
+    client_instance = MagicMock()
+    client_instance.health_check.return_value = {"status": "ok"}
+
+    with (
+        patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client_instance),
+        patch(
+            "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", return_value=True
+        ) as ready,
+        patch.object(cmd, "_test_model_inference", return_value=(True, None)),
+    ):
+        cmd._verify_setup()
+
+    assert ready.call_args.kwargs["model"] == "Gemma-4-E4B-it-GGUF"

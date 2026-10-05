@@ -190,6 +190,24 @@ def test_cloud_startup_checks_server_without_loading_local_chat(monkeypatch, mod
     local_init.assert_not_called()
 
 
+def test_local_agent_hands_its_model_to_ensure_ready(monkeypatch):
+    """A cloud ``default_model`` must not decide preload for a local agent."""
+    from gaia.agents.base.agent import Agent
+
+    class LocalAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    local_init = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", local_init
+    )
+
+    LocalAgent(model_id="Gemma-4-E4B-it-GGUF", silent_mode=True)
+
+    assert local_init.call_args.kwargs["model"] == "Gemma-4-E4B-it-GGUF"
+
+
 def test_cloud_agent_without_url_uses_isolated_embedded_endpoint(monkeypatch, tmp_path):
     import json
 

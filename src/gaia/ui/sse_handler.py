@@ -27,6 +27,7 @@ from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
 from gaia.agents.base.turn_metrics import turn_log_path
 from gaia.agents.base.verification import split_verification_scope
+from gaia.ui import scripted_user
 from gaia.ui.event_narration import DEBUG_CHANNEL, format_count
 
 logger = logging.getLogger(__name__)
@@ -239,6 +240,9 @@ class SSEOutputHandler(OutputHandler):
         # Autonomous loop support
         # background_mode=True: skip blocking user confirmation; immediately deny.
         self.background_mode: bool = background_mode
+        # False on a transport with no route back for an answer (the stdio
+        # agent): a question there would hang the turn, so none is asked.
+        self.answers_questions: bool = True
         # Directive written by set_loop_state tool; read by AgentLoop after the run.
         self.loop_state_directive: Optional[Dict[str, Any]] = None
         # User input request queue (ordered, multi-slot keyed by request_id).
@@ -967,6 +971,14 @@ class SSEOutputHandler(OutputHandler):
 
     # === Tool Confirmation (blocking) ===
 
+    def insists_on_asking(self, tool_name: str, tool_args: Dict[str, Any]) -> bool:
+        """True when this call must reach the prompt even if a grant covers it.
+
+        Only the eval's scripted user insists: it has to see a call to decline
+        it, and a skill grant would otherwise run ``pytest`` with nobody asked.
+        """
+        return scripted_user.declines(tool_name, tool_args)
+
     def confirm_tool_execution(
         self,
         tool_name: str,
@@ -991,6 +1003,21 @@ class SSEOutputHandler(OutputHandler):
         """
         if timeout is _USE_HANDLER_TIMEOUT:
             timeout = self.confirm_timeout_seconds
+
+        # Before auto-approve: the eval runs with it on, and this is its only no.
+        if scripted_user.declines(tool_name, tool_args):
+            self._emit(
+                {
+                    "type": "tool_confirm_denied",
+                    "tool": tool_name,
+                    "reason": "scripted_user",
+                    "message": f"Tool '{tool_name}' was denied by the user.",
+                }
+            )
+            logger.info("Scripted eval user declined '%s'", tool_name)
+            return self.deny_tool_execution(
+                tool_name, f"Tool '{tool_name}' was denied by the user."
+            )
 
         # Full access and prior "always" grants are checked before anything is
         # emitted: neither has a question to ask, so putting a modal up would be
@@ -1260,6 +1287,14 @@ class SSEOutputHandler(OutputHandler):
             timeout, or ``"__NO_RESPONSE__"`` when no default is provided and
             the timeout expires.  Never returns empty string.
         """
+        if not self.answers_questions:
+            logger.info("Question not asked: this transport cannot return an answer")
+            return (
+                default_if_no_response
+                if default_if_no_response is not None
+                else "__NO_RESPONSE__"
+            )
+
         request_id = str(uuid.uuid4())
         timeout_seconds = max(10, timeout_seconds)  # floor: 10 seconds
 
@@ -1287,9 +1322,18 @@ class SSEOutputHandler(OutputHandler):
             }
         )
 
+        if evt is not None and scripted_user.active():
+            # The scripted eval user never answers: release the slot at once.
+            with self._user_input_lock:
+                self._user_input_queue = deque(
+                    rid for rid in self._user_input_queue if rid != request_id
+                )
+                self._user_input_events.pop(request_id, None)
+            evt = None
+
         if evt is None:
-            # Background mode: can't block — no active SSE consumer.  Return the
-            # sentinel so the caller can decide whether to proceed or retry.
+            # Background mode or the scripted user: nobody will answer.  Return
+            # the sentinel so the caller can decide whether to proceed or retry.
             return (
                 default_if_no_response
                 if default_if_no_response is not None

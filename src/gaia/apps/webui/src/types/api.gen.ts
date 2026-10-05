@@ -68,6 +68,7 @@ export interface ApiSchemas {
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
+  ScriptedUserRequest: ScriptedUserRequest;
   SelectModelRequest: SelectModelRequest;
   SessionListResponse: SessionListResponse;
   SessionResponse: SessionResponse;
@@ -700,6 +701,12 @@ export interface ScheduleResponse {
 export interface ScheduleResultsResponse {
   results: unknown[];
   total: number;
+}
+/**
+ * Commands the eval's scripted user declines; empty turns it off.
+ */
+export interface ScriptedUserRequest {
+  decline_commands?: string[];
 }
 export interface SelectModelRequest {
   model: string;
