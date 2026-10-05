@@ -1267,6 +1267,40 @@ class TestDataSummaryPointsAtGroupBy:
         assert "per_group_totals" not in tools["analyze_data_file"](str(data))
 
 
+class TestColumnNamesInAnyCase:
+    """A column named in another case still matches.
+
+    Gemma asked for group_by="Region" and columns="Region, Revenue" on a file
+    whose header is lowercase, got "None of the requested columns found", and
+    spent a turn retrying.
+    """
+
+    CSV = "region,product,revenue\n" "East,A,100\nEast,B,250\nWest,A,90\n"
+
+    def test_group_by_and_columns_ignore_case(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        data = safe_dir / "sales.csv"
+        data.write_text(self.CSV, encoding="utf-8")
+
+        result = tools["analyze_data_file"](
+            str(data), columns="Region, Revenue", group_by="Region"
+        )
+
+        assert result.get("status") != "error", result
+        assert "group_by_error" not in result
+        assert result["group_by_results"][0]["region"] == "East"
+        assert result["group_by_results"][0]["revenue_total"] == 350.0
+
+    def test_a_name_that_matches_two_columns_is_not_guessed(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        data = safe_dir / "dup.csv"
+        data.write_text("Region,region,revenue\nA,a,1\n", encoding="utf-8")
+
+        result = tools["analyze_data_file"](str(data), group_by="REGION")
+
+        assert "not found" in result["group_by_error"]
+
+
 class TestSpreadsheetHeaderBelowATitle:
     """A sheet's header is found below its title and note rows.
 

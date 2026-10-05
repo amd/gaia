@@ -64,6 +64,13 @@ type CanonicalStatusEvent struct {
 	LemonadeReachable *bool  `json:"lemonade_reachable,omitempty"`
 	LemonadeVersion   string `json:"lemonade_version,omitempty"`
 	LemonadeBaseURL   string `json:"lemonade_base_url,omitempty"`
+	// Phase names what the model is doing while nothing else is on the wire:
+	// "loading_model", "downloading_model", "reading", "reasoning" or
+	// "tool_call". Empty on narration and on agents that predate it. Words
+	// (reasoning) and Chars (tool_call) count the progress so far.
+	Phase string `json:"phase,omitempty"`
+	Words int    `json:"words,omitempty"`
+	Chars int    `json:"chars,omitempty"`
 }
 
 // CanonicalTokenEvent — one incremental chunk of assistant answer text.
