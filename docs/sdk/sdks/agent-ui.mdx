@@ -346,6 +346,12 @@ class SessionResponse(BaseModel):
     system_prompt: Optional[str] = None
     message_count: int = 0
     document_ids: List[str] = []
+    # Where the next chat turn is answered. inference_remote is None when it
+    # can't be determined; the UI then makes no local-or-cloud claim.
+    inference_remote: Optional[bool] = None
+    inference_provider: Optional[str] = None       # "lemonade", "fireworks", "amd", ...
+    inference_provider_name: Optional[str] = None  # "Fireworks AI"
+    inference_description: Optional[str] = None    # one sentence, as the TUI shows it
 
 class SessionListResponse(BaseModel):
     sessions: List[SessionResponse]
@@ -1131,7 +1137,7 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="POST /api/memory/knowledge">
-    Create a knowledge entry from the dashboard. Items created via the UI use `source='user'` and `confidence=0.8`.
+    Create a knowledge entry from the dashboard. Items created via the UI use `source='user'` and `confidence=0.8`. The entry is embedded right away with the embedder that produced the stored vectors, so recall by meaning finds it without a rebuild.
 
     **Request:**
     ```json
@@ -1145,10 +1151,17 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
       "sensitive": false
     }
     ```
+
+    **Response:**
+    ```json
+    { "status": "created", "knowledge_id": "abc-123", "embedded": true }
+    ```
+
+    If embedding fails the entry is still saved, and the response carries `"embedded": false` plus an `embed_error` saying what to do (run **Rebuild Embeddings**; keyword recall still finds it).
   </Accordion>
 
   <Accordion title="PUT /api/memory/knowledge/{knowledge_id}">
-    Edit a knowledge entry. Only provided fields are updated.
+    Edit a knowledge entry. Only provided fields are updated. A `content` change re-embeds the entry and the response includes `embedded` (and `embed_error` on failure), as for create; other edits keep the existing vector and omit the field.
 
     **Request:**
     ```json
@@ -1360,7 +1373,10 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
 
   <Accordion title="GET /api/memory/stream-inference">
     SSE stream of LLM-assisted profile inference over the discovery findings
-    — each `insight` event is a candidate fact awaiting approval.
+    — each `insight` event is a candidate fact awaiting approval. It runs on
+    the machine's default local chat model (`default_model` in
+    `~/.gaia/config.json`), never the chat's cloud model; a cloud
+    `default_model` ends the stream with an `error` event.
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-discovery">
@@ -1618,7 +1634,9 @@ First-run hardware scan and setup-wizard state (issues #1726, #1727).
   <Accordion title="GET /api/onboarding/preflight">
     Scan hardware (NPU/GPU via Lemonade's `/system-info`, RAM) and report
     whether this machine can run the first-run model, with a coarse tier
-    recommendation.
+    recommendation. `recommended_model` is the model chat will load on this
+    machine (the `default_model` `gaia init` chose, else Gemma-4-E4B), and
+    `required_disk_gb` is sized for that model's download.
   </Accordion>
 
   <Accordion title="GET /api/onboarding/status">

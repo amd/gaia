@@ -32,6 +32,10 @@ from gaia.agents.install_hints import (
     agent_not_installed_message,
 )
 from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.llm.inference_location import (
+    InferenceLocation,
+    resolve_inference_location,
+)
 from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import BLOCKED_DIRECTORIES
 from gaia.ui.email_sidecar.profiles import (
@@ -305,12 +309,13 @@ async def _generate_session_title(
     """Call Lemonade chat completions to produce a short tab-style title.
 
     Returns the cleaned title (≤ 64 chars, no quotes, no trailing
-    punctuation) or None on any failure.  Times out at 30 s so a hung
+    punctuation) or None on an HTTP or parse failure.  Times out at 30 s so a hung
     LLM doesn't keep the background task alive forever.
     """
     import httpx  # pylint: disable=import-outside-toplevel
 
     from gaia.llm.lemonade_client import (
+        find_model_requirement,
         lemonade_auth_headers,
         resolve_lemonade_api_key,
     )
@@ -323,18 +328,23 @@ async def _generate_session_title(
         f"Assistant: {(assistant_msg or '')[:200]}\n"
         "Title:"
     )
+    body = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 24,
+        # Low temperature: titles should be deterministic-ish
+        # for the same conversation.
+        "temperature": 0.3,
+    }
+    mr = find_model_requirement(model_id)
+    if mr is not None and mr.thinking is not None:
+        # A thinking model would spend all 24 tokens reasoning and title nothing.
+        body["chat_template_kwargs"] = {"enable_thinking": False}
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 f"{base_url}/chat/completions",
-                json={
-                    "model": model_id,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 24,
-                    # Low temperature: titles should be deterministic-ish
-                    # for the same conversation.
-                    "temperature": 0.3,
-                },
+                json=body,
                 headers=lemonade_auth_headers(
                     resolve_lemonade_api_key(base_url=base_url)
                 ),
@@ -357,7 +367,7 @@ async def _generate_session_title(
                 if title.lower().startswith(prefix):
                     title = title[len(prefix) :].strip()
             return title[:64] if title else None
-    except Exception as exc:  # pylint: disable=broad-except
+    except (httpx.HTTPError, ValueError, LookupError, AttributeError) as exc:
         logger.debug("Auto-title LLM call failed: %s", exc)
         return None
 
@@ -604,6 +614,62 @@ def _apply_device_model(
             )
         return dev_model, dev_ctx
     return model_id, None
+
+
+def _ui_cloud_provider(model_id: str) -> str | None:
+    """Classify *model_id*, also recognising cloud ids already seen in the catalog."""
+    from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
+
+    metadata = {"recipe": "cloud"} if is_cloud_model(model_id) else None
+    return cloud_model_provider(model_id, metadata)
+
+
+def session_inference_location(
+    session: dict, custom_model: str | None, registry=None
+) -> InferenceLocation | None:
+    """Where this session's next chat turn will be answered, or None if unknowable.
+
+    ``model`` is empty when the destination is certain but the exact model is not.
+
+    Mirrors the chat path's model choice (custom override > agent preference >
+    device) without touching the network: the agent's preferred-model pick
+    depends on what Lemonade has downloaded, so every candidate is classified
+    and an answer is given only when they all agree.
+    """
+    try:
+        provider_kwargs = _eval_provider_kwargs()
+    except ValueError as exc:
+        logger.warning("Inference location unknown: %s", exc)
+        return None
+    if provider_kwargs.get("use_claude"):
+        return resolve_inference_location(
+            provider_kwargs["claude_model"], use_claude=True
+        )
+
+    if custom_model:
+        candidates = [custom_model]
+    else:
+        registry = registry if registry is not None else _agent_registry
+        agent_type = session.get("agent_type") or "chat"
+        reg = registry.get(agent_type) if registry is not None else None
+        preferred = [m for m in (getattr(reg, "models", None) or []) if m]
+        candidates = preferred + [session.get("model")]
+        candidates = [
+            _apply_device_model(session, agent_type, m, None, registry)[0]
+            for m in candidates
+        ]
+
+    locations = {
+        resolve_inference_location(m, cloud_provider_lookup=_ui_cloud_provider)
+        for m in candidates
+    }
+    if len({(loc.provider, loc.remote) for loc in locations}) != 1:
+        return None
+    if len(locations) == 1:
+        return locations.pop()
+    # Same destination, several possible models: name the destination only.
+    loc = next(iter(locations))
+    return InferenceLocation(loc.provider, "", remote=loc.remote)
 
 
 def get_cached_mcp_status() -> list[dict]:

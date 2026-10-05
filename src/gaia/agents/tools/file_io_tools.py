@@ -24,6 +24,7 @@ from gaia.agents.tools.file_edit import (
     read_first_preflight,
     stamp_of,
 )
+from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.logger import get_logger
 from gaia.security import BackupError
 
@@ -412,8 +413,7 @@ class FileIOToolsMixin:
                             "start_line/end_line (lines), not both.",
                         }
                     try:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            lines = f.read().splitlines()
+                        lines = read_text(file_path)[0].splitlines()
                     except UnicodeDecodeError:
                         return {
                             "status": "error",
@@ -429,15 +429,17 @@ class FileIOToolsMixin:
                     from gaia.agents.base.artifacts import read_text_page
 
                     page = read_text_page(
-                        file_path, offset, 8000 if limit is None else limit
+                        file_path,
+                        offset,
+                        8000 if limit is None else limit,
+                        encoding=text_encoding(file_path),
                     )
                     reads.note(file_path, seen)
                     return {"status": "success", "file_path": file_path, **page}
 
                 # Read file content
                 try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
+                    content, encoding = read_text(file_path)
                 except UnicodeDecodeError:
                     # Binary file
                     with open(file_path, "rb") as f:
@@ -466,6 +468,8 @@ class FileIOToolsMixin:
                     "line_count": len(content.splitlines()),
                     "size_bytes": len(content.encode("utf-8")),
                 }
+                if encoding != "utf-8":
+                    result["encoding"] = encoding
 
                 # Python file - add syntax validation and symbol extraction
                 if ext == ".py":
@@ -878,17 +882,22 @@ class FileIOToolsMixin:
                         files_searched += 1
 
                         try:
-                            with open(file_path, "r", encoding="utf-8") as f:
-                                content = f.read()
+                            content = read_text(file_path)[0]
 
                             if pattern in content:
                                 files_with_matches += 1
                                 # Find line numbers with matches
                                 matches = []
                                 for i, line in enumerate(content.splitlines(), 1):
-                                    if pattern in line:
+                                    at = line.find(pattern)
+                                    if at != -1:
                                         matches.append(
-                                            {"line": i, "content": line.strip()}
+                                            {
+                                                "line": i,
+                                                "content": match_excerpt(
+                                                    line, at, at + len(pattern)
+                                                ),
+                                            }
                                         )
 
                                 results.append(

@@ -93,7 +93,9 @@ class SystemStatus(BaseModel):
     # LLM configuration health
     context_size_sufficient: bool = True  # False if loaded ctx < required minimum
     model_downloaded: Optional[bool] = None  # None=unknown, True/False if checked
-    default_model_name: str = "Gemma-4-E4B-it-GGUF"  # Required model for GAIA Chat
+    # Required model for GAIA Chat; None when an unreadable config hides it
+    # (``config_error`` then says why).
+    default_model_name: Optional[str] = "Gemma-4-E4B-it-GGUF"
     # Catalog-reported size of ``default_model_name``. Populated alongside
     # ``model_downloaded`` so the "not downloaded" banner can show an accurate
     # size hint instead of a hard-coded one (the previous "~25 GB" was a stale
@@ -342,6 +344,12 @@ class SessionResponse(BaseModel):
     device: str = "gpu"
     # Mailbox FILTER (#1596): None = every connected mailbox (no pick).
     mail_provider: Optional[str] = None
+    # Where the next chat turn is answered. inference_remote is None when that
+    # can't be determined, so the UI must not claim the chat stays local.
+    inference_remote: Optional[bool] = None
+    inference_provider: Optional[str] = None
+    inference_provider_name: Optional[str] = None
+    inference_description: Optional[str] = None
 
 
 class SessionListResponse(BaseModel):

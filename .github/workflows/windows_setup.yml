@@ -1,0 +1,236 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Build the one Windows GAIA setup -- desktop app, terminal, or both -- and prove
+# it installs, upgrades and uninstalls on a runner that did not build it.
+#
+# Its own workflow, not a leg of tui_installers.yml: the setup embeds the
+# desktop app's electron-builder setup, which on a release comes from
+# publish.yml's run and can take a while to appear. Waiting inside the TUI
+# matrix would hold the macOS and Linux packages hostage to it; here a slow or
+# failed desktop app build costs only the Windows setup, and says so in `ok`.
+#
+# Callers name exactly one desktop app source -- never "whatever is latest":
+#
+#   agent_ui_release           a published vX.Y.Z release (PR gate, manual runs)
+#   agent_ui_publish_run_sha   publish.yml's push run for this commit (tags),
+#                              which builds the installers before its approval
+#                              gate, so a release does not wait on a human.
+#
+# `sidecar` works as it does in tui_installers.yml: pinned fetches the real
+# gaia-agent against the committed digest; stub stands gaia-tui in for it on
+# PRs, where that digest is a placeholder. Nothing stub-built is published.
+#
+# Reads the `tui-binaries` artifact the caller's tui_installers.yml run uploaded,
+# so the setup wraps the same gaia-tui bytes the raw downloads publish.
+
+name: Windows setup
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version stamped into the setup and its filename (x.y.z).'
+        required: true
+        type: string
+      sidecar:
+        description: 'pinned (fetch + verify the real gaia-agent) or stub (PR gate).'
+        required: false
+        default: pinned
+        type: string
+      agent_ui_release:
+        description: 'Take the desktop app setup from this published release tag (vX.Y.Z).'
+        required: false
+        default: ''
+        type: string
+      agent_ui_publish_run_sha:
+        description: "Take the desktop app setup from publish.yml's push run for this commit."
+        required: false
+        default: ''
+        type: string
+    outputs:
+      ok:
+        description: 'true when the setup built AND passed the clean-runner smoke test.'
+        value: ${{ jobs.ok.outputs.ok }}
+
+permissions:
+  contents: read
+
+jobs:
+  # A Linux runner does the waiting: on a release this can sit until publish.yml
+  # has built the desktop installers, and an idle Windows runner costs more.
+  agent-ui-setup:
+    name: Fetch the desktop app setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read   # publish.yml's run artifacts
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Fetch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ inputs.agent_ui_release }}
+          RUN_SHA: ${{ inputs.agent_ui_publish_run_sha }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RELEASE}" ] && [ -z "${RUN_SHA}" ]; then
+            python installer/tui/fetch_agent_ui_setup.py --release "${RELEASE}" --out agent-ui
+          elif [ -n "${RUN_SHA}" ] && [ -z "${RELEASE}" ]; then
+            python installer/tui/fetch_agent_ui_setup.py \
+              --publish-run-sha "${RUN_SHA}" --version "${VERSION}" \
+              --wait-minutes 60 --out agent-ui
+          else
+            echo "::error::name exactly one desktop app source: agent_ui_release or agent_ui_publish_run_sha (got '${RELEASE}' and '${RUN_SHA}')."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: agent-ui-win-setup
+          path: agent-ui/
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    name: Build the Windows setup
+    needs: agent-ui-setup
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tui-binaries
+          path: bin
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: agent-ui-win-setup
+          path: agent-ui
+
+      # What build-setup.sh consumes: gaia-tui.exe, gaia-agent.exe, LICENSE.md.
+      - name: Stage the terminal payload
+        env:
+          SIDECAR: ${{ inputs.sidecar }}
+        run: |
+          set -euo pipefail
+          mkdir -p stage/win-x64
+          cp bin/gaia-win-x64.exe stage/win-x64/gaia-tui.exe
+          cp LICENSE.md stage/win-x64/LICENSE.md
+          if [ "${SIDECAR}" = "stub" ]; then
+            # The committed sidecar digest is a placeholder between releases, so
+            # a PR cannot fetch a real one and must not pretend to. Everything
+            # but the sidecar's identity stays under test; nothing is published.
+            cp stage/win-x64/gaia-tui.exe stage/win-x64/gaia-agent.exe
+          else
+            # Verified against hub/agents/gaia/npm/binaries.lock.json; a
+            # placeholder or mismatched digest fails the build.
+            python installer/tui/fetch_sidecar.py --platform win-x64 --out stage/win-x64
+          fi
+          ls -l stage/win-x64
+
+      # Verified against the digests committed in installer/tui/fonts/fonts.lock.json.
+      - name: Stage the pinned IBM Plex Mono fonts
+        run: python installer/tui/fetch_fonts.py --out stage/fonts
+
+      # Bundled, not downloaded at install time, so the setup works offline.
+      # Same pinned source and size guard as build-installers.yml.
+      - name: Download the pinned Lemonade MSI
+        run: |
+          set -euo pipefail
+          LEMONADE_VERSION=$(grep -oE 'LEMONADE_VERSION = "[^"]+"' src/gaia/version.py | cut -d'"' -f2)
+          if [ -z "$LEMONADE_VERSION" ]; then
+            echo "::error::Could not parse LEMONADE_VERSION from src/gaia/version.py" >&2
+            exit 1
+          fi
+          URL="https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_VERSION}/lemonade-server-minimal.msi"
+          echo "Downloading Lemonade MSI v${LEMONADE_VERSION} from ${URL}"
+          curl -fsSL --retry 3 --retry-delay 5 "${URL}" -o installer/lemonade-server-minimal.msi
+          # The -minimal MSI is a bootstrap (~4-6MB) that fetches the runtime on
+          # first run, so this guards against a truncated download or an HTML
+          # error body rather than pinning a size that moves upstream.
+          SIZE=$(wc -c < installer/lemonade-server-minimal.msi)
+          echo "Downloaded MSI size: ${SIZE} bytes"
+          if [ "$SIZE" -lt 1048576 ]; then
+            echo "::error::MSI smaller than 1MB; download likely corrupt or a 404 HTML body." >&2
+            exit 1
+          fi
+
+      - name: Install NSIS
+        run: choco install nsis --no-progress -y
+
+      - name: Build the setup
+        run: |
+          set -euo pipefail
+          installer/tui/nsis/build-setup.sh \
+            --version "${{ inputs.version }}" \
+            --payload stage/win-x64 \
+            --out dist \
+            --lemonade-msi installer/lemonade-server-minimal.msi \
+            --fonts stage/fonts \
+            --agent-ui-setup "$(ls agent-ui/gaia-agent-ui-*-x64-setup.exe)"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-setup
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # A separate job is a fresh VM. An installer verified only on the box that
+  # built it is not verified: that box already has the payload, the PATH entry
+  # and every dependency sitting in the working directory.
+  smoke:
+    name: Smoke-test the Windows setup
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-setup
+          path: dist
+
+      - name: Install, verify, uninstall
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = python installer/tui/artifacts.py names --version $env:VERSION --platform win-x64
+          ./installer/tui/nsis/smoke-test.ps1 -Setup "dist/$name" -Version $env:VERSION
+
+  # Runs only when the smoke test passed, so `ok` is empty -- not "true" --
+  # after any failure. Same contract as tui_installers.yml's installers-ok.
+  ok:
+    name: Windows setup verified
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ok: ${{ steps.done.outputs.ok }}
+    steps:
+      - id: done
+        run: echo "ok=true" >> "$GITHUB_OUTPUT"

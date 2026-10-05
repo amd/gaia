@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -422,14 +423,18 @@ def _real_cli(*args: str, home: Path, cwd: Path):
     env = {
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
         "HOME": str(home / "fake-home"),
+        "USERPROFILE": str(home / "fake-home"),
         "GAIA_CONFIG_DIR": str(home / "gaia-home"),
         "PYTHONPATH": str(REPO_ROOT / "src"),
         "GAIA_MEMORY_DISABLED": "1",
     }
+    # Windows cannot start Winsock (asyncio's import) without SYSTEMROOT.
+    if "SYSTEMROOT" in os.environ:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     return subprocess.run(
         [sys.executable, "-m", "gaia.cli", "skill", *args],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         env=env,
         cwd=str(cwd),
         check=False,

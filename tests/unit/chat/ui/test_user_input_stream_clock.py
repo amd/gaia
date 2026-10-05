@@ -54,3 +54,27 @@ def test_the_clock_counts_only_time_spent_waiting_on_the_user():
     assert clock.update(False, 500.0) == 300.0  # the turn's own time does not
     assert clock.update(True, 510.0) == 300.0
     assert clock.update(False, 520.0) == 310.0
+
+
+def test_a_pending_tool_confirmation_counts_as_waiting_on_the_user():
+    """A prompt can wait as long as the turn's budget; that wait is the user's."""
+    handler = SSEOutputHandler()
+    answers = []
+    asker = threading.Thread(
+        target=lambda: answers.append(
+            handler.confirm_tool_execution("write_file", {"file_path": "a.txt"})
+        ),
+        daemon=True,
+    )
+
+    asker.start()
+    deadline = time.monotonic() + 5
+    while handler._confirm_id is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert handler.awaiting_user_input() is True
+
+    handler.resolve_tool_confirmation(approved=False)
+    asker.join(timeout=5)
+
+    assert answers == [False]
+    assert handler.awaiting_user_input() is False

@@ -1,7 +1,25 @@
 ; Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 ; SPDX-License-Identifier: MIT
 ;
-; GAIA Terminal Hub — Windows setup.
+; GAIA — the one Windows setup. The user picks the desktop app (Agent UI), the
+; terminal (TUI), or both; at least one is required.
+;
+;   Desktop app  runs the embedded, unmodified electron-builder setup
+;                (gaia-agent-ui-<v>-x64-setup.exe /S /currentuser). That setup
+;                stays the app's owner -- its files, Installed-apps entry,
+;                shortcuts, autostart and uninstaller -- because electron-updater
+;                re-runs exactly that file to update the app. A second owner here
+;                would be duplicated by the first auto-update.
+;   Terminal     gaia-tui + gaia-agent, PATH, Windows Terminal profile, shortcuts,
+;                under the "GAIA Terminal Hub" identity the TUI-only setup used,
+;                so upgrading from it replaces it in place.
+;
+; No suite-level Installed-apps entry is written: each component is removed from
+; its own entry, so nothing here can be left orphaned.
+;
+; Silent installs take /COMPONENTS=ui,tui (or ui, or tui). Without it, /S keeps
+; what is already installed, and installs both on a fresh machine -- the same
+; defaults the interactive page starts from.
 ;
 ; Built with STANDALONE makensis, not electron-builder. electron-builder is an
 ; Electron packager and the terminal hub is a pair of plain executables; routing
@@ -23,6 +41,9 @@
 ;            -DLEMONADE_MSI=<path to lemonade-server-minimal.msi> \
 ;            -DLEMONADE_VERSION=<LEMONADE_VERSION from src/gaia/version.py> \
 ;            -DICON=<path to gaia.ico> \
+;            -DFONTS_DIR=<dir staged by installer/tui/fetch_fonts.py> \
+;            -DAGENT_UI_SETUP=<path to gaia-agent-ui-<v>-x64-setup.exe> \
+;            -DAGENT_UI_VERSION=<the version in that file name> \
 ;            -DOUTFILE=gaia-<version>-win-x64-setup.exe \
 ;            installer/tui/nsis/gaia-setup.nsi
 
@@ -49,7 +70,19 @@ Unicode true
 !ifndef OUTFILE
   !error "OUTFILE is required: -DOUTFILE=gaia-<version>-win-x64-setup.exe"
 !endif
+!ifndef FONTS_DIR
+  !error "FONTS_DIR is required: the IBM Plex Mono faces staged and verified by installer/tui/fetch_fonts.py"
+!endif
+!ifndef AGENT_UI_SETUP
+  !error "AGENT_UI_SETUP is required: the electron-builder gaia-agent-ui-<version>-x64-setup.exe this setup installs as the desktop app component"
+!endif
+!ifndef AGENT_UI_VERSION
+  !error "AGENT_UI_VERSION is required: the version of the embedded desktop app setup"
+!endif
 
+!define SETUP_NAME        "GAIA"
+; The terminal component's identity -- its Installed-apps entry and shortcuts.
+; Unchanged from the TUI-only setup so an upgrade lands on the same entry.
 !define PRODUCT_NAME      "GAIA Terminal Hub"
 !define PRODUCT_PUBLISHER "Advanced Micro Devices, Inc."
 !define PRODUCT_URL       "https://amd-gaia.ai"
@@ -58,7 +91,39 @@ Unicode true
 !define AGENT_EXE         "gaia-agent.exe"
 !define LEMONADE_MSI_NAME "lemonade-server-minimal.msi"
 
-Name "${PRODUCT_NAME} ${VERSION}"
+; The desktop app's registry identity, as electron-builder derives it:
+; UUIDv5(appId "ai.amd.gaia", electron-builder's namespace). Pinned by
+; tests/unit/installer/test_single_installer.py against electron-builder.yml.
+!define UI_GUID           "071ff68a-44b8-5d94-b099-f93e99d1c3f3"
+!define UI_INSTALL_KEY    "Software\${UI_GUID}"
+!define UI_UNINST_KEY     "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UI_GUID}"
+!define UI_EXE            "gaia-desktop.exe"
+!define UI_SETUP_NAME     "gaia-agent-ui-setup.exe"
+
+; The developer build (installer/nsis/gaia.nsi) puts its own gaia-tui on PATH
+; under its own "GAIA" Installed-apps entry, so beside this setup there would be
+; two of each. Setup refuses rather than guess which copy the user wants.
+!define DEV_SETTINGS_KEY  "Software\AMD\GAIA"
+!define DEV_UNINST_KEY    "Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIA"
+
+; Exit codes for silent installs. Every refusal leaves the machine unchanged.
+!define EXIT_RUNNING      2   ; a GAIA program Setup would replace is running
+!define EXIT_USAGE        3   ; /COMPONENTS named something unknown, or nothing
+!define EXIT_CONFLICT     4   ; the developer build, or an all-users desktop app
+!define EXIT_PARTIAL      5   ; a chosen component failed; any others installed
+
+; Windows Terminal reads per-user fragments from here; settings.json is never touched.
+!define WT_FRAGMENT_DIR   "$LOCALAPPDATA\Microsoft\Windows Terminal\Fragments\GAIA"
+!define WT_FRAGMENT_FILE  "gaia.json"
+; Must match the guid in wt-fragment.json.
+!define WT_PROFILE_GUID   "{6b5d7d70-4ed6-471b-b773-f1cafc56246f}"
+!define USER_FONTS_DIR    "$LOCALAPPDATA\Microsoft\Windows\Fonts"
+!define FONTS_REG         "Software\Microsoft\Windows NT\CurrentVersion\Fonts"
+; Which faces THIS setup installed, so uninstall never removes a copy the user had.
+!define GAIA_FONTS_KEY    "Software\GAIA\TerminalHub\Fonts"
+!define FONT_LICENSE      "IBM-Plex-Mono-OFL.txt"
+
+Name "${SETUP_NAME} ${VERSION}"
 OutFile "${OUTFILE}"
 ; Per-user by design: no admin prompt, no UAC dialog, nothing written outside
 ; the user's own profile. A machine-wide install would need elevation for a
@@ -76,9 +141,9 @@ SetCompressor /SOLID lzma
 ; Explorer sorts on this binary field, so a literal 0.0.0.0 would make every
 ; build report as older than the last. build-setup.sh enforces x.y.z.
 VIProductVersion "${VERSION}.0"
-VIAddVersionKey "ProductName"     "${PRODUCT_NAME}"
+VIAddVersionKey "ProductName"     "${SETUP_NAME}"
 VIAddVersionKey "CompanyName"     "${PRODUCT_PUBLISHER}"
-VIAddVersionKey "FileDescription" "${PRODUCT_NAME} Setup"
+VIAddVersionKey "FileDescription" "${SETUP_NAME} Setup"
 VIAddVersionKey "FileVersion"     "${VERSION}"
 VIAddVersionKey "ProductVersion"  "${VERSION}"
 VIAddVersionKey "LegalCopyright"  "Copyright (C) 2025-2026 ${PRODUCT_PUBLISHER}"
@@ -87,20 +152,41 @@ VIAddVersionKey "LegalCopyright"  "Copyright (C) 2025-2026 ${PRODUCT_PUBLISHER}"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
 !include "WinMessages.nsh"
+!include "WordFunc.nsh"
+!include "Sections.nsh"
+!include "x64.nsh"
 
 !insertmacro GetSize
+
+; What the shortcuts and the Finish page launch: wt.exe with the GAIA profile
+; when Windows Terminal is present, gaia-tui.exe directly otherwise.
+Var LaunchExe
+Var LaunchArgs
+; Where the desktop app landed, read back from electron-builder's own key.
+Var UiDir
+; 1 once a chosen component failed, so the exit code says so after the rest ran.
+Var Failed
 
 !define MUI_ICON   "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING
-; Unquoted on purpose -- MUI2's Finish.nsh emits Exec "$\"${MUI_FINISHPAGE_RUN}$\"",
-; so quoting here would double-quote a path that already contains a space.
-!define MUI_FINISHPAGE_RUN "$INSTDIR\${TUI_EXE}"
-!define MUI_FINISHPAGE_RUN_TEXT "Start ${PRODUCT_NAME}"
+; Launched through a function so the Finish page opens GAIA the way the shortcuts do.
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchGaia
+!define MUI_FINISHPAGE_RUN_TEXT "Start ${SETUP_NAME}"
 !define MUI_FINISHPAGE_LINK "GAIA documentation"
 !define MUI_FINISHPAGE_LINK_LOCATION "${PRODUCT_URL}"
 
 !insertmacro MUI_PAGE_LICENSE "${PAYLOAD_DIR}\LICENSE.md"
+
+!define MUI_COMPONENTSPAGE_TEXT_TOP "Choose how you want to use GAIA - the desktop app, the terminal, or both. Pick at least one.$\r$\n$\r$\nUnticking something that is already installed does not remove it; uninstall it from Settings > Apps > Installed apps."
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW ComponentsShow
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE ComponentsLeave
+!insertmacro MUI_PAGE_COMPONENTS
+
+; The folder choice is the terminal's; the desktop app's setup picks its own.
+!define MUI_PAGE_CUSTOMFUNCTION_PRE DirectoryPre
+!define MUI_DIRECTORYPAGE_TEXT_TOP "Setup will install the GAIA terminal (gaia-tui) in the following folder. The desktop app installs to its own folder."
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -251,28 +337,24 @@ FunctionEnd
 !macroend
 
 ; ─── Install ───────────────────────────────────────────────────────────────
-
-Function .onInit
-  ; $PLUGINSDIR is where the bundled Lemonade MSI is unpacked, and it does not
-  ; exist until something asks for it. MUI2 alone never does -- the Agent UI's
-  ; installer.nsh gets away with omitting this only because electron-builder's
-  ; generated script calls it first. Without it SetOutPath lands on "" and the
-  ; MSI install fails for every user.
-  InitPluginsDir
-FunctionEnd
+;
+; Section order is execution order and the components-page order: preflight,
+; Lemonade, desktop app, terminal, terminal profile. .onInit and the selection
+; logic sit after the last section because a section's index only exists below
+; its own Section line.
 
 ; Windows refuses write access to a running image, so `File` over a live
 ; gaia-tui.exe fails mid-extraction and leaves a half-written install -- and
 ; under /S there is no dialog to notice it. Opening for append is the same test
 ; the extractor would make, one step before anything has been changed.
 Function AbortIfRunning
-  ; in: $R8 = file name inside $INSTDIR
+  ; in: $R7 = folder, $R8 = file name inside it
 retry:
-  ${IfNot} ${FileExists} "$INSTDIR\$R8"
+  ${IfNot} ${FileExists} "$R7\$R8"
     Return
   ${EndIf}
   ClearErrors
-  FileOpen $R9 "$INSTDIR\$R8" a
+  FileOpen $R9 "$R7\$R8" a
   ${IfNot} ${Errors}
     FileClose $R9
     Return
@@ -281,26 +363,97 @@ retry:
   ; /SD IDCANCEL: a silent install must fail rather than block on an invisible
   ; dialog, and must fail HERE, with the previous install still intact.
   MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
-    "GAIA is still running, so Setup cannot replace $R8.$\r$\n$\r$\nClose GAIA - quit gaia-tui, and end any gaia-agent it left behind - then click Retry.$\r$\n$\r$\nNothing has been changed; your existing installation is intact." \
+    "GAIA is still running, so Setup cannot replace $R8.$\r$\n$\r$\nClose GAIA - quit gaia-tui and the desktop app (including its icon in the notification area), and end any gaia-agent left behind - then click Retry.$\r$\n$\r$\nNothing has been changed; your existing installation is intact." \
     /SD IDCANCEL IDRETRY retry
-  SetErrorLevel 2
+  SetErrorLevel ${EXIT_RUNNING}
   Abort "GAIA is running. Close it and run Setup again - nothing was changed."
 FunctionEnd
 
-Section "GAIA Terminal Hub" SecMain
-  SectionIn RO
+; Every refusal happens here, before the first byte is written, so a refused
+; setup leaves the machine exactly as it found it.
+Section "-Preflight" SecPreflight
+  Call Preflight
+SectionEnd
 
-  StrCpy $R8 "${TUI_EXE}"
-  Call AbortIfRunning
-  StrCpy $R8 "${AGENT_EXE}"
-  Call AbortIfRunning
+Section "-Lemonade" SecLemonade
+  ; The local inference server GAIA runs models on. Bundled rather than
+  ; downloaded so this installer works offline; $PLUGINSDIR is auto-deleted on
+  ; exit, so the MSI does not linger on disk.
+  ;
+  ; A Lemonade failure does not abort the GAIA install -- both front ends walk
+  ; the user through finishing setup -- but it is never swallowed: the
+  ; real-failure branch raises a dialog naming the exit code and what to do
+  ; next. Same contract as installer/nsis/installer.nsh, made visible rather
+  ; than log-only. Runs before the desktop app, whose own setup then re-runs the
+  ; same MSI as a no-op (0, or 1638 when this one is newer).
+  SetOutPath "$PLUGINSDIR"
+  File "/oname=${LEMONADE_MSI_NAME}" "${LEMONADE_MSI}"
+  DetailPrint "Installing Lemonade Server ${LEMONADE_VERSION}..."
+  ClearErrors
+  ExecWait 'msiexec /i "$PLUGINSDIR\${LEMONADE_MSI_NAME}" /qn /norestart' $0
+  ${If} $0 == 0
+    DetailPrint "Lemonade Server installed successfully."
+  ${ElseIf} $0 == 1638
+    ; ERROR_PRODUCT_VERSION — a newer Lemonade is already installed.
+    DetailPrint "Lemonade Server: a newer version is already installed (bundled MSI skipped)."
+  ${ElseIf} $0 == 3010
+    ; ERROR_SUCCESS_REBOOT_REQUIRED — installed; reboot pending.
+    DetailPrint "Lemonade Server installed (reboot pending)."
+  ${Else}
+    DetailPrint "Lemonade Server install FAILED with exit code $0."
+    ; /SD IDOK or a silent install blocks here forever on an invisible dialog.
+    MessageBox MB_OK|MB_ICONEXCLAMATION \
+      "The bundled Lemonade Server did not install (msiexec exit code $0). Setup will still install the rest of GAIA.$\r$\n$\r$\nGAIA needs Lemonade to run models locally. When Setup finishes, open GAIA - the desktop app, or gaia-tui in a new terminal - and it will offer to finish the setup.$\r$\n$\r$\nDetails: ${PRODUCT_URL}" \
+      /SD IDOK
+  ${EndIf}
+  ; Not back to $INSTDIR: SetOutPath creates the folder, and a desktop-app-only
+  ; install must not leave an empty terminal folder. The terminal section sets
+  ; its own.
+SectionEnd
 
+Section "Desktop app (Agent UI)" SecUI
+  ; Extracted only now, inside the section, so a terminal-only install never
+  ; unpacks it.
+  SetOutPath "$PLUGINSDIR"
+  File "/oname=${UI_SETUP_NAME}" "${AGENT_UI_SETUP}"
+  DetailPrint "Installing the GAIA desktop app ${AGENT_UI_VERSION}..."
+  StrCpy $0 ""
+  ClearErrors
+  ; /currentuser: the per-user install electron-builder.yml asks for
+  ; (perMachine: false). Preflight already refused when an all-users copy exists.
+  ExecWait '"$PLUGINSDIR\${UI_SETUP_NAME}" /S /currentuser' $0
+  ${If} ${Errors}
+    StrCpy $0 "could not be started"
+  ${EndIf}
+  Delete "$PLUGINSDIR\${UI_SETUP_NAME}"
+
+  ReadRegStr $UiDir HKCU "${UI_INSTALL_KEY}" "InstallLocation"
+  ${If} $0 == 0
+  ${AndIf} ${FileExists} "$UiDir\${UI_EXE}"
+    DetailPrint "Installed the GAIA desktop app to $UiDir."
+    Return
+  ${EndIf}
+
+  ${If} $0 == 0
+    StrCpy $0 "0, but $UiDir\${UI_EXE} is missing"
+  ${EndIf}
+  StrCpy $UiDir ""
+  StrCpy $Failed 1
+  DetailPrint "The GAIA desktop app did not install (its setup exited with $0)."
+  ; /SD IDOK, or a silent install blocks forever on a dialog nobody can see.
+  MessageBox MB_OK|MB_ICONEXCLAMATION \
+    "The GAIA desktop app did not install (its setup exited with $0).$\r$\n$\r$\nSetup will still install anything else you chose. Run Setup again and choose the desktop app, or download it on its own from ${PRODUCT_URL}." \
+    /SD IDOK
+SectionEnd
+
+Section "Terminal (TUI)" SecMain
   SetOutPath "$INSTDIR"
 
   File "${PAYLOAD_DIR}\${TUI_EXE}"
   File "${PAYLOAD_DIR}\${AGENT_EXE}"
   File "${PAYLOAD_DIR}\LICENSE.md"
   File "/oname=gaia.ico" "${ICON}"
+  File "${FONTS_DIR}\${FONT_LICENSE}"
 
   WriteRegStr HKCU "Software\GAIA\TerminalHub" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\GAIA\TerminalHub" "Version"    "${VERSION}"
@@ -320,17 +473,224 @@ Section "GAIA Terminal Hub" SecMain
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
 
-  ; ── Shortcuts ──
-  ; Both point at gaia-tui.exe. cobra's Explorer guard is disabled in the binary
-  ; (tui/internal/cli/root.go); left at its default it would make every one of
-  ; these shortcuts print "This is a command line tool" and exit, because a
-  ; shortcut launches via Explorer -- exactly the case mousetrap trips on.
-  CreateDirectory "$SMPROGRAMS\GAIA"
-  CreateShortcut "$SMPROGRAMS\GAIA\${PRODUCT_NAME}.lnk" "$INSTDIR\${TUI_EXE}" "" "$INSTDIR\gaia.ico" 0
-  CreateShortcut "$SMPROGRAMS\GAIA\Uninstall ${PRODUCT_NAME}.lnk" "$INSTDIR\Uninstall.exe"
-  CreateShortcut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\${TUI_EXE}" "" "$INSTDIR\gaia.ico" 0
-
   Call AddToUserPath
+SectionEnd
+
+; ─── Terminal profile: font, Windows Terminal fragment, shortcuts ──────────
+
+; Per-user font install: no admin, nothing under C:\Windows\Fonts. A face the
+; user already has (per-user or machine-wide) is left alone and not recorded,
+; so the uninstaller never removes it.
+Function ShouldInstallFont
+  ; in : $R8 = file name, $R9 = registry value name ("<full name> (TrueType)")
+  ; out: $R0 = 1 install it, 0 leave it
+  ; clobbers $R1
+  ClearErrors
+  ReadRegStr $R1 HKCU "${GAIA_FONTS_KEY}" "$R8"
+  ${IfNot} ${Errors}
+    ; Ours from an earlier install. Windows Terminal holds an open font file, and
+    ; the pinned bytes are identical, so an in-use copy is kept rather than
+    ; failing the upgrade on it.
+    ${If} ${FileExists} "${USER_FONTS_DIR}\$R8"
+      ClearErrors
+      FileOpen $R1 "${USER_FONTS_DIR}\$R8" a
+      ${If} ${Errors}
+        DetailPrint "$R8 is in use - keeping the copy this setup installed earlier."
+        StrCpy $R0 0
+        Return
+      ${EndIf}
+      FileClose $R1
+    ${EndIf}
+    StrCpy $R0 1
+    Return
+  ${EndIf}
+  StrCpy $R0 0
+  ClearErrors
+  ReadRegStr $R1 HKCU "${FONTS_REG}" "$R9"
+  ${IfNot} ${Errors}
+    DetailPrint "$R9 is already installed for this user - leaving it as it is."
+    Return
+  ${EndIf}
+  ClearErrors
+  ReadRegStr $R1 HKLM "${FONTS_REG}" "$R9"
+  ${IfNot} ${Errors}
+    DetailPrint "$R9 is already installed for all users - leaving it as it is."
+    Return
+  ${EndIf}
+  ${If} ${FileExists} "$FONTS\$R8"
+    DetailPrint "$R8 is already in the Windows fonts folder - leaving it as it is."
+    Return
+  ${EndIf}
+  ; In the per-user folder but registered nowhere: no font Windows offers, so
+  ; it is replaced and registered rather than left as an unusable stray.
+  ${If} ${FileExists} "${USER_FONTS_DIR}\$R8"
+    ClearErrors
+    FileOpen $R1 "${USER_FONTS_DIR}\$R8" a
+    ${If} ${Errors}
+      DetailPrint "$R8 is in your fonts folder but unregistered and in use - close Windows Terminal and run Setup again to install it."
+      Return
+    ${EndIf}
+    FileClose $R1
+  ${EndIf}
+  StrCpy $R0 1
+FunctionEnd
+
+!macro InstallFontFace FILE FULL_NAME
+  StrCpy $R8 "${FILE}"
+  StrCpy $R9 "${FULL_NAME} (TrueType)"
+  Call ShouldInstallFont
+  ${If} $R0 == 1
+    SetOutPath "${USER_FONTS_DIR}"
+    File "${FONTS_DIR}\${FILE}"
+    WriteRegStr HKCU "${FONTS_REG}" "${FULL_NAME} (TrueType)" "${USER_FONTS_DIR}\${FILE}"
+    WriteRegStr HKCU "${GAIA_FONTS_KEY}" "${FILE}" "${FULL_NAME} (TrueType)"
+    ; Makes the face usable now rather than after the next sign-in.
+    System::Call 'gdi32::AddFontResourceW(w "${USER_FONTS_DIR}\${FILE}") i .r0'
+    ${If} $0 == 0
+      DetailPrint "Installed font ${FULL_NAME} for this user; it becomes available after you next sign in."
+    ${Else}
+      DetailPrint "Installed font ${FULL_NAME} for this user."
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+; Writes $R3 to the open handle $R1 as UTF-8. FileWrite would write the ANSI
+; code page, and Windows Terminal rejects a fragment that is not UTF-8 -- which
+; any non-ASCII user name in the install path would produce.
+Function WriteUtf8
+  ClearErrors
+  System::Call 'kernel32::WideCharToMultiByte(i 65001, i 0, w R3, i -1, p 0, i 0, p 0, p 0) i .r5'
+  ${If} $5 <= 0
+    SetErrors
+    Return
+  ${EndIf}
+  System::Alloc $5
+  Pop $6
+  System::Call 'kernel32::WideCharToMultiByte(i 65001, i 0, w R3, i -1, p r6, i r5, p 0, p 0) i .r5'
+  ; Drop the terminating NUL the -1 length counted.
+  IntOp $5 $5 - 1
+  System::Call 'kernel32::WriteFile(p R1, p r6, i r5, *i .r7, p 0) i .r8'
+  System::Free $6
+  ${If} $8 == 0
+  ${OrIf} $7 != $5
+    SetErrors
+  ${EndIf}
+FunctionEnd
+
+; out: error flag set when the fragment could not be written whole.
+Function WriteTerminalFragment
+  ; A JSON string needs every backslash in the path doubled.
+  ${WordReplace} "$INSTDIR" "\" "\\" "+" $R2
+  SetOutPath "$PLUGINSDIR"
+  File "/oname=wt-fragment.json" "${__FILEDIR__}\wt-fragment.json"
+  CreateDirectory "${WT_FRAGMENT_DIR}"
+  ClearErrors
+  FileOpen $R0 "$PLUGINSDIR\wt-fragment.json" r
+  ${If} ${Errors}
+    Return
+  ${EndIf}
+  FileOpen $R1 "${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}" w
+  ${If} ${Errors}
+    FileClose $R0
+    SetErrors
+    Return
+  ${EndIf}
+  StrCpy $R4 0
+  ${Do}
+    ClearErrors
+    FileRead $R0 $R3
+    ${If} ${Errors}
+      ${Break}
+    ${EndIf}
+    ${WordReplace} "$R3" "__GAIA_INSTDIR__" "$R2" "+" $R3
+    ; WordReplace flags "no match", which is every line but two.
+    ClearErrors
+    Call WriteUtf8
+    ${If} ${Errors}
+      StrCpy $R4 1
+      ${Break}
+    ${EndIf}
+  ${Loop}
+  FileClose $R0
+  FileClose $R1
+  ClearErrors
+  ${If} $R4 == 1
+    Delete "${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}"
+    SetErrors
+  ${EndIf}
+FunctionEnd
+
+; out: $R0 = path to wt.exe, or "" when Windows Terminal is not installed
+Function FindWindowsTerminal
+  ; The Store build exposes wt.exe as an app execution alias here.
+  StrCpy $R0 "$LOCALAPPDATA\Microsoft\WindowsApps\wt.exe"
+  ${If} ${FileExists} "$R0"
+    Return
+  ${EndIf}
+  SearchPath $R0 "wt.exe"
+FunctionEnd
+
+; The desktop app when it was installed, otherwise the terminal the way its
+; shortcuts open it.
+Function LaunchGaia
+  ${If} $UiDir != ""
+    Exec '"$UiDir\${UI_EXE}"'
+  ${ElseIf} $LaunchExe != ""
+    Exec '"$LaunchExe" $LaunchArgs'
+  ${EndIf}
+FunctionEnd
+
+Section "-Terminal profile" SecTerminalProfile
+  !insertmacro InstallFontFace "IBMPlexMono-Regular.ttf"    "IBM Plex Mono"
+  !insertmacro InstallFontFace "IBMPlexMono-Bold.ttf"       "IBM Plex Mono Bold"
+  !insertmacro InstallFontFace "IBMPlexMono-Italic.ttf"     "IBM Plex Mono Italic"
+  !insertmacro InstallFontFace "IBMPlexMono-BoldItalic.ttf" "IBM Plex Mono Bold Italic"
+  SendMessage ${HWND_BROADCAST} ${WM_FONTCHANGE} 0 0 /TIMEOUT=5000
+  SetOutPath "$INSTDIR"
+
+  ; Written even without Windows Terminal: it is inert until WT is installed,
+  ; and then the GAIA profile simply appears.
+  StrCpy $R5 1
+  Call WriteTerminalFragment
+  ${If} ${Errors}
+    StrCpy $R5 0
+  ${EndIf}
+  ; Shortcuts take $OUTDIR as their start-in folder, and the function left it on $PLUGINSDIR.
+  SetOutPath "$INSTDIR"
+  ${If} $R5 == 0
+    DetailPrint "Could not write the Windows Terminal profile to ${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}."
+    ; /SD IDOK, or a silent install blocks forever on a dialog nobody can see.
+    MessageBox MB_OK|MB_ICONEXCLAMATION \
+      "GAIA is installed, but Setup could not write its Windows Terminal profile to:$\r$\n$\r$\n${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}$\r$\n$\r$\nThe shortcuts will run gaia-tui in the default console instead. Check that folder is writable, then run Setup again." \
+      /SD IDOK
+  ${Else}
+    DetailPrint "Added the GAIA profile to Windows Terminal (${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE})."
+  ${EndIf}
+
+  ; ── Shortcuts ──
+  ; cobra's Explorer guard is disabled in gaia-tui (tui/internal/cli/root.go);
+  ; left at its default, a shortcut that runs it directly would print "This is
+  ; a command line tool" and exit, because a shortcut launches via Explorer.
+  Call FindWindowsTerminal
+  ${If} $R0 != ""
+  ${AndIf} $R5 == 1
+    StrCpy $LaunchExe "$R0"
+    StrCpy $LaunchArgs '-p "${WT_PROFILE_GUID}"'
+    DetailPrint "Shortcuts open GAIA in Windows Terminal with the GAIA profile."
+  ${Else}
+    StrCpy $LaunchExe "$INSTDIR\${TUI_EXE}"
+    StrCpy $LaunchArgs ""
+    ${If} $R0 == ""
+      ; Explicit, not a fallback: the console host cannot load a WT profile.
+      DetailPrint "Windows Terminal is not installed - shortcuts run gaia-tui in the default console, without the GAIA font and colours. Install Windows Terminal and re-run Setup to use the GAIA profile."
+    ${Else}
+      DetailPrint "Shortcuts run gaia-tui in the default console because the Windows Terminal profile could not be written."
+    ${EndIf}
+  ${EndIf}
+  CreateDirectory "$SMPROGRAMS\GAIA"
+  CreateShortcut "$SMPROGRAMS\GAIA\${PRODUCT_NAME}.lnk" "$LaunchExe" "$LaunchArgs" "$INSTDIR\gaia.ico" 0
+  CreateShortcut "$SMPROGRAMS\GAIA\Uninstall ${PRODUCT_NAME}.lnk" "$INSTDIR\Uninstall.exe"
+  CreateShortcut "$DESKTOP\${PRODUCT_NAME}.lnk" "$LaunchExe" "$LaunchArgs" "$INSTDIR\gaia.ico" 0
 SectionEnd
 
 !macro RefusePathEdit
@@ -380,46 +740,260 @@ Function AddToUserPath
   DetailPrint "Added $INSTDIR to your PATH (open a new terminal to pick it up)."
 FunctionEnd
 
-Section "-Lemonade" SecLemonade
-  ; The local inference server GAIA runs models on. Bundled rather than
-  ; downloaded so this installer works offline; $PLUGINSDIR is auto-deleted on
-  ; exit, so the MSI does not linger on disk.
-  ;
-  ; A Lemonade failure does not abort the GAIA install -- both binaries are
-  ; still useful and gaia-tui walks the user through setup -- but it is never
-  ; swallowed: the real-failure branch raises a dialog naming the exit code and
-  ; what to run next. Same contract as installer/nsis/installer.nsh, made
-  ; visible rather than log-only.
-  SetOutPath "$PLUGINSDIR"
-  File "/oname=${LEMONADE_MSI_NAME}" "${LEMONADE_MSI}"
-  DetailPrint "Installing Lemonade Server ${LEMONADE_VERSION}..."
-  ClearErrors
-  ExecWait 'msiexec /i "$PLUGINSDIR\${LEMONADE_MSI_NAME}" /qn /norestart' $0
-  ${If} $0 == 0
-    DetailPrint "Lemonade Server installed successfully."
-  ${ElseIf} $0 == 1638
-    ; ERROR_PRODUCT_VERSION — a newer Lemonade is already installed.
-    DetailPrint "Lemonade Server: a newer version is already installed (bundled MSI skipped)."
-  ${ElseIf} $0 == 3010
-    ; ERROR_SUCCESS_REBOOT_REQUIRED — installed; reboot pending.
-    DetailPrint "Lemonade Server installed (reboot pending)."
-  ${Else}
-    DetailPrint "Lemonade Server install FAILED with exit code $0."
-    ; /SD IDOK or a silent install blocks here forever on an invisible dialog.
-    MessageBox MB_OK|MB_ICONEXCLAMATION \
-      "GAIA is installed, but the bundled Lemonade Server did not install (msiexec exit code $0).$\r$\n$\r$\nGAIA needs Lemonade to run models locally. Open a new terminal, run gaia-tui, and it will offer to finish the setup.$\r$\n$\r$\nDetails: ${PRODUCT_URL}" \
-      /SD IDOK
+; Last section: a component that failed after the others installed must still
+; show in the exit code, or a silent install reports success.
+Section "-Report" SecReport
+  ${If} $Failed == 1
+    SetErrorLevel ${EXIT_PARTIAL}
   ${EndIf}
-  SetOutPath "$INSTDIR"
 SectionEnd
 
+; ─── Component selection ───────────────────────────────────────────────────
+
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecUI} "The GAIA desktop app: a window with chat, your documents and files, and every tool call shown as it runs. Adds a GAIA shortcut to the desktop and Start menu, and starts with Windows (turn that off in the app's tray menu)."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "gaia-tui: the same agent in your terminal, on your PATH, with a GAIA profile for Windows Terminal. Adds a GAIA Terminal Hub shortcut to the desktop and Start menu."
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
+
+!macro RefuseUsage MSG
+  ; /SD IDOK: under /S the exit code is the message.
+  MessageBox MB_OK|MB_ICONSTOP "${MSG}$\r$\n$\r$\nUse /COMPONENTS=ui,tui, /COMPONENTS=ui or /COMPONENTS=tui. Nothing was installed." /SD IDOK
+  SetErrorLevel ${EXIT_USAGE}
+  Quit
+!macroend
+
+; in : $R3 = the value after /COMPONENTS=
+; out: $R0 = 1 when the terminal was asked for, $R1 = 1 when the desktop app was
+Function ParseComponents
+  StrCpy $R0 0
+  StrCpy $R1 0
+  StrCpy $R4 "$R3,"
+  ${Do}
+    ${If} $R4 == ""
+      ${Break}
+    ${EndIf}
+    StrCpy $R5 ""
+    ${Do}
+      StrCpy $R6 $R4 1
+      StrCpy $R4 $R4 "" 1
+      ${If} $R6 == ","
+        ${Break}
+      ${EndIf}
+      StrCpy $R5 "$R5$R6"
+    ${Loop}
+    ; == is case-insensitive in LogicLib, so TUI and Ui are accepted too.
+    ${If} $R5 == "tui"
+      StrCpy $R0 1
+    ${ElseIf} $R5 == "ui"
+      StrCpy $R1 1
+    ${ElseIf} $R5 != ""
+      !insertmacro RefuseUsage "Unknown component '$R5' in /COMPONENTS=$R3."
+    ${EndIf}
+  ${Loop}
+  ${If} $R0 == 0
+  ${AndIf} $R1 == 0
+    !insertmacro RefuseUsage "/COMPONENTS= must name at least one component."
+  ${EndIf}
+FunctionEnd
+
+; out: $R0 = 1 when the desktop app is installed for all users (HKLM), which a
+;      per-user setup cannot update without leaving a second copy beside it.
+;      Clobbers $R9 only.
+Function HasAllUsersUi
+  StrCpy $R0 0
+  ReadRegStr $R9 HKLM "${UI_INSTALL_KEY}" "InstallLocation"
+  ${If} $R9 != ""
+    StrCpy $R0 1
+  ${EndIf}
+FunctionEnd
+
+Function .onInit
+  ; $PLUGINSDIR is where the bundled Lemonade MSI is unpacked, and it does not
+  ; exist until something asks for it. MUI2 alone never does -- the Agent UI's
+  ; installer.nsh gets away with omitting this only because electron-builder's
+  ; generated script calls it first. Without it SetOutPath lands on "" and the
+  ; MSI install fails for every user.
+  InitPluginsDir
+  ; electron-builder writes the desktop app's all-users key in the 64-bit view;
+  ; a 32-bit NSIS process would otherwise read WOW6432Node and never see it.
+  ${If} ${RunningX64}
+    SetRegView 64
+  ${EndIf}
+  StrCpy $Failed 0
+  StrCpy $UiDir ""
+
+  ; Its files, not just its keys: a folder deleted by hand leaves keys behind
+  ; and an uninstaller that cannot run, which must not block Setup forever.
+  ReadRegStr $R0 HKCU "${DEV_SETTINGS_KEY}" "InstallDir"
+  ${If} $R0 == ""
+    ReadRegStr $R0 HKCU "${DEV_UNINST_KEY}" "InstallLocation"
+  ${EndIf}
+  ${If} $R0 != ""
+  ${AndIf} ${FileExists} "$R0\gaia-tui.exe"
+    ; /SD IDOK: under /S the exit code is the message.
+    MessageBox MB_OK|MB_ICONSTOP \
+      "A GAIA developer build is installed (Installed apps: GAIA).$\r$\n$\r$\nInstalled beside it, GAIA would have two gaia-tui programs on your PATH and two GAIA entries in Installed apps. Uninstall it from Settings > Apps > Installed apps, then run Setup again.$\r$\n$\r$\nNothing was installed." \
+      /SD IDOK
+    SetErrorLevel ${EXIT_CONFLICT}
+    Quit
+  ${EndIf}
+
+  ; Start from what is installed, so re-running Setup -- or a silent upgrade --
+  ; updates what the user has rather than adding what they did not choose. A
+  ; fresh machine gets both. An all-users desktop app is not ours to update.
+  ReadRegStr $R2 HKCU "Software\GAIA\TerminalHub" "InstallDir"
+  ReadRegStr $R3 HKCU "${UI_INSTALL_KEY}" "InstallLocation"
+  StrCpy $R0 0
+  StrCpy $R1 0
+  ${If} $R2 != ""
+    StrCpy $R0 1
+  ${EndIf}
+  ${If} $R3 != ""
+    StrCpy $R1 1
+  ${EndIf}
+  ${If} $R0 == 0
+  ${AndIf} $R1 == 0
+    Call HasAllUsersUi
+    IntOp $R1 $R0 ^ 1
+    StrCpy $R0 1
+  ${EndIf}
+
+  ${GetParameters} $R2
+  ClearErrors
+  ${GetOptions} $R2 "/COMPONENTS=" $R3
+  ${IfNot} ${Errors}
+    Call ParseComponents
+  ${EndIf}
+
+  ${If} $R0 == 1
+    !insertmacro SelectSection ${SecMain}
+  ${Else}
+    !insertmacro UnselectSection ${SecMain}
+  ${EndIf}
+  ${If} $R1 == 1
+    !insertmacro SelectSection ${SecUI}
+  ${Else}
+    !insertmacro UnselectSection ${SecUI}
+  ${EndIf}
+  Call SyncHiddenSections
+FunctionEnd
+
+; The terminal profile belongs to the terminal: it runs only when that does.
+Function SyncHiddenSections
+  ${If} ${SectionIsSelected} ${SecMain}
+    !insertmacro SelectSection ${SecTerminalProfile}
+  ${Else}
+    !insertmacro UnselectSection ${SecTerminalProfile}
+  ${EndIf}
+FunctionEnd
+
+Function UpdateNextButton
+  GetDlgItem $0 $HWNDPARENT 1
+  ${If} ${SectionIsSelected} ${SecUI}
+  ${OrIf} ${SectionIsSelected} ${SecMain}
+    EnableWindow $0 1
+  ${Else}
+    EnableWindow $0 0
+  ${EndIf}
+FunctionEnd
+
+Function .onSelChange
+  Call SyncHiddenSections
+  Call UpdateNextButton
+FunctionEnd
+
+Function ComponentsShow
+  Call UpdateNextButton
+FunctionEnd
+
+; Next is already disabled with nothing chosen; this is the second lock, for
+; the keyboard and anything else that reaches the page's leave callback.
+Function ComponentsLeave
+  ${IfNot} ${SectionIsSelected} ${SecUI}
+  ${AndIfNot} ${SectionIsSelected} ${SecMain}
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Choose the desktop app, the terminal, or both."
+    Abort
+  ${EndIf}
+  ${If} ${SectionIsSelected} ${SecUI}
+    Call HasAllUsersUi
+    ${If} $R0 == 1
+      MessageBox MB_OK|MB_ICONEXCLAMATION \
+        "The GAIA desktop app is installed for all users on this PC, and this Setup installs it for your account only - that would leave two copies.$\r$\n$\r$\nUntick the desktop app here, or uninstall the all-users copy first (Settings > Apps > Installed apps, as an administrator)."
+      Abort
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
+Function DirectoryPre
+  ${IfNot} ${SectionIsSelected} ${SecMain}
+    Abort
+  ${EndIf}
+FunctionEnd
+
+; The same refusals the components page makes, again here because /S never
+; shows that page. Then the running-program checks, for what will be replaced.
+Function Preflight
+  ${If} ${SectionIsSelected} ${SecUI}
+    Call HasAllUsersUi
+    ${If} $R0 == 1
+      DetailPrint "The desktop app is installed for all users - Setup cannot update it per-user."
+      MessageBox MB_OK|MB_ICONSTOP \
+        "The GAIA desktop app is installed for all users on this PC, and this Setup installs it for your account only - that would leave two copies.$\r$\n$\r$\nRun Setup without the desktop app (/COMPONENTS=tui), or uninstall the all-users copy first. Nothing was changed." \
+        /SD IDOK
+      SetErrorLevel ${EXIT_CONFLICT}
+      Abort "The desktop app is installed for all users - nothing was changed."
+    ${EndIf}
+    ReadRegStr $R7 HKCU "${UI_INSTALL_KEY}" "InstallLocation"
+    ${If} $R7 != ""
+      StrCpy $R8 "${UI_EXE}"
+      Call AbortIfRunning
+    ${EndIf}
+  ${EndIf}
+  ${If} ${SectionIsSelected} ${SecMain}
+    StrCpy $R7 "$INSTDIR"
+    StrCpy $R8 "${TUI_EXE}"
+    Call AbortIfRunning
+    StrCpy $R8 "${AGENT_EXE}"
+    Call AbortIfRunning
+  ${EndIf}
+FunctionEnd
+
 ; ─── Uninstall ─────────────────────────────────────────────────────────────
+
+; Removes a face only when this setup recorded installing it.
+!macro UninstallFontFace FILE FULL_NAME
+  ClearErrors
+  ReadRegStr $R0 HKCU "${GAIA_FONTS_KEY}" "${FILE}"
+  ${IfNot} ${Errors}
+    System::Call 'gdi32::RemoveFontResourceW(w "${USER_FONTS_DIR}\${FILE}") i .r0'
+    Delete "${USER_FONTS_DIR}\${FILE}"
+    ; Registration goes only with the file, so a face still in use stays a
+    ; working installed font rather than an unregistered stray.
+    ${If} ${FileExists} "${USER_FONTS_DIR}\${FILE}"
+      DetailPrint "${FULL_NAME} is still installed - Windows Terminal has it open. Close Windows Terminal, then remove it from Settings > Personalization > Fonts."
+    ${Else}
+      DeleteRegValue HKCU "${FONTS_REG}" "${FULL_NAME} (TrueType)"
+      DetailPrint "Removed font ${FULL_NAME}."
+    ${EndIf}
+  ${EndIf}
+!macroend
 
 Section "Uninstall"
   Delete "$INSTDIR\${TUI_EXE}"
   Delete "$INSTDIR\${AGENT_EXE}"
   Delete "$INSTDIR\LICENSE.md"
   Delete "$INSTDIR\gaia.ico"
+  Delete "$INSTDIR\${FONT_LICENSE}"
+
+  ; Before the GAIA key is deleted: it records which faces are ours to remove.
+  !insertmacro UninstallFontFace "IBMPlexMono-Regular.ttf"    "IBM Plex Mono"
+  !insertmacro UninstallFontFace "IBMPlexMono-Bold.ttf"       "IBM Plex Mono Bold"
+  !insertmacro UninstallFontFace "IBMPlexMono-Italic.ttf"     "IBM Plex Mono Italic"
+  !insertmacro UninstallFontFace "IBMPlexMono-BoldItalic.ttf" "IBM Plex Mono Bold Italic"
+  SendMessage ${HWND_BROADCAST} ${WM_FONTCHANGE} 0 0 /TIMEOUT=5000
+
+  Delete "${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}"
+  RMDir  "${WT_FRAGMENT_DIR}"
 
   ; The original Uninstall.exe is still exiting here and Windows will not delete
   ; a running image, so a single Delete loses that race. Not /REBOOTOK either:

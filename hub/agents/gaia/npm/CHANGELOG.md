@@ -8,6 +8,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Every tool is offered on every turn again, as in the Agent UI.** Per-turn
+  tool selection swapped about a dozen tools in and out at its cap, which broke
+  the local model's prompt cache (17s to first token on a one-line question,
+  0.4s without it) and left out the tool a question needed: a CSV question was
+  given web tools and fetched an unrelated page. `GAIA_DYNAMIC_TOOLS=1` turns
+  selection back on. The registered count is 95: `load_tools`, the selector's
+  escape hatch, registers only while selection is on.
+- **A turn's silent opening now says what the model is doing.** A thinking
+  model sat on "Getting started" for 10-20 s while it read the prompt and then
+  reasoned in a paragraph released only once finished. `status` events gain an
+  optional `phase` (`loading_model`, `downloading_model`, `reading`,
+  `reasoning`, `tool_call`) with a `words` or `chars` count, sent when each phase
+  actually starts; the terminal UI shows them as "Reading your request",
+  "Reasoning · 214 words" and so on. Clients that ignore the field see the same
+  sentence in `message`.
+- **GPU models no longer load at 32K on an NPU-profile machine.** The NPU's
+  32,768-token ceiling was applied to every model whenever `default_device` was
+  `npu`, so a GGUF model ran at half its window and long tasks overflowed. It now
+  binds NPU (FLM) models only. A model can also opt in to a window sized to the
+  machine's memory, up to its native maximum.
 - **A stale `GAIA_SKILL_SET` now stops startup.** An undeclared name used to be
   dropped silently, so the agent came up healthy with no skills. The sidecar
   and the stdio entry now exit non-zero before serving, with a message naming
@@ -22,6 +42,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chat: the agent starts, loads its model and reads its system prompt there,
   step by step. New stdio sentinel `warm_up` (answers `warmed_up`, or
   `warm_up_skipped` for a remote model).
+- The default chat model now follows the hardware. On a PC whose GPU has
+  ~27 GB for models — a 64 GB+ Strix Halo or a 32 GB GPU; the 23.3 GB model also
+  needs its context cache — `gaia init` sets up Qwen3.6 35B A3B (a 23 GB Lemonade
+  built-in MoE, run with thinking on) and records it as `default_model`; the
+  agent and its `GET /v1/gaia/init` readiness check use it for chat. Gemma 4 E4B
+  is still downloaded for vision. Every other PC, including a CPU-only one, keeps
+  Gemma alone.
+- **Qwen3.6 gets the longest context this PC's memory holds.** Up to its native
+  262,144 tokens on a Strix Halo (a 5.4 GB KV cache), about 152K on a 32 GB GPU,
+  never under 64K. Gemma stays at 64K.
+- Qwen3.8 Flash Next (82 GB, multimodal, thinking on) is available on a
+  128 GB Strix Halo and never picked as a default; it needs ~90 GB for models.
+  Choose it with `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`;
+  `gaia init` refuses it on a PC that cannot hold it.
 - **Bypass permissions is now called full access, everywhere.** `--full-access`
   and `/full-access` replace `--bypass-permissions` and `/bypass`; the old names
   fail with a message naming the new one. `/full-access always` (or
@@ -50,6 +84,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that fails still returns 409 and leaves the session on its previous model.
 
 ### Fixed
+
+- **`--use-claude` works with the downloaded binary.** The release build left
+  out the Anthropic client, so every Claude launch from the terminal UI, and
+  every `/model` switch to Claude, failed with "The 'anthropic' package is
+  required", which a frozen binary cannot act on. The client is now bundled, and
+  the release build fails if it is missing.
 
 - **Code search works in an Agent UI chat that is not inside a project.** It
   started in GAIA's own documents folder, which usually does not exist yet, so

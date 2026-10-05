@@ -649,3 +649,15 @@ def test_checking_a_live_pid_never_kills_it_when_the_os_is_faked():
     finally:
         child.kill()
         child.wait()
+
+
+def test_pinned_digests_are_bare_hex_like_the_installer_computes():
+    """The release API publishes ``sha256:<hex>``; the installer compares against
+    ``hexdigest()``, so a pasted prefix would fail every embedded install."""
+    import re
+
+    from gaia.llm.lemonade_embedded import EMBEDDABLE_SHA256
+
+    assert EMBEDDABLE_SHA256
+    for asset, digest in EMBEDDABLE_SHA256.items():
+        assert re.fullmatch(r"[0-9a-f]{64}", digest), f"{asset}: {digest!r}"

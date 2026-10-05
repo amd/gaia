@@ -42,7 +42,7 @@ class RAGConfig:
 
     model: str = "Qwen3.5-35B-A3B-GGUF"
     max_tokens: int = 1024
-    chunk_size: int = 500
+    chunk_size: int = 500  # max useful; chunks are capped at EMBED_MAX_CHARS (2000)
     chunk_overlap: int = 100
     max_chunks: int = 5
     embedding_model: str = "user.embeddinggemma-300m-GGUF"
@@ -332,7 +332,6 @@ def test_remove_document():
 [project]
 dependencies = [
     "pypdf>=3.0",
-    "sentence-transformers",  # For embeddings
     "faiss-cpu",  # Vector search
     "numpy",
     "gaia.chat.sdk",

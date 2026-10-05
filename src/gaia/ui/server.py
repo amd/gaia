@@ -278,12 +278,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             """
             import faiss  # noqa: F401  # pylint: disable=unused-import
 
-            # sentence-transformers is NOT pre-imported: RAG embeds via Lemonade,
-            # and the memory cross-encoder reranker imports it lazily with graceful
-            # degradation. Eagerly importing it here pulled the fragile torch/
-            # torchcodec stack into boot and made a broken install look like a RAG
-            # failure (#RAG-embedder-switch).
-
             # Log which SWIG backend faiss actually loaded.
             # Order matters: check most-optimized first.
             _swig_variants = [
@@ -336,9 +330,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
             from gaia.daemon.broker_client import model_lease
             from gaia.llm.lemonade_client import LemonadeClient
-            from gaia.ui.routers.system import _DEFAULT_MODEL_NAME
+            from gaia.ui.routers.system import _default_model_name
 
-            model_id = db.get_setting("custom_model") or _DEFAULT_MODEL_NAME
+            model_id = db.get_setting("custom_model") or _default_model_name()
 
             # model_load_lock guards other threads in THIS process; the broker
             # lease guards other processes sharing Lemonade's single slot

@@ -413,6 +413,35 @@ an unreadable series (`1301 … 1437, 991`) and proved nothing.
 | cancel mid-generation | Esc during a long answer | **can take 60–90s** — cooperative, only checked at step boundaries |
 | idle Esc | Esc with nothing streaming | must NOT quit silently |
 
+## Stress it with real and hostile files
+
+Small synthetic prompts pass while users' files break things. Generate the stress
+corpus (110 MB, seeded, never committed) and ask about each file:
+
+```bash
+python util/stress_corpus.py --out ~/Documents/stress --answers ~/stress-answers.json
+```
+
+Keep the key outside the corpus: a content search over the folder finds the key's
+copy of every answer and the test proves nothing.
+
+A right answer is not a pass. Read the tool trail and the timings too. The needle
+in the 1,667-page PDF came back correct after **11 minutes**: a tool timed out
+mid-index, the retry indexed it again, and the trail said "Indexed document
+(0 chunks)". Then check the backend, which the transcript never shows:
+
+```bash
+# side requests that hit the token cap: a thinking model reasoning without end
+grep "out=4096" <lemonade log>
+# turns that re-read the whole conversation: the prompt cache was lost
+grep "Inference completed" <lemonade log>    # compare in= across turns
+```
+
+Run each case on both default models. Qwen3.6 reasons before every answer and
+Gemma does not, so a bug often shows up on only one of them. In the Agent UI,
+answer every permission prompt within its countdown: a prompt that times out is a
+denial, and the turn that follows tests the denial path, not the feature.
+
 ## Known-good baselines (Gemma-4-E4B, GPU, quiet box)
 
 | operation | time |

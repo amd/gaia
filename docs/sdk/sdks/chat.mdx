@@ -261,7 +261,7 @@ chat = AgentSDK()
 
 chat.enable_rag(
     documents=["doc1.pdf", "doc2.pdf"],
-    chunk_size=600,      # Larger chunks for more context
+    chunk_size=500,      # Largest chunks (500 is the maximum)
     max_chunks=4,        # More chunks per query
     chunk_overlap=100    # Overlap for context preservation
 )

@@ -21,6 +21,14 @@ export interface Session {
     device?: string;
     /** Mail provider for email-triage sessions ("google" | "microsoft"). */
     mail_provider?: string | null;
+    /** Whether chat leaves this machine; null/absent when the backend can't tell. */
+    inference_remote?: boolean | null;
+    /** Backend id answering chat, e.g. "lemonade", "fireworks". */
+    inference_provider?: string | null;
+    /** Human name for that backend, e.g. "Fireworks AI". */
+    inference_provider_name?: string | null;
+    /** One sentence on where chat runs and what is sent there. */
+    inference_description?: string | null;
 }
 
 /** Per-device configuration for an agent (CPU / GPU / NPU). */
@@ -485,7 +493,7 @@ export interface SystemStatus {
     // LLM configuration health
     context_size_sufficient: boolean;
     model_downloaded: boolean | null;
-    default_model_name: string;
+    default_model_name: string | null;
     /**
      * Catalog-reported size of ``default_model_name`` (GB). Used by the
      * "model not downloaded" banner so the size hint stays in sync with

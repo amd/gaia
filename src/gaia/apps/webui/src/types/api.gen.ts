@@ -743,6 +743,10 @@ export interface SessionResponse {
   device?: string;
   document_ids?: string[];
   id: string;
+  inference_description?: string | null;
+  inference_provider?: string | null;
+  inference_provider_name?: string | null;
+  inference_remote?: boolean | null;
   mail_provider?: string | null;
   message_count?: number;
   model: string;
@@ -803,7 +807,7 @@ export interface SystemStatus {
   active_profile?: string;
   config_error?: string | null;
   context_size_sufficient?: boolean;
-  default_model_name?: string;
+  default_model_name?: string | null;
   default_model_size_gb?: number | null;
   detected_devices?: string[];
   disk_space_gb?: number;
