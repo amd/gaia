@@ -124,8 +124,21 @@ def test_a_script_reading_an_out_of_scope_file_is_refused_for_that_file(layout):
         "python3 -Ic \"open('../../outside/secret.txt')\"",
         "node -e \"require('fs').readFileSync('../../outside/secret.txt')\"",
         'cmd /c "type ../../outside/secret.txt"',
+        "cmd /c type ../../outside/secret.txt",
+        'cmd.exe /C "type ../../outside/secret.txt"',
+        'CMD.EXE /K "type ../../outside/secret.txt"',
+        'cmd /k "dir /b ../../outside/secret.txt"',
+        'cmd /s /q /c "type ../../outside/secret.txt"',
+        'cmd /d /e:on /C "type ../../outside/secret.txt"',
+        'cmd /r "type ../../outside/secret.txt"',
+        'cmd "/ctype ../../outside/secret.txt"',
+        "cmd /Ktype ../../outside/secret.txt",
+        'cmd /c "echo hi & type ../../outside/secret.txt"',
         "pwsh -NoLogo -Command Get-Content -Path:../../outside/secret.txt",
         "powershell Get-Content '../../outside/secret.txt'",
+        'powershell /NoProfile /Command "Get-Content ../../outside/secret.txt"',
+        "pwsh.exe /nologo /c Get-Content ../../outside/secret.txt",
+        "powershell /File ../../outside/secret.txt",
     ],
 )
 def test_traversal_inside_an_inline_script_is_refused(command, layout):
@@ -133,6 +146,60 @@ def test_traversal_inside_an_inline_script_is_refused(command, layout):
 
     assert refusal is not None, command
     assert str(layout["secret"].resolve()) in refusal["error"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'bash -c "cat ../Documents/stress/server.log"',
+        "sh -c 'head -n 1 ../Documents/stress/server.log'",
+        'bash -lc "cat ../Documents/stress/server.log | wc -l"',
+        "python -c \"print(open('../Documents/stress/server.log').read())\"",
+        "python3 -Ic \"open('../Documents/stress/server.log')\"",
+        "node -e \"require('fs').readFileSync('../Documents/stress/server.log')\"",
+        "perl -e \"open(F, '../Documents/stress/server.log')\"",
+        "ruby -e \"File.read('../Documents/stress/server.log')\"",
+        'cmd /c "type ../Documents/stress/server.log"',
+        "cmd /c type ../Documents/stress/server.log",
+        'cmd.exe /C "type ../Documents/stress/server.log"',
+        'CMD.EXE /K "type ../Documents/stress/server.log"',
+        'cmd /k "dir /b /a:-d ../Documents/stress"',
+        'cmd /s /q /c "type ../Documents/stress/server.log"',
+        'cmd /d /e:on /C "type ../Documents/stress/server.log"',
+        'cmd /r "type ../Documents/stress/server.log"',
+        'cmd "/ctype ../Documents/stress/server.log"',
+        "cmd /Ktype ../Documents/stress/server.log",
+        "pwsh -NoLogo -Command Get-Content -Path:../Documents/stress/server.log",
+        "powershell Get-Content '../Documents/stress/server.log'",
+        'powershell /NoProfile /Command "Get-Content ../Documents/stress/server.log"',
+        "pwsh.exe /nologo /c Get-Content ../Documents/stress/server.log",
+        "powershell /File ../Documents/stress/server.log",
+    ],
+)
+def test_an_allowed_path_inside_an_inline_script_is_not_refused(command, layout):
+    refusal, validator = _check(command, layout["work"], layout["home"])
+
+    assert refusal is None, refusal
+    # The file was really checked, not skipped.
+    assert any(
+        path.startswith(str(layout["log"].parent.resolve())) for path in validator.asked
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cmd /c type /outside/secret.txt",
+        "cmd /outside/secret.txt /c dir",
+        "pwsh /outside/secret.ps1",
+        "powershell /NoProfile /File /outside/secret.ps1",
+    ],
+)
+def test_only_a_switch_is_exempt_never_a_path(command, layout):
+    """A ``/name`` switch is skipped; a rooted path beside it is still checked."""
+    refusal, _ = _check(command, layout["work"], layout["home"])
+
+    assert refusal is not None, command
 
 
 def test_an_encoded_command_is_decoded_and_checked(layout):

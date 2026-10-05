@@ -892,6 +892,57 @@ _SCRIPT_QUOTES = {"powershell": "'\"", "cmd": '"', "code": "'\"`"}
 #: Marks a ``-EncodedCommand`` operand, which is base64 of UTF-16LE PowerShell.
 _PS_ENCODED = "powershell-encoded"
 
+#: Marks an interpreter's own ``/switch``: an option on every OS, never a path.
+_SWITCH = "switch"
+
+#: Marks ``/cdir``-style operands: cmd's run switch with the script attached.
+_CMD_ATTACHED = "cmd-attached"
+
+#: cmd.exe's own switches; ``/c``, ``/k`` and ``/r`` start the script.
+_CMD_RUN_SWITCH = re.compile(r"/[ckr]", re.IGNORECASE)
+_CMD_OWN_SWITCH = re.compile(r"/(?:[sqdauxy?]|[tefv]:[^/\\]*)", re.IGNORECASE)
+
+#: PowerShell's own parameters, which it also accepts as ``/Name``.
+_POWERSHELL_SWITCHES = (
+    "command",
+    "configurationname",
+    "custompipename",
+    "encodedarguments",
+    "encodedcommand",
+    "ec",
+    "executionpolicy",
+    "file",
+    "help",
+    "inputformat",
+    "interactive",
+    "login",
+    "mta",
+    "noexit",
+    "nologo",
+    "noninteractive",
+    "noprofile",
+    "outputformat",
+    "settingsfile",
+    "sta",
+    "version",
+    "windowstyle",
+    "workingdirectory",
+    "?",
+)
+
+
+def _is_slash_switch(word: str) -> bool:
+    """Whether *word* has the ``/name`` shape of a Windows switch, on any host."""
+    return re.fullmatch(r"/[^/\\]+", word) is not None and ".." not in word
+
+
+def _is_powershell_switch(token: str) -> bool:
+    """Whether *token* is ``/Name`` for one of PowerShell's own parameters."""
+    if not _is_slash_switch(token):
+        return False
+    name = token[1:].lower()
+    return any(switch.startswith(name) for switch in _POWERSHELL_SWITCHES)
+
 
 def _interpreter_name(token: str) -> str:
     """*token* as the interpreter it runs: ``C:\\...\\pwsh.exe`` -> ``powershell``."""
@@ -915,6 +966,8 @@ def _powershell_script_positions(argv: list) -> Dict[int, str]:
         token = argv[index]
         if not token.startswith(("-", "/")):
             break
+        if _is_powershell_switch(token):
+            positions[index] = _SWITCH
         name = token[1:].split(":", 1)[0].lower()
         if name and "command".startswith(name):
             index += 1
@@ -939,7 +992,8 @@ def _inline_script_positions(argv: list) -> Dict[int, str]:
     """``{index: dialect}`` for each operand of *argv* that is inline script.
 
     Only the interpreters in ``_SCRIPT_DIALECTS``, and only the operand their
-    script flag names. Any other operand stays a single path candidate.
+    script flag names. Any other operand stays a single path candidate, except
+    cmd's and PowerShell's own ``/switch`` operands, marked ``_SWITCH``.
     """
     program = _interpreter_name(argv[0])
     dialect = _SCRIPT_DIALECTS.get(program)
@@ -948,13 +1002,18 @@ def _inline_script_positions(argv: list) -> Dict[int, str]:
     if dialect == "powershell":
         return _powershell_script_positions(argv)
     if dialect == "cmd":
+        positions: Dict[int, str] = {}
         for index, token in enumerate(argv[1:], start=1):
-            if token.lower().startswith(("/c", "/k")):
+            if _CMD_RUN_SWITCH.match(token):
                 # cmd runs the rest of the line; '/cdir' carries it attached.
-                start = index if len(token) > 2 else index + 1
-                return {body: "cmd" for body in range(start, len(argv))}
-        return {}
-    positions: Dict[int, str] = {}
+                positions[index] = _SWITCH if len(token) == 2 else _CMD_ATTACHED
+                for body in range(index + 1, len(argv)):
+                    positions[body] = "cmd"
+                break
+            if _CMD_OWN_SWITCH.fullmatch(token):
+                positions[index] = _SWITCH
+        return positions
+    positions = {}
     reads_script = False
     for index, token in enumerate(argv[1:], start=1):
         if dialect == "posix":
@@ -1051,6 +1110,8 @@ def _script_words(body: str, dialect: str) -> list:
             logger.debug("-EncodedCommand operand is not base64 UTF-16LE: %s", exc)
             return [body]
         dialect = "powershell"
+    if dialect == _CMD_ATTACHED:
+        body, dialect = body[2:], "cmd"
     if dialect == "posix":
         try:
             return _tokenize(body, bypass_gates=True)
@@ -1063,6 +1124,9 @@ def _script_words(body: str, dialect: str) -> list:
         words = [
             w.split(":", 1)[1] if w.startswith("-") and ":" in w else w for w in words
         ]
+    if dialect == "cmd":
+        # 'dir /b' inside the script: a switch whichever OS checks the line.
+        words = [w for w in words if not _is_slash_switch(w)]
     return words
 
 
@@ -1079,6 +1143,8 @@ def _path_operands(argv: list) -> list:
         dialect = positions.get(index)
         if dialect is None:
             operands.append(("Argument", token))
+            continue
+        if dialect == _SWITCH:
             continue
         label = f"Path in the {_interpreter_name(argv[0])} script"
         operands.extend((label, word) for word in _script_words(token, dialect))
