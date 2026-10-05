@@ -1791,6 +1791,16 @@ def test_the_row_ceiling_drops_the_newest_not_the_oldest(store):
     assert len(store.search_deltas(base_name="s", limit=None)) == 5
 
 
+def test_deltas_written_in_one_clock_tick_keep_their_write_order(store, monkeypatch):
+    """Windows' clock can stamp several writes alike; the last one still wins."""
+    from gaia.agents.base import memory_store
+
+    monkeypatch.setattr(memory_store, "_now_iso", lambda: "2026-01-01T00:00:00+00:00")
+    ids = [_put(store, "s") for _ in range(8)]
+
+    assert [r["id"] for r in store.search_deltas(base_name="s")] == ids
+
+
 def test_archiving_is_bound_to_the_skill_and_scope_named(store):
     mine = _put(store, "mine", scope="AgentA")
     theirs = _put(store, "theirs", scope="AgentA")

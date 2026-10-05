@@ -96,6 +96,7 @@ def test_hub_installed_wheel_agent_importable_in_fresh_process(tmp_path, monkeyp
     tmp_home = tmp_path / "home"
     tmp_home.mkdir()
     monkeypatch.setenv("HOME", str(tmp_home))
+    monkeypatch.setenv("USERPROFILE", str(tmp_home))
 
     wheel_bytes = build_chat_shaped_fixture_wheel(agent_id=FIXTURE_AGENT_ID)
     manifest, artifact_path = build_wheel_manifest(
@@ -133,7 +134,7 @@ def test_hub_installed_wheel_agent_importable_in_fresh_process(tmp_path, monkeyp
     )
     assert result.hot_registered is False  # no registry= was passed
 
-    env = {**os.environ, "HOME": str(tmp_home)}
+    env = {**os.environ, "HOME": str(tmp_home), "USERPROFILE": str(tmp_home)}
     proc = subprocess.run(
         [sys.executable, "-c", _DISCOVER_SCRIPT.format(agent_id=FIXTURE_AGENT_ID)],
         env=env,

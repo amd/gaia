@@ -950,14 +950,13 @@ MODELS = {
         min_ctx_size=GPU_CTX_SIZE,
         tool_calling=True,
     ),
-    # --- Qwen3.8-Flash-Next: the multimodal big-PC option (Strix Halo 128 GB) ---
+    # --- Qwen3.8-Flash-Next: opt-in on a 128 GB Strix Halo, never a default ---
     # 125B MoE (6B active) + 51B n-gram embedding; needs llama.cpp's qwen4exp
-    # support, first bundled in Lemonade v2026.39.1. UD-IQ3_XXS (82 GB, three
-    # shards in one repo folder) is the largest quant that fits a 96 GB GPU
-    # carve-out with room for the 64K window — its KV cache is ~25 KB/token,
-    # since only 12 of 48 layers carry attention. Not the default (see
-    # LARGE_DEFAULT_MODEL_NAME) — switch to it with `gaia config set
-    # default_model` when vision/reasoning matters more than decode speed.
+    # (llama.cpp #27742, in b10825), first bundled in Lemonade v2026.39.1.
+    # UD-IQ3_XXS (82 GB, three shards in one repo folder) is the largest quant
+    # whose ~90 GB need fits a 96 GB GPU carve-out, so the OS keeps all of its
+    # own RAM. Its MTP head is not in llama.cpp yet. Not in
+    # DEFAULT_MODEL_LADDER — choose it with `gaia config set default_model`.
     "qwen3.8-flash": ModelRequirement(
         model_type=ModelType.LLM,
         model_id=FLASH_OPTION_MODEL_NAME,
@@ -969,9 +968,14 @@ MODELS = {
         mmproj="mmproj-F16.gguf",
         vision=True,
         reasoning=True,
+        thinking=True,
         # Three model shards plus the 0.9 GB vision projector, as Lemonade counts it.
         size_gb=82.86,
         min_lemonade_version="2026.39.1",
+        # 12 of 48 layers are Sparse Attention; the rest are Gated DeltaNet, whose
+        # state does not grow: 2 KV heads x 256 dims x K+V x f16 = 24 KiB/token,
+        # 1.6 GB at 64K. No max_ctx_size, so the window stays at the floor.
+        kv_bytes_per_token=24576,
     ),
     # --- Qwen3.6 35B A3B: the default wherever a GPU holds it ---
     # 35B MoE (3B active), a Lemonade built-in on llama.cpp (UD-Q4_K_XL +
@@ -1175,6 +1179,26 @@ MODEL_SAMPLING_PROFILES: Dict[str, CardSampling] = {
     # The MTP build is the same weights plus a speculative-decoding head.
     "Qwen3.6-35B-A3B-GGUF": _QWEN3_6_35B_A3B,
     "Qwen3.6-35B-A3B-MTP-GGUF": _QWEN3_6_35B_A3B,
+    # https://huggingface.co/Qwen/Qwen3.8-Flash-Next thinks unless the request
+    # sends chat_template_kwargs {"enable_thinking": false}; the card gives no
+    # repetition penalty for either mode.
+    FLASH_OPTION_MODEL_NAME: CardSampling(
+        thinks_by_default=True,
+        thinking={
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 0.0,
+        },
+        non_thinking={
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 1.5,
+        },
+    ),
 }
 
 
@@ -1206,6 +1230,21 @@ def requested_thinking(
         return explicit
     mr = find_model_requirement(model_id)
     return mr.thinking if mr else None
+
+
+def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
+    """Request fields that turn thinking off for a short, structured side call.
+
+    A thinking model bills its reasoning against ``max_tokens``, so a side call
+    that wants a few hundred tokens of JSON instead reasons until the cap and
+    returns nothing. Empty for cloud models and for local models whose template
+    has no thinking switch (``requested_thinking`` is None), which send nothing.
+    """
+    if not isinstance(model_id, str) or cloud_model_provider(model_id):
+        return {}
+    if requested_thinking(model_id) is None:
+        return {}
+    return {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 # Define agent profiles with their model requirements
@@ -2167,6 +2206,11 @@ class LemonadeClient:
         # (#2924). Reset at the top of every ``_ensure_model_loaded_locked``
         # call so a later warm call never leaks a stale value.
         self._last_model_load_seconds: Optional[float] = None
+
+        # Called as (model, state) around a load this client actually performs:
+        # "downloading" or "loading" before it, "loaded" after it succeeds. A
+        # cold load is the longest silent wait a chat turn has.
+        self.model_load_listener: Optional[Callable[[str, str], None]] = None
 
         # Set logging level based on verbosity
         if not verbose:
@@ -5140,6 +5184,10 @@ class LemonadeClient:
         # corrupt checkpoint) previously got hidden by a blanket
         # ``except Exception: log.debug(...)``, so the downstream chat call
         # failed generically with no model id, URL, or fix. Surface it loudly.
+        if self.model_load_listener is not None:
+            self.model_load_listener(
+                model, "downloading" if is_downloaded is False else "loading"
+            )
         _load_start = time.monotonic()
         try:
             self.load_model(
@@ -5160,6 +5208,8 @@ class LemonadeClient:
         # raises above and never reaches here, so it can't be misattributed
         # as ttft on a request that never got a response.
         self._last_model_load_seconds = time.monotonic() - _load_start
+        if self.model_load_listener is not None:
+            self.model_load_listener(model, "loaded")
 
         # Print model ready message
         try:

@@ -8,6 +8,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A turn's silent opening now says what the model is doing.** A thinking
+  model sat on "Getting started" for 10-20 s while it read the prompt and then
+  reasoned in a paragraph released only once finished. `status` events gain an
+  optional `phase` (`loading_model`, `downloading_model`, `reading`,
+  `reasoning`, `tool_call`) with a `words` or `chars` count, sent when each phase
+  actually starts; the terminal UI shows them as "Reading your request",
+  "Reasoning · 214 words" and so on. Clients that ignore the field see the same
+  sentence in `message`.
 - **GPU models no longer load at 32K on an NPU-profile machine.** The NPU's
   32,768-token ceiling was applied to every model whenever `default_device` was
   `npu`, so a GGUF model ran at half its window and long tasks overflowed. It now
@@ -37,9 +45,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Qwen3.6 gets the longest context this PC's memory holds.** Up to its native
   262,144 tokens on a Strix Halo (a 5.4 GB KV cache), about 152K on a 32 GB GPU,
   never under 64K. Gemma stays at 64K.
-- Qwen3.8 Flash Next (82 GB, multimodal) is a supported manual option on
-  128 GB-class PCs — not auto-selected. Switch with
-  `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`.
+- Qwen3.8 Flash Next (82 GB, multimodal, thinking on) is available on a
+  128 GB Strix Halo and never picked as a default; it needs ~90 GB for models.
+  Choose it with `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`;
+  `gaia init` refuses it on a PC that cannot hold it.
 - **Bypass permissions is now called full access, everywhere.** `--full-access`
   and `/full-access` replace `--bypass-permissions` and `/bypass`; the old names
   fail with a message naming the new one. `/full-access always` (or

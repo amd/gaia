@@ -438,10 +438,12 @@ class _FakeAgent:
 
 class TestBackgroundExecution:
     @pytest.fixture
-    def agent(self, tmp_path):
+    def agent(self, tmp_path, monkeypatch):
         class _Agent(MemoryMixin, _FakeAgent):
             pass
 
+        # These tests need a real store; the unit job disables memory globally.
+        monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
         host = _Agent()
         with (
             patch.object(MemoryMixin, "_get_embedder", return_value=_mock_embedder()),
@@ -530,3 +532,38 @@ class TestBackgroundExecution:
         agent._memory_store = None
         assert agent.start_skill_synthesis() is None
         assert agent.wait_for_skill_synthesis() is True
+
+
+# ---------------------------------------------------------------------------
+# Distillation is a short structured side call
+# ---------------------------------------------------------------------------
+
+
+class TestDistillationThinking:
+    """A thinking model would reason through DISTILL_MAX_TOKENS and distil nothing."""
+
+    @pytest.mark.parametrize(
+        "model_id,expected",
+        [
+            ("Qwen3.6-35B-A3B-GGUF", {"enable_thinking": False}),
+            ("Gemma-4-E4B-it-GGUF", None),
+        ],
+    )
+    def test_distill_call_carries_the_thinking_switch(self, store, model_id, expected):
+        sent = []
+
+        class _Chat(_RecordingChat):
+            effective_model = model_id
+
+            def send_messages(self, messages, **kwargs):
+                sent.append(kwargs)
+                return super().send_messages(messages, **kwargs)
+
+        host = _SynthesisHost(store, _Chat())
+        _seed_cluster(store, "s", "triage the support ticket")
+
+        host._synthesize_skills()
+
+        assert sent, "the qualifying cluster was never distilled"
+        for kwargs in sent:
+            assert kwargs.get("chat_template_kwargs") == expected

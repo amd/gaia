@@ -18,6 +18,16 @@ def marker(tmp_path, monkeypatch):
     return path
 
 
+@pytest.fixture(autouse=True)
+def default_model(monkeypatch):
+    """The machine's default chat model, never this developer's own config."""
+    chosen = {"model": "Gemma-4-E4B-it-GGUF"}
+    monkeypatch.setattr(
+        onboarding_mod, "resolve_default_chat_model", lambda: chosen["model"]
+    )
+    return chosen
+
+
 @pytest.fixture
 def client(marker):  # noqa: ARG001 - marker fixture applies the monkeypatch
     app = create_app(db_path=":memory:")
@@ -58,6 +68,41 @@ def test_preflight_full_tier_compatible(client, monkeypatch):
     assert body["recommended_model"] == "Gemma-4-E4B-it-GGUF"
     # NPU present ⇒ no NPU warning.
     assert not any("NPU" in w for w in body["warnings"])
+
+
+@pytest.mark.allow_network
+def test_preflight_recommends_the_model_chat_will_load(
+    client, monkeypatch, default_model
+):
+    """On a machine whose default is Qwen3.6, setup pulls Qwen3.6, not Gemma.
+
+    The wizard said "Gemma-4-E4B is downloaded and ready" on a Strix Halo whose
+    chat then asked for the 23 GB Qwen3.6 nobody had pulled.
+    """
+    default_model["model"] = "Qwen3.6-35B-A3B-GGUF"
+    monkeypatch.setattr(onboarding_mod, "_probe_lemonade_devices", _stub_devices())
+    monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 64.0)
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+
+    body = client.get("/api/onboarding/preflight").json()
+
+    assert body["recommended_model"] == "Qwen3.6-35B-A3B-GGUF"
+    assert body["required_disk_gb"] > 23.3
+
+
+@pytest.mark.allow_network
+def test_preflight_blocks_when_the_default_model_does_not_fit_on_disk(
+    client, monkeypatch, default_model
+):
+    default_model["model"] = "Qwen3.6-35B-A3B-GGUF"
+    monkeypatch.setattr(onboarding_mod, "_probe_lemonade_devices", _stub_devices())
+    monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 64.0)
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 10.0)
+
+    body = client.get("/api/onboarding/preflight").json()
+
+    assert body["compatible"] is False
+    assert body["blockers"]
 
 
 @pytest.mark.allow_network

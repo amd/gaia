@@ -166,7 +166,7 @@ def test_polling_path_does_not_log_database_initialized_per_pass(tmp_path):
     ``assertNoLogs`` (not ``assertLogs``) is deliberate: the watched logger
     here (``gaia.database.mixin``) is the same object that emits the record,
     so the "assertLogs only changes the watched logger's level, not a child
-    logger's inherited level" gotcha (see ``tests/test_lemonade_client.py``'s
+    logger's inherited level" gotcha (see ``tests/unit/test_lemonade_client_http.py``'s
     ``test_api_key_never_appears_in_logs``) does not apply — but ``assertLogs``
     itself raises when NOTHING is captured, which is exactly the passing case
     here, so ``assertNoLogs`` is the correct primitive for a silence

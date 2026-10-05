@@ -190,12 +190,21 @@ func RunOneShot(
 		streamed  strings.Builder
 		sawTokens bool
 		tools     = newToolLedger()
+		// A phase repeats once a second while its count climbs; stderr gets
+		// each phase once, not a line per tick.
+		lastPhase string
 	)
 
 	handle := func(evt interface{}) {
 		switch e := evt.(type) {
 		case event.CanonicalStatusEvent:
 			debugf("status %q", e.Message)
+			if e.Phase != "" {
+				if e.Phase == lastPhase {
+					return
+				}
+				lastPhase = e.Phase
+			}
 			if msg := strings.TrimSpace(e.Message); msg != "" {
 				fmt.Fprintf(errW, "  … %s\n", msg)
 			}
@@ -210,6 +219,7 @@ func RunOneShot(
 
 		case event.CanonicalToolCallEvent:
 			debugf("tool_call %s args=%s", e.Tool, rawOrDash(e.Args))
+			lastPhase = ""
 			fmt.Fprintf(errW, "  🔧 %s\n", e.Tool)
 
 		case event.CanonicalToolResultEvent:
