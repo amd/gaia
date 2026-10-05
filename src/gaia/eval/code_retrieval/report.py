@@ -196,6 +196,10 @@ def compare(
             f"baseline is suite {baseline.get('suite')!r}, this run is "
             f"{current.get('suite')!r}; compare runs of the same suite"
         )
+    # A part the baseline ran and this run did not is unchecked, not passed.
+    for part in ("quality", "incremental", "robustness"):
+        if baseline.get(part) and not current.get(part):
+            regressions.append(f"{part} did not run, so it was not compared")
     bq, cq = baseline.get("quality"), current.get("quality")
     if bq and cq:
         b_ids = sorted(r["id"] for r in bq["queries"])
@@ -206,11 +210,26 @@ def compare(
                 f"({len(b_ids)} vs {len(c_ids)}); its numbers are not comparable. "
                 "Re-capture the baseline from a run of this suite."
             )
+        # Gold is filtered to what the index holds, so an index that stops
+        # holding a gold file would shrink the target and keep recall flat.
+        before = {r["id"]: r for r in bq["queries"]}
+        for r in cq["queries"]:
+            b = before[r["id"]]
+            lost = sorted(
+                set(r["gold"]["not_in_index"]) - set(b["gold"]["not_in_index"])
+            )
+            if lost:
+                regressions.append(f"{r['id']}: gold files no longer indexed: {lost}")
+            if "skipped" in r and "skipped" not in b:
+                regressions.append(f"{r['id']}: now skipped ({r['skipped']})")
         for name, b in bq["summary"].items():
             c = cq["summary"][name]
             for metric in GATED_METRICS:
                 bv, cv = b["semantic"][metric], c["semantic"][metric]
-                if bv is None or cv is None:
+                if bv is None:
+                    continue
+                if cv is None:
+                    regressions.append(f"{name} semantic {metric} has no value now")
                     continue
                 deltas.append(
                     {"set": name, "metric": metric, "baseline": bv, "current": cv}
@@ -220,8 +239,6 @@ def compare(
                         f"{name} semantic {metric} fell {bv:.3f} -> {cv:.3f} "
                         f"(more than {max_drop})"
                     )
-    elif bq or cq:
-        regressions.append("quality ran in only one of the two runs")
     ci = current.get("incremental")
     if ci is not None and not ci["correct"]:
         regressions.append("incremental re-index drifted from a fresh index")

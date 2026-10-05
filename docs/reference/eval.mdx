@@ -414,7 +414,7 @@ An abridged, illustrative file:
 `gaia eval retrieval --component code` measures the code index behind semantic code search ([`src/gaia/code_index/`](https://github.com/amd/gaia/tree/main/src/gaia/code_index)) on real repositories. It answers four questions: does it find the code a real fix changed, does it beat plain `grep`, what does indexing cost, and does a damaged cache fail loudly? No LLM is involved. Every number comes from real embeddings through Lemonade.
 
 ```bash
-gaia eval retrieval --component code                     # pr suite, ~30 min
+gaia eval retrieval --component code                     # pr suite, ~40 min
 gaia eval retrieval --component code --suite pr \
   --gate tests/fixtures/eval_baselines/code-retrieval/pr.json
 gaia eval retrieval --component code --suite nightly     # sampled, a few hours

@@ -220,7 +220,10 @@ def _result(suite="pr", r10=0.8, ids=("a", "b"), passed=True, correct=True):
     }
     return {
         "suite": suite,
-        "quality": {"queries": [{"id": i} for i in ids], "summary": {"all": summary}},
+        "quality": {
+            "queries": [{"id": i, "gold": {"not_in_index": []}} for i in ids],
+            "summary": {"all": summary},
+        },
         "incremental": {"correct": correct},
         "robustness": {
             "scenarios": [{"name": "faiss-empty", "passed": passed, "recovers": True}],
@@ -354,3 +357,27 @@ def test_file_hazards_cover_what_the_index_must_skip():
         "oversized-file": False,
         "latin-1-file": True,
     }
+
+
+def test_gate_sees_gold_the_index_stopped_holding():
+    current = _result()
+    current["quality"]["queries"][0]["gold"]["not_in_index"] = ["pkg/a.py"]
+    current["quality"]["queries"][1]["skipped"] = "nothing indexed"
+    regs = report.compare(_result(), current, 0.05)["regressions"]
+    assert any("no longer indexed" in r and "pkg/a.py" in r for r in regs)
+    assert any("now skipped" in r for r in regs)
+
+
+def test_gate_fails_a_metric_that_lost_its_value():
+    current = _result()
+    current["quality"]["summary"]["all"]["semantic"]["symbol_recall@5"] = None
+    regs = report.compare(_result(), current, 0.05)["regressions"]
+    assert any("symbol_recall@5 has no value" in r for r in regs)
+
+
+def test_gate_treats_every_missing_part_the_same():
+    for part in ("quality", "incremental", "robustness"):
+        current = _result()
+        current.pop(part)
+        regs = report.compare(_result(), current, 0.05)["regressions"]
+        assert f"{part} did not run, so it was not compared" in regs

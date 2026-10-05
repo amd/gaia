@@ -5,7 +5,7 @@
 # what does indexing cost, and does it fail loudly when its cache is damaged?
 # `gaia eval retrieval --component code`; docs/reference/eval.mdx explains it.
 #
-#   pr      - PRs touching the code index. Real embeddings, no LLM, ~30 min.
+#   pr      - PRs touching the code index. Real embeddings, no LLM, ~40 min.
 #             Gated against tests/fixtures/eval_baselines/code-retrieval/pr.json.
 #   nightly - sampled SWE-bench Verified + SWE-rebench 2026. Gated against
 #             nightly.json.
@@ -39,19 +39,21 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.schedule || github.event.inputs.suite || 'pr' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   retrieval:
     name: Code retrieval (${{ github.event.schedule == '41 7 * * 0' && 'scale' || (github.event_name == 'schedule' && 'nightly' || (github.event.inputs.suite || 'pr')) }})
     # Fork PRs never reach the self-hosted pool; drafts wait for ready_for_ci.
+    # Of all labels, only ready_for_ci starts a run.
     if: >-
       (github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ready_for_ci') &&
       (github.event.pull_request.draft == false ||
       contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))))
+    # Job-level, so a skipped run (a label other than ready_for_ci) cancels nothing.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.schedule || github.event.inputs.suite || 'pr' }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     defaults:
       run:
