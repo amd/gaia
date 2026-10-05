@@ -1763,6 +1763,8 @@ Do NOT wrap conversational replies in JSON.
                     base_url=base_url,
                     required_min_device=required_min_device,
                     device=device,
+                    # A cloud default_model must not stop this local model's preload.
+                    model=model_id,
                 )
                 # Starting GAIA's own server picks its port, so follow it.
                 if resolve_after_start:

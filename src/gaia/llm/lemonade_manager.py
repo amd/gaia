@@ -296,6 +296,9 @@ class LemonadeManager:
     # Set while an idle-server preload runs with ``_lock`` released; other
     # callers wait on it instead of sending a second /load.
     _preload_in_flight: Optional[threading.Event] = None
+    # Server confirmed up for a cloud-model caller. Kept apart from
+    # ``_initialized`` so a later local-model caller still gets the idle preload.
+    _ready_for_cloud = False
     _log = get_logger(__name__)
 
     # Rate-limit the per-turn context re-check that fires when context_size==0.
@@ -620,6 +623,7 @@ class LemonadeManager:
         port: Optional[int] = None,
         required_min_device: Optional[str] = None,
         device: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> bool:
         """Ensure Lemonade server is running with sufficient context size.
 
@@ -646,6 +650,10 @@ class LemonadeManager:
             device: High-level device selector ('cpu', 'gpu', 'npu').
                 When set, maps to the appropriate ``required_min_device``
                 value.  Explicit ``required_min_device`` takes precedence.
+            model: The chat model the caller will run; unset means this
+                machine's default (``resolve_default_chat_model``). An idle
+                server is seeded with it. A cloud model is never preloaded and
+                skips the context check — it has no local window to size.
 
         Returns:
             True if Lemonade server is ready, False otherwise.
@@ -658,13 +666,11 @@ class LemonadeManager:
         """
         # Callers thread config values through verbatim — an unset (None)
         # floor means the default, never a TypeError at the ctx comparison.
+        requested_ctx = min_context_size
         if min_context_size is None:
             min_context_size = resolve_ctx_size(device=device)
-            # An idle server is seeded with the default model at that model's
-            # own window, so its first chat does not reload it.
-            preload_ctx = resolve_ctx_size(model=DEFAULT_MODEL_NAME)
-        else:
-            preload_ctx = min_context_size
+        chat_model = model or resolve_default_chat_model()
+        is_cloud = cloud_model_provider(chat_model) is not None
         # Map high-level device selector to required_min_device when the
         # caller didn't pass an explicit required_min_device.
         if device and not required_min_device:
@@ -697,6 +703,9 @@ class LemonadeManager:
             cls._maybe_validate_device(
                 required_min_device, device, base_url, host, port, quiet
             )
+
+            if is_cloud and (cls._initialized or cls._ready_for_cloud):
+                return True
 
             # If already initialized, just verify context size
             if cls._initialized:
@@ -899,6 +908,17 @@ class LemonadeManager:
                             cls.print_server_error(min_context_size)
                         return False
 
+                if is_cloud:
+                    cls._ready_for_cloud = True
+                    cls._base_url = client.base_url
+                    cls._log.debug(
+                        "Lemonade ready at %s; not preloading a local chat "
+                        "model because the chat model %r is a cloud model",
+                        cls._base_url,
+                        chat_model,
+                    )
+                    return True
+
                 # Defensive normalisation: some Lemonade versions can return
                 # `loaded_models: null` in their JSON, which would crash the
                 # `any(... for model in ...)` calls below.
@@ -935,8 +955,13 @@ class LemonadeManager:
                 # of poisoned with (initialized=True, ctx=0).
                 just_preloaded = False
                 if context_size_value == 0 and not llm_models_loaded:
+                    # Seed the model at its own window (an explicit floor
+                    # wins), so its first chat does not reload it.
+                    preload_ctx = requested_ctx or resolve_ctx_size(
+                        model=chat_model, base_url=client.base_url
+                    )
                     context_size_value, status = cls._try_preload_with_ctx(
-                        client, preload_ctx, quiet, cls._lock
+                        client, preload_ctx, quiet, cls._lock, model=chat_model
                     )
                     just_preloaded = True
                     # ``_try_preload_with_ctx`` already re-fetched status
@@ -1193,8 +1218,10 @@ class LemonadeManager:
         min_context_size: int,
         quiet: bool,
         lock: "threading.Lock",
+        model: Optional[str] = None,
     ) -> Tuple[int, "LemonadeStatus"]:
-        """Load the default LLM with the required ctx_size on an idle server.
+        """Load *model* (default: this machine's default local LLM) with the
+        required ctx_size on an idle server.
 
         Closes the gap left by `_try_reload_with_ctx`, which only handles the
         "model already loaded with too-small ctx" path.  When the server is
@@ -1224,7 +1251,7 @@ class LemonadeManager:
                 command) so the user can recover manually if the auto-preload
                 cannot.
         """
-        model = _preload_model()
+        model = model or _preload_model()
         # Proactive clamp (#2992): a model already downloaded from a prior
         # run has its ceiling in the catalog before we ever call /load, so
         # request the real value up front instead of relying on Lemonade's
@@ -1483,6 +1510,7 @@ class LemonadeManager:
         """
         with cls._lock:
             cls._initialized = False
+            cls._ready_for_cloud = False
             cls._base_url = None
             cls._context_size = 0
             cls._context_ceiling = None
