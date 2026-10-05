@@ -73,7 +73,7 @@ export function pathAccessTitle(args: unknown, followUp = false): string {
   return followUp ? `Also let GAIA use this ${noun}?` : `Let GAIA use this ${noun}?`;
 }
 
-/** `C:\A\b.txt` and `c:/a/b.txt/` compare equal; case is ignored for Windows drives. */
+/** `C:\A\b.txt` and `c:/a/b.txt/` compare equal. Picks card wording only; too loose for an access check. */
 function normalizePath(p: string): string {
   return p.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
