@@ -3,6 +3,7 @@ id: data_region_breakdown
 name: "Data — Regional Breakdown With an Exact Slice"
 category: gaia_data
 severity: high
+tags: [t2_compound]
 description: |
   A per-region breakdown where one slice has a pinned expected value
   (North = $6,150) and the parts must sum to the pinned total ($18,600).

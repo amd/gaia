@@ -161,7 +161,7 @@ def flagship(monkeypatch, tmp_path):
                 self.file_metadata = {}
                 self.file_to_chunk_indices = {}
 
-            def index_document(self, path):
+            def index_document(self, path, progress_callback=None):
                 self.indexed_files.add(path)
                 return {"success": True, "file_name": "handbook.md", "num_chunks": 1}
 

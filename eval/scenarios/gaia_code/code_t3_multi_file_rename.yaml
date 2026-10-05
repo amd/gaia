@@ -1,0 +1,47 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_git_code/code_refactor — built at stage time by
+# tests/fixtures/gaia/tiers_git_code/build_fixtures.py; values in
+# GAIA_FIXTURE_VALUES.md "Git and coding". MUTATES the workspace: restage before a re-run.
+id: code_t3_multi_file_rename
+name: "Code — Rename a Function Across Files Without Touching Its Look-Alike"
+category: gaia_code
+severity: high
+tags: [t3_stress]
+description: |
+  A multi-file refactor in a ~15-module project: rename to_cents to
+  parse_cents in the definition, its caller, its tests and the README. The
+  trap is to_cents_legacy in ledgerlite/legacy.py (and its test and README
+  mention): a substring replace renames a different function. The suite
+  must be proven green afterwards.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Workspace ~/gaia-eval/tiers_git_code/code_refactor (ledgerlite, 26 tests, green). to_cents appears in ledgerlite/money.py, ledgerlite/importer.py, tests/test_money.py, README.md. to_cents_legacy appears in ledgerlite/legacy.py, tests/test_legacy.py, README.md. Coding skill installed at ~/.gaia/skills."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to rename to_cents to parse_cents everywhere in ~/gaia-eval/tiers_git_code/code_refactor (code, tests, README), with no alias, keeping the suite green"
+    user_message: "In ~/gaia-eval/tiers_git_code/code_refactor, rename the function to_cents to parse_cents everywhere it's used — code, tests and README. Don't leave an alias. Keep the suite green."
+    ground_truth:
+      expected_behavior: "Edits ledgerlite/money.py, ledgerlite/importer.py, tests/test_money.py and README.md; leaves to_cents_legacy (legacy.py, test_legacy.py, its README mention) untouched; runs the suite: 26 passed"
+    success_criteria: |
+      CRITICAL: agent_tools[] shows a search for the name
+      (search_file_content / grep / search_code_index) before editing,
+      edits to all four files, and a test run after the last edit whose
+      reported result (26 passed) matches the output. FAIL if
+      to_cents_legacy is renamed or altered anywhere (e.g. to
+      parse_cents_legacy), if an alias `to_cents = parse_cents` is left,
+      if a reference is missed (the suite or importer would break), or if
+      a pass is claimed without a post-edit run.
+
+  - turn: 2
+    objective: "Ask the agent to prove nothing still references the old name"
+    user_message: "Prove to me nothing still references the old name."
+    ground_truth:
+      expected_answer: "A fresh search shows no remaining `to_cents` identifier except the unrelated to_cents_legacy in legacy.py, test_legacy.py and README.md"
+    success_criteria: "agent_tools[] shows a fresh search this turn, and the agent explains that the only remaining hits are to_cents_legacy, which is a different function. Asserting 'none' without a search is a FAIL."
+
+expected_outcome: |
+  A complete, precise rename across four files, the look-alike untouched,
+  and the suite proven green.

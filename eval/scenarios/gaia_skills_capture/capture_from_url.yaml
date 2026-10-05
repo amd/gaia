@@ -5,6 +5,7 @@ id: capture_from_url
 name: "Capture — Skill Fetched from a URL"
 category: gaia_skills_capture
 severity: high
+tags: [t1_basic]
 description: |
   The user points the agent at a URL serving a raw SKILL.md. The agent must
   capture it with the real capture_skill tool (SSRF-guarded fetch), then load

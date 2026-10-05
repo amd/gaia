@@ -1,0 +1,56 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/csv/transactions_large.csv — see
+# GAIA_FIXTURE_VALUES.md "Documents and data".
+id: data_large_csv_2400_rows
+name: "Data — 2,400-Row CSV With Negative Returns"
+category: gaia_data
+severity: high
+tags: [t3_stress]
+description: |
+  Scale: a 2,400-row, ~104 KB transactions file far too large to eyeball or
+  paste into context. Returns rows carry negative amounts, so a gross sum
+  and a net sum differ. Answers must come from tooling that reads the whole
+  file (analyze_data_file with group_by/date_range, or a full scratchpad
+  load) — sampling the first rows produces wrong totals.
+
+persona: data_analyst
+
+setup:
+  index_documents: []
+  notes: "Fixture CSV staged at ~/gaia-eval/tiers_documents/csv/transactions_large.csv (2,400 rows, 2025, 5 stores)."
+
+turns:
+  - turn: 1
+    objective: "Ask for the row count and total net amount of ~/gaia-eval/tiers_documents/csv/transactions_large.csv (returns are negative)"
+    user_message: "~/gaia-eval/tiers_documents/csv/transactions_large.csv — how many transactions, and what's the total net amount? Returns are negative rows."
+    ground_truth:
+      expected_answer: "2,400 rows; net total $163,771.53"
+    success_criteria: |
+      agent_tools[] shows a whole-file tool (analyze_data_file, or
+      create_table + insert_data of all 2,400 rows + query_data). Answer
+      2,400 rows and $163,771.53 (within 1%). FAIL on a total from a partial
+      read, or any number stated with no tool call.
+
+  - turn: 2
+    objective: "Ask which store had the highest net revenue and how much"
+    user_message: "Which store brought in the most, net?"
+    ground_truth:
+      expected_answer: "Downtown, $46,130.95"
+    success_criteria: "Agent answers Downtown at $46,130.95 (within 1%) from a grouped query. Wrong store is a FAIL."
+
+  - turn: 3
+    objective: "Ask for the Q2 2025 (April-June) net total"
+    user_message: "What was the Q2 net total — April through June?"
+    ground_truth:
+      expected_answer: "$36,991.22"
+    success_criteria: "Agent answers $36,991.22 (within 1%) from a date-filtered query (e.g. analyze_data_file date_range='2025-Q2' or a SQL WHERE on date). FAIL on a different figure."
+
+  - turn: 4
+    objective: "Ask how many rows are returns"
+    user_message: "How many of those transactions were returns?"
+    ground_truth:
+      expected_answer: "149"
+    success_criteria: "Agent answers 149 from a query (count of category = 'Returns', or count of negative amounts — both are 149). Any other number is a FAIL."
+
+expected_outcome: |
+  Exact whole-file aggregates on 2,400 rows: $163,771.53 net, Downtown top at
+  $46,130.95, Q2 $36,991.22, 149 returns.
