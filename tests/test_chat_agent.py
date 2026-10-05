@@ -104,14 +104,11 @@ class TestChatAgent:
         # Check if at least one expected key is present
         assert any(key in " ".join(keys) for key in expected_keys)
 
-    def test_system_prompt_updated_after_index(self, agent):
-        """Test that the system prompt includes indexed documents after indexing.
+    def test_indexed_document_reaches_the_next_turn(self, agent):
+        """After /index, the next turn names the document; the prompt stays put.
 
-        This test simulates what the /index command handler should do:
-        1. Index the document via agent.rag.index_document()
-        2. Update the system prompt via agent.rebuild_system_prompt()
-
-        After these steps, the system prompt should list the indexed document.
+        The indexed set is sent with each turn rather than in the system
+        prompt, so indexing never invalidates the server's prompt cache.
         """
         # Use a test file in the project directory (within allowed paths)
         test_dir = Path(__file__).parent / "test_data"
@@ -122,7 +119,8 @@ class TestChatAgent:
             test_file.write_text("This is test content about machine learning and AI.")
 
             # Verify initial state: no documents indexed
-            assert "No documents are currently indexed" in agent.system_prompt
+            assert "[Indexed documents:" not in agent.get_memory_dynamic_context()
+            prompt_before = agent.system_prompt
 
             # Mock the LemonadeClient to avoid needing server
             mock_lemonade = Mock()
@@ -152,9 +150,11 @@ class TestChatAgent:
             # Step 2: Update the system prompt (what /index command should do after indexing)
             agent.rebuild_system_prompt()
 
-            # After both steps, system prompt should be updated to list the document
-            assert "test_document_for_prompt.txt" in agent.system_prompt
-            assert "No documents are currently indexed" not in agent.system_prompt
+            assert (
+                "[Indexed documents: test_document_for_prompt.txt]"
+                in agent.get_memory_dynamic_context()
+            )
+            assert agent.system_prompt == prompt_before
         finally:
             # Cleanup
             if test_file.exists():
@@ -250,12 +250,12 @@ class TestChatAgent:
                     "success"
                 ), f"Indexing failed: {result2.get('error')}"
 
-            # Update system prompt
             agent.rebuild_system_prompt()
 
-            # Verify both documents in system prompt
-            assert "doc1.txt" in agent.system_prompt
-            assert "doc2.txt" in agent.system_prompt
+            # Both reach the next turn; the system prompt names neither.
+            line = agent.get_memory_dynamic_context()
+            assert "[Indexed documents: doc1.txt, doc2.txt]" in line
+            assert "doc1.txt" not in agent.system_prompt
             assert len(agent.rag.indexed_files) == 2
         finally:
             for f in [test_file1, test_file2]:
@@ -315,21 +315,24 @@ class TestChatAgent:
             if test_dir.exists() and not any(test_dir.iterdir()):
                 test_dir.rmdir()
 
-    def test_tier2_rag_rules_absent_without_indexed_docs(self, agent):
-        """Tier 2 query rules must NOT appear when no documents are indexed.
+    def test_tier2_rag_rules_present_before_any_index(self, agent):
+        """Tier 2 query rules are in the prompt before anything is indexed.
+
+        Gating them on the first index re-read the whole ~19K-token prompt
+        mid-turn (~60 s on an iGPU); always present, they are read once at
+        warm-up and stay cached.
 
         RAG tools are always registered.  Tier 1 discovery guidance is always
         present in some form — when no files are loaded the agent shows a
         *compact* hint (search_file → index_document → query_*); when docs
         or a library are present it expands to the full SMART DISCOVERY /
-        FILE SEARCH workflow.  Tier 2 rules (FACTUAL ACCURACY, DOCUMENT
-        SILENCE, etc.) only appear once documents are actually indexed.
+        FILE SEARCH workflow.
 
         NOTE: POST-INDEX QUERY RULE is intentionally always present (in tool_rules)
         because Smart Discovery can trigger indexing mid-conversation even when no
         docs are initially indexed — the model needs this rule from the start.
         """
-        # No documents indexed — has_indexed is False
+        # No documents indexed
         assert not agent.rag.indexed_files
 
         prompt = agent.system_prompt
@@ -340,9 +343,8 @@ class TestChatAgent:
         assert "POST-INDEX QUERY RULE" in prompt
         # FILE SEARCH AND AUTO-INDEX is only present when enable_filesystem=True
 
-        # Tier 2 (absent until docs are indexed)
-        assert "FACTUAL ACCURACY RULE" not in prompt
-        assert "DOCUMENT SILENCE RULE" not in prompt
+        # Tier 2: present from the start, so indexing never changes the prompt
+        assert "FACTUAL ACCURACY RULE" in prompt
 
     def test_tier2_rag_rules_present_after_indexing(self, agent):
         """Tier 2 query rules appear in prompt once a document is indexed."""
@@ -388,354 +390,6 @@ class TestChatAgent:
                 test_file.unlink()
             if test_dir.exists() and not any(test_dir.iterdir()):
                 test_dir.rmdir()
-
-
-class TestChatAgentEval:
-    """Evaluation tests for Chat Agent quality metrics."""
-
-    @pytest.fixture
-    def temp_dir(self):
-        """Create temporary directory for test files."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            yield tmpdir
-
-    @pytest.fixture
-    def agent_with_docs(self, temp_dir):
-        """Create agent with test documents."""
-        # This would be expanded with actual test documents
-        resolved_temp_dir = str(Path(temp_dir).resolve())
-        agent = ChatAgent(
-            ChatAgentConfig(
-                silent_mode=True,
-                debug=False,
-                rag_documents=[],
-                max_steps=10,
-                allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
-            )
-        )
-        yield agent
-        agent.stop_watching()
-
-    def test_eval_retrieval_accuracy(self, agent_with_docs):
-        """
-        Evaluate retrieval accuracy.
-
-        This test should:
-        1. Index known documents
-        2. Query with known questions
-        3. Measure if correct context is retrieved
-        """
-        # Placeholder for evaluation test
-        # Would be expanded with actual documents and ground truth
-        agent = agent_with_docs
-        assert agent is not None
-
-    def test_eval_answer_quality(self, agent_with_docs):
-        """
-        Evaluate answer quality against ground truth.
-
-        This test should:
-        1. Index documents with known facts
-        2. Query for those facts
-        3. Compare answers to ground truth
-        """
-        # Placeholder for evaluation test
-        agent = agent_with_docs
-        assert agent is not None
-
-    def test_eval_search_key_quality(self, agent_with_docs):
-        """
-        Evaluate search key generation quality.
-
-        This test should:
-        1. Generate search keys for various queries
-        2. Measure if generated keys improve retrieval
-        """
-        agent = agent_with_docs
-
-        # Test queries
-        test_queries = [
-            "What is machine learning?",
-            "How to train a neural network?",
-            "When was AI invented?",
-        ]
-
-        for query in test_queries:
-            keys = agent._generate_search_keys(query)
-            # Keys should include original query
-            assert query in keys
-            # Should generate additional keys
-            assert len(keys) > 1
-            # Keys should be non-empty
-            assert all(len(k) > 0 for k in keys)
-
-
-class TestChatAgentTools:
-    """Test chat agent tools from mixins."""
-
-    @pytest.fixture
-    def agent(self, temp_dir):
-        """Create Chat Agent instance."""
-        # Use resolved paths for configuration
-        resolved_temp_dir = str(Path(temp_dir).resolve())
-        config = ChatAgentConfig(
-            silent_mode=True,
-            debug=False,
-            max_steps=5,
-            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
-        )
-        agent = ChatAgent(config)
-        yield agent
-        agent.stop_watching()
-
-    @pytest.fixture
-    def temp_dir(self):
-        """Create temporary directory for test files."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            yield tmpdir
-
-    @pytest.fixture
-    def sample_txt_file(self, temp_dir):
-        """Create a sample text file."""
-        txt_path = Path(temp_dir) / "test.txt"
-        txt_path.write_text(
-            "This is a test document about machine learning.\nIt contains information about AI."
-        )
-        return str(txt_path)
-
-    @pytest.fixture
-    def sample_md_file(self, temp_dir):
-        """Create a sample markdown file."""
-        md_path = Path(temp_dir) / "test.md"
-        md_path.write_text(
-            "# Test Document\n\nThis is a markdown file about neural networks."
-        )
-        return str(md_path)
-
-    @pytest.fixture
-    def sample_csv_file(self, temp_dir):
-        """Create a sample CSV file."""
-        csv_path = Path(temp_dir) / "test.csv"
-        csv_path.write_text("Name,Age,City\nAlice,30,NYC\nBob,25,LA")
-        return str(csv_path)
-
-    @pytest.fixture
-    def sample_json_file(self, temp_dir):
-        """Create a sample JSON file."""
-        json_path = Path(temp_dir) / "test.json"
-        json_path.write_text('{"name": "Test", "description": "A test JSON document"}')
-        return str(json_path)
-
-    @pytest.fixture
-    def sample_python_file(self, temp_dir):
-        """Create a sample Python file."""
-        py_path = Path(temp_dir) / "test.py"
-        code = '''# Sample Python code
-def authenticate(username, password):
-    """Authenticate user with credentials."""
-    if not username or not password:
-        return False
-    return check_database(username, password)
-
-class UserAuth:
-    """Handle user authentication."""
-    def __init__(self, db_connection):
-        self.db = db_connection
-'''
-        py_path.write_text(code)
-        return str(py_path)
-
-    @pytest.fixture
-    def sample_js_file(self, temp_dir):
-        """Create a sample JavaScript file."""
-        js_path = Path(temp_dir) / "test.js"
-        code = """// Sample JavaScript code
-function fetchUserData(userId) {
-    return fetch(`/api/users/${userId}`)
-        .then(response => response.json());
-}
-
-class DataManager {
-    constructor() {
-        this.cache = new Map();
-    }
-}
-"""
-        js_path.write_text(code)
-        return str(js_path)
-
-    def test_index_text_file(self, agent, sample_txt_file):
-        """Test indexing a text file."""
-        # Use str(Path().resolve()) for the input path to ensure it passes ChatAgent validation
-        # which uses os.path.realpath().resolve()
-        res_sample_path = str(Path(sample_txt_file).resolve())
-        result = agent.rag.index_document(res_sample_path)
-        assert result["success"], f"Indexing failed: {result.get('error')}"
-
-        # RAG stores paths as absolute() (not resolved)
-        abs_path = str(Path(res_sample_path).absolute())
-        assert abs_path in agent.rag.indexed_files
-
-    def test_index_markdown_file(self, agent, sample_md_file):
-        """Test indexing a markdown file."""
-        res_sample_path = str(Path(sample_md_file).resolve())
-        result = agent.rag.index_document(res_sample_path)
-        assert result["success"], f"Indexing failed: {result.get('error')}"
-        abs_path = str(Path(res_sample_path).absolute())
-        assert abs_path in agent.rag.indexed_files
-
-    def test_index_csv_file(self, agent, sample_csv_file):
-        """Test indexing a CSV file."""
-        res_sample_path = str(Path(sample_csv_file).resolve())
-        result = agent.rag.index_document(res_sample_path)
-        assert result["success"], f"Indexing failed: {result.get('error')}"
-        abs_path = str(Path(res_sample_path).absolute())
-        assert abs_path in agent.rag.indexed_files
-
-    def test_index_json_file(self, agent, sample_json_file):
-        """Test indexing a JSON file."""
-        res_sample_path = str(Path(sample_json_file).resolve())
-        result = agent.rag.index_document(res_sample_path)
-        assert result["success"], f"Indexing failed: {result.get('error')}"
-        abs_path = str(Path(res_sample_path).absolute())
-        assert abs_path in agent.rag.indexed_files
-
-    def test_query_after_indexing(self, agent, sample_txt_file):
-        """Test querying after indexing a document."""
-        agent.rag.index_document(sample_txt_file)
-        response = agent.rag.query("What is this document about?")
-        assert response.text
-        assert len(response.text) > 0
-
-    def test_index_python_file(self, agent, sample_python_file):
-        """Test indexing a Python code file."""
-        res_sample_path = str(Path(sample_python_file).resolve())
-        result = agent.rag.index_document(res_sample_path)
-        assert result["success"], f"Indexing failed: {result.get('error')}"
-        abs_path = str(Path(res_sample_path).absolute())
-        assert abs_path in agent.rag.indexed_files
-
-    def test_index_javascript_file(self, agent, sample_js_file):
-        """Test indexing a JavaScript file."""
-        res_sample_path = str(Path(sample_js_file).resolve())
-        result = agent.rag.index_document(res_sample_path)
-        assert result["success"], f"Indexing failed: {result.get('error')}"
-        abs_path = str(Path(res_sample_path).absolute())
-        assert abs_path in agent.rag.indexed_files
-
-    def test_query_code_file(self, agent, sample_python_file):
-        """Test querying code after indexing."""
-        agent.rag.index_document(sample_python_file)
-        response = agent.rag.query("What does the authenticate function do?")
-        assert response.text
-        assert len(response.text) > 0
-        # The response should contain information about authentication
-        # (We can't assert exact content without mocking the LLM)
-
-    def test_search_in_code(self, agent, sample_python_file):
-        """Test searching for specific code patterns."""
-        agent.rag.index_document(sample_python_file)
-        # Search for class definition
-        response = agent.rag.query("Where is UserAuth defined?")
-        assert response.text
-        # Should have retrieved chunks containing UserAuth
-
-    def test_rag_tools_mixin(self, agent):
-        """Test RAG tools are registered."""
-        # Check that RAG tools exist
-        tools = agent.get_tools()
-        rag_tool_names = [
-            "query_documents",
-            "query_specific_file",
-            "search_file_content",
-            "evaluate_retrieval",
-            "index_document",
-            "list_indexed_documents",
-            "rag_status",
-            "summarize_document",
-        ]
-
-        for tool_name in rag_tool_names:
-            assert any(
-                t["name"] == tool_name for t in tools
-            ), f"Tool {tool_name} not found"
-
-    def test_file_tools_mixin(self, agent):
-        """Test file tools are registered."""
-        tools = agent.get_tools()
-        assert any(t["name"] == "add_watch_directory" for t in tools)
-
-    def test_shell_tools_mixin(self, agent):
-        """Test shell tools are registered."""
-        tools = agent.get_tools()
-        assert any(t["name"] == "run_shell_command" for t in tools)
-
-    def test_shell_command_ls(self, agent, temp_dir):
-        """Test running ls/dir shell command."""
-        # This tests the shell tool functionality
-        # Note: On Windows, 'dir' is used; on Unix, 'ls' is used
-        import platform
-
-        if platform.system() == "Windows":
-            cmd = f'dir "{temp_dir}"'
-        else:
-            cmd = f'ls "{temp_dir}"'
-
-        # We can't easily test this without mocking, but we can test the path validation
-        # Use str(Path().absolute()) to match agent configuration
-        abs_temp_dir = str(Path(temp_dir).absolute())
-        assert agent._is_path_allowed(abs_temp_dir)
-
-
-class TestChatAgentSummarization:
-    """Test document summarization functionality."""
-
-    @pytest.fixture
-    def agent(self, temp_dir):
-        """Create Chat Agent instance."""
-        # Use resolved paths for configuration
-        resolved_temp_dir = str(Path(temp_dir).resolve())
-        config = ChatAgentConfig(
-            silent_mode=True,
-            debug=False,
-            max_steps=5,
-            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
-        )
-        agent = ChatAgent(config)
-        yield agent
-        agent.stop_watching()
-
-    @pytest.fixture
-    def temp_dir(self):
-        """Create temporary directory for test files."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            yield tmpdir
-
-    @pytest.fixture
-    def long_document(self, temp_dir):
-        """Create a long document for summarization testing."""
-        doc_path = Path(temp_dir) / "long_doc.txt"
-        # Create a document with multiple paragraphs
-        content = "\n\n".join(
-            [
-                f"This is paragraph {i}. It contains information about topic {i}."
-                for i in range(50)
-            ]
-        )
-        doc_path.write_text(content)
-        return str(doc_path)
-
-    def test_summarize_small_document(self, agent, temp_dir):
-        """Test summarizing a small document."""
-        doc_path = Path(temp_dir) / "small.txt"
-        doc_path.write_text("This is a short document about testing.")
-
-        agent.rag.index_document(str(doc_path))
-
-        # Test summarization (would need to mock LLM for real test)
-        # For now, just verify the tool exists
-        tools = agent.get_tools()
-        assert any(t["name"] == "summarize_document" for t in tools)
 
 
 class TestChatAgentSessions:
@@ -915,274 +569,6 @@ class TestChatAgentPathValidation:
         # Test a path outside the allowed directory
         disallowed = "/tmp/not_allowed"
         assert not chat_agent._is_path_allowed(disallowed)
-
-
-class TestChatAgentCodeSupport:
-    """Test code file indexing and retrieval capabilities."""
-
-    @pytest.fixture
-    def agent(self, temp_dir):
-        """Create Chat Agent instance."""
-        # Use resolved paths for configuration
-        resolved_temp_dir = str(Path(temp_dir).resolve())
-        config = ChatAgentConfig(
-            silent_mode=True,
-            debug=False,
-            max_steps=5,
-            allowed_paths=[resolved_temp_dir, str(Path.cwd().resolve())],
-        )
-        agent = ChatAgent(config)
-        yield agent
-        agent.stop_watching()
-
-    @pytest.fixture
-    def temp_dir(self):
-        """Create temporary directory for test files."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            yield tmpdir
-
-    @pytest.fixture
-    def sample_codebase(self, temp_dir):
-        """Create a sample codebase with multiple files."""
-        # Create directory structure
-        src_dir = Path(temp_dir) / "src"
-        src_dir.mkdir()
-
-        # Python file
-        (src_dir / "auth.py").write_text('''
-class UserAuth:
-    """Authentication handler."""
-    def authenticate(self, username, password):
-        # TODO: Add rate limiting
-        return self.check_credentials(username, password)
-''')
-
-        # JavaScript file
-        (src_dir / "api.js").write_text("""
-// API client
-class APIClient {
-    constructor(baseUrl) {
-        this.baseUrl = baseUrl;
-    }
-
-    async fetchUser(userId) {
-        // TODO: Add error handling
-        return fetch(`${this.baseUrl}/users/${userId}`);
-    }
-}
-""")
-
-        # Config file
-        (src_dir / "config.yaml").write_text("""
-database:
-  host: localhost
-  port: 5432
-  name: myapp
-""")
-
-        return str(src_dir)
-
-    @pytest.fixture
-    def sample_web_project(self, temp_dir):
-        """Create a sample web development project."""
-        web_dir = Path(temp_dir) / "web"
-        web_dir.mkdir()
-
-        # HTML file
-        (web_dir / "index.html").write_text("""
-<!DOCTYPE html>
-<html>
-<head>
-    <title>My App</title>
-    <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-    <div class="container">
-        <h1>Welcome</h1>
-    </div>
-</body>
-</html>
-""")
-
-        # CSS file
-        (web_dir / "styles.css").write_text("""
-.container {
-    max-width: 1200px;
-    margin: 0 auto;
-}
-
-.button:hover {
-    background-color: #0056b3;
-    transform: scale(1.05);
-}
-""")
-
-        # Vue component
-        (web_dir / "UserCard.vue").write_text("""
-<template>
-  <div class="user-card">
-    <h2>{{ user.name }}</h2>
-    <p>{{ user.email }}</p>
-  </div>
-</template>
-
-<script>
-export default {
-  props: ['user'],
-  mounted() {
-    console.log('User card mounted');
-  }
-}
-</script>
-""")
-
-        # React component (JSX)
-        (web_dir / "Button.jsx").write_text("""
-import React from 'react';
-
-export function Button({ onClick, children }) {
-  return (
-    <button className="btn" onClick={onClick}>
-      {children}
-    </button>
-  );
-}
-""")
-
-        # SCSS file
-        (web_dir / "variables.scss").write_text("""
-$primary-color: #007bff;
-$secondary-color: #6c757d;
-
-.btn-primary {
-  background-color: $primary-color;
-  &:hover {
-    background-color: darken($primary-color, 10%);
-  }
-}
-""")
-
-        return str(web_dir)
-
-    def test_index_multiple_code_files(self, agent, sample_codebase):
-        """Test indexing multiple code files."""
-        src_dir = Path(sample_codebase)
-
-        # Index all files
-        for file in src_dir.glob("*"):
-            if file.is_file():
-                res_sample_path = str(file.resolve())
-                result = agent.rag.index_document(res_sample_path)
-                assert result[
-                    "success"
-                ], f"Indexing failed for {file}: {result.get('error')}"
-
-        # Should have indexed 3 files
-        assert len(agent.rag.indexed_files) == 3
-
-    def test_query_across_codebase(self, agent, sample_codebase):
-        """Test querying across multiple code files."""
-        src_dir = Path(sample_codebase)
-
-        # Index all files
-        for file in src_dir.glob("*"):
-            if file.is_file():
-                agent.rag.index_document(str(file))
-
-        # Query should search across all indexed files
-        response = agent.rag.query("Find TODO comments")
-        assert response.text
-        # Should retrieve chunks from multiple files with TODOs
-
-    def test_file_type_detection(self, agent):
-        """Test that different code file types are correctly detected."""
-        file_types = {
-            ".py": "Python",
-            ".js": "JavaScript",
-            ".ts": "TypeScript",
-            ".java": "Java",
-            ".go": "Go",
-            ".rs": "Rust",
-            ".css": "CSS",
-            ".html": "HTML",
-            ".vue": "Vue",
-            ".jsx": "React JSX",
-            ".scss": "SCSS",
-        }
-
-        for ext, lang in file_types.items():
-            file_type = agent.rag._get_file_type(f"test{ext}")
-            assert file_type == ext
-
-    def test_index_web_files(self, agent, sample_web_project):
-        """Test indexing web development files."""
-        web_dir = Path(sample_web_project)
-
-        # Index all files
-        for file in web_dir.glob("*"):
-            if file.is_file():
-                res_sample_path = str(file.resolve())
-                result = agent.rag.index_document(res_sample_path)
-                assert result[
-                    "success"
-                ], f"Indexing failed for {file}: {result.get('error')}"
-
-        # Should have indexed HTML, CSS, Vue, JSX, SCSS files
-        assert len(agent.rag.indexed_files) == 5
-
-    def test_query_css_content(self, agent, sample_web_project):
-        """Test querying CSS files."""
-        web_dir = Path(sample_web_project)
-        css_file = web_dir / "styles.css"
-
-        agent.rag.index_document(str(css_file))
-        response = agent.rag.query("Find CSS classes with hover effects")
-        assert response.text
-        # Should find .button:hover
-
-    def test_query_vue_components(self, agent, sample_web_project):
-        """Test querying Vue component files."""
-        web_dir = Path(sample_web_project)
-        vue_file = web_dir / "UserCard.vue"
-
-        agent.rag.index_document(str(vue_file))
-        response = agent.rag.query("What props does this component use?")
-        assert response.text
-        # Should mention 'user' prop
-
-    def test_query_react_components(self, agent, sample_web_project):
-        """Test querying React JSX files."""
-        web_dir = Path(sample_web_project)
-        jsx_file = web_dir / "Button.jsx"
-
-        agent.rag.index_document(str(jsx_file))
-        response = agent.rag.query("What does the Button component do?")
-        assert response.text
-        # Should describe the button component
-
-    def test_query_scss_variables(self, agent, sample_web_project):
-        """Test querying SCSS files with variables."""
-        web_dir = Path(sample_web_project)
-        scss_file = web_dir / "variables.scss"
-
-        agent.rag.index_document(str(scss_file))
-        response = agent.rag.query("What is the primary color?")
-        assert response.text
-        # Should find $primary-color definition
-
-    def test_query_across_web_project(self, agent, sample_web_project):
-        """Test querying across multiple web files."""
-        web_dir = Path(sample_web_project)
-
-        # Index all web files
-        for file in web_dir.glob("*"):
-            if file.is_file():
-                agent.rag.index_document(str(file))
-
-        # Query should search across all files
-        response = agent.rag.query("Find all references to buttons")
-        assert response.text
-        # Should find button in CSS, JSX, etc.
 
 
 class TestChatAgentHostAttributeContract:

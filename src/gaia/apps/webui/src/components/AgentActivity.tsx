@@ -348,19 +348,21 @@ function FlowStatus({ step }: { step: AgentStep }) {
 // ── Path Linkification (for tool results) ────────────────────────────────
 
 /** Detect Windows absolute paths in text and make them clickable. */
-function linkifyPaths(text: string): React.ReactNode {
-    // Match Windows absolute paths: C:\...\file.ext or C:\...\folder\
-    // Also match paths in parentheses: (C:\Users\...)
-    const pathRe = /[A-Z]:[\\\/](?:[^\s*?"<>|,;)}\]]+[\\\/])*[^\s*?"<>|,;)}\]]*/gi;
+export function linkifyPaths(text: string): React.ReactNode {
+    // A quoted path ('C:\My Docs\a.txt') runs to its closing quote, spaces
+    // included, and the quotes stay outside the link. An unquoted one
+    // (C:\...\file.ext, (C:\Users\...)) stops at whitespace or punctuation.
+    const pathRe = /(['"`])([A-Z]:[\\/][^'"`\n]*?)\1|[A-Z]:[\\/](?:[^\s*?"'`<>|,;)}\]]+[\\/])*[^\s*?"'`<>|,;)}\]]*/gi;
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
     let match: RegExpExecArray | null;
 
     while ((match = pathRe.exec(text)) !== null) {
-        if (match.index > lastIndex) {
-            parts.push(text.slice(lastIndex, match.index));
+        const quote = match[1] ?? '';
+        if (match.index > lastIndex || quote) {
+            parts.push(text.slice(lastIndex, match.index) + quote);
         }
-        const rawMatch = match[0];
+        const rawMatch = quote ? match[2] : match[0];
         const filePath = rawMatch.replace(/[)}\]]+$/, ''); // trim trailing brackets
         const handleClick = () => {
             api.openFileOrFolder(filePath).catch((err) => log.ui.error('Failed to open path', err));
@@ -380,10 +382,10 @@ function linkifyPaths(text: string): React.ReactNode {
             </span>
         );
         // Advance past the full raw match; push trimmed trailing brackets as plain text
-        if (filePath.length < rawMatch.length) {
-            parts.push(rawMatch.slice(filePath.length));
+        if (filePath.length < rawMatch.length || quote) {
+            parts.push(rawMatch.slice(filePath.length) + quote);
         }
-        lastIndex = match.index + rawMatch.length;
+        lastIndex = match.index + match[0].length;
     }
 
     if (parts.length === 0) return text;

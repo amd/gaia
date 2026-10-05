@@ -3412,12 +3412,13 @@ class MemoryStore:
             clauses.append("superseded_by IS NULL")
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        # rowid, not the random id: writes in one clock tick share created_at.
         sql = (
             "SELECT id, base_name, base_root, base_version, scope, kind, "
             "learn_tier, anchor_section, anchor_digest, payload, provenance, "
             "status, success_count, attempt_count, superseded_by, created_at, "
             "approved_at, last_used_at FROM skill_deltas "
-            f"{where} ORDER BY created_at ASC, id ASC"
+            f"{where} ORDER BY created_at ASC, rowid ASC"
         )
         if limit is not None:
             # Fetch one extra so "exactly at the ceiling" and "truncated" are

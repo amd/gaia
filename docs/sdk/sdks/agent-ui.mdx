@@ -1620,7 +1620,9 @@ First-run hardware scan and setup-wizard state (issues #1726, #1727).
   <Accordion title="GET /api/onboarding/preflight">
     Scan hardware (NPU/GPU via Lemonade's `/system-info`, RAM) and report
     whether this machine can run the first-run model, with a coarse tier
-    recommendation.
+    recommendation. `recommended_model` is the model chat will load on this
+    machine (the `default_model` `gaia init` chose, else Gemma-4-E4B), and
+    `required_disk_gb` is sized for that model's download.
   </Accordion>
 
   <Accordion title="GET /api/onboarding/status">
