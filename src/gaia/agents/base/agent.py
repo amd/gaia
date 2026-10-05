@@ -368,6 +368,18 @@ def _trace_includes_schema_text() -> bool:
     )
 
 
+class ToolCallTruncated(ValueError):
+    """A native tool call ran past the output-token cap mid-arguments."""
+
+    def __init__(self, model_id: str, cap: int):
+        self.cap = cap
+        super().__init__(
+            f"Tool call truncated mid-arguments (finish_reason=length). Model "
+            f"{model_id} ran out of output tokens before finishing the call "
+            f"({cap} max) — pass a larger max_output_tokens to the agent."
+        )
+
+
 class ToolExecutionTimeout(Exception):
     """Raised when a tool body exceeds its bounded execution window.
 
@@ -3669,6 +3681,22 @@ Do NOT wrap conversational replies in JSON.
         which is what lets the model correct the real problem instead of
         guessing from generic advice.
         """
+        if isinstance(reason, ToolCallTruncated):
+            # The generic advice sent the same oversized edit back three times.
+            prompt = (
+                f"Your last tool call was cut off at the {reason.cap}-token output "
+                "limit before its arguments were finished, so nothing ran. Send "
+                "much shorter arguments."
+            )
+            # write_file replaces the whole file, so a long file is built with edits.
+            if "edit_file" in self._tools_registry:
+                prompt += (
+                    " For edit_file, put only the few lines that change in "
+                    "old_content and new_content, never the whole file; to create "
+                    "a long file, write_file a short first part, then add the rest "
+                    "with edit_file in small pieces."
+                )
+            return prompt
         return (
             f"Your last tool call could not be used: {reason}\n"
             "Please try again. Emit exactly ONE tool call as raw JSON — no code "
@@ -4355,12 +4383,7 @@ Do NOT wrap conversational replies in JSON.
                 # ``max_output_tokens`` (or, for one-off long tool calls,
                 # asking the model to pick a single value rather than
                 # concatenating).
-                raise ValueError(
-                    f"Tool call truncated mid-arguments (finish_reason=length). "
-                    f"Model {self.model_id} ran out of output tokens before "
-                    f"finishing the call ({self._max_output_tokens()} max) — "
-                    f"pass a larger max_output_tokens to the agent."
-                )
+                raise ToolCallTruncated(self.model_id, self._max_output_tokens())
             if not raw_tool_calls:
                 raise ValueError(
                     "Native tool_calls envelope contained an empty tool_calls list."

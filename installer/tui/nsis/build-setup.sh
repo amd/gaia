@@ -11,21 +11,24 @@
 #   build-setup.sh --version 0.23.0 \
 #                  --payload dist/payload \
 #                  --out dist \
-#                  --lemonade-msi installer/lemonade-server-minimal.msi
+#                  --lemonade-msi installer/lemonade-server-minimal.msi \
+#                  --fonts dist/fonts
 #
 # --payload must already hold gaia-tui.exe, gaia-agent.exe and LICENSE.md.
+# --fonts must hold the faces installer/tui/fetch_fonts.py staged and verified.
 # Produces <out>/gaia-<version>-win-x64-setup.exe.
 
 set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: build-setup.sh --version <x.y.z> --payload <dir> --out <dir> --lemonade-msi <path>
+usage: build-setup.sh --version <x.y.z> --payload <dir> --out <dir> --lemonade-msi <path> --fonts <dir>
 
   --version       version to stamp into the installer and its filename
   --payload       directory holding gaia-tui.exe, gaia-agent.exe and LICENSE.md
   --out           directory the setup .exe is written to
   --lemonade-msi  the pinned lemonade-server-minimal.msi to bundle
+  --fonts         IBM Plex Mono faces staged by installer/tui/fetch_fonts.py
   --icon          .ico to use (default: <repo>/src/gaia/img/gaia.ico)
 EOF
   exit 2
@@ -38,7 +41,7 @@ die() {
   exit 1
 }
 
-VERSION="" PAYLOAD="" OUT="" LEMONADE_MSI="" ICON=""
+VERSION="" PAYLOAD="" OUT="" LEMONADE_MSI="" ICON="" FONTS=""
 
 # Each flag guards its own `shift 2`: without the guard a trailing --version
 # makes shift fail, which under `set -e` aborts with no message at all.
@@ -48,6 +51,7 @@ while [ $# -gt 0 ]; do
     --payload)      [ $# -ge 2 ] || die "--payload requires a value." "Example: --payload dist/payload";                           PAYLOAD="$2";      shift 2 ;;
     --out)          [ $# -ge 2 ] || die "--out requires a value." "Example: --out dist";                                           OUT="$2";          shift 2 ;;
     --lemonade-msi) [ $# -ge 2 ] || die "--lemonade-msi requires a value." "Example: --lemonade-msi installer/lemonade-server-minimal.msi"; LEMONADE_MSI="$2"; shift 2 ;;
+    --fonts)        [ $# -ge 2 ] || die "--fonts requires a value." "Example: --fonts dist/fonts";                               FONTS="$2";        shift 2 ;;
     --icon)         [ $# -ge 2 ] || die "--icon requires a value." "Example: --icon src/gaia/img/gaia.ico";                        ICON="$2";         shift 2 ;;
     -h|--help)      usage ;;
     *) echo "build-setup.sh: unknown argument '$1'" >&2; usage ;;
@@ -59,6 +63,7 @@ missing=""
 [ -n "${PAYLOAD}" ]      || missing="${missing} --payload"
 [ -n "${OUT}" ]          || missing="${missing} --out"
 [ -n "${LEMONADE_MSI}" ] || missing="${missing} --lemonade-msi"
+[ -n "${FONTS}" ]        || missing="${missing} --fonts"
 if [ -n "${missing}" ]; then
   echo "build-setup.sh: missing required argument(s):${missing}" >&2
   usage
@@ -96,6 +101,18 @@ done
   exit 1
 }
 [ -f "${ICON}" ] || { echo "build-setup.sh: icon '${ICON}' does not exist" >&2; exit 1; }
+# Every file the committed pin names, faces and licence -- not a directory
+# listing, which would accept a staging dir missing one.
+FONT_FILES="$(grep -oE '"filename": "[^"]+"' "${HERE}/../fonts/fonts.lock.json" | cut -d'"' -f4)"
+[ -n "${FONT_FILES}" ] || { echo "build-setup.sh: no filenames found in installer/tui/fonts/fonts.lock.json" >&2; exit 1; }
+for f in ${FONT_FILES}; do
+  [ -f "${FONTS}/${f}" ] || {
+    echo "build-setup.sh: --fonts '${FONTS}' has no ${f}." >&2
+    echo "  Stage the pinned IBM Plex Mono faces first:" >&2
+    echo "    python installer/tui/fetch_fonts.py --out ${FONTS}" >&2
+    exit 1
+  }
+done
 
 LEMONADE_VERSION="$(grep -oE 'LEMONADE_VERSION = "[^"]+"' "${REPO}/src/gaia/version.py" | cut -d'"' -f2)"
 [ -n "${LEMONADE_VERSION}" ] || {
@@ -136,6 +153,7 @@ winpath() {
   "-DLEMONADE_MSI=$(winpath "$(cd "$(dirname "${LEMONADE_MSI}")" && pwd)/$(basename "${LEMONADE_MSI}")")" \
   "-DLEMONADE_VERSION=${LEMONADE_VERSION}" \
   "-DICON=$(winpath "${ICON}")" \
+  "-DFONTS_DIR=$(winpath "$(cd "${FONTS}" && pwd)")" \
   "-DOUTFILE=$(winpath "$(cd "${OUT}" && pwd)")\\${OUTFILE_NAME}" \
   "$(winpath "${HERE}/gaia-setup.nsi")"
 
