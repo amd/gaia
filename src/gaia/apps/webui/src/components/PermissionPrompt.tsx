@@ -89,10 +89,11 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     // Capture phase, so this runs before ChatView's Escape-stops-the-reply.
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (e.key !== 'Escape' || e.defaultPrevented || busy) return;
+            if (e.key !== 'Escape' || e.defaultPrevented) return;
             if (remaining !== null && remaining <= 0) return;
+            // Claimed even mid-answer: a second Esc would otherwise stop the whole reply.
             e.preventDefault();
-            void answer('deny');
+            if (!busy) void answer('deny');
         };
         window.addEventListener('keydown', onKey, true);
         return () => window.removeEventListener('keydown', onKey, true);

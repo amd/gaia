@@ -556,9 +556,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'answer') {
                         fullContent = content;
                     } else {
-                        // If a tool just ran between text chunks, add a paragraph separator
-                        if (toolOccurredRef.current && fullContent.length > 0) {
-                            fullContent += '\n\n';
+                        // A tool between text chunks starts a new paragraph. Clear the flag on
+                        // the first chunk either way, or it splits the answer after its first word.
+                        if (toolOccurredRef.current) {
+                            if (fullContent.length > 0) fullContent += '\n\n';
                             toolOccurredRef.current = false;
                         }
                         fullContent += content;
