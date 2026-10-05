@@ -249,3 +249,39 @@ def test_env_override_parses_truthy_values(monkeypatch):
     for value in ("0", "false", "no", "off"):
         monkeypatch.setenv("GAIA_DYNAMIC_SKILLS", value)
         assert dynamic_skills_env_override() is False
+
+
+# ── always-on skills ────────────────────────────────────────────────────
+
+
+def test_only_always_on_skills_loaded_skips_embedding():
+    """Nothing to choose between: the embedder must not even load."""
+
+    def _boom(_text):
+        raise AssertionError("embed_fn must not be called for always-on skills")
+
+    loader = SkillLoader(_boom)
+    assert (
+        loader.select("hi there", _loaded(["gaia-voice"]), always_on={"gaia-voice"})
+        == []
+    )
+    assert loader.session_disabled is False
+
+
+def test_always_on_does_not_change_selection_when_real_candidates_exist():
+    skills = ["gaia-voice", "github", "jira"]
+    scores = {"q": {"gaia-voice": 0.32, "github": 0.5, "jira": 0.05}}
+    plain = SkillLoader(_make_embed_fn(skills, scores)).select("q", _loaded(skills))
+    calls = []
+    embed = _make_embed_fn(skills, scores)
+
+    def counting(text):
+        calls.append(text)
+        return embed(text)
+
+    with_always_on = SkillLoader(counting).select(
+        "q", _loaded(skills), always_on={"gaia-voice"}
+    )
+
+    assert with_always_on == plain == ["gaia-voice", "github"]
+    assert "q" in calls

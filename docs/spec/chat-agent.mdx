@@ -131,6 +131,7 @@ class ChatAgentConfig:
 
     # Agent UI integration
     ui_session_id: Optional[str] = None      # resume an Agent-UI session
+    memory_incognito: bool = False           # memory off: load the embedder only on first use
     enable_sd_tools: bool = False            # Stable Diffusion image generation
 ```
 
