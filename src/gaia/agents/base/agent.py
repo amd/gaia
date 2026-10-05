@@ -84,6 +84,7 @@ from gaia.agents.base.verification import (
     unsupported_test_claim,
     unverified_change,
     verification_record,
+    verification_summary,
     verify_after_change_correction,
 )
 
@@ -1560,6 +1561,8 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage: List[Dict[str, Any]] = []
         # Same rationale for the verification-scope log (#3376).
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # Whether a project root has tests, walked once per root per turn.
+        self._has_tests_cache: Dict[Optional[str], bool] = {}
         # Same rationale for the per-turn record of edited files (#3733).
         self._turn_file_edits: List[Dict[str, Any]] = []
         self.conversation_history = (
@@ -4209,6 +4212,8 @@ Do NOT wrap conversational replies in JSON.
                 desc = param_info.get("description", "")
                 if desc:
                     prop["description"] = desc
+                if param_info.get("enum"):
+                    prop["enum"] = list(param_info["enum"])
                 properties[param_name] = prop
                 if param_info.get("required", True):
                     required.append(param_name)
@@ -5403,20 +5408,22 @@ Do NOT wrap conversational replies in JSON.
             if msg.get("role") == "tool" and msg.get("name")
         ]
 
-        message = f"⚠️ Reached maximum steps limit ({steps_limit} steps)\n\n"
-        message += f"Completed {steps_taken} steps using these tools:\n"
+        message = (
+            f"I ran out of steps before I could finish — I used {steps_taken} "
+            f"of the {steps_limit} I get per request.\n\n"
+        )
+        if tools_used:
+            from collections import Counter
 
-        # Count tool usage
-        from collections import Counter
+            message += "Here's what I ran:\n"
+            for tool, count in Counter(tools_used).most_common(10):
+                message += f"  - {tool}: {count}x\n"
+            message += "\n"
 
-        tool_counts = Counter(tools_used)
-        for tool, count in tool_counts.most_common(10):
-            message += f"  - {tool}: {count}x\n"
-
-        message += "\nTo continue or complete this task:\n"
-        message += "1. Review the generated files and progress so far\n"
-        message += f"2. Run with --max-steps {steps_limit + 50} to allow more steps\n"
-        message += "3. Or complete remaining tasks manually\n"
+        message += (
+            "Ask me to continue and I'll pick up from here. From the command "
+            f"line, `--max-steps {steps_limit + 50}` gives me more room.\n"
+        )
 
         return message
 
@@ -6723,24 +6730,64 @@ Do NOT wrap conversational replies in JSON.
             return None
         root = self._verification_project_root()
         changed = unverified_change(executions, root)
-        if changed is None or not project_has_tests(root):
+        if changed is None or not self._project_has_tests(root):
             return None
         return verify_after_change_correction(changed)
 
+    def _project_has_tests(self, root: Optional[str]) -> bool:
+        """``project_has_tests``, walked once per root per turn."""
+        if root not in self._has_tests_cache:
+            self._has_tests_cache[root] = project_has_tests(root)
+        return self._has_tests_cache[root]
+
+    def _unchecked_change(self) -> Tuple[Optional[str], bool]:
+        """``(path, has_tests)`` for the last change nothing checked afterwards.
+
+        In a project with tests only a test run covers a change; without one,
+        any check does.
+        """
+        executions = getattr(self, "_turn_tool_executions", None) or []
+        if not executions:
+            return None, True
+        root = self._verification_project_root()
+        has_tests = self._project_has_tests(root)
+        changed = unverified_change(executions, root, tests_only=has_tests)
+        if changed and root and os.path.isabs(changed):
+            same_drive = (
+                os.path.splitdrive(os.path.abspath(changed))[0].lower()
+                == os.path.splitdrive(os.path.abspath(root))[0].lower()
+            )
+            if same_drive:
+                changed = os.path.relpath(changed, root)
+        return changed, has_tests
+
     def verification_scope_statement(self) -> str:
-        """This turn's bounded verified / partially verified / unverified line."""
+        """This turn's plain-English "not confirmed" note, or ``""``."""
+        changed, has_tests = self._unchecked_change()
         return build_verification_scope(
-            getattr(self, "_turn_tool_executions", None) or []
+            getattr(self, "_turn_tool_executions", None) or [],
+            unchecked_change=changed,
+            has_tests=has_tests,
         )
 
-    def _with_verification_scope(self, answer: Optional[str]) -> Optional[str]:
-        """Give a non-empty answer exactly one scope statement (#3376, #3675).
+    def verification_state(self) -> Dict[str, Any]:
+        """This turn's check results as data, for tooling rather than the user."""
+        return verification_summary(
+            getattr(self, "_turn_tool_executions", None) or [],
+            unchecked_change=self._unchecked_change()[0],
+        )
 
-        Any statement the model wrote itself comes out first. The line rides in
-        the answer and the answer comes back as conversation history, so a model
-        can and does echo a previous turn's — and the user then read the same
-        verification paragraph twice, once from the model and once from here.
-        Only the one derived from this turn's tool log is authoritative.
+    #: Stands in for an answer that was nothing but a previous turn's note.
+    ECHO_ONLY_ANSWER = "I don't have anything new to add."
+
+    def _with_verification_scope(self, answer: Optional[str]) -> Optional[str]:
+        """Give a non-empty answer at most one scope note (#3376, #3675).
+
+        Any note the model wrote itself comes out first. The line rides in the
+        answer and the answer comes back as conversation history, so a model
+        can and does echo a previous turn's. Only the one derived from this
+        turn's tool log is authoritative, and it is added only when the work
+        is not confirmed.
 
         Empty stays empty — a blank answer is a signal downstream (cancelled
         turns skip persistence), and a scope line would make it non-blank.
@@ -6750,8 +6797,10 @@ Do NOT wrap conversational replies in JSON.
         body = strip_verification_scope(answer)
         statement = self.verification_scope_statement()
         if not body.strip():
-            # The whole "answer" was an echoed scope line; one is still one.
-            return statement
+            # Never surface the stale echo as this turn's answer.
+            return statement or self.ECHO_ONLY_ANSWER
+        if not statement:
+            return body
         return f"{body.rstrip()}\n\n{statement}"
 
     def _gate_unsealed_answer(
@@ -7050,6 +7099,7 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement (#3376). Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        self._has_tests_cache = {}
         self._completion_evidence = CompletionEvidence(
             user_input,
             os.getcwd(),
@@ -9398,8 +9448,9 @@ Do NOT wrap conversational replies in JSON.
                         saved = sorted(self._extraction_ledger.destinations)
                         if saved:
                             answer_candidate += (
-                                "\n\nSaved and read back the complete inventory: "
+                                "\n\nI saved the full list to "
                                 + ", ".join(f"`{path}`" for path in saved)
+                                + " and checked the file."
                             )
                 final_answer = self._with_verification_scope(answer_candidate)
                 verification_scope_applied = True
@@ -9644,6 +9695,7 @@ Do NOT wrap conversational replies in JSON.
             "tool_schema": self._trace_tool_schema(),
             "completion_gaps": completion_gaps,
             "extraction_sources": sorted(self._extraction_ledger.results),
+            "verification": self.verification_state(),
         }
 
         result["model_messages"] = messages.finish(result["result"])

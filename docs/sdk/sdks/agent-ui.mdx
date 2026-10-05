@@ -348,6 +348,12 @@ class SessionResponse(BaseModel):
     system_prompt: Optional[str] = None
     message_count: int = 0
     document_ids: List[str] = []
+    # Where the next chat turn is answered. inference_remote is None when it
+    # can't be determined; the UI then makes no local-or-cloud claim.
+    inference_remote: Optional[bool] = None
+    inference_provider: Optional[str] = None       # "lemonade", "fireworks", "amd", ...
+    inference_provider_name: Optional[str] = None  # "Fireworks AI"
+    inference_description: Optional[str] = None    # one sentence, as the TUI shows it
 
 class SessionListResponse(BaseModel):
     sessions: List[SessionResponse]

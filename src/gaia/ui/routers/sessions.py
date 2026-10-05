@@ -22,6 +22,7 @@ from .._chat_helpers import (
     get_agent_registry,
     resolve_device_model,
     resolve_session_model,
+    session_inference_location,
 )
 from ..database import (
     SESSION_DEFAULT_MODEL,
@@ -58,10 +59,36 @@ def _reject_if_turn_running(http_request: Request, session_id: str) -> None:
         )
 
 
+def _resolved_session_response(
+    session: dict, custom_model: str | None, registry
+) -> SessionResponse:
+    """``session_to_response`` plus the model a turn runs and where it is answered.
+
+    Both follow the chat path's custom-override > agent-preference > device choice.
+    """
+    effective_model = resolve_session_model(
+        session, session.get("agent_type") or "chat", custom_model, registry
+    )[0]
+    loc = session_inference_location(session, custom_model, registry)
+    if loc is None:
+        return session_to_response(session, effective_model=effective_model)
+    if loc.provider == "claude":
+        # The eval Claude provider replaces the Lemonade model outright.
+        effective_model = loc.model
+    return session_to_response(session, effective_model=effective_model).model_copy(
+        update={
+            "inference_remote": loc.remote,
+            "inference_provider": loc.provider,
+            "inference_provider_name": loc.display,
+            "inference_description": loc.describe() if loc.model else None,
+        }
+    )
+
+
 async def _session_responses(
     db: ChatDatabase, sessions: list[dict]
 ) -> list[SessionResponse]:
-    """Session responses naming the model a turn would run, not just the stored one.
+    """Session responses naming the model a turn would run and where it runs.
 
     Resolved off the event loop: the agent's preferred model can need a blocking
     Lemonade lookup (2 s while it is unreachable), and the UI polls the list.
@@ -69,16 +96,10 @@ async def _session_responses(
     custom_model = db.get_setting("custom_model")
     registry = get_agent_registry()
 
-    def resolve() -> list[str | None]:
-        return [
-            resolve_session_model(
-                s, s.get("agent_type") or "chat", custom_model, registry
-            )[0]
-            for s in sessions
-        ]
+    def resolve() -> list[SessionResponse]:
+        return [_resolved_session_response(s, custom_model, registry) for s in sessions]
 
-    models = await asyncio.to_thread(resolve)
-    return [session_to_response(s, effective_model=m) for s, m in zip(sessions, models)]
+    return await asyncio.to_thread(resolve)
 
 
 async def _session_response(db: ChatDatabase, session: dict) -> SessionResponse:

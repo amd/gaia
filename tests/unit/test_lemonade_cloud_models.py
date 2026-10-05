@@ -81,6 +81,7 @@ def test_cloud_chat_only_calls_inference_and_preserves_tools(client, provider):
             repeat_penalty=1.1,
             repeat_last_n=256,
             frequency_penalty=0.3,
+            id_slot=1,
         )
         == reply
     )
@@ -91,6 +92,8 @@ def test_cloud_chat_only_calls_inference_and_preserves_tools(client, provider):
     assert body["tools"] == tools
     assert body["frequency_penalty"] == 0.3
     assert "repeat_penalty" not in body and "repeat_last_n" not in body
+    # Fireworks answers "Extra inputs are not permitted, field: 'id_slot'".
+    assert "id_slot" not in body
     assert "ctx_size" not in body
 
 

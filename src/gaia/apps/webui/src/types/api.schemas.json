@@ -2728,6 +2728,50 @@
         "title": "Id",
         "type": "string"
       },
+      "inference_description": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Inference Description"
+      },
+      "inference_provider": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Inference Provider"
+      },
+      "inference_provider_name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Inference Provider Name"
+      },
+      "inference_remote": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Inference Remote"
+      },
       "mail_provider": {
         "anyOf": [
           {

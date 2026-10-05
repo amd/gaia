@@ -32,6 +32,10 @@ from gaia.agents.install_hints import (
     agent_not_installed_message,
 )
 from gaia.daemon.broker_client import BrokerUnavailableError
+from gaia.llm.inference_location import (
+    InferenceLocation,
+    resolve_inference_location,
+)
 from gaia.llm.providers.lemonade import classify_lemonade_exception
 from gaia.security import BLOCKED_DIRECTORIES
 from gaia.ui.email_sidecar.profiles import (
@@ -636,6 +640,62 @@ def resolve_session_model(
             )
             model_id = preferred
     return _apply_device_model(session, agent_type, model_id, custom_model, registry)
+
+
+def _ui_cloud_provider(model_id: str) -> str | None:
+    """Classify *model_id*, also recognising cloud ids already seen in the catalog."""
+    from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
+
+    metadata = {"recipe": "cloud"} if is_cloud_model(model_id) else None
+    return cloud_model_provider(model_id, metadata)
+
+
+def session_inference_location(
+    session: dict, custom_model: str | None, registry=None
+) -> InferenceLocation | None:
+    """Where this session's next chat turn will be answered, or None if unknowable.
+
+    ``model`` is empty when the destination is certain but the exact model is not.
+
+    Mirrors the chat path's model choice (custom override > agent preference >
+    device) without touching the network: the agent's preferred-model pick
+    depends on what Lemonade has downloaded, so every candidate is classified
+    and an answer is given only when they all agree.
+    """
+    try:
+        provider_kwargs = _eval_provider_kwargs()
+    except ValueError as exc:
+        logger.warning("Inference location unknown: %s", exc)
+        return None
+    if provider_kwargs.get("use_claude"):
+        return resolve_inference_location(
+            provider_kwargs["claude_model"], use_claude=True
+        )
+
+    if custom_model:
+        candidates = [custom_model]
+    else:
+        registry = registry if registry is not None else _agent_registry
+        agent_type = session.get("agent_type") or "chat"
+        reg = registry.get(agent_type) if registry is not None else None
+        preferred = [m for m in (getattr(reg, "models", None) or []) if m]
+        candidates = preferred + [session.get("model")]
+        candidates = [
+            _apply_device_model(session, agent_type, m, None, registry)[0]
+            for m in candidates
+        ]
+
+    locations = {
+        resolve_inference_location(m, cloud_provider_lookup=_ui_cloud_provider)
+        for m in candidates
+    }
+    if len({(loc.provider, loc.remote) for loc in locations}) != 1:
+        return None
+    if len(locations) == 1:
+        return locations.pop()
+    # Same destination, several possible models: name the destination only.
+    loc = next(iter(locations))
+    return InferenceLocation(loc.provider, "", remote=loc.remote)
 
 
 def get_cached_mcp_status() -> list[dict]:

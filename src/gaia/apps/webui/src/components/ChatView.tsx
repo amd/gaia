@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
+import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
+import { InferenceLocationBadge } from './InferenceLocationBadge';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, selectUnreadCount, PATH_ACCESS_TOOL, pathAccessQuestion } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -1942,10 +1943,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             <span className="input-footer-sep" />
                         </>
                     )}
-                    <span className="input-footer-item">
-                        <Lock size={10} />
-                        <span>100% local &amp; private</span>
-                    </span>
+                    <InferenceLocationBadge session={session} />
                     <span className="input-footer-sep" />
                     <span className="input-footer-item">
                         <kbd className="kbd-hint">Enter</kbd>

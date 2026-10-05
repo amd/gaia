@@ -744,6 +744,10 @@ export interface SessionResponse {
   document_ids?: string[];
   effective_model?: string | null;
   id: string;
+  inference_description?: string | null;
+  inference_provider?: string | null;
+  inference_provider_name?: string | null;
+  inference_remote?: boolean | null;
   mail_provider?: string | null;
   message_count?: number;
   model: string;
