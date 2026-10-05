@@ -120,3 +120,20 @@ describe('Composer', () => {
         expect(screen.queryByRole('list', { name: 'Attached files' })).not.toBeInTheDocument();
     });
 });
+
+describe('Composer height', () => {
+    it('shrinks back when a long disabled-reason placeholder clears', () => {
+        // Chrome counts the placeholder in scrollHeight; jsdom has no layout.
+        const spy = vi.spyOn(HTMLTextAreaElement.prototype, 'scrollHeight', 'get')
+            .mockImplementation(function (this: HTMLTextAreaElement) {
+                return this.value ? 24 : Math.min(24 * Math.ceil(this.placeholder.length / 20), 400);
+            });
+        const reason = 'Checking whether GAIA is set up and the model server is reachable';
+        const { rerender } = render(<Harness disabledReason={reason} />);
+        const box = screen.getByLabelText('Message') as HTMLTextAreaElement;
+        expect(parseInt(box.style.height, 10)).toBeGreaterThan(24);
+        rerender(<Harness disabledReason={null} />);
+        expect(box.style.height).toBe('24px');
+        spy.mockRestore();
+    });
+});
