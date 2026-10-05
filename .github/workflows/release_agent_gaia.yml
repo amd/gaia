@@ -488,10 +488,15 @@ jobs:
           # into the active interpreter (#2358), and a frozen binary has no
           # interpreter to install into. Without it faiss/pypdf are absent, the
           # RAG tools still register, and document Q&A fails on every call.
+          #
+          # `anthropic` backs `--use-claude` and `/model`, which the TUI passes
+          # to this binary. Its import is guarded, so leaving it out still
+          # builds a binary that boots and then fails every Claude launch.
           uv pip install --python .venv-freeze \
             -e ".[api,rag,diarize,browser]" \
             -e hub/agents/chat/python \
             -e hub/agents/gaia/python \
+            anthropic \
             pyinstaller
 
       - name: Freeze one-file binary

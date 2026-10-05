@@ -1381,9 +1381,8 @@ class Agent(abc.ABC):
     # a static fragment listed here just loses its position, harmlessly.
     VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = frozenset(
         {
-            "get_memory_system_prompt",  # changes on any remember()/forget()
+            "get_memory_system_prompt",  # re-rendered on forget/update of a shown item
             "get_skills_system_prompt",  # per-turn body selection (#2848)
-            "get_recalled_skills_system_prompt",  # per-turn procedural recall
             # Mostly static, but the index line flips as a background index
             # lands and the shape line changes if the project does (#3379).
             "get_project_map_system_prompt",
@@ -2231,12 +2230,16 @@ Do NOT wrap conversational replies in JSON.
                 "Not granting %s: tools are pre-approved, nobody asked", path
             )
             return False
+        args = {"path": str(path)}
+        # Lets the prompt say "file" or "folder" instead of a catch-all.
+        if path.is_dir():
+            args["kind"] = "folder"
+        elif path.is_file():
+            args["kind"] = "file"
         started = time.perf_counter()
         try:
             return (
-                self.console.confirm_tool_execution(
-                    PATH_ACCESS_PROMPT_TOOL, {"path": str(path)}
-                )
+                self.console.confirm_tool_execution(PATH_ACCESS_PROMPT_TOOL, args)
                 is True
             )
         finally:
@@ -2676,8 +2679,31 @@ Do NOT wrap conversational replies in JSON.
         # pylint: disable-next=assignment-from-none
         new_filter = self._select_skills_for_turn(user_input)
         new_filter = self._union_sticky_skills(new_filter)
-        if new_filter != self._active_skill_filter:
-            self._apply_skill_filter(new_filter)
+        if new_filter == self._active_skill_filter:
+            return
+        if self._rendered_skill_bodies(new_filter) == self._rendered_skill_bodies(
+            self._active_skill_filter
+        ):
+            # Same bodies render (e.g. an always-on skill flipped in the
+            # selection), so recomposing would only re-read the prompt.
+            self._active_skill_filter = new_filter
+            return
+        self._apply_skill_filter(new_filter)
+
+    def _rendered_skill_bodies(
+        self, skill_filter: Optional[List[str]]
+    ) -> Optional[FrozenSet[str]]:
+        """Loaded skills whose full body renders under *skill_filter*.
+
+        ``None`` stays ``None``: an unfiltered prompt renders every body under a
+        different header, so it never equals a filtered one.
+        """
+        if skill_filter is None:
+            return None
+        loaded = getattr(self, "_loaded_skills", None) or {}
+        return (frozenset(skill_filter) | self._always_on_skill_names) & frozenset(
+            loaded
+        )
 
     def _union_sticky_skills(
         self, new_filter: Optional[List[str]]
@@ -3585,21 +3611,50 @@ Do NOT wrap conversational replies in JSON.
         """Get a list of registered tools for the agent."""
         return list(self._tools_registry.values())
 
-    def _attach_tool_call_progress(self) -> None:
-        """Report a long tool call while its arguments stream in.
+    def _announce_model_call(self, after_tools: bool) -> None:
+        """Say what the model is doing until its first token, and keep saying it.
 
-        A local model writing a whole file into edit_file streamed for seven
-        minutes with nothing on screen but a timer.
+        A streamed call is silent until the model produces something: a cold
+        load, then reading the whole prompt, then (for a thinking model) a
+        reasoning paragraph that is only released once it is finished. Each of
+        those is reported as it actually starts, never on a timer.
         """
+        reading = "Reading the tool results" if after_tools else "Reading your request"
         provider = getattr(getattr(self, "chat", None), "llm_client", None)
         if provider is not None and hasattr(provider, "tool_call_progress"):
             provider.tool_call_progress = self._report_tool_call_progress
+        if provider is not None and hasattr(provider, "reasoning_progress"):
+            provider.reasoning_progress = self._report_reasoning_progress
+        backend = getattr(provider, "_backend", None)
+        if backend is not None and hasattr(backend, "model_load_listener"):
+
+            def _on_load(model: str, state: str) -> None:
+                if state == "loaded":
+                    self.console.report_phase("reading", reading)
+                elif state == "downloading":
+                    self.console.report_phase(
+                        "downloading_model", f"Downloading {model}"
+                    )
+                else:
+                    self.console.report_phase(
+                        "loading_model", f"Loading {model} into memory"
+                    )
+
+            backend.model_load_listener = _on_load
+        self.console.report_phase("reading", reading)
 
     def _report_tool_call_progress(self, tool: str, chars: int) -> None:
         label = _TOOL_CALL_PROGRESS_LABELS.get(tool) or (
             f"Preparing {tool}" if tool else "Preparing a tool call"
         )
-        self.console.report_progress(f"{label} — {chars:,} characters so far")
+        self.console.report_phase(
+            "tool_call", f"{label} — {chars:,} characters so far", chars=chars
+        )
+
+    def _report_reasoning_progress(self, words: int) -> None:
+        self.console.report_phase(
+            "reasoning", f"Reasoning — {words:,} words so far", words=words
+        )
 
     def _tool_call_retry_prompt(self, reason: Exception) -> str:
         """Build the recovery turn sent after a tool-call parse failure.
@@ -6286,8 +6341,8 @@ Do NOT wrap conversational replies in JSON.
                 return obj.item()
             if isinstance(obj, np.ndarray):
                 return obj.tolist()
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 - fall through to the generic cases
+            logger.debug("numpy conversion skipped for %s: %s", type(obj).__name__, e)
 
         if isinstance(obj, bytes):
             # For binary data, return a placeholder (don't expose raw bytes to LLM)
@@ -7524,7 +7579,7 @@ Do NOT wrap conversational replies in JSON.
                 # behaviour as the non-streaming branch below — needed because
                 # multi-step ReAct loops accumulate tool results in `messages`.
                 _retried_after_trim_stream = False
-                self._attach_tool_call_progress()
+                self._announce_model_call(after_tools=bool(tool_call_history))
                 while True:
                     try:
                         response_stream = self.chat.send_messages_stream(
@@ -8880,8 +8935,12 @@ Do NOT wrap conversational replies in JSON.
                                     or _targs.get("path")
                                     or _targs.get("document_path")
                                 )
-                            except Exception:
-                                pass
+                            except Exception as e:  # noqa: BLE001
+                                logger.debug(
+                                    "Could not read the indexed file from the "
+                                    "index_document call: %s",
+                                    e,
+                                )
                             break
                     if _last_indexed_file:
                         # Inject a fake assistant tool-call so the conversation shows
@@ -9381,6 +9440,16 @@ Do NOT wrap conversational replies in JSON.
                                 "from an earlier turn, say so without claiming you saved it now."
                             )
                         )
+                        refused = set(self._completion_evidence.refused.values())
+                        if artifact_gaps and set(artifact_gaps) <= refused:
+                            # Asking for the write again would re-ask a "no".
+                            correction = (
+                                "[check:completion] "
+                                + " ".join(artifact_gaps)
+                                + " Do not retry that write, here or anywhere "
+                                "else. Say it was not saved, and give your "
+                                "complete answer again."
+                            )
                         messages.append({"role": "user", "content": correction})
                         conversation.append({"role": "user", "content": correction})
                         continue
