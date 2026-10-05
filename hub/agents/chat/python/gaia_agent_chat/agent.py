@@ -669,7 +669,8 @@ class ChatAgent(
             # was already logged there) — nothing to retry.
             return None
         try:
-            return RAGSDK(self._rag_config)
+            # Shared, so access the user grants mid-chat reaches indexing too.
+            return RAGSDK(self._rag_config, path_validator=self.path_validator)
         except Exception as e:
             logger.warning(
                 "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
