@@ -41,15 +41,15 @@ Before using Agent Memory, make sure you have the following in place:
 
 ---
 
-## Enable Memory
+## Turn Memory On or Off
 
-Memory is off by default. Turn it on once and it stays on for every future `gaia chat` session on this machine.
+Memory is on by default, in the terminal UI and the Agent UI alike. Turning it off stops all memory writes for every future session on this machine until you turn it back on; a private chat pauses it for that chat only.
 
 ### Via the Agent UI (recommended)
 
 1. Launch the Agent UI: `gaia chat --ui`
-2. Click the **Brain** icon in the toolbar to open the Memory Dashboard.
-3. Click the **Off** toggle next to *Memory*; a confirmation modal appears. Click **Enable Memory** in the modal to confirm. The agent picks up the change on its next message -- no restart needed.
+2. Open the Memory Dashboard.
+3. Use the toggle next to *Memory*. The agent picks up the change on its next message -- no restart needed.
 
 ### Via the API (for headless / scripted setups)
 
@@ -57,20 +57,20 @@ Memory is off by default. Turn it on once and it stays on for every future `gaia
 curl -X PUT http://localhost:4200/api/memory/settings \
   -H "Content-Type: application/json" \
   -H "X-Gaia-UI: 1" \
-  -d '{"memory_enabled": true}'
+  -d '{"memory_enabled": false}'
 ```
 
 Verify it stuck:
 
 ```bash
 curl http://localhost:4200/api/memory/settings
-# → {"memory_enabled": true, ...}
+# → {"memory_enabled": false, ...}
 ```
 
-Until you enable memory, none of the behaviors on this page (cross-session recall, automatic extraction, the Memory Dashboard's knowledge browser) will activate -- sessions run in "incognito" mode and nothing is written to `~/.gaia/memory.db`.
+While memory is off, none of the behaviors on this page (cross-session recall, automatic extraction, the Memory Dashboard's knowledge browser) are active -- sessions run in "incognito" mode, nothing is written to `~/.gaia/memory.db`, and the agent says memory is turned off when asked to remember something.
 
 <Note>
-  Once enabled, conversations are summarized into `~/.gaia/memory.db` -- a **plaintext SQLite file** (not encrypted). The [Sensitive Data](#sensitive-data) section below explains the `sensitive` flag for controlling system-prompt visibility; do not store passwords or tokens in agent memory.
+  While memory is on, conversations are summarized into `~/.gaia/memory.db` -- a **plaintext SQLite file** (not encrypted). The [Sensitive Data](#sensitive-data) section below explains the `sensitive` flag for controlling system-prompt visibility; do not store passwords or tokens in agent memory.
 </Note>
 
 ---

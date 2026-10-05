@@ -22,6 +22,7 @@ from gaia.agents.base.memory_store import (
     USER_REVIEWED_CATEGORIES as _DASHBOARD_CATEGORIES,
 )
 from gaia.agents.base.memory_store import VALID_CATEGORIES as _VALID_CATEGORIES
+from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
@@ -1697,7 +1698,7 @@ def commit_inference(body: InferenceCommit) -> Dict:
 # ---------------------------------------------------------------------------
 
 _MCP_MEMORY_ENABLED_KEY = "mcp_memory_enabled"
-_MEMORY_ENABLED_KEY = "memory_enabled"
+_MEMORY_ENABLED_KEY = MEMORY_ENABLED_KEY
 _SYSTEM_DISCOVERY_KEY = "system_discovery_consent"
 
 
@@ -1725,7 +1726,7 @@ def _get_memory_settings_dict(db: ChatDatabase) -> Dict:
     if json_consent != db_consent:
         db.set_setting(_SYSTEM_DISCOVERY_KEY, "true" if json_consent else "false")
     return {
-        "memory_enabled": db.get_setting(_MEMORY_ENABLED_KEY, "false") == "true",
+        "memory_enabled": memory_enabled(db),
         "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false")
         == "true",
         "system_discovery_consent": json_consent,
@@ -1737,7 +1738,7 @@ def get_memory_settings(db: ChatDatabase = Depends(get_db)) -> Dict:
     """Return memory-related feature settings.
 
     Keys:
-    - ``memory_enabled`` (bool): global memory on/off. Default false (beta).
+    - ``memory_enabled`` (bool): global memory on/off. Default true.
     - ``mcp_memory_enabled`` (bool): expose read tools to MCP clients. Default false.
     - ``system_discovery_consent`` (bool): allow system scanning (hardware, software,
       environment). Default false — requires explicit opt-in.
@@ -1755,7 +1756,7 @@ def update_memory_settings(
     Supported keys:
     - ``memory_enabled`` (bool): globally enable/disable all memory storage.
       When false, no knowledge or conversation data is written during any
-      chat session (equivalent to every session being private). Default false (beta).
+      chat session (equivalent to every session being private). Default true.
     - ``mcp_memory_enabled`` (bool): expose memory read tools to MCP clients
       for debug/troubleshooting. Default false.
     - ``system_discovery_consent`` (bool): allow system scanning. Default false.

@@ -40,6 +40,7 @@ from gaia.ui.email_sidecar.profiles import (
     api_version_supported,
     profile_for,
 )
+from gaia.ui.memory_settings import memory_enabled
 
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
@@ -1790,8 +1791,9 @@ async def _get_chat_response(
 
         # Suppress memory writes when private session OR global memory is disabled.
         if hasattr(agent, "_incognito"):
-            memory_globally_off = db.get_setting("memory_enabled", "false") == "false"
-            agent._incognito = memory_globally_off or bool(session.get("private", 0))
+            private = bool(session.get("private", 0))
+            agent._incognito = private or not memory_enabled(db)
+            agent._incognito_reason = "private" if private else "memory_off"
 
         _restore_model_history(agent, db, session_id, request.message)
 
@@ -2346,12 +2348,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                 # Suppress memory writes when private session OR global memory is disabled.
                 if hasattr(agent, "_incognito"):
-                    memory_globally_off = (
-                        db.get_setting("memory_enabled", "false") == "false"
-                    )
-                    agent._incognito = memory_globally_off or bool(
-                        session.get("private", 0)
-                    )
+                    private = bool(session.get("private", 0))
+                    agent._incognito = private or not memory_enabled(db)
+                    agent._incognito_reason = "private" if private else "memory_off"
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():

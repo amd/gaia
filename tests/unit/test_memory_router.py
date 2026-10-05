@@ -1490,10 +1490,10 @@ class TestMemorySettings:
         resp = client.get("/api/memory/settings")
         assert "memory_enabled" in resp.json()
 
-    def test_memory_enabled_default_false(self, client):
-        """memory_enabled defaults to false (beta — requires explicit opt-in)."""
+    def test_memory_enabled_default_true(self, client):
+        """Memory is on until the user turns it off, as it is in the TUI."""
         resp = client.get("/api/memory/settings")
-        assert resp.json()["memory_enabled"] is False
+        assert resp.json()["memory_enabled"] is True
 
     def test_put_settings_disables_memory(self, client):
         """PUT with memory_enabled=false persists and is returned."""
