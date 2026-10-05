@@ -18,6 +18,7 @@ import threading
 
 import pytest
 
+from gaia.agents.base import project_map
 from gaia.agents.base.project_map import (
     PROJECT_MANIFESTS,
     PROJECT_MAP_TOKEN_BUDGET,
@@ -450,14 +451,23 @@ def test_prompt_fragment_is_the_rendered_map(repo):
     assert count_tokens(text) <= PROJECT_MAP_TOKEN_BUDGET
 
 
-def test_prompt_fragment_is_empty_outside_a_project(tmp_path, monkeypatch):
+def test_outside_a_project_the_fragment_is_only_the_working_directory(
+    tmp_path, monkeypatch
+):
     monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
     plain = tmp_path / "docs-only"
     plain.mkdir()
     monkeypatch.chdir(plain)
     agent = _FakeAgent(plain)
     agent.config.project_root = None
-    assert agent.get_project_map_system_prompt() == ""
+    text = agent.get_project_map_system_prompt()
+    assert text.startswith("Working directory: ") and str(plain) in text
+    assert "PROJECT MAP" not in text and len(text.splitlines()) == 1
+
+
+def test_gaia_own_source_is_not_named_as_the_working_directory(monkeypatch):
+    monkeypatch.setattr(project_map, "is_agent_own_source", lambda _: True)
+    assert project_map.working_directory_line() == ""
 
 
 def test_index_trigger_fires_for_an_unindexed_repository(repo):

@@ -90,7 +90,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-The default construction registers **96 tools** — the 66 of the Chat agent's `full` profile, plus 8 skill-library tools, 8 live-browser tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, `remember_skill_lesson`, and the `load_tools` escape hatch. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
+The default construction registers **95 tools** — the 66 of the Chat agent's `full` profile, plus 8 skill-library tools, 8 live-browser tools, 5 read-only email tools, 4 code-search tools, 3 image-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -107,9 +107,9 @@ The default construction registers **96 tools** — the 66 of the Chat agent's `
 | CLI setup | `check_cli_setup`, `install_cli`, `sign_in_cli` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `capture_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
-| Run control | `request_user_input`, `set_loop_state`, `sleep`, `load_tools`, `read_tool_output` |
+| Run control | `request_user_input`, `set_loop_state`, `sleep`, `read_tool_output` |
 
-That count is what the agent *can* do, not what it sees at once: per-turn tool selection sends the model a subset of the registry on any one call, and `load_tools` is the escape hatch it calls mid-turn to pull in a bundle the selector missed. No capability is lost either way.
+Every one of them is offered to the model on every turn, as in the Agent UI: a tool list that stays the same keeps the local model's prompt cache warm. `GAIA_DYNAMIC_TOOLS=1` turns on per-turn tool selection instead, which sends the model a subset on each call and adds a 96th tool, `load_tools`, that it calls mid-turn to pull in a bundle the selector missed.
 
 `run_shell_command` is rate-limited and needs your approval like the other gated tools. Anything off its read-only no-prompt list (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) — `git commit`, `npm test`, `rm notes.txt` — is shown to you and runs once you approve it, rather than being refused. A few invocations a yes/no cannot describe honestly, like `gh auth token` or an encoded PowerShell command, are always refused. A run pre-approved with `GAIA_AUTO_APPROVE_TOOLS` gets the read-only list and refuses the rest; only full access, which a person turns on and can see on screen, runs the rest unasked. Installing the specific CLIs a skill needs goes through [its own tools](#setting-up-a-cli-a-skill-needs) instead. Commands can be chained on one line (`cd src && ls | grep agent`) so looking something up and checking it is a single step — every command on the line is checked against the same allowlist before any of it runs, and one approval covers the line. A leading `VAR=value` (`PYTHONPATH=. pytest -q`) sets that one command's environment and nothing else's; the variables that decide which binary runs or what code it loads — `PATH`, `LD_PRELOAD`, `GIT_SSH_COMMAND` and their families — stay refused. A `cd` that actually ran carries to the *next* separate call, so `cd build` in one turn is still in effect on the next — `get_shell_state` reads the session's current directory, and `reset_shell_session` returns it to where the task started; an explicit `working_directory` is a one-shot override that never moves the session. `run_python` runs a Python snippet from the project root and returns its output, so the agent can compute or check something without leaving a script in your project. `sleep` waits up to five minutes per call, so the agent can wait out a rate limit before retrying; pressing Stop ends the wait within a second.
 

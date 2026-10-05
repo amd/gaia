@@ -206,13 +206,13 @@ class GaiaAgentConfig(ChatAgentConfig):
     dynamic_skills: bool = True
     dynamic_skills_threshold: float = DEFAULT_SKILL_THRESHOLD
 
-    # Per-turn semantic tool selection. On by default for this agent
-    # specifically: breadth is its whole point, and breadth is what makes the
-    # un-trimmed native ``tools=`` payload cost ~10.2K tiktoken tokens on every
-    # LLM call of a 2-5 call ReAct turn — 60% of the fixed prefill a 4B model
-    # re-reads each step. ChatAgent keeps dynamic_tools=False; no other profile
-    # pays a 66-tool registry. Overridable via GAIA_DYNAMIC_TOOLS.
-    dynamic_tools: bool = True
+    # Per-turn semantic tool selection, off by default as in the Agent UI. On,
+    # it churned the offered set at its cap every turn: the changed tool list
+    # broke the backend's prompt cache (17s to first token on "17 times 23" vs
+    # 0.4s with every tool offered) and the right tool was often not offered —
+    # a local CSV question got web tools and fetched a stranger's page.
+    # Overridable via GAIA_DYNAMIC_TOOLS.
+    dynamic_tools: bool = False
 
     # 16 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
     # for the doc profile's 11 CORE, leaving 3 slots — less than one 6-member
