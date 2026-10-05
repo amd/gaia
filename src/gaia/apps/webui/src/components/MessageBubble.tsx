@@ -505,12 +505,14 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} />
                     )}
                     {stopState && (
-                        <div className={`msg-stopped${stopState === 'unconfirmed' ? ' is-unconfirmed' : ''}`} role="note">
+                        <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
                             <Square size={9} fill="currentColor" aria-hidden="true" />
                             <span>
                                 {stopState === 'unconfirmed'
                                     ? 'Stopped. GAIA did not confirm the stop, so some steps may be missing here. Reload the chat to see what it saved.'
-                                    : 'Stopped'}
+                                    : message.stopError
+                                        ? `Stopped. GAIA reported an error while stopping: ${message.stopError}`
+                                        : 'Stopped'}
                             </span>
                         </div>
                     )}

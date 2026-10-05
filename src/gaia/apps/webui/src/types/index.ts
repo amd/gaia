@@ -260,6 +260,8 @@ export interface Message {
     /** Set when the user stopped this turn. 'unconfirmed' means the server
      *  never acknowledged the stop, so the client closed the turn itself. */
     stopState?: 'stopped' | 'unconfirmed';
+    /** Error the server reported while a stopped turn was closing. */
+    stopError?: string;
 }
 
 /** One card instance transferred onto a finalized Message (issue #2108). */
@@ -614,6 +616,8 @@ export interface StreamEvent {
     type: StreamEventType;
     content?: string;
     message_id?: number;
+    /** On `done`: the user's Stop ended this run (absent when it completed normally). */
+    cancelled?: boolean;
     // Agent-specific fields
     status?: string;
     message?: string;

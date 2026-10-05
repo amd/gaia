@@ -878,7 +878,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);
                 if (doneHandled) return;
                 doneHandled = true;
-                const stopped = stopRequestedRef.current;
+                // Label from the server's report, not the click: a Stop that
+                // lands as the run finishes on its own leaves a normal answer.
+                // A synthesized done (no message_id) means the stream closed unreported.
+                const stopState: Message['stopState'] = event.cancelled === true
+                    ? 'stopped'
+                    : stopRequestedRef.current && event.message_id == null ? 'unconfirmed' : undefined;
                 endStopWait();
 
                 // Cancel any pending rAF flush — we have the final content
@@ -897,13 +902,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 store.setRunningSessions(store.runningSessionIds.filter((id) => id !== sessionId));
 
                 const content = event.content || fullContent;
-                log.chat.timed(`Agent response complete: ${content.length} chars${stopped ? ' (stopped)' : ''}`, streamStart);
+                log.chat.timed(`Agent response complete: ${content.length} chars${stopState ? ` (${stopState})` : ''}`, streamStart);
 
                 // Snapshot agent steps and streaming cards (#2108) for the completed message
                 const { steps: stepsSnapshot, cards: cardsSnapshot } = snapshotTurn();
 
                 const hasPolicyAlert = stepsSnapshot.some((s) => s.type === 'policy_alert');
-                if (content || hasPolicyAlert || stopped) {
+                if (content || hasPolicyAlert || stopState) {
                     // Update msg count ref so poll doesn't re-fetch what we just added
                     lastMsgCountRef.current = useChatStore.getState().messages.length + 1;
                     const assistantMsg: Message = {
@@ -916,7 +921,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         agentSteps: stepsSnapshot.length > 0 ? stepsSnapshot : undefined,
                         stats: event.stats || undefined,
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
-                        stopState: stopped ? 'stopped' : undefined,
+                        stopState,
                     };
                     addMessage(assistantMsg);
                 }
@@ -976,7 +981,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onError: (err) => {
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);
-                const stopped = stopRequestedRef.current;
+                const wasStopping = stopRequestedRef.current;
                 endStopWait();
                 // Cancel any pending rAF flush
                 if (streamRafRef.current !== null) {
@@ -990,6 +995,30 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (isStale()) return;
 
                 log.chat.error(`Chat error for session=${sessionId}`, err);
+
+                // An error while stopping must not wipe the steps the user is auditing.
+                if (wasStopping) {
+                    const { steps, cards: cardsSnapshot } = snapshotTurn();
+                    addMessage({
+                        id: Date.now() + 2,
+                        session_id: sessionId,
+                        role: 'assistant',
+                        content: fullContent,
+                        created_at: new Date().toISOString(),
+                        rag_sources: null,
+                        agentSteps: steps.length > 0 ? steps : undefined,
+                        cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
+                        stopState: 'stopped',
+                        stopError: err.message || 'Unknown error',
+                    });
+                    // The server persisted its own row for this turn; don't let the poll swap ours out.
+                    lastMsgCountRef.current = useChatStore.getState().messages.length;
+                    setStreaming(false);
+                    clearStreamContent();
+                    clearAgentSteps();
+                    clearCards();
+                    return;
+                }
                 // Provide a user-friendly error message based on the error type
                 // Each error includes a GitHub link for reporting issues
                 let errorContent: string;
@@ -1021,12 +1050,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     created_at: new Date().toISOString(),
                     rag_sources: null,
                 };
-                // A stopped turn that closes with an error still shows what ran.
-                if (stopped) {
-                    const { steps, cards: cardsSnapshot } = snapshotTurn();
-                    if (steps.length > 0) errMsg.agentSteps = steps;
-                    if (cardsSnapshot.length > 0) errMsg.cards = cardsSnapshot;
-                }
                 addMessage(errMsg);
                 setStreaming(false);
                 clearStreamContent();

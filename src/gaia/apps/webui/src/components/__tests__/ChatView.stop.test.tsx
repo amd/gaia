@@ -142,7 +142,7 @@ describe('ChatView Stop', () => {
             total: 2,
         } as never);
         act(() => {
-            capturedCallbacks!.onDone({ type: 'done', message_id: 42, content: 'Cancelled.' } as unknown as StreamEvent);
+            capturedCallbacks!.onDone({ type: 'done', message_id: 42, content: 'Cancelled.', cancelled: true } as unknown as StreamEvent);
         });
         act(() => {
             vi.advanceTimersByTime(400);
@@ -189,28 +189,45 @@ describe('ChatView Stop', () => {
         expect(useChatStore.getState().messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
     });
 
-    it('keeps the steps when the stopped turn closes with an error instead of done', async () => {
+    it('a Stop that lands as the run finishes on its own leaves the answer unlabelled', async () => {
+        await sendAndRunTools();
+
+        act(() => {
+            fireEvent.click(screen.getByLabelText('Stop'));
+        });
+        // The server finished before the cancel took effect: a normal done, no `cancelled`.
+        act(() => {
+            capturedCallbacks!.onDone({ type: 'done', message_id: 9, content: 'Deleted 3 files.' } as unknown as StreamEvent);
+        });
+
+        const msg = assistantMessage();
+        expect(msg?.content).toBe('Deleted 3 files.');
+        expect(msg?.stopState).toBeUndefined();
+        expect(screen.queryByRole('note')).toBeNull();
+    });
+
+    it('keeps the steps and surfaces the error when the server answers Stop with an error', async () => {
         await sendAndRunTools();
 
         act(() => {
             fireEvent.click(screen.getByLabelText('Stop'));
         });
         act(() => {
-            capturedCallbacks!.onError(new Error('run failed while stopping'));
+            capturedCallbacks!.onError(new Error('Sorry, something went wrong on my end.'));
         });
-
-        const msg = assistantMessage();
-        expect(msg?.content).toContain('run failed while stopping');
-        expect(msg?.agentSteps).toHaveLength(2);
-        expect(msg?.agentSteps?.every((s) => !s.active)).toBe(true);
-        expect(useChatStore.getState().isStreaming).toBe(false);
-        expect(screen.getByLabelText('Send')).toBeInTheDocument();
-
-        // The grace timer was cleared: no second, unconfirmed copy of the turn.
         act(() => {
-            vi.advanceTimersByTime(STOP_GRACE_MS);
+            vi.advanceTimersByTime(400);
         });
-        expect(useChatStore.getState().messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
+        await act(async () => {});
+
+        const assistants = useChatStore.getState().messages.filter((m) => m.role === 'assistant');
+        expect(assistants).toHaveLength(1);
+        expect(assistants[0].agentSteps).toHaveLength(2);
+        expect(assistants[0].stopState).toBe('stopped');
+        expect(useChatStore.getState().isStreaming).toBe(false);
+        expect(screen.getByRole('note')).toHaveTextContent(
+            'GAIA reported an error while stopping: Sorry, something went wrong on my end.',
+        );
     });
 
     it('a normal done without Stop carries no stopped marker', async () => {
