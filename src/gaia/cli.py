@@ -113,6 +113,7 @@ def initialize_lemonade_for_agent(
     host: str | None = None,
     port: int | None = None,
     base_url: str | None = None,
+    model: str | None = None,
 ):
     """
     Initialize Lemonade Server for a specific GAIA agent.
@@ -130,6 +131,8 @@ def initialize_lemonade_for_agent(
         port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         base_url: Full base URL for the Lemonade server (e.g., https://abc.ngrok-free.app).
                   When provided, takes priority over host/port.
+        model: Chat model the command will run (e.g. ``--model``); unset means
+               this machine's default. A cloud model is never preloaded locally.
 
     Returns:
         Tuple of (success: bool, base_url: str | None)
@@ -185,9 +188,13 @@ def initialize_lemonade_for_agent(
         # No floor passed: ensure_ready resolves the same one, and then also
         # seeds an idle server with the default model at its own window.
         if base_url:
-            success = LemonadeManager.ensure_ready(quiet=quiet, base_url=base_url)
+            success = LemonadeManager.ensure_ready(
+                quiet=quiet, base_url=base_url, model=model
+            )
         else:
-            success = LemonadeManager.ensure_ready(quiet=quiet, host=host, port=port)
+            success = LemonadeManager.ensure_ready(
+                quiet=quiet, host=host, port=port, model=model
+            )
     except LemonadeClientError as e:
         print(f"❌ Error: {e}", file=sys.stderr)
         return False, None
@@ -545,6 +552,7 @@ async def async_main(action, **kwargs):
             use_claude=use_claude,
             use_chatgpt=use_chatgpt,
             base_url=lemonade_base_url,
+            model=kwargs.get("model"),
         )
         if not success:
             sys.exit(1)
@@ -4807,6 +4815,7 @@ Let me know your answer!
             agent="minimal",
             quiet=False,
             base_url=getattr(args, "base_url", None),
+            model=getattr(args, "model", None),
         )
         if not success:
             return

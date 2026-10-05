@@ -261,3 +261,20 @@ def test_installer_profile_wins_before_config_is_saved(
     command._test_model_inference(probe, "user.custom-GGUF")
     # The NPU ceiling binds FLM models only; a GGUF load keeps the override.
     assert probe.load_model.call_args.kwargs["ctx_size"] == gguf_load
+
+
+def test_cli_hands_its_model_to_ensure_ready():
+    """`gaia llm --model fireworks.…` must tell the manager, or it seeds Gemma."""
+    base = "http://lemonade.test/api/v1"
+    with (
+        patch(
+            "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", return_value=True
+        ) as ready,
+        patch(
+            "gaia.llm.lemonade_manager.LemonadeManager.get_base_url", return_value=base
+        ),
+    ):
+        initialize_lemonade_for_agent(
+            "minimal", base_url=base, model="fireworks.deepseek-v4p1-flash"
+        )
+    assert ready.call_args.kwargs["model"] == "fireworks.deepseek-v4p1-flash"
