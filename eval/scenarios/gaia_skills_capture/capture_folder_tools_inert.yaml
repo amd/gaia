@@ -5,6 +5,7 @@ id: capture_folder_tools_inert
 name: "Capture — Folder with Code Stays Inert Until Promote (Honesty Floor)"
 category: gaia_skills_capture
 severity: critical
+tags: [t2_compound]
 description: |
   The user captures a local skill folder that ships a tools.py. The
   instructions load, but the tool must NOT register until the user runs

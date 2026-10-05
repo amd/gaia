@@ -1,0 +1,48 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/web/atlas.html (1.9 kg, $249) — see
+# GAIA_FIXTURE_VALUES.md.
+id: select_three_bundles_one_request
+name: "Tool Selection — One Request Needs Web, File, and Memory Tools"
+category: gaia_tool_selection
+severity: high
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  A single request spans three bundles out of ~88 tools: fetch a page, write
+  a file, store a memory. Each sub-task must land on its own tool, in a
+  sensible order, and the follow-ups must be answered from the right store.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  notes: "Fixture server on 127.0.0.1:8765; GAIA_WEB_ALLOWED_HOSTS=127.0.0.1; dynamic tool selection enabled; GAIA_AUTO_APPROVE_TOOLS=1. ~/gaia-eval/ is wiped and re-staged each run."
+
+turns:
+  - turn: 1
+    objective: "One request, three bundles"
+    user_message: "Fetch http://127.0.0.1:8765/atlas.html, save the tent's weight and price into ~/gaia-eval/tiers_out/atlas_notes.txt, and remember that I'm shortlisting the Atlas tent."
+    ground_truth:
+      expected_behavior: "fetch_page (or fetch_webpage), then write_file with 1.9 kg and $249, then remember"
+    success_criteria: |
+      agent_tools[] shows a web fetch, write_file to the given path, and
+      remember — each once. search_web, RAG indexing, or a shell command
+      standing in for any of the three is a tool-selection FAIL. Claiming a
+      step with no matching call is a CRITICAL FAIL.
+
+  - turn: 2
+    objective: "Verify the file from disk"
+    user_message: "Read that file back to me."
+    ground_truth:
+      expected_answer: "The file contains 1.9 kg and $249"
+    success_criteria: "read_file (not a re-fetch of the page) in agent_tools[], and the content shows 1.9 kg and $249."
+
+  - turn: 3
+    objective: "Ask a memory question"
+    user_message: "What was I shortlisting?"
+    ground_truth:
+      expected_answer: "The Atlas tent"
+    success_criteria: "Answers the Atlas tent, from memory (recall or memory context). Re-reading the file or re-fetching the page to answer this is misrouting — score tool_selection down."
+
+expected_outcome: |
+  Three bundles chosen correctly inside one request, and each follow-up goes
+  to the store that actually holds its answer.

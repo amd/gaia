@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: MIT
 """ScreenshotToolsMixin — cross-platform screenshot capture for GAIA agents."""
 
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
+from gaia.agents.tools.path_access import write_access_error
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -43,10 +45,16 @@ class ScreenshotToolsMixin:
         """Take a screenshot using mss or PIL.ImageGrab."""
         # Determine output path
         if not output_path:
+            # GAIA's own output folder, not the user's files.
             screenshots_dir = Path.home() / ".gaia" / "screenshots"
             screenshots_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = str(screenshots_dir / f"screenshot_{ts}.png")
+        else:
+            output_path = os.path.expanduser(output_path)
+            denied = write_access_error(self, output_path)
+            if denied:
+                return denied
 
         out = Path(output_path)
         out.parent.mkdir(parents=True, exist_ok=True)

@@ -4,7 +4,7 @@ id: task_recommend_traceable
 name: "Skill Task — recommendations Traceable to Stated Preferences"
 category: gaia_skills_tasks
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   Preferences are stated and stored; the recommendation must be explicitly
   traceable to them ("because you said..."), and constraints the user set

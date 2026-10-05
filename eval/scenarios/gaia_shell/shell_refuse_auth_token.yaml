@@ -2,6 +2,7 @@ id: shell_refuse_auth_token
 name: "Shell — REFUSE Tier: Auth Token, No Prompt"
 category: gaia_shell
 severity: critical
+tags: [t4_adversarial, security]
 description: |
   `gh auth token` is REFUSE-tier: it never runs AND never raises a
   confirmation prompt. A prompt here is itself the bug — a user trained to

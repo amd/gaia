@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
@@ -476,6 +477,11 @@ class CanonicalTranslator:
         always_scope = event.get("always_scope")
         if always_scope:
             canonical["always_scope"] = str(always_scope)
+        # What the call does (read / write / execute / destructive), so the
+        # prompt's label is earned by the command rather than the tool name.
+        risk = event.get("risk")
+        if risk:
+            canonical["risk"] = str(risk)
         return [canonical]
 
     def _on_user_input_request(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -524,6 +530,10 @@ class CanonicalTranslator:
         """
         if self._summary_renderer is not None:
             return self._summary_renderer(tool, args)
+        # The prompt's title already says what kind of action this is; the
+        # body is the one thing the decision turns on, shown once.
+        if tool in COMMAND_SUMMARY_TOOLS or tool in CODE_SUMMARY_TOOLS:
+            return render_command_summary(tool, args)
         if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(args.get("path"), str):
             return _path_access_question(args)
         label = self._action_labels.get(tool, f"Run {tool!r}")
@@ -632,6 +642,138 @@ def render_labelled_summary(
     return f"{label}?"
 
 
+#: Tools whose confirmation shows a command or code, rendered by
+#: :func:`render_command_summary` instead of as a ``key="value"`` clause.
+COMMAND_SUMMARY_TOOLS = frozenset(
+    {"run_shell_command", "run_cli_command", "wait_for_condition"}
+)
+CODE_SUMMARY_TOOLS = frozenset({"run_python", "execute_python_file"})
+
+#: Longest a command may be before its middle is elided. Head AND tail are
+#: kept: for a shell line the part the decision turns on is often at the end.
+SUMMARY_COMMAND_CHARS = 240
+#: Longest the "in <folder>" line may be before the middle folders are elided.
+SUMMARY_LOCATION_CHARS = 48
+#: Longest a code snippet may run, in lines, before its middle is elided.
+SUMMARY_CODE_LINES = 12
+
+
+def _elide_middle(text: str, limit: int) -> str:
+    """Keep the head and the tail of *text*, saying how much was cut."""
+    if len(text) <= limit:
+        return text
+    head = limit * 3 // 5
+    tail = limit - head
+    hidden = len(text) - head - tail
+    return f"{text[:head]} …[{hidden:,} chars]… {text[-tail:]}"
+
+
+def _short_location(path: str, workspace: str) -> str:
+    """*path* as the user would name it: relative to the workspace, else ~-rooted.
+
+    Returns "" when *path* IS the workspace — there is nothing to say.
+    """
+    sep = "\\" if "\\" in path and "/" not in path else "/"
+    norm = os.path.normcase(os.path.normpath(path))
+    ws = os.path.normcase(os.path.normpath(workspace)) if workspace else ""
+    if ws and norm == ws:
+        return ""
+    if ws and norm.startswith(ws + os.sep):
+        return "." + sep + os.path.normpath(path)[len(ws) + 1 :]
+    home = os.path.expanduser("~")
+    shown = os.path.normpath(path)
+    if home and os.path.normcase(shown).startswith(os.path.normcase(home) + os.sep):
+        shown = "~" + shown[len(home) :]
+    if len(shown) <= SUMMARY_LOCATION_CHARS:
+        return shown
+    parts = shown.replace("\\", "/").split("/")
+    if len(parts) <= 4:
+        return _elide_middle(shown, SUMMARY_LOCATION_CHARS)
+    return sep.join(parts[:2] + ["…"] + parts[-2:])
+
+
+def _strip_base(command: str, base: str) -> str:
+    """Drop ``base`` + separator where it starts a path token. Never a root."""
+    base = os.path.normpath(base).rstrip("\\/") if base else ""
+    if not base or os.path.dirname(base) == base or len(base) < 3:
+        return command
+    pattern = r"(^|[\s\"'=])" + re.escape(base) + r"[\\/]"
+    return re.sub(
+        pattern, r"\1", command, flags=re.IGNORECASE if os.name == "nt" else 0
+    )
+
+
+def _split_leading_cd(command: str) -> "tuple[str, str]":
+    """``cd <dir> && rest`` → ``(dir, rest)``; anything else → ``("", command)``."""
+    stripped = command.strip()
+    for prefix in ("cd /d ", "cd ", "pushd ", "Set-Location "):
+        if not stripped.lower().startswith(prefix.lower()):
+            continue
+        rest = stripped[len(prefix) :]
+        for joiner in (" && ", "; "):
+            target, sep, tail = rest.partition(joiner)
+            if sep and tail.strip():
+                return target.strip().strip('"').strip("'"), tail.strip()
+    return "", command
+
+
+def render_command_summary(
+    tool: str, args: Dict[str, Any], workspace: Optional[str] = None
+) -> str:
+    """The command (or code) a gated call runs, shown once and readably.
+
+    A leading ``cd <folder> &&`` becomes an ``in <folder>`` line, folder paths
+    inside the command become relative to it, and the workspace itself is never
+    spelled out. Anything long is shortened head AND tail, with the cut counted,
+    so the end of the command stays visible. Arguments other than the command
+    and its folder follow in brackets — a hidden key is a hidden side effect.
+    """
+    workspace = workspace if workspace is not None else os.getcwd()
+    shown_keys = {"command", "working_directory", "code", "file_path"}
+    if tool in CODE_SUMMARY_TOOLS:
+        if isinstance(args.get("code"), str):
+            lines = args["code"].strip("\n").splitlines() or [""]
+            if len(lines) > SUMMARY_CODE_LINES:
+                hidden = len(lines) - SUMMARY_CODE_LINES
+                lines = (
+                    lines[: SUMMARY_CODE_LINES - 4]
+                    + [f"…[{hidden} more lines]…"]
+                    + lines[-4:]
+                )
+            body = "\n".join(
+                _elide_middle(line, SUMMARY_COMMAND_CHARS) for line in lines
+            )
+            location = ""
+        else:
+            path = str(args.get("file_path") or "")
+            body = _short_location(path, workspace) or os.path.basename(path)
+            location = ""
+    else:
+        command = str(args.get("command") or "").strip()
+        cd_target, command = _split_leading_cd(command)
+        folder = str(args.get("working_directory") or "")
+        if cd_target:
+            # The cd decides where the command runs; it is never dropped.
+            folder = os.path.join(folder or workspace, cd_target)
+        # Paths are shortened only relative to the folder the command runs in —
+        # stripping any other prefix would name a different file.
+        command = _strip_base(command, folder or workspace)
+        body = _elide_middle(" ".join(command.split()), SUMMARY_COMMAND_CHARS)
+        location = _short_location(folder, workspace) if folder else ""
+
+    extras = [
+        f"{key}={json.dumps(args[key], default=str) if not isinstance(args[key], str) else args[key]}"
+        for key in sorted(args)
+        if key not in shown_keys and args[key] not in (None, "")
+    ]
+    out = body
+    if extras:
+        out += f"  ({', '.join(extras)})"
+    if location:
+        out += f"\nin {location}"
+    return out
+
+
 #: Longest a single argument value may be in a confirmation summary. Past this
 #: the value is elided: the prompt has to fit a modal, and a payload nobody can
 #: read is not disclosure.
@@ -681,6 +823,7 @@ def render_invocation(args: Dict[str, Any]) -> str:
 __all__ = [
     "CanonicalTranslator",
     "TERMINAL_TYPES",
+    "render_command_summary",
     "render_invocation",
     "render_labelled_summary",
 ]

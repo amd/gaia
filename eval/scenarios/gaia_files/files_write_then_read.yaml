@@ -2,6 +2,7 @@ id: files_write_then_read
 name: "Files — Write a File, Read It Back"
 category: gaia_files
 severity: high
+tags: [t1_basic]
 description: |
   Create a file with specific content, then verify by reading it back. The
   write must actually happen — a claimed write with no tool call is the
@@ -14,8 +15,8 @@ setup:
 
 turns:
   - turn: 1
-    objective: "Ask the agent to create gaia_eval_note.txt in the home directory with three specific lines"
-    user_message: "create a file called gaia_eval_note.txt in my home folder with exactly these three lines: 'milk', 'eggs', 'coffee beans'"
+    objective: "Ask the agent to create gaia_eval_note.txt in its working folder with three specific lines"
+    user_message: "create a file called gaia_eval_note.txt in your working folder with exactly these three lines: 'milk', 'eggs', 'coffee beans'"
     ground_truth:
       expected_behavior: "File created with the three lines"
     success_criteria: "Agent creates the file. agent_tools[] MUST include write_file — a success claim without it is a CRITICAL FAIL."

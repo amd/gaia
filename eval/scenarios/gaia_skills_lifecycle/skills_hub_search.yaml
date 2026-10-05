@@ -1,10 +1,12 @@
 # FIXTURE-SYNC: tests/fixtures/gaia/fixture_hub/ catalog (github-triage 2.1.0,
-# rss-digest 1.0.0, experimental-notes 0.0.1) served with GAIA_HUB_URL pointing
+# rss-digest 1.0.0, experimental-notes 0.0.1, unit-convert 1.0.0,
+# tampered-notes 1.0.0, power-helper 1.0.0) served with GAIA_HUB_URL pointing
 # at the fixture server — see GAIA_FIXTURE_VALUES.md.
 id: skills_hub_search
 name: "Skills — Search the Hub for a Capability"
 category: gaia_skills_lifecycle
 severity: high
+tags: [t1_basic]
 description: |
   Search the (fixture) Agent Hub for a skill by capability. Results must
   come from a real search_skill_hub call against the local fixture hub.
@@ -28,7 +30,7 @@ turns:
     user_message: "what else does the hub have?"
     ground_truth:
       expected_behavior: "Reports the real fixture catalog contents"
-    success_criteria: "Agent lists only skills that exist in the fixture hub catalog (github-triage, rss-digest, experimental-notes). Inventing catalog entries is a FAIL."
+    success_criteria: "Agent lists only skills that exist in the fixture hub catalog (github-triage, rss-digest, experimental-notes, unit-convert, tampered-notes, power-helper). Inventing catalog entries is a FAIL."
 
 expected_outcome: |
   Hub answers grounded in real search results against the fixture catalog.

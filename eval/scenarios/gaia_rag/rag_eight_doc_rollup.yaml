@@ -1,0 +1,49 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/regional_reports/ — see
+# GAIA_FIXTURE_VALUES.md "Documents and data".
+id: rag_eight_doc_rollup
+name: "RAG — Roll Up Eight Regional Reports"
+category: gaia_rag
+severity: high
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  Cross-document synthesis at scale: eight short regional reports (mixed .md
+  and .txt), each with Q2 revenue, Q2 target and headcount, plus a Q1 revenue
+  decoy line. Every answer needs all eight documents — top-k retrieval that
+  surfaces only a few regions produces a wrong total.
+
+persona: data_analyst
+
+setup:
+  index_documents: []
+  notes: "Fixture folder staged at ~/gaia-eval/tiers_documents/regional_reports/ (8 files)."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to index the folder ~/gaia-eval/tiers_documents/regional_reports and say which region had the highest Q2 2026 revenue and which regions missed their Q2 target"
+    user_message: "Index ~/gaia-eval/tiers_documents/regional_reports — eight regional Q2 reports. Which region had the highest Q2 2026 revenue, and which regions missed their Q2 target?"
+    ground_truth:
+      expected_answer: "Highest: Central, $501,750. Missed target: South, West, Mountain (exactly three)"
+    success_criteria: |
+      agent_tools[] shows index_directory (or index_document for all eight
+      files) and retrieval covering every region. Answer: Central at
+      $501,750; missed = South, West, Mountain — no more, no fewer. FAIL on a
+      wrong top region, a missing or extra region in the missed list, or
+      using Q1 figures.
+
+  - turn: 2
+    objective: "Ask for total Q2 2026 revenue across all eight regions"
+    user_message: "What's total Q2 revenue across all eight?"
+    ground_truth:
+      expected_answer: "$3,044,000"
+    success_criteria: "Agent answers $3,044,000 and its per-region figures (if listed) match the documents. A total built from fewer than eight regions or from Q1 decoy values is a FAIL."
+
+  - turn: 3
+    objective: "Ask for total headcount across all regions"
+    user_message: "And total headcount?"
+    ground_truth:
+      expected_answer: "272"
+    success_criteria: "Agent answers 272. Any other number is a FAIL."
+
+expected_outcome: |
+  All eight documents contribute: Central tops at $501,750, three regions
+  missed target, totals $3,044,000 revenue and 272 headcount.

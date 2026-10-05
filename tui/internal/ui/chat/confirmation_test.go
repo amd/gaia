@@ -309,7 +309,7 @@ func TestConfirmationTimeoutDeniesAndClearsModal(t *testing.T) {
 	if m.confirmation != nil {
 		t.Error("the modal must clear once the timeout resolves it")
 	}
-	if got := approvalOf(m); !strings.Contains(got, "no answer in") {
+	if got := approvalOf(m); !strings.Contains(got, "not answered in") {
 		t.Errorf("the timeout was not recorded on the step: %q", got)
 	}
 }

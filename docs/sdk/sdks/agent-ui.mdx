@@ -190,9 +190,7 @@ history budget; the newest turn is retained if it fits. The full stored trace
 remains in SQLite, and exclusions produce a warning in the backend log.
 
 `get_messages` and the ordinary transcript API do not expose the internal trace.
-Deleting a transcript message also deletes its evidence. The email sidecar's
-separate `/query` contract still carries bounded prose; native evidence replay
-for that transport is a separate extension.
+Deleting a transcript message also deletes its evidence.
 
 
 **Example:**
@@ -991,6 +989,14 @@ Used to reach the UI from a phone.
     agent's own `CONFIRMATION_REQUIRED_TOOLS`) triggers the agent to pause,
     the UI prompts the user and posts the outcome (`approve` / `deny`) back on
     this endpoint.
+  </Accordion>
+
+  <Accordion title="POST /api/eval/scripted-user">
+    **Eval-only**, gated by `GAIA_EVAL_SCRIPTED_USER=1` (403 otherwise).
+    Scripts a user who declines the shell commands in `decline_commands` and
+    answers no questions, so `gaia eval agent` can score what the agent does
+    after a "no". An empty list turns it off. The runner sets it from a
+    scenario's `setup.decline_commands` and clears it afterwards.
   </Accordion>
 </AccordionGroup>
 

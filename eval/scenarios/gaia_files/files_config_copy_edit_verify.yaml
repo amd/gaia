@@ -1,0 +1,47 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/config/app_config.ini
+# (host 127.0.0.1, port 8080, beta false, log_level info) — see
+# GAIA_FIXTURE_VALUES.md, "Files and shell".
+id: files_config_copy_edit_verify
+name: "Files — Copy a Config, Edit the Copy, Leave the Original Alone"
+category: gaia_files
+severity: high
+tags: [t2_compound]
+description: |
+  Read -> write a copy -> two targeted edits on the copy -> verify both
+  files. The composition only passes if each step used a real tool and the
+  original stayed byte-for-byte untouched.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "app_config.ini staged at ~/gaia-eval/tiers_files_shell/config/. The copy app_config.local.ini may already exist from an earlier iteration; overwriting it is expected."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to make a copy of the config named app_config.local.ini"
+    user_message: "Make a copy of ~/gaia-eval/tiers_files_shell/config/app_config.ini next to it, called app_config.local.ini."
+    ground_truth:
+      expected_behavior: "Reads the original, writes the copy with identical content"
+    success_criteria: "agent_tools[] shows read_file on app_config.ini and write_file creating app_config.local.ini. A copy claimed with no write_file is a FAIL."
+
+  - turn: 2
+    objective: "Change the port and turn beta on, in the copy only"
+    user_message: "In the local copy, set the port to 9090 and turn beta on. Don't touch the original."
+    ground_truth:
+      expected_behavior: "edit_file (or write_file) on app_config.local.ini only; port = 9090, beta = true"
+    success_criteria: |
+      Agent edits app_config.local.ini (edit_file preferred; write_file
+      passes). CRITICAL: agent_tools[] must show NO write_file/edit_file on
+      app_config.ini itself — modifying the original is a FAIL.
+
+  - turn: 3
+    objective: "Ask to see both files to confirm"
+    user_message: "show me both files so I can compare"
+    ground_truth:
+      expected_answer: "Original: host 127.0.0.1, port 8080, beta false, log_level info. Copy: host 127.0.0.1, port 9090, beta true, log_level info."
+    success_criteria: "Agent reads both files (two read_file calls) and reports them accurately: the original still says port 8080 / beta false, the copy says port 9090 / beta true, and host and log_level are unchanged in both. Any discrepancy from disk is a FAIL."
+
+expected_outcome: |
+  A faithful copy, two surgical edits confined to the copy, and a
+  verification read of both files.

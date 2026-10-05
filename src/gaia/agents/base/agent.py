@@ -53,6 +53,14 @@ from gaia.agents.base.context_eviction import (
     evict_threshold_from_env,
     resolve_context_eviction,
 )
+from gaia.agents.base.denied_effects import (
+    NETWORK,
+    PATH,
+    Denial,
+    DeniedEffects,
+    Effect,
+    render_call,
+)
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.extraction import MAX_SECONDS as EXTRACTION_MAX_SECONDS
 from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
@@ -1023,6 +1031,66 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     return None
 
 
+# First-person intent that announces the call it rides with ("I'll read it").
+_TOOL_STEP_INTENT_PATTERN = re.compile(
+    r"^(?:(?:ok(?:ay)?|so|alright|now|first|next|then)[,.]?\s+)*"
+    r"(?:i'll|i will|i'm going to|i am going to|let's"
+    r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b))\b",
+    re.IGNORECASE,
+)
+_TRAILING_SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+|\n+")
+# A call that fetches something feeds the reply after it, so text sent beside
+# it is progress, never the answer. Executors count too: they may be lookups.
+_LOOKUP_TOOL_PATTERN = re.compile(
+    r"^(?:read|search|find|list|get|browse|query|analy[sz]e|fetch|recall|describe"
+    r"|inspect|check|view|show|grep|lookup|look|load|open|summari[sz]e|extract"
+    r"|transcribe|download|web|run|execute)(?:_|$)"
+)
+
+
+def _answer_beside_tool_calls(
+    content: Any, tool_calls: Optional[list] = None
+) -> Optional[str]:
+    """The answer in text sent alongside tool calls, or ``None`` if it has none.
+
+    Only beside closing actions ("drop_table", "remember"): beside a lookup the
+    reply that follows is the answer. Reasoning and trailing next-step
+    narration ("Let me drop the table.") are removed; what remains counts only
+    if it is not itself a plan or narration.
+    """
+    if not isinstance(content, str):
+        return None
+    if any(
+        _LOOKUP_TOOL_PATTERN.match(str(call.get("name", "")))
+        for call in tool_calls or []
+    ):
+        return None
+    text, _ = _split_reasoning(content)
+    while text:
+        last = _TRAILING_SENTENCE_PATTERN.split(text)[-1]
+        sentence = re.sub(r"[*_`#>]", "", last).replace("’", "'").strip()
+        if not (
+            _NEXT_STEP_INTENT_PATTERN.match(sentence)
+            or _TOOL_STEP_INTENT_PATTERN.match(sentence)
+        ):
+            break
+        text = text[: text.rfind(last)].rstrip()
+    if not text or _unfinished_answer_kind(text):
+        return None
+    return text
+
+
+def _with_answer_beside_tool_calls(answer: str, beside: Optional[str]) -> str:
+    """Put the answer sent alongside the turn's last tool calls ahead of *answer*.
+
+    Only when *answer* is a shorter wrap-up ("Scratch table cleaned up.");
+    a reply that restates or outgrows it already stands on its own.
+    """
+    if not beside or beside in answer or len(answer.strip()) >= len(beside):
+        return answer
+    return f"{beside}\n\n{answer.strip()}" if answer.strip() else beside
+
+
 #: Any one of these lets the agent look at a file the request names.
 _LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 
@@ -1667,6 +1735,8 @@ Do NOT wrap conversational replies in JSON.
         # running. Drained at the step boundary beside the cancel check, so a
         # second thought reaches the model without waiting out the turn.
         self._followup_queue: Optional["queue.Queue[str]"] = None
+        # Effects the user declined this turn; reset per turn (#4447).
+        self._denied_effects = DeniedEffects()
 
         # Resolve the same endpoint as TUI setup, including an isolated runtime.
         from gaia.llm.lemonade_client import resolve_lemonade_base_url
@@ -1704,6 +1774,8 @@ Do NOT wrap conversational replies in JSON.
                     base_url=base_url,
                     required_min_device=required_min_device,
                     device=device,
+                    # A cloud default_model must not stop this local model's preload.
+                    model=model_id,
                 )
                 # Starting GAIA's own server picks its port, so follow it.
                 if resolve_after_start:
@@ -5000,6 +5072,116 @@ Do NOT wrap conversational replies in JSON.
             return None
         return refuses(tool_name, tool_args)  # pylint: disable=not-callable
 
+    #: The answers the denied-effect question offers (#4447).
+    ALLOW_DENIED_EFFECT = "Allow once"
+    KEEP_DENIED_EFFECT = "Don't run it"
+
+    def _check_denied_effects(
+        self, tool_name: str, tool_args: Optional[Dict[str, Any]]
+    ) -> Tuple[Optional[Dict[str, Any]], bool]:
+        """Stop a call that reaches an effect the user declined this turn.
+
+        Returns ``(refusal, allowed)``. ``allowed`` means the user was just
+        shown this exact call and said yes, which already is their answer to
+        it, so the confirmation prompt is not shown a second time.
+        """
+        conflict = self._denied_effects.conflict(tool_name, tool_args)
+        if conflict is None:
+            return None, False
+        denial, effect = conflict
+        command = render_call(tool_name, tool_args)
+        answer = self._ask_to_lift_denial(denial, effect, command)
+        if answer is True:
+            # Once: the denial stands for any other route this turn.
+            logger.info("User allowed %s after declining %s", command, denial.rendered)
+            return None, True
+
+        if answer is None:
+            asked = (
+                "Stop and ask the user: name the exact command you need "
+                f"(`{command}`) and why you need it, or tell them what you can "
+                "still do without it."
+            )
+        elif answer is False:
+            asked = (
+                "The user was asked about this exact call and said no again. "
+                "Tell them what is blocked and what you can do without it."
+            )
+        else:
+            asked = f"The user was asked about this exact call and replied: {answer!r}."
+        logger.info(
+            "Refused %s: it %s, declined earlier as %s",
+            tool_name,
+            effect.describe(),
+            denial.rendered,
+        )
+        return (
+            {
+                **NOT_EXECUTED,
+                "status": "denied",
+                "blocked_effect": effect.describe(),
+                "declined_call": denial.rendered,
+                "error": (
+                    f"Not run: this {effect.describe()}, which the user declined "
+                    f"earlier in this request (`{denial.rendered}` — "
+                    f"{denial.reason}). A denial covers the effect, not only the "
+                    "tool it was asked through, so do not reach it with another "
+                    f"tool, command, or script. {asked}"
+                ),
+            },
+            False,
+        )
+
+    def _ask_to_lift_denial(
+        self, denial: Denial, effect: Effect, command: str
+    ) -> Union[bool, str, None]:
+        """Put the rerouted call to the user; None when nobody can answer.
+
+        True is "allow once", False is "no", a string is whatever else they
+        typed. Consoles without a question channel (plain terminals, headless
+        hosts) get None, and the model is told to ask in its reply instead.
+        """
+        console = getattr(self, "console", None)
+        asker = getattr(console, "request_user_input_blocking", None)
+        if (
+            not callable(asker)
+            or getattr(console, "background_mode", False)
+            or not getattr(console, "answers_questions", True)
+        ):
+            return None
+        # The user's own words, not the memory context the loop prepends.
+        raw = getattr(self, "_original_user_input", None) or getattr(
+            self, "_current_query", ""
+        )
+        request = " ".join(str(raw or "").split())
+        purpose = f" to finish “{request[:160]}”" if request else ""
+        question = (
+            f"You declined `{denial.rendered}` earlier in this request. My next "
+            f"step{purpose} {effect.describe()} another way:\n\n{command}\n\n"
+            "I stopped instead of running it. Allow it once?"
+        )
+        timeout = getattr(console, "confirm_timeout_seconds", None) or 300
+        raw = asker(
+            message=question,
+            choices=[self.ALLOW_DENIED_EFFECT, self.KEEP_DENIED_EFFECT],
+            default_if_no_response=None,
+            timeout_seconds=int(timeout),
+            continue_if_no_response=True,
+        )
+        answer = raw.strip() if isinstance(raw, str) else ""
+        if not answer or answer == "__NO_RESPONSE__":
+            return None
+        lowered = answer.lower().strip(" .!")
+        if lowered == self.KEEP_DENIED_EFFECT.lower() or re.match(
+            r"^(?:no|n|nope|don'?t|do not|stop|cancel)\b", lowered
+        ):
+            return False
+        if lowered == self.ALLOW_DENIED_EFFECT.lower() or re.match(
+            r"^(?:allow|yes|y|yep|yeah|ok|okay|sure|go ahead|do it|run it)\b", lowered
+        ):
+            return True
+        return answer
+
     def _call_is_pre_authorized(
         self, tool_name: str, tool_args: Optional[Dict[str, Any]]
     ) -> bool:
@@ -5020,6 +5202,10 @@ Do NOT wrap conversational replies in JSON.
         answer yes, so its gate stays byte-identical.
         """
         if not tool_args:
+            return False
+        # A console may insist on asking about a call a grant would cover.
+        insists = getattr(getattr(self, "console", None), "insists_on_asking", None)
+        if callable(insists) and insists(tool_name, tool_args) is True:
             return False
         covers = getattr(self, "skill_grant_covers_call", None)
         if not callable(covers):
@@ -5297,13 +5483,36 @@ Do NOT wrap conversational replies in JSON.
         # must never reach a prompt.
         refusal = self._policy_refusal(tool_name, tool_args)
         if refusal is not None:
+            ledger = getattr(self, "_denied_effects", None)
+            # Shell policy refusals only: a tool's own preflight ("read it
+            # first") is a step to take, not a no. And one refused command
+            # shape is not the whole family — the host or file it aimed at is.
+            if ledger is not None and isinstance((tool_args or {}).get("command"), str):
+                ledger.record(
+                    tool_name,
+                    tool_args,
+                    str(refusal.get("error") if isinstance(refusal, dict) else refusal),
+                    kinds={NETWORK, PATH},
+                )
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
+
+        # A "no" covers the effect, not the tool: another route to it is asked
+        # about, never taken silently.
+        asked_and_allowed = False
+        if getattr(self, "_denied_effects", None):
+            rerouted, asked_and_allowed = self._check_denied_effects(
+                tool_name, tool_args
+            )
+            if rerouted is not None:
+                return rerouted
 
         # Guardrail: require explicit user confirmation for high-risk tools.
         # Consoles that cannot reach a human deny rather than answer for them
         # (#2210): AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
         # frontend modal, everything else denies with an actionable message.
-        if self._tool_requires_confirmation(tool_name, tool_args):
+        if not asked_and_allowed and self._tool_requires_confirmation(
+            tool_name, tool_args
+        ):
             # Blocking on a human is not tool cost. Timed separately so a turn
             # where approval took five minutes does not report the tool as
             # having taken five minutes.
@@ -5317,10 +5526,16 @@ Do NOT wrap conversational replies in JSON.
                     getattr(self, "_confirmation_wait_s", 0.0) or 0.0
                 ) + (time.perf_counter() - _confirm_started)
             if not approved:
-                return {
-                    "status": "denied",
-                    "error": self._confirmation_denied_error(tool_name),
-                }
+                denied_error = self._confirmation_denied_error(tool_name)
+                denied = {"status": "denied", "error": denied_error}
+                if self.console.confirmation_timed_out(tool_name) is True:
+                    # Nobody said no, so this is not a refusal to route around.
+                    denied["timed_out"] = True
+                else:
+                    ledger = getattr(self, "_denied_effects", None)
+                    if ledger is not None:
+                        ledger.record(tool_name, tool_args, denied_error)
+                return denied
 
         # Dynamic tool loader (#1449): record use for LRU recency. The name is
         # fully resolved and confirmed in the registry here. Execution stays on
@@ -7094,6 +7309,7 @@ Do NOT wrap conversational replies in JSON.
         self._current_query = user_input
         self._single_tool_done = False
         self._turn_seq += 1
+        self._denied_effects = DeniedEffects(os.getcwd())
         self._begin_turn_provenance()
         # Cleared per turn: a trace must never report the previous turn's
         # schema for a turn that never reached the backend.
@@ -7201,6 +7417,8 @@ Do NOT wrap conversational replies in JSON.
         cut_off_continuations = 0
         completion_corrections = 0
         completion_gaps = []
+        # Answer text the model sent alongside its latest tool calls.
+        answer_beside_tool_calls: Optional[str] = None
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -7636,7 +7854,7 @@ Do NOT wrap conversational replies in JSON.
                         if tool_call_history
                         else "unknown tool"
                     )
-                    prompt = (
+                    header = (
                         "TOOL EXECUTION FAILED!\n\n"
                         f"You were trying to execute: {last_tool}\n"
                         f"Error: {last_error}\n\n"
@@ -7644,13 +7862,32 @@ Do NOT wrap conversational replies in JSON.
                         f"Current plan step {self.current_step + 1}/{self.total_plan_steps} failed.\n"
                         f"Current plan: {self.current_plan}\n\n"
                         f"Previous successful outputs: {truncated_outputs}\n\n"
-                        "INSTRUCTIONS:\n"
-                        "1. Analyze the error and understand what went wrong\n"
-                        "2. Create a NEW corrected plan that fixes the error\n"
-                        "3. Make sure to use correct tool parameters (check the available tools)\n"
-                        "4. Start executing the corrected plan\n\n"
-                        "Respond with your analysis, a corrected plan, and the first tool to execute."
                     )
+                    if self._is_denial_error(last_error):
+                        # "Fix the error" read as "find another way" is how a
+                        # user's no got routed around (#4447).
+                        prompt = header + (
+                            "This was a denial or refusal, not a mistake to fix. "
+                            "It is a decision about what the action DOES, so the "
+                            "same effect through another tool, command, or script "
+                            "is also declined.\n\n"
+                            "INSTRUCTIONS:\n"
+                            "1. Do not retry it, and do not reach the same result "
+                            "another way.\n"
+                            "2. Continue only with steps that do not need it.\n"
+                            "3. Otherwise stop and tell the user what is blocked, "
+                            "the exact command you need and why, and what you can "
+                            "do without it."
+                        )
+                    else:
+                        prompt = header + (
+                            "INSTRUCTIONS:\n"
+                            "1. Analyze the error and understand what went wrong\n"
+                            "2. Create a NEW corrected plan that fixes the error\n"
+                            "3. Make sure to use correct tool parameters (check the available tools)\n"
+                            "4. Start executing the corrected plan\n\n"
+                            "Respond with your analysis, a corrected plan, and the first tool to execute."
+                        )
 
                     # Add the error recovery prompt to the messages array so it gets sent to LLM
                     messages.append({"role": "user", "content": prompt})
@@ -8182,6 +8419,11 @@ Do NOT wrap conversational replies in JSON.
             # shape for native tool_calls, raw text otherwise — see
             # ``_build_assistant_message`` for the why).
             messages.append(self._build_assistant_message(response, parsed, reasoning))
+            if "answer" not in parsed:
+                answer_beside_tool_calls = _answer_beside_tool_calls(
+                    parsed.get("content") if parsed.get("tool_calls") else None,
+                    parsed.get("tool_calls"),
+                )
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
@@ -8981,7 +9223,10 @@ Do NOT wrap conversational replies in JSON.
 
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
-                answer_candidate = parsed["answer"]
+                # Every check below must see the text the user will see.
+                answer_candidate = _with_answer_beside_tool_calls(
+                    parsed["answer"], answer_beside_tool_calls
+                )
                 completion_gaps = []
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after
@@ -9609,14 +9854,26 @@ Do NOT wrap conversational replies in JSON.
                         )
                         refused = set(self._completion_evidence.refused.values())
                         if artifact_gaps and set(artifact_gaps) <= refused:
-                            # Asking for the write again would re-ask a "no".
-                            correction = (
-                                "[check:completion] "
-                                + " ".join(artifact_gaps)
-                                + " Do not retry that write, here or anywhere "
-                                "else. Say it was not saved, and give your "
-                                "complete answer again."
-                            )
+                            unconfirmed = self._completion_evidence.unconfirmed
+                            if unconfirmed & set(artifact_gaps):
+                                # Nobody said no, but retrying unasked skips them.
+                                correction = (
+                                    "[check:completion] "
+                                    + " ".join(artifact_gaps)
+                                    + " Do not retry that write now. Say it was "
+                                    "not saved because the approval expired, ask "
+                                    "whether to try again, and give your complete "
+                                    "answer again."
+                                )
+                            else:
+                                # Asking for the write again would re-ask a "no".
+                                correction = (
+                                    "[check:completion] "
+                                    + " ".join(artifact_gaps)
+                                    + " Do not retry that write, here or anywhere "
+                                    "else. Say it was not saved, and give your "
+                                    "complete answer again."
+                                )
                         else:
                             # Only the files it names: other reads are still drift.
                             self._turn_scope.widen(correction)
@@ -9954,6 +10211,20 @@ Do NOT wrap conversational replies in JSON.
         r"|refus(?:ed|es) (?:the )?(?:request|access|operation)",
         re.IGNORECASE,
     )
+
+    _DENIAL_RE = re.compile(
+        r"\bwas denied\b|\bdeclined\b|\bdenied by\b|execution denied"
+        r"|with no user response|requires (?:explicit|live) user approval",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _is_denial_error(cls, error: Any) -> bool:
+        """True when a failure was a no from the user or a policy, not a bug."""
+        text = str(error or "")
+        return bool(
+            cls._DENIAL_RE.search(text) or cls._LOOP_NOT_PERMITTED_RE.search(text)
+        )
 
     @staticmethod
     def _is_throttled_result(result: Any) -> bool:

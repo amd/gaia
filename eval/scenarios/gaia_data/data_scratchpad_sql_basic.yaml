@@ -1,0 +1,37 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/csv/expenses_small.csv — see
+# GAIA_FIXTURE_VALUES.md "Documents and data".
+id: data_scratchpad_sql_basic
+name: "Data — Load a CSV Into the Scratchpad and Query It With SQL"
+category: gaia_data
+severity: high
+tags: [t1_basic]
+description: |
+  The explicit scratchpad path: create_table, insert_data, query_data over a
+  10-row expense CSV. Every number must come from a query_data result.
+
+persona: data_analyst
+
+setup:
+  index_documents: []
+  notes: "Fixture CSV staged at ~/gaia-eval/tiers_documents/csv/expenses_small.csv (10 rows)."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to load ~/gaia-eval/tiers_documents/csv/expenses_small.csv into a scratchpad table and report total spend per category"
+    user_message: "Load ~/gaia-eval/tiers_documents/csv/expenses_small.csv into a scratchpad table and give me total spend per category using SQL."
+    ground_truth:
+      expected_answer: "Travel $1,088.75; Meals $153.75; Software $169.00; Office $135.50 (total $1,547.00)"
+    success_criteria: |
+      agent_tools[] shows create_table, insert_data (10 rows) and a
+      query_data GROUP BY. All four category totals must be exact. A total
+      stated with no query_data call is a CRITICAL FAIL.
+
+  - turn: 2
+    objective: "Ask for the single largest expense"
+    user_message: "What's the single biggest expense?"
+    ground_truth:
+      expected_answer: "Harbor Hotel, $640.00 (Travel, 2026-02-20)"
+    success_criteria: "Agent answers Harbor Hotel $640.00 from a query_data call against the table it built. Wrong vendor or amount is a FAIL."
+
+expected_outcome: |
+  A real scratchpad table, exact GROUP BY totals, and a queried maximum.

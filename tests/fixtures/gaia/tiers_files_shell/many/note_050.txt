@@ -1,0 +1,4 @@
+Note 050
+owner: Tomasz
+status: ok
+todo list reviewed, nothing outstanding

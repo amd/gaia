@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: MIT
 """AudioToolsMixin — transcribe audio and video files for GAIA agents."""
 
+import os
 import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -443,6 +445,15 @@ class AudioToolsMixin:
         from gaia.audio.media import ensure_ffmpeg, probe_duration, to_wav16k_mono
 
         source = Path(file_path).expanduser()
+        denied = self._transcript_access_error(source, write=False)
+        if denied:
+            return denied
+        if output_path:
+            denied = self._transcript_access_error(
+                self._transcript_destination(source, output_path), write=True
+            )
+            if denied:
+                return denied
         if not source.is_file():
             return {
                 "status": "error",
@@ -592,6 +603,16 @@ class AudioToolsMixin:
         from gaia.agents.base.tools import ToolCancelled, raise_if_cancelled
 
         source = Path(transcript_path).expanduser()
+        destination = (
+            Path(output_path).expanduser()
+            if output_path
+            else source.with_suffix(".transcript.md")
+        )
+        denied = self._transcript_access_error(
+            source, write=False
+        ) or self._transcript_access_error(destination, write=True)
+        if denied:
+            return denied
         if not source.is_file():
             return {
                 "status": "error",
@@ -604,12 +625,6 @@ class AudioToolsMixin:
         raw = source.read_text(encoding="utf-8", errors="replace").strip()
         if not raw:
             return {"status": "error", "error": f"{source} is empty."}
-
-        destination = (
-            Path(output_path).expanduser()
-            if output_path
-            else source.with_suffix(".transcript.md")
-        )
 
         timings_file = timings_path_for(source)
         segments: List[dict] = []
@@ -974,6 +989,20 @@ class AudioToolsMixin:
                 f"call refine_transcript('{destination}')."
             ),
         }
+
+    def _transcript_access_error(self, path: Path, *, write: bool):
+        """The allowed-folders refusal for *path*, or None.
+
+        GAIA's own transcript folder is exempt: it is where this tool writes,
+        and the follow-up calls must be able to read back what it wrote.
+        """
+        if Path(os.path.realpath(path)).is_relative_to(
+            Path(os.path.realpath(TRANSCRIPT_DIR))
+        ):
+            return None
+        if write:
+            return write_access_error(self, path)
+        return read_access_error(self, path)
 
     def _transcript_destination(self, source, output_path):
         """Where this recording's transcript lives."""
