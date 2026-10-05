@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
 
 from gaia.agents.base.call_risk import call_risk
-from gaia.agents.base.console import OutputHandler, timeout_denial_message
+from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
 from gaia.agents.base.turn_metrics import turn_log_path
@@ -1050,7 +1050,7 @@ class SSEOutputHandler(OutputHandler):
             logger.info(
                 "Background mode: immediately denied confirmation for '%s'", tool_name
             )
-            self._last_denial = (tool_name, unattended_message)
+            self._last_denial = Denial(tool_name, unattended_message)
             return False
 
         confirm_id = str(uuid.uuid4())
@@ -1094,7 +1094,7 @@ class SSEOutputHandler(OutputHandler):
         while deadline is None or time.monotonic() < deadline:
             if self.cancelled.is_set():
                 self._clear_pending_confirmation()
-                self._last_denial = (
+                self._last_denial = Denial(
                     tool_name,
                     f"Confirmation for '{tool_name}' was abandoned: the run was "
                     "cancelled before the user answered.",
@@ -1114,9 +1114,10 @@ class SSEOutputHandler(OutputHandler):
             )
             logger.warning("Tool confirmation timed out for '%s'", tool_name)
             self._clear_pending_confirmation()
-            self._last_denial = (
+            self._last_denial = Denial(
                 tool_name,
                 timeout_denial_message(tool_name, f"{timeout:g} s"),
+                timed_out=True,
             )
             return False
 
@@ -1126,12 +1127,13 @@ class SSEOutputHandler(OutputHandler):
         if timed_out:
             # The client's own clock ran out and it said so: a timeout, never
             # "the user denied it".
-            self._last_denial = (
+            self._last_denial = Denial(
                 tool_name,
                 timeout_denial_message(tool_name, "the time allowed"),
+                timed_out=True,
             )
         elif not result:
-            self._last_denial = (
+            self._last_denial = Denial(
                 tool_name,
                 f"Tool '{tool_name}' was denied by the user.",
             )

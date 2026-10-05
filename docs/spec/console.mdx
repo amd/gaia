@@ -232,6 +232,10 @@ class OutputHandler(ABC):
     def confirmation_denied_reason(self, tool_name: str) -> str:
         """Why the last denial happened, for the ``{"status": "denied"}`` result."""
         ...
+
+    def confirmation_timed_out(self, tool_name: str) -> bool:
+        """True when the last denial was a prompt nobody answered in time."""
+        ...
 ```
 
 <Warning>

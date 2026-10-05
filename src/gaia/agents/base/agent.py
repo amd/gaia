@@ -5205,10 +5205,14 @@ Do NOT wrap conversational replies in JSON.
                     getattr(self, "_confirmation_wait_s", 0.0) or 0.0
                 ) + (time.perf_counter() - _confirm_started)
             if not approved:
-                return {
+                denied = {
                     "status": "denied",
                     "error": self._confirmation_denied_error(tool_name),
                 }
+                timed_out = getattr(self.console, "confirmation_timed_out", None)
+                if callable(timed_out) and timed_out(tool_name) is True:
+                    denied["timed_out"] = True
+                return denied
 
         # Dynamic tool loader (#1449): record use for LRU recency. The name is
         # fully resolved and confirmed in the registry here. Execution stays on
@@ -9341,14 +9345,26 @@ Do NOT wrap conversational replies in JSON.
                         )
                         refused = set(self._completion_evidence.refused.values())
                         if artifact_gaps and set(artifact_gaps) <= refused:
-                            # Asking for the write again would re-ask a "no".
-                            correction = (
-                                "[check:completion] "
-                                + " ".join(artifact_gaps)
-                                + " Do not retry that write, here or anywhere "
-                                "else. Say it was not saved, and give your "
-                                "complete answer again."
-                            )
+                            unconfirmed = self._completion_evidence.unconfirmed
+                            if unconfirmed & set(artifact_gaps):
+                                # Nobody said no, but retrying unasked skips them.
+                                correction = (
+                                    "[check:completion] "
+                                    + " ".join(artifact_gaps)
+                                    + " Do not retry that write now. Say it was "
+                                    "not saved because the approval expired, ask "
+                                    "whether to try again, and give your complete "
+                                    "answer again."
+                                )
+                            else:
+                                # Asking for the write again would re-ask a "no".
+                                correction = (
+                                    "[check:completion] "
+                                    + " ".join(artifact_gaps)
+                                    + " Do not retry that write, here or anywhere "
+                                    "else. Say it was not saved, and give your "
+                                    "complete answer again."
+                                )
                         messages.append({"role": "user", "content": correction})
                         conversation.append({"role": "user", "content": correction})
                         continue

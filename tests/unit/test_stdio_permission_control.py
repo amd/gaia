@@ -547,7 +547,8 @@ class ReasonReportingAgent(GatedAgent):
     def process_query(self, _query):
         allowed = self.console.confirm_tool_execution(self.tool, self.args)
         reason = "" if allowed else self.console.confirmation_denied_reason(self.tool)
-        return {"answer": f"decision={allowed} reason={reason}"}
+        timed_out = self.console.confirmation_timed_out(self.tool)
+        return {"answer": f"decision={allowed} timed_out={timed_out} reason={reason}"}
 
 
 class TestATimeoutIsNotARefusal:
@@ -557,6 +558,7 @@ class TestATimeoutIsNotARefusal:
         events = drive(PermissionState(), ["timeout"], agent=ReasonReportingAgent())
         answer = final_answer(events)
         assert "decision=False" in answer
+        assert "timed_out=True" in answer
         assert "timed out" in answer
         assert "did NOT refuse" in answer
         assert "denied by the user" not in answer
@@ -564,6 +566,7 @@ class TestATimeoutIsNotARefusal:
     def test_a_real_deny_is_still_the_users_decision(self):
         events = drive(PermissionState(), ["deny"], agent=ReasonReportingAgent())
         assert "denied by the user" in final_answer(events)
+        assert "timed_out=False" in final_answer(events)
 
 
 class TestPromptsSayWhatTheCallDoes:

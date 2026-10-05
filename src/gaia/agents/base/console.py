@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from gaia.agents.base.tool_grants import PATH_TOOLS, grant_scope, path_argument
 from gaia.agents.base.tools import get_tool_display_name
@@ -111,6 +111,15 @@ def unattended_denial_message(tool_name: str) -> str:
         f"{AUTO_APPROVE_ENV_VAR}=1 to pre-approve confirmation-gated tools for "
         "a trusted automated run."
     )
+
+
+class Denial(NamedTuple):
+    """Why a gated call did not run, bound to the tool it was asked for."""
+
+    tool: str
+    reason: str
+    #: Nobody answered in time: not a refusal, so the call may be offered again.
+    timed_out: bool = False
 
 
 def user_denial_message(tool_name: str) -> str:
@@ -335,8 +344,8 @@ class OutputHandler(ABC):
     edit_roots: Tuple[str, ...] = ()
     """Folders "accept edits" may write into — the session's workspace."""
 
-    _last_denial: Optional[Tuple[str, str]] = None
-    """``(tool_name, reason)`` for the most recent denial (#2210).
+    _last_denial: Optional[Denial] = None
+    """The most recent denial (#2210).
 
     Bound to the tool so a handler that denies without recording a reason can
     never inherit the previous tool's explanation.
@@ -646,9 +655,11 @@ class OutputHandler(ABC):
             AUTO_APPROVE_ENV_VAR,
         )
 
-    def deny_tool_execution(self, tool_name: str, reason: str) -> bool:
+    def deny_tool_execution(
+        self, tool_name: str, reason: str, timed_out: bool = False
+    ) -> bool:
         """Record and log a denial, then return False for the caller to return."""
-        self._last_denial = (tool_name, reason)
+        self._last_denial = Denial(tool_name, reason, timed_out)
         logger.warning("Denied confirmation-gated tool '%s': %s", tool_name, reason)
         return False
 
@@ -661,9 +672,14 @@ class OutputHandler(ABC):
         unless the recorded denial is for this exact tool.
         """
         recorded = self._last_denial
-        if recorded and recorded[0] == tool_name:
-            return recorded[1]
+        if recorded and recorded.tool == tool_name:
+            return recorded.reason
         return user_denial_message(tool_name)
+
+    def confirmation_timed_out(self, tool_name: str) -> bool:
+        """True when this tool's most recent denial was a prompt nobody answered."""
+        recorded = self._last_denial
+        return bool(recorded and recorded.tool == tool_name and recorded.timed_out)
 
     def print_policy_alert(
         self,

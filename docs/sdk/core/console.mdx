@@ -102,7 +102,9 @@ depends on the handler:
 
 The agent loop turns a denial into a `{"status": "denied", "error": ...}` tool
 result, so the model can explain itself or pick a different action instead of the
-run crashing.
+run crashing. A prompt nobody answered in time adds `"timed_out": true`: the user
+did not refuse, so the agent says the approval expired and asks whether to try
+again, rather than treating the write as declined.
 
 <Warning>
   For a genuinely unattended run (CI, a batch job, a host that already asked the
