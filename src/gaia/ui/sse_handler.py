@@ -22,8 +22,6 @@ from collections import deque
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
 
-import _socket
-
 from gaia.agents.base.console import OutputHandler
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
