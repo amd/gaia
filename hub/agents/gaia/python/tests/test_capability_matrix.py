@@ -62,8 +62,9 @@ _spec.loader.exec_module(capability_matrix)
 # image_gen bundles, `run_python`, `capture_skill` and #3402's
 # `wait_for_condition`, plus `sleep`, the three cli_setup tools, and the
 # persistent shell session's `get_shell_state` / `reset_shell_session`), plus
-# the eight live-browser tools.
-_EXPECTED_TOOLS_TOTAL = 96
+# the eight live-browser tools. 95 since per-turn tool selection went off by
+# default: `load_tools` registers only while it is on.
+_EXPECTED_TOOLS_TOTAL = 95
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
 # 16 with `sleep`, which joins the core set rather than a bundle: waiting out a

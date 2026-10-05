@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Every tool is offered on every turn again, as in the Agent UI.** Per-turn
+  tool selection swapped about a dozen tools in and out at its cap, which broke
+  the local model's prompt cache (17s to first token on a one-line question,
+  0.4s without it) and left out the tool a question needed: a CSV question was
+  given web tools and fetched an unrelated page. `GAIA_DYNAMIC_TOOLS=1` turns
+  selection back on. The registered count is 95: `load_tools`, the selector's
+  escape hatch, registers only while selection is on.
 - **A turn's silent opening now says what the model is doing.** A thinking
   model sat on "Getting started" for 10-20 s while it read the prompt and then
   reasoned in a paragraph released only once finished. `status` events gain an

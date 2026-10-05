@@ -750,6 +750,10 @@ export interface SessionResponse {
   device?: string;
   document_ids?: string[];
   id: string;
+  inference_description?: string | null;
+  inference_provider?: string | null;
+  inference_provider_name?: string | null;
+  inference_remote?: boolean | null;
   mail_provider?: string | null;
   message_count?: number;
   model: string;

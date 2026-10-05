@@ -1240,9 +1240,16 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
 **FILE BROWSING:** browse_directory (navigate), list_recent_files (recent), get_file_info (metadata).
 
-**IMAGE GENERATION (when SD enabled):** Always CALL `generate_image` first. Don't pre-announce availability. If it errors, state unavailable in 1-2 sentences (mention `--sd` flag); don't apologize or describe what you would have done.
-
 **UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`. Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process.
+"""
+        # A rule about a tool the session lacks made the model offer images.
+        if getattr(self.config, "enable_sd_tools", False):
+            data_file_rules += """
+**IMAGE GENERATION:** Always CALL `generate_image` first. Don't pre-announce availability. If it errors, state unavailable in 1-2 sentences (mention `--sd` flag); don't apologize or describe what you would have done.
+"""
+        else:
+            data_file_rules += """
+**IMAGE GENERATION:** Not available in this session. Never offer or claim it.
 """
 
         # Native-only escape-hatch menu (#1450): non-native models already
