@@ -1,0 +1,1432 @@
+{
+ "schema": 1,
+ "meta": {
+  "suite": "pr",
+  "component": "rag",
+  "started": "2026-10-04T19:31:01-0700",
+  "git_sha": "d1cc07723ac91dfed4229e1590836aa85b9ef30f",
+  "machine": {
+   "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+   "logical_cpus": 32,
+   "ram_gb": 63.6,
+   "os": "Windows 11 (10.0.26200)",
+   "python": "3.12.10"
+  },
+  "llm_model": "Gemma-4-E4B-it-GGUF",
+  "answers": false,
+  "judge": false,
+  "rag_defaults": {
+   "model": "Gemma-4-E4B-it-GGUF",
+   "embedding_model": "user.embeddinggemma-300m-GGUF",
+   "chunk_size": 500,
+   "chunk_overlap": 100,
+   "max_chunks": 5,
+   "max_indexed_files": 100,
+   "max_total_chunks": 10000,
+   "vlm_model": "Qwen3-VL-4B-Instruct-GGUF"
+  },
+  "vlm": {
+   "model": "Qwen3-VL-4B-Instruct-GGUF",
+   "enabled": false
+  },
+  "dense_depth": 20,
+  "sources": {},
+  "embedder": {
+   "model": "user.embeddinggemma-300m-GGUF",
+   "checkpoint": "ggml-org/embeddinggemma-300M-GGUF:Q8_0",
+   "device": "cpu",
+   "recipe": "llamacpp"
+  },
+  "duration_s": 34.5,
+  "errors": []
+ },
+ "datasets": [
+  {
+   "dataset": "repo_docs",
+   "description": "Hand-labelled questions over real documents already committed to this repo. Offline: no download needed.",
+   "sources": [],
+   "index": {
+    "documents": 21,
+    "indexed": 21,
+    "failed": [],
+    "required_failed": 0,
+    "chunks": 51,
+    "embedding_dim": 768,
+    "embedder_load_s": 1.34,
+    "index_s": 6.24,
+    "docs_per_s": 3.365,
+    "chunks_per_s": 8.17,
+    "rss_start_mb": 164.0,
+    "rss_peak_mb": 167.8,
+    "rss_end_mb": 167.8,
+    "rss_growth_mb": 3.8,
+    "vectors_global_mb": 0.15,
+    "vectors_per_file_mb": 0.15,
+    "chunk_text_mb": 0.08,
+    "cache_on_disk_mb": 0.23,
+    "unlocated_chunks": 0,
+    "per_document": [
+     {
+      "doc": "oil_gas_manual",
+      "seconds": 1.565,
+      "chunks": 13,
+      "pages": 10,
+      "from_cache": false,
+      "bytes": 749376
+     },
+     {
+      "doc": "fed_rate_nov2024",
+      "seconds": 0.137,
+      "chunks": 1,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 1752
+     },
+     {
+      "doc": "alphabet_10k_2024",
+      "seconds": 0.249,
+      "chunks": 2,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 2822
+     },
+     {
+      "doc": "treasury_fy2024",
+      "seconds": 0.179,
+      "chunks": 1,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 1819
+     },
+     {
+      "doc": "bls_employment_dec2025",
+      "seconds": 0.145,
+      "chunks": 1,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 1700
+     },
+     {
+      "doc": "nist_csf2",
+      "seconds": 0.266,
+      "chunks": 2,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 2181
+     },
+     {
+      "doc": "apache_license",
+      "seconds": 0.24,
+      "chunks": 2,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 3478
+     },
+     {
+      "doc": "gdpr_article17",
+      "seconds": 0.255,
+      "chunks": 2,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 3028
+     },
+     {
+      "doc": "github_tos",
+      "seconds": 0.18,
+      "chunks": 2,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 2103
+     },
+     {
+      "doc": "mit_license",
+      "seconds": 0.139,
+      "chunks": 1,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 2039
+     },
+     {
+      "doc": "attention_paper",
+      "seconds": 0.186,
+      "chunks": 2,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 2248
+     },
+     {
+      "doc": "cdc_flu_2023_2024",
+      "seconds": 0.147,
+      "chunks": 1,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 1896
+     },
+     {
+      "doc": "python311_whats_new",
+      "seconds": 0.194,
+      "chunks": 2,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 2159
+     },
+     {
+      "doc": "raspberry_pi4",
+      "seconds": 0.232,
+      "chunks": 1,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 1749
+     },
+     {
+      "doc": "rfc7231",
+      "seconds": 0.217,
+      "chunks": 2,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 2346
+     },
+     {
+      "doc": "usb20",
+      "seconds": 0.156,
+      "chunks": 1,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 1859
+     },
+     {
+      "doc": "acme_q3_report",
+      "seconds": 0.27,
+      "chunks": 2,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 2199
+     },
+     {
+      "doc": "budget_2025",
+      "seconds": 0.171,
+      "chunks": 1,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 1320
+     },
+     {
+      "doc": "employee_handbook",
+      "seconds": 0.729,
+      "chunks": 7,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 9507
+     },
+     {
+      "doc": "meeting_notes_q3",
+      "seconds": 0.484,
+      "chunks": 4,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 5476
+     },
+     {
+      "doc": "safety_handbook_cc0",
+      "seconds": 0.1,
+      "chunks": 1,
+      "pages": null,
+      "from_cache": false,
+      "bytes": 630
+     }
+    ]
+   },
+   "embedder": {
+    "model": "user.embeddinggemma-300m-GGUF",
+    "checkpoint": "ggml-org/embeddinggemma-300M-GGUF:Q8_0",
+    "device": "cpu",
+    "recipe": "llamacpp"
+   },
+   "summary": {
+    "questions": 48,
+    "evidence_not_indexed": 0,
+    "sdk": {
+     "n": 48,
+     "recall@1": 0.75,
+     "recall@3": 0.9375,
+     "recall@5": 0.9792,
+     "recall@10": 1.0,
+     "recall@20": 1.0,
+     "mrr": 0.8488
+    },
+    "sdk_document": {
+     "n": 48,
+     "recall@1": 0.9792,
+     "recall@5": 1.0,
+     "mrr": 0.9896
+    },
+    "sdk_latency": {
+     "n": 48,
+     "p50_ms": 24.9,
+     "p95_ms": 39.7,
+     "max_ms": 41.3
+    },
+    "agent": {
+     "n": 48,
+     "recall@1": 0.0625,
+     "recall@3": 0.125,
+     "recall@5": 0.1458,
+     "recall@10": 1.0,
+     "recall@20": 1.0,
+     "mrr": 0.2306,
+     "recall@returned": 1.0,
+     "mean_returned": 9.9
+    },
+    "agent_latency": {
+     "n": 48,
+     "p50_ms": 53.0,
+     "p95_ms": 81.1,
+     "max_ms": 114.4
+    }
+   },
+   "by_tag": {
+    "financial": {
+     "questions": 10,
+     "sdk_recall@5": 1.0,
+     "agent_recall@returned": 1.0
+    },
+    "government": {
+     "questions": 13,
+     "sdk_recall@5": 0.9231,
+     "agent_recall@returned": 1.0
+    },
+    "lang:en": {
+     "questions": 48,
+     "sdk_recall@5": 0.9792,
+     "agent_recall@returned": 1.0
+    },
+    "legal": {
+     "questions": 8,
+     "sdk_recall@5": 1.0,
+     "agent_recall@returned": 1.0
+    },
+    "multi_evidence": {
+     "questions": 3,
+     "sdk_recall@5": 1.0,
+     "agent_recall@returned": 1.0
+    },
+    "numeric": {
+     "questions": 23,
+     "sdk_recall@5": 1.0,
+     "agent_recall@returned": 1.0
+    },
+    "pdf": {
+     "questions": 7,
+     "sdk_recall@5": 0.8571,
+     "agent_recall@returned": 1.0
+    },
+    "scientific": {
+     "questions": 4,
+     "sdk_recall@5": 1.0,
+     "agent_recall@returned": 1.0
+    },
+    "table": {
+     "questions": 9,
+     "sdk_recall@5": 1.0,
+     "agent_recall@returned": 1.0
+    },
+    "technical": {
+     "questions": 17,
+     "sdk_recall@5": 0.9412,
+     "agent_recall@returned": 1.0
+    },
+    "text": {
+     "questions": 41,
+     "sdk_recall@5": 1.0,
+     "agent_recall@returned": 1.0
+    }
+   },
+   "questions": [
+    {
+     "id": "repo-001",
+     "dataset": "repo_docs",
+     "tags": [
+      "pdf",
+      "government",
+      "technical",
+      "table"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 3,
+     "sdk_doc_rank": 1,
+     "agent_rank": 8,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.021781599964015186,
+     "agent_latency_s": 0.0758225999888964,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-002",
+     "dataset": "repo_docs",
+     "tags": [
+      "pdf",
+      "government",
+      "technical"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.019177399983163923,
+     "agent_latency_s": 0.05329290003282949,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-003",
+     "dataset": "repo_docs",
+     "tags": [
+      "pdf",
+      "government",
+      "technical"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 5,
+     "sdk_doc_rank": 1,
+     "agent_rank": 10,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.027360500011127442,
+     "agent_latency_s": 0.06694349995814264,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-004",
+     "dataset": "repo_docs",
+     "tags": [
+      "pdf",
+      "government",
+      "technical"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.038629200018476695,
+     "agent_latency_s": 0.03674049995606765,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-005",
+     "dataset": "repo_docs",
+     "tags": [
+      "pdf",
+      "government",
+      "technical"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 8,
+     "sdk_doc_rank": 1,
+     "agent_rank": 1,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.024358200025744736,
+     "agent_latency_s": 0.0681404999922961,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-006",
+     "dataset": "repo_docs",
+     "tags": [
+      "pdf",
+      "government",
+      "technical",
+      "multi_evidence"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.04022289998829365,
+     "agent_latency_s": 0.06446779996622354,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-007",
+     "dataset": "repo_docs",
+     "tags": [
+      "pdf",
+      "government",
+      "technical",
+      "table"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 3,
+     "sdk_doc_rank": 1,
+     "agent_rank": 8,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.026071300031617284,
+     "agent_latency_s": 0.04958940000506118,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-010",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "financial",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 1,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.01640890003181994,
+     "agent_latency_s": 0.059258799999952316,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-011",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "financial",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.015452199964784086,
+     "agent_latency_s": 0.044671100040432066,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-012",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "financial",
+      "numeric",
+      "multi_evidence"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.013981700001750141,
+     "agent_latency_s": 0.035363500006496906,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-013",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "financial",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.01478179998230189,
+     "agent_latency_s": 0.06381429999601096,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-014",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "financial",
+      "government",
+      "numeric",
+      "table"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.01480259996606037,
+     "agent_latency_s": 0.03824280004482716,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-015",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "financial",
+      "government",
+      "numeric",
+      "table"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.030781199980992824,
+     "agent_latency_s": 0.04856730002211407,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-016",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "government",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 1,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.016537199961021543,
+     "agent_latency_s": 0.05275939998682588,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-017",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "government"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.036399099975824356,
+     "agent_latency_s": 0.04838310001650825,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-018",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "government",
+      "technical"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.015062699967529625,
+     "agent_latency_s": 0.029869900026824325,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-019",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "government",
+      "technical",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 2,
+     "sdk_doc_rank": 1,
+     "agent_rank": 7,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.027973900025244802,
+     "agent_latency_s": 0.06498890003422275,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-020",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "legal"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.0413401999976486,
+     "agent_latency_s": 0.041341800009831786,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-021",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "legal"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 2,
+     "sdk_doc_rank": 1,
+     "agent_rank": 7,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.032267100003082305,
+     "agent_latency_s": 0.04752710001775995,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-022",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "legal",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.014028800011146814,
+     "agent_latency_s": 0.0638223999994807,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-023",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "legal"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 2,
+     "sdk_doc_rank": 1,
+     "agent_rank": 7,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.01429309998638928,
+     "agent_latency_s": 0.046283100033178926,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-024",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "legal",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 2,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.012736400007270277,
+     "agent_latency_s": 0.08228480000980198,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-025",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "legal"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 3,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.025569099991116673,
+     "agent_latency_s": 0.03820770001038909,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-026",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "legal"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.015000999963376671,
+     "agent_latency_s": 0.08250979997683316,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-027",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "legal"
+     ],
+     "language": "en",
+     "answer_type": "judge",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 7,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.03200290002860129,
+     "agent_latency_s": 0.04502320004394278,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-028",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "scientific",
+      "numeric",
+      "table"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 2,
+     "sdk_doc_rank": 1,
+     "agent_rank": 4,
+     "agent_returned": 8,
+     "sdk_latency_s": 0.016448200040031224,
+     "agent_latency_s": 0.07878849998814985,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-029",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "scientific"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.028134900028817356,
+     "agent_latency_s": 0.03322839998872951,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-030",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "scientific",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 2,
+     "agent_returned": 7,
+     "sdk_latency_s": 0.031266799953300506,
+     "agent_latency_s": 0.06443549995310605,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-031",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "scientific",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.02666869998211041,
+     "agent_latency_s": 0.05495999997947365,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-032",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "technical"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.02138260001083836,
+     "agent_latency_s": 0.042102000035811216,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-033",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "technical"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.013184099982026964,
+     "agent_latency_s": 0.051040599995758384,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-034",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "technical"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.02959520003059879,
+     "agent_latency_s": 0.04705170000670478,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-035",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "technical",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.028472199977841228,
+     "agent_latency_s": 0.06721260002814233,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-036",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "technical"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.0265963000128977,
+     "agent_latency_s": 0.04011860000900924,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-037",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "technical"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.015885100001469254,
+     "agent_latency_s": 0.05216030002338812,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-038",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "technical",
+      "numeric",
+      "table"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.01393439999083057,
+     "agent_latency_s": 0.0616609999560751,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-039",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "technical",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.029139199992641807,
+     "agent_latency_s": 0.03085729997837916,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-040",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "financial",
+      "numeric",
+      "table"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.014732000010553747,
+     "agent_latency_s": 0.03956290002679452,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-041",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "financial",
+      "numeric",
+      "table"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.03457660001004115,
+     "agent_latency_s": 0.056771299976389855,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-042",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "financial",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.03401319996919483,
+     "agent_latency_s": 0.1143634999752976,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-043",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "financial",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.02564230002462864,
+     "agent_latency_s": 0.07148340001003817,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-044",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 2,
+     "sdk_doc_rank": 1,
+     "agent_rank": 7,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.013690499996300787,
+     "agent_latency_s": 0.06050739996135235,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-045",
+     "dataset": "repo_docs",
+     "tags": [
+      "text"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 2,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.016286200028844178,
+     "agent_latency_s": 0.07523130002664402,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-046",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 2,
+     "sdk_doc_rank": 1,
+     "agent_rank": 7,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.040993900038301945,
+     "agent_latency_s": 0.06975109997438267,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-047",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "numeric"
+     ],
+     "language": "en",
+     "answer_type": "numeric",
+     "sdk_rank": 4,
+     "sdk_doc_rank": 2,
+     "agent_rank": 9,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.01517450000392273,
+     "agent_latency_s": 0.05557389999739826,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-048",
+     "dataset": "repo_docs",
+     "tags": [
+      "text"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.02536650002002716,
+     "agent_latency_s": 0.06540270004188642,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-049",
+     "dataset": "repo_docs",
+     "tags": [
+      "text",
+      "multi_evidence",
+      "table"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.015023400017526,
+     "agent_latency_s": 0.05166749999625608,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    },
+    {
+     "id": "repo-050",
+     "dataset": "repo_docs",
+     "tags": [
+      "text"
+     ],
+     "language": "en",
+     "answer_type": "exact",
+     "sdk_rank": 1,
+     "sdk_doc_rank": 1,
+     "agent_rank": 6,
+     "agent_returned": 10,
+     "sdk_latency_s": 0.035897699999623,
+     "agent_latency_s": 0.03074159997049719,
+     "label_overlap": null,
+     "evidence_not_indexed": false,
+     "answer": null
+    }
+   ]
+  }
+ ],
+ "hard_cases": [
+  {
+   "id": "replaced_document",
+   "title": "Document replaced by a newer version after indexing",
+   "status": "fail",
+   "finding": "A file edited after indexing keeps serving its old text: index_document() on the same path returns already_indexed, and the agent's index_document tool short-circuits earlier still. Only reindex_document() or a new session picks up the change.",
+   "details": {
+    "question": "repo-010",
+    "checks": {
+     "v1_served_before_change": true,
+     "new_content_without_action": false,
+     "index_document_again_says_already_indexed": true,
+     "new_content_after_index_document_again": false,
+     "new_content_after_reindex_document": true,
+     "new_content_in_new_session_same_cache": true
+    }
+   }
+  },
+  {
+   "id": "exact_duplicate",
+   "title": "Near-duplicate documents (identical copy under another name)",
+   "status": "fail",
+   "finding": "Duplicate chunks fill 40% of the SDK's top-5 and 0% of the agent's. Identical documents are not de-duplicated, so a copy crowds out other evidence.",
+   "details": {
+    "per_question": [
+     {
+      "question": "repo-010",
+      "sdk_dup_share@5": 0.4,
+      "agent_dup_share@5": 0.0,
+      "sdk_top5_from_both_copies": true
+     },
+     {
+      "question": "repo-013",
+      "sdk_dup_share@5": 0.4,
+      "agent_dup_share@5": 0.0,
+      "sdk_top5_from_both_copies": true
+     },
+     {
+      "question": "repo-014",
+      "sdk_dup_share@5": 0.4,
+      "agent_dup_share@5": 0.0,
+      "sdk_top5_from_both_copies": true
+     }
+    ]
+   }
+  },
+  {
+   "id": "corrupted_cache",
+   "title": "Corrupted index cache recovery",
+   "status": "pass",
+   "finding": "Truncated, tampered, unsigned and garbage cache entries are all rebuilt from the document, and retrieval matches a clean index.",
+   "details": {
+    "question": "repo-010",
+    "outcomes": {
+     "truncated": {
+      "rebuilt": true,
+      "planted_text_served": false,
+      "rank": 1,
+      "clean_rank": 1
+     },
+     "tampered": {
+      "rebuilt": true,
+      "planted_text_served": false,
+      "rank": 1,
+      "clean_rank": 1
+     },
+     "signature_missing": {
+      "rebuilt": true,
+      "planted_text_served": false,
+      "rank": 1,
+      "clean_rank": 1
+     },
+     "garbage": {
+      "rebuilt": true,
+      "planted_text_served": false,
+      "rank": 1,
+      "clean_rank": 1
+     }
+    }
+   }
+  },
+  {
+   "id": "corrupted_pdf",
+   "title": "Truncated PDF",
+   "status": "pass",
+   "finding": "A PDF cut to 40% of its bytes is reported (success=False, pdf_status=corrupted).",
+   "details": {
+    "success": false,
+    "pdf_status": "corrupted",
+    "chunks": 0,
+    "error": "Could not read PDF: truncated_oil_gas_manual.pdf\nReason: Stream has ended unexpectedly\nThe file appears to be corrupted, truncated, or not a valid PDF.\nSuggestions:\n  1. Re-download or re-export the PDF from the original source\n  2. Try opening the file in a PDF viewer to confirm it is readable\n  3."
+   }
+  },
+  {
+   "id": "capacity_eviction",
+   "title": "Indexing past the document cap (max_indexed_files=3)",
+   "status": "fail",
+   "finding": "The 4th document evicted fed_rate_nov2024 with no sign in index_document()'s result (success=True, no eviction field). Questions about it now find nothing. The default cap is 100 documents / 10,000 chunks.",
+   "details": {
+    "evicted": "fed_rate_nov2024",
+    "first_still_indexed": false,
+    "last_result_keys": [
+     "file_name",
+     "file_size_mb",
+     "file_type",
+     "max_indexed_files",
+     "max_total_chunks",
+     "num_chunks",
+     "num_pages",
+     "success",
+     "total_chunks",
+     "total_images",
+     "total_indexed_files",
+     "vlm_pages"
+    ],
+    "signal_keys": []
+   }
+  },
+  {
+   "id": "scanned_pdf",
+   "title": "Scanned (image-only) PDF",
+   "status": "pass",
+   "finding": "With the VLM off, the scanned PDF is refused with an actionable 'no extractable text' error, not indexed empty. Retrieval over scanned pages was not measured.",
+   "details": {
+    "vlm_model": "Qwen3-VL-4B-Instruct-GGUF",
+    "vlm_enabled": false,
+    "success": false,
+    "pdf_status": "empty",
+    "chunks": 0,
+    "error": "No extractable text in PDF: scanned_oil_gas_manual.pdf\nThe file has 10 page(s) but none contained machine-readable text.\nCommon causes:\n  1. The PDF is a scan with no OCR layer\n  2. All content is rendered as images or vector glyphs\nSuggestions:\n  1. Run OCR on the PDF (e.g. `ocrmypdf input.pdf outp"
+   }
+  }
+ ]
+}

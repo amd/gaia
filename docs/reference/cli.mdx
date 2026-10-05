@@ -1990,6 +1990,38 @@ gaia eval code --control ~/.gaia/tui/control.json
 
 ---
 
+### Retrieval Benchmark
+
+Scores RAG retrieval (recall@k, MRR) separately from answer accuracy, on real documents with labelled evidence, and measures indexing and query cost as the corpus grows. See [Retrieval Benchmark](/reference/eval#retrieval-benchmark-rag).
+
+```bash
+gaia eval retrieval --suite pr                     # Offline, retrieval only: the PR gate
+gaia eval retrieval --suite pr --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json
+gaia eval retrieval --suite full --judge           # FinanceBench, AMD docs, XQuAD, scale tiers, answers
+gaia eval retrieval --fetch-only                   # Download and verify the corpora
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--component` | `rag` | Retrieval component under test |
+| `--suite` | `pr` | `pr` (offline, deterministic) or `full` |
+| `--datasets` | the suite's | Subset of `repo_docs`, `technical_docs`, `financebench`, `xquad` |
+| `--retrieval-only` | off | Skip answer generation |
+| `--judge` / `--judge-model` | off | Grade free-form answers with Claude; otherwise they are unscored |
+| `--model` | RAG default | Chat model that answers |
+| `--scale-tiers` / `--no-scale` | `10,100,1000` (full) | Corpus sizes for the scale phase |
+| `--no-hard-cases` | off | Skip the hard cases |
+| `--xquad-languages` / `--xquad-per-language` | `en,de,es,ru,zh,ar,hi` / `40` | Multilingual slice |
+| `--financebench-docs` | all | Keep the questions over the first N filings |
+| `--no-vlm` | off | Do not read PDF images with the VLM (`pr` never does); otherwise the VLM must read a test image before the run starts |
+| `--offline` | off | Never download; fail if a file is not cached |
+| `--fetch-only` | off | Download and verify every corpus file, then stop |
+| `--out` | `eval/results/retrieval-<suite>-<timestamp>` | Output directory |
+| `--gate` / `--tolerance` | – / `0.02` | Compare to a baseline `results.json`; exit 1 on a regression |
+| `--keep-work` | off | Keep the temporary index caches |
+
+---
+
 ### Flagship Agent Tasks
 
 Run an agent on real coding, data and Q&A tasks and score what the finished project does. CI gates on passes, tested changes, quality, honesty, tokens, steps and runtime, against main's committed results.

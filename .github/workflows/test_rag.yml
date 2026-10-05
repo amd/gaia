@@ -15,6 +15,12 @@ on:
       - 'src/gaia/vlm/**'
       - 'tests/test_rag*.py'
       - 'tests/unit/rag/**'
+      - 'src/gaia/agents/tools/rag_tools.py'
+      - 'hub/agents/chat/python/gaia_agent_chat/agent.py'
+      - 'src/gaia/eval/retrieval/**'
+      - 'eval/retrieval/**'
+      - 'tests/unit/eval/test_retrieval_bench.py'
+      - 'tests/fixtures/eval_baselines/rag-retrieval/**'
       - 'setup.py'
       - '.github/workflows/test_rag.yml'
   pull_request:
@@ -28,6 +34,12 @@ on:
       - 'src/gaia/vlm/**'
       - 'tests/test_rag*.py'
       - 'tests/unit/rag/**'
+      - 'src/gaia/agents/tools/rag_tools.py'
+      - 'hub/agents/chat/python/gaia_agent_chat/agent.py'
+      - 'src/gaia/eval/retrieval/**'
+      - 'eval/retrieval/**'
+      - 'tests/unit/eval/test_retrieval_bench.py'
+      - 'tests/fixtures/eval_baselines/rag-retrieval/**'
       - 'setup.py'
       - '.github/workflows/test_rag.yml'
   merge_group:
@@ -69,7 +81,7 @@ jobs:
         GAIA_REQUIRE_RAG: '1'
       run: |
         echo "Running RAG unit tests..."
-        pytest tests/test_rag.py tests/unit/rag/ -v -s --tb=short --cov=src/gaia/rag --cov-report=term-missing
+        pytest tests/test_rag.py tests/unit/rag/ tests/unit/eval/test_retrieval_bench.py -v -s --tb=short --cov=src/gaia/rag --cov=src/gaia/eval/retrieval --cov-report=term-missing
 
     - name: Upload coverage report
       if: always()
@@ -98,7 +110,9 @@ jobs:
       uses: ./.github/actions/setup-venv
       with:
         python-version: '3.12'
-        install-package: '.[dev,rag]'
+        # The chat agent package provides query_documents' search-key expansion,
+        # which the retrieval gate scores as the agent pipeline.
+        install-package: '.[dev,rag] ./hub/agents/chat/python'
 
     - name: Install additional test dependencies
       shell: powershell
@@ -159,6 +173,12 @@ jobs:
             Write-Host "`n=== Running RAG Integration Tests ==="
             python tests/test_rag_integration.py
             if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
+
+            # Offline, retrieval-only subset over committed documents, compared to
+            # the committed baseline. The full suite runs nightly (eval_retrieval.yml).
+            Write-Host "`n=== Retrieval benchmark gate (gaia eval retrieval --suite pr) ==="
+            python -m gaia.cli eval retrieval --suite pr --offline --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json --out retrieval-pr
+            if ($LASTEXITCODE -ne 0) { throw "Retrieval gate failed with exit code $LASTEXITCODE" }
         } finally {
             if ($env:LEMONADE_PROCESS_ID) {
                 Write-Host "`n=== Stopping Lemonade Server (PID $env:LEMONADE_PROCESS_ID) ==="
@@ -173,4 +193,5 @@ jobs:
         name: rag-integration-test-results
         path: |
           pytest-results/
+          retrieval-pr/
           *.log

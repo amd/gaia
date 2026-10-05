@@ -128,6 +128,8 @@ class RAGConfig:
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
     vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
+    # False skips image text extraction even when the VLM is installed
+    use_vlm: bool = True
     # Security settings
     allowed_paths: Optional[List[str]] = None
 
@@ -439,6 +441,8 @@ class RAGSDK:
                 "chunk_size": self.config.chunk_size,
                 "chunk_overlap": self.config.chunk_overlap,
                 "use_llm_chunking": bool(self.config.use_llm_chunking),
+                # Only when off, so existing caches keep their keys.
+                **({} if self.config.use_vlm else {"use_vlm": False}),
             },
             sort_keys=True,
         )
@@ -806,11 +810,13 @@ class RAGSDK:
                 vlm = VLMClient(
                     vlm_model=self.config.vlm_model, base_url=self.config.base_url
                 )
-                vlm_available = vlm.check_availability()
+                vlm_available = self.config.use_vlm and vlm.check_availability()
 
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from images")
-                elif not vlm_available and self.config.show_stats:
+                elif (
+                    not vlm_available and self.config.use_vlm and self.config.show_stats
+                ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
                     print(
@@ -1184,11 +1190,13 @@ class RAGSDK:
                 vlm = VLMClient(
                     vlm_model=self.config.vlm_model, base_url=self.config.base_url
                 )
-                vlm_available = vlm.check_availability()
+                vlm_available = self.config.use_vlm and vlm.check_availability()
 
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from slide images")
-                elif not vlm_available and self.config.show_stats:
+                elif (
+                    not vlm_available and self.config.use_vlm and self.config.show_stats
+                ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
                     print(

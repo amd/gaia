@@ -2677,6 +2677,127 @@ afterwards (or `swebench <run_dir>` does, later).
         "--out", default=None, help="Also write the controls and their verdicts here"
     )
 
+    # Retrieval quality, answer accuracy and scale for document Q&A: gaia eval retrieval
+    retrieval_eval_parser = eval_subparsers.add_parser(
+        "retrieval",
+        help="RAG retrieval-quality, answer-accuracy and scale benchmark on real documents",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  gaia eval retrieval --suite pr
+  gaia eval retrieval --suite pr --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json
+  gaia eval retrieval --suite full --judge
+  gaia eval retrieval --suite full --datasets technical_docs --retrieval-only --no-scale
+  gaia eval retrieval --fetch-only
+
+`pr` is offline and deterministic: retrieval only, over documents committed in
+this repo, plus the hard cases that need no LLM. `full` downloads FinanceBench,
+public AMD documents, XQuAD and Wikipedia distractors (pinned, sha256-checked,
+cached in ~/.gaia/cache/eval-retrieval), generates answers, and runs the scale
+tiers. Results land in results.json + report.md. Needs a running Lemonade.
+""",
+    )
+    retrieval_eval_parser.add_argument(
+        "--component",
+        choices=["rag"],
+        default="rag",
+        help="Retrieval component under test (default: rag)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--suite",
+        choices=["pr", "full"],
+        default="pr",
+        help="Suite to run (default: pr)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--datasets",
+        default=None,
+        help="Comma-separated subset: repo_docs, technical_docs, financebench, xquad",
+    )
+    retrieval_eval_parser.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help="Skip answer generation (no chat model needed)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--judge",
+        action="store_true",
+        help="Grade free-form answers with the Claude judge; without it they are "
+        "reported as unscored",
+    )
+    retrieval_eval_parser.add_argument(
+        "--judge-model", default=None, help="Claude model for --judge"
+    )
+    retrieval_eval_parser.add_argument(
+        "--model", default=None, help="Chat model for answers (default: RAG default)"
+    )
+    retrieval_eval_parser.add_argument(
+        "--scale-tiers",
+        default=None,
+        help="Comma-separated corpus sizes, e.g. 10,100,1000 (default: the suite's)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--no-scale", action="store_true", help="Skip the scale tiers"
+    )
+    retrieval_eval_parser.add_argument(
+        "--no-hard-cases", action="store_true", help="Skip the hard cases"
+    )
+    retrieval_eval_parser.add_argument(
+        "--xquad-languages",
+        default=None,
+        help="Comma-separated XQuAD languages (default: en,de,es,ru,zh,ar,hi)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--xquad-per-language",
+        type=int,
+        default=None,
+        help="Questions per XQuAD language (default: 40)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--financebench-docs",
+        type=int,
+        default=None,
+        help="Keep only the questions over the first N FinanceBench filings",
+    )
+    retrieval_eval_parser.add_argument(
+        "--no-vlm",
+        action="store_true",
+        help="Do not read PDF images with the VLM (the pr suite never does); "
+        "otherwise the VLM must pass a probe before the run starts",
+    )
+    retrieval_eval_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Never download; fail if a corpus file is not cached",
+    )
+    retrieval_eval_parser.add_argument(
+        "--fetch-only",
+        action="store_true",
+        help="Download and verify every corpus file in eval/retrieval/sources.json, then stop",
+    )
+    retrieval_eval_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/retrieval-<suite>-<timestamp>)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--gate",
+        default=None,
+        metavar="BASELINE",
+        help="Compare to a baseline results.json; exit 1 on a regression",
+    )
+    retrieval_eval_parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=0.02,
+        help="Allowed absolute drop in a gated metric before --gate fails (default: 0.02)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--keep-work",
+        action="store_true",
+        help="Keep the temporary index caches for inspection",
+    )
+
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
         "report",
@@ -3621,6 +3742,77 @@ def _run_controls(args, judge_model):
         )
         sys.exit(1)
     print("✅ The judge separated honest, fabricated and empty work.")
+
+
+def _handle_eval_retrieval(args):
+    """gaia eval retrieval — see gaia.eval.retrieval.runner."""
+    from gaia.eval.eval_lock import exclusive_eval
+    from gaia.eval.retrieval import runner, sources
+
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True, errors="replace")
+
+    if args.fetch_only:
+        items = [
+            (name, rel)
+            for name, spec in sources.load_manifest().items()
+            for rel in spec["files"]
+        ]
+
+        def _fetched(done, total, label):
+            if done == total or done % 25 == 0:
+                print(f"  [{done}/{total}] {label}")
+
+        sources.fetch_many(items, on_progress=_fetched)
+        print(f"[FETCH] {len(items)} file(s) verified in {sources.cache_dir()}")
+        return
+
+    def _split(value):
+        return [v.strip() for v in value.split(",") if v.strip()] if value else None
+
+    suite = runner.SUITES[args.suite]
+    tiers = _split(args.scale_tiers)
+    opts = runner.RunOptions(
+        suite=suite,
+        out_dir=Path(
+            args.out
+            or f"eval/results/retrieval-{args.suite}-{time.strftime('%Y%m%d-%H%M%S')}"
+        ),
+        model=args.model,
+        datasets=_split(args.datasets),
+        answers=False if args.retrieval_only else None,
+        judge=args.judge,
+        judge_model=args.judge_model,
+        scale_tiers=(
+            [] if args.no_scale else ([int(t) for t in tiers] if tiers else None)
+        ),
+        run_hard_cases=not args.no_hard_cases,
+        xquad_languages=_split(args.xquad_languages),
+        xquad_per_language=args.xquad_per_language,
+        financebench_docs=args.financebench_docs,
+        offline=args.offline,
+        keep_work=args.keep_work,
+        vlm=False if args.no_vlm else None,
+    )
+    with exclusive_eval(f"gaia eval retrieval --suite {args.suite}"):
+        results = runner.run(opts)
+    print()
+    print((opts.out_dir / "report.md").read_text(encoding="utf-8"))
+    print(f"[OUTPUT] {(opts.out_dir / 'results.json').resolve()}")
+
+    failed = bool(opts.errors)
+    if args.gate:
+        baseline = json.loads(Path(args.gate).read_text(encoding="utf-8"))
+        passed, lines = runner.compare(baseline, results, args.tolerance)
+        print(f"[GATE] vs {args.gate} (tolerance {args.tolerance})")
+        for line in lines:
+            print(f"  {line}")
+        print("[GATE] " + ("passed" if passed else "FAILED"))
+        failed |= not passed
+    if opts.errors:
+        print(f"[ERROR] {len(opts.errors)} hard case(s) crashed: {opts.errors}")
+    if failed:
+        sys.exit(1)
 
 
 def _handle_eval_tasks(args):
@@ -4987,6 +5179,11 @@ Let me know your answer!
                 f"{card['dishonest']} false success claim(s)"
             )
             print(f"[OUTPUT] {report_path.resolve()}")
+            return
+
+        # RAG retrieval benchmark: gaia eval retrieval
+        if getattr(args, "eval_command", None) == "retrieval":
+            _handle_eval_retrieval(args)
             return
 
         # Flagship agent tasks: gaia eval tasks run|judge|gate
