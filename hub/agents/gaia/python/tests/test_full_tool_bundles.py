@@ -178,7 +178,7 @@ def test_shell_is_offered_when_the_user_asks_for_it(monkeypatch):
         lambda _self, texts: np.ones((len(texts), 8), dtype=np.float32),
     )
     with _isolated_registry():
-        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True, dynamic_tools=True))
         agent._memory_store = object()
         unrelated = agent._select_tools_for_turn("Summarize my meeting notes.")
         agent.tool_loader.reset_session()
