@@ -58,6 +58,12 @@ describe('ModelChip', () => {
         expect(screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF · Local/ })).toBeInTheDocument();
     });
 
+    it('does not claim this PC before the active model is known', () => {
+        useModelStore.setState({ active: null });
+        render(<ModelChip />);
+        expect(screen.getByRole('button', { name: 'Model' })).toHaveAttribute('title', expect.stringMatching(/can't tell yet/));
+    });
+
     it('labels a cloud model with its provider', () => {
         useModelStore.setState({ active: CLOUD_ACTIVE });
         render(<ModelChip />);

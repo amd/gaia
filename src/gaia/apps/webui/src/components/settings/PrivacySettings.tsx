@@ -41,9 +41,11 @@ export function PrivacySettings() {
         <div className="settings-pane">
             <h2 className="settings-pane-title">Privacy</h2>
             <p className="settings-pane-lede">
-                Chats, documents and memory stay on this PC. {active?.remote
-                    ? `Right now answers come from ${locationLabel(active)}, so each message and the chat history are sent there.`
-                    : 'Right now answers are generated on this PC too.'}
+                Chats, documents and memory stay on this PC. {!active
+                    ? "GAIA can't tell yet where answers are generated."
+                    : active.remote
+                        ? `Right now answers come from ${locationLabel(active)}, so each message and the chat history are sent there.`
+                        : 'Right now answers are generated on this PC too.'}
             </p>
             <div className="setting-row">
                 <span>Data folder</span>

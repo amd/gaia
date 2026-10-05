@@ -52,11 +52,18 @@ export const useModelStore = create<ModelState>((set, get) => ({
     dismissRestoreNotice: () => set({ restoreNotice: null }),
 }));
 
-/** "Local" or the cloud provider's name, for the place-of-inference indicator. */
+/** "Local" or the cloud provider's name; never "Local" while the model is unknown. */
 export function locationLabel(active: ActiveModel | null): string {
-    if (!active) return 'Local';
+    if (!active) return 'Location unknown';
     if (!active.remote) return 'Local';
     return active.provider === 'fireworks' ? 'Fireworks AI' : 'AMD LLM Gateway';
+}
+
+/** Tooltip for the place-of-inference indicator. */
+export function locationTitle(active: ActiveModel | null): string {
+    if (!active) return "GAIA can't tell yet whether chat runs on this PC or with a cloud provider.";
+    if (!active.remote) return 'Runs on this PC';
+    return `Runs on ${locationLabel(active)} — chat history leaves this PC`;
 }
 
 /** The model name without its provider prefix or catalogue path. */

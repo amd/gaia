@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
 import { useChatStore } from '../../stores/chatStore';
@@ -45,6 +45,23 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('Sidebar', () => {
+    it('names where chat runs, and claims nothing while that is unknown', () => {
+        const { rerender } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(screen.getByTitle('Runs on this PC')).toHaveTextContent('Local');
+
+        act(() => useModelStore.setState({
+            active: { provider: 'fireworks', model: 'fireworks.deepseek-v4p1-flash', label: 'DeepSeek', remote: true, is_default: false },
+        }));
+        rerender(<Sidebar onNewChat={vi.fn()} />);
+        expect(screen.getByTitle(/chat history leaves this PC/)).toHaveTextContent('Fireworks AI');
+
+        act(() => useModelStore.setState({ active: null }));
+        rerender(<Sidebar onNewChat={vi.fn()} />);
+        const unknown = screen.getByTitle(/can't tell yet/);
+        expect(unknown).toHaveTextContent('Location unknown');
+        expect(unknown).not.toHaveTextContent('Local');
+    });
+
     it('groups chats by recency', () => {
         render(<Sidebar onNewChat={vi.fn()} />);
         const list = screen.getByRole('navigation', { name: 'Recent chats' });

@@ -3,11 +3,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Bell, Brain, Clock, Cloud, Cpu, EyeOff, FileText, Loader2, PanelLeftClose, PanelLeftOpen,
+    Bell, Brain, Clock, Cloud, Cpu, EyeOff, FileText, HelpCircle, Loader2, PanelLeftClose, PanelLeftOpen,
     Search, Settings, Smartphone, SquarePen, Trash2, X,
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
-import { useModelStore, locationLabel, shortModelName } from '../stores/modelStore';
+import { useModelStore, locationLabel, locationTitle, shortModelName } from '../stores/modelStore';
 import { useNotificationStore, selectUnreadCount } from '../stores/notificationStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -132,7 +132,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         }
     }, [addPendingDelete, removePendingDelete, removeSession]);
 
-    const LocationIcon = active?.remote ? Cloud : Cpu;
+    const LocationIcon = !active ? HelpCircle : active.remote ? Cloud : Cpu;
     const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
     const isCollapsed = collapsed && !isMobile;
 
@@ -236,7 +236,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                         type="button"
                         className="sb-location"
                         onClick={() => openSettings('model')}
-                        title={active?.remote ? 'Chat history is sent to the cloud provider' : 'Runs on this PC'}
+                        title={locationTitle(active)}
                     >
                         <LocationIcon size={13} aria-hidden="true" />
                         <span className="sb-location-text">
