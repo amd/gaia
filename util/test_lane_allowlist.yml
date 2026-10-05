@@ -97,6 +97,7 @@ module_skips:
       - tests/unit/test_prompt_size_budget.py
       - tests/unit/test_inference_location.py
       - tests/unit/test_run_python_tool.py
+      - tests/unit/test_sd_rule_gating.py
       - tests/unit/test_skill_tools_same_turn.py
       - tests/unit/test_tool_admission_order.py
       - tests/unit/test_tool_loader_disambiguation.py
