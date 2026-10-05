@@ -17,6 +17,8 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
+from gaia.config import gaia_home
+
 CACHE_ENV = "GAIA_RETRIEVAL_CACHE"
 REPO_ROOT = Path(__file__).resolve().parents[4]
 _USER_AGENT = "Mozilla/5.0 (gaia-eval-retrieval; +https://github.com/amd/gaia)"
@@ -44,7 +46,7 @@ def cache_dir() -> Path:
     override = os.environ.get(CACHE_ENV)
     if override:
         return Path(override).expanduser().resolve()
-    return Path.home() / ".gaia" / "cache" / "eval-retrieval"
+    return gaia_home() / "cache" / "eval-retrieval"
 
 
 def _sha256(path: Path) -> str:

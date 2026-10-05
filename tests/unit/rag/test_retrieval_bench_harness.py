@@ -60,6 +60,13 @@ def _fake_make_rag(cache_dir, allowed, model=None, **overrides):
     return sdk
 
 
+def _needs_chat_agent():
+    """The ``agent`` pipeline calls the chat agent's real ``query_documents``."""
+    pytest.importorskip(
+        "gaia_agent_chat", reason="runs in test_chat_agent.yml, with the chat wheel"
+    )
+
+
 @pytest.fixture(autouse=True)
 def fake_rag(monkeypatch):
     monkeypatch.setattr(harness, "make_rag", _fake_make_rag)
@@ -154,6 +161,7 @@ def test_every_chunk_the_real_chunker_cuts_maps_back_to_its_page(tmp_path):
 
 
 def test_both_pipelines_find_the_labelled_evidence(dataset, tmp_path):
+    _needs_chat_agent()
     bench = harness.index_dataset(dataset, tmp_path / "work")
     assert bench.build_stats["indexed"] == len(TOPICS)
     assert bench.build_stats["unlocated_chunks"] == 0
@@ -181,6 +189,7 @@ def test_a_label_quote_missing_from_the_document_fails_loudly(dataset, tmp_path)
 def test_answers_are_classified_by_whether_evidence_reached_the_model(
     dataset, tmp_path
 ):
+    _needs_chat_agent()
     opts = runner.RunOptions(suite=runner.SUITES["pr"], out_dir=tmp_path / "out")
     result = runner._run_dataset(
         dataset, tmp_path / "work", opts, answers=True, judge=None
@@ -196,6 +205,7 @@ def test_answers_are_classified_by_whether_evidence_reached_the_model(
 
 
 def test_a_refused_document_is_recorded_and_its_questions_miss(dataset, tmp_path):
+    _needs_chat_agent()
     dataset.documents[0].path.write_text("", encoding="utf-8")
     bench = harness.index_dataset(dataset, tmp_path / "work")
     assert bench.build_stats["required_failed"] == 1
@@ -221,6 +231,7 @@ def test_replaced_document_reports_what_each_refresh_path_serves(dataset, tmp_pa
 
 
 def test_exact_duplicates_are_measured_in_both_pipelines(dataset, tmp_path):
+    _needs_chat_agent()
     result = hard_cases.exact_duplicate(_ctx(dataset, tmp_path))
     assert len(result["details"]["per_question"]) == 3
     assert result["status"] in ("pass", "fail")
