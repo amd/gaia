@@ -214,6 +214,7 @@ def test_the_rag_sdk_reads_a_file_the_user_granted(layout):
 
 
 def test_chat_agent_hands_its_validator_to_the_rag_sdk(layout):
+    pytest.importorskip("gaia_agent_chat")
     from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
     with (
