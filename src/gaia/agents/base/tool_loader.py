@@ -193,6 +193,7 @@ class ToolLoader:
 
         # Per-session mutable state (cleared by reset_session()).
         self._loaded: Dict[str, _ToolState] = {}
+        self._last_stamp = 0.0
         self._turn = 0
         self._session_disabled = False
         # Escape-hatch activation counters (Part 2, #1450). Both recovery paths
@@ -423,7 +424,7 @@ class ToolLoader:
         """
         state = self._loaded.get(tool_name)
         if state is not None:
-            state.last_call_ts = time.time()
+            state.last_call_ts = self._stamp()
             return
         self._escape_hatch_count += 1
         logger.info(
@@ -593,8 +594,17 @@ class ToolLoader:
 
     def _admit(self, name: str, sel: _Selection) -> None:
         """Add *name* to the loaded set with fresh bookkeeping."""
-        self._loaded[name] = _ToolState(loaded_at=time.time(), load_turn=self._turn)
+        self._loaded[name] = _ToolState(loaded_at=self._stamp(), load_turn=self._turn)
         sel.admitted.append(name)
+
+    def _stamp(self) -> float:
+        """``time.time()``, strictly after the last stamp — LRU needs a total order.
+
+        Windows' clock repeats for milliseconds, and a tie falls through to the
+        tool's name, which evicts by spelling instead of by age.
+        """
+        self._last_stamp = max(time.time(), self._last_stamp + 1e-6)
+        return self._last_stamp
 
     def _trim_to_cap(self, sel: _Selection) -> None:
         """Evict back down to ``max_tools`` after a mid-turn overshoot.

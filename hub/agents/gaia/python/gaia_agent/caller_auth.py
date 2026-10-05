@@ -24,10 +24,11 @@ from gaia.sidecar.caller_auth import (  # noqa: F401  (re-exported)
     configure,
     generate_session_token,
     get_config,
-    is_exempt_path,
-    reset,
-    token_ok,
 )
+from gaia.sidecar.caller_auth import (
+    install_openapi_security as _install_openapi_security,
+)
+from gaia.sidecar.caller_auth import is_exempt_path, reset, token_ok
 
 # Preferred channel: the spawning parent writes the token to a 0600, owner-only
 # file and passes its PATH — the secret never sits in the environment. MUST
@@ -70,6 +71,17 @@ def config_from_environment() -> CallerAuthConfig:
     )
 
 
+def install_openapi_security(app) -> None:
+    """Wire the bearer-gate overlay onto this sidecar's OpenAPI document (#4605).
+
+    Shared by the real server app (``server.py``) and the export app
+    (``export_openapi.py``) so the two documents can never drift apart. See
+    :func:`gaia.sidecar.caller_auth.install_openapi_security` for what the
+    overlay documents.
+    """
+    _install_openapi_security(app, exempt_paths=EXEMPT_PATHS)
+
+
 __all__ = [
     "TOKEN_ENV_VAR",
     "TOKEN_FILE_ENV_VAR",
@@ -81,6 +93,7 @@ __all__ = [
     "configure",
     "generate_session_token",
     "get_config",
+    "install_openapi_security",
     "is_exempt_path",
     "reset",
     "token_ok",

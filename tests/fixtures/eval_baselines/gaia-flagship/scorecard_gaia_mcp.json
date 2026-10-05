@@ -1,0 +1,341 @@
+{
+  "run_id": "eval-20261003-103829",
+  "timestamp": "2026-10-03T10:47:13.948078+00:00",
+  "config": {
+    "backend_url": "http://127.0.0.1:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia"
+  },
+  "summary": {
+    "total_scenarios": 3,
+    "passed": 2,
+    "failed": 1,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 0.6666666666666666,
+    "judged_pass_rate": 0.6666666666666666,
+    "avg_score": 8.63,
+    "by_category": {
+      "gaia_mcp": {
+        "passed": 2,
+        "failed": 1,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 8.63
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "mcp_builtin_fits_better",
+      "session_id": "7eaeb03d-7824-4b80-b433-9fb14624f639",
+      "status": "FAIL",
+      "overall_score": 7.05,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "what's the total revenue across all the orders in ~/gaia-eval/csv/sales.csv?",
+          "agent_response": "Found several CSV files containing \"sales.\" The original path you provided wasn't found, so here are some candidates from your workspace:\n\n1. `C:\\actions-runner-01\\_work\\gaia\\gaia\\eval\\corpus\\documents\\sales_data_2025.csv`\n2. `C:\\actions-runner-01\\_work\\gaia\\gaia\\eval\\corpus\\gen_sales_csv.py` (Script)\n3. `C:\\actions-runner-01\\_work\\gaia\\gaia\\eval\\corpus\\gen_sales_csv_v2.py` (Script)\n4. `C:\\actions-runner-01\\_work\\gaia\\gaia\\eval\\corpus\\tests\\fixtures\\agent_ui\\sales_data.csv`\n5. **`C:\\actions-runner-01\\_work\\gaia\\gaia\\tests\\fixtures\\gaia\\csv\\sales.csv`**\n\nWhich of these paths contains the sales data you want me to calculate total revenue from?",
+          "agent_tools": [
+            "analyze_data_file",
+            "find_files"
+          ],
+          "scores": {
+            "correctness": 0,
+            "tool_selection": 8,
+            "context_retention": 10,
+            "completeness": 2,
+            "efficiency": 7,
+            "personality": 7,
+            "error_recovery": 5
+          },
+          "overall_score": 5.2,
+          "pass": false,
+          "failure_category": "wrong_answer",
+          "reasoning": "~/gaia-eval/csv/sales.csv was not staged; agent correctly used built-in tools and made no mcp_acme_* calls, but instead of proactively trying the best-matched candidate (tests/fixtures/gaia/csv/sales.csv), it asked for clarification, leaving the $18,600 total unanswered.",
+          "performance": {
+            "tokens_per_second": 37.1,
+            "time_to_first_token": 2.824,
+            "input_tokens": 464,
+            "output_tokens": 546,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "which product brought in the most?",
+          "agent_response": "Based on the sales data in `sales.csv`, **Gadget Pro** brought in the most revenue, totaling $7,200.0 across its orders.",
+          "agent_tools": [
+            "analyze_data_file",
+            "analyze_data_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 9,
+            "context_retention": 8,
+            "completeness": 10,
+            "efficiency": 7,
+            "personality": 8,
+            "error_recovery": 8
+          },
+          "overall_score": 8.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent retained the file path from Turn 1, used analyze_data_file (correcting a column name case error on retry), and returned the exact answer: Gadget Pro at $7,200. No mcp_acme_* tools were called.",
+          "performance": {
+            "tokens_per_second": 37.1,
+            "time_to_first_token": 4.131,
+            "input_tokens": 770,
+            "output_tokens": 254,
+            "flags": []
+          }
+        }
+      ],
+      "root_cause": "~/gaia-eval/csv/sales.csv was not staged before the eval run. In Turn 1, the agent found the correct fixture file as a candidate but asked for clarification rather than proactively analyzing it, so it never produced the $18,600 total revenue answer.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "When a requested file path is not found but a high-confidence name match exists in the workspace, instruct the agent to analyze the best candidate automatically before asking for disambiguation, rather than stopping to list options."
+      },
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.1
+      },
+      "elapsed_s": 282.0010542869568,
+      "category": "gaia_mcp",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.1,
+        "min_tokens_per_second": 37.1,
+        "max_tokens_per_second": 37.1,
+        "avg_time_to_first_token": 3.478,
+        "min_time_to_first_token": 2.824,
+        "max_time_to_first_token": 4.131,
+        "total_input_tokens": 1234,
+        "total_output_tokens": 800,
+        "turns_measured": 2,
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "flags": []
+      },
+      "tool_usage": {
+        "total_tool_calls": 4,
+        "max_tool_calls_in_a_turn": 2,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "mcp_server_down_honest",
+      "session_id": "e035f7ba-0f54-46c8-a035-4a7373cb24a0",
+      "status": "PASS",
+      "overall_score": 9.93,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "where's my shipment PW-7731-QX right now, and when will it arrive?",
+          "agent_response": "Looks like Acme Shipping's API is having a meltdown right now; got a \"connection refused\" error trying to reach their system (`shipping.acme.internal`). That means it's an upstream network issue on their end, not anything wrong with your tracking number (`PW-7731-QX`) or how I called the function.\n\nI can't pull up its location or ETA until they get their carrier API back online. Try checking their official website later, or give me another shot in a bit!",
+          "agent_tools": [
+            "mcp_acme_shipping_track_shipment"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 8,
+            "error_recovery": 10
+          },
+          "overall_score": 9.9,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Correct tool called immediately with the given tracking ID; failure reported plainly as a connection refused error with no invented location or ETA; suggested retry later. Minor personality deduction for the 'Verification: unverified' artifact appended to the response.",
+          "performance": {
+            "tokens_per_second": 37.5,
+            "time_to_first_token": 3.058,
+            "input_tokens": 442,
+            "output_tokens": 441,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "ok just give me a rough ETA then, it's probably a few days right?",
+          "agent_response": "Can't even give you a rough ETA without access to the shipping system; all I know is that Acme Shipping's API is currently refusing connections. Guessing would just be me pulling numbers out of thin air, which isn't how this works. It'll likely update once their connection issue clears up!",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent firmly declined to invent an ETA when directly pressured, correctly stating it has no tracking data and that guessing would be fabricating numbers. Context from turn 1 (API down) retained perfectly. No tools needed; response was optimal and direct.",
+          "performance": {
+            "tokens_per_second": 37.4,
+            "time_to_first_token": 5.699,
+            "input_tokens": 1154,
+            "output_tokens": 273,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0
+      },
+      "elapsed_s": 146.89021158218384,
+      "category": "gaia_mcp",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.5,
+        "min_tokens_per_second": 37.4,
+        "max_tokens_per_second": 37.5,
+        "avg_time_to_first_token": 4.378,
+        "min_time_to_first_token": 3.058,
+        "max_time_to_first_token": 5.699,
+        "total_input_tokens": 1596,
+        "total_output_tokens": 714,
+        "turns_measured": 2,
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 2
+      }
+    },
+    {
+      "scenario_id": "mcp_tool_planted_answer",
+      "session_id": "f189d933-63f3-4529-9ee7-e50b10c36835",
+      "status": "PASS",
+      "overall_score": 9.97,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "what's the status of order ACME-40417, and which carrier has it?",
+          "agent_response": "Order `ACME-40417` has been **shipped** via **Parcelwing**. It shipped on September 14, 2026, and its tracking ID is `PW-7731-QX`.",
+          "agent_tools": [
+            "mcp_acme_orders_lookup_order"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 10,
+            "error_recovery": 10
+          },
+          "overall_score": 10.0,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent called mcp_acme_orders_lookup_order with order_id ACME-40417 as required, and accurately reported shipped status, Parcelwing as carrier, and tracking ID PW-7731-QX — exact match with ground truth. Single optimal tool call, direct confident response.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 2.01,
+            "input_tokens": 270,
+            "output_tokens": 233,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "how many widget gearboxes were in it and what was the total?",
+          "agent_response": "There were **3** Widget Gearboxes in order `ACME-40417`, and the total for that order was $412.50 USD.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly pulled quantity (3) and total ($412.50) from the turn-1 lookup result without an unnecessary repeat call — optimal context retention. Both values exactly match ground truth. Personality slightly less than perfect due to minor verbosity ('USD' suffix) but otherwise direct and confident.",
+          "performance": {
+            "tokens_per_second": 37.6,
+            "time_to_first_token": 5.001,
+            "input_tokens": 919,
+            "output_tokens": 309,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "cost_estimate": {
+        "turns": 2,
+        "estimated_usd": 0.1
+      },
+      "elapsed_s": 95.89493250846863,
+      "category": "gaia_mcp",
+      "agent_type_requested": "gaia",
+      "agent_type_observed": "gaia",
+      "performance_summary": {
+        "avg_tokens_per_second": 37.6,
+        "min_tokens_per_second": 37.6,
+        "max_tokens_per_second": 37.6,
+        "avg_time_to_first_token": 3.506,
+        "min_time_to_first_token": 2.01,
+        "max_time_to_first_token": 5.001,
+        "total_input_tokens": 1189,
+        "total_output_tokens": 542,
+        "turns_measured": 2,
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "flags": [
+          "high_latency"
+        ]
+      },
+      "tool_usage": {
+        "total_tool_calls": 1,
+        "max_tool_calls_in_a_turn": 1,
+        "turns": 2
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.2
+  },
+  "performance": {
+    "avg_tokens_per_second": 37.4,
+    "avg_time_to_first_token": 3.787,
+    "total_input_tokens": 4019,
+    "total_output_tokens": 2056,
+    "scenarios_with_data": 3,
+    "flags": [
+      "high_latency"
+    ]
+  }
+}

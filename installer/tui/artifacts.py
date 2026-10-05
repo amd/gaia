@@ -16,6 +16,7 @@ Usage::
 
     python installer/tui/artifacts.py names --version 0.23.0 --platform win-x64
     python installer/tui/artifacts.py publish-args --version 0.23.0 --dir dist
+    python installer/tui/artifacts.py publish-args --version 0.23.0 --dir dist --platform win-x64
 """
 
 from __future__ import annotations
@@ -74,7 +75,12 @@ def _cmd_publish_args(args: argparse.Namespace) -> int:
     """
     lines: list[str] = []
     missing: list[str] = []
-    for platform in sorted(ARTIFACTS):
+    # The Windows setup builds and publishes separately from the macOS and Linux
+    # packages (windows_setup.yml), so each publish step scopes its platforms.
+    # Excluding rather than listing keeps a platform added to ARTIFACTS later
+    # from silently never publishing.
+    excluded = set(args.exclude_platform or [])
+    for platform in sorted(set(args.platform or ARTIFACTS) - excluded):
         if not platform_has_sidecar(platform):
             print(
                 f"[artifacts] skipping {platform}: the flagship agent publishes no "
@@ -96,7 +102,7 @@ def _cmd_publish_args(args: argparse.Namespace) -> int:
             "  Publishing is serial into immutable paths, so uploading the ones that DO "
             "exist would\n"
             "  leave a version that can never be completed. Nothing has been published.\n"
-            f"  Fix: check the tui-installers job for {args.dir}, or update "
+            f"  Fix: check the job that built {args.dir}, or update "
             "installer/tui/artifacts.py if a filename changed."
         )
 
@@ -121,6 +127,18 @@ def main_argv(argv: list[str] | None = None) -> int:
     )
     publish.add_argument("--version", required=True)
     publish.add_argument("--dir", required=True, type=Path)
+    publish.add_argument(
+        "--platform",
+        action="append",
+        choices=sorted(ARTIFACTS),
+        help="only these platforms (repeatable); default: every platform",
+    )
+    publish.add_argument(
+        "--exclude-platform",
+        action="append",
+        choices=sorted(ARTIFACTS),
+        help="every platform but these (repeatable)",
+    )
     publish.set_defaults(func=_cmd_publish_args)
 
     args = ap.parse_args(argv)

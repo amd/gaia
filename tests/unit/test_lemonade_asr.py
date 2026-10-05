@@ -1187,8 +1187,8 @@ class TestRealServer:
         whispers = [name for name in downloaded if name.lower().startswith("whisper")]
         if not whispers:
             pytest.skip(
-                "no Whisper model downloaded - run "
-                f"`lemonade-server pull {DEFAULT_ASR_MODEL}`"
+                "no Whisper model downloaded - pull one with "
+                f'LemonadeASRClient(model="{DEFAULT_ASR_MODEL}").ensure_model()'
             )
         model = DEFAULT_ASR_MODEL if DEFAULT_ASR_MODEL in whispers else whispers[0]
 

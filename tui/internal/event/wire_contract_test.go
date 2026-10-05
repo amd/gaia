@@ -18,6 +18,7 @@ type canonicalEventsFixture struct {
 	Events map[string]struct {
 		Fields         []string `json:"fields"`
 		StdioExtension []string `json:"stdio_extension"`
+		PhaseExtension []string `json:"phase_extension"`
 	} `json:"events"`
 }
 
@@ -71,7 +72,7 @@ func TestCanonicalEventStructsMatchTheSharedFixture(t *testing.T) {
 			t.Errorf("fixture lists %q, which the TUI has no struct for", etype)
 			continue
 		}
-		want := append(append([]string(nil), spec.Fields...), spec.StdioExtension...)
+		want := append(append(append([]string(nil), spec.Fields...), spec.StdioExtension...), spec.PhaseExtension...)
 		sort.Strings(want)
 		if got := jsonFields(v); strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("%s decodes %v, fixture says %v", etype, got, want)

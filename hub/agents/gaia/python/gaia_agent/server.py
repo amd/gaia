@@ -13,12 +13,16 @@ The event translation itself is NOT reimplemented here — it lives in
 so the two agents cannot drift into private dialects of the same contract.
 
 Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
-``/query/{run_id}/cancel`` and ``/query/{run_id}/respond``. ``needs_input`` is
-answered over ``/respond`` on the run's existing stream. ``needs_confirmation``
-is the one gate still unimplemented: it ends the run with a refusal (the
-stateless D1 stub, same as email) rather than pretending to support server-side
-resume. That is additive when a tool needs it; claiming support we haven't built
-would be worse than the honest gap.
+``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
+``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
+2.14) and ``/sessions/{session_id}/bypass``. ``needs_input`` is answered over
+``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
+the same way over ``/tool_decision`` — but only when there is a session to
+hold the grant AND the caller declared it can answer (``can_confirm`` in
+``query()``). A one-shot request (no ``session_id``, or
+``can_answer_questions: false``) still ends such a run with a refusal (the
+stateless D1 stub, same as email) rather than parking a run nobody can
+answer.
 
 :func:`main` also owns the binary's TRANSPORT DISPATCH: ``--serve`` runs this
 HTTP surface, anything else delegates to :mod:`gaia_agent.stdio`. One
@@ -32,7 +36,7 @@ import contextlib
 import json
 import os
 import queue
-import re
+import sys
 import threading
 import time
 import uuid
@@ -53,9 +57,10 @@ from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
 
-from gaia.agents.base.readiness import start_advice
+from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
+from gaia.version import LEMONADE_MIN_VERSION
 
 logger = get_logger(__name__)
 
@@ -107,7 +112,10 @@ class QueryContextItem(_Strict):
 class QueryRequest(_Strict):
     """``POST /v1/gaia/query`` body (frozen #2015 contract, spec §2.2)."""
 
-    query: str = Field(min_length=1)
+    query: str = Field(
+        min_length=1,
+        description="The user's message for this turn.",
+    )
     run_id: str = Field(
         description=(
             "Host-minted UUIDv4 run handle. Cancellation "
@@ -118,9 +126,28 @@ class QueryRequest(_Strict):
     context: List[QueryContextItem] = Field(
         description="Transcript slice, pushed in the body. May be empty, never absent."
     )
-    model: Optional[str] = None
-    provider: Optional[str] = None
-    max_steps: Optional[int] = Field(default=None, ge=1)
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Model id for this turn. A Claude model id implies provider "
+            "'claude' when provider is omitted; otherwise it is served by the "
+            "local Lemonade backend. Omit to keep a retained session's current "
+            "model, or to use the backend's default on a new session."
+        ),
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "Inference backend for this turn: 'lemonade' (local) or 'claude' "
+            "(Anthropic's API). Omit to leave a retained session on its "
+            "current backend, or to infer it from 'model' on a new session."
+        ),
+    )
+    max_steps: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Cap on agent-loop steps for this turn. Omit for the agent's default.",
+    )
     session_id: Optional[str] = Field(
         default=None,
         description=(
@@ -438,42 +465,17 @@ def build_query_agent(**config_kwargs: Any):
     return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
 
 
-#: Lemonade floor. Kept in lock-step with gaia_agent_email.version and
-#: gaia.installer.init_command — a machine provisioned for one agent must not be
-#: below the floor of another.
-MIN_LEMONADE_VERSION = "10.2.0"
-
-
-def _version_meets_min(version: Optional[str], minimum: str) -> Optional[bool]:
-    """``True``/``False``, or ``None`` when the version cannot be compared.
-
-    ``None`` is *indeterminate*, not a pass — the caller renders it as an
-    unknown row rather than a green one, so an unparseable version never
-    silently reads as compatible.
-    """
-    if not version:
-        return None
-    try:
-        # Leading digits per part: this reads /api/v1/health verbatim, and
-        # Lemonade's CalVer dev builds look like "2026.39.0~12.abc1234".
-        got = tuple(
-            int(re.match(r"\s*(\d+)", p).group(1))
-            for p in str(version).strip().lstrip("v").split(".")[:3]
-        )
-        want = tuple(int(p) for p in minimum.split(".")[:3])
-    except (ValueError, AttributeError):
-        return None
-    return got >= want
-
-
 def _probe_lemonade() -> Dict[str, Any]:
     """Read-only probe of the local model server. Never pulls or loads."""
     import requests
     from gaia_agent.agent import GaiaAgentConfig
 
     from gaia.llm.lemonade_client import (
-        DEFAULT_MODEL_NAME,
+        _model_ids_match,
         configured_lemonade_url,
+        lemonade_auth_headers,
+        resolve_default_chat_model,
+        resolve_lemonade_api_key,
         resolve_lemonade_base_url,
     )
 
@@ -481,7 +483,9 @@ def _probe_lemonade() -> Dict[str, Any]:
     base = resolve_lemonade_base_url(
         configured_lemonade_url() or getattr(GaiaAgentConfig(), "base_url", None)
     ).rstrip("/")
-    model_id = DEFAULT_MODEL_NAME
+    # GAIA's own server rejects keyless requests, which would read as "unreachable".
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base))
+    model_id = resolve_default_chat_model()
 
     out: Dict[str, Any] = {
         "base_url": base,
@@ -492,12 +496,12 @@ def _probe_lemonade() -> Dict[str, Any]:
         "model_id": model_id,
     }
     try:
-        r = requests.get(f"{base}/models", timeout=5)
+        r = requests.get(f"{base}/models", timeout=5, headers=headers)
         r.raise_for_status()
         out["reachable"] = True
         data = r.json().get("data") or []
         for entry in data:
-            if entry.get("id") == model_id or model_id in str(
+            if _model_ids_match(entry.get("id"), model_id) or model_id in str(
                 entry.get("checkpoint", "")
             ):
                 out["present"] = True
@@ -505,16 +509,19 @@ def _probe_lemonade() -> Dict[str, Any]:
                 if isinstance(ctx, int):
                     out["ctx_size"] = ctx
                 break
-    except Exception:  # noqa: BLE001 - reachability probe; the caller reports it
+    except (requests.RequestException, ValueError, AttributeError, TypeError) as exc:
+        # The caller reports "not reachable"; the log keeps the actual cause.
+        logger.warning("Lemonade probe of %s/models failed: %s", base, exc)
         return out
 
     try:
-        rv = requests.get(f"{base}/health", timeout=5)
-        if rv.ok:
-            payload = rv.json()
-            out["version"] = payload.get("version") or payload.get("server_version")
-    except Exception:  # noqa: BLE001 - an absent version is indeterminate, not fatal
-        pass
+        rv = requests.get(f"{base}/health", timeout=5, headers=headers)
+        rv.raise_for_status()
+        payload = rv.json()
+        out["version"] = payload.get("version") or payload.get("server_version")
+    except (requests.RequestException, ValueError, AttributeError, TypeError) as exc:
+        # An absent version is indeterminate (rendered as unknown), not fatal.
+        logger.warning("Lemonade version probe of %s/health failed: %s", base, exc)
     return out
 
 
@@ -559,7 +566,7 @@ async def init() -> Dict[str, Any]:
 
     probe = await asyncio.to_thread(_probe_lemonade)
     compatible = (
-        _version_meets_min(probe["version"], MIN_LEMONADE_VERSION)
+        version_meets_min(probe["version"], LEMONADE_MIN_VERSION)
         if probe["reachable"]
         else None
     )
@@ -577,7 +584,8 @@ async def init() -> Dict[str, Any]:
     elif compatible is False:
         hint = (
             f"Lemonade {probe['version']} is older than the required "
-            f"{MIN_LEMONADE_VERSION}. Update it, then re-check."
+            f"{LEMONADE_MIN_VERSION}. Run `gaia init --force-reinstall`, then "
+            "re-check."
         )
     elif not probe["present"]:
         # `gaia download` takes no positional model — argparse exits 2 on it.
@@ -596,7 +604,7 @@ async def init() -> Dict[str, Any]:
             "reachable": probe["reachable"],
             "base_url": probe["base_url"],
             "version": probe["version"],
-            "min_version": MIN_LEMONADE_VERSION,
+            "min_version": LEMONADE_MIN_VERSION,
             "compatible": compatible,
         },
         "model": {
@@ -1251,7 +1259,15 @@ def build_app() -> FastAPI:
         finally:
             task.cancel()
 
-    app = FastAPI(title="GAIA Agent", version=__version__, lifespan=_lifespan)
+    app = FastAPI(
+        title="GAIA Agent",
+        version=__version__,
+        lifespan=_lifespan,
+        # Swagger UI loads its JS from a CDN — an unexpected outbound network
+        # call for an embedder running this sidecar offline. /openapi.json
+        # stays served; only the interactive /docs page is disabled.
+        docs_url=None,
+    )
     app.add_middleware(caller_auth.HostOriginMiddleware)
 
     @app.get("/health", include_in_schema=True)
@@ -1267,6 +1283,11 @@ def build_app() -> FastAPI:
         return {"apiVersion": API_VERSION, "version": __version__, "agent": AGENT_ID}
 
     app.include_router(router, prefix=f"/v1/{AGENT_ID}")
+
+    # require_caller_token is a plain Request dependency (not a
+    # fastapi.security class), so FastAPI never emits securitySchemes for it
+    # (#4605) — overlay the real, conditional (bearer-or-none) posture.
+    caller_auth.install_openapi_security(app)
     return app
 
 
@@ -1341,6 +1362,18 @@ def serve_http(argv: List[str]) -> int:
     parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
     args = parser.parse_args(argv)
+
+    # The warm-up swallows agent-build errors, so a stale GAIA_SKILL_SET would
+    # otherwise leave a healthy-looking sidecar with no skills.
+    from gaia_agent.agent import check_skill_set_selection
+
+    from gaia.skills.errors import SkillSetError
+
+    try:
+        check_skill_set_selection()
+    except SkillSetError as exc:
+        print(f"gaia-agent: {exc}", file=sys.stderr)
+        return 2
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0

@@ -4,6 +4,10 @@
 """The staging both eval workflows use before running gaia_* categories."""
 
 import importlib.util
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -63,6 +67,43 @@ def test_nothing_that_holds_an_answer_is_staged(tmp_path):
         assert not (staged / harness).exists(), harness
     assert not list(staged.glob("*.py")) and not list(staged.glob("*.json"))
     assert not (staged / "README.md").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="drives the POSIX gh shim")
+def test_staged_fake_gh_answers_ahead_of_any_real_gh(tmp_path):
+    stage_eval_env.stage(tmp_path)
+    bin_dir = tmp_path / ".gaia-eval-bin"
+    path = os.pathsep.join([str(bin_dir), os.environ.get("PATH", "")])
+
+    assert shutil.which("gh", path=path) == str(bin_dir / "gh")
+    proc = subprocess.run(
+        ["gh", "--version"],
+        env={**os.environ, "PATH": path},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "gaia eval fixture" in proc.stdout
+
+
+def test_on_windows_the_fake_gh_gets_an_exe_launcher(tmp_path, monkeypatch):
+    """CreateProcess resolves only gh.exe, so a .cmd shim alone loses to real gh."""
+    from gaia.eval.bench import ghstub
+
+    built = []
+
+    def fake_launcher(python, script):
+        built.append(Path(script))
+        return b"MZ-launcher"
+
+    monkeypatch.setattr(ghstub, "_exe_launcher", fake_launcher)
+    monkeypatch.setattr(stage_eval_env.sys, "platform", "win32")
+    bin_dir = stage_eval_env.install_fake_gh(tmp_path)
+
+    assert bin_dir == tmp_path / ".gaia-eval-bin"
+    assert (bin_dir / "gh.exe").read_bytes() == b"MZ-launcher"
+    assert built == [stage_eval_env.HERE / "fake_gh" / "gh.py"]
 
 
 def test_restaging_clears_read_only_files(tmp_path):

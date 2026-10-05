@@ -14,16 +14,24 @@ directories at the front of ``sys.path``, so the checkout you are sitting in is
 the one that gets tested. It also fails the session loudly if a core module
 still resolves elsewhere, rather than letting a green run mean nothing.
 
+It also points GAIA's config file, daemon home and memory database at a
+per-session tmp dir, so no result depends on the developer's real ~/.gaia.
+
 Set ``GAIA_ALLOW_EXTERNAL_IMPORTS=1`` to opt out — testing an actually-installed
 wheel is a legitimate thing to do, it just must not happen by accident.
 """
 
 from __future__ import annotations
 
+import atexit
 import importlib.util
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -100,7 +108,46 @@ def _assert_local(session_warn) -> None:
         )
 
 
+#: State a test must never read from the developer's real ~/.gaia, each pointed
+#: at a per-session tmp dir unless the caller already set it. config.json's
+#: ``default_model`` made results depend on the machine.
+#:
+#: GAIA_HOME (and the GAIA_CONFIG_DIR env var) are deliberately not set: they
+#: outrank both ways tests already move GAIA's tree (setting GAIA_CONFIG_DIR,
+#: patching ``Path.home``), so a session value would silently override them.
+_STATE_ENV = {
+    "GAIA_CONFIG_FILE": ("config", "config.json"),
+    "GAIA_DAEMON_HOME": ("daemon-home",),
+    "GAIA_MEMORY_DB": ("memory", "memory.db"),
+}
+_STATE_ROOT = Path(tempfile.mkdtemp(prefix="gaia-test-state-"))
+atexit.register(shutil.rmtree, _STATE_ROOT, ignore_errors=True)
+
+
+def _isolate_gaia_state() -> None:
+    # Module level, not a fixture: gaia.config reads GAIA_CONFIG_FILE at import,
+    # which can happen before any fixture runs.
+    for name, parts in _STATE_ENV.items():
+        if os.environ.get(name):
+            continue
+        path = _STATE_ROOT.joinpath(*parts)
+        (path if name == "GAIA_DAEMON_HOME" else path.parent).mkdir(
+            parents=True, exist_ok=True
+        )
+        os.environ[name] = str(path)
+
+
+def _isolate_config_dir() -> None:
+    """Point ``gaia.config.GAIA_CONFIG_DIR`` (sessions, SD images) at the tmp dir."""
+    if os.environ.get("GAIA_CONFIG_DIR"):
+        return
+    from gaia import config
+
+    config.GAIA_CONFIG_DIR = Path(os.environ["GAIA_CONFIG_FILE"]).parent
+
+
 _prepend_source_roots()
+_isolate_gaia_state()
 
 
 def pytest_sessionstart(session):  # noqa: D103 — pytest hook
@@ -108,3 +155,30 @@ def pytest_sessionstart(session):  # noqa: D103 — pytest hook
         raise RuntimeError(message)
 
     _assert_local(_fail)
+    _isolate_config_dir()
+
+
+def _restore_tool_registry():
+    """Undo every ``@tool`` registration made while the caller was active.
+
+    ``_TOOL_REGISTRY`` is process-global and agents snapshot all of it, so a
+    tool one test registers shows up in every agent built after it.
+    """
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    saved = dict(_TOOL_REGISTRY)
+    yield
+    _TOOL_REGISTRY.clear()
+    _TOOL_REGISTRY.update(saved)
+
+
+# Module scope also catches class- and module-scoped fixtures that build agents,
+# which set up before (and outside) the per-test restore.
+@pytest.fixture(scope="module", autouse=True)
+def _isolate_tool_registry_per_module():
+    yield from _restore_tool_registry()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tool_registry_per_test():
+    yield from _restore_tool_registry()

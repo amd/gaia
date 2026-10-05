@@ -10,11 +10,23 @@ still paused (see ``.github/workflows/publish_agents.yml``, tracked by
 -- so every call site that used to recommend them needs to point at the one
 install path that actually resolves today: pip installing straight from the
 package's subdirectory in this repo.
+
+It also owns the choice of package installer for the running interpreter
+(``resolve_pip_frontend``): the GAIA installer's venv has no pip, so every
+install GAIA runs or recommends goes through that one decision.
 """
 
 import importlib.metadata
+import importlib.util
+import json
+import re
+import shutil
 import sys
-from typing import Optional
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional, Sequence, Tuple
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 # hub/agents/<subdir>/python for each wheel this module has a hint for. Keep
 # in sync with the directories under hub/agents/ (ls hub/agents/).
@@ -41,20 +53,196 @@ def _installed_version(package: str) -> Optional[str]:
         return None
 
 
-def source_install_command(wheel: str, *, force_reinstall: bool = False) -> str:
-    """Return the pip command that installs ``wheel`` straight from source.
+class PackageInstallerUnavailableError(RuntimeError):
+    """Neither pip nor uv can install into the running interpreter."""
 
-    Uses ``sys.executable -m pip`` rather than a bare ``uv`` binary: a stock
-    ``python -m venv`` has neither the ``uv`` executable on PATH nor the
-    ``uv`` Python module, so hard-coding ``uv pip install`` here would just
-    move the #2240 dead end from ``pip install gaia-agent-<id>`` to this
-    hint's own recommended command. ``python -m pip`` is the one frontend
-    every stock venv provides (the same last-resort fallback
-    ``InitCommand._install_pip_extras`` already uses for this reason).
+
+_UV_INSTALL_DOCS = "https://docs.astral.sh/uv/getting-started/installation/"
+
+# Double-quote args with spaces or glob/bracket chars (e.g. ``gaia[rag]``).
+# Not a full shell escaper: ``$`` and backticks still expand in bash, and a
+# quoted executable path needs ``& "..."`` in PowerShell.
+_NEEDS_QUOTES = re.compile(r"[\s\[\]@#&|<>;()*?'$`!{}]")
+
+
+@dataclass(frozen=True)
+class PipFrontend:
+    """An ``install`` command that targets ``sys.executable``'s environment.
+
+    ``argv`` is what to execute; ``display`` is the same command as a user
+    would type it (a bare ``uv`` when PATH is what resolved it).
+    """
+
+    argv: Tuple[str, ...]
+    display: Tuple[str, ...]
+
+
+def _pip_available() -> bool:
+    """Whether pip is importable in the running interpreter."""
+    return importlib.util.find_spec("pip") is not None
+
+
+def _find_uv() -> Optional[Tuple[str, str]]:
+    """Return ``(path, display_name)`` for the uv binary, or None.
+
+    Besides PATH, checks where uv's own installer puts it (``~/.local/bin``,
+    older releases ``~/.cargo/bin``): the GAIA installer adds those to PATH
+    only for its own session, so a later shell may not have them.
+    """
+    on_path = shutil.which("uv")
+    if on_path:
+        return on_path, "uv"
+    exe = "uv.exe" if sys.platform == "win32" else "uv"
+    for directory in (Path.home() / ".local" / "bin", Path.home() / ".cargo" / "bin"):
+        candidate = directory / exe
+        if candidate.is_file():
+            return str(candidate), str(candidate)
+    return None
+
+
+def format_command(argv: Sequence[str]) -> str:
+    """Render ``argv`` as one pasteable line for the commands GAIA prints."""
+    return " ".join(f'"{a}"' if _NEEDS_QUOTES.search(a) else a for a in argv)
+
+
+def resolve_pip_frontend() -> PipFrontend:
+    """Pick the installer that can actually write into this interpreter.
+
+    ``python -m pip`` when pip is importable here; otherwise ``uv pip install
+    --python <this interpreter>``. The GAIA installer builds its venv with
+    ``uv venv`` (no pip) and never activates it, so a bare ``uv pip install``
+    finds no environment and ``python -m pip`` does not exist.
+
+    Raises:
+        PackageInstallerUnavailableError: pip is missing and no uv binary exists.
+    """
+    if _pip_available():
+        prefix = (sys.executable, "-m", "pip", "install")
+        return PipFrontend(argv=prefix, display=prefix)
+    uv = _find_uv()
+    if uv is not None:
+        path, name = uv
+        tail = ("pip", "install", "--python", sys.executable)
+        return PipFrontend(argv=(path, *tail), display=(name, *tail))
+    raise PackageInstallerUnavailableError(
+        f"Cannot install Python packages into {sys.executable}: pip is not "
+        "installed in it and no `uv` binary was found on PATH, in ~/.local/bin "
+        f"or in ~/.cargo/bin. Install uv ({_UV_INSTALL_DOCS}) or run "
+        f"`{format_command([sys.executable, '-m', 'ensurepip'])}`, then retry."
+    )
+
+
+def editable_gaia_root() -> Optional[str]:
+    """Return the source checkout amd-gaia is editable-installed from, if any.
+
+    Reads the PEP 610 ``direct_url.json`` written at install time, rather than
+    asking a pip frontend that may not exist in this environment.
+    """
+    try:
+        dist = importlib.metadata.distribution("amd-gaia")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    raw = dist.read_text("direct_url.json")
+    if not raw:
+        return None
+    try:
+        direct_url = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"amd-gaia's install record in {dist.locate_file('')} is corrupt "
+            f"(direct_url.json is not JSON: {e}). Reinstall GAIA."
+        ) from e
+    url = direct_url.get("url", "")
+    if not direct_url.get("dir_info", {}).get("editable") or not url.startswith(
+        "file://"
+    ):
+        return None
+    return url2pathname(urlparse(url).path)
+
+
+def gaia_extras_install_args(extras: Sequence[str]) -> List[str]:
+    """Return the install arguments that add ``extras`` to this GAIA install.
+
+    An editable checkout reinstalls itself with the extras; a wheel install
+    asks the index for ``amd-gaia[...]``.
+    """
+    joined = ",".join(extras)
+    root = editable_gaia_root()
+    if root is not None:
+        return ["-e", f"{root}[{joined}]"]
+    return [f"amd-gaia[{joined}]"]
+
+
+_EXTRA_MARKER = re.compile(r"""^extra\s*==\s*["']([^"']+)["']$""")
+
+
+def gaia_extra_requirements(extras: Sequence[str]) -> List[str]:
+    """Return the requirements ``extras`` add to the installed GAIA.
+
+    Installing these, rather than ``amd-gaia[...]``, never reinstalls GAIA
+    itself: on Windows the running ``gaia.exe`` cannot be replaced, so an
+    editable checkout's ``gaia init`` failed while adding its own extras.
+
+    Raises:
+        RuntimeError: GAIA's install record is missing, names no requirement
+            for an extra, or marks one with a condition this cannot evaluate.
+    """
+    try:
+        declared = importlib.metadata.requires("amd-gaia")
+    except importlib.metadata.PackageNotFoundError as e:
+        raise RuntimeError(
+            "amd-gaia is not installed in this Python, so its extras cannot be "
+            "added. Reinstall GAIA (https://amd-gaia.ai/docs/guides/install)."
+        ) from e
+    wanted = set(extras)
+    found = set()
+    requirements = []
+    for line in declared or []:
+        requirement, _, marker = line.partition(";")
+        if "extra" not in marker:
+            continue
+        match = _EXTRA_MARKER.match(marker.strip())
+        if match is None:
+            raise RuntimeError(
+                f"amd-gaia declares {line!r}, a condition GAIA cannot evaluate "
+                f"while adding extras. Run: {pip_install_hint(*gaia_extras_install_args(extras))}"
+            )
+        if match.group(1) in wanted:
+            found.add(match.group(1))
+            requirements.append(requirement.strip())
+    missing = wanted - found
+    if missing:
+        raise RuntimeError(
+            f"amd-gaia declares no extra {sorted(missing)}. Reinstall GAIA "
+            "(https://amd-gaia.ai/docs/guides/install)."
+        )
+    return list(dict.fromkeys(requirements))
+
+
+def pip_install_hint(*args: str) -> str:
+    """Return a command a user can paste to install ``args`` into this Python.
+
+    With no installer available yet, the text says to install uv first and
+    then gives the uv command -- never a command that cannot run as printed.
+    """
+    try:
+        return format_command([*resolve_pip_frontend().display, *args])
+    except PackageInstallerUnavailableError:
+        command = format_command(
+            ["uv", "pip", "install", "--python", sys.executable, *args]
+        )
+        return f"install uv ({_UV_INSTALL_DOCS}), then run: {command}"
+
+
+def source_install_command(wheel: str, *, force_reinstall: bool = False) -> str:
+    """Return the command that installs ``wheel`` straight from source.
 
     Raises ``KeyError`` if ``wheel`` isn't a known ``gaia-agent-*`` package --
     that's a bug at the call site (a typo'd wheel name), not a runtime
-    condition to swallow.
+    condition to swallow. With ``force_reinstall=True`` (an installed but
+    broken wheel needs the same file contents replaced), adds
+    ``--force-reinstall --no-deps`` so pip replaces only this wheel rather
+    than re-deploying its whole dependency tree.
     """
     subdir = _AGENT_SOURCE_SUBDIRS[wheel]
     # Pin the ref to the installed core: the wheels track this repo's trunk,
@@ -62,11 +250,10 @@ def source_install_command(wheel: str, *, force_reinstall: bool = False) -> str:
     # skew that produced the misdiagnosed "not installed" ImportErrors.
     core_version = _installed_version("amd-gaia")
     ref = f"@v{core_version}" if core_version else ""
-    flag = "--force-reinstall --no-deps " if force_reinstall else ""
-    return (
-        f'{sys.executable} -m pip install {flag}"{wheel} @ git+{_REPO_URL}{ref}'
-        f'#subdirectory=hub/agents/{subdir}/python"'
-    )
+    spec = f"{wheel} @ git+{_REPO_URL}{ref}#subdirectory=hub/agents/{subdir}/python"
+    if force_reinstall:
+        return pip_install_hint(spec, "--force-reinstall", "--no-deps")
+    return pip_install_hint(spec)
 
 
 def agent_not_installed_message(

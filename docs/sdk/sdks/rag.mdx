@@ -218,9 +218,11 @@ config = RAGConfig(chunk_size=500)  # 500 tokens ≈ 375 words ≈ 2-3 paragraph
 | chunk_size | Roughly equals | Best for |
 |------------|----------------|----------|
 | `256` | ~1 paragraph | FAQs, short Q&A pairs, definitions |
-| `500` | ~2-3 paragraphs | General documents, manuals (default) |
-| `1024` | ~4-6 paragraphs | Technical papers, code with context |
-| `2048` | ~1-2 pages | Long-form analysis, narratives |
+| `500` | ~2-3 paragraphs | General documents, manuals, papers (default, and the maximum) |
+
+<Note>
+**500 is the ceiling.** The embedder reads at most 2,048 tokens per chunk, and a number-heavy table can take one token per character, so no chunk is cut longer than 2,000 characters (`EMBED_MAX_CHARS` in `gaia.rag.sdk`). That way every word of every chunk is searchable. A larger `chunk_size` logs a warning at startup and its chunks are capped at 2,000 characters. To give the model more context per answer, raise `max_chunks` instead.
+</Note>
 
 **Trade-offs:**
 
@@ -230,7 +232,7 @@ config = RAGConfig(chunk_size=500)  # 500 tokens ≈ 375 words ≈ 2-3 paragraph
 
 **Cons:** May miss surrounding context, more chunks to search, fragmented information.
 </Card>
-<Card title="Large Chunks (1024+)" icon="expand">
+<Card title="Large Chunks (500)" icon="expand">
 **Pros:** More context preserved, fewer chunks overall, complete ideas captured.
 
 **Cons:** Less precise matching, more irrelevant text included, slower embedding.
@@ -262,8 +264,8 @@ WITH OVERLAP (100 tokens):
 ```
 
 **Rule of thumb:** Set `chunk_overlap` to 10-20% of `chunk_size`:
+- `chunk_size=256` → `chunk_overlap=25-50`
 - `chunk_size=500` → `chunk_overlap=50-100`
-- `chunk_size=1000` → `chunk_overlap=100-200`
 
 ---
 
@@ -298,7 +300,7 @@ rag = RAGSDK(config)
 ```
 
 <Note>
-The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks (content-hashed, independent of the embedder), and vectors are regenerated via Lemonade on every index — so changing `embedding_model` needs no cache clearing.
+The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings.
 </Note>
 
 ### Tuning `max_chunks`
@@ -898,9 +900,9 @@ Academic papers need more context to understand concepts:
 
 ```python
 config = RAGConfig(
-    chunk_size=1024,       # Large chunks preserve argument flow
-    chunk_overlap=200,     # High overlap keeps ideas connected
-    max_chunks=4,          # Fewer, richer chunks
+    chunk_size=500,        # Largest chunks the embedder reads whole
+    chunk_overlap=100,     # High overlap keeps ideas connected
+    max_chunks=6,          # More chunks give the answer more context
     max_file_size_mb=200   # Academic papers can be large
 )
 
@@ -912,9 +914,9 @@ response = rag.query("What methodology was used in the study?")
 ```
 
 **Why these settings:**
-- Large chunks capture complete methodologies
+- The largest chunks keep a methodology paragraph together
 - High overlap preserves logical flow
-- Fewer chunks focus on key passages
+- More chunks bring in the surrounding argument
 </Accordion>
 
 <Accordion title="Use Case: Codebase Documentation">
@@ -923,7 +925,7 @@ Code docs mix short references with detailed explanations:
 
 ```python
 config = RAGConfig(
-    chunk_size=512,        # Medium chunks for mixed content
+    chunk_size=400,        # Medium chunks for mixed content
     chunk_overlap=100,     # Preserve code block context
     max_chunks=6,          # More chunks to show examples + explanations
 )
@@ -947,8 +949,8 @@ Legal documents need precise, complete clause retrieval:
 
 ```python
 config = RAGConfig(
-    chunk_size=768,        # Clauses can be long
-    chunk_overlap=150,     # Don't break clause boundaries
+    chunk_size=500,        # Clauses can be long
+    chunk_overlap=100,     # Don't break clause boundaries
     max_chunks=5,          # Show relevant clauses
     max_file_size_mb=500   # Contracts can be huge
 )
@@ -1042,10 +1044,10 @@ rag.index_document("system_requirements.pdf")
 **Solutions:**
 
 ```python
-# 1. Increase chunk size
+# 1. Increase chunk size (500 is the maximum)
 config = RAGConfig(
-    chunk_size=768,        # Was 256
-    chunk_overlap=150,     # Proportionally larger
+    chunk_size=500,        # Was 256
+    chunk_overlap=100,     # Proportionally larger
 )
 
 # 2. Retrieve more chunks
@@ -1055,8 +1057,8 @@ config = RAGConfig(
 
 # 3. Both together for comprehensive answers
 config = RAGConfig(
-    chunk_size=768,
-    chunk_overlap=150,
+    chunk_size=500,
+    chunk_overlap=100,
     max_chunks=6,
 )
 ```
@@ -1078,9 +1080,9 @@ config = RAGConfig(
 for doc in ["doc1.pdf", "doc2.pdf", "doc3.pdf"]:
     rag.index_document(doc)
 
-# 3. Tune chunk sizes and LLM-based chunking
+# 3. Use the largest chunks and skip LLM-based chunking
 config = RAGConfig(
-    chunk_size=1024,          # Larger chunks = fewer embeddings = faster indexing
+    chunk_size=500,           # Largest chunks = fewest embeddings = fastest indexing
     use_llm_chunking=False,   # Disable semantic chunking for raw speed
 )
 
@@ -1088,7 +1090,7 @@ config = RAGConfig(
 config = RAGConfig(
     cache_dir="./my_rag_cache"  # Index persisted here
 )
-# Next run will load existing index instead of re-creating
+# Next run with the same chunking settings loads the cached chunks
 ```
 </Accordion>
 
@@ -1107,9 +1109,9 @@ config = RAGConfig(
     max_file_size_mb=50,      # Limit individual file size
 )
 
-# 2. Use larger chunks (fewer total chunks)
+# 2. Use the largest chunks (fewer total chunks)
 config = RAGConfig(
-    chunk_size=1024,          # Fewer chunks per document
+    chunk_size=500,           # The maximum; fewer chunks per document
 )
 
 # 3. Clear cached embeddings when switching projects
@@ -1144,7 +1146,7 @@ class DocumentQA:
     def __init__(self, documents: list[str]):
         # Configure for general document Q&A
         config = RAGConfig(
-            chunk_size=512,
+            chunk_size=500,
             chunk_overlap=100,
             max_chunks=5,
         )

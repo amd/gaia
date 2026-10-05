@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 
+from gaia.env import child_env
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
 from gaia.version import LEMONADE_VERSION
@@ -609,13 +610,15 @@ class EmbeddedLemonade:
         return path
 
     def _pin_llamacpp_backends(self) -> None:
-        """Record per-model backends Lemonade applies even when it auto-loads.
+        """Record per-model load options Lemonade applies even when it auto-loads.
 
         The embedder is loaded on demand by ``/embeddings`` as well as by GAIA's
-        explicit loads, so the backend has to live in Lemonade's saved options.
+        explicit loads, so its backend and ubatch have to live in Lemonade's
+        saved options.
         """
         from gaia.llm.lemonade_client import (
             DEFAULT_EMBEDDING_MODEL,
+            EMBEDDER_LLAMACPP_ARGS,
             llamacpp_backend_for,
         )
 
@@ -643,6 +646,9 @@ class EmbeddedLemonade:
             entry = options.get(model)
             entry = dict(entry) if isinstance(entry, dict) else {}
             entry["llamacpp_backend"] = backend
+            args = str(entry.get("llamacpp_args") or "")
+            if "--ubatch-size" not in args:
+                entry["llamacpp_args"] = f"{args} {EMBEDDER_LLAMACPP_ARGS}".strip()
             options[model] = entry
         path.write_text(json.dumps(options, indent=2), encoding="utf-8")
 
@@ -946,8 +952,7 @@ class EmbeddedLemonade:
         port = port or _free_port()
         api_key = secrets.token_urlsafe(32)
 
-        env = dict(os.environ)
-        env["LEMONADE_API_KEY"] = api_key
+        env = child_env({"LEMONADE_API_KEY": api_key})
 
         argv = [
             str(self.daemon_path),
@@ -1196,8 +1201,7 @@ class EmbeddedLemonade:
                 f"re-record it."
             )
 
-        env = dict(os.environ)
-        env["LEMONADE_API_KEY"] = api_key
+        env = child_env({"LEMONADE_API_KEY": api_key})
         try:
             result = subprocess.run(
                 [

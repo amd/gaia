@@ -57,6 +57,12 @@ budget, independent of local device settings and `GAIA_CTX_SIZE`; this is not
 a claim about the remote model’s actual context capacity. Claude uses its provider
 budget. The email sidecar still uses its separate prose-only history contract.
 
+With a cloud model selected (for example through the custom model setting), the
+chat footer reads **Sent to Fireworks AI** (or the AMD gateway) instead of
+**100% local & private**, and the sidebar badge names the provider. Hover the
+footer for what is sent: the whole conversation, including anything read out of
+files, documents or memory, which themselves stay stored on your machine.
+
 ### Analyze Any Document
 
 Drag files into the chat — or just ask the agent to find them. It indexes the content and lets you ask questions, extract data, compare sections, or get summaries. Works with:
@@ -93,10 +99,12 @@ Pick the install path that fits you best:
     and `gaia-agent-ui-0.17.2-amd64.deb`.
 
     **Windows (.exe):**
-    1. Download `gaia-agent-ui-<version>-x64-setup.exe` from [Releases](https://github.com/amd/gaia/releases).
-    2. Double-click to install, then launch "GAIA" from the Start Menu (binary: `gaia-desktop`).
-    3. Update by downloading and running the newer installer.
+    1. Download **Install GAIA for Windows** from [amd-gaia.ai](https://amd-gaia.ai/#install) (`gaia-<version>-win-x64-setup.exe`) and run it.
+    2. Tick **Desktop app** on Choose Components (and the terminal too, if you want it), then launch "GAIA" from the desktop or Start Menu (binary: `gaia-desktop`).
+    3. Update by running the newer installer; it keeps your choices.
     4. Uninstall via Windows Settings → Apps → Installed apps → GAIA.
+
+    See [Install GAIA](/guides/install) for silent installs. The desktop app's own installer, `gaia-agent-ui-<version>-x64-setup.exe`, is still on [Releases](https://github.com/amd/gaia/releases) for scripted installs of the app alone.
 
     **Ubuntu (.deb):**
     ```bash
@@ -162,10 +170,11 @@ Pick the install path that fits you best:
     </Note>
 
     <Note>
-      If you see a missing dependencies error, install the UI extras:
+      If you see a missing dependencies error, run the install command it prints — it targets the Python that GAIA runs in. For the one-line installer's environment (which has no `pip` and is not activated) that is:
 
       ```bash
-      uv pip install "amd-gaia[ui]"
+      uv pip install --python ~/.gaia/venv/bin/python "amd-gaia[ui]"
+      # Windows: uv pip install --python "$env:USERPROFILE\.gaia\venv\Scripts\python.exe" "amd-gaia[ui]"
       ```
     </Note>
 
@@ -259,11 +268,13 @@ Sessions let you organize conversations by topic. They sync between the CLI (`ga
 | `Escape` | Stop agent response |
 | `Ctrl+K` | Search across sessions |
 
+When GAIA asks permission, the prompt takes focus and `Enter` does nothing, so a message you were typing can't approve it. `Escape` denies; `Tab` to **Allow** and press `Enter` or `Space` to approve. The prompt counts down the time the agent will wait and denies when it runs out.
+
 ---
 
 ## Memory
 
-The agent can remember facts, preferences, and decisions across sessions. Memory is **opt-in (beta)** and disabled by default — see the [Agent Memory guide](/guides/memory) to enable it and learn what the **Brain** icon's dashboard exposes.
+The agent can remember facts, preferences, and decisions across sessions. Memory is **on by default (beta)** — see the [Agent Memory guide](/guides/memory) to turn it off and learn what the **Brain** icon's dashboard exposes.
 
 ---
 
@@ -406,9 +417,6 @@ The agent supports the **Model Context Protocol** in both directions — connect
     The first time you index a document, Lemonade Server pulls the embedding
     model (`user.embeddinggemma-300m-GGUF`, ~334 MB) from `huggingface.co`,
     cached under `~/.cache/huggingface/hub/`. Subsequent runs are offline.
-    (Agent memory adds a small cross-encoder reranker,
-    `cross-encoder/ms-marco-MiniLM-L-6-v2` (~22 MB), fetched via
-    `sentence-transformers` on first hybrid search.)
 
     If your environment blocks `huggingface.co`, pre-seed the cache on a
     machine with internet access and copy it to the target machine, or set

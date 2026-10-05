@@ -1,33 +1,48 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+"""Live-microphone speech-to-text for ``gaia talk``, transcribed by Lemonade.
 
-# Standard library imports
+``AudioRecorder`` cuts the microphone stream into utterances on silence; each
+one is posted to Lemonade's Whisper (``/audio/transcriptions``) and the text
+lands on ``transcription_queue``.
+"""
+
+import os
 import queue
-import threading
+import tempfile
 import time
 
-# Third-party imports
 import numpy as np
 
-try:
-    import sounddevice as sd
-except ImportError:
-    sd = None
-
-try:
-    import torch
-except ImportError:
-    torch = None
-
-try:
-    import whisper
-except ImportError:
-    whisper = None
-
 from gaia.audio.audio_recorder import AudioRecorder
-
-# First-party imports
+from gaia.audio.lemonade_asr import LemonadeASRClient
+from gaia.audio.lemonade_tts import write_wav
 from gaia.logger import get_logger
+
+#: ``--whisper-model-size`` values and the Lemonade model each one selects.
+WHISPER_MODELS = {
+    "tiny": "Whisper-Tiny",
+    "base": "Whisper-Base",
+    "small": "Whisper-Small",
+    "medium": "Whisper-Medium",
+    "large": "Whisper-Large-v3",
+    "turbo": "Whisper-Large-v3-Turbo",
+}
+DEFAULT_WHISPER_SIZE = "base"
+
+# One utterance is seconds of audio; anything near this is a stuck server.
+UTTERANCE_TIMEOUT = 60
+
+
+def whisper_model_for(size: str) -> str:
+    """The Lemonade model id for a ``--whisper-model-size`` value."""
+    try:
+        return WHISPER_MODELS[size]
+    except KeyError:
+        raise ValueError(
+            f"Unknown Whisper model size '{size}'. Choose one of: "
+            f"{', '.join(WHISPER_MODELS)}."
+        ) from None
 
 
 class WhisperAsr(AudioRecorder):
@@ -35,387 +50,95 @@ class WhisperAsr(AudioRecorder):
 
     def __init__(
         self,
-        model_size="small",
+        model_size=DEFAULT_WHISPER_SIZE,
         device_index=None,  # Use default input device
         transcription_queue=None,
-        enable_cuda=False,
         silence_threshold=None,  # Custom silence threshold
         min_audio_length=None,  # Custom minimum audio length
+        base_url=None,
+        language="en",
+        client=None,
+        say=None,
     ):
-        # Check for required dependencies
-        missing = []
-        if sd is None:
-            missing.append("sounddevice")
-        if torch is None:
-            missing.append("torch")
-        if whisper is None:
-            missing.append("openai-whisper")
+        """
+        Args:
+            model_size: Whisper size; see ``WHISPER_MODELS``.
+            base_url: Lemonade API root; defaults to ``LEMONADE_BASE_URL``.
+            language: ISO 639-1 code sent with every utterance.
+            client: A ready :class:`LemonadeASRClient` (tests inject one).
+            say: Called with a line before the Whisper model is downloaded.
 
-        if missing:
-            error_msg = (
-                f"\n❌ Error: Missing required talk dependencies: {', '.join(missing)}\n\n"
-                f"Please install the talk dependencies:\n"
-                f'  uv pip install -e ".[talk]"\n\n'
-                f"Or install packages directly:\n"
-                f"  uv pip install {' '.join(missing)}\n"
-            )
-            raise ImportError(error_msg)
-
+        Raises:
+            ImportError: sounddevice is missing.
+            ConnectionError: Lemonade Server is not reachable.
+            LemonadeASRError: Lemonade cannot serve the Whisper model.
+        """
         super().__init__(device_index)
 
-        # Override thresholds if provided
         if silence_threshold is not None:
             self.SILENCE_THRESHOLD = silence_threshold
         if min_audio_length is not None:
             self.MIN_AUDIO_LENGTH = min_audio_length
         self.log = self.__class__.log
 
-        # Initialize Whisper model with optimized settings
-        self.log.debug(f"Loading Whisper model: {model_size}")
-        self.model = whisper.load_model(model_size)
-
-        # Add compute type optimization if GPU available
-        self.using_cuda = enable_cuda and torch.cuda.is_available()
-        if self.using_cuda:
-            self.model.to(torch.device("cuda"))
-            torch.set_float32_matmul_precision("high")
-            # Enable torch compile for better performance
-            if hasattr(torch, "compile"):
-                self.model = torch.compile(self.model)
-            self.log.debug("GPU acceleration enabled with optimizations")
-
-        # Add batch processing capability
-        self.batch_size = 3  # Process multiple audio segments at once
-        self.audio_buffer = []
-        self.last_process_time = time.time()
-        self.process_interval = 0.5  # Process every 0.5 seconds
-
-        # Rest of initialization
+        self.language = language
+        self.client = client or LemonadeASRClient(
+            base_url=base_url,
+            model=whisper_model_for(model_size),
+            timeout=UTTERANCE_TIMEOUT,
+        )
+        self.client.ensure_model(say=say)
         self.transcription_queue = transcription_queue
 
-    def _record_audio_streaming(self):
-        """Record audio for streaming mode - puts chunks directly into queue.
+        #: Why transcription stopped, set by the processing thread. Like
+        #: ``mic_error`` it is the only way that thread can report anything.
+        self.asr_error = None
 
-        Any failure clears ``is_recording`` and records the reason on
-        ``mic_error``. This runs on its own thread, so raising here reaches
-        nobody: leaving the flag set is what left ``gaia talk`` printing
-        "Listening…" forever against a microphone that never opened (#3554).
-        """
+    def transcribe_utterance(self, audio: np.ndarray) -> str:
+        """Send one utterance of 16 kHz float audio to Lemonade; return its text."""
+        fd, name = tempfile.mkstemp(suffix=".wav", prefix="gaia-talk-")
+        os.close(fd)
         try:
-            # Log device info
-            if self.device_index is not None:
-                device_info = sd.query_devices(self.device_index)
-            else:
-                device_info = sd.query_devices(kind="input")
-                self.device_index = device_info["index"]
-
-            self.log.debug(
-                f"Using audio device [{self.device_index}]: {device_info['name']}"
+            write_wav(name, audio, self.RATE)
+            transcript = self.client.transcribe(
+                name, language=self.language, require_timestamps=False
             )
-
-            self.stream = sd.InputStream(
-                samplerate=self.RATE,
-                channels=self.CHANNELS,
-                dtype=self.DTYPE,
-                device=self.device_index,
-                blocksize=self.CHUNK,
-            )
-            self.stream.start()
-
-            self.log.debug("Streaming recording started...")
-            audio_buffer = np.array([], dtype=np.float32)
-            chunks_processed = 0
-
-            # Use 3-second chunks for better context (Whisper works better with longer segments)
-            chunk_duration = 3.0  # seconds
-            overlap_duration = 0.5  # seconds of overlap to avoid cutting words
-
-            chunk_size = int(self.RATE * chunk_duration)
-            overlap_size = int(self.RATE * overlap_duration)
-
-            # Simple VAD - only send chunks with sufficient audio energy
-            min_energy_threshold = 0.001  # Minimum energy to consider as speech
-
-            while self.is_recording:
-                try:
-                    frames, _ = self.stream.read(self.CHUNK)
-                    with self.pause_lock:
-                        if self.is_paused:
-                            audio_buffer = np.array([], dtype=np.float32)
-                            continue
-                    data = frames[:, 0].copy()  # Extract mono channel
-                    audio_buffer = np.concatenate((audio_buffer, data))
-
-                    # Process when we have enough audio (3 seconds)
-                    if len(audio_buffer) >= chunk_size:
-                        chunk = audio_buffer[:chunk_size].copy()
-
-                        # Only process if chunk has sufficient audio energy (not silence)
-                        energy = np.abs(chunk).mean()
-                        chunks_processed += 1
-
-                        if energy > min_energy_threshold:
-                            self.audio_queue.put(chunk)
-                            self.log.debug(
-                                f"Chunk {chunks_processed}: Added to queue (energy: {energy:.6f})"
-                            )
-                        else:
-                            self.log.debug(
-                                f"Chunk {chunks_processed}: Skipped - too quiet (energy: {energy:.6f})"
-                            )
-
-                        # Keep overlap to maintain context between chunks
-                        audio_buffer = audio_buffer[chunk_size - overlap_size :]
-
-                except Exception as e:
-                    self.mic_error = self.device_error_message("read from", e)
-                    self.log.error(self.mic_error)
-                    break
-
-            # Process any remaining audio
-            if not self.is_paused and len(audio_buffer) > self.RATE * 0.5:
-                self.audio_queue.put(audio_buffer.copy())
-
-        except Exception as e:
-            # Opening or querying the device failed, so recording never began.
-            self.mic_error = self.device_error_message("open", e)
-            self.log.error(self.mic_error)
         finally:
-            # Always clear the flag: the supervisor loop polls it to notice the
-            # capture thread is gone, and it is the only way out of "Listening…".
-            self.is_recording = False
-            if self.stream:
-                try:
-                    self.stream.stop()
-                    self.stream.close()
-                except Exception as e:  # noqa: BLE001 - teardown of a dead device
-                    self.log.debug(f"Ignoring error closing the input stream: {e}")
-
-    def start_recording_streaming(self):
-        """Start recording in streaming mode."""
-        self.record_thread = None
-        self.mic_error = None
-        self._stop_requested = False
-        self.is_recording = True
-        self.record_thread = threading.Thread(target=self._record_audio_streaming)
-        self.record_thread.start()
-        time.sleep(0.1)
-        self.process_thread = threading.Thread(target=self._process_audio)
-        self.process_thread.start()
-        time.sleep(0.1)
+            os.unlink(name)
+        return transcript.text.strip()
 
     def _process_audio(self):
-        """Internal method to process audio with batching and optimizations."""
-        self.log.debug("Starting optimized audio processing...")
-        processed_count = 0
+        """Transcribe utterances as the recorder queues them.
 
+        A failure stops recording and is kept on ``asr_error``: a server that
+        went away would otherwise fail every utterance while the screen still
+        says "Listening".
+        """
+        self.log.debug("Starting Lemonade transcription loop...")
         while self.is_recording:
             try:
-                current_time = time.time()
-
-                # Collect audio segments into buffer
-                while len(self.audio_buffer) < self.batch_size:
-                    try:
-                        audio = self.audio_queue.get_nowait()
-                        if len(audio) > 0:
-                            self.audio_buffer.append(audio)
-                            self.log.debug(
-                                f"Added audio to buffer (size: {len(self.audio_buffer)}/{self.batch_size})"
-                            )
-                    except queue.Empty:
-                        break
-
-                # Process batch if enough time has passed or buffer is full
-                if len(self.audio_buffer) >= self.batch_size or (
-                    len(self.audio_buffer) > 0
-                    and current_time - self.last_process_time >= self.process_interval
-                ):
-
-                    try:
-                        processed_count += 1
-                        self.log.debug(
-                            f"Processing batch {processed_count} with {len(self.audio_buffer)} segments..."
-                        )
-
-                        with torch.inference_mode():
-                            # Process batch of audio segments with better quality settings
-                            results = [
-                                self.model.transcribe(
-                                    audio,
-                                    language="en",
-                                    temperature=0.0,  # Deterministic, no randomness
-                                    no_speech_threshold=0.6,  # Higher threshold to filter noise
-                                    condition_on_previous_text=False,  # Don't use previous text as it can cause hallucinations
-                                    beam_size=5,  # Larger beam for better quality
-                                    best_of=5,  # More attempts for better quality
-                                    fp16=self.using_cuda,
-                                    suppress_blank=True,  # Suppress blank outputs
-                                    suppress_tokens=[-1],  # Suppress special tokens
-                                    without_timestamps=False,  # Keep timestamps for context
-                                )
-                                for audio in self.audio_buffer
-                            ]
-
-                            # Send transcriptions to queue
-                            for i, result in enumerate(results):
-                                transcribed_text = result["text"].strip()
-                                if transcribed_text and self.transcription_queue:
-                                    self.transcription_queue.put(transcribed_text)
-                                    self.log.debug(
-                                        f"Transcribed segment {i+1}: {transcribed_text}"
-                                    )
-                                else:
-                                    self.log.debug(f"Segment {i+1}: No text or empty")
-
-                        self.audio_buffer = []
-                        self.last_process_time = current_time
-
-                    except Exception as e:
-                        self.log.error(f"Batch transcription error: {e}")
-                        self.audio_buffer = []  # Clear buffer on error
-
-                else:
-                    # Small sleep to prevent CPU spinning
-                    time.sleep(0.01)
-
-            except Exception as e:
-                self.log.error(f"Error in audio processing: {e}")
-                if not self.is_recording:
-                    break
-
-        self.log.debug("Audio processing stopped")
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Whisper ASR Demo")
-    parser.add_argument(
-        "--duration",
-        type=int,
-        default=5,
-        help="Recording duration in seconds",
-    )
-    parser.add_argument(
-        "--model",
-        default="base",
-        help="Whisper model size (tiny, base, small, medium, large)",
-    )
-    parser.add_argument(
-        "--cuda", action="store_true", help="Enable CUDA acceleration if available"
-    )
-    parser.add_argument(
-        "--stream",
-        action="store_true",
-        help="Stream transcriptions in real-time as they arrive",
-    )
-    args = parser.parse_args()
-
-    print("=== Whisper ASR Demo ===")
-    print(f"Model: {args.model}, CUDA: {args.cuda}")
-
-    # Microphone transcription
-    print("\n--- Microphone Transcription Test ---")
-    print(f"Recording for {args.duration} seconds...")
-    print(f"Mode: {'Streaming' if args.stream else 'Batch'}")
-
-    # Create a queue to collect transcriptions
-    transcription_queue = queue.Queue()
-    asr = WhisperAsr(
-        model_size=args.model,
-        transcription_queue=transcription_queue,
-        enable_cuda=args.cuda,
-    )
-
-    start_time = time.time()
-    transcriptions = []
-
-    if args.stream:
-        # Streaming mode - show text as it arrives
-        print("Starting recording threads...")
-        asr.start_recording_streaming()  # Use streaming-specific method
-
-        print("\n[STREAMING] Transcriptions as they arrive:")
-        print("-" * 50)
-
-        # Give recording a moment to start properly
-        time.sleep(0.5)
-
-        print(f"Recording status: {asr.is_recording}")
-        print(f"Listening for {args.duration} seconds...")
-
-        end_time = start_time + args.duration
-        checks = 0
-
-        try:
-            while time.time() < end_time:
-                checks += 1
-                # Check for new transcriptions
-                while not transcription_queue.empty():
-                    try:
-                        text = transcription_queue.get_nowait()
-                        if text:
-                            transcriptions.append(text)
-                            # Stream the text immediately with timestamp
-                            time_offset = time.time() - start_time
-                            print(f"[{time_offset:5.1f}s] {text}")
-                    except queue.Empty:
-                        break
-
-                # Debug: Show we're still checking
-                if checks % 20 == 0:  # Every second (20 * 0.05)
-                    print(
-                        f"  ... still listening (audio_queue size: ~{asr.audio_queue.qsize()})"
-                    )
-
-                # Small sleep to prevent CPU spinning
-                time.sleep(0.05)
-
-        finally:
-            # Stop recording
-            asr.stop_recording()
-
-            # Collect any remaining transcriptions
-            time.sleep(0.5)  # Give a moment for final processing
-            while not transcription_queue.empty():
-                try:
-                    text = transcription_queue.get_nowait()
-                    if text:
-                        transcriptions.append(text)
-                        time_offset = time.time() - start_time
-                        print(f"[{time_offset:5.1f}s] {text}")
-                except queue.Empty:
-                    break
-
-        print("-" * 50)
-
-    else:
-        # Batch mode - collect all text then display
-        asr.start_recording(duration=args.duration)  # Blocking
-
-        # Collect all transcriptions after recording
-        while not transcription_queue.empty():
-            try:
-                text = transcription_queue.get_nowait()
-                if text:
-                    transcriptions.append(text)
+                audio = self.audio_queue.get(timeout=0.1)
             except queue.Empty:
+                continue
+            if len(audio) == 0:
+                continue
+            started = time.time()
+            try:
+                text = self.transcribe_utterance(audio)
+            except Exception as e:  # noqa: BLE001 - reported via asr_error
+                self.asr_error = (
+                    f"Speech recognition failed: {e}. Check that Lemonade Server "
+                    "is running, then restart `gaia talk`."
+                )
+                self.log.error(self.asr_error)
+                self.is_recording = False
                 break
-
-    elapsed = time.time() - start_time
-
-    # Display results
-    print("\nResults:")
-    if transcriptions:
-        print(f"  Transcription segments: {len(transcriptions)}")
-        if not args.stream:  # Show individual segments in batch mode
-            for i, text in enumerate(transcriptions, 1):
-                print(f"    {i}. {text}")
-        print(f"  Full transcript: {' '.join(transcriptions)}")
-    else:
-        print("  No transcriptions received (possibly no speech detected)")
-
-    print(f"  Total time: {elapsed:.2f} seconds")
-    print(f"  Processing efficiency: {args.duration/elapsed:.2f}x realtime")
-
-    print("\nDemo completed!")
+            self.log.debug(
+                "Transcribed %.1fs of audio in %.2fs: %r",
+                len(audio) / self.RATE,
+                time.time() - started,
+                text,
+            )
+            if text and self.transcription_queue is not None:
+                self.transcription_queue.put(text)
+        self.log.debug("Lemonade transcription loop stopped")

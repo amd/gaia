@@ -14,7 +14,7 @@ Valid categories: fact, preference, error, skill, note, reminder, system.
 v2 additions:
 - Embedding pipeline (Lemonade EmbeddingGemma 300M, 768-dim)
 - FAISS IndexFlatIP for cosine similarity search
-- Hybrid search: vector + BM25 + RRF fusion + cross-encoder reranking
+- Hybrid search: vector + BM25 + RRF fusion
 - Complexity-aware recall depth (3/5/10 top_k)
 - Mem0-style LLM extraction (ADD/UPDATE/DELETE/NOOP)
 - Conversation consolidation (old sessions → knowledge)
@@ -74,6 +74,7 @@ from gaia.agents.base.verification import check_was_executed
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
+    SIDE_SLOT,
     backend_crash_remedy,
 )
 
@@ -141,8 +142,8 @@ def _live_software_versions() -> Dict[str, str]:
 
         versions["GAIA version"] = str(__version__)
         versions["Lemonade Server version"] = str(LEMONADE_VERSION)
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - an unreadable version is "no versions"
+        logger.debug("[MemoryMixin] software versions unavailable: %s", e)
     return versions
 
 
@@ -188,9 +189,6 @@ EMBEDDING_DIM = 768
 #: ride the first turn of a session and the first turn after this much silence
 #: — a natural pause — never every turn.
 REMINDER_PAUSE_SECONDS = 30 * 60
-
-#: Cross-encoder model for reranking (~22 MB, runs on CPU).
-CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 #: RRF fusion weights: 60% vector, 40% BM25.
 RRF_WEIGHT_VECTOR = 0.6
@@ -388,11 +386,6 @@ _MEMORY_TOOLS = frozenset(
     {"remember", "recall", "update_memory", "forget", "search_past_conversations"}
 )
 
-# Module-level cache for the cross-encoder model (loaded once per process).
-# _CROSS_ENCODER_UNAVAILABLE is a sentinel: once set, we stop retrying.
-_cross_encoder_model = None
-_CROSS_ENCODER_UNAVAILABLE = False
-
 #: Guards the one-time creation of each instance's extraction bookkeeping.
 _EXTRACTION_STATE_LOCK = threading.Lock()
 
@@ -403,6 +396,20 @@ _WRITE_FAILURE_LOCK = threading.Lock()
 WRITE_FAILURE_EMBED = "embed"  # row saved, no search vector stored
 WRITE_FAILURE_INDEX = "index"  # vector stored, not in this session's index
 WRITE_FAILURE_STORE = "store"  # row not saved at all
+
+
+def memory_off_reason(agent) -> str:
+    """Why *agent* is not storing memory, in words the user can act on."""
+    reason = getattr(agent, "_incognito_reason", None)
+    if reason == "private":
+        return "This is a private chat, so nothing is saved to memory."
+    if reason == "memory_off":
+        return (
+            "Memory is turned off in Settings, so nothing is saved. "
+            "It can be turned back on there."
+        )
+    return "Memory is off for this session, so nothing is saved."
+
 
 _REEMBED_HINT = (
     "Agents re-embed missing vectors on startup (up to 100 per start) when the "
@@ -486,12 +493,11 @@ def _loaded_omp_runtimes() -> tuple[str, ...]:
 def assert_faiss_omp_safe(operation: str) -> None:
     """Refuse a faiss call that would SIGABRT this process.
 
-    faiss-cpu and torch each bundle their own ``libomp.dylib``. Both resident
-    means the next OpenMP region — a faiss search, or torch's first parallel
-    op — initialises the second copy and macOS kills the process. That abort is
-    native: no ``except`` can catch it, so the only place to stop it is before
-    the call. ``_get_cross_encoder`` guards the import direction; this guards
-    the search direction, which is fatal whichever library loaded first.
+    faiss-cpu and torch each bundle their own ``libomp.dylib``. GAIA never
+    imports torch, but code sharing the process can (a skill's Python, an
+    embedding host). Both resident means the next faiss search initialises the
+    second copy and macOS kills the process. That abort is native: no
+    ``except`` can catch it, so the only place to stop it is before the call.
 
     Raises:
         RuntimeError: when a second OpenMP runtime is already resident.
@@ -506,8 +512,8 @@ def assert_faiss_omp_safe(operation: str) -> None:
         f"are loaded ({', '.join(runtimes)}). faiss-cpu and torch each bundle "
         "one, and the next faiss search initialises the second — macOS aborts "
         "the process (OMP: Error #15), which no error handler can catch. "
-        "Keep the two out of one process (torch arrives with the [audio] and "
-        "[ui] extras; memory recall needs faiss-cpu), or set "
+        "Keep the two out of one process (GAIA does not import torch; whatever "
+        "loaded it here did — memory recall needs faiss-cpu), or set "
         f"{_OMP_OVERRIDE_ENV}=1 on a host where the two runtimes coexist. "
         "See src/gaia/agents/base/memory.py:_loaded_omp_runtimes."
     )
@@ -531,55 +537,6 @@ def _validated_faiss_query(
             "`gaia memory` onboarding) so both sides use one embedder."
         )
     return query
-
-
-def _get_cross_encoder():
-    """Lazy-load the cross-encoder reranking model. Cached at module level.
-
-    Returns None (without retrying) if sentence-transformers is not installed
-    or the model failed to load on a previous attempt.
-    """
-    global _cross_encoder_model, _CROSS_ENCODER_UNAVAILABLE
-    if _CROSS_ENCODER_UNAVAILABLE:
-        return None
-    if _cross_encoder_model is not None:
-        return _cross_encoder_model
-    # faiss and torch each link their own OpenMP runtime; whichever loads
-    # second aborts the process with "OMP: Error #15" — a SIGABRT no except
-    # clause can catch, so the guards below would never run. Refuse the import
-    # we know is fatal rather than take the process down mid-conversation.
-    if (
-        "faiss" in sys.modules
-        and "torch" not in sys.modules
-        and not _omp_conflict_override()
-    ):
-        logger.warning(
-            "[MemoryMixin] cross-encoder reranking disabled: faiss is already "
-            "loaded and importing torch alongside it aborts the process "
-            "(OpenMP double-initialisation). Retrieval falls back to vector "
-            "similarity, which is ordered but not reranked. Set "
-            "%s=1 to keep reranking on a host where the two runtimes coexist.",
-            _OMP_OVERRIDE_ENV,
-        )
-        _CROSS_ENCODER_UNAVAILABLE = True
-        return None
-    try:
-        from sentence_transformers import CrossEncoder
-
-        _cross_encoder_model = CrossEncoder(CROSS_ENCODER_MODEL)
-        logger.info("[MemoryMixin] cross-encoder loaded: %s", CROSS_ENCODER_MODEL)
-        return _cross_encoder_model
-    except ImportError:
-        logger.warning(
-            "[MemoryMixin] sentence-transformers not installed; "
-            "cross-encoder reranking disabled"
-        )
-        _CROSS_ENCODER_UNAVAILABLE = True
-        return None
-    except Exception as e:
-        logger.warning("[MemoryMixin] cross-encoder load failed: %s", e)
-        _CROSS_ENCODER_UNAVAILABLE = True
-        return None
 
 
 def _embedding_to_blob(vec: np.ndarray) -> bytes:
@@ -638,7 +595,7 @@ class MemoryMixin(ProceduralMemoryMixin):
     - Working context via system prompt (preferences, facts, errors, upcoming)
     - Auto tool call logging with error learning
     - Conversation persistence with Mem0-style LLM extraction
-    - Hybrid search: FAISS vector + BM25 FTS5 + RRF fusion + cross-encoder reranking
+    - Hybrid search: FAISS vector + BM25 FTS5 + RRF fusion
     - Conversation consolidation for old sessions
     - Background memory reconciliation for conflict detection
     - 5 CRUD tools for the LLM (remember, recall, update_memory, forget, search_past_conversations)
@@ -744,11 +701,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         self._proc_faiss_id_map: List[str] = []  # faiss_position -> procedure_id
 
         # Per-turn recalled-skill injection (#887 RECALL).  Holds the rendered
-        # procedure body(ies) recall_skill matched for the current goal; the
-        # auto-discovered get_recalled_skills_system_prompt() contributes it to
-        # the composed system prompt.  Empty string = no recall = the system
-        # prompt stays byte-identical to a build without procedural memory.
+        # procedure body(ies) recall_skill matched for the current goal; it rides
+        # in this turn's memory context, never the system prompt.
         self._recalled_skill_prompt = ""
+        # The stable memory section, rendered once per session (see
+        # get_memory_system_prompt). None until the first composition.
+        self._stable_memory_prompt: Optional[str] = None
         # The matched DistilledProcedure objects from the same per-turn recall
         # (#1451): the tool loader reads their tools_required via
         # _recalled_skill_tools as the SKILL signal.  Empty list = no recall =
@@ -1180,8 +1138,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         old = self._memory_context
         self._memory_context = context
         logger.info("[MemoryMixin] context switched %s → %s", old, context)
-        if hasattr(self, "rebuild_system_prompt"):
-            self.rebuild_system_prompt()
+        self._refresh_stable_memory_prompt()
 
     # ==================================================================
     # Embedding Pipeline
@@ -1416,8 +1373,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             return
 
         store = self._memory_store
-        # Get all active knowledge items that have embeddings
-        items = store.get_items_with_embeddings(include_sensitive=True)
+        items = store.iter_items_with_embeddings(include_sensitive=True)
 
         index = faiss.IndexFlatIP(self._embedding_dim)
         id_map = []
@@ -1426,27 +1382,24 @@ class MemoryMixin(ProceduralMemoryMixin):
         for item in items:
             try:
                 vec = _blob_to_embedding(item["embedding"])
-                if vec.shape[0] != self._embedding_dim:
-                    logger.debug(
-                        "[MemoryMixin] skipping embedding for %s: wrong dim %d",
-                        item["id"],
-                        vec.shape[0],
-                    )
-                    skipped += 1
-                    continue
-                # Ensure L2 normalization
-                norm = np.linalg.norm(vec)
-                if norm > 0:
-                    vec = vec / norm
-                index.add(vec.reshape(1, -1))
-                id_map.append(item["id"])
-            except Exception as e:
+            except (ValueError, TypeError) as e:  # TypeError: a non-BLOB value
+                logger.debug("[MemoryMixin] unreadable embedding %s: %s", item["id"], e)
+                skipped += 1
+                continue
+            if vec.shape[0] != self._embedding_dim:
                 logger.debug(
-                    "[MemoryMixin] skipping bad embedding for %s: %s",
+                    "[MemoryMixin] embedding %s has dim %d, expected %d",
                     item["id"],
-                    e,
+                    vec.shape[0],
+                    self._embedding_dim,
                 )
                 skipped += 1
+                continue
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+            index.add(vec.reshape(1, -1))
+            id_map.append(item["id"])
 
         if skipped:
             self._note_memory_write_failure(
@@ -1612,15 +1565,14 @@ class MemoryMixin(ProceduralMemoryMixin):
         time_from: Optional[str] = None,
         time_to: Optional[str] = None,
     ) -> List[Dict]:
-        """Full hybrid search: vector + BM25 + RRF + cross-encoder reranking.
+        """Full hybrid search: vector + BM25 fused by RRF.
 
         1. Embed the query via _embed_text()
         2. FAISS cosine search: top_k × 4 candidates
         3. FTS5 BM25 via self._memory_store.search(): top_k × 4 candidates
         4. Deduplicate by ID, apply RRF fusion
-        5. Cross-encoder reranking via ms-marco-MiniLM-L-6-v2
-        6. Return final top_k
-        7. Bump confidence + use_count
+        5. Return final top_k
+        6. Bump confidence + use_count
 
         Args:
             query: Search query text.
@@ -1641,24 +1593,19 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Step 1: Embed the query (HARD REQUIREMENT — no BM25-only fallback)
         query_vec = self._embed_text(query)
 
-        # Step 2: FAISS cosine search → get IDs, then batch-resolve from store
-        # Use get_items_with_embeddings() with filters to pre-load a candidate
-        # pool, then rank by FAISS similarity.  This avoids N individual DB
-        # queries and handles filtering at the SQL level.
+        # Step 2: FAISS cosine search, then resolve exactly the hit IDs with
+        # the filters applied in SQL.
         vector_results = []
         faiss_hits = self._faiss_search(query_vec, oversample)
         if faiss_hits:
-            # Fetch candidate items from store with filters already applied.
-            # We over-fetch (top_k=oversample*2) so filtering by the FAISS hit
-            # set still yields enough items.
             candidate_pool = store.get_items_with_embeddings(
                 category=category,
                 context=context,
                 entity=entity,
                 include_sensitive=include_sensitive,
-                top_k=max(oversample * 2, 200),
                 time_from=time_from,
                 time_to=time_to,
+                ids=[kid for kid, _score in faiss_hits],
             )
             pool_by_id = {item["id"]: item for item in candidate_pool}
 
@@ -1724,30 +1671,12 @@ class MemoryMixin(ProceduralMemoryMixin):
                 RRF_K + b_rank
             )
 
-        # Sort by RRF score descending, take top_k × 2 for reranking
+        # Step 5: Return final top_k by RRF score
         sorted_ids = sorted(rrf_scores, key=rrf_scores.get, reverse=True)
-        rerank_candidates = sorted_ids[: top_k * 2]
-
-        # Step 5: Cross-encoder reranking
-        cross_enc = _get_cross_encoder()
-        if cross_enc is not None and rerank_candidates:
-            try:
-                pairs = [
-                    (query, all_items[kid]["content"]) for kid in rerank_candidates
-                ]
-                ce_scores = cross_enc.predict(pairs)
-                # Re-sort by cross-encoder score
-                scored = list(zip(rerank_candidates, ce_scores))
-                scored.sort(key=lambda x: x[1], reverse=True)
-                rerank_candidates = [kid for kid, _ in scored]
-            except Exception as e:
-                logger.debug("[MemoryMixin] cross-encoder reranking failed: %s", e)
-
-        # Step 6: Return final top_k
-        final_ids = rerank_candidates[:top_k]
+        final_ids = sorted_ids[:top_k]
         results = [all_items[kid] for kid in final_ids]
 
-        # Step 7: Bump confidence + use_count on recalled items.
+        # Step 6: Bump confidence + use_count on recalled items.
         # Only bump items that were NOT already bumped by store.search()
         # (BM25 path).  store.search() internally bumps confidence for its
         # results, so we only bump vector-only items to avoid double-counting.
@@ -1845,8 +1774,11 @@ class MemoryMixin(ProceduralMemoryMixin):
                     outcome["response"] = self.chat.send_messages(
                         messages=[{"role": "user", "content": prompt}],
                         system_prompt="You are a memory extraction engine. Return valid JSON only.",
+                        # Off the conversation's slot, so its cache survives.
+                        id_slot=SIDE_SLOT,
                         temperature=0.1,
                         max_tokens=EXTRACTION_MAX_TOKENS,
+                        **self._side_request_kwargs(),
                     )
                 except BaseException as exc:  # re-raised on the caller's thread
                     outcome["error"] = exc
@@ -1871,6 +1803,20 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             response = outcome["response"]
             raw_text = response.text if hasattr(response, "text") else str(response)
+            if (
+                getattr(response, "finish_reason", None) == "length"
+                and not raw_text.strip()
+            ):
+                logger.error(
+                    "[MemoryMixin] extraction stored nothing: %s spent its whole "
+                    "%d-token budget without writing an answer (reasoning only). "
+                    "Each such call holds the GPU for minutes; if this repeats, "
+                    "the model ignores the thinking switch GAIA sends for side "
+                    "requests — run `gaia diagnostics` and report it.",
+                    getattr(self.chat, "effective_model", "the model"),
+                    EXTRACTION_MAX_TOKENS,
+                )
+                return []
 
             # Strip thinking tags if present (Qwen3.5 models)
             raw_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
@@ -2176,6 +2122,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         except Exception as e:
             logger.warning("[MemoryMixin] post-init prune failed: %s", e)
 
+        # The session's frozen memory section is taken after upkeep, before the
+        # first request that carries it.
+        self._refresh_stable_memory_prompt()
+
     # ==================================================================
     # Conversation Consolidation
     # ==================================================================
@@ -2268,6 +2218,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         system_prompt="You are a conversation summarizer. Return valid JSON only.",
                         temperature=0.1,
                         max_tokens=1024,
+                        **self._side_request_kwargs(),
                     )
 
                     raw_text = (
@@ -2500,6 +2451,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     system_prompt="You are a memory reconciliation engine. Return valid JSON only.",
                     temperature=0.1,
                     max_tokens=256,
+                    **self._side_request_kwargs(),
                 )
 
                 raw_text = response.text if hasattr(response, "text") else str(response)
@@ -2603,11 +2555,39 @@ class MemoryMixin(ProceduralMemoryMixin):
         Time and upcoming items are intentionally excluded — they are injected
         per-turn via get_memory_dynamic_context() to keep this prompt frozen for
         LLM KV-cache reuse.
+
+        Rendered once per session. The store changes under it every turn
+        (extraction, auto-stored tool errors, confidence bumps), and any prompt
+        recomposition would otherwise carry that drift into the system prompt
+        and force a full re-read. What is stored mid-session reaches the model
+        through the per-turn recall instead. A context switch, a session reset,
+        or an explicit edit of an item shown here re-renders it.
         """
         if getattr(self, "_memory_store", None) is None:
             return ""
 
-        return self._build_stable_memory_prompt()
+        if getattr(self, "_stable_memory_prompt", None) is None:
+            self._stable_memory_prompt = self._build_stable_memory_prompt()
+        return self._stable_memory_prompt
+
+    def _refresh_stable_memory_prompt(self) -> None:
+        """Re-render the stable memory section now and recompose the prompt."""
+        self._stable_memory_prompt = None
+        if hasattr(self, "rebuild_system_prompt"):
+            self.rebuild_system_prompt()
+
+    def _refresh_if_shown(self, knowledge_id: str) -> None:
+        """Re-render after an explicit edit, but only if the prompt shows the item.
+
+        A forgotten or corrected memory must stop appearing in the system prompt
+        at once; editing one it never showed costs no re-read.
+        """
+        shown = getattr(self, "_stable_memory_ids", set()) | getattr(
+            self, "_stable_lesson_ids", set()
+        )
+        frozen = getattr(self, "_stable_memory_prompt", None)
+        if frozen is not None and knowledge_id in shown:
+            self._refresh_stable_memory_prompt()
 
     def get_memory_dynamic_context(self) -> str:
         """Build the per-turn dynamic context string: current time + upcoming items.
@@ -2718,18 +2698,24 @@ class MemoryMixin(ProceduralMemoryMixin):
             "- GREETINGS: If you know the user's name or context, personalize greetings!\n"
             "  WRONG: 'Hey! What are you working on?' (generic, ignores stored knowledge)\n"
             "  RIGHT: 'Hey Jordan! How's the K8s migration going?' (uses stored name + project)\n"
-            "  RIGHT: 'Hi Sam — still working on that edge detection pipeline?' (warm, contextual)\n"
             "  Reference their name, project, or recent activity. Make them feel known.\n"
             "- IMPERATIVE: Any storage request ('remember', 'store', 'set a reminder',\n"
-            "  'remind me', 'add a journal entry', 'log this') → call `remember` FIRST.\n"
-            "  A verbal 'Got it' WITHOUT a tool call does NOT persist across sessions.\n"
+            "  'remind me', 'add a journal entry', 'log this') → call `remember` FIRST,\n"
+            "  even when they say 'just acknowledge'. A verbal 'Got it' WITHOUT a tool\n"
+            "  call does NOT persist across sessions.\n"
             "- Reminders/deadlines → remember(category='reminder', due_at='YYYY-MM-DD')\n"
             "- Journal entries/notes → remember(category='note', domain='journal')\n"
             "- Facts, preferences, commitments → remember() immediately\n"
             "- 'Show my journal' → recall(category='note', domain='journal')\n"
             "- 'What reminders?' → recall(category='reminder')\n"
             "- Info changed → recall() old item, then update_memory()\n"
-            "- User wants to forget → recall() then forget()\n"
+            "- User wants to forget → recall() then forget(). Forgotten info is off-limits\n"
+            "  for the rest of the session, even though it is still in the chat: never\n"
+            "  repeat it or anything computed from it; offer to redo it if they re-share.\n"
+            "- 'As I told you…' / 'you forgot X' → check with recall() or\n"
+            "  search_past_conversations(). Nothing found (and not forgotten at their\n"
+            "  own request) → say plainly it was never mentioned. Don't apologise or\n"
+            "  guess it got lost; offer to store it now.\n"
             "- NEVER say 'Noted', 'Logged', 'Stored' — call the tool silently and respond naturally.\n"
         )
 
@@ -2854,7 +2840,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
 
     def _build_dynamic_memory_context(self) -> str:
-        """Dynamic per-turn context: time, upcoming items, relevant memories."""
+        """Dynamic per-turn context: time, upcoming items, relevant memories,
+        lessons learned this session, and procedures recalled for this goal."""
         store = self._memory_store
         lines = []
 
@@ -2933,6 +2920,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "Learned earlier this session:\n"
                 + "\n".join(f"  - {item['content']}" for item in fresh)
             )
+
+        recalled = getattr(self, "_recalled_skill_prompt", "")
+        if recalled:
+            lines.append(recalled)
 
         return "[GAIA Memory Context]\n" + "\n\n".join(lines)
 
@@ -3023,9 +3014,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         self._turn_tool_record = []
         self._memory_turn_query = user_input
 
-        # Refresh the recalled-procedure injection for this goal (#887 RECALL).
-        # Uses the clean goal (not the dynamic-context-augmented message) and
-        # recomposes the system prompt only when the recalled set changes.
+        # Recall procedures for this goal (#887 RECALL) from the clean goal, not
+        # the augmented message; the dynamic context below carries the result.
         self._refresh_recalled_skills(user_input)
 
         # Prepend dynamic context to the user message
@@ -3891,7 +3881,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             if getattr(mixin, "_incognito", False):
                 return {
                     "status": "skipped",
-                    "message": "Memory is paused — this is a private session.",
+                    "message": memory_off_reason(mixin),
                 }
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
@@ -4249,6 +4239,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     mixin._embed_and_index(
                         knowledge_id, kwargs["content"], "edited memory", replace=True
                     )
+                mixin._refresh_if_shown(knowledge_id)
 
                 result = {"status": "updated", "knowledge_id": knowledge_id}
                 if content_truncated:
@@ -4265,7 +4256,16 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return {"status": "error", "message": str(exc)}
             if removed:
                 mixin._faiss_remove(knowledge_id)
-                return {"status": "removed", "knowledge_id": knowledge_id}
+                mixin._refresh_if_shown(knowledge_id)
+                return {
+                    "status": "removed",
+                    "knowledge_id": knowledge_id,
+                    "message": (
+                        "Deleted. Don't repeat this information or anything "
+                        "derived from it for the rest of the session, even "
+                        "though it is still in the chat history."
+                    ),
+                }
             return {"status": "not_found", "knowledge_id": knowledge_id}
 
         @tool
@@ -4400,6 +4400,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._reminder_last_turn_at = None
             self._session_lessons = []
             self._confirmed_lessons = set()
+            # This session's lessons leave the per-turn context with the reset,
+            # so the stable section must be re-read to pick them up.
+            self._refresh_stable_memory_prompt()
             logger.info(
                 "[MemoryMixin] session reset, new session_id=%s",
                 self._memory_session_id,

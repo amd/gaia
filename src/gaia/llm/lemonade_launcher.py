@@ -28,6 +28,7 @@ stdlib-only by design — import direction is installer -> llm, no cycles.
 import logging
 import os
 import platform
+import posixpath
 import re
 import shlex
 import shutil
@@ -77,7 +78,7 @@ class StartSpec:
 
     ``env`` contains ONLY the additional variables the server needs; the
     caller must merge it into the parent environment at the Popen call
-    site — ``env={**os.environ, **spec.env}`` — never replace it (a bare
+    site — ``env=child_env(spec.env)`` — never replace it (a bare
     ``env=spec.env`` drops PATH/LOCALAPPDATA and breaks LemonadeServer.exe).
     """
 
@@ -171,16 +172,17 @@ def resolve_lemonade() -> LemonadeTooling:
         # Probe the daemon (what we start), not the client — the client is
         # only needed for the version query and may be absent.
         for bin_dir in _MACOS_BIN_DIRS:
-            daemon = Path(bin_dir) / _MACOS_DAEMON_NAME
-            if not daemon.exists():
+            # posixpath: the answer is a macOS path whatever host computes it.
+            daemon = posixpath.join(bin_dir, _MACOS_DAEMON_NAME)
+            if not Path(daemon).exists():
                 continue
-            client = Path(bin_dir) / _MACOS_CLIENT_NAME
+            client = posixpath.join(bin_dir, _MACOS_CLIENT_NAME)
             log.debug("Found modern Lemonade at canonical path: %s", daemon)
             return LemonadeTooling(
                 found=True,
                 kind="modern",
-                client_path=str(client) if client.exists() else None,
-                server_launcher=str(daemon),
+                client_path=client if Path(client).exists() else None,
+                server_launcher=daemon,
             )
         # Installed under a non-standard prefix but still on PATH.
         daemon_on_path = shutil.which(_MACOS_DAEMON_NAME)
@@ -333,6 +335,30 @@ def render_command(spec: StartSpec) -> str:
     return _render_command(spec.argv, spec.env)
 
 
+def gaia_runs_lemonade(base_url: Optional[str] = None) -> bool:
+    """Whether the server to start for *base_url* is GAIA's own, not a system install.
+
+    The one decision every start path makes before launching anything: True
+    when ``gaia init`` installed GAIA's embedded server, ``LEMONADE_BASE_URL``
+    names no other, and *base_url* is unset or is the address GAIA resolves on
+    its own. That server is started through the daemon, never by
+    :func:`resolve_lemonade` / :func:`build_start_command`, and binds a port
+    chosen at start time -- so a caller holding the stopped-state default URL
+    must re-resolve after starting it.
+    """
+    from gaia.llm.lemonade_client import (
+        configured_lemonade_url,
+        resolve_lemonade_base_url,
+    )
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    if configured_lemonade_url() or not EmbeddedLemonade().is_installed():
+        return False
+    if base_url is None:
+        return True
+    return resolve_lemonade_base_url(base_url) == resolve_lemonade_base_url()
+
+
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     """Describe how to start Lemonade Server on THIS machine.
 
@@ -344,12 +370,7 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     ``lemonade-server serve`` CLI is only ever named when a legacy install
     was actually resolved.
     """
-    from gaia.llm.lemonade_client import configured_lemonade_url
-    from gaia.llm.lemonade_embedded import EmbeddedLemonade
-
-    # `gaia init` installs GAIA's own server, and GAIA uses it unless
-    # LEMONADE_BASE_URL names another -- mirror LemonadeManager's guard.
-    if not configured_lemonade_url() and EmbeddedLemonade().is_installed():
+    if gaia_runs_lemonade():
         return StartHint(
             instruction=(
                 "GAIA starts its Lemonade Server when it needs it. To start it "

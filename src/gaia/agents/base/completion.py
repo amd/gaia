@@ -161,6 +161,16 @@ _NOT_REQUEST = re.compile(
 )
 # Quoting allows spaces; bare paths are scanned as tokens, never suffix matches.
 _TARGET = re.compile(r"`([^`\n]+)`|\"([^\"\n]+)\"|'([^'\n]+)'|([^\s`\"'<>]+)")
+# Write-tool errors from the path allowlist or the overwrite prompt (security.py).
+_PERMISSION_REFUSALS = ("Access denied:", "User declined to overwrite")
+_REFUSED = ", so nothing was saved there."
+# The answer owns up that the write did not happen.
+_ADMITS_UNSAVED = re.compile(
+    r"\b(?:can(?:no|')t|could(?:n't| not)|unable|did(?:n't| not)|was(?:n't| not)|"
+    r"not (?:saved|written|created|permitted|allowed)|nothing was|denied|declined|"
+    r"refused|permission)\b",
+    re.I,
+)
 _DESTINATION = re.compile(r"\b(?:to|into|in|at|as)\s+", re.I)
 # Words allowed between a destination preposition and its path.
 _LEAD = re.compile(
@@ -359,8 +369,11 @@ def _normalize_key(path: str, base: str) -> str:
         # A drive-lettered path off Windows: no filesystem here can resolve it.
         return ntpath.normcase(ntpath.normpath(ntpath.join(base, path)))
     # Write tools report resolved paths; junctions and macOS /tmp are symlinks.
+    # Prose names folders as `%TEMP%` or `$HOME`; tools report them expanded.
     return os.path.normcase(
-        os.path.realpath(os.path.join(base, os.path.expanduser(path)))
+        os.path.realpath(
+            os.path.join(base, os.path.expandvars(os.path.expanduser(path)))
+        )
     )
 
 
@@ -378,6 +391,8 @@ class CompletionEvidence:
         self.sequence = 0
         self.removed: set[str] = set()
         self.uninspectable: dict[str, str] = {}
+        # Writes the permission boundary turned down: key -> what to tell the user.
+        self.refused: dict[str, str] = {}
         self.requested, self.save_requested = save_obligations(query)
         self.instructed = save_instructed(query)
         self.disk_tool_ran = False
@@ -464,6 +479,7 @@ class CompletionEvidence:
     ) -> None:
         self.sequence += 1
         if not executed:
+            self._record_refusal(tool, args, result)
             return
         if tool in WRITE_TOOLS or tool in SIDE_EFFECT_PATHS or tool in _EXEC_TOOLS:
             self.disk_tool_ran = True
@@ -523,6 +539,23 @@ class CompletionEvidence:
                 self.sequence if successful else 0,
                 tool in WRITE_TOOLS or tool in _EXEC_TOOLS,
             )
+
+    def _record_refusal(self, tool: str, args: dict, result: Any) -> None:
+        """Remember a write the user or the path allowlist turned down."""
+        if tool not in WRITE_TOOLS:
+            return
+        path = args.get("file_path") or args.get("path")
+        if not isinstance(path, str) or "\x00" in path:
+            return
+        data = _payload(result)
+        error = data.get("error")
+        if data.get("status") == "denied":
+            reason = f"The write to `{path}` was declined{_REFUSED}"
+        elif isinstance(error, str) and error.startswith(_PERMISSION_REFUSALS):
+            reason = f"Writing `{path}` was not permitted{_REFUSED}"
+        else:
+            return  # A preflight like "read it first" is a step, not a refusal.
+        self.refused[self.key(path, args.get("project_dir"))] = reason
 
     def read_by_framework(self, key: str) -> None:
         """The framework read this output in full after its latest write."""
@@ -609,7 +642,15 @@ class CompletionEvidence:
             for path in self.requested
             if path and ntpath.basename(path) == path
         }
+        # A bare name keyed against the cwd is not a path the user gave.
+        shown = {
+            self.key(path): path
+            for path in self.requested
+            if path and ntpath.basename(path) == path
+        }
+        claimed: set[str] = set()
         claim_without_path = False
+        admitted = bool(_ADMITS_UNSAVED.search(answer))
         checkable = self.instructed or self.disk_tool_ran
         for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", answer)):
             if _EARLIER.search(sentence):
@@ -630,7 +671,9 @@ class CompletionEvidence:
                         )
                 continue
             required.update(self.key(path) for path in paths)
+            claimed.update(self.key(path) for path in paths)
             bare.update(self.key(p) for p in paths if ntpath.basename(p) == p)
+            shown.update((self.key(p), p) for p in paths if ntpath.basename(p) == p)
             claim_without_path |= not paths
         gaps = self.cleanup_gaps(answer)
 
@@ -652,6 +695,20 @@ class CompletionEvidence:
             for key, item in self.files.items()
             if item.written and not (self.scratch and inside(key, self.scratch))
         }
+
+        def refusal(path: str) -> str | None:
+            """Why the user's side turned down the write this obligation names."""
+            for key, reason in self.refused.items():
+                if (
+                    key == path
+                    or inside(key, path)
+                    or (
+                        path in bare and os.path.basename(key) == os.path.basename(path)
+                    )
+                ):
+                    return reason
+            return None
+
         for path in sorted(required):
             if path in bare and os.path.basename(path) in written_names:
                 continue
@@ -661,15 +718,32 @@ class CompletionEvidence:
             if not written_inside and (
                 path not in self.files or not self.files[path].written
             ):
+                refused = refusal(path)
+                if (
+                    refused
+                    and admitted
+                    and not claim_without_path
+                    and (path not in claimed)
+                ):
+                    # "No" is a finished answer once the reply says so.
+                    continue
                 reason = self.uninspectable.get(path)
-                gaps.append(
-                    f"Could not inspect `{path}`: {reason}"
-                    if reason
-                    else f"No successful write to `{path}` is recorded for this turn."
-                )
+                name = shown.get(path, path)
+                if refused:
+                    if refused not in gaps:
+                        gaps.append(refused)
+                elif reason:
+                    gaps.append(f"Could not inspect `{name}`: {reason}")
+                else:
+                    gaps.append(
+                        f"No successful write to `{name}` is recorded for this turn."
+                    )
         if (
             not required
-            and (self.save_requested or claim_without_path)
+            and (
+                claim_without_path
+                or (self.save_requested and not (self.refused and admitted))
+            )
             and not any(
                 item.direct
                 and item.written
@@ -775,10 +849,12 @@ class CompletionEvidence:
 
 def incomplete_answer(gaps: list[str]) -> str:
     """Framework-owned result; never repeat the unsupported candidate answer."""
+    if gaps and all(gap.endswith(_REFUSED) for gap in gaps):
+        # Nothing is left to finish: the user's side turned the write down.
+        return "\n".join(gaps)
     return (
-        "I couldn't verify completion.\n\n"
-        + "\n".join(f"- {gap}" for gap in gaps)
-        + (
-            "\n\nThe task is incomplete. Complete the missing work and read back the output before relying on it."
-        )
+        "I can't confirm this is done:\n\n"
+        + "\n".join(f"- {gap[:1].upper()}{gap[1:]}" for gap in gaps)
+        + "\n\nTreat it as unfinished — ask me to pick it up and I'll finish "
+        "the missing parts."
     )

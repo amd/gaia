@@ -43,6 +43,8 @@ var backgrounds = []background{
 	{"macOS Terminal · Pro", "#000000", true},
 	{"GNOME Terminal · Ubuntu", "#300A24", true},
 	{"Windows Terminal · Campbell", "#0C0C0C", true},
+	// The scheme the Windows setup ships in its GAIA profile (installer/tui/nsis/wt-fragment.json).
+	{"Windows Terminal · GAIA profile", "#17161B", true},
 	{"One Half Dark", "#282C34", true},
 	{"Solarized Dark", "#002B36", true},
 	{"Nord", "#2E3440", true},

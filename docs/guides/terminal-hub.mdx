@@ -46,19 +46,22 @@ gaia-tui
 
 ## Installing
 
-Every release publishes a native installer per platform, at
-[amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform) and on the
-[GitHub release](https://github.com/amd/gaia/releases/latest). Each puts two binaries
-on disk and on your PATH — `gaia-tui` (this hub) and `gaia-agent` (the flagship agent
+Every release publishes a native installer per platform at
+[amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform). Each puts
+two binaries on disk and on your PATH — `gaia-tui` (this hub) and `gaia-agent` (the flagship agent
 the hub runs) — so there is nothing to unzip and nothing to `chmod`.
 
 | Platform | File | How to install | Installs to |
 | --- | --- | --- | --- |
-| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click | `%LOCALAPPDATA%\Programs\GAIA Terminal Hub` |
+| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click, tick **Terminal** | `%LOCALAPPDATA%\Programs\GAIA Terminal Hub` |
 | macOS Apple silicon | `gaia-<version>-darwin-arm64.pkg` | double-click | `/usr/local/bin` |
 | macOS Intel | `gaia-<version>-darwin-x64.pkg` | double-click | `/usr/local/bin` |
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
 | Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo rpm -i gaia-<version>.x86_64.rpm` | `/usr/bin` |
+
+On Windows this is the one GAIA installer: on **Choose Components**, tick
+**Terminal** — and the desktop app too, if you want both. [Install GAIA](/guides/install)
+covers the choice and silent installs (`/S /COMPONENTS=tui`).
 
 The Windows setup is per-user: it needs no administrator rights and shows no UAC
 prompt. It also bundles Lemonade Server, so the install itself needs no network
@@ -68,6 +71,26 @@ already-open one keeps the PATH it started with. Quit GAIA before upgrading —
 Windows cannot replace a running program, and the setup will tell you so rather
 than install over it half-way.
 
+The Windows setup also gives GAIA its own look in Windows Terminal. It adds a
+**GAIA** profile (IBM Plex Mono, roomy spacing, a dark GAIA colour scheme) and installs
+IBM Plex Mono for your account only. When Windows Terminal is installed, the shortcuts
+open that profile. Without it, they run `gaia-tui` in the default console, and the
+install log says so. Specifically, the setup writes:
+
+| What | Where |
+| --- | --- |
+| The GAIA profile and colour scheme | `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\GAIA\gaia.json` |
+| IBM Plex Mono Regular, Bold, Italic, Bold Italic | `%LOCALAPPDATA%\Microsoft\Windows\Fonts`, registered under `HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts` |
+| The font's licence (SIL OFL 1.1) | `IBM-Plex-Mono-OFL.txt` in the install folder |
+
+Your Windows Terminal `settings.json` and default profile are never changed. To
+restyle the profile, use Windows Terminal's settings. A reinstall rewrites the fragment
+but keeps your overrides, because those live in `settings.json`. If IBM Plex Mono was
+already installed, the setup leaves your copy alone. Uninstalling removes the
+fragment and only the font files the setup itself added. If Windows Terminal has a
+font open during uninstall, that face stays installed and the uninstall log says so.
+To remove it, close Windows Terminal, then go to **Settings → Personalization → Fonts**.
+
 <Note>
   There is no installer for Windows on Arm or Linux on Arm. The flagship agent
   publishes no build for either, so an installer there would set up the hub with no
@@ -76,7 +99,8 @@ than install over it half-way.
 </Note>
 
 Uninstalling leaves `~/.gaia` — your chats, documents and memory — in place unless
-you say otherwise. On Windows, Add/Remove Programs offers to delete it; on Linux,
+you say otherwise. On Windows, the terminal is its own **GAIA Terminal Hub** entry
+in Installed apps, separate from the desktop app's, and its uninstaller offers to delete it; on Linux,
 `apt remove` and `rpm -e` keep it. Lemonade Server is never removed with GAIA,
 because other things may be using it — see `gaia uninstall --purge-lemonade`.
 

@@ -1,11 +1,13 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Verification-scope statement appended to every emitted answer (#3376).
+"""Plain-English note on an answer whose work is not confirmed (#3376, #4484).
 
 The agent loop used to report "done" in the same confident language whether it
-ran the test suite or ran nothing at all. Every emitted answer now carries one
-line saying which — derived from the turn's own tool-execution log, so it costs
-no extra model call.
+ran the test suite or ran nothing at all. An answer now ends with one line when
+a check failed, never ran, or a change went untested — derived from the turn's
+own tool-execution log, so it costs no extra model call. When everything
+checked out, or nothing needed checking, the answer carries nothing; tooling
+reads :func:`verification_summary` instead.
 
 The line rides in the answer, which the surfaces persist and re-send as
 conversation history, so it is HARD-CAPPED at ``VERIFICATION_SCOPE_MAX_CHARS``.
@@ -30,7 +32,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from gaia.agents.base.checks import (
     CheckResult,
@@ -42,6 +44,9 @@ from gaia.agents.base.checks import (
 from gaia.agents.base.checks import summary_reports_failure as summary_counts_failure
 from gaia.agents.base.claims import passing_test_claim
 
+#: How the note opens. Fixed, so a model's echo of it can be found and removed.
+VERIFICATION_NOTE_OPENER = "I haven't confirmed this works"
+#: The label older answers carried; still stripped from saved history.
 VERIFICATION_SCOPE_PREFIX = "Verification: "
 VERIFICATION_SCOPE_MAX_CHARS = 200
 
@@ -75,9 +80,8 @@ _DENIED_STATUS = "denied"
 #: model's ``> **Verification:** …`` or ``## Verification: …`` is recognised as
 #: the same line.
 #:
-#: The TUI's no-op-only strip (tui/internal/ui/chat/verification.go,
-#: verificationScopeRE) is a hand-kept copy of this pattern, narrowed to the
-#: "unverified" case only — update both if this changes.
+#: The TUI's strip (tui/internal/ui/chat/verification.go, verificationScopeRE)
+#: handles only the legacy "Verification: unverified" line from saved sessions.
 _SCOPE_MARKUP_RE = re.compile(
     r"^[ \t]*(?:>[ \t]*)*(?:\#{1,6}[ \t]+)?(?:(?:[-*+]|\d{1,3}[.)])[ \t]+)?[*_~`]*[ \t]*"
 )
@@ -86,13 +90,28 @@ _SCOPE_MARKUP_RE = re.compile(
 #: indented or not. Lines between a matching pair are never touched.
 _FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 
-#: A line is a scope statement only when it carries the WHOLE generated shape:
-#: the prefix, then one of the three states, then the em dash that introduces
-#: the body. Matching the bare prefix deleted a user's own "Verification: run
-#: pytest before tagging" out of a checklist the model wrote.
+#: A line is a scope statement only when it carries the WHOLE generated shape.
+#: The legacy form needs the prefix, a state and a dash: matching the bare prefix
+#: deleted a user's own "Verification: run pytest before tagging" out of a
+#: checklist the model wrote. The current form needs the em dash and one of the
+#: generated reasons, so the model's own "I haven't confirmed this works - it
+#: needs your GPU" caveat survives.
 _SCOPE_BODY_RE = re.compile(
     re.escape(VERIFICATION_SCOPE_PREFIX.strip())
-    + r"\s*[*_~`]*\s*(?:un|partially )?verified\s*[—–-]"
+    + r"\s*[*_~`]*\s*(?:un|partially )?verified\s*[*_~`]*\s*[—–-]"
+    + r"|I\s+haven['’]t\s+confirmed\s+this\s+works\s*—.*(?:"
+    + r"didn['’]t\s+pass|didn['’]t\.|blocked\s+before"
+    + r"|didn['’]t\s+run\s+(?:the\s+tests|anything)"
+    # The grounding reasons (gaia.agents.base.grounding).
+    + r"|\bthis\s+turn\b"
+    # A note cut at VERIFICATION_SCOPE_MAX_CHARS loses its ending.
+    + r"|…[\s*_~`]*$)"
+)
+
+#: Cheap pre-check before the line-by-line scan.
+_SCOPE_HINT_RE = re.compile(
+    re.escape(VERIFICATION_SCOPE_PREFIX.strip())
+    + r"|haven['’]t\s+confirmed\s+this\s+works"
 )
 
 
@@ -228,19 +247,26 @@ def _mixed(passed: List[Dict[str, Any]], failed: List[Dict[str, Any]]) -> str:
         if label in split:
             bad = sum(1 for e in failed if e["check_label"] == label)
             total = bad + sum(1 for e in passed if e["check_label"] == label)
-            parts.append(f"{bad} of {total} {label} runs did not pass")
+            parts.append(f"{bad} of {total} {label} runs didn't pass")
     only_failed = [e for e in failed if e["check_label"] not in split]
     if only_failed:
-        parts.append(f"{_names(only_failed)} did not")
+        parts.append(f"{_names(only_failed)} didn't")
     return ", ".join(parts)
 
 
-def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
-    """One bounded line naming what ran, what passed, and what went unchecked.
+def verification_summary(
+    executions: List[Dict[str, Any]],
+    unchecked_change: Optional[str] = None,
+    ungrounded: Sequence[str] = (),
+) -> Dict[str, Any]:
+    """What this turn's checks showed, as data for tooling.
 
-    Three distinguishable states: ``verified`` (checks ran and every one
-    passed), ``partially verified`` (checks ran, not all passed), and
-    ``unverified`` (no check ran at all).
+    ``state`` is ``verified`` (checks ran, every one passed, nothing changed
+    after them), ``partially verified`` (checks ran, not all passed or some
+    never ran) or ``unverified`` (no check ran). ``passed``, ``failed`` and
+    ``not_run`` name the checks; ``unchecked_change`` is the last project change
+    no check ran after, when the caller knows it; ``ungrounded`` lists the
+    answer's claims the tool record does not back.
 
     A check that ran more than once counts once, by its most recent run: a
     test that failed and then passed after a fix is verified, and one that
@@ -249,8 +275,8 @@ def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
     wider run that failed.
 
     A check the agent *requested* and never got to run — refused by the shell
-    allowlist, declined by the user — is none of those three. It is named as
-    not having run, and never counted as one that did (#3677).
+    allowlist, declined by the user — is named as not having run, and never
+    counted as one that did (#3677).
 
     Each execution is ``{"tool": str, "check_label": str | None,
     "check_target": str | None, "failed": bool, "ran": bool}`` — see
@@ -258,13 +284,31 @@ def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
     written before the field existed; a record without ``check_target`` groups
     by its label alone.
     """
+    ran, passed, failed, blocked = _partition(executions)
+    if not passed and not failed:
+        state = "unverified"
+    elif failed or blocked or unchecked_change or ungrounded:
+        state = "partially verified"
+    else:
+        state = "verified"
+    return {
+        "state": state,
+        "tool_calls": len(ran),
+        "passed": _labels(passed),
+        "failed": _labels(failed),
+        "not_run": _labels(blocked),
+        "unchecked_change": unchecked_change,
+        "ungrounded": list(ungrounded),
+    }
+
+
+def _partition(executions: List[Dict[str, Any]]) -> Tuple[List, List, List, List]:
+    """``(ran, passed, failed, blocked)``; each check judged by its latest run."""
     executions = list(executions or [])
     ran = [e for e in executions if e.get("ran", True)]
     checks = [e for e in ran if e.get("check_label")]
     # A refusal the agent recovered from is not an unrun check. Retrying a
-    # refused command in an allowed form is the ordinary path, and listing the
-    # first attempt alongside the one that succeeded read as
-    # "pytest ran and passed. pytest did not run."
+    # refused command in an allowed form is the ordinary path.
     reached = {e.get("check_label") for e in checks}
     blocked = [
         e
@@ -273,39 +317,58 @@ def build_verification_scope(executions: List[Dict[str, Any]]) -> str:
         and not e.get("ran", True)
         and e["check_label"] not in reached
     ]
-    if not checks:
-        if blocked:
-            body = (
-                f"unverified — {_names(blocked)} did not run (refused before "
-                "execution), so nothing was checked."
-            )
-        elif not ran:
-            body = "unverified — no tools ran, so nothing was checked."
-        else:
-            total = len(ran)
-            plural = "" if total == 1 else "s"
-            body = (
-                f"unverified — {total} tool call{plural} ran, none of them a "
-                "test, lint, or build."
-            )
+    latest = {(e["check_label"], e.get("check_target")): e for e in checks}
+    passed = [e for e in latest.values() if not e.get("failed")]
+    failed = [e for e in latest.values() if e.get("failed")]
+    return ran, passed, failed, blocked
+
+
+def _labels(executions: List[Dict[str, Any]]) -> List[str]:
+    return list(dict.fromkeys(e["check_label"] for e in executions))
+
+
+def build_verification_scope(
+    executions: List[Dict[str, Any]],
+    unchecked_change: Optional[str] = None,
+    has_tests: bool = True,
+    ungrounded: Sequence[str] = (),
+) -> str:
+    """A plain-English note when the turn's work is NOT confirmed, else ``""``.
+
+    Silent when every check passed, and when nothing that needed checking
+    happened — a conversational turn, a lookup, a read. It speaks up when a
+    check failed, when a check was refused before it could run, and when
+    *unchecked_change* names a change nothing checked afterwards — no test run
+    when *has_tests*, no check at all otherwise — and for each *ungrounded*
+    reason, a gap between the answer and the tool record that survived its
+    correction (:func:`gaia.agents.base.grounding.unverified_reasons`). Bounded by
+    ``VERIFICATION_SCOPE_MAX_CHARS`` because it rides in the answer.
+    """
+    _ran, passed, failed, blocked = _partition(executions)
+    reasons: List[str] = []
+    if failed and passed:
+        reasons.append(_mixed(passed, failed))
+    elif failed:
+        reasons.append(f"{_names(failed)} didn't pass")
+    elif blocked and passed:
+        reasons.append(f"{_names(passed)} passed")
+    if blocked:
+        one = len(_labels(blocked)) == 1
+        reasons.append(
+            f"{_names(blocked)} {'was' if one else 'were'} blocked before "
+            f"{'it' if one else 'they'} could run"
+        )
+    if unchecked_change:
+        what = "the tests afterwards" if has_tests else "anything to check it"
+        reasons.append(f"I changed `{unchecked_change}` and didn't run {what}")
+    reasons.extend(ungrounded)
+    if not reasons:
+        return ""
+    if len(reasons) == 1:
+        body = reasons[0]
     else:
-        # A check that ran more than once is judged by its latest run, so a
-        # fix that made it pass and an edit that made it fail stay distinct.
-        latest = {(e["check_label"], e.get("check_target")): e for e in checks}
-        passed = [e for e in latest.values() if not e.get("failed")]
-        failed = [e for e in latest.values() if e.get("failed")]
-        # A check left unrun keeps the claim below "verified", whatever the
-        # ones that did run reported.
-        unrun = f" {_names(blocked)} did not run." if blocked else ""
-        if not failed:
-            state = "partially verified" if blocked else "verified"
-            body = f"{state} — {_names(passed)} ran and passed.{unrun}"
-        elif not passed:
-            tail = unrun or " Nothing else was checked."
-            body = f"partially verified — {_names(failed)} ran and did not pass.{tail}"
-        else:
-            body = f"partially verified — {_mixed(passed, failed)}.{unrun}"
-    statement = VERIFICATION_SCOPE_PREFIX + body
+        body = ", ".join(reasons[:-1]) + ", and " + reasons[-1]
+    statement = f"{VERIFICATION_NOTE_OPENER} — {body}."
     if len(statement) > VERIFICATION_SCOPE_MAX_CHARS:
         statement = statement[: VERIFICATION_SCOPE_MAX_CHARS - 1].rstrip() + "…"
     return statement
@@ -335,7 +398,7 @@ def split_verification_scope(text: str) -> Tuple[str, str]:
     A statement sharing a line with prose is left alone on purpose: the models
     emit it on its own line, and matching mid-line risks eating real prose.
     """
-    if not isinstance(text, str) or VERIFICATION_SCOPE_PREFIX.strip() not in text:
+    if not isinstance(text, str) or not _SCOPE_HINT_RE.search(text):
         return (text if isinstance(text, str) else "", "")
     kept: List[str] = []
     found = ""
@@ -356,8 +419,11 @@ def split_verification_scope(text: str) -> Tuple[str, str]:
             continue
         if not fence and _is_scope_line(line):
             bare = _SCOPE_MARKUP_RE.sub("", line).strip()
-            body = bare[len(VERIFICATION_SCOPE_PREFIX.strip()) :].strip(" *_~`")
-            found = VERIFICATION_SCOPE_PREFIX + body if body else ""
+            if bare.startswith(VERIFICATION_SCOPE_PREFIX.strip()):
+                body = bare[len(VERIFICATION_SCOPE_PREFIX.strip()) :].strip(" *_~`")
+                found = VERIFICATION_SCOPE_PREFIX + body if body else ""
+            else:
+                found = bare.strip(" *_~`")
             # The blank line that set this statement apart goes with it.
             if kept and not kept[-1].strip():
                 kept.pop()
@@ -605,13 +671,26 @@ def is_check_execution(execution: Dict[str, Any]) -> bool:
     )
 
 
+def _is_test_execution(execution: Dict[str, Any]) -> bool:
+    """True when *execution* ran tests, not a lint, typecheck or build."""
+    if not is_check_execution(execution):
+        return False
+    label = execution.get("check_label")
+    if label:
+        return (execution.get("check_kind") or check_kind(label)) == "test"
+    return True  # counted only for a test-runner summary in its output
+
+
 def unverified_change(
-    executions: List[Dict[str, Any]], project_root: Optional[str]
+    executions: List[Dict[str, Any]],
+    project_root: Optional[str],
+    tests_only: bool = False,
 ) -> Optional[str]:
     """Name of the last project change no check ran after, else ``None``.
 
-    ``None`` too when there is no project root: with no project there is no
-    suite to run.
+    With *tests_only*, only a test run after the change covers it — a clean
+    lint says nothing about behaviour. ``None`` too when there is no project
+    root: with no project there is no suite to run.
     """
     if not project_root:
         return None
@@ -622,7 +701,8 @@ def unverified_change(
             last = index
     if last is None:
         return None
-    if any(is_check_execution(e) for e in executions[last + 1 :]):
+    covers = _is_test_execution if tests_only else is_check_execution
+    if any(covers(e) for e in executions[last + 1 :]):
         return None
     changed = executions[last]
     paths = _changed_paths(changed) or []
@@ -709,15 +789,13 @@ _FILE_MUTATION_TOOLS: FrozenSet[str] = frozenset(
 
 
 #: Why the record does not back a pass claim, phrased for the correction.
-NO_TEST_RUN = "no test run is recorded for this turn"
+NO_TEST_RUN = "no tests were run this turn"
 
 
-TEST_RUN_FAILED = "the test run recorded for this turn did not pass"
+TEST_RUN_FAILED = "the tests run this turn didn't pass"
 
 
-TEST_RUN_STALE = (
-    "the test run recorded for this turn finished before the last file change"
-)
+TEST_RUN_STALE = "the tests ran before the last change, so they don't cover it"
 
 
 def is_file_mutation(tool_name: str) -> bool:

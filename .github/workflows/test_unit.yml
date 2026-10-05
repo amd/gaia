@@ -3,8 +3,8 @@
 
 # Fast unit tests that don't require Lemonade server or external dependencies
 # These tests run first to provide quick feedback on core SDK components
-# Platform: Linux is the required gate; macOS and Windows run the same suite
-# as non-blocking (continue-on-error) smoke tests until known-clean there.
+# Platform: Linux, macOS and Windows all run the full unit suite, and a
+# failure on any of them fails the run.
 
 name: Unit Tests
 
@@ -273,6 +273,35 @@ jobs:
           echo "  - DatabaseMixin + Agent: Full agent lifecycle with database"
           echo "  - DatabaseAgent: Auto-registered database tools"
 
+  # setup.py declares python_requires>=3.10, but every other lane runs 3.12, so
+  # 3.11-only syntax or stdlib imports (tomllib, except*, typing.Self) would
+  # ship unnoticed. Importing every module is enough to catch that, in seconds.
+  import-floor-py310:
+    name: Import Every Module (Linux, py3.10)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system pytest pytest-asyncio pytest-timeout
+          uv pip install --system -e ".[api]"
+
+      - name: Import every gaia module on Python 3.10
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: pytest tests/unit/test_import_all_modules.py -v --tb=short
+
   # Integration suites that need no Lemonade, no live account and no AMD
   # hardware. Files are named one by one so util/check_test_lane_coverage.py
   # can see them; a new offline integration file belongs in this list.
@@ -350,14 +379,12 @@ jobs:
             tests/mcp/test_port_map.py \
             -v --tb=short --timeout=600
 
-  # Experimental macOS smoke test — validates core SDK imports and pure-Python
-  # unit tests on Darwin. continue-on-error until the full suite is macOS-clean.
   unit-tests-macos:
-    name: Unit Tests (macOS smoke)
+    name: Unit Tests (macOS, py3.12)
     runs-on: macos-latest
-    timeout-minutes: 30
+    # The full unit suite takes ~33 min here; 30 cut it off at 92%.
+    timeout-minutes: 60
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 
@@ -371,13 +398,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # faiss-cpu + pypdf + playwright are required by tests/unit/ (see the main
-          # unit-tests job's install step for why) — this job runs the same suite
-          # with -x, so a missing dep here doesn't just fail loudly, it truncates
-          # the whole macOS smoke run at that test.
+          # The Linux unit-tests job's set — see its install step for why each
+          # one is needed. A missing one skips files that Linux runs.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
-                                  faiss-cpu pypdf playwright
+                                  faiss-cpu pypdf playwright python-docx python-pptx reportlab slack-sdk
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
@@ -388,26 +413,18 @@ jobs:
           pytest tests/unit/test_packaging.py -v --tb=short
           echo "Packaging integrity checks passed"
 
-      - name: Run unit tests (macOS smoke)
+      - name: Run unit tests (macOS)
         env:
           GAIA_MEMORY_DISABLED: "1"
-        run: |
-          echo "=== macOS Smoke Test ==="
-          echo "Running unit tests on macOS to catch platform-specific issues"
-          echo ""
-          pytest tests/unit/ -x --timeout=60 -v --tb=short
+        run: pytest tests/unit/ --timeout=60 -v --tb=short
 
-  # Windows smoke test — same rollout pattern as the macOS job above:
-  # continue-on-error until the suite is known-clean on this platform. GAIA is
-  # a Windows/NPU-first product, so this closes a real gap: the only other
-  # Windows CI is 3 hardware-specific files on a self-hosted devlab runner
-  # (test_gaia_cli_windows.yml) and a security-only job (test_security.yml).
+  # GAIA is Windows/NPU-first; this is the only hosted Windows run of the suite.
   unit-tests-windows:
-    name: Unit Tests (Windows smoke)
+    name: Unit Tests (Windows, py3.12)
     runs-on: windows-latest
-    timeout-minutes: 30
+    # The full suite reached 95% at 60 min on windows-latest.
+    timeout-minutes: 90
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 
@@ -425,11 +442,11 @@ jobs:
       - name: Install dependencies
         shell: bash
         run: |
-          # Same set the macOS smoke job installs — see its step for why each
+          # The Linux unit-tests job's set — see its install step for why each
           # one is needed.
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx matplotlib pymupdf cvss responses \
-                                  faiss-cpu pypdf playwright
+                                  faiss-cpu pypdf playwright python-docx python-pptx reportlab slack-sdk
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
@@ -441,12 +458,8 @@ jobs:
           pytest tests/unit/test_packaging.py -v --tb=short
           echo "Packaging integrity checks passed"
 
-      - name: Run unit tests (Windows smoke)
+      - name: Run unit tests (Windows)
         shell: bash
         env:
           GAIA_MEMORY_DISABLED: "1"
-        run: |
-          echo "=== Windows Smoke Test ==="
-          echo "Running unit tests on Windows to catch platform-specific issues"
-          echo ""
-          pytest tests/unit/ -x --timeout=60 -v --tb=short
+        run: pytest tests/unit/ --timeout=60 -v --tb=short

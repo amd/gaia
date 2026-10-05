@@ -309,7 +309,7 @@ contextmanager-decorators = contextlib.contextmanager
 # *running* interpreter, so they raise E1101 when pylint runs on Windows even
 # though every call site is guarded at runtime. CI lints on Linux and never
 # sees it; this keeps `python util/lint.py` green for Windows contributors.
-generated-members = numpy\..*, torch\..*, transformers.*, os\.killpg, os\.getpgid, os\.geteuid
+generated-members = numpy\..*, torch\..*, os\.killpg, os\.getpgid, os\.geteuid
 
 # Tells whether missing members accessed in mixin class should be ignored. A
 # mixin class is detected if its name ends with "mixin" (case insensitive).

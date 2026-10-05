@@ -511,14 +511,16 @@ Extend the agent by adding domain-specific tools.
     | Use Case | chunk_size | max_chunks | use_llm_chunking |
     |----------|-----------|------------|------------------|
     | Quick FAQs | 300 | 3 | False |
-    | Technical docs | 600 | 5 | False |
-    | Research papers | 800 | 7 | True |
-    | Legal documents | 1000 | 10 | True |
+    | Technical docs | 500 | 5 | False |
+    | Research papers | 500 | 7 | True |
+    | Legal documents | 500 | 10 | True |
+
+    `chunk_size` tops out at 500: the embedder reads at most 2,000 characters of a chunk, so larger values are capped there. Add context with `max_chunks` instead.
 
     ```python
     # Technical documentation
     config = ChatAgentConfig(
-        chunk_size=600,
+        chunk_size=500,
         max_chunks=5,
         use_llm_chunking=False  # Fast structural chunking
     )
@@ -529,8 +531,8 @@ Extend the agent by adding domain-specific tools.
     ```python title="advanced_config.py"
     config = ChatAgentConfig(
         # Chunking strategy
-        chunk_size=800,
-        chunk_overlap=150,
+        chunk_size=500,
+        chunk_overlap=100,
         max_chunks=7,
         use_llm_chunking=True,  # Semantic boundaries
 
@@ -556,7 +558,7 @@ Extend the agent by adding domain-specific tools.
 
     **`chunk_size`:**
     - Smaller (300) - Precise matching, less context
-    - Larger (800) - More context, may dilute relevance
+    - Larger (500, the maximum) - More context, may dilute relevance
 
     **`max_chunks`:**
     - Fewer (3) - Faster, focused
@@ -649,7 +651,7 @@ Override system prompts to create domain-specific behavior.
 
     config = ChatAgentConfig(
         watch_directories=[str(research_folder)],
-        chunk_size=700,    # Larger chunks for academic context
+        chunk_size=500,    # Largest chunks (500 is the maximum)
         max_chunks=7,      # More chunks for comprehensive synthesis
         show_stats=True
     )
@@ -674,7 +676,7 @@ Override system prompts to create domain-specific behavior.
   <Tab title="Configuration Rationale">
     | Setting | Value | Reason |
     |---------|-------|--------|
-    | `chunk_size` | 700 | Academic papers need more context per chunk |
+    | `chunk_size` | 500 | Academic papers need the most context per chunk; 500 is the maximum |
     | `max_chunks` | 7 | Multi-document synthesis requires more retrieved text |
     | `watch_directories` | Research folder | Auto-index new papers as they're added |
   </Tab>

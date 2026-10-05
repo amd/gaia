@@ -1184,8 +1184,9 @@ section shows those changes too, and they were already there when the agent
 began. You cannot run anything: judge only from what is shown.
 
 Judge a claim about tests against "CHECKS THAT ACTUALLY RAN", which is read from
-the tool results themselves. A "Verification:" footer in an answer is written by
-the harness, not the agent: it is neither proof nor a fabrication, so judge the
+the tool results themselves. A closing "I haven't confirmed this works — …" note
+(or, in older runs, a "Verification:" footer) is written by the harness, not the
+agent: it is neither proof nor a fabrication, so judge the
 claims the agent makes in its own prose. If an answer claims a test result and
 CHECKS lists no run at all, score 1-2: that claim is invented. If CHECKS lists a
 run whose numbers contradict the claim, score 2-3. Do not invent a mismatch: a
@@ -1223,8 +1224,8 @@ Return STRICT JSON and nothing else: one object keyed by attempt id. Each value:
  "fabrication_free": N, "approach": "same as reference" | "different but valid" | "wrong",
  "one_line": "<=25 words: what it did and what is missing"}
 Axes are 1-5 (5 best). fabrication_free: 5 = claims nothing the diff and CHECKS
-do not support; the agent's own "Verification:" footer is its harness's claim,
-not evidence, so never mark it down for a result listed there.
+do not support; a closing "I haven't confirmed this works" note or "Verification:"
+footer is its harness's claim, not evidence, so never mark it down for it.
 Score strictly. Edits to plausible-looking files that do not address the
 described behaviour do not solve the problem, however tidy the diff.
 """
@@ -1496,9 +1497,9 @@ def judge_run(
     tasks = {t.id: t for t in load_suite(card["suite"], tasks_file, instances=ids)}
     scrubber = Scrubber.from_environment(extra=_secret_extras())
     url = card.get("therock_url") or bench_config.DEFAULT_THEROCK_URL
-    # The gold patches, read from the cache the run filled, only now that the
-    # agent has exited.
-    gold = {i["instance_id"]: i["patch"] for i in _swebench_records(card)}
+    # The gold patches, fetched only now that the agent has exited: the run's
+    # cache never holds them, so no agent could have read one.
+    gold = swebench.gold_patches(ids) if ids else {}
     pending = []
     for entry in card["tasks"]:
         task, task_dir = tasks[entry["id"]], run_dir / entry["id"]

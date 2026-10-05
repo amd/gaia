@@ -286,6 +286,39 @@ class TestGoTuiContract:
         assert exc.value.code == 2
         assert "only apply with --check" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(
+        "error",
+        [
+            "gaia.config:GaiaConfigError",
+            "gaia.llm.model_fit:ModelFitError",
+            "gaia.llm.lemonade_client:LemonadeClientError",
+        ],
+    )
+    def test_an_unanswerable_check_is_not_reported_as_needs_setup(
+        self, error, monkeypatch, capsys
+    ):
+        """A corrupt config or a default_model that cannot fit is not something
+        setup fixes, so --check must not answer 1 (which offers setup) and must
+        not print a traceback."""
+        import importlib
+
+        module, name = error.split(":")
+        exc_type = getattr(importlib.import_module(module), name)
+
+        def boom(**kwargs):
+            raise exc_type("explained problem")
+
+        monkeypatch.setattr("gaia.installer.init_command.check_setup_status", boom)
+        monkeypatch.setattr(
+            sys, "argv", ["gaia", "init", "--check", "--profile", DEFAULT_INIT_PROFILE]
+        )
+        from gaia.cli import main
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 2
+        assert "explained problem" in capsys.readouterr().err
+
     def test_the_tuis_exact_argv_is_accepted_by_the_real_cli(self):
         """End-to-end on the argv gaiainit.CheckArgs builds. An unrecognised
         flag exits 2, which the TUI reports as "could not determine" — this
@@ -390,14 +423,21 @@ class TestFlagshipCompletionMessage:
     """A headline about the flagship must not be answered with a different
     package's install line."""
 
-    def _completion(self, available):
+    def _completion(self, available, tui_path="/usr/local/bin/gaia-tui"):
         from gaia.installer.init_command import InitCommand
 
         cmd = InitCommand(profile=FLAGSHIP_AGENT_ID, yes=True)
         cmd._is_hub_agent_available = lambda _id: available
         printed = []
         cmd._print = lambda msg, end="\n": printed.append(msg)
-        with patch("gaia.installer.init_command.RICH_AVAILABLE", False):
+        which = {"gaia-tui": tui_path}
+        with (
+            patch("gaia.installer.init_command.RICH_AVAILABLE", False),
+            patch(
+                "gaia.installer.init_command.shutil.which",
+                side_effect=lambda name: which.get(name),
+            ),
+        ):
             cmd._print_completion()
         return "\n".join(printed)
 
@@ -410,3 +450,16 @@ class TestFlagshipCompletionMessage:
         """`gaia chat` runs a different agent through a wheel this profile
         never installs, so it cannot be the only next step offered."""
         assert "gaia-tui" in self._completion(available=True)
+
+    def test_pip_install_without_tui_points_at_the_installer(self):
+        """A pip install never ships gaia-tui, so naming it as a command to
+        run would be a dead end; the installer is what provides it."""
+        from gaia.installer import init_command
+
+        out = self._completion(available=True, tui_path=None)
+        assert not any(
+            line.strip().startswith("gaia-tui") for line in out.splitlines()
+        ), out
+        assert init_command._INSTALLER_HINT in out
+        assert "https://amd-gaia.ai/install." in init_command._INSTALLER_HINT
+        assert "gaia chat --ui" in out

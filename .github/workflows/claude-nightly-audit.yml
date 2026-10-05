@@ -216,9 +216,11 @@ jobs:
   # crashing (e.g. an install-phase flake) doesn't sink the whole audit.
   audit:
     needs: preflight
-    # A custom `if` drops the implicit needs-succeeded guard, so re-assert the repo
-    # gate — otherwise a fork (where preflight is skipped, leaving skip empty) would run.
-    if: github.repository == 'amd/gaia' && needs.preflight.outputs.skip != 'true'
+    # Explicit status check (#3929): run only after preflight succeeded and chose to
+    # audit. The repo gate keeps a fork, where preflight is skipped, from running.
+    if: >-
+      github.repository == 'amd/gaia' && !cancelled() &&
+      needs.preflight.result == 'success' && needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -263,7 +265,7 @@ jobs:
       - name: Run Claude (${{ matrix.dimension }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790  # v1.0.235
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -329,8 +331,9 @@ jobs:
             touches a published hub agent, review it against this bar explicitly and bump any
             gap up one severity level** (a gap here is never 🟡; a user-facing break on the
             default path is 🔴).
-            - **Which agents are published:** currently the **email agent** — code at
-              `hub/agents/email/python/`, npm client at `hub/agents/email/npm/`. Detect
+            - **Which agents are published:** currently the **email agent** and the **gaia
+              flagship agent** — code at `hub/agents/<id>/python/`, npm client at
+              `hub/agents/<id>/npm/`. Detect
               any *other* published agent generally: it has a `.github/workflows/release_agent_<id>.yml`
               OR a shipped `hub/agents/**/SCORECARD.md` OR a released `version:` in its
               `hub/agents/**/<id>/gaia-agent.yaml`. Apply this bar to every one you find.
@@ -484,13 +487,23 @@ jobs:
             echo "::error title=Claude stopped::No execution log was written, so Claude never started. Look at the 'Run Claude' step above for the install or startup error."
             exit 1
           fi
+          # execution_file is ONE pretty-printed JSON array (JSONL is accepted too), so it
+          # must be parsed whole — a line-by-line read finds no result and classifies "".
+          # Reduce it to the terminal result: subtype on stdout, result text to a file.
           subtype=$(python3 -c 'import json,sys
-          for l in open(sys.argv[1],encoding="utf-8",errors="replace"):
-              l=l.strip()
-              if not l.startswith("{"): continue
-              try: e=json.loads(l)
-              except ValueError: continue
-              if e.get("type")=="result": print(e.get("subtype",""))' "$EXECUTION_FILE" | tail -1)
+          raw=open(sys.argv[1],encoding="utf-8",errors="replace").read()
+          try:
+              data=json.loads(raw)
+              events=data if isinstance(data,list) else [data]
+          except ValueError:
+              events=[]
+              for l in raw.splitlines():
+                  try: events.append(json.loads(l))
+                  except ValueError: pass
+          results=[e for e in events if isinstance(e,dict) and e.get("type")=="result"]
+          last=results[-1] if results else {}
+          open(sys.argv[2],"w",encoding="utf-8").write(str(last.get("result") or last.get("subtype") or ""))
+          print(last.get("subtype") or "")' "$EXECUTION_FILE" "$RUNNER_TEMP/claude-result.txt")
           if [ "$subtype" = "error_max_turns" ]; then
             echo "::error title=Claude stopped::The lens hit its --max-turns ceiling before finishing. Whatever it had written to its findings file is still collected."
             exit 1
@@ -498,15 +511,6 @@ jobs:
           # Classify only the terminal result, never the transcript: the classifier
           # matches words like "unauthorized" and bare 401/403, which a lens that audits
           # auth writes about constantly — its prose would read as a dead credential.
-          python3 -c 'import json,sys
-          last=""
-          for l in open(sys.argv[1],encoding="utf-8",errors="replace"):
-              l=l.strip()
-              if not l.startswith("{"): continue
-              try: e=json.loads(l)
-              except ValueError: continue
-              if e.get("type")=="result": last=str(e.get("result") or e.get("subtype") or "")
-          open(sys.argv[2],"w",encoding="utf-8").write(last)' "$EXECUTION_FILE" "$RUNNER_TEMP/claude-result.txt"
           python3 util/classify_claude_probe.py --exit-code 1 --format text --text-file "$RUNNER_TEMP/claude-result.txt"
 
       - name: Upload findings
@@ -625,7 +629,7 @@ jobs:
       - name: Synthesize and file one issue per defect
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790  # v1.0.235
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -649,7 +653,7 @@ jobs:
                defect, each with its locations and a ranked list of possibly-matching open
                issues. Defects already filed or suppressed are listed at the bottom and are
                **already handled — do not act on them at all**.
-            2. Read `CLAUDE.md` → "Issue Response Guidelines" for the tone to write in.
+            2. Read `CLAUDE.md` → "How You Communicate" for the tone to write in.
             3. `synthesis-input.json` has the same data structured, if you need a field the
                dossier elides — including the full location list when one is truncated.
             If the dossier reports malformed findings or that the lenses barely clustered,

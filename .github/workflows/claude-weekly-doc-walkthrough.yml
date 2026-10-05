@@ -192,7 +192,10 @@ jobs:
   # findings already captured from guides that finished first.
   walkthrough:
     needs: discover
-    if: github.repository == 'amd/gaia' && needs.discover.outputs.docs != '[]'
+    # Explicit status check (#3929) instead of the implicit success() a bare needs.* ref gets.
+    if: >-
+      github.repository == 'amd/gaia' && !cancelled() &&
+      needs.discover.result == 'success' && needs.discover.outputs.docs != '[]'
     # Expression-wrapped 'stx' (not a bare literal) to match the rest of the repo's
     # self-hosted-runner workflows and stay actionlint-clean (a literal label isn't
     # in actionlint's default known-labels list; an expression sidesteps that
@@ -397,7 +400,7 @@ jobs:
       - name: "Executor: walk ${{ matrix.doc.path }}"
         id: executor
         continue-on-error: true
-        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790  # v1.0.235
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -507,6 +510,7 @@ jobs:
           # bash `jq -s '[.. | objects | select(has("is_error")) | .is_error] | .[-1]'`
           # claude-nightly-audit.yml uses on ubuntu.
           $ok = $false
+          $said = "(no result text)"
           if ($env:EXEC_FILE -and (Test-Path $env:EXEC_FILE)) {
             $raw = Get-Content -Raw $env:EXEC_FILE
             $hits = [regex]::Matches($raw, '"is_error"\s*:\s*(true|false)')
@@ -514,6 +518,13 @@ jobs:
               $ok = $hits[$hits.Count - 1].Groups[1].Value -eq 'false'
             } else {
               Write-Host "::warning::No is_error in $env:EXEC_FILE -- treating as a crash."
+            }
+            # The CLI's terminal result text is the only place a rejection (usage limit,
+            # dead credential, unknown model) is named; without it every outage reads the same.
+            $texts = [regex]::Matches($raw, '"result"\s*:\s*"((?:[^"\\]|\\.)*)"')
+            if ($texts.Count -gt 0) {
+              $said = $texts[$texts.Count - 1].Groups[1].Value
+              if ($said.Length -gt 300) { $said = $said.Substring(0, 300) }
             }
           }
           $transcriptExists = Test-Path "$env:RUN_DIR\transcript.md"
@@ -527,7 +538,7 @@ jobs:
             "- **Executor:** ❌ reported success but wrote no transcript" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
             exit 1
           } else {
-            Write-Host "::error title=Executor did not complete cleanly (${{ matrix.doc.path }})::log: $env:EXEC_FILE"
+            Write-Host "::error title=Executor did not complete cleanly (${{ matrix.doc.path }})::CLI reported: $said | log: $env:EXEC_FILE"
             "- **Executor:** ❌ did not complete cleanly" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
             exit 1
           }
@@ -536,7 +547,7 @@ jobs:
         id: judge
         if: always()
         continue-on-error: true
-        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790  # v1.0.235
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -650,6 +661,7 @@ jobs:
           # Same whole-text scan as "Report executor status" above -- see the note there
           # for why line-by-line parsing misreads this file.
           $ok = $false
+          $said = "(no result text)"
           if ($env:EXEC_FILE -and (Test-Path $env:EXEC_FILE)) {
             $raw = Get-Content -Raw $env:EXEC_FILE
             $hits = [regex]::Matches($raw, '"is_error"\s*:\s*(true|false)')
@@ -658,12 +670,17 @@ jobs:
             } else {
               Write-Host "::warning::No is_error in $env:EXEC_FILE -- treating as a crash."
             }
+            $texts = [regex]::Matches($raw, '"result"\s*:\s*"((?:[^"\\]|\\.)*)"')
+            if ($texts.Count -gt 0) {
+              $said = $texts[$texts.Count - 1].Groups[1].Value
+              if ($said.Length -gt 300) { $said = $said.Substring(0, 300) }
+            }
           }
           $findingsFile = "findings-walkthrough-${{ matrix.doc.slug }}.json"
           if ($ok) {
             Write-Host "✅ Judge completed."
           } else {
-            Write-Host "::warning title=Judge did not complete cleanly (${{ matrix.doc.path }})::log: $env:EXEC_FILE"
+            Write-Host "::warning title=Judge did not complete cleanly (${{ matrix.doc.path }})::CLI reported: $said | log: $env:EXEC_FILE"
           }
           if (Test-Path $findingsFile) {
             $findingsObj = Get-Content $findingsFile -Raw | ConvertFrom-Json
@@ -832,7 +849,7 @@ jobs:
       - name: Synthesize and file one issue per defect
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790  # v1.0.235
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -857,7 +874,7 @@ jobs:
                and (where the per-guide judges disagreed on a key) its likely siblings in
                this same run. Defects listed as already-filed or suppressed at the bottom
                are **already handled -- do not act on them at all**.
-            2. Read `CLAUDE.md` -> "Issue Response Guidelines" for tone/format.
+            2. Read `CLAUDE.md` -> "How You Communicate" for tone/format.
             3. `synthesis-input.json` has the same data structured, if you need a field
                the dossier elides -- including the full location list when truncated.
             If the dossier reports malformed findings or that the judges barely clustered,
