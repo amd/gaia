@@ -339,6 +339,7 @@ export function MemoryDashboard() {
     const [systemDiscoveryConsent, setSystemDiscoveryConsent] = useState(false);
     const [settingsLoading, setSettingsLoading] = useState(false);
     const [deleteConfirm, setDeleteConfirm] = useState(false);
+    const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
     const [reinitConfirm, setReinitConfirm] = useState(false);
     const [betaConfirm, setBetaConfirm] = useState<null | 'memory' | 'mcp' | 'discovery'>(null);
 
@@ -641,7 +642,7 @@ export function MemoryDashboard() {
     const handleCreateKnowledge = useCallback(async () => {
         if (!formData.content.trim()) return;
         try {
-            await memoryApi.createKnowledge({
+            const created = await memoryApi.createKnowledge({
                 content: formData.content,
                 category: formData.category,
                 domain: formData.domain || undefined,
@@ -656,7 +657,8 @@ export function MemoryDashboard() {
             loadStats();
             loadEmbeddingCoverage();
             log.ui.info('Created new knowledge entry');
-            showToast('Memory created successfully', 'success');
+            if (created?.embedded === false) showToast(created.embed_error ?? 'Saved, but not embedded', 'error');
+            else showToast('Memory created successfully', 'success');
         } catch (err) {
             log.system.error('Failed to create knowledge', err);
             showToast('Failed to create memory', 'error');
@@ -666,7 +668,7 @@ export function MemoryDashboard() {
     const handleEditKnowledge = useCallback(async () => {
         if (!editingId || !formData.content.trim()) return;
         try {
-            await memoryApi.editKnowledge(editingId, {
+            const updated = await memoryApi.editKnowledge(editingId, {
                 content: formData.content,
                 category: formData.category,
                 domain: formData.domain || undefined,
@@ -678,15 +680,22 @@ export function MemoryDashboard() {
             setEditingId(null);
             setFormData({ content: '', category: 'fact', domain: '', context: 'global', entity: '', sensitive: false, due_at: '' });
             loadKnowledge();
+            loadEmbeddingCoverage();
             log.ui.info(`Updated knowledge ${editingId}`);
-            showToast('Memory updated', 'success');
+            if (updated?.embedded === false) showToast(updated.embed_error ?? 'Saved, but not embedded', 'error');
+            else showToast('Memory updated', 'success');
         } catch (err) {
             log.system.error('Failed to update knowledge', err);
             showToast('Failed to update memory', 'error');
         }
-    }, [editingId, formData, loadKnowledge, showToast]);
+    }, [editingId, formData, loadKnowledge, loadEmbeddingCoverage, showToast]);
 
     const handleDeleteKnowledge = useCallback(async (id: string) => {
+        if (confirmDeleteId !== id) {
+            setConfirmDeleteId(id);
+            return;
+        }
+        setConfirmDeleteId(null);
         try {
             await memoryApi.deleteKnowledge(id);
             loadKnowledge();
@@ -698,7 +707,13 @@ export function MemoryDashboard() {
             log.system.error('Failed to delete knowledge', err);
             showToast('Failed to delete memory', 'error');
         }
-    }, [loadKnowledge, loadStats, loadEmbeddingCoverage, showToast]);
+    }, [confirmDeleteId, loadKnowledge, loadStats, loadEmbeddingCoverage, showToast]);
+
+    useEffect(() => {
+        if (!confirmDeleteId) return;
+        const t = setTimeout(() => setConfirmDeleteId(null), 3000);
+        return () => clearTimeout(t);
+    }, [confirmDeleteId]);
 
     const handleToggleSensitive = useCallback(async (entry: KnowledgeEntry) => {
         try {
@@ -1241,8 +1256,8 @@ export function MemoryDashboard() {
                                 <div className="mem-stat-card" data-accent="green">
                                     <div className="mem-stat-value">{stats?.tools?.total_calls ?? 0}</div>
                                     <div className="mem-stat-label">Tool Calls</div>
-                                    <div className="mem-stat-sub">
-                                        {stats?.tools?.unique_tools ?? 0} tools
+                                    <div className="mem-stat-sub" title="Memory tools (remember, recall, ...) are not logged">
+                                        {stats?.tools?.unique_tools ?? 0} tools, excl. memory
                                     </div>
                                 </div>
                                 <div className="mem-stat-card" data-accent="red">
@@ -1517,7 +1532,7 @@ export function MemoryDashboard() {
                                                             Created{renderSortArrow('created_at')}
                                                         </th>
                                                         <th>Due</th>
-                                                        <th></th>
+                                                        <th className="mem-actions-cell"></th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -1622,7 +1637,7 @@ export function MemoryDashboard() {
                                                                     <span className="mem-due-badge none">{'\u2014'}</span>
                                                                 )}
                                                             </td>
-                                                            <td>
+                                                            <td className="mem-actions-cell">
                                                                 <div className="mem-row-actions" onClick={e => e.stopPropagation()}>
                                                                     <button className="mem-row-action-btn" onClick={() => startEdit(entry)} title="Edit">
                                                                         <Pencil size={13} />
@@ -1634,8 +1649,13 @@ export function MemoryDashboard() {
                                                                     <button className="mem-row-action-btn" onClick={() => copyId(entry.id)} title="Copy ID">
                                                                         <Copy size={13} />
                                                                     </button>
-                                                                    <button className="mem-row-action-btn delete" onClick={() => handleDeleteKnowledge(entry.id)} title="Delete">
-                                                                        <Trash2 size={13} />
+                                                                    <button
+                                                                        className={`mem-row-action-btn delete${confirmDeleteId === entry.id ? ' is-confirm' : ''}`}
+                                                                        onClick={() => handleDeleteKnowledge(entry.id)}
+                                                                        title={confirmDeleteId === entry.id ? 'Click again to delete' : 'Delete'}
+                                                                        aria-label={confirmDeleteId === entry.id ? 'Confirm delete memory' : 'Delete memory'}
+                                                                    >
+                                                                        {confirmDeleteId === entry.id ? <span className="mem-row-delete-label">Delete?</span> : <Trash2 size={13} />}
                                                                     </button>
                                                                 </div>
                                                             </td>
@@ -1744,6 +1764,7 @@ export function MemoryDashboard() {
                                 <div className="mem-section">
                                     <div className="mem-section-title">
                                         <Wrench size={14} /> Tool Performance
+                                        <span className="mem-section-note" title="remember, recall, update_memory, forget and search_past_conversations are not logged">excludes memory tools</span>
                                     </div>
                                     {tools.length > 0 ? (
                                         <div style={{ overflowX: 'auto' }}>
