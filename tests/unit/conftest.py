@@ -46,6 +46,20 @@ def mock_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _restore_environ():
+    """Undo any ``os.environ`` change a test leaves behind, so none depends on order.
+
+    The code under test can write the environment too (a PATH refresh, a
+    popped flag); without this the next test inherits it.
+    """
+    saved = dict(os.environ)
+    yield
+    if dict(os.environ) != saved:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_gaia_config(tmp_path, monkeypatch):
     """Keep unit tests off the developer's real ``~/.gaia/config.json``.
 
@@ -165,7 +179,7 @@ def _block_network(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _enable_memory_for_memory_tests(request):
+def _enable_memory_for_memory_tests(request, monkeypatch):
     """Auto-fixture: clear GAIA_MEMORY_DISABLED for memory test modules.
 
     Only applies to tests in modules whose filename starts with ``test_memory_``.
@@ -173,15 +187,5 @@ def _enable_memory_for_memory_tests(request):
     cleanly without Lemonade).
     """
     module_path = getattr(request.module, "__file__", "") or ""
-    is_memory_test = "test_memory_" in os.path.basename(module_path)
-
-    if not is_memory_test:
-        yield
-        return
-
-    prior = os.environ.pop("GAIA_MEMORY_DISABLED", None)
-    try:
-        yield
-    finally:
-        if prior is not None:
-            os.environ["GAIA_MEMORY_DISABLED"] = prior
+    if "test_memory_" in os.path.basename(module_path):
+        monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)

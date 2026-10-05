@@ -19,6 +19,7 @@ from gaia.llm.lemonade_client import (
     cloud_model_provider,
     create_lemonade_client,
     local_sampling_defaults,
+    no_thinking_kwargs,
 )
 from gaia.llm.providers.lemonade import LemonadeProvider
 
@@ -678,6 +679,44 @@ def test_qwen3_6_sends_its_thinking_mode_with_the_matching_sampling(
     )
 
 
+_FLASH = "user.Qwen3.8-Flash-Next-GGUF"
+_FLASH_THINKING = {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+}
+_FLASH_INSTRUCT = {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 1.5,
+}
+
+
+@pytest.mark.parametrize(
+    "template_kwargs,sent_switch,expected",
+    [
+        (None, True, _FLASH_THINKING),
+        ({"enable_thinking": False}, False, _FLASH_INSTRUCT),
+    ],
+)
+@pytest.mark.parametrize("stream", [False, True])
+def test_flash_sends_its_thinking_mode_with_its_card_sampling(
+    monkeypatch, stream, template_kwargs, sent_switch, expected
+):
+    kwargs = {"chat_template_kwargs": template_kwargs} if template_kwargs else {}
+    body = _sent_body(monkeypatch, _FLASH, stream, **kwargs)
+    assert body == _wire(
+        _FLASH,
+        stream,
+        chat_template_kwargs={"enable_thinking": sent_switch},
+        **expected,
+    )
+
+
 @pytest.mark.parametrize("stream", [False, True])
 def test_turning_the_default_non_thinking_flips_switch_and_sampling_together(
     monkeypatch, stream
@@ -698,6 +737,38 @@ def test_turning_the_default_non_thinking_flips_switch_and_sampling_together(
         chat_template_kwargs={"enable_thinking": False},
         **_QWEN3_6_INSTRUCT,
     )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_side_request_reaches_lemonade_with_thinking_off(monkeypatch, stream):
+    """GAIA forces thinking on for Qwen3.6; a side call's switch must win on the wire."""
+    body = _sent_body(monkeypatch, _QWEN3_6, stream, **no_thinking_kwargs(_QWEN3_6))
+    assert body == _wire(
+        _QWEN3_6,
+        stream,
+        chat_template_kwargs={"enable_thinking": False},
+        **_QWEN3_6_INSTRUCT,
+    )
+
+
+@pytest.mark.parametrize(
+    "model_id,expected",
+    [
+        (_QWEN3_6, {"chat_template_kwargs": {"enable_thinking": False}}),
+        (
+            "user.Qwen3.6-35B-A3B-GGUF",
+            {"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        # No thinking switch registered: the template's own mode, nothing sent.
+        ("Gemma-4-E4B-it-GGUF", {}),
+        (_QWEN3_30B, {}),
+        # Cloud providers do not take llama.cpp template kwargs.
+        ("fireworks.deepseek-v4p1-flash", {}),
+        (None, {}),
+    ],
+)
+def test_no_thinking_kwargs(model_id, expected):
+    assert no_thinking_kwargs(model_id) == expected
 
 
 def test_single_mode_model_ignores_the_thinking_switch():
