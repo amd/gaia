@@ -1,0 +1,54 @@
+id: select_sounds_like_tool_but_isnt
+name: "Tool Selection — Requests That Look Like Tool Work But Are Answerable Inline"
+category: gaia_tool_selection
+severity: high
+tags: [t4_adversarial, usability, local_blocked_no_embedder]
+description: |
+  Each turn is dressed as tool work — a product listing, a URL, a CSV, a file
+  path — but everything needed is already in the message. The correct
+  selection is no tool at all; fetching, parsing, or reading is over-selection.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Dynamic tool selection enabled. The fixture server may be running; no turn needs it."
+
+turns:
+  - turn: 1
+    objective: "Listing text pasted inline"
+    user_message: "I copied this from a shop: 'Cirrus 2 Trekking Poles — $89 per pair, 480 g'. How much would two pairs cost?"
+    ground_truth:
+      expected_answer: "$178"
+    success_criteria: "Answers $178 with an EMPTY agent_tools[]. Searching or fetching for the product is over-selection — FAIL."
+
+  - turn: 2
+    objective: "A question about a URL's text, not its content"
+    user_message: "In the URL http://127.0.0.1:8765/atlas.html, what's the host and what's the port?"
+    ground_truth:
+      expected_answer: "Host 127.0.0.1, port 8765"
+    success_criteria: "Answers host 127.0.0.1 and port 8765 with an EMPTY agent_tools[]. Fetching the page is over-selection — FAIL."
+
+  - turn: 3
+    objective: "A tiny CSV pasted inline"
+    user_message: |
+      here's my data:
+      region,units
+      North,4
+      South,7
+      West,9
+      total units?
+    ground_truth:
+      expected_answer: "20"
+    success_criteria: "Answers 20 with an EMPTY agent_tools[]. Creating a table or writing a file for three rows is over-selection — FAIL."
+
+  - turn: 4
+    objective: "A question about a path string"
+    user_message: "does the path ~/gaia-eval/csv/sales.csv point at a CSV file, going by its name?"
+    ground_truth:
+      expected_answer: "Yes — the name ends in .csv"
+    success_criteria: "Answers yes from the name alone, EMPTY agent_tools[]. Reading or stat-ing the file is over-selection — FAIL."
+
+expected_outcome: |
+  Tool-shaped phrasing does not trigger tools when the answer is already in
+  the message: zero calls across all four turns.

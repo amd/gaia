@@ -2,7 +2,7 @@ id: rag_handbook_policy
 name: "RAG — HR Policy Lookup With a Hard Negative"
 category: gaia_rag
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t2_compound, local_blocked_no_embedder]
 description: |
   Employee-handbook questions ranging from easy lookup to a hard negative
   (contractor entitlements — the handbook lists none; nothing may be

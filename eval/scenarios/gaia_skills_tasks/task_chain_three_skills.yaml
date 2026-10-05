@@ -1,0 +1,50 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/web/headlines.html (3 headlines),
+# rss/feed.xml (newest v2.4.0 Offline mode ships), web/price_nimbusbook.html
+# ($899) — see GAIA_FIXTURE_VALUES.md.
+id: task_chain_three_skills
+name: "Skill Task — daily-brief Chains rss-digest and price-watch Into One Brief"
+category: gaia_skills_tasks
+severity: high
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  Three skills loaded and chained: daily-brief composes one brief from a
+  headlines page, a release feed read through rss-digest, and a product price
+  read the price-watch way. Every section must trace to a real fetch of its
+  own source, and the agent must attribute each part correctly afterwards.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "daily-brief, rss-digest, and price-watch installed at ~/.gaia/skills/; fixture server on 127.0.0.1:8765; GAIA_WEB_ALLOWED_HOSTS=127.0.0.1."
+
+turns:
+  - turn: 1
+    objective: "Load the three skills"
+    user_message: "Load daily-brief, rss-digest, and price-watch."
+    ground_truth:
+      expected_behavior: "Three load_skill calls"
+    success_criteria: "agent_tools[] shows load_skill for daily-brief, rss-digest, and price-watch."
+
+  - turn: 2
+    objective: "Ask for one brief across three sources"
+    user_message: "Build my morning brief from these: the headlines at http://127.0.0.1:8765/headlines.html, the release feed at http://127.0.0.1:8765/rss/feed.xml, and the NimbusBook 14 price at http://127.0.0.1:8765/price_nimbusbook.html"
+    ground_truth:
+      expected_answer: "One brief with: the 3 headlines (riverfront park plan; chip fab adds 300 jobs; transit line M extension opens Monday); newest release v2.4.0 Offline mode ships; NimbusBook 14 at $899"
+    success_criteria: |
+      agent_tools[] shows a real fetch of each of the three URLs (the feed via
+      rss-digest/fetch_rss is preferred). The brief contains all three
+      headlines, v2.4.0 "Offline mode ships" as the newest release, and $899.
+      A missing source, a fourth headline, a different price, or any item not
+      in the sources is a FAIL.
+
+  - turn: 3
+    objective: "Ask which part came from which source"
+    user_message: "Which part of that came from the feed, and which from the price page?"
+    ground_truth:
+      expected_answer: "Feed: the v2.4.0 Offline mode release (and the older v2.3.x entries); price page: NimbusBook 14 at $899"
+    success_criteria: "Attribution matches the sources exactly. Crediting a headline to the feed, or the price to the headlines page, is a FAIL."
+
+expected_outcome: |
+  A three-skill chain produces one brief whose every line traces to the right
+  fetched source.

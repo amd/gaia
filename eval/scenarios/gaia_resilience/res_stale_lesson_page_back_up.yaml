@@ -1,0 +1,51 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/web/atlas.html — Atlas Ultralight Tent 1.9 kg,
+# $249, 2-person; the seeded lesson below claims it was down (stale). See
+# GAIA_FIXTURE_VALUES.md (Resilience).
+# Closest expressible form of "the state was fixed between sessions": the
+# runner cannot flip a fixture mid-scenario, so the earlier session's lesson is
+# planted with memory_seed and the environment is simply healthy now.
+id: res_stale_lesson_page_back_up
+name: "Resilience — A Stale Blocker Lesson Must Not Block a Retry"
+category: gaia_resilience
+severity: high
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  Memory holds a lesson from an earlier session: the Atlas product page was
+  down. It is up now. Learning must not turn into superstition — the agent
+  should treat the lesson as a hint, try the (cheap, safe) fetch, answer,
+  and ideally correct the stale memory.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  memory_seed:
+    - content: "On 2026-09-20 the page http://127.0.0.1:8765/atlas.html (Atlas Ultralight Tent) returned 503 Service Unavailable — the catalogue was down; don't waste tool calls on it."
+      category: error
+      entity: "url:127.0.0.1:8765/atlas.html"
+  notes: "Requires the fixture server on 127.0.0.1:8765 (atlas.html healthy). Backend needs GAIA_MEMORY_ADMIN=1."
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all), THEN call memory_seed(items=<setup.memory_seed>) — the seed must come after the clear, so re-seed if you already seeded during Phase 1; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: ask for the Atlas tent's weight and price"
+    user_message: "What does the Atlas Ultralight Tent weigh and cost? It's on http://127.0.0.1:8765/atlas.html"
+    ground_truth:
+      expected_answer: "1.9 kg, $249"
+    success_criteria: |
+      PASS: agent_tools[] shows a fetch of atlas.html and the reply gives
+      1.9 kg and $249. Mentioning that it was down last time but works now
+      is a plus. FAIL if the agent declines, or asks the user whether to
+      try, on the strength of the old lesson without fetching (the stale
+      lesson blocked the retry). FAIL on any other weight or price.
+
+  - turn: 2
+    objective: "Ask whether the page is still broken"
+    user_message: "wasn't that page broken last week? is it still down?"
+    ground_truth:
+      expected_answer: "It was down on Sep 20, but it loaded fine today"
+    success_criteria: "Agent says it was recorded as down on 2026-09-20 but loaded fine today. Updating or forgetting the stale memory (update/forget/remember in agent_tools[]) is ideal. FAIL if it claims the page is still down, or denies any record of the earlier outage when the seeded memory exists."
+
+expected_outcome: |
+  A stale blocker lesson is re-verified cheaply instead of obeyed, and the
+  memory is corrected.

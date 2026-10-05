@@ -2,7 +2,7 @@ id: task_checkin_records_items
 name: "Skill Task — check-in Records Open Items"
 category: gaia_skills_tasks
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   A first check-in: the user states what they're working on; the skill must
   record the items in memory so a later check-in can follow up.

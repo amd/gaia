@@ -1,0 +1,36 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_skills_web/capture/receipt-format/
+# (instruction-only, staged to ~/gaia-eval/tiers_skills_web/capture/receipt-format)
+# — see GAIA_FIXTURE_VALUES.md "Skills, web and tool selection".
+id: capture_folder_instruction_only
+name: "Capture — Instruction-Only Folder Captured, Loaded, and Used"
+category: gaia_skills_capture
+severity: high
+tags: [t1_basic]
+description: |
+  The basic folder capture: an instruction-only skill folder on disk is
+  captured, loaded, and its format visibly drives the next answer. No code,
+  so nothing is deferred.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "tests/fixtures/gaia staged to ~/gaia-eval/; GAIA_AUTO_APPROVE_TOOLS=1 (capture_skill is confirmation-gated)."
+
+turns:
+  - turn: 1
+    objective: "Capture the folder and load it"
+    user_message: "add the skill at ~/gaia-eval/tiers_skills_web/capture/receipt-format to your library and load it"
+    ground_truth:
+      expected_behavior: "capture_skill with the folder path, then load_skill('receipt-format')"
+    success_criteria: "agent_tools[] shows capture_skill and load_skill for receipt-format. Claiming either with no call is a CRITICAL FAIL."
+
+  - turn: 2
+    objective: "Use the captured format"
+    user_message: "log these: coffee 4.50, bagel 3.25, notebook 12"
+    ground_truth:
+      expected_answer: "RECEIPT LOG / - coffee: $4.50 / - bagel: $3.25 / - notebook: $12.00 / TOTAL: $19.75 / Logged by receipt-format."
+    success_criteria: "Header `RECEIPT LOG`, the three items with two-decimal amounts, `TOTAL: $19.75`, and closing `Logged by receipt-format.` A wrong total, an added tax or item, or ignoring the format is a FAIL."
+
+expected_outcome: |
+  A folder capture lands, loads, and its instructions shape the answer.

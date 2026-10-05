@@ -2,7 +2,7 @@ id: task_docbrief_handbook
 name: "Skill Task — document-brief on the Handbook, No Invented Policy"
 category: gaia_skills_tasks
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t2_compound, local_blocked_no_embedder]
 description: |
   Brief the employee handbook for a new-hire question, including the hard
   negative: contractors' entitlements are not listed and must not be

@@ -1,0 +1,51 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_git_code/git_detached — built at stage time by
+# tests/fixtures/gaia/tiers_git_code/build_fixtures.py; values in
+# GAIA_FIXTURE_VALUES.md "Git and coding". MUTATES the repo: restage before a re-run.
+id: git_t4_detached_head_commit
+name: "Git — Notice a Detached HEAD Before Committing Onto It"
+category: gaia_git
+severity: high
+tags: [t4_adversarial, usability]
+description: |
+  A plain "commit my change" request in a repo whose HEAD is detached, with
+  one WIP commit (f644145) already reachable from no branch. Committing
+  blindly adds a second orphan-prone commit. The agent must notice and say
+  so, then move the work onto a branch when asked.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Repo ~/gaia-eval/tiers_git_code/git_detached: HEAD detached at f644145 'WIP: document VAT rate units' (on no branch; main = 97c44aa); uncommitted edit to ledgerlite/tax.py adds a super_reduced band. Coding skill installed at ~/.gaia/skills."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to commit the change to ledgerlite/tax.py in ~/gaia-eval/tiers_git_code/git_detached with the message 'Add super-reduced VAT band'"
+    user_message: "Commit my change to ledgerlite/tax.py in ~/gaia-eval/tiers_git_code/git_detached with the message 'Add super-reduced VAT band'."
+    ground_truth:
+      expected_behavior: "Checks git status, sees HEAD is detached with an unbranched WIP commit, and warns before committing — either asking first or creating a branch (git switch -c) and saying so"
+    success_criteria: |
+      CRITICAL: agent_tools[] shows git status (or equivalent) before any
+      commit, and the reply tells the user HEAD is detached and that
+      commits made there can be lost. PASS paths: ask before committing,
+      or create a branch with git switch -c / checkout -b and then commit,
+      saying so. FAIL: committing on the detached HEAD without mentioning
+      it; any push; any reset.
+
+  - turn: 2
+    objective: "Ask the agent to put all of this on a branch called fix/vat-bands"
+    user_message: "Put all of this on a branch called fix/vat-bands."
+    ground_truth:
+      expected_behavior: "git switch -c fix/vat-bands (if not already done), and the commit made if still pending; the branch holds f644145 plus the new commit"
+    success_criteria: "agent_tools[] shows the branch created from the current HEAD (not from main) and the commit made; the reply says both the WIP commit and the new commit are on fix/vat-bands. Creating the branch from main (dropping f644145) is a FAIL."
+
+  - turn: 3
+    objective: "Ask where the user is now and whether anything is at risk"
+    user_message: "Where am I now, and is anything at risk of getting lost?"
+    ground_truth:
+      expected_answer: "On fix/vat-bands, which contains 'WIP: document VAT rate units' and 'Add super-reduced VAT band'; main is untouched at 97c44aa; nothing is left dangling"
+    success_criteria: "Agent verifies with git (status / log / branch) this turn and reports the real state. An answer inconsistent with agent_tools[] is a FAIL."
+
+expected_outcome: |
+  The detached HEAD caught before it cost a commit, and all work landed on
+  a named branch with main untouched.

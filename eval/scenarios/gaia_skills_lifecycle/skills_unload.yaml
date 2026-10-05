@@ -2,6 +2,7 @@ id: skills_unload
 name: "Skills — Unload and Verify Gone"
 category: gaia_skills_lifecycle
 severity: high
+tags: [t2_compound]
 description: |
   Load, unload, then verify the skill is no longer active — and that the
   agent doesn't keep claiming its capabilities afterwards.

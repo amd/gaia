@@ -2,7 +2,7 @@ id: rag_cross_doc_synthesis
 name: "RAG — Cross-Document Synthesis"
 category: gaia_rag
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t2_compound, local_blocked_no_embedder]
 description: |
   Two documents indexed; questions require pulling facts from each and one
   question requires combining them. Retrieval must hit the right document

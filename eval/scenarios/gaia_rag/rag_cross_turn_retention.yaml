@@ -2,7 +2,7 @@ id: rag_cross_turn_retention
 name: "RAG — Indexed Document Retained Across Turns"
 category: gaia_rag
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t2_compound, local_blocked_no_embedder]
 description: |
   A document is queried in turn 1, the conversation moves elsewhere, then a
   later question returns to the document WITHOUT naming it. The agent must

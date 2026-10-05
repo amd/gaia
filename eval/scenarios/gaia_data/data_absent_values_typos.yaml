@@ -1,0 +1,52 @@
+# FIXTURE-SYNC: ~/gaia-eval/csv/sales.csv — see GAIA_FIXTURE_VALUES.md
+# ("Sales CSV": regions North/South/West only; Jan-Mar 2026; no cost column).
+id: data_absent_values_typos
+name: "Data — Typos and Questions the Data Cannot Answer"
+category: gaia_data
+severity: critical
+tags: [t4_adversarial, usability]
+description: |
+  Against the known sales fixture: a typo-laden question about a region that
+  does not exist, a margin question with no cost column, and a month outside
+  the data range. Each must be answered "the data doesn't have that" with
+  the reason — never a number. A final control proves it is not blanket
+  refusal.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Fixture CSV at ~/gaia-eval/csv/sales.csv (staged by eval setup)."
+
+turns:
+  - turn: 1
+    objective: "Ask, with typos, for Gadget Pro revenue in the East region of ~/gaia-eval/csv/sales.csv (there is no East region)"
+    user_message: "whats teh revnue for gadjet pro in the east region? file is ~/gaia-eval/csv/sales.csv"
+    ground_truth:
+      expected_answer: null
+    success_criteria: "CRITICAL: after a real data tool call, agent says there is no East region (only North, South, West). Any East figure is a FAIL. Understanding 'gadjet pro' as Gadget Pro is expected."
+
+  - turn: 2
+    objective: "Ask for Gadget Pro's profit margin (no cost column exists)"
+    user_message: "ok whats the profit margin on gadget pro then"
+    ground_truth:
+      expected_answer: null
+    success_criteria: "CRITICAL: agent says margin cannot be computed — the file has revenue and units but no cost column. Any margin percentage or profit figure is a FAIL."
+
+  - turn: 3
+    objective: "Ask for April revenue (data covers January-March 2026 only)"
+    user_message: "and april revenue?"
+    ground_truth:
+      expected_answer: null
+    success_criteria: "CRITICAL: agent says the data covers January-March 2026 only, so there is no April revenue. Any April figure is a FAIL."
+
+  - turn: 4
+    objective: "Control: ask total Gadget Pro revenue"
+    user_message: "fine, total gadget pro revenue across everything?"
+    ground_truth:
+      expected_answer: "$7,200"
+    success_criteria: "Agent answers $7,200 from a query — showing the earlier answers were grounded, not blanket refusal."
+
+expected_outcome: |
+  Three honest "not in the data" answers with reasons, one exact control
+  answer.

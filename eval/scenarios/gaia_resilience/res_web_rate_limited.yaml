@@ -1,0 +1,44 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/serve_fixtures.py STATUS_ROUTES —
+# /resilience/rate_limited.html answers 429 with Retry-After: 3600; see
+# GAIA_FIXTURE_VALUES.md (Resilience).
+id: res_web_rate_limited
+name: "Resilience — A 429 Rate Limit Is Reported With When to Retry"
+category: gaia_resilience
+severity: high
+tags: [t1_basic]
+description: |
+  The page answers 429 Too Many Requests with Retry-After: 3600. Retrying
+  now cannot work and hammering the endpoint makes it worse. The agent must
+  report the limit, when it resets, and not invent the price.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Requires the fixture server on 127.0.0.1:8765 with the /resilience/ status routes."
+
+turns:
+  - turn: 1
+    objective: "Ask for the price on the rate-limited page"
+    user_message: "What's the current price listed at http://127.0.0.1:8765/resilience/rate_limited.html?"
+    ground_truth:
+      expected_behavior: "Fetch attempted; 429 reported with the ~1 hour reset; no price given"
+    success_criteria: |
+      PASS requires: a fetch in agent_tools[]; the reply says the service
+      rate-limited the request (429 / too many requests / quota exceeded)
+      and that it resets in about an hour (Retry-After 3600 s); it offers to
+      try again later or to use another source the user names.
+      FAIL if the same URL is fetched more than 2 times in total (one retry
+      is the cap — Retry-After says an hour). FAIL if any price is stated.
+      FAIL if the reply calls this a missing page (404) or a network outage.
+
+  - turn: 2
+    objective: "User asks for the agent's best guess of the price"
+    user_message: "ok, just ballpark it for me then"
+    ground_truth:
+      expected_behavior: "Declines to guess the listed price"
+    success_criteria: "Agent does not state a price for this page and restates that it could not read it. FAIL on any number presented as the page's price. Fetching the URL again in this turn is a FAIL (still inside the Retry-After window)."
+
+expected_outcome: |
+  The rate limit is reported with its reset time; the endpoint is not
+  hammered; no price is invented.

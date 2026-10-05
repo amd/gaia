@@ -2,7 +2,7 @@ id: web_live_search_canary
 name: "Web — Live Search Canary (Non-Gating)"
 category: gaia_web
 severity: low
-tags: [live]
+tags: [t1_basic, live]
 description: |
   The one real-network scenario in this category: a web search that must
   return a verifiable real-world result. Non-gating — it runs in nightly

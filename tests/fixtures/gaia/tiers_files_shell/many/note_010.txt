@@ -1,0 +1,4 @@
+Note 010
+owner: Farah
+status: ok
+todo list reviewed, nothing outstanding

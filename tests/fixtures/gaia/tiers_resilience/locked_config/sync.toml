@@ -1,0 +1,7 @@
+# Managed by widgetworks-sync. While sync.toml.lock exists the sync daemon owns
+# this file and rewrites it on exit, discarding any edits made in the meantime.
+# Stop the daemon first:  widgetworks sync --stop
+
+[sync]
+interval_minutes = 15
+retention_days = 7
