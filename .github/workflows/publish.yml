@@ -633,7 +633,7 @@ jobs:
 
           Download the installer for your platform from the assets below:
 
-          - **Windows** — `gaia-agent-ui-*-x64-setup.exe` (NSIS installer, autostart on by default)
+          - **Windows** — the GAIA installer from https://amd-gaia.ai/#install (`gaia-*-win-x64-setup.exe`): choose the desktop app, the terminal, or both. `gaia-agent-ui-*-x64-setup.exe` below is the desktop app on its own (autostart on by default)
           - **macOS** — `gaia-agent-ui-*-arm64.dmg` (drag to Applications, Apple Silicon only)
           - **Linux** — `gaia-agent-ui-*-amd64.deb` (Debian/Ubuntu) or `gaia-agent-ui-*-x86_64.AppImage` (any distro)
 

@@ -71,10 +71,10 @@ icon: "circle-question"
     Run the installer from command-line with parameters for CI/CD or silent installations:
 
     ```bash
-    gaia-agent-ui-<version>-x64-setup.exe /S
+    gaia-<version>-win-x64-setup.exe /S /COMPONENTS=ui,tui
     ```
 
-    (The Windows installer is an NSIS package named `gaia-agent-ui-<version>-<arch>-setup.exe`, downloaded from [GitHub Releases](https://github.com/amd/gaia/releases).)
+    (The Windows installer is an NSIS package named `gaia-<version>-win-x64-setup.exe`, downloaded from [amd-gaia.ai](https://amd-gaia.ai/#install). `ui` is the desktop app and `tui` the terminal; see [Install GAIA](/guides/install#silent-install-on-windows-it-and-scripted-deployment) for the exit codes.)
 
     **Available parameters:**
     - `/S` - Silent installation (no UI)
