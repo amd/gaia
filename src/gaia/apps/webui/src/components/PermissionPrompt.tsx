@@ -24,6 +24,9 @@ function summarize(n: GaiaNotification): string {
 /**
  * The permission question for this chat, inline above the composer: allow once,
  * always allow this exact call in this chat, or deny — the TUI's choices.
+ *
+ * Enter never answers it: focus moves to the card, not a button, so a keystroke
+ * meant for the composer can't approve. Esc denies; Tab reaches the buttons.
  */
 export function PermissionPrompt({ sessionId }: { sessionId: string }) {
     const selector = useMemo(() => selectSessionPermissionPrompt(sessionId), [sessionId]);
@@ -32,28 +35,44 @@ export function PermissionPrompt({ sessionId }: { sessionId: string }) {
     return <PromptCard key={prompt.id} notification={prompt} />;
 }
 
+/** `45` -> "45s", `600` -> "10:00". */
+export function formatCountdown(seconds: number): string {
+    if (seconds < 60) return `${seconds}s`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
 function PromptCard({ notification }: { notification: GaiaNotification }) {
     const respond = useNotificationStore((s) => s.respondToPermission);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [showArgs, setShowArgs] = useState(false);
-    const [remaining, setRemaining] = useState<number | null>(notification.timeoutSeconds ?? null);
-    const allowRef = useRef<HTMLButtonElement>(null);
+    const hasTimeout = notification.timeoutSeconds != null && notification.timeoutSeconds > 0;
+    // A deadline, not a tick count: background tabs throttle timers, and the
+    // backend denies at its own deadline regardless of how often we ticked.
+    const deadline = useRef(hasTimeout ? Date.now() + notification.timeoutSeconds! * 1000 : null);
+    const [remaining, setRemaining] = useState<number | null>(hasTimeout ? notification.timeoutSeconds! : null);
+    const cardRef = useRef<HTMLElement>(null);
     const freshConsent = requiresFreshConsent(notification.tool);
     const scope = freshConsent ? undefined : notification.alwaysScope;
     const detail = summarize(notification);
     const args = notification.toolArgs ?? {};
     const hasArgs = Object.keys(args).length > 0;
 
-    useEffect(() => { allowRef.current?.focus({ preventScroll: true }); }, []);
+    // Take focus from the composer so its Enter can't land on a button here.
+    useEffect(() => { cardRef.current?.focus({ preventScroll: true }); }, []);
 
     // The backend denies on its own when the wait runs out; this only shows it.
     useEffect(() => {
-        if (remaining === null) return;
-        if (remaining <= 0) return;
-        const t = setTimeout(() => setRemaining((r) => (r === null ? r : r - 1)), 1000);
-        return () => clearTimeout(t);
-    }, [remaining]);
+        if (deadline.current === null) return;
+        const t = setInterval(() => {
+            const left = Math.max(0, Math.ceil((deadline.current! - Date.now()) / 1000));
+            setRemaining(left);
+            if (left === 0) clearInterval(t);
+        }, 1000);
+        return () => clearInterval(t);
+    }, []);
 
     const answer = useCallback(async (decision: PermissionDecision) => {
         setBusy(true);
@@ -66,9 +85,28 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
         }
     }, [notification.id, respond]);
 
+    // Esc denies. Enter is deliberately unbound — only a focused button approves.
+    // Capture phase, so this runs before ChatView's Escape-stops-the-reply.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape' || e.defaultPrevented || busy) return;
+            if (remaining !== null && remaining <= 0) return;
+            e.preventDefault();
+            void answer('deny');
+        };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    }, [answer, busy, remaining]);
+
     const expired = remaining !== null && remaining <= 0;
     return (
-        <section className="perm-card" role="alertdialog" aria-labelledby={`perm-${notification.id}`}>
+        <section
+            ref={cardRef}
+            tabIndex={-1}
+            className="perm-card"
+            role="alertdialog"
+            aria-labelledby={`perm-${notification.id}`}
+        >
             <div className="perm-card-head">
                 <ShieldQuestion size={16} className="perm-card-icon" aria-hidden="true" />
                 <div className="perm-card-text">
@@ -79,7 +117,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {freshConsent && notification.message && <p className="perm-card-detail">{notification.message}</p>}
                 </div>
                 {remaining !== null && !expired && (
-                    <span className="perm-card-timer" title="Denied automatically when the time runs out">{remaining}s</span>
+                    <span className="perm-card-timer" title="Denied automatically when the time runs out">{formatCountdown(remaining)}</span>
                 )}
             </div>
             {hasArgs && (
@@ -100,7 +138,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                 <p className="perm-card-detail">No answer in time, so GAIA was told no.</p>
             ) : (
                 <div className="perm-card-actions">
-                    <button ref={allowRef} type="button" className="perm-btn is-primary" onClick={() => answer('allow')} disabled={busy}>
+                    <button type="button" className="perm-btn is-primary" onClick={() => answer('allow')} disabled={busy}>
                         Allow once
                     </button>
                     {scope && (

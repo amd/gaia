@@ -25,7 +25,10 @@ from gaia.config import gaia_home
 from gaia.hub.compatibility import check_compatibility
 from gaia.hub.manifest import Requirements
 from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_NAME,
+    find_model_requirement,
     lemonade_auth_headers,
+    resolve_default_chat_model,
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
 )
@@ -36,17 +39,31 @@ logger = get_logger(__name__)
 
 router = APIRouter(tags=["onboarding"])
 
-# The light, multimodal default every first-run profile pulls (see
-# ``INIT_PROFILES`` in ``gaia.installer.init_command``) — the floor,
-# ``gaia.llm.lemonade_client.DEFAULT_MODEL_NAME``. A PC's actual default can be
-# larger (``resolve_default_chat_model``).
-_RECOMMENDED_MODEL = "Gemma-4-E4B-it-GGUF"
-# Disk the recommended first-run download needs (model + embedder + headroom).
+# Disk the floor model's first-run download needs (model + embedder + headroom).
 # Deliberately conservative so we block *before* a half-finished pull fills the
 # disk rather than after.
 _RECOMMENDED_DISK_GB = 6.0
-# RAM below which the recommended model is likely to swap/fail to load.
+# RAM below which the floor model is likely to swap/fail to load.
 _RECOMMENDED_MEMORY_GB = 8.0
+# Embedder plus room for a pull's partial files, on top of a model's weights.
+_DOWNLOAD_HEADROOM_GB = 2.0
+
+
+def _recommended_download() -> tuple[str, float]:
+    """The model chat will load here, and the disk its download needs.
+
+    The same ``resolve_default_chat_model`` every agent uses, so setup pulls the
+    model the first chat asks for — on a 64 GB machine that is not the floor.
+    Memory stays at the floor: ``gaia init`` fit-checked this model against the
+    pool that holds it (GPU memory), which system RAM here does not measure.
+    """
+    model = resolve_default_chat_model()
+    requirement = find_model_requirement(model)
+    if requirement is None or not requirement.size_gb:
+        return model, _RECOMMENDED_DISK_GB
+    return model, max(_RECOMMENDED_DISK_GB, requirement.size_gb + _DOWNLOAD_HEADROOM_GB)
+
+
 _LEMONADE_SYSTEM_INFO_ERROR = "Lemonade system-info query failed"
 
 
@@ -136,7 +153,7 @@ class PreflightReport(BaseModel):
     lemonade_error: Optional[str] = None
     tier: str = "unknown"
     recommended_profile: str = "chat"
-    recommended_model: str = _RECOMMENDED_MODEL
+    recommended_model: str = DEFAULT_MODEL_NAME
     required_disk_gb: float = _RECOMMENDED_DISK_GB
     required_memory_gb: float = _RECOMMENDED_MEMORY_GB
     # ``compatible`` is False only when there is a hard blocker (e.g. no disk).
@@ -163,9 +180,10 @@ async def onboarding_preflight() -> PreflightReport:
     # The report carries the detected RAM/disk, so we surface those values from
     # the *same* scan that produced the blockers/warnings — one detection, no
     # drift between what we display and what we gate on.
+    model, disk_gb = _recommended_download()
     reqs = Requirements(
         min_memory_gb=_RECOMMENDED_MEMORY_GB,
-        min_disk_gb=_RECOMMENDED_DISK_GB,
+        min_disk_gb=disk_gb,
         npu=True,
         platforms=[],  # cross-platform; don't block on the platform triple here
     )
@@ -194,8 +212,8 @@ async def onboarding_preflight() -> PreflightReport:
         lemonade_error=devices.get("lemonade_error"),
         tier=_classify_tier(ram_gb, npu_detected),
         recommended_profile="chat",
-        recommended_model=_RECOMMENDED_MODEL,
-        required_disk_gb=_RECOMMENDED_DISK_GB,
+        recommended_model=model,
+        required_disk_gb=disk_gb,
         required_memory_gb=_RECOMMENDED_MEMORY_GB,
         compatible=report.compatible,
         blockers=list(report.blockers),

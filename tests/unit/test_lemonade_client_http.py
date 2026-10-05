@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import unittest
 from io import StringIO
 from unittest.mock import MagicMock, patch
@@ -49,6 +50,18 @@ class TestLemonadeClientMock(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("GAIA_CTX_SIZE", None)
+        # A developer's own embedded Lemonade (its port and API key under
+        # ~/.gaia) would otherwise stand in for the defaults asserted here.
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        os.environ["GAIA_HOME"] = home.name
+        for name in (
+            "LEMONADE_BASE_URL",
+            "LEMONADE_API_KEY",
+            "LEMONADE_PORT",
+            "GAIA_LEMONADE_EMBEDDED",
+        ):
+            os.environ.pop(name, None)
         self.client = create_lemonade_client(
             model=TEST_MODEL, host=HOST, port=PORT, verbose=False
         )
@@ -1069,6 +1082,55 @@ class TestLemonadeClientMock(unittest.TestCase):
         ):
             self.client._ensure_model_loaded_locked(TEST_MODEL)
         self.assertIsNone(self.client._last_model_load_seconds)
+
+    def test_a_cold_load_is_announced_before_and_after(self):
+        """The chat turn's longest silent wait is a load; the listener is what
+        lets the live line say so."""
+        seen = []
+        self.client.model_load_listener = lambda model, state: seen.append(
+            (model, state)
+        )
+        with (
+            patch.object(self.client, "get_status", return_value={"loaded_models": []}),
+            patch.object(
+                self.client,
+                "list_models",
+                return_value={"data": [{"id": TEST_MODEL, "downloaded": True}]},
+            ),
+            patch.object(self.client, "load_model", return_value={"status": "success"}),
+        ):
+            self.client._ensure_model_loaded_locked(TEST_MODEL)
+        self.assertEqual(seen, [(TEST_MODEL, "loading"), (TEST_MODEL, "loaded")])
+
+    def test_a_first_run_download_is_announced_as_a_download(self):
+        seen = []
+        self.client.model_load_listener = lambda model, state: seen.append(state)
+        with (
+            patch.object(self.client, "get_status", return_value={"loaded_models": []}),
+            patch.object(
+                self.client,
+                "list_models",
+                return_value={"data": [{"id": TEST_MODEL, "downloaded": False}]},
+            ),
+            patch.object(self.client, "load_model", return_value={"status": "success"}),
+        ):
+            self.client._ensure_model_loaded_locked(TEST_MODEL)
+        self.assertEqual(seen, ["downloading", "loaded"])
+
+    def test_a_resident_model_announces_nothing(self):
+        seen = []
+        self.client.model_load_listener = lambda model, state: seen.append(state)
+        loaded_entry = {"id": TEST_MODEL, "recipe_options": {"ctx_size": 65536}}
+        with (
+            patch.object(
+                self.client,
+                "get_status",
+                return_value={"loaded_models": [loaded_entry]},
+            ),
+            patch.object(self.client, "_find_loaded_entry", return_value=loaded_entry),
+        ):
+            self.client._ensure_model_loaded_locked(TEST_MODEL)
+        self.assertEqual(seen, [])
 
     def test_ensure_model_loaded_locked_never_records_a_failed_load(self):
         """A load that raises must not leave a stale/partial duration behind

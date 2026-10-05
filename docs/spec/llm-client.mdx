@@ -546,7 +546,10 @@ sets one, else GAIA's choice for the model (`ModelRequirement.thinking`). The pr
 the sampling profile from it and `LemonadeClient.chat_completions` sends it as the switch, so
 the sampling always matches the mode the model runs in.
 [`Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) runs with thinking on
-and gets its card's thinking profile for coding and precise work.
+and gets its card's thinking profile for coding and precise work. Memory's short JSON side
+calls (extraction, consolidation, reconciliation, skill distillation) pass
+`no_thinking_kwargs(model)`, which turns thinking off for such a model: reasoning is billed
+against `max_tokens`, so with it on they reason to the cap and return no answer.
 
 Every other local model gets `LOCAL_SAMPLING_DEFAULTS`: `temperature=0.1` plus frequency,
 presence and repeat penalties, so it does not loop on tables and paragraphs. Cloud models get

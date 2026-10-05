@@ -11,6 +11,7 @@ to JSON events that the streaming endpoint sends to the frontend.
 import json
 import logging
 import math
+import os
 import queue
 import re
 import socket
@@ -32,8 +33,10 @@ logger = logging.getLogger(__name__)
 
 _SUMMARY_CHAR_CAP = 300
 
-#: Seconds the agent thread waits for a tool-confirm response from the frontend.
-TOOL_CONFIRM_TIMEOUT_SECONDS = 60
+#: Seconds the agent thread waits for a tool-confirm response before denying.
+#: Matches the TUI's ``DeliverableConfirmationTimeout`` so a prompt waits as
+#: long on every surface.
+TOOL_CONFIRM_TIMEOUT_SECONDS = 10 * 60
 
 #: Sentinel for "the caller did not pass a timeout". Distinct from ``None``,
 #: which is a caller explicitly asking to wait for the human indefinitely.
@@ -212,6 +215,9 @@ class SSEOutputHandler(OutputHandler):
     #: the user was actually shown rather than the whole tool.
     _confirm_args: Optional[Dict[str, Any]] = None
 
+    #: Outcome of the last ``tool_result``, echoed by the ``tool_end`` after it.
+    _last_tool_success: bool = True
+
     def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
@@ -371,10 +377,11 @@ class SSEOutputHandler(OutputHandler):
 
     def print_tool_complete(self):
         self._tool_start_time = None  # Reset in case tool_result was skipped
+        success, self._last_tool_success = self._last_tool_success, True
         self._emit(
             {
                 "type": "tool_end",
-                "success": True,
+                "success": success,
             }
         )
 
@@ -403,13 +410,13 @@ class SSEOutputHandler(OutputHandler):
 
         # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
+        success = data.get("status") != "error" if isinstance(data, dict) else True
+        self._last_tool_success = success
         event = {
             "type": "tool_result",
             "title": title,
             "summary": summary,
-            "success": (
-                data.get("status") != "error" if isinstance(data, dict) else True
-            ),
+            "success": success,
         }
         # String-returning tools (notably email envelopes) are summarized by a
         # hard character cap. Tell downstream classifiers that an unparsable
@@ -557,6 +564,17 @@ class SSEOutputHandler(OutputHandler):
 
     def report_progress(self, message: str):
         self._emit({"type": "status", "status": "working", "message": message})
+
+    def report_phase(self, phase: str, message: str, **counts: int):
+        self._emit(
+            {
+                "type": "status",
+                "status": "working",
+                "message": message,
+                "phase": phase,
+                **counts,
+            }
+        )
 
     # === Structured-render map (#2109) ===
 
@@ -772,6 +790,9 @@ class SSEOutputHandler(OutputHandler):
                             open_idx + len("<think>") :
                         ]
                         self._in_thinking = True
+                        # Inline <think> carries no word count, but it does
+                        # prove the model has moved on from reading the prompt.
+                        self.report_phase("reasoning", "Reasoning")
                         continue
                     else:
                         break  # No more <think> tags
@@ -1186,6 +1207,10 @@ class SSEOutputHandler(OutputHandler):
         if sock is not None:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
+                if os.name == "nt":
+                    # Windows' select() ignores a local shutdown; only closing the
+                    # handle wakes it. detach() leaves the object at fd -1.
+                    socket.close(sock.detach())
                 return  # reader wakes promptly; the stream owner closes resp
             except OSError:
                 logger.debug(
@@ -1198,7 +1223,9 @@ class SSEOutputHandler(OutputHandler):
             logger.debug("email relay: failed to close active response", exc_info=True)
 
     def awaiting_user_input(self) -> bool:
-        """True while a ``request_user_input`` question is waiting on the user."""
+        """True while a question or a tool confirmation is waiting on the user."""
+        if self._confirm_id is not None:
+            return True
         with self._user_input_lock:
             return bool(self._user_input_queue)
 
@@ -1491,6 +1518,22 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         if count > 5:
             result += f" (+{count - 5} more)"
         return result
+
+    # Tabular analysis: what was counted, not how many columns the file has.
+    row_count = data.get("row_count")
+    if (
+        isinstance(row_count, int)
+        and row_count > 0
+        and isinstance(data.get("columns"), list)
+        and data.get("status") != "error"
+    ):
+        rows = format_count(row_count, "rows")
+        groups = data.get("group_by_results")
+        if isinstance(groups, list) and groups and data.get("group_by"):
+            # The tool keeps only the 25 largest groups.
+            top = "top " if len(groups) >= 25 else ""
+            return f"{top}{format_count(len(groups), 'groups')} by {data['group_by']} · {rows}"
+        return f"{rows} · {format_count(len(data['columns']), 'columns')}"
 
     # Status-based results
     if "status" in data:

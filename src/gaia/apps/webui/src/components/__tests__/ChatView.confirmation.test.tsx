@@ -299,3 +299,40 @@ describe('permission requests wait for the user', () => {
         }
     );
 });
+
+describe('ChatView path-access permission_request', () => {
+    it('words a file grant as a file and keeps the backend timeout', async () => {
+        await driveSend();
+
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'permission_request',
+                tool: 'allow_path_access',
+                args: { path: 'C:\\Users\\me\\sales.csv', kind: 'file' },
+                confirm_id: 'c-1',
+                timeout_seconds: 600,
+            } as unknown as StreamEvent);
+        });
+
+        const prompt = selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState());
+        expect(prompt?.message).toBe(
+            'GAIA wants to use the file C:\\Users\\me\\sales.csv, which this chat cannot reach yet. Allow it for this chat?'
+        );
+        expect(prompt?.timeoutSeconds).toBe(600);
+    });
+
+    it('invents no countdown when the backend sent no timeout', async () => {
+        await driveSend();
+
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'permission_request',
+                tool: 'write_file',
+                args: { file_path: 'a.txt' },
+                confirm_id: 'c-2',
+            } as unknown as StreamEvent);
+        });
+
+        expect(selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState())?.timeoutSeconds).toBeUndefined();
+    });
+});

@@ -47,6 +47,16 @@ export type PermissionDecision = 'allow' | 'always' | 'deny';
 /** The prompt raised when a tool reaches outside the chat's files (security.py). */
 export const PATH_ACCESS_TOOL = 'allow_path_access';
 
+/** The question a path-access prompt asks; `kind` comes from the agent when it knows. */
+export function pathAccessQuestion(args: unknown): string {
+  const { path, kind } = (args ?? {}) as { path?: unknown; kind?: unknown };
+  const target = String(path ?? 'a file');
+  const what = kind === 'folder'
+    ? `the folder ${target} and everything in it`
+    : kind === 'file' ? `the file ${target}` : `${target} (and anything inside it, including changes)`;
+  return `GAIA wants to use ${what}, which this chat cannot reach yet. Allow it for this chat?`;
+}
+
 export function requiresFreshConsent(tool: string | undefined): boolean {
   return tool === 'share_engineering_context'
     || tool === 'append_engineering_context'

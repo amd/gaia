@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, PATH_ACCESS_TOOL } from '../stores/notificationStore';
+import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -459,7 +459,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Global keyboard shortcuts: Escape → stop streaming, Ctrl+K → focus sidebar search
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
-            if (e.key === 'Escape' && isStreaming) {
+            // An open permission prompt claims Escape first (it denies).
+            if (e.key === 'Escape' && isStreaming && !e.defaultPrevented) {
                 e.preventDefault();
                 handleStop();
             }
@@ -605,7 +606,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         agentName: 'GAIA',
                         title: `Allow ${toolName}?`,
                         message: toolName === PATH_ACCESS_TOOL
-                            ? `GAIA wants to use ${String((event.args as { path?: unknown } | undefined)?.path ?? 'a file')} (and anything inside it, including changes), which this chat cannot reach yet. Allow it for this chat?`
+                            ? pathAccessQuestion(event.args)
                             : `The agent wants to execute: ${toolName}`,
                         timestamp: Date.now(),
                         read: false,
@@ -615,7 +616,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         toolArgs: event.args as Record<string, unknown> | undefined,
                         confirmId: event.confirm_id,
                         alwaysScope: typeof event.always_scope === 'string' ? event.always_scope : undefined,
-                        timeoutSeconds: event.timeout_seconds ?? undefined,
+                        // No timeout from the backend means it waits; don't invent one.
+                        timeoutSeconds: event.timeout_seconds,
                     });
                     return;
                 }
