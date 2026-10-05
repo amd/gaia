@@ -164,8 +164,10 @@ def test_chat_system_prompt_directives_preserved() -> None:
         "fake",
         # Index-then-query workflow
         "index_document",
-        # Section explicitly listing what's currently indexed
-        "currently indexed documents",
+        # Section explaining the per-turn "[Indexed documents: ...]" line
+        # (the static list itself moved to get_memory_dynamic_context() so
+        # the system prompt stays fixed for KV-cache reuse — see #4698)
+        "indexed documents",
     ]
     missing = [m for m in must_contain if m not in prompt]
     assert not missing, (

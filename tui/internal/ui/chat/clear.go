@@ -22,6 +22,7 @@ func (m ChatModel) clearConversation() (tea.Model, tea.Cmd) {
 		m.logPeakRows = 0
 		m.buffer = ""
 		m.stashed = ""
+		m.phase = modelPhase{}
 		m.followTail = true
 		m.queryStart = time.Now()
 		// Same per-turn reset as startTurn: a stale step count or a card

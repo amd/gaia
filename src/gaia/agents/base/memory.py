@@ -142,8 +142,8 @@ def _live_software_versions() -> Dict[str, str]:
 
         versions["GAIA version"] = str(__version__)
         versions["Lemonade Server version"] = str(LEMONADE_VERSION)
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - an unreadable version is "no versions"
+        logger.debug("[MemoryMixin] software versions unavailable: %s", e)
     return versions
 
 
@@ -687,11 +687,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         self._proc_faiss_id_map: List[str] = []  # faiss_position -> procedure_id
 
         # Per-turn recalled-skill injection (#887 RECALL).  Holds the rendered
-        # procedure body(ies) recall_skill matched for the current goal; the
-        # auto-discovered get_recalled_skills_system_prompt() contributes it to
-        # the composed system prompt.  Empty string = no recall = the system
-        # prompt stays byte-identical to a build without procedural memory.
+        # procedure body(ies) recall_skill matched for the current goal; it rides
+        # in this turn's memory context, never the system prompt.
         self._recalled_skill_prompt = ""
+        # The stable memory section, rendered once per session (see
+        # get_memory_system_prompt). None until the first composition.
+        self._stable_memory_prompt: Optional[str] = None
         # The matched DistilledProcedure objects from the same per-turn recall
         # (#1451): the tool loader reads their tools_required via
         # _recalled_skill_tools as the SKILL signal.  Empty list = no recall =
@@ -1123,8 +1124,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         old = self._memory_context
         self._memory_context = context
         logger.info("[MemoryMixin] context switched %s → %s", old, context)
-        if hasattr(self, "rebuild_system_prompt"):
-            self.rebuild_system_prompt()
+        self._refresh_stable_memory_prompt()
 
     # ==================================================================
     # Embedding Pipeline
@@ -1764,6 +1764,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         id_slot=SIDE_SLOT,
                         temperature=0.1,
                         max_tokens=EXTRACTION_MAX_TOKENS,
+                        **self._side_request_kwargs(),
                     )
                 except BaseException as exc:  # re-raised on the caller's thread
                     outcome["error"] = exc
@@ -1788,6 +1789,20 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             response = outcome["response"]
             raw_text = response.text if hasattr(response, "text") else str(response)
+            if (
+                getattr(response, "finish_reason", None) == "length"
+                and not raw_text.strip()
+            ):
+                logger.error(
+                    "[MemoryMixin] extraction stored nothing: %s spent its whole "
+                    "%d-token budget without writing an answer (reasoning only). "
+                    "Each such call holds the GPU for minutes; if this repeats, "
+                    "the model ignores the thinking switch GAIA sends for side "
+                    "requests — run `gaia diagnostics` and report it.",
+                    getattr(self.chat, "effective_model", "the model"),
+                    EXTRACTION_MAX_TOKENS,
+                )
+                return []
 
             # Strip thinking tags if present (Qwen3.5 models)
             raw_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
@@ -2093,6 +2108,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         except Exception as e:
             logger.warning("[MemoryMixin] post-init prune failed: %s", e)
 
+        # The session's frozen memory section is taken after upkeep, before the
+        # first request that carries it.
+        self._refresh_stable_memory_prompt()
+
     # ==================================================================
     # Conversation Consolidation
     # ==================================================================
@@ -2185,6 +2204,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         system_prompt="You are a conversation summarizer. Return valid JSON only.",
                         temperature=0.1,
                         max_tokens=1024,
+                        **self._side_request_kwargs(),
                     )
 
                     raw_text = (
@@ -2417,6 +2437,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     system_prompt="You are a memory reconciliation engine. Return valid JSON only.",
                     temperature=0.1,
                     max_tokens=256,
+                    **self._side_request_kwargs(),
                 )
 
                 raw_text = response.text if hasattr(response, "text") else str(response)
@@ -2520,11 +2541,39 @@ class MemoryMixin(ProceduralMemoryMixin):
         Time and upcoming items are intentionally excluded — they are injected
         per-turn via get_memory_dynamic_context() to keep this prompt frozen for
         LLM KV-cache reuse.
+
+        Rendered once per session. The store changes under it every turn
+        (extraction, auto-stored tool errors, confidence bumps), and any prompt
+        recomposition would otherwise carry that drift into the system prompt
+        and force a full re-read. What is stored mid-session reaches the model
+        through the per-turn recall instead. A context switch, a session reset,
+        or an explicit edit of an item shown here re-renders it.
         """
         if getattr(self, "_memory_store", None) is None:
             return ""
 
-        return self._build_stable_memory_prompt()
+        if getattr(self, "_stable_memory_prompt", None) is None:
+            self._stable_memory_prompt = self._build_stable_memory_prompt()
+        return self._stable_memory_prompt
+
+    def _refresh_stable_memory_prompt(self) -> None:
+        """Re-render the stable memory section now and recompose the prompt."""
+        self._stable_memory_prompt = None
+        if hasattr(self, "rebuild_system_prompt"):
+            self.rebuild_system_prompt()
+
+    def _refresh_if_shown(self, knowledge_id: str) -> None:
+        """Re-render after an explicit edit, but only if the prompt shows the item.
+
+        A forgotten or corrected memory must stop appearing in the system prompt
+        at once; editing one it never showed costs no re-read.
+        """
+        shown = getattr(self, "_stable_memory_ids", set()) | getattr(
+            self, "_stable_lesson_ids", set()
+        )
+        frozen = getattr(self, "_stable_memory_prompt", None)
+        if frozen is not None and knowledge_id in shown:
+            self._refresh_stable_memory_prompt()
 
     def get_memory_dynamic_context(self) -> str:
         """Build the per-turn dynamic context string: current time + upcoming items.
@@ -2771,7 +2820,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
 
     def _build_dynamic_memory_context(self) -> str:
-        """Dynamic per-turn context: time, upcoming items, relevant memories."""
+        """Dynamic per-turn context: time, upcoming items, relevant memories,
+        lessons learned this session, and procedures recalled for this goal."""
         store = self._memory_store
         lines = []
 
@@ -2850,6 +2900,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "Learned earlier this session:\n"
                 + "\n".join(f"  - {item['content']}" for item in fresh)
             )
+
+        recalled = getattr(self, "_recalled_skill_prompt", "")
+        if recalled:
+            lines.append(recalled)
 
         return "[GAIA Memory Context]\n" + "\n\n".join(lines)
 
@@ -2940,9 +2994,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         self._turn_tool_record = []
         self._memory_turn_query = user_input
 
-        # Refresh the recalled-procedure injection for this goal (#887 RECALL).
-        # Uses the clean goal (not the dynamic-context-augmented message) and
-        # recomposes the system prompt only when the recalled set changes.
+        # Recall procedures for this goal (#887 RECALL) from the clean goal, not
+        # the augmented message; the dynamic context below carries the result.
         self._refresh_recalled_skills(user_input)
 
         # Prepend dynamic context to the user message
@@ -4166,6 +4219,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     mixin._embed_and_index(
                         knowledge_id, kwargs["content"], "edited memory", replace=True
                     )
+                mixin._refresh_if_shown(knowledge_id)
 
                 result = {"status": "updated", "knowledge_id": knowledge_id}
                 if content_truncated:
@@ -4182,6 +4236,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return {"status": "error", "message": str(exc)}
             if removed:
                 mixin._faiss_remove(knowledge_id)
+                mixin._refresh_if_shown(knowledge_id)
                 return {"status": "removed", "knowledge_id": knowledge_id}
             return {"status": "not_found", "knowledge_id": knowledge_id}
 
@@ -4317,6 +4372,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._reminder_last_turn_at = None
             self._session_lessons = []
             self._confirmed_lessons = set()
+            # This session's lessons leave the per-turn context with the reset,
+            # so the stable section must be re-read to pick them up.
+            self._refresh_stable_memory_prompt()
             logger.info(
                 "[MemoryMixin] session reset, new session_id=%s",
                 self._memory_session_id,

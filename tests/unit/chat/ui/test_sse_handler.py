@@ -1360,6 +1360,49 @@ class TestSummarizeToolResult:
         result = _summarize_tool_result([1, 2, 3])
         assert "1" in result
 
+    # --- Tabular analysis results ---
+
+    def test_a_group_by_says_how_many_groups_from_how_many_rows(self):
+        data = {
+            "status": "success",
+            "row_count": 120,
+            "columns": [
+                "date",
+                "region",
+                "product",
+                "units",
+                "price",
+                "revenue",
+                "rep",
+            ],
+            "group_by": "region",
+            "group_by_results": [{"region": r} for r in ("W", "E", "N", "S")],
+        }
+        assert _summarize_tool_result(data) == "4 groups by region · 120 rows"
+
+    def test_a_group_by_at_the_cap_says_top(self):
+        data = {
+            "status": "success",
+            "row_count": 900,
+            "columns": ["sku", "revenue"],
+            "group_by": "sku",
+            "group_by_results": [{"sku": i} for i in range(25)],
+        }
+        assert _summarize_tool_result(data) == "top 25 groups by sku · 900 rows"
+
+    def test_a_plain_analysis_counts_rows_and_columns(self):
+        data = {"status": "success", "row_count": 1, "columns": ["a", "b"]}
+        assert _summarize_tool_result(data) == "1 row · 2 columns"
+
+    def test_an_empty_file_keeps_its_message(self):
+        data = {
+            "status": "success",
+            "row_count": 0,
+            "columns": ["a"],
+            "message": "File is empty or contains only headers.",
+        }
+        assert "File is empty" in _summarize_tool_result(data)
+
     # --- Command execution results ---
 
     def test_command_success_with_output(self):
@@ -1552,6 +1595,10 @@ class TestSummarizeToolResult:
         data = {"num_chunks": 5}
         result = _summarize_tool_result(data)
         assert result == "Indexed document (5 chunks)"
+
+    def test_indexing_an_already_indexed_document_says_so(self):
+        data = {"num_chunks": 5, "already_indexed": True, "filename": "a.pdf"}
+        assert _summarize_tool_result(data) == "Already indexed (5 chunks)"
 
     # --- File read results ---
 
