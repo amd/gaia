@@ -834,7 +834,10 @@ def interactive_mode(agent: ChatAgent):
                             )
 
                             page_num = extract_page_from_chunk(
-                                chunk, chunk_idx, agent.rag.chunks
+                                chunk,
+                                chunk_idx,
+                                agent.rag.chunks,
+                                agent.rag.chunk_to_file,
                             )
                             page_info = (
                                 f"Page {page_num}" if page_num else "Page Unknown"

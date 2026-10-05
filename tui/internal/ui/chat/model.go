@@ -189,6 +189,9 @@ type ChatModel struct {
 	// answer of last resort when a model answers, calls one more tool, and
 	// then ends with an empty `final`.
 	stashed string
+	// phase is what the model is doing while nothing else is on the wire, as
+	// the agent reported it. A tool call or result supersedes it.
+	phase modelPhase
 
 	// queued holds follow-ups typed while the agent was still working, sent one
 	// at a time as each turn settles (see Update's drain). A local model
@@ -1864,6 +1867,7 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	m.logPeakRows = 0
 	m.buffer = ""
 	m.stashed = ""
+	m.phase = modelPhase{}
 	// Asking a new question means you want to see its answer, wherever the
 	// scroll happened to be left.
 	m.followTail = true
@@ -2942,25 +2946,63 @@ func anyCompleted(log []ActivityItem) bool {
 	return false
 }
 
-// idlePhrase describes the turn when no tool call is open — the model is either
-// working out what to do or writing the answer. Both are real states worth
-// naming; "Waiting for agent" names neither.
-// Deliberately not phrased like the sidecar's own status text: this line sits
-// directly under it, and two lines saying the same thing read as a stuck loop.
+// idlePhrase describes the turn when no tool call is open. It names only a
+// state something on the wire proved: the agent's phase report, or answer text
+// arriving. Without either (an agent that predates phases) it says no more
+// than that the request is with the model.
 func (m ChatModel) idlePhrase(logLen int) string {
 	switch {
 	case m.cancelPending:
 		// requestCancel clears the activity log but leaves the turn streaming,
 		// so without this the spinner sat under "cancelling…" cheerfully
-		// announcing "Getting started".
+		// announcing the turn's opening state.
 		return "Stopping at the next step"
 	case m.buffer != "":
 		return "Writing your answer"
-	case logLen == 0:
-		return "Getting started"
-	default:
-		return "Thinking about the next step"
 	}
+	if phrase := m.phasePhrase(); phrase != "" {
+		return phrase
+	}
+	if logLen == 0 {
+		return "Waiting for the model"
+	}
+	return "Thinking about the next step"
+}
+
+// modelPhase is the agent's latest report of what the model is doing.
+type modelPhase struct {
+	name  string
+	words int
+	// label is the agent's own sentence, used for a phase this client has
+	// no phrasing of its own for.
+	label string
+}
+
+// phasePhrase words m.phase for the live line, or "" when there is none.
+func (m ChatModel) phasePhrase() string {
+	model := m.modelDisplay
+	if model == "" {
+		model = "the model"
+	}
+	switch m.phase.name {
+	case "":
+		return ""
+	case "loading_model":
+		return "Loading " + model + " into memory"
+	case "downloading_model":
+		return "Downloading " + model
+	case "reading":
+		if anyCompleted(m.activity) {
+			return "Reading the tool results"
+		}
+		return "Reading your request"
+	case "reasoning":
+		if m.phase.words > 0 {
+			return "Reasoning · " + commas(m.phase.words) + " words"
+		}
+		return "Reasoning"
+	}
+	return m.phase.label
 }
 
 // renderLiveLine draws the one line that owns the spinner and the clock.

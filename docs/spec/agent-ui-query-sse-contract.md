@@ -165,7 +165,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
 |---|---|---|
-| `status` | `{message}` (the stdio transport adds model fields, §10.3) | progress line / spinner label |
+| `status` | `{message, phase?, words?, chars?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label |
 | `token` | `{delta}` | stream assistant text |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
@@ -187,7 +187,10 @@ indistinguishable from a dead one.
   "required": ["type", "message"],
   "properties": {
     "type":    { "const": "status" },
-    "message": { "type": "string" }
+    "message": { "type": "string" },
+    "phase":   { "type": "string" },   // optional, §4.4
+    "words":   { "type": "integer" },  // with phase "reasoning"
+    "chars":   { "type": "integer" }   // with phase "tool_call"
   } }
 
 // token
@@ -320,6 +323,23 @@ Rules every receiver implements and every producer can rely on:
 work and render consistently. A custom `render` key requires a first-party /
 AMD-verified frontend component in v1 (§0.15); until yours ships, emitting it
 degrades to the unsupported-card fallback.
+
+### 4.4 `status.phase` (additive)
+
+A `status` may carry `phase`, naming what the model is doing while nothing else
+is on the wire. It is sent when the phase actually starts, never on a timer, and
+`message` says the same thing in words for a receiver that ignores the field.
+
+| `phase` | Sent when | Count |
+|---|---|---|
+| `reading` | a model call is sent (again after a load finishes) | — |
+| `loading_model` / `downloading_model` | the agent starts loading (or first downloading) the model | — |
+| `reasoning` | the model's first reasoning output, then about once a second | `words` reasoned so far |
+| `tool_call` | a long tool call's arguments are still streaming | `chars` so far |
+
+A phase lasts until the next phase, `token`, `tool_call` or `tool_result`. A
+receiver that shows narration separately should treat a phased `status` as
+state, not narration.
 
 ---
 

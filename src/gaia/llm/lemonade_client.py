@@ -1208,6 +1208,21 @@ def requested_thinking(
     return mr.thinking if mr else None
 
 
+def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
+    """Request fields that turn thinking off for a short, structured side call.
+
+    A thinking model bills its reasoning against ``max_tokens``, so a side call
+    that wants a few hundred tokens of JSON instead reasons until the cap and
+    returns nothing. Empty for cloud models and for local models whose template
+    has no thinking switch (``requested_thinking`` is None), which send nothing.
+    """
+    if not isinstance(model_id, str) or cloud_model_provider(model_id):
+        return {}
+    if requested_thinking(model_id) is None:
+        return {}
+    return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
 # Define agent profiles with their model requirements
 AGENT_PROFILES = {
     "chat": AgentProfile(
@@ -2167,6 +2182,11 @@ class LemonadeClient:
         # (#2924). Reset at the top of every ``_ensure_model_loaded_locked``
         # call so a later warm call never leaks a stale value.
         self._last_model_load_seconds: Optional[float] = None
+
+        # Called as (model, state) around a load this client actually performs:
+        # "downloading" or "loading" before it, "loaded" after it succeeds. A
+        # cold load is the longest silent wait a chat turn has.
+        self.model_load_listener: Optional[Callable[[str, str], None]] = None
 
         # Set logging level based on verbosity
         if not verbose:
@@ -5140,6 +5160,10 @@ class LemonadeClient:
         # corrupt checkpoint) previously got hidden by a blanket
         # ``except Exception: log.debug(...)``, so the downstream chat call
         # failed generically with no model id, URL, or fix. Surface it loudly.
+        if self.model_load_listener is not None:
+            self.model_load_listener(
+                model, "downloading" if is_downloaded is False else "loading"
+            )
         _load_start = time.monotonic()
         try:
             self.load_model(
@@ -5160,6 +5184,8 @@ class LemonadeClient:
         # raises above and never reaches here, so it can't be misattributed
         # as ttft on a request that never got a response.
         self._last_model_load_seconds = time.monotonic() - _load_start
+        if self.model_load_listener is not None:
+            self.model_load_listener(model, "loaded")
 
         # Print model ready message
         try:

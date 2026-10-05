@@ -433,6 +433,13 @@ class OutputHandler(ABC):
     def report_progress(self, message: str) -> None:
         """A live line for long work that has nothing else to show yet. Optional."""
 
+    def report_phase(self, phase: str, message: str, **counts: int) -> None:
+        """Name what the model is doing right now (loading, reading, reasoning).
+
+        ``phase`` is a stable id a client can phrase for itself; ``message`` is
+        the same thing in words for clients that only show text. Optional.
+        """
+
     def pause_progress(self):
         """Pause progress indicator, remembering state for later resume. Optional — default no-op."""
         ...
