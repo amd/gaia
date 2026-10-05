@@ -4,7 +4,7 @@ id: task_coding_mini_repo
 name: "Skill Task — coding Skill Finds Real Symbols"
 category: gaia_skills_tasks
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   The coding skill works the fixture mini-repo: find where a behavior
   lives, name the real symbol and file, and read the actual code before

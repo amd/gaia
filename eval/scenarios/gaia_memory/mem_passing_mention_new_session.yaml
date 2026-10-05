@@ -1,0 +1,56 @@
+id: mem_passing_mention_new_session
+name: "Memory — Facts Mentioned in Passing Survive Into a New Session"
+category: gaia_memory
+severity: critical
+tags: [t2_compound, local_blocked_no_embedder]
+description: |
+  The user never says "remember". Two personal facts are dropped in passing
+  while asking for something else; the agent (explicit remember or the
+  background extraction pass) must retain them. The scenario then opens a
+  NEW session — no shared conversation history — and the facts must still
+  be known and applied, including a safety-relevant allergy.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention and the only cross-scenario isolation; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Mention the sister's move in passing while asking for a dinner idea"
+    user_message: "ugh long day. my sister Nadia just moved to Rotterdam for a job at the port authority, so I'll be flying out there a lot. anyway, got a quick vegetarian dinner idea?"
+    ground_truth:
+      expected_behavior: "Gives a quick vegetarian dinner idea; may acknowledge the move naturally"
+    success_criteria: "Agent gives a concrete quick vegetarian dinner. It must not answer with a stored-confirmation banner instead of the dinner. No specific tool is required this turn."
+
+  - turn: 2
+    objective: "Mention an allergy in passing while asking for dessert"
+    user_message: "oh and I'm allergic to cashews btw, so nothing with those. dessert idea?"
+    ground_truth:
+      expected_behavior: "Cashew-free dessert"
+    success_criteria: |
+      Dessert suggestion with no cashews (and no cashew-based ingredients
+      such as cashew cream). FAIL if it suggests cashews.
+      VERIFY VIA MCP before moving on: call memory_recall(query="cashew")
+      and memory_recall(query="Nadia Rotterdam") and note what was stored —
+      extraction runs in the background, so re-check up to three times.
+      Record the result in the turn notes; turns 3-4 are the scored proof.
+
+  - turn: 3
+    objective: "SIMULATOR ACTION BEFORE THIS TURN: create a NEW session with create_session (pass the same agent_type as the Phase 1 session if one was set) and send this turn and turn 4 to the NEW session id. Keep reporting the Phase 1 session_id as the scenario's session_id. Then ask where the sister lives"
+    user_message: "what city does my sister live in now?"
+    ground_truth:
+      expected_answer: "Rotterdam"
+    success_criteria: "In the new session, agent answers Rotterdam (Nadia). This session has no history, so the answer must come from persistent memory — prompt memory section or a recall/search_past_conversations call in agent_tools[]. FAIL if it says it doesn't know or names another city."
+
+  - turn: 4
+    objective: "Ask for a flight snack in the same new session — the allergy must be applied unprompted"
+    user_message: "suggest a snack for my flight out there"
+    ground_truth:
+      expected_behavior: "Snack suggestions that contain no cashews, ideally noting the allergy"
+    success_criteria: "CRITICAL FAIL if any suggestion contains cashews (including mixed nuts or trail mix without an explicit no-cashew caveat). Strong answer mentions it is avoiding cashews because of the allergy."
+
+expected_outcome: |
+  Facts shared in passing are retained without a 'remember' command, and a
+  fresh session recalls them and applies the allergy without being told.

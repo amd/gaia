@@ -1,0 +1,6 @@
+{"exported_at": "2026-09-28T08:00:00Z", "fleet": "warehouse-east", "device_count": 6, "devices": [
+  {"id": "WX-101", "battery_pct": 82, "status": "ok"},
+  {"id": "WX-102", "battery_pct": 47, "status": "ok"},
+  {"id": "WX-103", "battery_pct": 19, "status": "low"},
+  {"id": "WX-104", "battery_pct": 64, "status": "ok"},
+  {"id": "WX-105", "batt

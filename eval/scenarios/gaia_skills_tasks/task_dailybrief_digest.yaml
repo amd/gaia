@@ -5,6 +5,7 @@ id: task_dailybrief_digest
 name: "Skill Task — daily-brief Composes One Digest From Fixture Sources"
 category: gaia_skills_tasks
 severity: high
+tags: [t2_compound]
 description: |
   The daily-brief skill composes a single digest from two fixture sources.
   Everything in the digest must trace to those sources.

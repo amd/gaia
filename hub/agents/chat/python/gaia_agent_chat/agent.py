@@ -68,6 +68,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ShellToolsMixin,
     WaitToolsMixin,
 )
+from gaia.agents.tools.rag_tools import documents_still_indexing
 from gaia.llm.inference_location import (
     InferenceLocation,
     resolve_inference_location,
@@ -238,6 +239,9 @@ class ChatAgentConfig:
 
     # Session persistence (UI session ID for cross-turn document retention)
     ui_session_id: Optional[str] = None
+    # Memory starts off (private chat / memory off in the UI): the embedder
+    # loads only once memory is actually used.
+    memory_incognito: bool = False
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
     enable_sd_tools: bool = False  # Stable Diffusion image generation
@@ -507,7 +511,10 @@ class ChatAgent(
         self.tool_loader = self._maybe_build_tool_loader()
 
         # Initialize memory subsystem (before super().__init__ which calls _register_tools)
-        self.init_memory(embedding_model=effective_embedding_model)
+        self.init_memory(
+            embedding_model=effective_embedding_model,
+            incognito=config.memory_incognito,
+        )
 
         # Store base URL for use in _register_tools() (VLM, etc.)
         self._base_url = effective_base_url
@@ -622,14 +629,27 @@ class ChatAgent(
             self._start_watching()
 
     def _indexed_documents_line(self) -> str:
-        """``[Indexed documents: a.pdf, b.txt]``, or "" when none are indexed."""
+        """``[Indexed documents: a.pdf, b.txt]``, or "" when none are indexed.
+
+        A document still indexing in the background is not searchable, so it
+        is named on a line of its own instead.
+        """
         profile = getattr(self.config, "prompt_profile", "full")
         if "doc_rag" not in get_profile_spec(profile).tool_groups:
             return ""
-        if not (self.rag and self.rag.indexed_files):
+        if not self.rag:
             return ""
-        names = sorted({Path(fp).name for fp in self.rag.indexed_files})
-        return f"[Indexed documents: {', '.join(names)}]"
+        lines = []
+        if self.rag.indexed_files:
+            names = sorted({Path(fp).name for fp in self.rag.indexed_files})
+            lines.append(f"[Indexed documents: {', '.join(names)}]")
+        pending = sorted({Path(fp).name for fp in documents_still_indexing(self.rag)})
+        if pending:
+            lines.append(
+                "[Still indexing in the background, not searchable yet: "
+                f"{', '.join(pending)}]"
+            )
+        return "\n".join(lines)
 
     def get_memory_dynamic_context(self) -> str:
         """Per-turn context, plus which documents are indexed right now."""
@@ -1182,7 +1202,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.config, "enable_scratchpad", False
         ):
             scratchpad_section = """
-**DATA ANALYSIS WORKFLOW (Scratchpad):** find_files → create_table → read_file + insert_data per doc → query_data (SQL: SUM/AVG/GROUP BY) → drop_table when done.
+**DATA ANALYSIS WORKFLOW (Scratchpad):** find_files → create_table → read_file + insert_data per doc → query_data (SQL: SUM/AVG/GROUP BY) → drop_table → final answer built from the query results.
 """
 
         browser_section = ""

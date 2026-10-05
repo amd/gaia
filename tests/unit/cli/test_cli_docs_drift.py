@@ -26,8 +26,22 @@ from typing import Iterator
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI_DOC = REPO_ROOT / "docs" / "reference" / "cli.mdx"
 
+# Deliberately outside the documented CLI surface: the mail guide and the CLI
+# reference describe the flagship's read-only mailbox tools, and `gaia email`
+# drives a different agent that the docs no longer cover. Drop these when the
+# command itself goes (#4523).
+_INTENTIONALLY_UNDOCUMENTED = {
+    ("email", "autonomy", "kill"),
+    ("email", "autonomy", "pause"),
+    ("email", "autonomy", "resume"),
+    ("email", "autonomy", "run"),
+    ("email", "autonomy", "set-level"),
+    ("email", "autonomy", "status"),
+    ("email", "autonomy", "trust"),
+}
+
 # Pre-existing gaps (#4250 fixed `mcp serve` / `eval code`; these remain).
-_ALLOWLISTED_UNDOCUMENTED = {
+_ALLOWLISTED_UNDOCUMENTED = _INTENTIONALLY_UNDOCUMENTED | {
     ("connectors", "activations", "activate"),
     ("connectors", "activations", "deactivate"),
     ("connectors", "activations", "list"),

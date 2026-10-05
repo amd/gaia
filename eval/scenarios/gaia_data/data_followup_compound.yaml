@@ -3,6 +3,7 @@ id: data_followup_compound
 name: "Data — Load Once, Compound Follow-Ups"
 category: gaia_data
 severity: high
+tags: [t2_compound]
 description: |
   The CSV is loaded once, then a chain of follow-ups — including a bare
   elliptical one — is answered against the loaded table without reloading

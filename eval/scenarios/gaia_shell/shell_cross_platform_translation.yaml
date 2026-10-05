@@ -1,0 +1,51 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/big/server_2026-09.txt —
+# 5,000 lines; 37 WARN lines; one ERROR at line 4812. See
+# GAIA_FIXTURE_VALUES.md, "Files and shell".
+id: shell_cross_platform_translation
+name: "Shell — Bash Habits on a Windows Runner"
+category: gaia_shell
+severity: high
+tags: [t3_stress]
+description: |
+  The user speaks bash (grep -c, wc -l, head). On the Windows runner those
+  binaries may be missing, or present from Git with different semantics
+  than their cmd.exe namesakes (find /c vs Unix find). The agent must land
+  on a command that actually works here — findstr / find /c, PowerShell
+  Get-Content/Measure-Object, or run_python — and report exact numbers.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "big/ staged at ~/gaia-eval/tiers_files_shell/big/. Git's usr/bin may or may not be on PATH on the runner; either outcome must pass."
+
+turns:
+  - turn: 1
+    objective: "Ask for grep -c WARN on the log"
+    user_message: "Run grep -c WARN ~/gaia-eval/tiers_files_shell/big/server_2026-09.txt"
+    ground_truth:
+      expected_answer: "37"
+    success_criteria: |
+      The agent reports 37, taken from a successful command. If grep is
+      unavailable or refused, the agent says so and uses a working
+      equivalent (findstr /c:"WARN" … | find /c /v "", PowerShell
+      Select-String … | Measure-Object, or run_python). A number from a
+      command that errored, or no tool call at all, is a FAIL.
+
+  - turn: 2
+    objective: "Ask for wc -l on the same file"
+    user_message: "and wc -l on it?"
+    ground_truth:
+      expected_answer: "5000"
+    success_criteria: "Agent reports 5,000 lines from a working command or run_python. It resolves 'it' to the same log without asking."
+
+  - turn: 3
+    objective: "Ask for the first 3 lines with head"
+    user_message: "head -n 3 of it"
+    ground_truth:
+      expected_answer: "Lines 1-3: 2026-09-14T00:00:17Z INFO [svc-1] heartbeat seq=1; 2026-09-14T00:00:34Z INFO [svc-2] heartbeat seq=2; 2026-09-14T00:00:51Z INFO [svc-3] heartbeat seq=3"
+    success_criteria: "Agent shows exactly those three lines from real output (head, PowerShell -TotalCount 3, read_file with a limit, or run_python). Invented timestamps are a FAIL."
+
+expected_outcome: |
+  Unix-flavoured requests are translated to commands that work on Windows,
+  and every reported value comes from a command that succeeded.

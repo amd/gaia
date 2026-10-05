@@ -54,6 +54,10 @@ def test_stages_fixtures_skills_and_a_trusted_fixture_hub(tmp_path):
     assert not stage_eval_env.NOT_PRE_INSTALLED & installed
     assert (skills_root / "trusted-keys.json").is_file()
 
+    # The git workspaces are built into the staged copy, never the checkout.
+    assert (staged / "tiers_resilience" / "journal" / ".git").is_dir()
+    assert any((staged / "tiers_git_code").glob("*/.git"))
+
 
 def test_nothing_that_holds_an_answer_is_staged(tmp_path):
     """The backend runs from the staged folder, so the agent can read all of it."""
@@ -63,6 +67,7 @@ def test_nothing_that_holds_an_answer_is_staged(tmp_path):
     names = {p.name for p in staged.rglob("*")}
     assert "ground_truth.json" not in names
     assert not {n for n in names if n.startswith("_gen_")}
+    assert not {"build_fixtures.py", "fake_gh_auth.json"} & names
     for harness in ("fake_gh", "email", "fixture_hub", "web", "rss", "mcp_stub"):
         assert not (staged / harness).exists(), harness
     assert not list(staged.glob("*.py")) and not list(staged.glob("*.json"))
@@ -114,3 +119,10 @@ def test_restaging_clears_read_only_files(tmp_path):
     stage_eval_env.stage(tmp_path)
     assert not locked.exists()
     assert (tmp_path / "gaia-eval" / "csv" / "sales.csv").is_file()
+
+
+def test_restaging_replaces_built_repositories(tmp_path):
+    # The builders write objects read-only; a second staging must still clear them.
+    stage_eval_env.stage(tmp_path)
+    stage_eval_env.stage(tmp_path)
+    assert (tmp_path / "gaia-eval" / "tiers_resilience" / "journal" / ".git").is_dir()

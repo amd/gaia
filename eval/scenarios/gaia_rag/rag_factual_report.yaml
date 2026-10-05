@@ -2,7 +2,7 @@ id: rag_factual_report
 name: "RAG — Factual Extraction From a Financial Report"
 category: gaia_rag
 severity: critical
-tags: [local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   Direct fact lookup from the Acme Q3 report through the flagship agent.
   Answers must be grounded in retrieval, not general knowledge.

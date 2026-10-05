@@ -65,6 +65,7 @@ class RAGConfig:
 
     # VLM settings
     vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
+    use_vlm: bool = True  # False: never read PDF/PPTX images, even if the VLM is installed
 
     # Security
     allowed_paths: Optional[List[str]] = None

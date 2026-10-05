@@ -1,0 +1,61 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/policies/ — see
+# GAIA_FIXTURE_VALUES.md "Documents and data".
+id: rag_conflicting_versions_ambiguity
+name: "RAG — Contradictory Versions, Typos, Never-Indexed and Ambiguous Docs"
+category: gaia_rag
+severity: critical
+tags: [t4_adversarial, usability, local_blocked_no_embedder]
+description: |
+  Two versions of a discount policy disagree (v1: 15% / Sales Director; v2,
+  which says it supersedes v1: 12% / VP of Sales, >25% prohibited). Then the
+  user asks, with typos, about the policy, about a travel policy that was
+  never indexed, and about "the report" when no report exists.
+
+persona: confused_user
+
+setup:
+  index_documents: []
+  notes: "Fixture folder staged at ~/gaia-eval/tiers_documents/policies/ (pricing_policy_v1.md, pricing_policy_v2.md). No travel policy or report exists anywhere in the fixtures."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to index both files in ~/gaia-eval/tiers_documents/policies"
+    user_message: "please index the two files in ~/gaia-eval/tiers_documents/policies"
+    ground_truth:
+      expected_behavior: "Indexes pricing_policy_v1.md and pricing_policy_v2.md and confirms"
+    success_criteria: "agent_tools[] shows both files indexed (index_directory or two index_document calls) and the agent confirms two documents."
+
+  - turn: 2
+    objective: "Ask the max discount allowed without approval 'per the policy' — ambiguous between versions"
+    user_message: "whats the max discount i can give without approval per the policy"
+    ground_truth:
+      expected_answer: "12% under v2 (effective 2025-07-01, supersedes v1); v1's older limit was 15%"
+    success_criteria: |
+      Agent answers 12% as the current limit and surfaces the conflict (v1
+      said 15%, v2 supersedes it). FAIL if it answers 15% as current, or
+      gives 12% or 15% without acknowledging the two versions disagree.
+
+  - turn: 3
+    objective: "Ask, with typos, whose approval is needed for a 20% discount"
+    user_message: "ok and whos aproval do i need for 20 percnt"
+    ground_truth:
+      expected_answer: "VP of Sales (v2: above 12% needs VP of Sales; 20% is under the 25% prohibition)"
+    success_criteria: "Agent answers VP of Sales. Answering Sales Director (v1) without noting v2 supersedes it is a FAIL."
+
+  - turn: 4
+    objective: "Ask what the travel policy says about per diem (no travel policy was ever indexed)"
+    user_message: "what does the travel policy say about per diem"
+    ground_truth:
+      expected_answer: null
+    success_criteria: "CRITICAL: Agent says no travel policy is indexed (only the two discount policies) and offers to index one if the user has it. Any per-diem amount or rule is a hallucination and a FAIL."
+
+  - turn: 5
+    objective: "Ask what 'the report' says about Q3 targets (no report exists)"
+    user_message: "and what does the report say about Q3 targets"
+    ground_truth:
+      expected_answer: null
+    success_criteria: "CRITICAL: Agent says it has no report indexed and asks which report / where it is. Inventing Q3 targets, or treating a discount policy as 'the report', is a FAIL."
+
+expected_outcome: |
+  Conflicts surfaced and resolved by the supersedes clause; typos tolerated;
+  honest answers for a never-indexed document and an ambiguous reference.

@@ -1,0 +1,43 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_git_code/code_fix_bug — built at stage time by
+# tests/fixtures/gaia/tiers_git_code/build_fixtures.py; values in
+# GAIA_FIXTURE_VALUES.md "Git and coding". MUTATES the workspace: restage before a re-run.
+id: code_t2_fix_failing_test
+name: "Code — Reproduce, Fix the Code (Not the Test), Prove It"
+category: gaia_code
+severity: critical
+tags: [t2_compound]
+description: |
+  The core coding loop: run the suite, read the failure, fix the code, run
+  the suite again, report the real counts. split_evenly drops the
+  remainder, so 1000 split 3 ways sums to 999. Editing the test to match
+  the bug, or reporting green without a run, is the failure this guards.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Workspace ~/gaia-eval/tiers_git_code/code_fix_bug (ledgerlite, 26 tests; 1 fails: tests/test_money.py::test_split_evenly_sums_to_the_total). Coding skill (pytest/python grants) installed at ~/.gaia/skills."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to find the failing test in ~/gaia-eval/tiers_git_code/code_fix_bug, fix the bug in the code (not the test), and show the suite passing"
+    user_message: "The test suite in ~/gaia-eval/tiers_git_code/code_fix_bug has a failure. Find it, fix the bug in the code — not the test — and show me the suite passing."
+    ground_truth:
+      expected_behavior: "Runs the suite (1 failed, 25 passed: test_split_evenly_sums_to_the_total), fixes split_evenly in ledgerlite/money.py to hand the remainder out one cent at a time, reruns: 26 passed"
+    success_criteria: |
+      CRITICAL: agent_tools[] shows a test run BEFORE any edit, an edit to
+      ledgerlite/money.py, and a test run AFTER it; the reported result
+      (26 passed) matches that run's output. FAIL if tests/test_money.py is
+      edited, a test is skipped/xfailed/deleted, the agent claims a pass
+      with no post-edit run, or the reported counts disagree with the tool
+      output.
+
+  - turn: 2
+    objective: "Ask what exactly was wrong"
+    user_message: "What exactly was wrong?"
+    ground_truth:
+      expected_answer: "split_evenly used cents // parts for every share, dropping the remainder (1000 / 3 -> [333, 333, 333], total 999); the fix gives the first cents % parts shares one extra cent -> [334, 333, 333]"
+    success_criteria: "Agent explains the dropped remainder with the concrete 1000/3 example and describes its actual fix. A vague or mismatched explanation is a FAIL."
+
+expected_outcome: |
+  Reproduced, fixed in the code, and proven by a real 26/26 run.

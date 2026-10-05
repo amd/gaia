@@ -606,6 +606,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         db_path: Optional[Path] = None,
         context: str = "global",
         embedding_model: Optional[str] = None,
+        incognito: bool = False,
     ) -> None:
         """Initialize the memory subsystem (v2 startup sequence).
 
@@ -626,6 +627,11 @@ class MemoryMixin(ProceduralMemoryMixin):
                 backend (#1744).
                 The embedding dimension is derived from the live embedder, not
                 this id, so a model with a different dim works without changes.
+            incognito: Start with memory off for this session (a private chat
+                or memory switched off in the Agent UI). The embedder is not
+                loaded until memory is actually used — a turn with memory back
+                on, a ``recall``, or a dashboard reconcile/consolidate — so a
+                session that never uses memory never pays for it.
 
         Does not raise when the embedding service is unreachable: it logs a
         warning and degrades to a memory-disabled session (``memory_store`` is
@@ -717,6 +723,35 @@ class MemoryMixin(ProceduralMemoryMixin):
         self._reminders_surfaced: set[str] = set()
         self._reminder_last_turn_at: Optional[float] = None
 
+        # Step 9, before the embedder: a degraded session still needs an id.
+        self._memory_session_id = str(uuid4())
+
+        self._memory_embedder_pending = False
+        if incognito:
+            # Memory is off for this session: load the embedder on first use.
+            self._incognito = True
+            self._memory_embedder_pending = True
+            self._memory_post_init_pending = False
+        elif not self._start_memory_embedder():
+            return
+
+        # Step 10: Initialize system context on first run (non-blocking)
+        try:
+            self.init_system_context()
+        except Exception as e:
+            logger.warning("[MemoryMixin] system context initialization failed: %s", e)
+
+        logger.info(
+            "[MemoryMixin] v2 initialized, session_id=%s context=%s",
+            self._memory_session_id,
+            context,
+        )
+
+    def _start_memory_embedder(self) -> bool:
+        """Validate the embedder, then backfill and index (startup steps 2-5).
+
+        Returns False after degrading to a memory-disabled session.
+        """
         # Step 2: Validate Lemonade embedding service connectivity.
         #
         # Memory v2 needs an embedding service to function (FAISS index, hybrid
@@ -785,10 +820,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._auto_extract_enabled = False
             self._incognito = True
             self._memory_post_init_pending = False
-            self._memory_session_id = str(uuid4())
             self._reminders_surfaced = set()
             self._reminder_last_turn_at = None
-            return
+            return False
 
         # (Embedder-change migration is handled above via the store's
         # reconcile_embedder, #1744.)
@@ -811,21 +845,15 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # Steps 6-8 need self.chat, so they run on the first query; prune follows consolidation.
         self._memory_post_init_pending = True
+        return True
 
-        # Step 9: Generate session UUID
-        self._memory_session_id = str(uuid4())
-
-        # Step 10: Initialize system context on first run (non-blocking)
-        try:
-            self.init_system_context()
-        except Exception as e:
-            logger.warning("[MemoryMixin] system context initialization failed: %s", e)
-
-        logger.info(
-            "[MemoryMixin] v2 initialized, session_id=%s context=%s",
-            self._memory_session_id,
-            context,
-        )
+    def _finish_deferred_memory_init(self) -> None:
+        """Load the embedder ``init_memory(incognito=True)`` deferred, once."""
+        if not getattr(self, "_memory_embedder_pending", False):
+            return
+        self._memory_embedder_pending = False
+        logger.info("[MemoryMixin] memory in use — loading the deferred embedder")
+        self._start_memory_embedder()
 
     @staticmethod
     def _system_context_refresh_reason(existing: List[Dict]) -> Optional[str]:
@@ -1587,8 +1615,11 @@ class MemoryMixin(ProceduralMemoryMixin):
         Returns:
             List of knowledge dicts, ranked by relevance.
         """
+        self._finish_deferred_memory_init()
         oversample = top_k * 4
         store = self._memory_store
+        if store is None:
+            raise RuntimeError(self.memory_unavailable_message())
 
         # Step 1: Embed the query (HARD REQUIREMENT — no BM25-only fallback)
         query_vec = self._embed_text(query)
@@ -2153,6 +2184,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             ``consolidated`` counts sessions that made progress, ``windows`` the
             turn-windows distilled across them.
         """
+        self._finish_deferred_memory_init()
         store = self._memory_store
         result = {"consolidated": 0, "windows": 0, "extracted_items": 0}
 
@@ -2349,6 +2381,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             "neutral": 0,
         }
 
+        self._finish_deferred_memory_init()
         if self._faiss_index is None or self._faiss_index.ntotal < 2:
             return result
 
@@ -2979,6 +3012,8 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     def warm_up(self, progress=None):
         """Run the deferred memory upkeep here, not in front of the first answer."""
+        if not getattr(self, "_incognito", False):
+            self._finish_deferred_memory_init()
         if getattr(self, "_memory_post_init_pending", False):
             if progress:
                 progress("Tidying memory")
@@ -2998,6 +3033,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         upcoming/overdue items) is injected per-turn by prepending it to the
         user message.
         """
+        # Memory switched back on for a session that started with it off.
+        if not getattr(self, "_incognito", False):
+            self._finish_deferred_memory_init()
+
         # UI callers may replace the construction-time silent console before
         # the first turn; report failures through the current handler.
         self.report_memory_unavailable()
@@ -3852,6 +3891,12 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         mixin = self  # Capture for closures
 
+        def _store_gone() -> Optional[dict]:
+            # A deferred embedder can fail after these tools were registered.
+            if mixin._memory_store is not None:
+                return None
+            return {"status": "error", "message": mixin.memory_unavailable_message()}
+
         @tool
         def remember(
             fact: str,
@@ -3878,6 +3923,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 sensitive: "true" to mark the entry private.
                 entity: Linked entity, e.g. 'person:Linda' or 'app:slack'.
             """
+            if (gone := _store_gone()) is not None:
+                return gone
             if getattr(mixin, "_incognito", False):
                 return {
                     "status": "skipped",
@@ -4002,6 +4049,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 time_from: ISO 8601 lower bound, e.g. '2026-01-01'.
                 time_to: ISO 8601 upper bound, e.g. '2026-03-31'.
             """
+            if (gone := _store_gone()) is not None:
+                return gone
             _recall_t0 = time.perf_counter()
             unfiltered = not any(
                 [query, category, domain, context, entity, time_from, time_to]
@@ -4166,6 +4215,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             entity: str = "",
         ) -> dict:
             """Update an existing memory entry by ID. Only non-empty fields change. reminded_at is maintained for you — do not set it after mentioning an item."""
+            if (gone := _store_gone()) is not None:
+                return gone
             kwargs = {}
             if content:
                 if not content.strip():
@@ -4250,6 +4301,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         @tool
         def forget(knowledge_id: str) -> dict:
             """Remove a specific memory entry by ID."""
+            if (gone := _store_gone()) is not None:
+                return gone
             try:
                 removed = mixin._memory_store.delete(knowledge_id)
             except ValueError as exc:
@@ -4277,6 +4330,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             time_to: str = "",
         ) -> dict:
             """Search past conversations. Use query for keywords, days for time range, time_from/time_to for ISO 8601 boundaries, or combinations."""
+            if (gone := _store_gone()) is not None:
+                return gone
             # Smaller models often emit numeric args as JSON strings ("7", "10");
             # coerce before any comparison so clamping below doesn't raise TypeError.
             for _name, _value in (("days", days), ("limit", limit)):

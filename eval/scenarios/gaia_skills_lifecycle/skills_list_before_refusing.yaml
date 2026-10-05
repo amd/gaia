@@ -2,6 +2,7 @@ id: skills_list_before_refusing
 name: "Skills — Check the List Before Claiming Unavailable"
 category: gaia_skills_lifecycle
 severity: high
+tags: [t2_compound]
 description: |
   The user asks for a capability by rough description, not by skill name.
   The agent must check list_skills (and optionally the hub) before claiming

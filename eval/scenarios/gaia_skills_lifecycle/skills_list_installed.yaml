@@ -2,6 +2,7 @@ id: skills_list_installed
 name: "Skills — List What Is Actually Installed"
 category: gaia_skills_lifecycle
 severity: high
+tags: [t1_basic]
 description: |
   Asking what skills are available must trigger a real list_skills call and
   report only what the tool returned.

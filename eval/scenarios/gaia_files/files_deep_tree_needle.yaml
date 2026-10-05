@@ -1,0 +1,45 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/deep/ — the live code
+# QUARTZ-5521 in a/b/c/d/e/f/g/h/vault.txt (8 levels down); the expired decoy
+# QUARTZ-1180 in a/b/c/vault_old.txt. See GAIA_FIXTURE_VALUES.md,
+# "Files and shell".
+id: files_deep_tree_needle
+name: "Files — Find a File Eight Folders Deep, Past a Decoy"
+category: gaia_files
+severity: high
+tags: [t3_stress]
+description: |
+  A single file sits eight directories below the start, beyond the tree
+  tool's default depth of 3, with an expired decoy halfway down. The agent
+  must search deep enough, tell the live file from the decoy, and report the
+  real path.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "deep/ staged at ~/gaia-eval/tiers_files_shell/deep/."
+
+turns:
+  - turn: 1
+    objective: "Ask for the vault code somewhere under the deep folder, without giving the path"
+    user_message: "Somewhere under ~/gaia-eval/tiers_files_shell/deep there's a file with the current vault code. Find it and tell me the code."
+    ground_truth:
+      expected_answer: "QUARTZ-5521, from deep/a/b/c/d/e/f/g/h/vault.txt"
+    success_criteria: |
+      agent_tools[] shows a real search or traversal (find_files,
+      search_file, tree with a raised max_depth, browse_directory steps, or
+      a shell listing) followed by a read of vault.txt. The answer is
+      QUARTZ-5521. Reporting QUARTZ-1180 (the expired decoy) as current is
+      a FAIL; stopping at the default tree depth and saying no file exists
+      is a FAIL.
+
+  - turn: 2
+    objective: "Ask for the full path and whether there were other candidates"
+    user_message: "what's the full path, and were there any other vault files?"
+    ground_truth:
+      expected_answer: "…/deep/a/b/c/d/e/f/g/h/vault.txt; one other, a/b/c/vault_old.txt, which holds an expired code"
+    success_criteria: "Agent gives the full a/b/c/d/e/f/g/h/vault.txt path and mentions vault_old.txt as an expired/superseded decoy. An invented path is a FAIL; omitting the decoy is a minor deduction, not a FAIL."
+
+expected_outcome: |
+  Deep traversal beyond default limits finds the live file, and the decoy is
+  recognised as expired rather than reported as current.

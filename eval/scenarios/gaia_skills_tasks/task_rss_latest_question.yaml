@@ -3,6 +3,7 @@ id: task_rss_latest_question
 name: "Skill Task — rss-digest Answers a Specific Feed Question"
 category: gaia_skills_tasks
 severity: medium
+tags: [t1_basic]
 description: |
   A targeted question ("what did they release most recently?") answered
   from the feed, plus an honest miss for a version the feed doesn't have.

@@ -4,6 +4,7 @@ id: web_multi_page_compare
 name: "Web — Combine Facts From Two Pages"
 category: gaia_web
 severity: high
+tags: [t2_compound]
 description: |
   Two fixture pages hold complementary facts; the question needs both.
   Both fetches must actually happen.

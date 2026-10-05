@@ -33,7 +33,15 @@ import json
 import logging
 import os
 import time
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence
+from typing import (
+    TYPE_CHECKING,
+    AbstractSet,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+)
 
 import numpy as np
 
@@ -117,7 +125,10 @@ class SkillLoader:
         self._disabled_until = 0.0
 
     def select(
-        self, query: str, loaded_skills: Dict[str, "Skill"]
+        self,
+        query: str,
+        loaded_skills: Dict[str, "Skill"],
+        always_on: AbstractSet[str] = frozenset(),
     ) -> Optional[List[str]]:
         """Return the sorted subset of *loaded_skills* names active this turn.
 
@@ -125,14 +136,18 @@ class SkillLoader:
             query: The selection query for this turn (current, or previous +
                 current — the caller's choice, mirroring ToolLoader).
             loaded_skills: The agent's live ``loaded_skills`` mapping.
+            always_on: Names whose body renders every turn regardless. When
+                every loaded skill is one of them there is nothing to choose,
+                so nothing is embedded.
 
         Returns:
             Sorted skill names scoring ``>= threshold`` against *query*.
-            Empty list when nothing is loaded or nothing matches. ``None``
-            while the embedder is on failure cooldown — the caller must fall
-            back to rendering every loaded skill's body.
+            Empty list when nothing is loaded, only always-on skills are
+            loaded, or nothing matches. ``None`` while the embedder is on
+            failure cooldown — the caller must fall back to rendering every
+            loaded skill's body.
         """
-        if not loaded_skills:
+        if all(name in always_on for name in loaded_skills):
             return []
 
         self._turn += 1
