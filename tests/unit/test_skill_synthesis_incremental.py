@@ -438,10 +438,12 @@ class _FakeAgent:
 
 class TestBackgroundExecution:
     @pytest.fixture
-    def agent(self, tmp_path):
+    def agent(self, tmp_path, monkeypatch):
         class _Agent(MemoryMixin, _FakeAgent):
             pass
 
+        # These tests need a real store; the unit job disables memory globally.
+        monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
         host = _Agent()
         with (
             patch.object(MemoryMixin, "_get_embedder", return_value=_mock_embedder()),

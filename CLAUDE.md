@@ -181,6 +181,9 @@ This self-review step is mandatory - never skip verification of your output.
 - Feature branches: Use descriptive names (e.g., `kalin/mcp`, `feature/new-agent`)
 - Always check current branch status before making changes
 - Use pull requests for merging changes to main
+- Never `git stash` in a worktree: every worktree of a clone shares one stash
+  list, so `git stash pop` can apply another session's work to yours. Use a
+  temporary commit or a patch file.
 
 ## Development Standards
 
@@ -432,6 +435,12 @@ gaia eval agent --compare \
   <printed-output-path>/scorecard.json
 ```
 
+The two-terminal recipe fits non-`gaia_*` categories. A `gaia_*` category scored
+that way is not comparable to CI: those scenarios read staged fixtures, a fixture
+web server and hub, and a fake `gh` that must be first on PATH because their tool
+calls are auto-approved. `python util/run_eval_lane.py --lane <lane>` (or
+`--category <name>`) reproduces a CI lane's setup on this machine.
+
 **Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), call it out explicitly in the PR description and replace that category's `scorecard_<category>.json` from the next nightly on the Strix Halo pool — never from a local `--save-baseline` run, which writes elsewhere and measures a different machine. The reviewer needs to see the diff between baselines, not just the new score.
 
 Report what you compared: name the baseline run, list scenarios that went PASS→FAIL (regressions) and FAIL→PASS (progress toward 80%) separately, and re-run any lone flip before trusting it.
@@ -453,7 +462,7 @@ ps aux | grep "gaia eval" | grep -v grep | wc -l    # must print "0"
 
 This applies to every `gaia eval agent` run — including `--fix` auto-fix runs and any batch fix-loop that chains them. The judge LLM (Claude) can run concurrently across scenarios — the bottleneck is the local Lemonade backend, which is single-tenant per model slot.
 
-**The constraint is the BACKEND, not the clock.** Two evals on two machines, each with its own Lemonade, cannot evict each other's model and are not covered by this rule. That is what lets [`eval_flagship.yml`](.github/workflows/eval_flagship.yml) fan the scenario eval out across parallel lanes on the ephemeral runner pool — every lane gets its own machine, and within a lane the categories still run one at a time. Do not "fix" that workflow back to a single serial job, and do not read this rule as licence to run two evals against one Lemonade because they are in different terminals.
+**The constraint is the BACKEND, not the clock.** Two evals on two machines, each with its own Lemonade, cannot evict each other's model and are not covered by this rule. That is what lets [`eval_flagship.yml`](.github/workflows/eval_flagship.yml) fan the scenario eval out across parallel lanes on the ephemeral runner pool — every lane gets its own machine, and within a lane the categories still run one at a time. Do not "fix" that workflow back to a single serial job, and do not read this rule as licence to run two evals against one Lemonade because they are in different terminals. Two Lemonades on **one** machine still share its GPU: they cannot evict each other, but each runs at a fraction of its speed and every timing in both scorecards is wrong. On a developer machine run one eval at a time, whatever backend it uses, and never set `GAIA_EVAL_NO_LOCK` to get past another session's eval.
 
 ## Development Workflow
 
@@ -665,7 +674,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
 ### Default Models
-- The default chat model follows the hardware. `gaia init` adds `Qwen3.6-35B-A3B-GGUF` (`LARGE_DEFAULT_MODEL_NAME`, a Lemonade built-in MoE with 3B active, listed since Lemonade v11.7.0, run with thinking on) where it fits — 23.3 GB of weights and vision projector plus its KV cache at the window it loads with (20 KiB/token, at least 64K, so ~27 GB for models), and only where a GPU holds it: a 64 GB+ Strix Halo or a 32 GB GPU, not a 24 GB card or a CPU-only PC — and records it as `default_model` in `~/.gaia/config.json` once downloaded; every smaller PC runs `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`), which every PC still downloads because vision loads it by name. "Fits" is [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py), read off Lemonade's `/system-info` and `/health`; the TUI picker applies the same rule from `tui/internal/lemonade/recommended_models.json` (a drift test pins the two). `user.Qwen3.8-Flash-Next-GGUF` (`FLASH_OPTION_MODEL_NAME`, 82.86 GB, multimodal, needs Lemonade v2026.39.1+) is a supported manual option on the same 128 GB-class PCs — not auto-selected — switchable with `gaia config set default_model`; `util/compare_local_models.py` measures both on real hardware.
+- The default chat model follows the hardware. `gaia init` adds `Qwen3.6-35B-A3B-GGUF` (`LARGE_DEFAULT_MODEL_NAME`, a Lemonade built-in MoE with 3B active, listed since Lemonade v11.7.0, run with thinking on) where it fits — 23.3 GB of weights and vision projector plus its KV cache at the window it loads with (20 KiB/token, at least 64K, so ~27 GB for models), and only where a GPU holds it: a 64 GB+ Strix Halo or a 32 GB GPU, not a 24 GB card or a CPU-only PC — and records it as `default_model` in `~/.gaia/config.json` once downloaded; every smaller PC runs `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`), which every PC still downloads because vision loads it by name. "Fits" is [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py), read off Lemonade's `/system-info` and `/health`; the TUI picker applies the same rule from `tui/internal/lemonade/recommended_models.json` (a drift test pins the two). `user.Qwen3.8-Flash-Next-GGUF` (`FLASH_OPTION_MODEL_NAME`, 82.86 GB plus its KV cache at 64K — 24 KiB/token, 1.6 GB — so ~90 GB, multimodal, thinking on, needs Lemonade v2026.39.1+) is opt-in only on a 128 GB Strix Halo — never in `DEFAULT_MODEL_LADDER` — chosen with `gaia config set default_model`; `util/compare_local_models.py` measures both on real hardware.
 - Agents that leave `model_id` unset call `resolve_default_chat_model()` — `default_model`, else `DEFAULT_MODEL_NAME`. That covers GaiaAgent, ChatAgent, BuilderAgent, and the example templates. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
 - **EmailTriageAgent is the one exception.** With no explicit `model_id` it calls `resolve_default_email_model()` (`hub/agents/email/python/gaia_agent_email/model_select.py`), which returns `gemma4-it-e2b-FLM` when an NPU is present *and* that model is already servable, and `DEFAULT_MODEL_NAME` in every other case.
 - Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` in `MODELS` ([`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)) gets the largest window that fits the GPU memory Lemonade reports (`largest_context` in [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py)), and the fit check charges the KV cache at that same window. Every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). `NPU_CTX_SIZE` (32768, the FLM ceiling) applies only to models that run on the NPU, never to a GPU model on a machine whose `default_device` is `npu`. Gemma-4-E4B stays at 65536 because the eval baseline was captured there.

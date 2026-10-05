@@ -21,6 +21,7 @@ No LLM or external service required.
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -421,7 +422,8 @@ class TestTheIndexScopeUsesTheSameRoots:
 # ============================================================================
 
 
-_FS_ROOT = Path("/").resolve()  # "C:\\" on Windows
+# The root of the drive tmp_path is on; CI checks out on D: but tmp is on C:.
+_FS_ROOT = Path(Path(tempfile.gettempdir()).resolve().anchor)
 
 
 def _search_file_tool(validator):

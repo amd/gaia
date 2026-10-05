@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import unittest
 from io import StringIO
 from unittest.mock import MagicMock, patch
@@ -49,6 +50,18 @@ class TestLemonadeClientMock(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("GAIA_CTX_SIZE", None)
+        # A developer's own embedded Lemonade (its port and API key under
+        # ~/.gaia) would otherwise stand in for the defaults asserted here.
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        os.environ["GAIA_HOME"] = home.name
+        for name in (
+            "LEMONADE_BASE_URL",
+            "LEMONADE_API_KEY",
+            "LEMONADE_PORT",
+            "GAIA_LEMONADE_EMBEDDED",
+        ):
+            os.environ.pop(name, None)
         self.client = create_lemonade_client(
             model=TEST_MODEL, host=HOST, port=PORT, verbose=False
         )
@@ -1381,6 +1394,34 @@ class TestLemonadeClientMock(unittest.TestCase):
         builtin = json.loads(responses.calls[1].request.body)
         self.assertNotIn("checkpoint", builtin)
         self.assertNotIn("recipe", builtin)
+
+    @responses.activate
+    def test_flash_pull_registers_it_as_a_user_model(self):
+        """Lemonade does not ship Flash, so the pull must carry its whole
+        registration: checkpoint, recipe, projector and labels (#1655)."""
+        from gaia.llm.lemonade_client import FLASH_OPTION_MODEL_NAME
+
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            body='event: complete\ndata: {"percent":100}\n\n',
+            status=200,
+            content_type="text/event-stream",
+        )
+        list(self.client.pull_model_stream(model_name=FLASH_OPTION_MODEL_NAME))
+
+        self.assertEqual(
+            json.loads(responses.calls[0].request.body),
+            {
+                "model_name": "user.Qwen3.8-Flash-Next-GGUF",
+                "stream": True,
+                "checkpoint": "unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS",
+                "recipe": "llamacpp",
+                "reasoning": True,
+                "vision": True,
+                "mmproj": "mmproj-F16.gguf",
+            },
+        )
 
     @responses.activate
     def test_large_default_pulls_by_name_only(self):

@@ -1493,11 +1493,14 @@ class TestCredentialManagerContractShape:
     ):
         """Windows failures were DEBUG while macOS/Linux warned — same blind spot."""
         caplog.set_level(logging.INFO, logger=DISCOVERY_LOGGER)
+        # The sibling scanner would read the host's real Windows stores.
+        (sibling,) = {"_scan_credential_manager", "_scan_outlook_registry"} - {scanner}
         with (
             patch("sys.platform", "win32"),
             patch.object(
                 isolated_disc, scanner, side_effect=RuntimeError("scan exploded")
             ),
+            patch.object(isolated_disc, sibling, return_value=None),
         ):
             results = isolated_disc.scan_email_accounts()
 
@@ -1591,6 +1594,10 @@ class TestChromiumProfileDiscovery:
 class TestXdgDesktopDirs:
     """A custom-prefix install (Nix, Guix) puts .desktop files nowhere else."""
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="XDG_DATA_DIRS is ':'-separated, so it cannot hold a C:\\ path",
+    )
     def test_xdg_data_dirs_is_honored(self, isolated_disc, tmp_path):
         prefix = tmp_path / "nix" / "profile" / "share" / "applications"
         prefix.mkdir(parents=True)

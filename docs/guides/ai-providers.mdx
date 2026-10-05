@@ -74,10 +74,12 @@ Strix Halo or a 32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** eve
 else, including CPU-only PCs. GAIA runs Qwen3.6 with thinking on, so each step
 reasons before it answers or calls a tool. It records the pick as `default_model` in `~/.gaia/config.json`,
 so the TUI's agent starts on it. Set `gaia config set default_model <id>` to
-choose your own; `gaia init` never overwrites it. **Qwen3.8 Flash Next** (82 GB,
-multimodal, needs a 128 GB-class Strix Halo) is a supported manual option —
-switch to it with `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`
-when vision/reasoning matters more than decode speed. To stay on Gemma on a
+choose your own; `gaia init` never overwrites it. **Qwen3.8 Flash Next** is
+available on a 128 GB Strix Halo, and never picked for you: it needs ~90 GB for
+models (82 GB of weights and vision projector plus its context cache). Choose it
+with `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`, then run
+`gaia init` to download it. On a PC that cannot hold it, `gaia init` refuses and
+says how much memory it needs. Like Qwen3.6 it runs with thinking on. To stay on Gemma on a
 large machine and skip the download, run `gaia config set default_model
 Gemma-4-E4B-it-GGUF` before setup. Pressing **p** at the setup screen and
 picking Gemma does the same for that session only: setup then downloads just
