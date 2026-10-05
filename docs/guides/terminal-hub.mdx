@@ -46,19 +46,22 @@ gaia-tui
 
 ## Installing
 
-Every release publishes a native installer per platform, at
-[amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform) and on the
-[GitHub release](https://github.com/amd/gaia/releases/latest). Each puts two binaries
-on disk and on your PATH — `gaia-tui` (this hub) and `gaia-agent` (the flagship agent
+Every release publishes a native installer per platform at
+[amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform). Each puts
+two binaries on disk and on your PATH — `gaia-tui` (this hub) and `gaia-agent` (the flagship agent
 the hub runs) — so there is nothing to unzip and nothing to `chmod`.
 
 | Platform | File | How to install | Installs to |
 | --- | --- | --- | --- |
-| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click | `%LOCALAPPDATA%\Programs\GAIA Terminal Hub` |
+| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click, tick **Terminal** | `%LOCALAPPDATA%\Programs\GAIA Terminal Hub` |
 | macOS Apple silicon | `gaia-<version>-darwin-arm64.pkg` | double-click | `/usr/local/bin` |
 | macOS Intel | `gaia-<version>-darwin-x64.pkg` | double-click | `/usr/local/bin` |
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
 | Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo rpm -i gaia-<version>.x86_64.rpm` | `/usr/bin` |
+
+On Windows this is the one GAIA installer: on **Choose Components**, tick
+**Terminal** — and the desktop app too, if you want both. [Install GAIA](/guides/install)
+covers the choice and silent installs (`/S /COMPONENTS=tui`).
 
 The Windows setup is per-user: it needs no administrator rights and shows no UAC
 prompt. It also bundles Lemonade Server, so the install itself needs no network
@@ -96,7 +99,8 @@ To remove it, close Windows Terminal, then go to **Settings → Personalization 
 </Note>
 
 Uninstalling leaves `~/.gaia` — your chats, documents and memory — in place unless
-you say otherwise. On Windows, Add/Remove Programs offers to delete it; on Linux,
+you say otherwise. On Windows, the terminal is its own **GAIA Terminal Hub** entry
+in Installed apps, separate from the desktop app's, and its uninstaller offers to delete it; on Linux,
 `apt remove` and `rpm -e` keep it. Lemonade Server is never removed with GAIA,
 because other things may be using it — see `gaia uninstall --purge-lemonade`.
 
