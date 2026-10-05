@@ -5421,10 +5421,16 @@ Do NOT wrap conversational replies in JSON.
                 ) + (time.perf_counter() - _confirm_started)
             if not approved:
                 denied_error = self._confirmation_denied_error(tool_name)
-                ledger = getattr(self, "_denied_effects", None)
-                if ledger is not None:
-                    ledger.record(tool_name, tool_args, denied_error)
-                return {"status": "denied", "error": denied_error}
+                denied = {"status": "denied", "error": denied_error}
+                timed_out = getattr(self.console, "confirmation_timed_out", None)
+                if callable(timed_out) and timed_out(tool_name) is True:
+                    # Nobody said no, so this is not a refusal to route around.
+                    denied["timed_out"] = True
+                else:
+                    ledger = getattr(self, "_denied_effects", None)
+                    if ledger is not None:
+                        ledger.record(tool_name, tool_args, denied_error)
+                return denied
 
         # Dynamic tool loader (#1449): record use for LRU recency. The name is
         # fully resolved and confirmed in the registry here. Execution stays on

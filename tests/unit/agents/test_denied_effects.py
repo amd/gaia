@@ -459,6 +459,26 @@ def test_the_reroute_is_refused_and_never_runs(tmp_path, script):
     assert console.prompted == ["run_shell_command"]
 
 
+class _ExpiredPromptConsole(_DenyShellConsole):
+    """Nobody answered the shell prompt in time."""
+
+    def confirmation_timed_out(self, tool_name):
+        return tool_name == "run_shell_command"
+
+
+def test_a_prompt_nobody_answered_is_not_a_refusal(tmp_path, script):
+    console = _ExpiredPromptConsole()
+    agent = _agent(console, tmp_path)
+
+    first = agent._execute_tool("run_shell_command", {"command": "pytest -q"})
+    second = agent._execute_tool("execute_python_file", {"file_path": script})
+
+    assert first["status"] == "denied" and first["timed_out"] is True
+    # Nobody said no, so the other route to the same effect is still open.
+    assert second["status"] == "success"
+    assert agent.ran == [("execute_python_file", script)]
+
+
 def test_unrelated_calls_still_run(tmp_path):
     agent = _agent(_DenyShellConsole(), tmp_path)
     agent._execute_tool("run_shell_command", {"command": "pytest -q"})

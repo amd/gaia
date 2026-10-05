@@ -1015,11 +1015,9 @@ class SSEOutputHandler(OutputHandler):
                 }
             )
             logger.info("Scripted eval user declined '%s'", tool_name)
-            self._last_denial = (
-                tool_name,
-                f"Tool '{tool_name}' was denied by the user.",
+            return self.deny_tool_execution(
+                tool_name, f"Tool '{tool_name}' was denied by the user."
             )
-            return False
 
         # Full access and prior "always" grants are checked before anything is
         # emitted: neither has a question to ask, so putting a modal up would be
