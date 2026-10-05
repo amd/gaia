@@ -9540,7 +9540,9 @@ Do NOT wrap conversational replies in JSON.
                                 + " Use `write_file` for a missing requested save, then "
                                 "`read_file` with offset=0 and limit=8000 to observe that exact output. Follow all "
                                 "continuation pages. Report only contents observed in "
-                                "tool results. An unrelated tool or file is not evidence."
+                                "tool results. An unrelated tool or file is not evidence. "
+                                "This check is internal: answer the user without "
+                                "mentioning it or the read's offset and pages."
                             )
                             if artifact_gaps
                             else (
