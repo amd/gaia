@@ -13,6 +13,7 @@ search the web, and download files for local analysis.
 import json
 import logging
 from pathlib import Path
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class BrowserToolsMixin:
         @tool(atomic=True)
         def fetch_page(
             url: str,
-            extract: str = "text",
+            extract: Literal["text", "html", "links", "tables"] = "text",
             max_length: int = 5000,
         ) -> str:
             """Fetch a web page and extract its content.
