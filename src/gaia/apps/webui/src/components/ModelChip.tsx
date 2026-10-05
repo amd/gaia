@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, Cloud, Cpu, Loader2 } from 'lucide-react';
+import { Check, ChevronDown, Cloud, Cpu, HelpCircle, Loader2 } from 'lucide-react';
 import { Popover } from './Popover';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
-import { useModelStore, locationLabel, shortModelName } from '../stores/modelStore';
+import { useModelStore, useInferencePlace, shortModelName, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
 import type { ProviderInfo, ProviderModel } from '../types';
 
 interface ProviderModels {
@@ -19,6 +19,7 @@ interface ProviderModels {
 export function ModelChip({ disabled }: { disabled?: boolean }) {
     const active = useModelStore((s) => s.active);
     const select = useModelStore((s) => s.select);
+    const place = useInferencePlace();
     const openSettings = useChatStore((s) => s.openSettings);
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
@@ -72,8 +73,14 @@ export function ModelChip({ disabled }: { disabled?: boolean }) {
         }
     }, [active?.remote, pendingCloud, select]);
 
-    const Icon = active?.remote ? Cloud : Cpu;
-    const label = active ? `${shortModelName(active.model)} · ${locationLabel(active)}` : 'Model';
+    const Icon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
+    const label = active
+        ? `${shortModelName(active.model)}${place ? ` · ${place.label}` : ''}`
+        : 'Model';
+    const title = !place
+        ? UNKNOWN_PLACE_TITLE
+        : place.description
+            ?? (place.remote ? `Runs on ${place.label} — chat history leaves this PC` : 'Runs on this PC');
 
     return (
         <div className="composer-chip-wrap">
@@ -85,7 +92,7 @@ export function ModelChip({ disabled }: { disabled?: boolean }) {
                 disabled={disabled}
                 aria-haspopup="dialog"
                 aria-expanded={open}
-                title={active?.remote ? `Runs on ${locationLabel(active)} — chat history leaves this PC` : 'Runs on this PC'}
+                title={title}
             >
                 <Icon size={13} aria-hidden="true" />
                 <span className="composer-chip-label">{label}</span>

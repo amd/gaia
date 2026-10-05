@@ -3,11 +3,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Bell, Brain, Clock, Cloud, Cpu, EyeOff, FileText, Loader2, PanelLeftClose, PanelLeftOpen,
+    Bell, Brain, Clock, Cloud, Cpu, EyeOff, FileText, HelpCircle, Loader2, PanelLeftClose, PanelLeftOpen,
     Search, Settings, Smartphone, SquarePen, Trash2, X,
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
-import { useModelStore, locationLabel, shortModelName } from '../stores/modelStore';
+import { useModelStore, useInferencePlace, shortModelName, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
 import { useNotificationStore, selectUnreadCount } from '../stores/notificationStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -83,6 +83,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const showMemory = useChatStore((s) => s.showMemoryDashboard);
     const showSchedules = useChatStore((s) => s.showSchedules);
     const active = useModelStore((s) => s.active);
+    const place = useInferencePlace();
     const unread = useNotificationStore(selectUnreadCount);
     const showNotifications = useNotificationStore((s) => s.showPanel);
     const setShowNotifications = useNotificationStore((s) => s.setShowPanel);
@@ -132,7 +133,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         }
     }, [addPendingDelete, removePendingDelete, removeSession]);
 
-    const LocationIcon = active?.remote ? Cloud : Cpu;
+    const LocationIcon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
     const isCollapsed = collapsed && !isMobile;
 
@@ -236,11 +237,14 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                         type="button"
                         className="sb-location"
                         onClick={() => openSettings('model')}
-                        title={active?.remote ? 'Chat history is sent to the cloud provider' : 'Runs on this PC'}
+                        title={!place
+                            ? UNKNOWN_PLACE_TITLE
+                            : place.description
+                                ?? (place.remote ? `Chat history is sent to ${place.label}` : 'Runs on this PC')}
                     >
                         <LocationIcon size={13} aria-hidden="true" />
                         <span className="sb-location-text">
-                            {locationLabel(active)}{active ? ` · ${shortModelName(active.model)}` : ''}
+                            {[place?.label, active && shortModelName(active.model)].filter(Boolean).join(' · ') || 'Model'}
                         </span>
                     </button>
                 )}

@@ -16,7 +16,7 @@ const mockedApi = vi.mocked(api);
 function chat(id: string, title: string, updated: Date): Session {
     return {
         id, title, created_at: updated.toISOString(), updated_at: updated.toISOString(),
-        model: '', system_prompt: null, message_count: 2, document_ids: [],
+        model: '', system_prompt: null, message_count: 2, document_ids: [], inference_remote: false,
     };
 }
 
@@ -108,5 +108,20 @@ describe('Sidebar', () => {
         });
         render(<Sidebar onNewChat={vi.fn()} />);
         expect(screen.getByRole('button', { name: 'Fireworks AI · kimi-k2' })).toBeInTheDocument();
+    });
+
+    it('does not claim Local when the backend cannot tell where chat runs', () => {
+        useChatStore.setState({ sessions: SESSIONS.map((s) => ({ ...s, inference_remote: null })) });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const location = screen.getByRole('button', { name: 'Gemma-4-E4B-it-GGUF' });
+        expect(location.textContent).not.toMatch(/local/i);
+    });
+
+    it('shows the cloud provider the backend reports', () => {
+        useChatStore.setState({
+            sessions: SESSIONS.map((s) => ({ ...s, inference_remote: true, inference_provider_name: 'Fireworks AI' })),
+        });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(screen.getByRole('button', { name: 'Fireworks AI · Gemma-4-E4B-it-GGUF' })).toBeInTheDocument();
     });
 });

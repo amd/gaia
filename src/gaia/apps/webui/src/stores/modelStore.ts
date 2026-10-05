@@ -5,7 +5,8 @@
 
 import { create } from 'zustand';
 import * as api from '../services/api';
-import type { ActiveModel } from '../types';
+import { useChatStore } from './chatStore';
+import type { ActiveModel, Session } from '../types';
 
 interface ModelState {
     active: ActiveModel | null;
@@ -52,11 +53,69 @@ export const useModelStore = create<ModelState>((set, get) => ({
     dismissRestoreNotice: () => set({ restoreNotice: null }),
 }));
 
-/** "Local" or the cloud provider's name, for the place-of-inference indicator. */
-export function locationLabel(active: ActiveModel | null): string {
-    if (!active) return 'Local';
-    if (!active.remote) return 'Local';
-    return active.provider === 'fireworks' ? 'Fireworks AI' : 'AMD LLM Gateway';
+/** The backend's answer to where a session's chat is answered (`inference_remote: null` = unknown). */
+export type InferenceLocation = Pick<
+    Session,
+    'inference_remote' | 'inference_provider_name' | 'inference_description'
+>;
+
+/**
+ * The open session's location, else the most recent one's (the model choice is
+ * global, so it answers for every session). Undefined when there is no session.
+ */
+export function selectInferenceLocation(
+    sessions: Session[],
+    currentSessionId: string | null,
+): InferenceLocation | undefined {
+    return sessions.find((s) => s.id === currentSessionId) ?? sessions[0];
+}
+
+/** Where new turns are answered, for the place-of-inference indicators. */
+export interface InferencePlace {
+    remote: boolean;
+    /** "Local" or the cloud provider's name. */
+    label: string;
+    /** The backend's full sentence, when it applies to the picked model. */
+    description: string | null;
+}
+
+/**
+ * Claims "Local" only when the backend says the chat stays on this PC. A cloud
+ * pick counts at once, before the polled session list catches up. Null when
+ * neither can tell, so the UI makes no claim.
+ */
+export function inferencePlace(
+    active: ActiveModel | null,
+    location: InferenceLocation | undefined,
+): InferencePlace | null {
+    if (active?.remote) {
+        return {
+            remote: true,
+            label: active.provider === 'fireworks' ? 'Fireworks AI' : 'AMD LLM Gateway',
+            description: null,
+        };
+    }
+    if (location?.inference_remote === true) {
+        return {
+            remote: true,
+            label: location.inference_provider_name || 'a cloud provider',
+            description: location.inference_description ?? null,
+        };
+    }
+    if (location?.inference_remote === false) {
+        return { remote: false, label: 'Local', description: location.inference_description ?? null };
+    }
+    return null;
+}
+
+export const UNKNOWN_PLACE_TITLE =
+    "GAIA can't tell whether this chat is answered on this PC or by a cloud provider, so it isn't claiming either.";
+
+/** Place of inference for the open chat, from the backend's session location and the picked model. */
+export function useInferencePlace(): InferencePlace | null {
+    const active = useModelStore((s) => s.active);
+    const location = useChatStore((s) => selectInferenceLocation(s.sessions, s.currentSessionId));
+    return inferencePlace(active, location);
 }
 
 /** The model name without its provider prefix or catalogue path. */

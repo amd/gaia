@@ -4,13 +4,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
-import { useModelStore, locationLabel } from '../../stores/modelStore';
+import { useInferencePlace } from '../../stores/modelStore';
 
 /** Where data lives and goes, and how to delete it. */
 export function PrivacySettings() {
     const sessions = useChatStore((s) => s.sessions);
     const removeSession = useChatStore((s) => s.removeSession);
-    const active = useModelStore((s) => s.active);
+    const place = useInferencePlace();
     const [confirm, setConfirm] = useState(false);
     const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -41,9 +41,11 @@ export function PrivacySettings() {
         <div className="settings-pane">
             <h2 className="settings-pane-title">Privacy</h2>
             <p className="settings-pane-lede">
-                Chats, documents and memory stay on this PC. {active?.remote
-                    ? `Right now answers come from ${locationLabel(active)}, so each message and the chat history are sent there.`
-                    : 'Right now answers are generated on this PC too.'}
+                Chats, documents and memory stay on this PC. {place?.remote
+                    ? `Right now answers come from ${place.label}, so each message and the chat history are sent there.`
+                    : place
+                        ? 'Right now answers are generated on this PC too.'
+                        : "GAIA can't tell right now whether answers are generated on this PC or by a cloud provider."}
             </p>
             <div className="setting-row">
                 <span>Data folder</span>

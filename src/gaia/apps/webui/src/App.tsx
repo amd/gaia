@@ -142,7 +142,10 @@ function App() {
                     const list = data.sessions || [];
                     // Never wipe a populated list on a transient empty reply.
                     if (!initial && list.length === 0 && useChatStore.getState().sessions.length > 0) return;
-                    const fp = list.map((s) => `${s.id}|${s.updated_at}|${s.title}`).join('\n');
+                    // Includes the inference location, so a model change reaches the indicators.
+                    const fp = list
+                        .map((s) => `${s.id}|${s.updated_at}|${s.title}|${s.inference_remote}|${s.inference_provider}|${s.inference_description}`)
+                        .join('\n');
                     if (fp === sessionFingerprint.current) return;
                     sessionFingerprint.current = fp;
                     setSessions(list);
