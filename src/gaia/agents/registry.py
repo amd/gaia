@@ -24,7 +24,10 @@ from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL as LEMONADE_DEFAULT_EMBEDDING_MODEL,
 )
-from gaia.llm.lemonade_client import GPU_CTX_SIZE, NPU_CTX_SIZE
+from gaia.llm.lemonade_client import (
+    GPU_CTX_SIZE,
+    NPU_CTX_SIZE,
+)
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
