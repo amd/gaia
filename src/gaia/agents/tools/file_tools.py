@@ -35,6 +35,7 @@ from gaia.agents.tools.search_scope import (
     root_depth,
     search_roots,
 )
+from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.logger import get_logger
 from gaia.security import BackupError
 
@@ -75,6 +76,15 @@ def _header_row_index(rows: List[tuple]) -> int:
         if len(cells) == width and all(isinstance(c, str) for c in cells):
             return i
     return 0
+
+
+def _match_column(name: str, columns: List[str]) -> str | None:
+    """The column *name* means: exact, else the one column equal ignoring case."""
+    name = name.strip()
+    if name in columns:
+        return name
+    folded = [c for c in columns if c.strip().casefold() == name.casefold()]
+    return folded[0] if len(folded) == 1 else None
 
 
 def _python_syntax_error(source: str, filename: str) -> str | None:
@@ -933,7 +943,10 @@ class FileSearchToolsMixin:
                     from gaia.agents.base.artifacts import read_text_page
 
                     page = read_text_page(
-                        file_path, offset, 8000 if limit is None else limit
+                        file_path,
+                        offset,
+                        8000 if limit is None else limit,
+                        encoding=text_encoding(file_path),
                     )
                     reads.note(file_path, seen)
                     return {"status": "success", "file_path": file_path, **page}
@@ -951,8 +964,7 @@ class FileSearchToolsMixin:
 
                 # Read file content
                 try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
+                    content, encoding = read_text(file_path)
                 except UnicodeDecodeError:
                     # Binary file
                     with open(file_path, "rb") as f:
@@ -981,6 +993,8 @@ class FileSearchToolsMixin:
                     "line_count": len(content.splitlines()),
                     "size_bytes": len(content.encode("utf-8")),
                 }
+                if encoding != "utf-8":
+                    result["encoding"] = encoding
 
                 # Python file - add symbol extraction
                 if ext == ".py":
@@ -1128,57 +1142,48 @@ class FileSearchToolsMixin:
                     _use_regex = False
                     _search_plain = pattern if case_sensitive else pattern.lower()
 
-                def _line_matches(line: str) -> bool:
+                def _match_span(line: str):
+                    """``(start, end)`` of the first match in *line*, or ``None``."""
                     if _use_regex:
-                        return bool(_regex.search(line))
-                    return _search_plain in (line if case_sensitive else line.lower())
+                        found = _regex.search(line)
+                        return found.span() if found else None
+                    at = (line if case_sensitive else line.lower()).find(_search_plain)
+                    return None if at == -1 else (at, at + len(_search_plain))
 
                 def search_file(file_path: Path):
                     """Search within a single file."""
                     try:
                         with open(
-                            file_path, "r", encoding="utf-8", errors="ignore"
+                            file_path,
+                            "r",
+                            encoding=text_encoding(file_path),
+                            errors="ignore",
                         ) as f:
-                            all_lines = f.readlines() if ctx > 0 else None
-                            if all_lines is None:
-                                for line_num, line in enumerate(
-                                    open(
-                                        file_path,
-                                        "r",
-                                        encoding="utf-8",
-                                        errors="ignore",
-                                    ),
-                                    1,
-                                ):
-                                    if _line_matches(line):
-                                        matches.append(
-                                            {
-                                                "file": str(file_path),
-                                                "line": line_num,
-                                                "content": line.strip()[:200],
-                                            }
+                            lines = f.readlines() if ctx > 0 else f
+                            for line_num, line in enumerate(lines, 1):
+                                span = _match_span(line)
+                                if span is None:
+                                    continue
+                                match = {
+                                    "file": str(file_path),
+                                    "line": line_num,
+                                    "content": match_excerpt(line, *span),
+                                }
+                                if ctx > 0:
+                                    start = max(0, line_num - 1 - ctx)
+                                    end = min(len(lines), line_num + ctx)
+                                    match["context"] = [
+                                        (
+                                            match_excerpt(lines[i], *span)
+                                            if i == line_num - 1
+                                            and len(lines[i].rstrip()) > 200
+                                            else lines[i].rstrip()[:200]
                                         )
-                                        if len(matches) >= 100:
-                                            return False
-                            else:
-                                for line_num, line in enumerate(all_lines, 1):
-                                    if _line_matches(line):
-                                        start = max(0, line_num - 1 - ctx)
-                                        end = min(len(all_lines), line_num + ctx)
-                                        ctx_lines = [
-                                            all_lines[i].rstrip()[:200]
-                                            for i in range(start, end)
-                                        ]
-                                        matches.append(
-                                            {
-                                                "file": str(file_path),
-                                                "line": line_num,
-                                                "content": line.strip()[:200],
-                                                "context": ctx_lines,
-                                            }
-                                        )
-                                        if len(matches) >= 100:
-                                            return False
+                                        for i in range(start, end)
+                                    ]
+                                matches.append(match)
+                                if len(matches) >= 100:
+                                    return False
                         return True
                     except (OSError, UnicodeError) as exc:
                         logger.warning("Could not search %s: %s", file_path, exc)
@@ -2046,7 +2051,13 @@ class FileSearchToolsMixin:
                     # Read content for preview
                     file_content = None
                     used_encoding = None
-                    for encoding in ("utf-8", "utf-8-sig", "latin-1", "cp1252"):
+                    bom_codec = text_encoding(fp)
+                    # latin-1 accepts any bytes, so a BOM-marked file decodes by its BOM.
+                    for encoding in (
+                        (bom_codec,)
+                        if bom_codec != "utf-8"
+                        else ("utf-8", "utf-8-sig", "latin-1", "cp1252")
+                    ):
                         try:
                             with open(fp, "r", encoding=encoding) as f:
                                 file_content = f.read()
@@ -2302,7 +2313,11 @@ class FileSearchToolsMixin:
                 focus_columns = all_columns
                 if columns:
                     requested = [c.strip() for c in columns.split(",")]
-                    focus_columns = [c for c in requested if c in all_columns]
+                    focus_columns = [
+                        m
+                        for m in (_match_column(c, all_columns) for c in requested)
+                        if m
+                    ]
                     if not focus_columns:
                         return {
                             "status": "error",
@@ -2759,6 +2774,7 @@ class FileSearchToolsMixin:
 
                 # --- GROUP BY aggregation ---
                 if group_by:
+                    group_by = _match_column(group_by, all_columns) or group_by
                     if group_by not in all_columns:
                         result["group_by_error"] = (
                             f"Column '{group_by}' not found. Available: {', '.join(all_columns)}"
