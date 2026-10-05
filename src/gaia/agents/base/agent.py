@@ -420,6 +420,28 @@ _TOOL_USER_WAIT: contextvars.ContextVar[Optional[_UserWaitClock]] = (
 )
 
 
+def budget_notices_enabled() -> bool:
+    """Whether the loop tells the model how much step budget is left.
+
+    On by default. ``GAIA_AGENT_BUDGET_NOTICES=0`` turns it off for anyone
+    measuring the loop against its previous behaviour, or running an agent
+    whose prompt already handles pacing. Read at call time, like the other
+    ``GAIA_AGENT_*`` knobs, so it can be set after this module is imported.
+    """
+    raw = os.environ.get("GAIA_AGENT_BUDGET_NOTICES")
+    if raw is None or raw == "":
+        return True
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(
+        f"GAIA_AGENT_BUDGET_NOTICES must be a boolean (1/0, true/false, "
+        f"on/off), got {raw!r}. Unset it to keep the notices on."
+    )
+
+
 class ToolExecutionTimeout(Exception):
     """Raised when a tool body exceeds its bounded execution window.
 
@@ -544,6 +566,70 @@ _STEP_CAP_ANSWER_PROMPT = (
     "your final answer now, using only what the tool results above show: what "
     "you found, what you couldn't finish and why, and what they can do next."
 )
+
+# How much of the step budget must be gone before each notice is sent, and
+# what it says. Until these existed the only thing the model ever heard about
+# the budget was _STEP_CAP_ANSWER_PROMPT above — which arrives after the last
+# step, far too late to spend the budget differently. A model that cannot see
+# its budget cannot manage it: it has no way to answer "have I read enough to
+# start?" because it does not know how much reading it can still afford.
+#
+# Deliberately short and deliberately not task-specific. This is a fact about
+# the loop, not advice about the work, and the model is better placed than the
+# framework to decide what the fact means for the job in hand.
+# Each level is (steps_left, small_cap_fraction_left, text).
+#
+# The trigger is STEPS REMAINING, not fraction consumed. What a model can act
+# on is "I have ten moves left", and that means the same thing whatever the
+# cap is. A percentage means nothing without the cap in hand: at max_steps=400
+# a "90% used" notice lands at step 360, long past the point any run reaches,
+# so a purely proportional rule silently switches itself off on exactly the
+# generous budgets where pacing advice is cheapest to give.
+#
+# ``small_cap_fraction_left`` is a floor, not a second trigger. On a tiny
+# budget "20 steps left" would fire before the turn had done anything, so the
+# level cannot fire while more than that fraction of the budget is still
+# unspent. The fractions are the remaining-budget mirror of the 50/75/90%
+# consumed rule this replaces, so short turns behave as they did before and
+# long ones now behave the same way short ones always did.
+_BUDGET_NOTICES = (
+    (
+        20,
+        0.50,
+        "Step budget: {used} of {total} used, {left} left. If the part of "
+        "this task that changes something has not started yet, start it now "
+        "rather than gathering more context.",
+    ),
+    (
+        10,
+        0.25,
+        "Step budget: {left} of {total} steps left. Do the most important "
+        "remaining action now and refine it afterwards if there is room — a "
+        "finished smaller change is worth more than an unfinished larger one.",
+    ),
+    (
+        5,
+        0.10,
+        "Step budget: {left} of {total} steps left. Finish what you can in "
+        "them, then answer. After the last one no tool can be called and "
+        "anything not already done is lost.",
+    ),
+)
+
+# Below this many steps the notices are noise: there is no room to act on
+# them, and at max_steps=2 the first notice would land on the only working step.
+_MIN_STEPS_FOR_BUDGET_NOTICES = 8
+
+
+def _budget_notice_trigger(steps_left: int, fraction_left: float, total: int) -> int:
+    """Steps-remaining at or below which this level fires, for a cap of *total*.
+
+    The absolute figure normally wins. The fraction only binds on a budget too
+    small to hold it, and never drops below 1 — a level whose trigger rounded
+    to 0 could only fire once the budget was already gone.
+    """
+    return min(steps_left, max(1, int(fraction_left * total)))
+
 
 # Sent once, with no tools offered, when the loop guard stops a turn on
 # identical calls that all worked.
@@ -1696,6 +1782,9 @@ Do NOT wrap conversational replies in JSON.
         self._grounding_history = ""
         # Grounding gaps that survived their correction, for the scope note.
         self._turn_ungrounded: List[str] = []
+        # Step-budget notices already sent this turn, by threshold.
+        self._budget_notices_sent: set = set()
+        self._budget_notices_on = budget_notices_enabled()
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -7275,6 +7364,57 @@ Do NOT wrap conversational replies in JSON.
         pending.put(text)
         return True
 
+    def _announce_step_budget(
+        self,
+        messages: List[Dict],
+        conversation: List[Dict],
+        steps_taken: int,
+        steps_limit: int,
+    ) -> Optional[str]:
+        """Tell the model how much of its step budget is gone, once per level.
+
+        Called at the step boundary, so the notice is in context for the very
+        next model call. Returns the notice sent, or ``None``.
+
+        Nothing else in the loop mentions the budget until it is already spent,
+        so a turn that runs out does so without ever having had the chance to
+        spend differently.
+        """
+        # getattr, not attribute access: an agent built via __new__ in a test
+        # never ran __init__, and a missing notice must not crash a turn.
+        if not getattr(self, "_budget_notices_on", False):
+            return None
+        if steps_taken <= 0 or steps_limit < _MIN_STEPS_FOR_BUDGET_NOTICES:
+            return None
+        if getattr(self, "_budget_notices_sent", None) is None:
+            self._budget_notices_sent = set()
+        left = steps_limit - steps_taken
+        # Most urgent level first: crossing two at once (a short budget, or a
+        # limit that moved mid-turn) sends the one that is true now, not a
+        # stale one followed immediately by its replacement.
+        for steps_level, fraction_left, template in reversed(_BUDGET_NOTICES):
+            trigger = _budget_notice_trigger(steps_level, fraction_left, steps_limit)
+            if steps_level in self._budget_notices_sent or left > trigger:
+                continue
+            # Everything less urgent is now moot: a turn that reaches "5 left"
+            # must not afterwards be told it has twenty.
+            self._budget_notices_sent.update(
+                level for level, _, _ in _BUDGET_NOTICES if level >= steps_level
+            )
+            notice = template.format(used=steps_taken, total=steps_limit, left=left)
+            for sink in (messages, conversation):
+                # Two dicts, not one shared object: downstream code edits
+                # entries in this list in place.
+                sink.append({"role": "user", "content": notice})
+            logger.debug(
+                "Budget notice at %d step(s) left: step %d/%d",
+                left,
+                steps_taken,
+                steps_limit,
+            )
+            return notice
+        return None
+
     def _drain_followups(self, messages: List[Dict], conversation: List[Dict]) -> int:
         """Fold any queued mid-turn follow-ups into this turn's context.
 
@@ -7463,6 +7603,11 @@ Do NOT wrap conversational replies in JSON.
         # Files edited this turn, so an empty response can name what it left
         # behind (#3733). Per-turn: an instance persists across queries.
         self._turn_file_edits: List[Dict[str, Any]] = []
+        # Per-turn too: the budget is spent per turn, so the notices reset
+        # with it. Read the env knob here rather than at import, so setting it
+        # between turns takes effect.
+        self._budget_notices_sent = set()
+        self._budget_notices_on = budget_notices_enabled()
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
@@ -7531,6 +7676,12 @@ Do NOT wrap conversational replies in JSON.
             # without running another step, and draining first would consume a
             # message this turn can no longer answer.
             self._drain_followups(messages, conversation)
+
+            # How much budget is left, said once per level, while there are
+            # still steps to spend differently. Same place and same mechanism
+            # as the drain above: appended at the step boundary so the next
+            # model call sees it.
+            self._announce_step_budget(messages, conversation, steps_taken, steps_limit)
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
