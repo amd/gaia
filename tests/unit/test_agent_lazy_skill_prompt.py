@@ -74,6 +74,7 @@ class _StubAgent:
     get_skills_system_prompt = Agent.get_skills_system_prompt
     _select_skills_for_turn = Agent._select_skills_for_turn
     _refresh_active_skill_filter = Agent._refresh_active_skill_filter
+    _rendered_skill_bodies = Agent._rendered_skill_bodies
     _union_sticky_skills = Agent._union_sticky_skills
     STICKY_SKILL_TURNS = Agent.STICKY_SKILL_TURNS
     _sticky_skill_turns = None
@@ -317,3 +318,23 @@ def test_refresh_only_rebuilds_the_prompt_when_the_selection_changes(agent):
     agent._refresh_active_skill_filter("what's the weather")
     assert agent._active_skill_filter == []
     assert agent.rebuilt == rebuilds_after_first + 1
+
+
+def test_an_always_on_skill_flipping_in_the_selection_does_not_rebuild(
+    tmp_path, bundled
+):
+    """Its body renders either way, so recomposing would only re-read the prompt."""
+    manifest = _write_manifest(tmp_path)
+    stub = _StubAgent(
+        isolated_manager(tmp_path, agent_skill_dirs=[bundled]), manifest=manifest
+    )
+    stub.load_skill_set()
+    stub._active_skill_filter = []
+    stub._select_skills_for_turn = lambda q: ["always-on"] if "voice" in q else []
+    before = stub.rebuilt
+
+    stub._refresh_active_skill_filter("say it in my voice")
+    stub._refresh_active_skill_filter("what's the weather")
+
+    assert stub.rebuilt == before
+    assert stub._active_skill_filter == []

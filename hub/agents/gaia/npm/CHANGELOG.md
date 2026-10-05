@@ -58,9 +58,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Qwen3.6 gets the longest context this PC's memory holds.** Up to its native
   262,144 tokens on a Strix Halo (a 5.4 GB KV cache), about 152K on a 32 GB GPU,
   never under 64K. Gemma stays at 64K.
-- Qwen3.8 Flash Next (82 GB, multimodal) is a supported manual option on
-  128 GB-class PCs — not auto-selected. Switch with
-  `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`.
+- Qwen3.8 Flash Next (82 GB, multimodal, thinking on) is available on a
+  128 GB Strix Halo and never picked as a default; it needs ~90 GB for models.
+  Choose it with `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`;
+  `gaia init` refuses it on a PC that cannot hold it.
 - **Bypass permissions is now called full access, everywhere.** `--full-access`
   and `/full-access` replace `--bypass-permissions` and `/bypass`; the old names
   fail with a message naming the new one. `/full-access always` (or

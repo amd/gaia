@@ -629,6 +629,27 @@ def test_admit_tools_overshoots_the_cap_then_the_next_turn_trims():
     assert loader.select("q2", reg) == ["c1", "a1", "a2"]  # cap restored, d1 LRU
 
 
+def test_tools_loaded_in_one_clock_tick_are_evicted_oldest_first(monkeypatch):
+    """Windows' clock repeats for milliseconds; d1 is still older than a1."""
+    from gaia.agents.base import tool_loader as tool_loader_module
+
+    monkeypatch.setattr(tool_loader_module.time, "time", lambda: 1000.0)
+    tools = ["c1", "d1", "a1", "a2"]
+    embed = _make_embed_fn(
+        tools,
+        {
+            "q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0},
+            "q2": {"c1": 0.0, "d1": 0.0, "a1": 0.0, "a2": 0.0},
+        },
+    )
+    loader = ToolLoader(frozenset({"c1"}), [], embed, threshold=0.55, max_tools=3)
+    reg = _registry(tools)
+    loader.select("q", reg)
+    loader.admit_tools(["a1", "a2"], reg)
+
+    assert loader.select("q2", reg) == ["c1", "a1", "a2"]
+
+
 def test_admit_tools_does_not_count_as_an_escape_hatch():
     """The point of the feature: the skill's tools arrive without a recovery event."""
     loader, reg = _loader_with_bundles()

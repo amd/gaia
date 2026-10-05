@@ -1373,9 +1373,8 @@ class Agent(abc.ABC):
     # a static fragment listed here just loses its position, harmlessly.
     VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = frozenset(
         {
-            "get_memory_system_prompt",  # changes on any remember()/forget()
+            "get_memory_system_prompt",  # re-rendered on forget/update of a shown item
             "get_skills_system_prompt",  # per-turn body selection (#2848)
-            "get_recalled_skills_system_prompt",  # per-turn procedural recall
             # Mostly static, but the index line flips as a background index
             # lands and the shape line changes if the project does (#3379).
             "get_project_map_system_prompt",
@@ -2670,8 +2669,31 @@ Do NOT wrap conversational replies in JSON.
         # pylint: disable-next=assignment-from-none
         new_filter = self._select_skills_for_turn(user_input)
         new_filter = self._union_sticky_skills(new_filter)
-        if new_filter != self._active_skill_filter:
-            self._apply_skill_filter(new_filter)
+        if new_filter == self._active_skill_filter:
+            return
+        if self._rendered_skill_bodies(new_filter) == self._rendered_skill_bodies(
+            self._active_skill_filter
+        ):
+            # Same bodies render (e.g. an always-on skill flipped in the
+            # selection), so recomposing would only re-read the prompt.
+            self._active_skill_filter = new_filter
+            return
+        self._apply_skill_filter(new_filter)
+
+    def _rendered_skill_bodies(
+        self, skill_filter: Optional[List[str]]
+    ) -> Optional[FrozenSet[str]]:
+        """Loaded skills whose full body renders under *skill_filter*.
+
+        ``None`` stays ``None``: an unfiltered prompt renders every body under a
+        different header, so it never equals a filtered one.
+        """
+        if skill_filter is None:
+            return None
+        loaded = getattr(self, "_loaded_skills", None) or {}
+        return (frozenset(skill_filter) | self._always_on_skill_names) & frozenset(
+            loaded
+        )
 
     def _union_sticky_skills(
         self, new_filter: Optional[List[str]]
@@ -6313,8 +6335,8 @@ Do NOT wrap conversational replies in JSON.
                 return obj.item()
             if isinstance(obj, np.ndarray):
                 return obj.tolist()
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 - fall through to the generic cases
+            logger.debug("numpy conversion skipped for %s: %s", type(obj).__name__, e)
 
         if isinstance(obj, bytes):
             # For binary data, return a placeholder (don't expose raw bytes to LLM)
@@ -8871,8 +8893,12 @@ Do NOT wrap conversational replies in JSON.
                                     or _targs.get("path")
                                     or _targs.get("document_path")
                                 )
-                            except Exception:
-                                pass
+                            except Exception as e:  # noqa: BLE001
+                                logger.debug(
+                                    "Could not read the indexed file from the "
+                                    "index_document call: %s",
+                                    e,
+                                )
                             break
                     if _last_indexed_file:
                         # Inject a fake assistant tool-call so the conversation shows

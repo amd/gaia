@@ -50,7 +50,7 @@ class ProceduralMemoryMixin:
     MemoryMixin host via MRO. Relies on host state/methods that
     MemoryMixin.init_memory and MemoryMixin define: self._memory_store,
     self._proc_faiss_index, self._proc_faiss_id_map, self._recalled_skill_prompt,
-    self._recalled_skills, self._embed_text, self.chat, self.rebuild_system_prompt,
+    self._recalled_skills, self._embed_text, self.chat,
     self._note_memory_write_failure.
     """
 
@@ -425,16 +425,16 @@ class ProceduralMemoryMixin:
     def _build_recalled_skills_prompt(
         self, skills: List[DistilledProcedure], config: Optional[SynthesisConfig]
     ) -> str:
-        """Render the recalled-procedure system-prompt section from ``skills``.
+        """Render the recalled-procedure section of this turn's memory context.
 
         Pure renderer over the already-recalled ``skills`` (and the ``config``
         resolved alongside them by ``_recall_skills_for_turn``) — the recall and
-        the single settings read happen once upstream and feed both this prompt
+        the single settings read happen once upstream and feed both this block
         and the loader's ``_recalled_skill_tools`` signal.  Each body is capped at
         ``config.max_recall_body_chars`` (default 1500) with an explicit
         ``… (truncated)`` marker; the full body always stays in the
-        ``procedures`` row.  Returns ``""`` when ``skills`` is empty, so the
-        composed system prompt is byte-identical to a no-procedure build.
+        ``procedures`` row.  Returns ``""`` when ``skills`` is empty, so a turn
+        with no recall carries nothing extra.
         """
         if not skills:
             return ""
@@ -477,44 +477,25 @@ class ProceduralMemoryMixin:
                     tools.append(tool)
         return tools
 
-    def get_recalled_skills_system_prompt(self) -> str:
-        """Contribute the recalled-procedure block to the composed system prompt.
-
-        Auto-discovered by ``Agent._get_mixin_prompts`` (the ``get_*_system_prompt``
-        convention).  Returns the value ``_refresh_recalled_skills`` computed for
-        the current turn — ``""`` when nothing was recalled, which the composer
-        drops, keeping the prompt byte-identical to a no-procedure build.
-        """
-        return getattr(self, "_recalled_skill_prompt", "")
-
     def _refresh_recalled_skills(self, goal: str) -> None:
         """Recompute the per-turn recalled-skill state for ``goal``.
 
         Recalls the matching procedures **once** and caches both consumers'
         inputs: ``self._recalled_skills`` (the matched ``DistilledProcedure``
         objects, read by the tool loader through ``_recalled_skill_tools`` —
-        #1451) and the
-        rendered ``self._recalled_skill_prompt`` (the system-prompt block, read by
-        ``get_recalled_skills_system_prompt`` — #887).  The single recall keeps
-        the loader's SKILL signal free (no second ``recall_skill``).
+        #1451) and the rendered ``self._recalled_skill_prompt`` (#887), which
+        ``_build_dynamic_memory_context`` adds to this turn's user message.  The
+        single recall keeps the loader's SKILL signal free (no second
+        ``recall_skill``).
 
-        Mirrors ``Agent._refresh_active_tool_filter``: it swaps the cached
-        injection and rebuilds the system prompt **only when the recalled set
-        changes**, so a stable recall (or no recall) leaves the cached prompt —
-        and the backend's KV-cache prefix — untouched.  Called per turn from the
-        ``process_query`` override with the clean user goal.
+        The system prompt is never touched: the recalled set changes from turn
+        to turn, and rewriting the prompt for it made the server re-read the
+        whole conversation.  Called per turn from the ``process_query`` override
+        with the clean user goal.
         """
         skills, config = self._recall_skills_for_turn(goal)
         self._recalled_skills = skills
-        new_prompt = self._build_recalled_skills_prompt(skills, config)
-        if new_prompt != getattr(self, "_recalled_skill_prompt", ""):
-            self._recalled_skill_prompt = new_prompt
-            # rebuild_system_prompt() recomposes via _compose_system_prompt(),
-            # which re-invokes get_recalled_skills_system_prompt() and picks up
-            # the new value.  Guarded: a host without it (e.g. a bare mixin) just
-            # keeps the cached injection for its own composer to read.
-            if hasattr(self, "rebuild_system_prompt"):
-                self.rebuild_system_prompt()
+        self._recalled_skill_prompt = self._build_recalled_skills_prompt(skills, config)
 
     # ==================================================================
     # Skill Synthesis (procedural memory, #887)
