@@ -47,14 +47,65 @@ export type PermissionDecision = 'allow' | 'always' | 'deny';
 /** The prompt raised when a tool reaches outside the chat's files (security.py). */
 export const PATH_ACCESS_TOOL = 'allow_path_access';
 
-/** The question a path-access prompt asks; `kind` comes from the agent when it knows. */
-export function pathAccessQuestion(args: unknown): string {
+function pathAccessArgs(args: unknown): { target: string; kind: unknown } {
   const { path, kind } = (args ?? {}) as { path?: unknown; kind?: unknown };
-  const target = String(path ?? 'a file');
+  return { target: String(path ?? 'a file'), kind };
+}
+
+/**
+ * The question a path-access prompt asks. `kind` is the agent's: it omits it only
+ * when nothing exists at the path yet. `followUp` means it backs a call just allowed.
+ */
+export function pathAccessQuestion(args: unknown, followUp = false): string {
+  const { target, kind } = pathAccessArgs(args);
   const what = kind === 'folder'
     ? `the folder ${target} and everything in it`
-    : kind === 'file' ? `the file ${target}` : `${target} (and anything inside it, including changes)`;
-  return `GAIA wants to use ${what}, which this chat cannot reach yet. Allow it for this chat?`;
+    : kind === 'file' ? `the file ${target}` : `${target}, which doesn't exist yet`;
+  return followUp
+    ? `To do what you just allowed, GAIA also needs ${what}. This chat can't reach it yet. Allow it for this chat?`
+    : `GAIA wants to use ${what}. This chat can't reach it yet. Allow it for this chat?`;
+}
+
+/** The path-access prompt's heading, in the user's terms rather than the tool's name. */
+export function pathAccessTitle(args: unknown, followUp = false): string {
+  const { kind } = pathAccessArgs(args);
+  const noun = kind === 'folder' ? 'folder' : kind === 'file' ? 'file' : 'location';
+  return followUp ? `Also let GAIA use this ${noun}?` : `Let GAIA use this ${noun}?`;
+}
+
+/** `C:\A\b.txt` and `c:/a/b.txt/` compare equal. Picks card wording only; too loose for an access check. */
+function normalizePath(p: string): string {
+  return p.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+/** The path a gated tool call acts on, if its arguments name one. */
+function toolTargetPath(args: Record<string, unknown> | undefined): string | null {
+  const value = ['file_path', 'path', 'directory', 'dir_path', 'destination']
+    .map((k) => args?.[k])
+    .find((v) => typeof v === 'string' && v.trim());
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * Whether a path-access request backs the call this chat just allowed — the same
+ * path, or a folder holding it. Only then may the prompt read as a follow-up.
+ */
+export function isPathAccessFollowUp(
+  notifications: GaiaNotification[],
+  sessionId: string,
+  args: unknown,
+): boolean {
+  const previous = notifications.find((n) => n.type === 'permission_request' && n.sessionId === sessionId);
+  if (!previous || previous.response !== 'allow' || previous.tool === PATH_ACCESS_TOOL) return false;
+  const acted = toolTargetPath(previous.toolArgs);
+  const { path } = (args ?? {}) as { path?: unknown };
+  if (!acted || typeof path !== 'string' || !path.trim()) return false;
+  const a = normalizePath(acted);
+  const p = normalizePath(path);
+  if (a === p || a.startsWith(`${p}/`)) return true;
+  // A relative argument resolves against a directory the prompt doesn't show.
+  const relative = !/^([a-z]:)?\//.test(a) && !a.startsWith('~');
+  return relative && p.endsWith(`/${a.replace(/^\.\//, '')}`);
 }
 
 export function requiresFreshConsent(tool: string | undefined): boolean {

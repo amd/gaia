@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion } from '../stores/notificationStore';
+import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -166,6 +166,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const setNotificationPanelVisible = useNotificationStore((s) => s.setShowPanel);
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
     const pendingPrompt = useChatStore((s) => s.pendingPrompt);
+    const liveStatus = useChatStore((s) => s.liveStatus);
 
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
@@ -598,16 +599,18 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // user already allowed "always" never get here: the backend skips them.
                 if (event.type === 'permission_request') {
                     const toolName = event.tool || '';
-                    const { addNotification: addNotif } = useNotificationStore.getState();
+                    const { addNotification: addNotif, notifications } = useNotificationStore.getState();
+                    const isPathAccess = toolName === PATH_ACCESS_TOOL;
+                    const followUp = isPathAccess && isPathAccessFollowUp(notifications, sessionId, event.args);
                     addNotif({
                         id: event.confirm_id ?? `perm-${Date.now()}`,
                         type: 'permission_request',
                         agentId: sessionId,
                         sessionId,
                         agentName: 'GAIA',
-                        title: `Allow ${toolName}?`,
-                        message: toolName === PATH_ACCESS_TOOL
-                            ? pathAccessQuestion(event.args)
+                        title: isPathAccess ? pathAccessTitle(event.args, followUp) : `Allow ${toolName}?`,
+                        message: isPathAccess
+                            ? pathAccessQuestion(event.args, followUp)
                             : `The agent wants to execute: ${toolName}`,
                         timestamp: Date.now(),
                         read: false,
@@ -783,6 +786,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (event.type === 'status') {
                     const status = event.status;
                     const msg = (event.message || '').trim();
+                    if (event.phase && msg) useChatStore.getState().setLiveStatus(msg);
                     // Skip "Executing <tool>" messages - redundant with tool_start
                     if (msg.toLowerCase().startsWith('executing ')) return;
                     if (status === 'working' || status === 'warning' || status === 'info') {
@@ -820,6 +824,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     addAgentStep(step);
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
+                        // The model's phase ended with the call; the tool card says what runs now.
+                        useChatStore.getState().setLiveStatus(null);
                     }
                 }
             },
@@ -1382,6 +1388,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
                                 cards={isStreaming ? cards : lastCardsRef.current}
+                                liveStatus={isStreaming ? liveStatus : null}
                             />
                         </div>
                     )}

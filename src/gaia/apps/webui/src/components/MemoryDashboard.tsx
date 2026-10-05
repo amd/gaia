@@ -1247,13 +1247,15 @@ export function MemoryDashboard() {
                                 </div>
                                 <div className="mem-stat-card" data-accent="red">
                                     <div className="mem-stat-value">
-                                        {stats?.tools?.overall_success_rate != null
+                                        {stats?.tools?.overall_success_rate != null && (stats.tools.total_calls ?? 0) > 0
                                             ? `${Math.round(stats.tools.overall_success_rate * 100)}%`
                                             : '\u2014'}
                                     </div>
                                     <div className="mem-stat-label">Success Rate</div>
                                     <div className="mem-stat-sub">
-                                        {stats?.tools?.total_errors ?? 0} errors
+                                        {(stats?.tools?.total_calls ?? 0) > 0
+                                            ? `${stats?.tools?.total_errors ?? 0} errors`
+                                            : 'No tool calls yet'}
                                     </div>
                                 </div>
                             </div>

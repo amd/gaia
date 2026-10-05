@@ -250,7 +250,8 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                 Uses a wrapper div that's always mounted so CSS can animate
                 the height transition on collapse/expand. */}
             {displaySteps.length > 0 && (
-                <div className={`agent-flow-wrap ${expanded ? 'flow-expanded' : 'flow-collapsed'}`}>
+                // Inert while collapsed: invisible buttons must not be tabbable or announced.
+                <div className={`agent-flow-wrap ${expanded ? 'flow-expanded' : 'flow-collapsed'}`} inert={!expanded}>
                     {/* Filter bar — shown when expanded and 2+ tool steps */}
                     {expanded && toolSteps.length >= 2 && (
                         <div className="activity-filter-bar">
@@ -700,6 +701,7 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
                             className={`cmd-copy ${copied ? 'copied' : ''}`}
                             onClick={handleCopy}
                             title={copied ? 'Copied!' : 'Copy output'}
+                            aria-label={copied ? 'Copied to clipboard' : 'Copy command output'}
                         >
                             {copied ? <Check size={11} /> : <Copy size={11} />}
                         </button>

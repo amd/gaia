@@ -7,6 +7,7 @@ import {
     useNotificationStore,
     selectSessionPermissionPrompt,
     requiresFreshConsent,
+    PATH_ACCESS_TOOL,
     type PermissionDecision,
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -112,7 +113,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                 <ShieldQuestion size={16} className="perm-card-icon" aria-hidden="true" />
                 <div className="perm-card-text">
                     <h2 id={`perm-${notification.id}`} className="perm-card-title">
-                        Allow GAIA to use <code>{notification.tool}</code>?
+                        {notification.tool === PATH_ACCESS_TOOL
+                            ? notification.title
+                            : <>Allow GAIA to use <code>{notification.tool}</code>?</>}
                     </h2>
                     {detail && <p className="perm-card-detail"><code>{detail}</code></p>}
                     {freshConsent && notification.message && <p className="perm-card-detail">{notification.message}</p>}
