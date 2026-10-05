@@ -7,11 +7,13 @@ icon: "flask-vial"
   **Source Code:** [`src/gaia/eval/`](https://github.com/amd/gaia/tree/main/src/gaia/eval)
 </Info>
 
-GAIA's live evaluation surface is five commands: `gaia eval sessions` (replay
+GAIA's live evaluation surface is six commands: `gaia eval sessions` (replay
 real Claude Code sessions), `gaia eval agent` (the scenario-based Agent UI
 benchmark), `gaia eval tasks` (the flagship's coding-task gate), `gaia eval
 code` (a code-editing benchmark scored by running the tests, not by a judge),
-and `gaia eval benchmark` (email-triage throughput: TTFT, tokens/sec, latency).
+`gaia eval benchmark` (email-triage throughput: TTFT, tokens/sec, latency),
+and `gaia eval retrieval --component code` (code search recall, scale and
+robustness on real repositories, no LLM).
 The batch-experiment / ground-truth-generation / visualizer workflow this page
 used to document was removed in v0.18.0; git history has it if you need it.
 
@@ -406,6 +408,55 @@ An abridged, illustrative file:
 <Warning>
   The run step never holds the judge's credentials: `run` removes `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` from its own environment before the agent starts, because the agent runs shell commands. In CI they exist only in the judge step. The CI artifact is public and holds each task's transcript and diffs as well as the scores; every file is scanned for the CI credentials and redacted before upload, but that catches credentials only.
 </Warning>
+
+## Code Retrieval Benchmark
+
+`gaia eval retrieval --component code` measures the code index behind semantic code search ([`src/gaia/code_index/`](https://github.com/amd/gaia/tree/main/src/gaia/code_index)) on real repositories. It answers four questions: does it find the code a real fix changed, does it beat plain `grep`, what does indexing cost, and does a damaged cache fail loudly? No LLM is involved. Every number comes from real embeddings through Lemonade.
+
+```bash
+gaia eval retrieval --component code                     # pr suite, ~40 min
+gaia eval retrieval --component code --suite pr \
+  --gate tests/fixtures/eval_baselines/code-retrieval/pr.json
+gaia eval retrieval --component code --suite nightly     # sampled, a few hours
+gaia eval retrieval --component code --suite scale       # five repos, most of a day
+gaia eval retrieval --component code --parts robustness  # one part of a suite
+```
+
+Each run writes `results.json` and `report.md` to `--out` (default `eval/results/retrieval-code-<suite>-<timestamp>/`). It holds the machine-wide eval lock, so it never shares Lemonade with another eval. Repositories are fetched into the same bare-repo cache `gaia eval tasks` uses (`--work-root`, default `$GAIA_BENCH_WORK_ROOT` or `<tmp>/gaia-bench`).
+
+### How quality is scored
+
+- **Queries are real issues.** The query is an issue's problem statement from [SWE-bench Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified), and from the 2026 monthly splits of [SWE-rebench](https://huggingface.co/datasets/nebius/SWE-rebench-leaderboard). Those splits postdate the embedding model's release, so the model cannot have seen the fixes.
+- **Relevance comes from the merged fix.** Relevant files are the ones the gold patch modifies. Files it creates did not exist yet, so they are not scored. Relevant symbols are the innermost `def`/`class` around each changed line, found with `ast` in the base-commit version. An insertion counts only when the symbol spans both sides of it.
+- **Each query is indexed at the issue's base commit.** The tree is the one the issue was filed against. One working tree per repository is reused, oldest base first, so each re-index only re-embeds what changed.
+- **Metrics:** file recall@1/5/10, function recall@5/10, and MRR (mean of 1/rank of the first relevant file). Search returns chunks. Files and symbols are ranked by their first chunk among the top 200.
+- **Baseline:** `git grep` for the code-looking identifiers in the issue (snake_case, camelCase, dotted names, anything in backticks), weighted by rarity across the indexed files. It searches the same files the index holds, so semantic search has to earn its keep against it.
+
+### Suites
+
+| Suite | What runs | Gated |
+|---|---|---|
+| `pr` | All 11 Verified instances from the three smallest repos (requests, flask, seaborn). Incremental replay of 10 requests commits. Robustness. | Yes, on PRs that touch the code index |
+| `nightly` | A seeded 20 of Verified plus 6 of SWE-rebench 2026, skipping repos over 20K chunks (named in the report). Incremental replay of 30 flask commits. Robustness. | Yes |
+| `scale` | Fresh index of requests, TheRock, llama.cpp, django and GAIA itself, all pinned. | No, reported |
+
+Indexing runs at about 10 chunks/s because the embedder is pinned to the CPU backend. That is why the suites are sized by repository, and why `scale` is weekly. Every repository and sample is pinned to a commit and seed, so two runs of a suite score the same queries over the same trees.
+
+### Incremental re-index and robustness
+
+- **Incremental:** the suite replays real commits, re-indexing after each, then compares the result with a fresh index of the last commit. "Correct" means no stale or missing chunks and every vector within cosine 0.999 of the fresh one.
+- **Damaged cache:** each scenario damages a copy of a real index, then searches and re-indexes. The cases are a truncated, empty, garbage or missing `index.faiss`; a truncated, empty or missing `metadata.json`; a dropped chunk; an old schema; another embedding model; leftover temp files; and a crash between the two renames of a save. A scenario fails when the index answers with no error but returns no results or wrong ones. "Recovers" says whether re-indexing alone fixed it.
+- **Hostile trees:** binary files with code extensions, a NUL past the 8 KB binary sniff, an oversized file, Latin-1 text, links out of the repository, a directory loop and a dangling link. A hazard the machine cannot build (file symlinks need Developer Mode on Windows) is reported `not-run`, never passed.
+
+### The gate
+
+`--gate BASELINE` compares the run with a committed `results.json` and exits 1 on any of these:
+
+- a semantic quality metric fell by more than `--tolerance` (default 0.05)
+- the incremental index drifted
+- a robustness scenario or tree hazard that passed in the baseline now fails
+
+Scale numbers are shown against the baseline but never gated. A baseline that scored different queries is refused, not compared. Baselines live in `tests/fixtures/eval_baselines/code-retrieval/`. They are copied unedited from a real run, never hand-written.
 
 
 ---

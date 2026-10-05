@@ -320,9 +320,9 @@ def repo_url(instance: Mapping[str, Any]) -> str:
     return f"https://github.com/{instance['repo']}.git"
 
 
-def _cache(cache_root: Path, url: str) -> Path:
+def _cache(cache_root: Path, url: str, prefix: str = "swebench") -> Path:
     key = hashlib.sha256(url.encode()).hexdigest()[:12]
-    cache = cache_root / "cache" / f"swebench-{key}.git"
+    cache = cache_root / "cache" / f"{prefix}-{key}.git"
     if not cache.is_dir():
         cache.parent.mkdir(parents=True, exist_ok=True)
         _git(["init", "--quiet", "--bare", str(cache)])
@@ -331,6 +331,30 @@ def _cache(cache_root: Path, url: str) -> Path:
 
 def _branch(sha: str) -> str:
     return f"base-{sha[:12]}"
+
+
+def fetch_commit(
+    url: str, sha: str, cache_root: Path, prefix: str = "swebench"
+) -> Tuple[Path, str]:
+    """The bare cache for *url* holding *sha* (and its :data:`HISTORY_DEPTH` ancestors).
+
+    Returns the cache and the branch naming *sha* in it. *prefix* names the
+    cache, so TheRock's ``therock`` caches are shared with :mod:`therock`.
+    """
+    cache, branch = _cache(cache_root, url, prefix), _branch(sha)
+    if not _git(["for-each-ref", f"refs/heads/{branch}"], cwd=cache).strip():
+        _git(
+            [
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                f"--depth={HISTORY_DEPTH}",
+                url,
+                f"{sha}:refs/heads/{branch}",
+            ],
+            cwd=cache,
+        )
+    return cache, branch
 
 
 def checkout(
@@ -346,19 +370,7 @@ def checkout(
     URL, for a mirror or a test.
     """
     base, url = instance["base_commit"], url or repo_url(instance)
-    cache, branch = _cache(cache_root, url), _branch(base)
-    if not _git(["for-each-ref", f"refs/heads/{branch}"], cwd=cache).strip():
-        _git(
-            [
-                "fetch",
-                "--quiet",
-                "--no-tags",
-                f"--depth={HISTORY_DEPTH}",
-                url,
-                f"{base}:refs/heads/{branch}",
-            ],
-            cwd=cache,
-        )
+    cache, branch = fetch_commit(url, base, cache_root)
     _git(
         [
             "clone",
