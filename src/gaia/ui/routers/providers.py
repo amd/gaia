@@ -32,6 +32,7 @@ from gaia.logger import get_logger
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
+from ..security import require_ui_header
 
 logger = get_logger(__name__)
 
@@ -432,7 +433,8 @@ def _via_tunnel(request: Request) -> bool:
     )
 
 
-@router.get("/api/providers")
+# Re-sends a stored key to Lemonade, so a cross-site GET must not reach it.
+@router.get("/api/providers", dependencies=[Depends(require_ui_header)])
 def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     """Every provider with its connection state, and the active model."""
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
@@ -465,7 +467,8 @@ def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     }
 
 
-@router.get("/api/providers/active")
+# Can restore and persist the last model, so a cross-site GET must not reach it.
+@router.get("/api/providers/active", dependencies=[Depends(require_ui_header)])
 def active_model(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     """The model new turns run, plus the once-per-run restore notice."""
     restore = restore_last_model(db)

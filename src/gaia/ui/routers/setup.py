@@ -11,15 +11,17 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from ..security import require_ui_header
 from ..setup_runner import SetupError, check, runner, step_labels
 
 router = APIRouter(tags=["setup"])
 
 
-@router.get("/api/setup/check")
+# Starts a subprocess that can load models, so a cross-site GET must not reach it.
+@router.get("/api/setup/check", dependencies=[Depends(require_ui_header)])
 def setup_check(skip_chat_model: bool = False, load: bool = False) -> Dict[str, Any]:
     """``gaia init --check --json``: ready, or the stage and reasons it is not."""
     try:

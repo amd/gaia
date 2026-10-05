@@ -155,10 +155,11 @@ class SkillLearningToolsMixin:
                     "was stored."
                 )
             if getattr(agent, "_incognito", False):
+                from gaia.agents.base.memory import memory_off_reason
+
                 return _failure(
-                    "This is a private session, so nothing is saved to memory. "
-                    "Ask the user to repeat the correction in a normal session "
-                    "if they want it to stick."
+                    f"{memory_off_reason(agent)} Ask the user to repeat the "
+                    "correction once memory is on if they want it to stick."
                 )
             # The off-switch means "no learned changes", not "learn silently
             # into a store nothing reads" — resolution ignores the overlay

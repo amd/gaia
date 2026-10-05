@@ -858,7 +858,11 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
     from gaia.config import UnsafeGaiaHomeError
 
     try:
-        from gaia.ui.server import create_app, start_model_server_owner
+        from gaia.ui.server import (
+            create_app,
+            lemonade_is_remote,
+            start_model_server_owner,
+        )
 
         # Forward --base-url to the UI server via environment variable
         if base_url:
@@ -876,7 +880,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         import uvicorn
 
         app = create_app(webui_dist=webui_dist)
-        if not base_url:
+        if not base_url and not lemonade_is_remote():
             # First run is set up in the app; the daemon owns the model server.
             start_model_server_owner()
         uvicorn.run(

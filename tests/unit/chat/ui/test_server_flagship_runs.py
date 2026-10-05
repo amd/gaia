@@ -58,13 +58,24 @@ def test_create_app_never_starts_the_daemon(monkeypatch):
         assert client.get("/api/health").status_code in (200, 503)
 
 
-@pytest.mark.parametrize("base_url,expected", [(None, 1), ("http://10.0.0.5:8000", 0)])
+@pytest.mark.parametrize(
+    "base_url,env_url,expected",
+    [
+        (None, None, 1),
+        ("http://10.0.0.5:8000", None, 0),
+        (None, "http://10.0.0.5:8000", 0),
+        (None, "http://127.0.0.1:8000/api/v1", 1),
+    ],
+)
 def test_launch_agent_ui_starts_the_owner_only_for_a_local_server(
-    monkeypatch, base_url, expected
+    monkeypatch, base_url, env_url, expected
 ):
     import gaia.cli as gaia_cli
 
-    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    if env_url is None:
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("LEMONADE_BASE_URL", env_url)
     # _launch_agent_ui exports --base-url into os.environ; don't leak it.
     with (
         patch.dict(os.environ),
