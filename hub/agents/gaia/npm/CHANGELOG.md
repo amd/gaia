@@ -8,6 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Everyday questions get short, plain answers.** "Why is the sky blue?" got
+  140 words with an equation, and a Wi-Fi question got diagnostic shell runs.
+  The voice skill now caps an everyday answer at three plain sentences, goes
+  one level deeper only when asked, honours a stored short/detailed preference,
+  and answers general-knowledge questions without running tools.
 - **Every tool is offered on every turn again, as in the Agent UI.** Per-turn
   tool selection swapped about a dozen tools in and out at its cap, which broke
   the local model's prompt cache (17s to first token on a one-line question,
