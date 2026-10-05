@@ -1,0 +1,47 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/vendor_quotes/ — see
+# GAIA_FIXTURE_VALUES.md "Documents and data".
+id: rag_index_directory_quotes
+name: "RAG — Index a Folder of Quotes and Compare All-In Cost"
+category: gaia_rag
+severity: high
+tags: [t2_compound, local_blocked_no_embedder]
+description: |
+  A folder of three vendor quotes in three formats (.md, .txt, .pdf) is
+  indexed in one step, then compared. The trap: the lowest UNIT price
+  (Borealis) is not the lowest ALL-IN price once shipping is added (Cobalt).
+
+persona: small_business_owner
+
+setup:
+  index_documents: []
+  notes: "Fixture folder staged at ~/gaia-eval/tiers_documents/vendor_quotes/ (apex_quote.md, borealis_quote.txt, cobalt_quote.pdf)."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to index everything in ~/gaia-eval/tiers_documents/vendor_quotes and say which vendor is cheapest all-in for 500 units including shipping"
+    user_message: "I've got three bolt quotes in ~/gaia-eval/tiers_documents/vendor_quotes — index the folder and tell me who's cheapest all-in for 500 units, shipping included."
+    ground_truth:
+      expected_answer: "Cobalt Industrial at $1,125 (500 x $2.25, free shipping). Apex $1,320; Borealis $1,385"
+    success_criteria: |
+      agent_tools[] shows index_directory on vendor_quotes (or index_document
+      on all three files) then retrieval. Answer: Cobalt, $1,125. FAIL if it
+      names Borealis (lowest unit price, but $1,385 all-in) or if any quoted
+      all-in total is wrong (Apex $1,320, Borealis $1,385, Cobalt $1,125).
+
+  - turn: 2
+    objective: "Ask which vendor ships fastest"
+    user_message: "which one's fastest?"
+    ground_truth:
+      expected_answer: "Cobalt Industrial, 10 days (Apex 14, Borealis 21)"
+    success_criteria: "Agent answers Cobalt at 10 days. Wrong vendor or lead time is a FAIL."
+
+  - turn: 3
+    objective: "Ask how much picking the cheapest vendor saves versus Apex"
+    user_message: "how much do I save going with them instead of Apex?"
+    ground_truth:
+      expected_answer: "$195 ($1,320 - $1,125)"
+    success_criteria: "Agent resolves 'them' to Cobalt and answers $195. A different figure is a FAIL."
+
+expected_outcome: |
+  All three formats are indexed and compared on all-in cost; Cobalt wins at
+  $1,125, fastest at 10 days, $195 cheaper than Apex.

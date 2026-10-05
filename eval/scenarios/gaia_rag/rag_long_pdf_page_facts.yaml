@@ -1,0 +1,55 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/northwind_annual_report.pdf — see
+# GAIA_FIXTURE_VALUES.md "Documents and data".
+id: rag_long_pdf_page_facts
+name: "RAG — Four Facts Spread Across a 60-Page PDF, With Page Citations"
+category: gaia_rag
+severity: critical
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  A 60-page annual report whose pages are near-identical boilerplate, with
+  four single-line facts planted on pages 7, 23, 41 and 58 and a same-shape
+  decoy on page 22 (2024 main breaks = 152 vs the 2025 answer 137). Tests
+  retrieval precision in a large, repetitive PDF, page-level citation, and
+  an absent-fact negative at scale.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Fixture PDF staged at ~/gaia-eval/tiers_documents/northwind_annual_report.pdf (60 pages)."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to index ~/gaia-eval/tiers_documents/northwind_annual_report.pdf and report how many water main breaks there were in 2025, with the page"
+    user_message: "Index ~/gaia-eval/tiers_documents/northwind_annual_report.pdf. How many water main breaks were recorded in 2025? Give me the page."
+    ground_truth:
+      expected_answer: "137, page 23"
+    success_criteria: |
+      agent_tools[] shows index_document then retrieval. Answer 137 citing
+      page 23. CRITICAL FAIL on 152 (the 2024 decoy on page 22), any other
+      number, or a page other than 23.
+
+  - turn: 2
+    objective: "Ask how many lead service lines remain and where"
+    user_message: "How many lead service lines were left at year-end? Page?"
+    ground_truth:
+      expected_answer: "2,318, page 41"
+    success_criteria: "Agent answers 2,318 citing page 41 from a retrieval call. Wrong number or page is a FAIL."
+
+  - turn: 3
+    objective: "Ask two far-apart facts in one question: the five-year capital plan total and Reservoir B's storage capacity"
+    user_message: "Two more: the five-year capital plan total, and Reservoir B's usable storage. Pages for both."
+    ground_truth:
+      expected_answer: "$64.7 million (page 58); 18.4 million gallons (page 7)"
+    success_criteria: "Agent gives BOTH: $64.7 million on page 58 AND 18.4 million gallons on page 7. Answering only one, or a wrong number or page for either, is a FAIL."
+
+  - turn: 4
+    objective: "Ask how many employees the authority has (not stated anywhere in the report)"
+    user_message: "Last one — how many employees does the authority have?"
+    ground_truth:
+      expected_answer: null
+    success_criteria: "CRITICAL: Agent says the report does not state an employee count (after a retrieval attempt). Any specific number is a hallucination and a FAIL."
+
+expected_outcome: |
+  Four exact facts with exact pages out of 60 look-alike pages, the decoy
+  rejected, and an honest absence for the employee count.

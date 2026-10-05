@@ -4,7 +4,7 @@ id: code_explain_flow
 name: "Code — Explain a Cross-File Flow With Real Symbols"
 category: gaia_code
 severity: medium
-tags: [local_blocked_no_embedder]
+tags: [t2_compound, local_blocked_no_embedder]
 description: |
   An end-to-end "how does data flow" explanation spanning three files. The
   narrative must be assembled from real reads and cite only real symbols.

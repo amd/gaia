@@ -1,0 +1,43 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/projects/ — exactly
+# atlas_notes.md, team_roster.txt and the folder archive/. See
+# GAIA_FIXTURE_VALUES.md, "Files and shell".
+id: shell_list_dir_basic
+name: "Shell — List a Known Folder With the Shell"
+category: gaia_shell
+severity: high
+tags: [t1_basic]
+description: |
+  A read-only, no-prompt command (dir / ls) against a fixture folder named
+  with '~'. On Windows neither cmd.exe nor the tool expands '~', so the
+  agent has to turn it into a real path. The listing must match the
+  fixture exactly.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "projects/ staged at ~/gaia-eval/tiers_files_shell/projects/."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to list the projects folder using the shell specifically"
+    user_message: "Use the shell to list ~/gaia-eval/tiers_files_shell/projects — I want the raw directory listing, not a file tool."
+    ground_truth:
+      expected_answer: "atlas_notes.md, team_roster.txt, and a folder named archive"
+    success_criteria: |
+      agent_tools[] must include run_shell_command with a listing command
+      (dir or ls) that succeeded. The reply names exactly atlas_notes.md,
+      team_roster.txt and the archive folder. If the first attempt failed
+      on '~', a corrected retry passes. A listing reported with no
+      successful shell call is a CRITICAL FAIL.
+
+  - turn: 2
+    objective: "Ask for the size of the roster file from the same listing"
+    user_message: "how big is team_roster.txt, in bytes?"
+    ground_truth:
+      expected_behavior: "A byte count taken from a real listing or file_info call"
+    success_criteria: "Agent reports a byte count that matches its tool output (the dir/ls listing, a second shell call, or file_info). A number that appears in no tool output is a FAIL."
+
+expected_outcome: |
+  A real shell listing of the fixture folder, with names and size taken from
+  the command's output.

@@ -47,6 +47,20 @@ Recorded issues (open, newest first):
 Notification inbox: exactly 2 unread — issue #142 and PR #140 "Fix flaky sync
 test in CI", both in `acme-labs/widgetworks`.
 
+## Auth state (resilience scenarios)
+
+`github.com` is signed in as `fixture-bot` by default, and
+`gh auth status --json hosts` returns that account in the shape
+`check_cli_setup` parses.
+
+- Hosts listed in `../tiers_resilience/fake_gh_auth.json` are **signed out**:
+  any command aimed at one (`--repo HOST/OWNER/REPO`, `--hostname HOST`, or
+  `GH_HOST`) exits 4 with gh's own "please run: gh auth login --hostname HOST"
+  message. Today that is `ghe.acme-labs.example` only, which no other scenario
+  touches.
+- `FAKE_GH_AUTH=logged_out` signs out **every** host (a local repro of a
+  logged-out `gh`); `auth status` then reports no accounts.
+
 ## What is NOT served — and why that is loud
 
 - **Refuse-tier commands** (`gh auth token`, `gh alias`, `gh extension`,

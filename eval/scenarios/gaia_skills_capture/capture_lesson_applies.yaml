@@ -1,0 +1,71 @@
+id: capture_lesson_applies
+name: "Capture — A User Correction Becomes a Skill Lesson That Sticks"
+category: gaia_skills_capture
+severity: high
+tags: [t2_compound, local_blocked_no_embedder]
+description: |
+  A pasted skill is captured and used; the user then corrects one of its
+  instructions and asks for the change to stick. That is remember_skill_lesson
+  on the loaded skill (a learned overlay), not a memory fact — and the next
+  use must follow the corrected instruction.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "GAIA_AUTO_APPROVE_TOOLS=1; memory store available (remember_skill_lesson writes to it)."
+
+turns:
+  - turn: 1
+    objective: "Paste a skill and ask to save and load it"
+    user_message: |
+      save this skill and load it:
+
+      ---
+      name: standup-format
+      description: Format a daily standup update when the user says what they did yesterday, will do today, and what blocks them.
+      version: "1.0.0"
+      ---
+
+      # Standup Format
+
+      ## Output shape
+
+      Three bullets in this order: **Yesterday**, **Today**, **Blockers**.
+      End with the exact line `-- END STANDUP --`.
+
+      ## Rules
+
+      Use only what the user said. Write `none` for an empty field.
+    ground_truth:
+      expected_behavior: "capture_skill (pasted text) then load_skill('standup-format')"
+    success_criteria: "agent_tools[] shows capture_skill and load_skill for standup-format."
+
+  - turn: 2
+    objective: "Use it once as shipped"
+    user_message: "standup: yesterday I fixed the login bug, today I'm writing tests, no blockers"
+    ground_truth:
+      expected_answer: "Yesterday / Today / Blockers (none) bullets, ending with -- END STANDUP --"
+    success_criteria: "Three bullets in order with Blockers `none`, ending `-- END STANDUP --`."
+
+  - turn: 3
+    objective: "Correct the skill and ask for it to stick"
+    user_message: "That closing line is wrong for my team. From now on this skill should end with == DONE == instead. Make that stick."
+    ground_truth:
+      expected_behavior: "remember_skill_lesson(skill='standup-format', section 'Output shape', replacing '-- END STANDUP --' with '== DONE ==')"
+    success_criteria: |
+      agent_tools[] includes remember_skill_lesson for standup-format.
+      Storing it only as a `remember` memory fact is a FAIL (it does not
+      change the skill). Mentioning how to undo it (`gaia skill deltas`) is a
+      plus. Claiming the change with no tool call is a CRITICAL FAIL.
+
+  - turn: 4
+    objective: "Use it again"
+    user_message: "standup: yesterday wrote tests, today code review, blocker is waiting on staging access"
+    ground_truth:
+      expected_answer: "Yesterday / Today / Blockers (waiting on staging access) bullets, ending with == DONE =="
+    success_criteria: "Ends with `== DONE ==` and NOT `-- END STANDUP --`. The three bullets carry exactly what the user said."
+
+expected_outcome: |
+  A user's correction lands in the skill through the lesson overlay and
+  governs the very next use.

@@ -1,0 +1,49 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_skills_web/web/directory.html (48
+# branch links) + web/branches/willow_creek.html and willowby.html — see
+# GAIA_FIXTURE_VALUES.md "Skills, web and tool selection".
+id: web_link_hunt_directory
+name: "Web — Find One Link Among 48, Past a Near-Duplicate Decoy"
+category: gaia_web
+severity: high
+tags: [t3_stress]
+description: |
+  A directory page lists 48 branches; the user names one. The agent must
+  pick the right link (Willow Creek, not the adjacent Willowby), follow it,
+  and answer from the branch page — not from the directory, which holds no
+  hours at all.
+
+persona: home_user
+
+setup:
+  index_documents: []
+  notes: "Fixture server on 127.0.0.1:8765; GAIA_WEB_ALLOWED_HOSTS=127.0.0.1. Only willow_creek.html and willowby.html exist under /branches/; the other 46 links 404."
+
+turns:
+  - turn: 1
+    objective: "Ask for hours at one named branch via the directory"
+    user_message: "The Ridgeview Library directory is at http://127.0.0.1:8765/tiers_skills_web/web/directory.html — what are the Saturday hours at the Willow Creek branch?"
+    ground_truth:
+      expected_answer: "9:00 AM to 1:00 PM"
+    success_criteria: |
+      agent_tools[] shows the directory fetched and then the Willow Creek
+      branch page fetched. Answer: 9:00 AM to 1:00 PM. Answering "closed on
+      Saturdays" (the Willowby page) is a FAIL; hours given without fetching
+      the branch page are fabrication and a CRITICAL FAIL.
+
+  - turn: 2
+    objective: "Ask about a facility on the same branch page"
+    user_message: "does that branch have a 3D printer?"
+    ground_truth:
+      expected_answer: "Yes — its Maker Lab has one 3D printer"
+    success_criteria: "Yes, one 3D printer in the Maker Lab, from the Willow Creek page."
+
+  - turn: 3
+    objective: "Ask about the decoy branch"
+    user_message: "and is the Willowby branch open on Saturdays?"
+    ground_truth:
+      expected_answer: "No — Willowby is closed on Saturdays"
+    success_criteria: "A fetch of the Willowby page and the answer 'closed on Saturdays'. Carrying over Willow Creek's hours is a FAIL."
+
+expected_outcome: |
+  The right link is chosen among many, the answer comes from the linked
+  page, and the near-duplicate is kept distinct.

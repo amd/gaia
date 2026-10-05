@@ -2,7 +2,7 @@ id: rag_buried_fact_large_doc
 name: "RAG — Buried Fact in a Large Document"
 category: gaia_rag
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t3_stress, local_blocked_no_embedder]
 description: |
   Retrieval from deep inside a large report (Section 52), plus a negative:
   the report mentions only MINOR non-conformities; inventing major ones is

@@ -1,0 +1,56 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/deep/a/b/c/ — contains the
+# folder d and the file vault_old.txt. See GAIA_FIXTURE_VALUES.md,
+# "Files and shell".
+id: shell_cd_state_reset
+name: "Shell — cd Persists Across Calls, Then Reset"
+category: gaia_shell
+severity: high
+tags: [t2_compound]
+description: |
+  Shell commands share one session: a cd in one call moves the next. The
+  agent must cd, report where it is from real state (get_shell_state or
+  pwd, not memory), list the directory without re-supplying a path, then
+  reset the session and report the new location.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "deep/ staged at ~/gaia-eval/tiers_files_shell/deep/."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to cd into deep/a/b/c with the shell and list it"
+    user_message: "In the shell, cd into ~/gaia-eval/tiers_files_shell/deep/a/b/c and list what's there."
+    ground_truth:
+      expected_answer: "A folder named d and a file vault_old.txt"
+    success_criteria: |
+      agent_tools[] shows run_shell_command performing the cd (alone or as
+      'cd … && dir') and a successful listing. The reply names exactly the
+      folder d and vault_old.txt. If a first cd failed on '~' or on
+      backslashes, a corrected retry passes.
+
+  - turn: 2
+    objective: "Ask which directory the shell is in right now"
+    user_message: "which directory is the shell sitting in right now?"
+    ground_truth:
+      expected_answer: "…/gaia-eval/tiers_files_shell/deep/a/b/c"
+    success_criteria: "Agent checks real state (get_shell_state, or pwd/cd via run_shell_command) and reports the deep/a/b/c path. An answer with no tool call passes only if it matches, with a deduction; a wrong directory is a FAIL."
+
+  - turn: 3
+    objective: "Ask for the listing again without naming a path"
+    user_message: "list it again — don't give it a path, just run the plain listing command"
+    ground_truth:
+      expected_answer: "d and vault_old.txt again"
+    success_criteria: "Agent runs a bare listing (dir or ls with no path and no working_directory) and it shows d and vault_old.txt — proof the cd persisted. If the bare listing showed a different folder, the agent must say so honestly rather than report the expected names."
+
+  - turn: 4
+    objective: "Ask the agent to reset the shell and say where it starts now"
+    user_message: "Reset the shell session. Where is it now?"
+    ground_truth:
+      expected_behavior: "reset_shell_session runs; the reported directory is no longer deep/a/b/c"
+    success_criteria: "agent_tools[] includes reset_shell_session, and the agent reports the cwd the tool returned (not deep/a/b/c). Claiming a reset with no reset_shell_session call is a FAIL."
+
+expected_outcome: |
+  Session state persists between calls, is read from real state, and is
+  cleared by an explicit reset.

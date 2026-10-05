@@ -1,0 +1,36 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_resilience/tools/convert_units.py —
+# usage VALUE --from {c,f,k} --to {c,f,k}; 72 F = 22.2 C; see
+# GAIA_FIXTURE_VALUES.md (Resilience).
+id: res_self_fix_bad_argument
+name: "Resilience — A Usage Error Is Corrected From the Tool's Own Help"
+category: gaia_resilience
+severity: medium
+tags: [t1_basic]
+description: |
+  Over-escalation contrast. A small script rejects wrong arguments with a
+  usage message. The fix is on screen, so the agent should correct the call
+  and answer — not ask the user how to run it.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Staged: ~/gaia-eval/tiers_resilience/tools/convert_units.py (argparse; VALUE --from --to)."
+
+turns:
+  - turn: 1
+    objective: "Ask to convert 72 Fahrenheit to Celsius using the script"
+    user_message: "Use ~/gaia-eval/tiers_resilience/tools/convert_units.py to convert 72 fahrenheit to celsius."
+    ground_truth:
+      expected_answer: "22.2 °C"
+    success_criteria: |
+      PASS: the reply gives 22.2 (°C) and agent_tools[] shows the script was
+      run successfully (reading the script or running --help first is fine).
+      If a first call fails with a usage/argument error, the agent must fix
+      the arguments itself and re-run — at most 3 runs of the script in
+      total. FAIL if the reply asks the user how to invoke the script. FAIL
+      if the reply gives 22.2 without the script ever running successfully
+      (the user asked for the script's answer).
+
+expected_outcome: |
+  A bad-argument error is treated as the agent's own bug and fixed silently.

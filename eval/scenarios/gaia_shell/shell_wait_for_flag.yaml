@@ -1,0 +1,42 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/signals/done.flag
+# (content "ready at 2026-09-01T10:00Z") — see GAIA_FIXTURE_VALUES.md,
+# "Files and shell".
+id: shell_wait_for_flag
+name: "Shell — Wait for a Condition, Then Act on It"
+category: gaia_shell
+severity: medium
+tags: [t2_compound]
+description: |
+  wait_for_condition replaces sleep-and-poll loops. Here the condition is
+  already true (done.flag exists), so the wait returns on its first probe;
+  the agent then reads the flag. Composition: a predicate command that
+  works on this OS, one wait call, then a read.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "signals/ staged at ~/gaia-eval/tiers_files_shell/signals/ with done.flag present. CI auto-approves wait_for_condition."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to wait until done.flag exists (up to a minute), then report"
+    user_message: "Wait until ~/gaia-eval/tiers_files_shell/signals/done.flag exists — give it up to a minute — then tell me when it's there."
+    ground_truth:
+      expected_behavior: "wait_for_condition with a predicate such as 'dir done.flag' reports condition_met on the first probe"
+    success_criteria: |
+      agent_tools[] includes wait_for_condition (preferred) or an honest
+      single check with run_shell_command. The agent reports the flag
+      exists. Looping run_shell_command polls instead of one wait is a
+      deduction; claiming the flag exists with no tool call is a FAIL.
+
+  - turn: 2
+    objective: "Ask what the flag file says"
+    user_message: "what does the flag file say?"
+    ground_truth:
+      expected_answer: "ready at 2026-09-01T10:00Z"
+    success_criteria: "Agent reads done.flag (read_file or a shell read) and reports 'ready at 2026-09-01T10:00Z' exactly."
+
+expected_outcome: |
+  One wait call confirms the condition, and the flag's content is read, not
+  assumed.

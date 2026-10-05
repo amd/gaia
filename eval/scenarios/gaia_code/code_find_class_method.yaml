@@ -4,7 +4,7 @@ id: code_find_class_method
 name: "Code — Locate a Method by Behavior"
 category: gaia_code
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   A behavior-phrased question ("where is the median computed?") must
   resolve to the real class method, not a plausible guess.

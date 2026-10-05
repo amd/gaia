@@ -2,7 +2,7 @@ id: task_docbrief_report
 name: "Skill Task — document-brief on the Q3 Report"
 category: gaia_skills_tasks
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   The document-brief skill briefs the Acme Q3 report. The brief must
   include the planted facts and quote/ground itself in the source.

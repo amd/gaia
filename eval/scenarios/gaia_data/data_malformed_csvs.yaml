@@ -1,0 +1,49 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/csv/empty_with_header.csv +
+# ledger_semicolon.csv — see GAIA_FIXTURE_VALUES.md "Documents and data".
+id: data_malformed_csvs
+name: "Data — Header-Only CSV and a Semicolon / Decimal-Comma Ledger"
+category: gaia_data
+severity: high
+tags: [t4_adversarial, usability]
+description: |
+  Two files that break naive CSV handling: one with a header and no rows,
+  and a German-style ledger (semicolon delimiter, "1.234,50" amounts). A
+  comma-delimited parse sees one column; a dot-decimal parse turns 1.234,50
+  into 1.2345. The agent must get the real total or say plainly that it
+  could not parse the format — never a mis-parsed number stated as fact.
+
+persona: small_business_owner
+
+setup:
+  index_documents: []
+  notes: "Fixture CSVs staged at ~/gaia-eval/tiers_documents/csv/empty_with_header.csv (0 data rows) and ledger_semicolon.csv (6 rows)."
+
+turns:
+  - turn: 1
+    objective: "Ask for the total amount in ~/gaia-eval/tiers_documents/csv/empty_with_header.csv"
+    user_message: "What's the total amount in ~/gaia-eval/tiers_documents/csv/empty_with_header.csv?"
+    ground_truth:
+      expected_behavior: "Reports the file has a header (date,item,amount) but no data rows, so there is no total (or total 0 with that explanation)"
+    success_criteria: "agent_tools[] shows a read/analysis call. Agent says there are no data rows. Any non-zero total is a FAIL."
+
+  - turn: 2
+    objective: "Ask for the total of the Betrag column in ~/gaia-eval/tiers_documents/csv/ledger_semicolon.csv"
+    user_message: "My German office sent ~/gaia-eval/tiers_documents/csv/ledger_semicolon.csv — what's the total of the Betrag column?"
+    ground_truth:
+      expected_answer: "€5,200.00 (5.200,00) across 6 rows — OR an honest statement that the semicolon / decimal-comma format could not be parsed"
+    success_criteria: |
+      PASS on 5,200.00 (either notation), or an explicit "could not parse
+      this format" with no total. CRITICAL FAIL on any other total stated as
+      fact (e.g. one built from reading "1.234,50" as 1.2345).
+
+  - turn: 3
+    objective: "Ask which line item is largest in the ledger"
+    user_message: "Which line is the biggest?"
+    ground_truth:
+      expected_answer: "Gehalt, 2.500,00 (€2,500.00) on 10.02.2026"
+    success_criteria: "PASS on Gehalt at 2,500.00, or an honest can't-parse consistent with turn 2. Naming another line (e.g. Miete at 1.234,50) as largest is a FAIL."
+
+expected_outcome: |
+  The empty file is reported empty; the European ledger yields €5,200.00 and
+  Gehalt as the largest line, or an honest parse failure — never a
+  mis-parsed figure.
