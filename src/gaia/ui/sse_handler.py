@@ -22,7 +22,8 @@ from collections import deque
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
 
-from gaia.agents.base.console import OutputHandler
+from gaia.agents.base.call_risk import call_risk
+from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
 from gaia.agents.base.turn_metrics import turn_log_path
@@ -216,6 +217,9 @@ class SSEOutputHandler(OutputHandler):
     #: the user was actually shown rather than the whole tool.
     _confirm_args: Optional[Dict[str, Any]] = None
 
+    #: Set when the client denied the live prompt because nobody answered.
+    _confirm_timed_out: bool = False
+
     #: Outcome of the last ``tool_result``, echoed by the ``tool_end`` after it.
     _last_tool_success: bool = True
 
@@ -233,6 +237,7 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_lock = threading.Lock()
         self._confirm_event: Optional[threading.Event] = None
         self._confirm_result: bool = False
+        self._confirm_timed_out: bool = False
         self._confirm_id: Optional[str] = None
         self._confirm_tool = None
         self._confirm_args = None
@@ -1034,6 +1039,18 @@ class SSEOutputHandler(OutputHandler):
             )
             return True
 
+        if self.edit_is_auto_accepted(tool_name, tool_args):
+            self._last_denial = None
+            logger.info("Accept-edits mode ran '%s' inside the workspace", tool_name)
+            self._emit(
+                {
+                    "type": "status",
+                    "status": "info",
+                    "message": f"Accept edits is on — ran '{tool_name}' in the workspace without asking.",
+                }
+            )
+            return True
+
         if self.call_is_granted(tool_name, tool_args):
             self._last_denial = None
             logger.info(
@@ -1061,13 +1078,14 @@ class SSEOutputHandler(OutputHandler):
             logger.info(
                 "Background mode: immediately denied confirmation for '%s'", tool_name
             )
-            self._last_denial = (tool_name, unattended_message)
+            self._last_denial = Denial(tool_name, unattended_message)
             return False
 
         confirm_id = str(uuid.uuid4())
         with self._confirm_lock:
             self._confirm_event = threading.Event()
             self._confirm_result = False
+            self._confirm_timed_out = False
             self._confirm_id = confirm_id
             self._confirm_tool = tool_name
             self._confirm_args = tool_args if isinstance(tool_args, dict) else {}
@@ -1086,6 +1104,11 @@ class SSEOutputHandler(OutputHandler):
         scope = grant_scope(tool_name, tool_args)
         if scope is not None:
             request["always_scope"] = scope.label
+        # What this call does — `pytest` is not `rm -rf` — so the prompt's label
+        # is earned by the command, not by the tool's worst case.
+        risk = call_risk(tool_name, tool_args)
+        if risk is not None:
+            request["risk"] = risk
         # Advertised only when it is real. A front-end told "60 s" that then
         # never expires runs a countdown to nothing; one told nothing correctly
         # renders a prompt that waits.
@@ -1099,7 +1122,7 @@ class SSEOutputHandler(OutputHandler):
         while deadline is None or time.monotonic() < deadline:
             if self.cancelled.is_set():
                 self._clear_pending_confirmation()
-                self._last_denial = (
+                self._last_denial = Denial(
                     tool_name,
                     f"Confirmation for '{tool_name}' was abandoned: the run was "
                     "cancelled before the user answered.",
@@ -1119,18 +1142,26 @@ class SSEOutputHandler(OutputHandler):
             )
             logger.warning("Tool confirmation timed out for '%s'", tool_name)
             self._clear_pending_confirmation()
-            self._last_denial = (
+            self._last_denial = Denial(
                 tool_name,
-                f"Confirmation for '{tool_name}' timed out after "
-                f"{timeout:g} s with no user response. "
-                "Execution denied.",
+                timeout_denial_message(tool_name, f"{timeout:g} s"),
+                timed_out=True,
             )
             return False
 
         result = self._confirm_result
+        timed_out = self._confirm_timed_out
         self._clear_pending_confirmation()
-        if not result:
-            self._last_denial = (
+        if timed_out:
+            # The client's own clock ran out and it said so: a timeout, never
+            # "the user denied it".
+            self._last_denial = Denial(
+                tool_name,
+                timeout_denial_message(tool_name, "the time allowed"),
+                timed_out=True,
+            )
+        elif not result:
+            self._last_denial = Denial(
                 tool_name,
                 f"Tool '{tool_name}' was denied by the user.",
             )
@@ -1171,6 +1202,7 @@ class SSEOutputHandler(OutputHandler):
         approved: bool,
         always: bool = False,
         confirm_id: Optional[str] = None,
+        timed_out: bool = False,
     ) -> bool:
         """Unblock the agent thread waiting in ``confirm_tool_execution()``.
 
@@ -1181,6 +1213,9 @@ class SSEOutputHandler(OutputHandler):
         *always* grants the pending tool for the rest of the session, so this
         prompt and every later one for the same tool are approved — the grant
         the terminal prompt's ``[a]lways for this tool`` already makes.
+
+        *timed_out* marks a denial the client made because nobody answered in
+        time, so the agent reports a timeout rather than a refusal.
 
         *confirm_id*, when given, must match the live prompt. A decision typed
         against a prompt that has since expired or been replaced is dropped
@@ -1203,7 +1238,8 @@ class SSEOutputHandler(OutputHandler):
                 # No pending confirmation — initialise state anyway so callers can
                 # inspect _confirm_result and _confirm_event after the call.
                 self._confirm_event = threading.Event()
-            self._confirm_result = approved or always
+            self._confirm_result = (approved or always) and not timed_out
+            self._confirm_timed_out = timed_out
             self._confirm_event.set()
         return True
 

@@ -354,6 +354,7 @@ can't be, the chat says so in one line and opens the provider picker. See
 | `Alt+Enter`, `Ctrl+J` | New line in the composer |
 | `Esc` | Idle: clear the composer. Streaming: stop the turn; the agent keeps its session. Press again to stop at once — an agent the TUI runs itself is then restarted without its loaded skills or grants |
 | `Ctrl+C` | Quit |
+| `Shift+Tab` | Change the permission mode: ask → accept edits → full access — see [When the agent asks first](#when-the-agent-asks-first) |
 | `↑` / `↓`, `PgUp` / `PgDn` | Scroll the conversation one line / one page |
 | `Home` / `End` | Jump to the top / bottom, if the composer is empty |
 | Drag and drop a file or folder | Its path lands in the composer, quoted by your terminal if it has spaces |
@@ -432,7 +433,8 @@ links and double-click copy.
 | `/setup` | Re-run first-time setup (`gaia init`) for the flagship agent |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
 | `/model` | Switch the flagship agent's live model |
-| `/full-access` | Let the agent run tools without asking (off by default) |
+| `/full-access` | Explain full access; `/full-access confirm` then turns it on for this session (off by default) |
+| `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
 | `/full-access never` | Stop it coming back on future launches |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
@@ -480,6 +482,62 @@ options are the same: `↑`/`↓` (or `Tab`) to move between them, a number key 
 one directly, `Enter` to answer, and the mouse works identically to the palette above.
 `Esc` cancels the turn rather than the question, since abandoning it is the only way
 out once it is up.
+
+### When the agent asks first
+
+Before the agent runs a shell command or Python, or writes a file, it asks. The
+prompt shows the command once, labelled by what it does:
+
+```
+ RUNS CODE  Run this command?
+ python -m pytest -q tests/ 2>&1
+ in ~/AppData/…/newuser/proj
+ mode: ask · shift+tab to change · expires in 10 minutes
+ y once · a always: pytest (this session) · n/esc deny
+```
+
+| Label | Means |
+|---|---|
+| `READ` | Only looks — `ls`, `git status`, `gh issue list` |
+| `WRITE` | Creates or changes files or repository state — `mkdir`, `git commit`, a file edit |
+| `RUNS CODE` | Runs code GAIA can't see into — tests, scripts, a program it doesn't know |
+| `DESTRUCTIVE` | Deletes or discards, and may not be reversible — `rm`, `git reset --hard`, `git push --force` |
+
+Paths are shown relative to the folder you started GAIA in, a leading `cd` moves
+to its own `in …` line, and a long command keeps its start and its end with the
+middle marked as cut.
+
+| Key | What it does |
+|---|---|
+| `y` | Run it this once |
+| `a` | Run it, and stop asking about that kind of command for the rest of the session. The prompt names exactly what `a` covers: `pytest` covers every spelling of a test run (`python -m pytest`, `cd proj && pytest 2>&1 \| tail`), never a different program. `python (any script)` and `Python snippets (run_python)` cover any Python code, and say so. Deletes never offer `a` |
+| `n` / `Esc` | Don't run it. The agent is told you said no |
+
+A prompt nobody answers expires after 10 minutes. The agent is told it **timed
+out**, not that you refused, so it asks whether you still want it rather than
+giving up on something you never saw.
+
+#### Permission modes
+
+`Shift+Tab` cycles the mode, and the status bar always shows which one is on:
+
+| Mode | What asks first |
+|---|---|
+| `ask` (default) | Every shell command, Python run and file write |
+| `accept edits` | Shell commands and Python still ask. File edits inside the folder you started GAIA in run without asking. Hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on your `PATH`, and a file that would stand in for a real program on Windows (`git.bat`) still ask. Started from your home folder or a drive root, nothing is auto-accepted |
+| `full access` | Nothing — see below |
+
+Full access is never switched on by a stray keypress. The first time `Shift+Tab`
+reaches it in a session, GAIA explains what it does and stays in `ask`; type
+`/full-access confirm` to turn it on. After that, or in a session launched with
+`--full-access` or with `full_access` saved in your config, `Shift+Tab` switches
+straight to it. Turning it off is never gated. While it is on, a banner says so
+on every frame.
+
+Commands GAIA refuses outright — printing a credential (`gh auth token`), an
+encoded PowerShell command, a `git` option that hides a script — stay refused in
+`ask` and `accept edits`, and no `a` answer unlocks them. Only full access lifts
+the shell guardrails; see [Full access](/reference/cli#full-access).
 
 A session launched with `--use-claude` skips first-boot setup entirely and does not
 start the local server — that flag exists to avoid the local backend, so running an

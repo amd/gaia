@@ -109,8 +109,10 @@ class TestYesNoAlways:
     def test_the_prompt_names_the_actual_invocation(self):
         """A prompt that hides the payload trains people to blind-approve."""
         events = drive(PermissionState(), ["deny"])
-        summary = events_of(events, "needs_confirmation")[0]["summary"]
-        assert 'command="pwd"' in summary, summary
+        prompt = events_of(events, "needs_confirmation")[0]
+        # The command itself, once — the tool name rides on `action`.
+        assert prompt["summary"] == "pwd", prompt["summary"]
+        assert prompt["action"] == "run_shell_command"
 
     def test_always_suppresses_the_next_prompt_for_that_tool(self):
         state = PermissionState()
@@ -525,7 +527,7 @@ class TestTheHandoffIsAtomic:
 
         assert held == [True], "the handler was used after the lock was dropped"
         assert handler.calls == [
-            {"approved": True, "always": False, "confirm_id": None}
+            {"approved": True, "always": False, "confirm_id": None, "timed_out": False}
         ]
 
     def test_a_detached_handler_never_sees_the_decision(self):
@@ -537,3 +539,274 @@ class TestTheHandoffIsAtomic:
         state.resolve("allow", None)
 
         assert handler.calls == []
+
+
+class ReasonReportingAgent(GatedAgent):
+    """Reports why a gated call was refused, the way the agent loop tells the model."""
+
+    def process_query(self, _query):
+        allowed = self.console.confirm_tool_execution(self.tool, self.args)
+        reason = "" if allowed else self.console.confirmation_denied_reason(self.tool)
+        timed_out = self.console.confirmation_timed_out(self.tool)
+        return {"answer": f"decision={allowed} timed_out={timed_out} reason={reason}"}
+
+
+class TestATimeoutIsNotARefusal:
+    """#4446: an unanswered prompt must never be reported as the user saying no."""
+
+    def test_timeout_denies_and_says_it_timed_out(self):
+        events = drive(PermissionState(), ["timeout"], agent=ReasonReportingAgent())
+        answer = final_answer(events)
+        assert "decision=False" in answer
+        assert "timed_out=True" in answer
+        assert "timed out" in answer
+        assert "did NOT refuse" in answer
+        assert "denied by the user" not in answer
+
+    def test_a_real_deny_is_still_the_users_decision(self):
+        events = drive(PermissionState(), ["deny"], agent=ReasonReportingAgent())
+        assert "denied by the user" in final_answer(events)
+        assert "timed_out=False" in final_answer(events)
+
+
+class TestPromptsSayWhatTheCallDoes:
+    """#4446: the label follows the command, and "always" covers its family."""
+
+    def test_a_test_run_is_execute_with_a_family_grant(self):
+        agent = GatedAgent(args={"command": "cd proj && python -m pytest -q 2>&1"})
+        prompt = events_of(
+            drive(PermissionState(), ["deny"], agent=agent), "needs_confirmation"
+        )[0]
+        assert prompt["risk"] == "execute"
+        assert prompt["always_scope"] == "pytest"
+        assert prompt["summary"].splitlines()[0] == "python -m pytest -q 2>&1"
+
+    def test_a_delete_is_destructive_and_offers_no_always(self):
+        agent = GatedAgent(args={"command": "rm -rf build"})
+        prompt = events_of(
+            drive(PermissionState(), ["deny"], agent=agent), "needs_confirmation"
+        )[0]
+        assert prompt["risk"] == "destructive"
+        assert "always_scope" not in prompt
+
+    def test_always_on_one_spelling_covers_another(self):
+        state = PermissionState()
+        first = GatedAgent(args={"command": "python -m pytest -q tests/"})
+        assert "decision=True" in final_answer(drive(state, ["always"], agent=first))
+        # Nobody answers: if this prompted, the turn would still be waiting.
+        second = GatedAgent(args={"command": "cd x && pytest 2>&1 | tail -5"})
+        events = drive(state, [], agent=second, timeout=0.5)
+        assert not events_of(events, "needs_confirmation")
+        assert "decision=True" in final_answer(events)
+
+
+class TestAcceptEdits:
+    """Accept edits: workspace file edits run unasked; nothing else does."""
+
+    def test_an_edit_inside_the_workspace_runs_without_asking(self, tmp_path):
+        state = PermissionState(accept_edits=True, edit_roots=(str(tmp_path),))
+        agent = GatedAgent(
+            tool="write_file", args={"file_path": str(tmp_path / "a.py")}
+        )
+        events = drive(state, [], agent=agent, timeout=0.5)
+        assert not events_of(events, "needs_confirmation")
+        assert "decision=True" in final_answer(events)
+
+    def test_an_edit_outside_the_workspace_still_asks(self, tmp_path):
+        inside = tmp_path / "ws"
+        inside.mkdir()
+        state = PermissionState(accept_edits=True, edit_roots=(str(inside),))
+        agent = GatedAgent(
+            tool="write_file", args={"file_path": str(tmp_path / "b.py")}
+        )
+        events = drive(state, ["deny"], agent=agent)
+        assert events_of(events, "needs_confirmation")
+
+    def test_an_edit_under_dot_git_still_asks(self, tmp_path):
+        state = PermissionState(accept_edits=True, edit_roots=(str(tmp_path),))
+        hook = tmp_path / ".git" / "hooks" / "pre-commit"
+        agent = GatedAgent(tool="write_file", args={"file_path": str(hook)})
+        events = drive(state, ["deny"], agent=agent)
+        assert events_of(events, "needs_confirmation")
+
+    def test_a_shell_command_still_asks(self, tmp_path):
+        state = PermissionState(accept_edits=True, edit_roots=(str(tmp_path),))
+        events = drive(state, ["deny"])
+        assert events_of(events, "needs_confirmation")
+
+    def test_the_control_verb_toggles_it_mid_session(self, tmp_path):
+        state = PermissionState(edit_roots=(str(tmp_path),))
+        apply_control({"gaia_control": "accept_edits", "enabled": True}, state)
+        assert state.accept_edits
+        agent = GatedAgent(tool="edit_file", args={"file_path": str(tmp_path / "x.md")})
+        assert not events_of(
+            drive(state, [], agent=agent, timeout=0.5), "needs_confirmation"
+        )
+        apply_control({"gaia_control": "accept_edits", "enabled": False}, state)
+        assert events_of(drive(state, ["deny"], agent=agent), "needs_confirmation")
+
+    def test_project_dir_is_resolved_the_way_the_file_tools_do(self, tmp_path):
+        """A relative file_path under an outside project_dir lands outside."""
+        inside = tmp_path / "ws"
+        inside.mkdir()
+        state = PermissionState(accept_edits=True, edit_roots=(str(inside),))
+        agent = GatedAgent(
+            tool="write_file",
+            args={"file_path": "x.sh", "project_dir": str(tmp_path / "elsewhere")},
+        )
+        events = drive(state, ["deny"], agent=agent)
+        assert events_of(events, "needs_confirmation")
+
+
+def test_edit_target_matches_the_file_tools_resolution(tmp_path):
+    """Pins parity with gaia.agents.tools.file_io_tools._resolve_target."""
+    import os
+
+    from gaia.agents.base.console import edit_target
+    from gaia.agents.tools.file_io_tools import _resolve_target
+
+    for args in (
+        {"file_path": "a/b.py"},
+        {"file_path": "a/b.py", "project_dir": str(tmp_path)},
+        {"file_path": str(tmp_path / "c.py"), "project_dir": "/elsewhere"},
+        {"file_path": "~/a/b.py"},
+        {"file_path": "~/a/b.py", "project_dir": str(tmp_path)},
+    ):
+        expected = _resolve_target(args["file_path"], args.get("project_dir"))
+        assert os.path.realpath(edit_target(args)) == str(expected)
+
+
+def test_a_home_relative_path_is_not_read_as_inside_the_workspace(
+    tmp_path, monkeypatch
+):
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    home = tmp_path / "home"
+    workspace = tmp_path / "ws"
+    home.mkdir()
+    workspace.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.chdir(workspace)
+
+    handler = SSEOutputHandler()
+    handler.accept_edits = True
+    handler.edit_roots = (str(workspace),)
+    assert handler.edit_is_auto_accepted("write_file", {"file_path": "a/b.py"})
+    assert not handler.edit_is_auto_accepted("write_file", {"file_path": "~/a/b.py"})
+
+
+def test_a_file_that_would_shadow_a_program_is_never_auto_accepted(
+    tmp_path, monkeypatch
+):
+    from gaia.agents.base import console
+
+    monkeypatch.setattr(console.os, "name", "nt")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    monkeypatch.setattr(
+        console.shutil, "which", lambda name: "/bin/" + name if name == "git" else None
+    )
+    assert not console.edit_is_inside(str(tmp_path / "git.bat"), (str(tmp_path),))
+    assert console.edit_is_inside(str(tmp_path / "notes.bat"), (str(tmp_path),))
+    assert console.edit_is_inside(str(tmp_path / "git.py"), (str(tmp_path),))
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [".bashrc", ".envrc", ".github/workflows/ci.yml", "src/.hidden/x.py"],
+)
+def test_a_hidden_file_inside_the_workspace_still_asks(tmp_path, relative):
+    """Dotfiles run code on their own (shell rc, direnv, CI) — like .git."""
+    from gaia.agents.base.console import edit_is_inside
+
+    assert not edit_is_inside(str(tmp_path / relative), (str(tmp_path),))
+    assert edit_is_inside(str(tmp_path / "src" / "app.py"), (str(tmp_path),))
+
+
+def test_a_home_folder_or_drive_root_is_never_a_workspace(tmp_path, monkeypatch):
+    """Started from ~, every file the user owns would count as "inside"."""
+    import os
+
+    from gaia.agents.base.console import edit_is_inside
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    assert not edit_is_inside(str(tmp_path / "notes.md"), (str(tmp_path),))
+    root = os.path.abspath(os.sep)
+    assert not edit_is_inside(os.path.join(root, "notes.md"), (root,))
+
+
+class TestATimeoutReachesTheAgentLoop:
+    """#4446/#4447: the loop records a refusal only when somebody said no."""
+
+    @staticmethod
+    def _agent(tmp_path):
+        from unittest.mock import patch
+
+        from gaia.agents.base.agent import Agent
+        from gaia.agents.base.console import SilentConsole
+        from gaia.agents.base.denied_effects import DeniedEffects
+        from gaia.agents.base.tools import tool
+
+        script = tmp_path / "run_tests.py"
+        script.write_text("import pytest\nraise SystemExit(pytest.main(['-q']))\n")
+
+        class Probe(Agent):
+            def _get_system_prompt(self):
+                return "probe"
+
+            def _create_console(self):
+                return SilentConsole()
+
+            def _register_tools(self):
+                @tool
+                def run_shell_command(command: str) -> dict:
+                    """Probe shell."""
+                    return {"status": "success", "return_code": 0}
+
+                @tool
+                def execute_python_file(file_path: str) -> dict:
+                    """Probe python runner."""
+                    return {"status": "success", "return_code": 0}
+
+            def process_query(self, _query):
+                self.first = self._execute_tool(
+                    "run_shell_command", {"command": "pytest -q"}
+                )
+                self.reroute_blocked = self._denied_effects.conflict(
+                    "execute_python_file", {"file_path": str(script)}
+                )
+                return {"answer": self.first["error"]}
+
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            agent = Probe(silent_mode=True, skip_lemonade=True)
+        agent._denied_effects = DeniedEffects(str(tmp_path))
+        # No history to budget: the model client is a mock with no context size.
+        agent.conversation_history = None
+        return agent
+
+    def test_a_timeout_records_no_refusal(self, tmp_path):
+        from gaia.agents.base.agent import Agent
+
+        agent = self._agent(tmp_path)
+        answer = final_answer(drive(PermissionState(), ["timeout"], agent=agent))
+
+        assert agent.first["status"] == "denied" and agent.first["timed_out"] is True
+        assert "did NOT refuse" in answer
+        assert "ask whether to try again" in answer
+        # Not a "no", so the recovery prompt's "do not retry" is not the one sent.
+        assert not Agent._is_denial_error(agent.first["error"])
+        assert not agent._denied_effects
+        assert agent.reroute_blocked is None
+
+    def test_a_decline_records_a_refusal(self, tmp_path):
+        from gaia.agents.base.agent import Agent
+
+        agent = self._agent(tmp_path)
+        answer = final_answer(drive(PermissionState(), ["deny"], agent=agent))
+
+        assert agent.first["status"] == "denied" and "timed_out" not in agent.first
+        assert "denied by the user" in answer
+        # A real "no" gets the "do not retry" recovery prompt.
+        assert Agent._is_denial_error(agent.first["error"])
+        assert agent.reroute_blocked is not None

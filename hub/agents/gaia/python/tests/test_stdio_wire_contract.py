@@ -41,6 +41,9 @@ class _RecordingState(stdio.PermissionState):
     def set_full_access(self, enabled):
         self.calls.append(("full_access", enabled))
 
+    def set_accept_edits(self, enabled):
+        self.calls.append(("accept_edits", enabled))
+
     def cancel_active(self, reason="stdin closed mid-turn"):
         # The pump also cancels on EOF; only the host's verb counts here.
         if reason != "stdin closed mid-turn":
@@ -88,6 +91,7 @@ def test_each_control_verb_is_handled_by_the_stdin_pump(monkeypatch):
     lines = [
         json.dumps({STDIN["control_key"]: "tool_decision", "decision": "allow"}),
         json.dumps({STDIN["control_key"]: "full_access", "enabled": True}),
+        json.dumps({STDIN["control_key"]: "accept_edits", "enabled": True}),
         json.dumps({STDIN["control_key"]: "cancel"}),
         json.dumps({STDIN["control_key"]: "clear_history"}),
     ]
@@ -100,6 +104,7 @@ def test_each_control_verb_is_handled_by_the_stdin_pump(monkeypatch):
     assert state.calls == [
         ("tool_decision", "allow", None),
         ("full_access", True),
+        ("accept_edits", True),
         ("cancel", "host asked to cancel"),
     ]
     assert isinstance(drained[0], stdio._ClearHistory)
@@ -181,7 +186,10 @@ def test_warm_up_is_skipped_for_a_remote_model(monkeypatch):
     events = _warm(monkeypatch, agent)
     assert not agent.warmed
     assert events == [
-        {"type": "final", "answer": STDIN["query_sentinels"]["warm_up"]["skipped_answer"]}
+        {
+            "type": "final",
+            "answer": STDIN["query_sentinels"]["warm_up"]["skipped_answer"],
+        }
     ]
 
 
@@ -241,6 +249,7 @@ def _translated_events():
             "args": {"command": "gh issue list"},
             "confirm_id": "c1",
             "always_scope": "gh issue list",
+            "risk": "read",
         },
         {
             "type": "user_input_request",

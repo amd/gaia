@@ -1030,10 +1030,11 @@ def test_a_denied_pathless_save_is_not_reported_missing(tmp_path):
     assert gaps(ledger, "You declined the write, so I didn't save it.") == []
 
 
-def _deny_writes(agent):
+def _deny_writes(agent, timed_out=False):
     agent._tool_requires_confirmation = lambda name, *a, **kw: name == "write_file"
     agent.console.confirm_tool_execution.return_value = False
     agent.console.confirmation_denied_reason = None
+    agent.console.confirmation_timed_out = lambda name: timed_out
 
 
 def test_loop_keeps_the_honest_answer_after_a_denied_write(agent, tmp_path):
@@ -1070,6 +1071,60 @@ def test_loop_still_rejects_a_false_save_after_a_denied_write(agent, tmp_path):
     assert "[check:completion]" in correction
     assert "Use `write_file`" not in correction
     assert "Do not retry that write" in correction
+
+
+def test_an_unanswered_prompt_is_not_reported_as_declined(tmp_path):
+    ledger = _documents_ledger(tmp_path)
+    target = str(tmp_path / "Documents" / "ui_notes.txt")
+    _refuse(ledger, target, {"status": "denied", "timed_out": True})
+    found = gaps(ledger, "Saved! `ui_notes.txt` is in your Documents folder.")
+    assert found == [
+        f"The write to `{target}` wasn't confirmed in time, so nothing was "
+        "saved there. Nobody refused it, so it can be tried again."
+    ]
+    assert incomplete_answer(found) == found[0]
+    honest = "The approval request expired, so I didn't save it. Try again?"
+    assert gaps(ledger, honest) == []
+
+
+def test_loop_after_an_unanswered_prompt_asks_instead_of_retrying(agent, tmp_path):
+    _deny_writes(agent, timed_out=True)
+    target = str(tmp_path / "Documents" / "ui_notes.txt")
+    lie = {"answer": "Saved! `ui_notes.txt` is in your Documents folder."}
+    sent = script(
+        agent,
+        call("write_file", file_path=target, content="hello from the agent ui"),
+        lie,
+        lie,
+    )
+    result = agent.process_query(_DOCUMENTS_REQUEST, max_steps=10)
+    assert result["status"] == "incomplete"
+    assert "wasn't confirmed in time" in result["result"]
+    assert "declined" not in result["result"]
+    correction = sent[2][-1]["content"]
+    assert "Use `write_file`" not in correction
+    assert "approval expired" in correction
+    assert "ask whether to try again" in correction
+    assert "here or anywhere else" not in correction
+    assert agent.console.confirm_tool_execution.call_count == 1
+
+
+def test_loop_after_a_declined_write_does_not_retry_it(agent, tmp_path):
+    _deny_writes(agent)
+    target = str(tmp_path / "Documents" / "ui_notes.txt")
+    lie = {"answer": "Saved! `ui_notes.txt` is in your Documents folder."}
+    sent = script(
+        agent,
+        call("write_file", file_path=target, content="hello from the agent ui"),
+        lie,
+        lie,
+    )
+    result = agent.process_query(_DOCUMENTS_REQUEST, max_steps=10)
+    assert "was declined" in result["result"]
+    correction = sent[2][-1]["content"]
+    assert "here or anywhere else" in correction
+    assert "wasn't confirmed" not in correction
+    assert agent.console.confirm_tool_execution.call_count == 1
 
 
 def test_a_folder_named_by_its_variable_is_backed_by_a_write_inside_it(

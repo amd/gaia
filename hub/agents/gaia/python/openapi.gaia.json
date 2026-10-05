@@ -277,7 +277,7 @@
             "title": "Confirm Id"
           },
           "decision": {
-            "description": "One of 'allow', 'deny', 'always'. 'always' grants the pending call's scope for the rest of the session.",
+            "description": "One of 'allow', 'deny', 'always', 'timeout'. 'always' grants the pending call's scope for the rest of the session. 'timeout' denies because nobody answered, and the agent reports it as a timeout.",
             "title": "Decision",
             "type": "string"
           }

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -33,6 +34,7 @@ from gaia.agents.base.denied_effects import (
     render_call,
 )
 from gaia.agents.base.tools import tool
+from gaia.ui.sse_handler import SSEOutputHandler
 
 
 def _shell(command: str) -> dict:
@@ -477,6 +479,61 @@ def test_a_prompt_nobody_answered_is_not_a_refusal(tmp_path, script):
     # Nobody said no, so the other route to the same effect is still open.
     assert second["status"] == "success"
     assert agent.ran == [("execute_python_file", script)]
+
+
+def _through_the_agent_ui_console(agent, handler, answer=None):
+    """Run the shell call against a real SSEOutputHandler; None answers nothing."""
+    result = {}
+
+    def call():
+        result["value"] = agent._execute_tool(
+            "run_shell_command", {"command": "pytest -q"}
+        )
+
+    worker = threading.Thread(target=call, daemon=True)
+    worker.start()
+    while True:
+        event = handler.event_queue.get(timeout=5)
+        if event["type"] == "permission_request":
+            break
+    if answer is not None:
+        handler.resolve_tool_confirmation(approved=answer)
+    worker.join(timeout=10)
+    assert not worker.is_alive()
+    return result["value"]
+
+
+def test_the_agent_ui_prompt_timing_out_records_no_refusal(tmp_path, script):
+    handler = SSEOutputHandler()
+    handler.confirm_timeout_seconds = 0.2
+    agent = _agent(handler, tmp_path)
+
+    first = _through_the_agent_ui_console(agent, handler)
+
+    assert first["status"] == "denied" and first["timed_out"] is True
+    assert "did NOT refuse" in first["error"]
+    assert "ask whether to try again" in first["error"]
+    # Not a "no", so the recovery prompt's "do not retry" is not the one sent.
+    assert not Agent._is_denial_error(first["error"])
+    assert not agent._denied_effects
+    assert agent._denied_effects.conflict(*_script_call(script)) is None
+
+
+def test_declining_the_agent_ui_prompt_records_a_refusal(tmp_path, script):
+    handler = SSEOutputHandler()
+    agent = _agent(handler, tmp_path)
+
+    first = _through_the_agent_ui_console(agent, handler, answer=False)
+
+    assert first["status"] == "denied" and "timed_out" not in first
+    assert "denied by the user" in first["error"]
+    # A real "no" gets the "do not retry" recovery prompt.
+    assert Agent._is_denial_error(first["error"])
+    assert agent._denied_effects.conflict(*_script_call(script)) is not None
+
+
+def _script_call(script):
+    return "execute_python_file", {"file_path": script}
 
 
 def test_unrelated_calls_still_run(tmp_path):
