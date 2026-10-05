@@ -467,6 +467,7 @@ class AgentLoop:
                         allowed_paths=allowed,
                         ui_session_id=session_id,
                         dynamic_tools=dynamic_tools,
+                        memory_incognito=not memory_enabled(db),
                     )
                     agent = GaiaAgent(config)
                     _helpers._register_agent_memory_ops(agent)

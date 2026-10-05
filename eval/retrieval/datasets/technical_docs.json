@@ -1,0 +1,1140 @@
+{
+  "id": "technical_docs",
+  "description": "Hand-labelled questions over public AMD technical documents and a two-column arXiv paper. Downloaded on demand; see eval/retrieval/sources.json.",
+  "documents": [
+    {
+      "id": "amd_cdna3_whitepaper",
+      "source": "amd",
+      "file": "amd-cdna-3-white-paper.pdf"
+    },
+    {
+      "id": "amd_cdna4_whitepaper",
+      "source": "amd",
+      "file": "amd-cdna-4-architecture-whitepaper.pdf"
+    },
+    {
+      "id": "amd_mi300x_datasheet",
+      "source": "amd",
+      "file": "amd-instinct-mi300x-data-sheet.pdf"
+    },
+    {
+      "id": "amd_cdna3_isa",
+      "source": "amd",
+      "file": "amd-instinct-mi300-cdna3-instruction-set-architecture.pdf"
+    },
+    {
+      "id": "arxiv_attention",
+      "source": "arxiv",
+      "file": "1706.03762v7.pdf"
+    }
+  ],
+  "questions": [
+    {
+      "id": "tech-001",
+      "doc": "amd_cdna3_whitepaper",
+      "question": "According to the AMD CDNA 3 white paper, how many compute units in each CDNA 3 accelerator complex die (XCD) are disabled for yield management?",
+      "answer": "2",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 5,
+          "quote": "there are only 38 CUs active, with 2 disabled for yield management"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-002",
+      "doc": "amd_cdna3_whitepaper",
+      "question": "In the AMD CDNA 3 white paper, how many operations per clock can a CDNA 3 compute unit's Matrix Core reach when exploiting sparse data?",
+      "answer": "8K",
+      "answer_aliases": [
+        "8,192",
+        "8192"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 8,
+          "quote": "enables doubling the computational throughput up to an incredible 8K operations per clock for a CU"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-003",
+      "doc": "amd_cdna3_whitepaper",
+      "question": "What aggregate L2-to-XCD bandwidth is shown in the legend of the CDNA 3 memory architecture diagram (Figure 6) in the AMD CDNA 3 white paper?",
+      "answer": "51.6 TB/s",
+      "answer_aliases": [
+        "51.6TB/s"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 9,
+          "quote": "Green line is L2 to XCD 51.6 TB/s (Aggregate)"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "figure_caption",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-004",
+      "doc": "amd_cdna3_whitepaper",
+      "question": "Per the AMD CDNA 3 white paper, what is the maximum aggregate L2 read bandwidth across all eight L2 instances in the CDNA 3 architecture?",
+      "answer": "34.4 TB/s",
+      "answer_aliases": [
+        "34.4TB/s"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 10,
+          "quote": "the AMD CDNA 3 architecture has collectively up to eight instances and up to 34.4 TB/s aggregate read bandwidth"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-005",
+      "doc": "amd_cdna3_whitepaper",
+      "question": "According to the AMD CDNA 3 white paper, how much memory does each HBM3 stack hold on the Instinct MI300A APU?",
+      "answer": "16GB",
+      "answer_aliases": [
+        "16 GB"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 11,
+          "quote": "each stack contains 24GB on Instinct MI300X GPUs and 16GB on Instinct MI300A of memory"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-006",
+      "doc": "amd_cdna3_whitepaper",
+      "question": "What is the maximum number of GPU partitions supported by the AMD Instinct MI300A APU, according to the CDNA 3 white paper?",
+      "answer": "three",
+      "answer_aliases": [
+        "3"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 12,
+          "quote": "the AMD Instinct MI300A APU has a maximum of three partitions with two XCDs per partition"
+        }
+      ],
+      "tags": [
+        "pdf"
+      ]
+    },
+    {
+      "id": "tech-007",
+      "doc": "amd_cdna3_whitepaper",
+      "question": "Per the AMD CDNA 3 white paper, at what maximum rate do the CDNA 3 inter-package communication links operate?",
+      "answer": "32Gbps",
+      "answer_aliases": [
+        "32 Gbps"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 15,
+          "quote": "the communication links have been systematically enhanced to operate at up to 32Gbps"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-008",
+      "doc": "amd_cdna3_whitepaper",
+      "question": "In the previous generation described in the AMD CDNA 3 white paper, what throughput did the two Infinity Fabric links between the AMD EPYC processor and the Instinct MI250X GPU provide?",
+      "answer": "144GB/s",
+      "answer_aliases": [
+        "144 GB/s"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 17,
+          "quote": "connected via two AMD Infinity Fabric links with 144GB/s throughput"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-009",
+      "doc": "amd_cdna3_whitepaper",
+      "question": "In Table 1 of the AMD CDNA 3 white paper, what is the Instinct MI250X GPU's peak Matrix FP64 throughput in TFLOP/s?",
+      "answer": "95.7",
+      "answer_aliases": [
+        "95.7 TFLOP/s"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 7,
+          "quote": "Matrix FP64 256 256 163.4 95.7 1.7x"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "table",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-010",
+      "doc": "amd_cdna3_whitepaper",
+      "question": "According to Table 2 of the AMD CDNA 3 white paper, how many total Zen 4 x86 cores does the AMD Instinct MI300A APU have?",
+      "answer": "24",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 23,
+          "quote": "TOTAL “ZEN 4” X86 CORES 24 NA NA"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "table",
+        "spec",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-011",
+      "doc": "amd_cdna3_whitepaper",
+      "question": "What transistor count does the AMD CDNA 3 white paper's specification table list for the Instinct MI300A APU?",
+      "answer": "146 billion",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 24,
+          "quote": "TRANSISTOR COUNT 146 Billion 153 Billion 153 Billion"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "table",
+        "spec",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-012",
+      "doc": "amd_cdna3_whitepaper",
+      "question": "Which maximum power options does the AMD CDNA 3 white paper's specification table give for the Instinct MI300A APU?",
+      "answer": "550W or 760W",
+      "answer_aliases": [
+        "550 W or 760 W"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 25,
+          "quote": "MAX POWER 550W or 760W 750W 1000W"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "table",
+        "spec"
+      ]
+    },
+    {
+      "id": "tech-013",
+      "doc": "amd_cdna4_whitepaper",
+      "question": "On which TSMC process node are the AMD CDNA 4 accelerator complex dies (XCDs) built?",
+      "answer": "N3P",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 5,
+          "quote": "The AMD CDNA 4 XCDs are built on the latest process technology, TSMC’s N3P"
+        }
+      ],
+      "tags": [
+        "pdf"
+      ]
+    },
+    {
+      "id": "tech-014",
+      "doc": "amd_cdna4_whitepaper",
+      "question": "According to the AMD CDNA 4 white paper, how many compute units are active in each CDNA 4 XCD?",
+      "answer": "32",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 5,
+          "quote": "Each XCD comprises 36 AMD CDNA 4 Compute Units organized as four arrays of 9 CUs, of which 32 are active"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-015",
+      "doc": "amd_cdna4_whitepaper",
+      "question": "What is the capacity of the Local Data Share (LDS) in the AMD CDNA 4 architecture?",
+      "answer": "160KB",
+      "answer_aliases": [
+        "160 KB"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 9,
+          "quote": "The LDS in the AMD CDNA 4 architecture is 160KB"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-016",
+      "doc": "amd_cdna4_whitepaper",
+      "question": "By what factor were transcendental rates increased in the AMD CDNA 4 compute unit to aid attention acceleration?",
+      "answer": "2x",
+      "answer_aliases": [
+        "2X",
+        "double",
+        "doubled"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 9,
+          "quote": "the transcendental rates have been increased by 2x to aid with attention acceleration"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-017",
+      "doc": "amd_cdna4_whitepaper",
+      "question": "Per the AMD CDNA 4 white paper, roughly how much faster is the direct IOD-to-IOD connection than in the CDNA 3 architecture?",
+      "answer": "14%",
+      "answer_aliases": [
+        "14 percent"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 11,
+          "quote": "The simpler direct connection between the IODs is roughly 14% faster than in the AMD CDNA 3 architecture"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-018",
+      "doc": "amd_cdna4_whitepaper",
+      "question": "How much memory does each HBM3E stack provide on the AMD Instinct MI350 Series (CDNA 4) GPUs?",
+      "answer": "36GB",
+      "answer_aliases": [
+        "36 GB"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 11,
+          "quote": "the memory capacity has increased to 36GB per stack for up to 288GB for a single processor"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-019",
+      "doc": "amd_cdna4_whitepaper",
+      "question": "What is the per-direction bandwidth of each Infinity Fabric link in the AMD CDNA 4 architecture?",
+      "answer": "76.8GB/s",
+      "answer_aliases": [
+        "76.8 GB/s"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 13,
+          "quote": "at 38.4Gbps for a total link bandwidth of 76.8GB/s in each direction"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-020",
+      "doc": "amd_cdna4_whitepaper",
+      "question": "According to the AMD CDNA 4 white paper's specification table, what is the peak engine clock of the AMD Instinct MI355X GPU?",
+      "answer": "2,400 MHz",
+      "answer_aliases": [
+        "2400 MHz"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 18,
+          "quote": "MAX ENGINE CLOCK (PEAK) 2,200 MHz 2,400 MHz"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "table",
+        "spec",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-021",
+      "doc": "amd_cdna4_whitepaper",
+      "question": "How does the AMD CDNA 4 architecture support the TF32 numerical format that CDNA 3 handled in hardware?",
+      "answer": "software emulation",
+      "answer_aliases": [
+        "emulated in software",
+        "emulation"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 8,
+          "quote": "this has been moved out of hardware and is supported through software emulation utilizing the BF16 datatype"
+        }
+      ],
+      "tags": [
+        "pdf"
+      ]
+    },
+    {
+      "id": "tech-022",
+      "doc": "amd_cdna4_whitepaper",
+      "question": "Up to how many AMD Instinct MI355X GPUs fit in a 200kW direct liquid-cooled rack, per the CDNA 4 white paper conclusion?",
+      "answer": "128",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 20,
+          "quote": "the AMD Instinct MI355X GPU is available in direct liquid-cooled form factors that can fit up to 128 GPUs in a 200kW rack"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-023",
+      "doc": "amd_mi300x_datasheet",
+      "question": "According to the AMD Instinct MI300X data sheet, how many SR-IOV partitions does the MI300X support?",
+      "answer": "8",
+      "answer_aliases": [
+        "eight"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 1,
+          "quote": "SR-IOV , up to 8 partitions"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "table",
+        "spec",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-024",
+      "doc": "amd_mi300x_datasheet",
+      "question": "What maximum total board power (TBP) does the AMD Instinct MI300X data sheet specify?",
+      "answer": "750W",
+      "answer_aliases": [
+        "750 W"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 1,
+          "quote": "Full-chip ECC memory, page retirement, page avoidance 750W"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "table",
+        "spec",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-025",
+      "doc": "amd_mi300x_datasheet",
+      "question": "What peak engine clock is listed in the AMD Instinct MI300X data sheet specifications?",
+      "answer": "2100 MHz",
+      "answer_aliases": [
+        "2,100 MHz"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 1,
+          "quote": "304 1216 19,456 2100 MHz"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "table",
+        "spec",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-026",
+      "doc": "amd_mi300x_datasheet",
+      "question": "How many JPEG/MJPEG codec cores does the AMD Instinct MI300X data sheet list?",
+      "answer": "32",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 1,
+          "quote": "32 cores, 8 cores per group"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "table",
+        "spec",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-027",
+      "doc": "amd_mi300x_datasheet",
+      "question": "Per the AMD Instinct MI300X data sheet, what peak AI/ML performance multiple does MI300X FP8 with sparsity offer over MI250X FP16?",
+      "answer": "13.7x",
+      "answer_aliases": [
+        "13.7"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 1,
+          "quote": "offering 13.7x the peak AI/ML workload performance using FP8 with sparsity"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-028",
+      "doc": "amd_mi300x_datasheet",
+      "question": "What peak advantage on FP32 HPC workloads does the AMD Instinct MI300X data sheet claim over the MI250X?",
+      "answer": "3.4x",
+      "answer_aliases": [
+        "3.4"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 1,
+          "quote": "a 3.4x peak advantage for HPC workloads on FP32 calculations"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-029",
+      "doc": "amd_mi300x_datasheet",
+      "question": "According to the AMD Instinct MI300X data sheet, what bidirectional bandwidth directly connects each pair of MI300X GPUs?",
+      "answer": "128 GB/s",
+      "answer_aliases": [
+        "128GB/s"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 2,
+          "quote": "direct connectivity of 128 GB/s bidirectional bandwidth between each GPU"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-030",
+      "doc": "amd_mi300x_datasheet",
+      "question": "On which baseboard is the eight-GPU AMD Instinct MI300X Platform interconnected, according to the MI300X data sheet?",
+      "answer": "UBB 2.0",
+      "answer_aliases": [
+        "Universal Base Board"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 2,
+          "quote": "an AMD Universal Base Board (UBB 2.0) with industry-standard HGX host connectors"
+        }
+      ],
+      "tags": [
+        "pdf"
+      ]
+    },
+    {
+      "id": "tech-031",
+      "doc": "amd_cdna3_isa",
+      "question": "In the AMD Instinct MI300 instruction set architecture guide, how many work-items make up a wavefront?",
+      "answer": "64",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 12,
+          "quote": "A collection of 64 work-items that execute in parallel on a single CDNA processor."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc",
+        "table",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-032",
+      "doc": "amd_cdna3_isa",
+      "question": "How many trap temporary SGPRs (TTMP registers) does the AMD Instinct MI300 ISA provide for the trap handler?",
+      "answer": "16",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 16,
+          "quote": "16 SGPRs available only to the Trap Handler for temporary storage."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc",
+        "table",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-033",
+      "doc": "amd_cdna3_isa",
+      "question": "Per the AMD Instinct MI300 ISA guide, what is the maximum number of SGPRs that can be allocated to a wavefront?",
+      "answer": "102",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 20,
+          "quote": "A wavefront can be allocated 16 to 102 SGPRs, in units of 16 GPRs (Dwords)."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-034",
+      "doc": "amd_cdna3_isa",
+      "question": "In the AMD Instinct MI300 ISA, in what block size is LDS space allocated to a work-group or wavefront?",
+      "answer": "512 bytes",
+      "answer_aliases": [
+        "512-byte",
+        "512 B"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 21,
+          "quote": "LDS space is allocated to a work-group or wavefront in contiguous blocks of 512 bytes on 512-byte alignment."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-035",
+      "doc": "amd_cdna3_isa",
+      "question": "According to the AMD Instinct MI300 ISA's small float data format table, what is the maximum value representable in the FP8 E4M3 format?",
+      "answer": "240",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 58,
+          "quote": "FP8 E4M3 8 +/-: 0x00 N/A 0x80 240"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc",
+        "table",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-036",
+      "doc": "amd_cdna3_isa",
+      "question": "Which register bit must be set to 1 for BF8 and FP8 operations to produce correct results on AMD Instinct MI300, per the ISA guide?",
+      "answer": "SH_MEM_CONFIG",
+      "answer_aliases": [
+        "SH_MEM_CONFIG bit 8"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 60,
+          "quote": "The register SH_MEM_CONFIG, bit[8] must be set to 1 to produce the correct results for BF8 and FP8 operations."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc"
+      ]
+    },
+    {
+      "id": "tech-037",
+      "doc": "amd_cdna3_isa",
+      "question": "In the AMD Instinct MI300 ISA, how many clocks does the instruction s_sleep 2 wait?",
+      "answer": "65-128",
+      "answer_aliases": [
+        "65 to 128"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 142,
+          "quote": "s_sleep 2       // Wait for 65-128 clocks."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc"
+      ]
+    },
+    {
+      "id": "tech-038",
+      "doc": "amd_cdna3_isa",
+      "question": "How many matrix multiplies does the AMD Instinct MI300 instruction V_MFMA_F64_4X4X4_4B_F64 perform?",
+      "answer": "4",
+      "answer_aliases": [
+        "four"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 284,
+          "quote": "This instruction performs 4 matrix multiplies. Each operand contains 4 matrices back to back"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-039",
+      "doc": "amd_cdna3_isa",
+      "question": "In the AMD Instinct MI300 ISA, what offset value threshold selects the FFT mode of DS_SWIZZLE_B32?",
+      "answer": "0xe000",
+      "answer_aliases": [
+        "0xE000"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 433,
+          "quote": "The FFT mode (offset >= 0xe000) swizzles the input based on offset[4:0] to support FFT calculation."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc"
+      ]
+    },
+    {
+      "id": "tech-040",
+      "doc": "amd_cdna3_isa",
+      "question": "For the AMD Instinct MI300 DS_BPERMUTE_B32 instruction, how is the per-lane address passed in derived from the source thread ID?",
+      "answer": "multiplied by 4",
+      "answer_aliases": [
+        "times 4",
+        "thread ID * 4"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 437,
+          "quote": "Note the address passed in is the thread ID multiplied by 4."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc"
+      ]
+    },
+    {
+      "id": "tech-041",
+      "doc": "amd_cdna3_isa",
+      "question": "Although DS_GWS_INIT on AMD Instinct MI300 uses only 32 bits of its VGPR operand, how wide a read does the hardware treat it as?",
+      "answer": "64 bit",
+      "answer_aliases": [
+        "64-bit"
+      ],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 453,
+          "quote": "Only 32 bits are used but hardware treats this instruction as a 64 bit read."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc"
+      ]
+    },
+    {
+      "id": "tech-042",
+      "doc": "amd_cdna3_isa",
+      "question": "Which AMD Instinct MI300 MUBUF instruction writes back the L2 cache and returns an ACK to the shader?",
+      "answer": "BUFFER_WBL2",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 468,
+          "quote": "BUFFER_WBL2 40 Write back L2 cache. Returns ACK to shader."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc"
+      ]
+    },
+    {
+      "id": "tech-043",
+      "doc": "amd_cdna3_isa",
+      "question": "In the AMD Instinct MI300 ISA microcode formats, what bit pattern must the ENCODING field [31:26] of the SMEM format contain?",
+      "answer": "110000",
+      "answer_aliases": [],
+      "answer_type": "exact",
+      "evidence": [
+        {
+          "page": 529,
+          "quote": "ENCODING [31:26] Must be: 110000"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc",
+        "table"
+      ]
+    },
+    {
+      "id": "tech-044",
+      "doc": "amd_cdna3_isa",
+      "question": "In the AMD Instinct MI300 ISA FLAT microcode format, which SEG field value selects global memory instructions?",
+      "answer": "2",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 559,
+          "quote": "SEG [15:14] Memory Segment (instruction type): 0 = flat, 1 = scratch, 2 = global."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "long_doc",
+        "table",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-045",
+      "doc": "arxiv_attention",
+      "question": "In 'Attention Is All You Need' Table 2, what EN-DE BLEU score does the Transformer base model achieve?",
+      "answer": "27.3",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 8,
+          "quote": "Transformer (base model) 27.3 38.1"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "multicolumn",
+        "table",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-046",
+      "doc": "arxiv_attention",
+      "question": "In 'Attention Is All You Need' Table 2, what EN-FR BLEU score is reported for the ConvS2S Ensemble?",
+      "answer": "41.29",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 8,
+          "quote": "ConvS2S Ensemble [9] 26.36 41.29"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "multicolumn",
+        "table",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-047",
+      "doc": "arxiv_attention",
+      "question": "How many parameters (in millions) does the 'big' Transformer configuration have in Table 3 of 'Attention Is All You Need'?",
+      "answer": "213",
+      "answer_aliases": [
+        "213 million"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 9,
+          "quote": "big 6 1024 4096 16 0.3 300K 4.33 26.4 213"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "multicolumn",
+        "table",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-048",
+      "doc": "arxiv_attention",
+      "question": "What WSJ Section 23 F1 score does the 4-layer Transformer achieve in the semi-supervised setting of 'Attention Is All You Need'?",
+      "answer": "92.7",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 10,
+          "quote": "Transformer (4 layers) semi-supervised 92.7"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "multicolumn",
+        "table",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-049",
+      "doc": "arxiv_attention",
+      "question": "How many warmup steps were used in the learning rate schedule of 'Attention Is All You Need'?",
+      "answer": "4000",
+      "answer_aliases": [
+        "4,000"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 7,
+          "quote": "We used warmup_steps = 4000."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "multicolumn",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-050",
+      "doc": "arxiv_attention",
+      "question": "For how many training steps were the Transformer base models trained in 'Attention Is All You Need'?",
+      "answer": "100,000",
+      "answer_aliases": [
+        "100000",
+        "100K"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 7,
+          "quote": "We trained the base models for a total of 100,000 steps or 12 hours."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "multicolumn",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-051",
+      "doc": "arxiv_attention",
+      "question": "What is the inner-layer dimensionality of the position-wise feed-forward network in 'Attention Is All You Need'?",
+      "answer": "2048",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 5,
+          "quote": "and the inner-layer has dimensionality df f = 2048."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "multicolumn",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-052",
+      "doc": "arxiv_attention",
+      "question": "How many parallel attention heads does the base Transformer in 'Attention Is All You Need' employ?",
+      "answer": "8",
+      "answer_aliases": [
+        "eight"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 5,
+          "quote": "In this work we employ h = 8 parallel attention layers, or heads."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "multicolumn",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-053",
+      "doc": "arxiv_attention",
+      "question": "What label smoothing value was used when training the Transformer in 'Attention Is All You Need'?",
+      "answer": "0.1",
+      "answer_aliases": [],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 8,
+          "quote": "During training, we employed label smoothing of value ϵls = 0.1"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "multicolumn",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-054",
+      "doc": "arxiv_attention",
+      "question": "What was the approximate size of the shared source-target byte-pair vocabulary for English-German in 'Attention Is All You Need'?",
+      "answer": "37000",
+      "answer_aliases": [
+        "37,000",
+        "37K"
+      ],
+      "answer_type": "numeric",
+      "evidence": [
+        {
+          "page": 7,
+          "quote": "which has a shared source- target vocabulary of about 37000 tokens"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "multicolumn",
+        "numeric"
+      ]
+    },
+    {
+      "id": "tech-055",
+      "doc": "arxiv_attention",
+      "question": "Why did the authors of 'Attention Is All You Need' choose sinusoidal positional encodings over learned positional embeddings?",
+      "answer": "The two produced nearly identical results, and the sinusoidal version may let the model extrapolate to sequence lengths longer than those seen during training.",
+      "answer_aliases": [],
+      "answer_type": "judge",
+      "evidence": [
+        {
+          "page": 6,
+          "quote": "We chose the sinusoidal version because it may allow the model to extrapolate to sequence lengths longer than the ones encountered during training."
+        }
+      ],
+      "tags": [
+        "pdf",
+        "multicolumn"
+      ]
+    }
+  ]
+}
