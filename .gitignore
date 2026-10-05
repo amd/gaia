@@ -331,3 +331,6 @@ hub/agents/*/python/packaging/build/
 /.playwright*/
 # Web fixture for the "don't download executables" scenarios (plain text, not a binary).
 !tests/fixtures/gaia/tiers_skills_web/downloads/
+
+# gaia eval retrieval run outputs (results.json / report.md); baselines live in tests/fixtures.
+eval/results/retrieval-*/
