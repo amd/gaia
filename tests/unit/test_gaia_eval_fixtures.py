@@ -15,6 +15,7 @@ hallucination probes depend on.
 import csv
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -40,12 +41,16 @@ HUB_CATALOG = {
 }
 
 
-def _gh(*args: str) -> subprocess.CompletedProcess:
+def _gh(*args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    clean = {
+        k: v for k, v in os.environ.items() if k not in ("FAKE_GH_AUTH", "GH_HOST")
+    }
     return subprocess.run(
         [sys.executable, str(FAKE_GH), *args],
         capture_output=True,
         text=True,
         timeout=30,
+        env={**clean, **(env or {})},
     )
 
 
@@ -88,6 +93,45 @@ def test_fake_gh_auth_status_json_accepts_the_equals_form():
     assert status.returncode == 0, status.stderr
     assert json.loads(status.stdout)["hosts"]["github.com"][0]["login"] == "fixture-bot"
     assert _gh("auth", "status", "--json=token").returncode != 0
+
+
+SIGNED_OUT_HOST = "ghe.acme-labs.example"
+
+
+@pytest.mark.parametrize(
+    ("argv", "env"),
+    [
+        (("issue", "list", "--repo", f"{SIGNED_OUT_HOST}/acme/x"), {}),
+        (("issue", "list", "-R", f"{SIGNED_OUT_HOST}/acme/x"), {}),
+        (("issue", "list", f"--repo={SIGNED_OUT_HOST}/acme/x"), {}),
+        (("api", "notifications", f"--hostname={SIGNED_OUT_HOST}"), {}),
+        (("issue", "list"), {"GH_HOST": SIGNED_OUT_HOST}),
+    ],
+)
+def test_fake_gh_refuses_a_signed_out_host_the_way_gh_does(argv, env):
+    result = _gh(*argv, env=env)
+    assert result.returncode == 4
+    assert f"gh auth login --hostname {SIGNED_OUT_HOST}" in result.stderr
+    assert "GH_ENTERPRISE_TOKEN" in result.stderr
+    assert result.stdout == ""
+
+
+def test_fake_gh_auth_status_lists_no_credentials_for_a_signed_out_host():
+    result = _gh("auth", "status", "--json", "hosts", "--hostname", SIGNED_OUT_HOST)
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == {"hosts": {}}
+
+
+def test_fake_gh_logged_out_mode_signs_out_every_host():
+    result = _gh("issue", "list", env={"FAKE_GH_AUTH": "logged_out"})
+    assert result.returncode == 4
+    assert "gh auth login" in result.stderr and "GH_TOKEN" in result.stderr
+
+
+def test_fake_gh_rejects_an_unknown_auth_mode():
+    result = _gh("issue", "list", env={"FAKE_GH_AUTH": "maybe"})
+    assert result.returncode == 2
+    assert "is not a mode" in result.stderr
 
 
 def test_fake_gh_issue_list_matches_the_contract_newest_first():
@@ -253,6 +297,36 @@ def _stop(server, thread):
     server.shutdown()
     server.server_close()
     thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("path", "status", "retry_after"),
+    [
+        ("/resilience/rate_limited.html", 429, "3600"),
+        ("/resilience/summit_tent.html", 503, "120"),
+        ("/resilience/summit_tent.html?x=1", 503, "120"),
+        ("/resilience/status_board.html", 503, "600"),
+    ],
+)
+@pytest.mark.allow_network  # loopback socket only (ephemeral port, never 4001)
+def test_resilience_pages_answer_with_their_error_status(path, status, retry_after):
+    serve_fixtures = _fixtures_import("serve_fixtures")
+    server, thread, base = _serve(None)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(f"{base}{path}")
+        error = excinfo.value
+        assert error.code == status
+        assert error.headers["Retry-After"] == retry_after
+        clean = path.split("?", 1)[0]
+        assert error.read() == serve_fixtures.STATUS_ROUTES[clean][2].read_bytes()
+
+        # Exact match only: a neighbouring path is an ordinary miss.
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(f"{base}/resilience/other.html")
+        assert excinfo.value.code == 404
+    finally:
+        _stop(server, thread)
 
 
 @pytest.fixture()
