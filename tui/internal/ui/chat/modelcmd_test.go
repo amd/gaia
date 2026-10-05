@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 )
 
@@ -201,10 +202,9 @@ func TestModelCommandRefusedOnAnUnsupportedAgent(t *testing.T) {
 	}
 }
 
-// A cancelled turn respawns the child from its ORIGINAL launch flags
-// (subprocess.go), silently reverting any live /model switch. The header
-// must self-correct AND say so — a silent revert is the failure mode this
-// guards against.
+// A respawned child that comes back on a different model the session did not
+// ask for. The header must self-correct AND say so — a silent revert is the
+// failure mode this guards against.
 func TestAnUnrequestedModelChangeWarnsOfARevert(t *testing.T) {
 	m, _ := newTestModel(t)
 
@@ -258,5 +258,75 @@ func TestAConfirmedModelSwitchDoesNotWarnOfARevert(t *testing.T) {
 		if strings.Contains(msg.Content, "reverted") {
 			t.Errorf("a switch this session requested must not be flagged as a revert: %+v", msg)
 		}
+	}
+}
+
+// The real subprocess transport must be the one the chat model records on.
+var _ modelSwitchRecorder = (*client.SubprocessClient)(nil)
+
+// switchRecordingClient is a transport that keeps a confirmed /model switch
+// for its next respawn, like client.SubprocessClient.
+type switchRecordingClient struct {
+	queryCapturingClient
+	recorded []string
+}
+
+func (c *switchRecordingClient) RecordModelSwitch(model string, claude bool) bool {
+	backend := "lemonade"
+	if claude {
+		backend = "claude"
+	}
+	c.recorded = append(c.recorded, backend+":"+model)
+	return true
+}
+
+func newSwitchRecordingModel(t *testing.T) (ChatModel, *switchRecordingClient) {
+	t.Helper()
+	c := &switchRecordingClient{}
+	m := NewChatModel(c, "gaia", "", false)
+	m.width, m.height = 100, 30
+	m = feed(t, m, event.CanonicalStatusEvent{
+		Type: "status", ModelID: "Qwen3.6-35B-A3B-GGUF", ModelDisplay: "Qwen3.6-35B-A3B-GGUF",
+		ModelBackend: "lemonade",
+	})
+	return m, c
+}
+
+// The agent's switch ping is its confirmation; the transport must hear it so a
+// crash-respawn keeps the model instead of reverting to the launch one.
+func TestAConfirmedModelSwitchIsKeptForTheNextRespawn(t *testing.T) {
+	for _, tc := range []struct {
+		target, backend, want string
+	}{
+		{"fireworks.deepseek-v4p1-flash", "fireworks", "lemonade:fireworks.deepseek-v4p1-flash"},
+		{"claude-opus-5", "claude", "claude:claude-opus-5"},
+		{"Gemma-4-E4B-it-GGUF", "lemonade", "lemonade:Gemma-4-E4B-it-GGUF"},
+	} {
+		t.Run(tc.target, func(t *testing.T) {
+			m, c := newSwitchRecordingModel(t)
+			updated, _ := m.submit("/model " + tc.target)
+			m = updated.(ChatModel)
+			m = feed(t, m, event.CanonicalStatusEvent{
+				Type: "status", ModelID: tc.target, ModelDisplay: tc.target, ModelBackend: tc.backend,
+			})
+			if len(c.recorded) != 1 || c.recorded[0] != tc.want {
+				t.Fatalf("recorded %v, want [%s]", c.recorded, tc.want)
+			}
+		})
+	}
+}
+
+// A refused switch leaves the agent where it was, so the respawn model must
+// not move either — and a ping nobody asked for is not a switch.
+func TestARefusedOrUnrequestedModelChangeIsNotKeptForRespawn(t *testing.T) {
+	m, c := newSwitchRecordingModel(t)
+	updated, _ := m.submit("/model fireworks.not-a-model")
+	m = updated.(ChatModel)
+	m = feed(t, m, event.CanonicalErrorEvent{Type: "error", Detail: "Unknown Lemonade model 'fireworks.not-a-model'."})
+	m = feed(t, m, event.CanonicalStatusEvent{
+		Type: "status", ModelID: "Gemma-4-E4B-it-GGUF", ModelDisplay: "Gemma-4-E4B-it-GGUF", ModelBackend: "lemonade",
+	})
+	if len(c.recorded) != 0 {
+		t.Fatalf("nothing was confirmed, but the respawn model changed: %v", c.recorded)
 	}
 }

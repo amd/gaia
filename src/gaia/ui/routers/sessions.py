@@ -22,6 +22,7 @@ from .._chat_helpers import (
     evict_session_agent,
     get_agent_registry,
     resolve_device_model,
+    session_inference_location,
 )
 from ..database import (
     SESSION_DEFAULT_MODEL,
@@ -46,6 +47,22 @@ from ..utils import message_to_response, session_to_response
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sessions"])
+
+
+def _session_response(session: dict, custom_model: str | None) -> SessionResponse:
+    """``session_to_response`` plus where the session's chat is answered."""
+    resp = session_to_response(session)
+    loc = session_inference_location(session, custom_model)
+    if loc is None:
+        return resp
+    return resp.model_copy(
+        update={
+            "inference_remote": loc.remote,
+            "inference_provider": loc.provider,
+            "inference_provider_name": loc.display,
+            "inference_description": loc.describe() if loc.model else None,
+        }
+    )
 
 
 def _reject_if_turn_running(http_request: Request, session_id: str) -> None:
@@ -155,8 +172,9 @@ async def list_sessions(
     offset = max(0, offset)
     sessions = db.list_sessions(limit=limit, offset=offset)
     total = db.count_sessions()
+    custom_model = db.get_setting("custom_model")
     return SessionListResponse(
-        sessions=[session_to_response(s) for s in sessions],
+        sessions=[_session_response(s, custom_model) for s in sessions],
         total=total,
     )
 
@@ -184,7 +202,7 @@ async def create_session(
             mail_provider=request.mail_provider,
         )
         session_permissions.seed_new_session(session["id"], start_mode)
-        return session_to_response(session)
+        return _session_response(session, db.get_setting("custom_model"))
     except Exception as e:
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
@@ -242,7 +260,7 @@ async def get_session(session_id: str, db: ChatDatabase = Depends(get_db)):
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    return session_to_response(session)
+    return _session_response(session, db.get_setting("custom_model"))
 
 
 @router.put("/api/sessions/{session_id}", response_model=SessionResponse)
@@ -316,7 +334,7 @@ async def update_session(
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    return session_to_response(session)
+    return _session_response(session, db.get_setting("custom_model"))
 
 
 @router.delete("/api/sessions/{session_id}")
@@ -356,7 +374,7 @@ async def toggle_session_privacy(
         raise HTTPException(status_code=404, detail="Session not found")
     current = bool(session.get("private", 0))
     updated = db.update_session(session_id, private=not current)
-    return session_to_response(updated)
+    return _session_response(updated, db.get_setting("custom_model"))
 
 
 # ── Messages ─────────────────────────────────────────────────────────────────

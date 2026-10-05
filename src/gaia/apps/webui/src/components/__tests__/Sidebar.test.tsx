@@ -5,7 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
 import { useChatStore } from '../../stores/chatStore';
-import { useModelStore } from '../../stores/modelStore';
+import { UNKNOWN_PLACE_TITLE, useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
 import type { Session } from '../../types';
 
@@ -16,7 +16,7 @@ const mockedApi = vi.mocked(api);
 function chat(id: string, title: string, updated: Date): Session {
     return {
         id, title, created_at: updated.toISOString(), updated_at: updated.toISOString(),
-        model: '', system_prompt: null, message_count: 2, document_ids: [],
+        model: '', system_prompt: null, message_count: 2, document_ids: [], inference_remote: false,
     };
 }
 
@@ -53,12 +53,14 @@ describe('Sidebar', () => {
             active: { provider: 'fireworks', model: 'fireworks.deepseek-v4p1-flash', label: 'DeepSeek', remote: true, is_default: false },
         }));
         rerender(<Sidebar onNewChat={vi.fn()} />);
-        expect(screen.getByTitle(/chat history leaves this PC/)).toHaveTextContent('Fireworks AI');
+        expect(screen.getByTitle('Chat history is sent to Fireworks AI')).toHaveTextContent('Fireworks AI');
 
-        act(() => useModelStore.setState({ active: null }));
+        act(() => {
+            useModelStore.setState({ active: null });
+            useChatStore.setState({ sessions: SESSIONS.map((s) => ({ ...s, inference_remote: null })) });
+        });
         rerender(<Sidebar onNewChat={vi.fn()} />);
-        const unknown = screen.getByTitle(/can't tell yet/);
-        expect(unknown).toHaveTextContent('Location unknown');
+        const unknown = screen.getByTitle(UNKNOWN_PLACE_TITLE);
         expect(unknown).not.toHaveTextContent('Local');
     });
 
@@ -125,5 +127,20 @@ describe('Sidebar', () => {
         });
         render(<Sidebar onNewChat={vi.fn()} />);
         expect(screen.getByRole('button', { name: 'Fireworks AI · kimi-k2' })).toBeInTheDocument();
+    });
+
+    it('does not claim Local when the backend cannot tell where chat runs', () => {
+        useChatStore.setState({ sessions: SESSIONS.map((s) => ({ ...s, inference_remote: null })) });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const location = screen.getByRole('button', { name: 'Gemma-4-E4B-it-GGUF' });
+        expect(location.textContent).not.toMatch(/local/i);
+    });
+
+    it('shows the cloud provider the backend reports', () => {
+        useChatStore.setState({
+            sessions: SESSIONS.map((s) => ({ ...s, inference_remote: true, inference_provider_name: 'Fireworks AI' })),
+        });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(screen.getByRole('button', { name: 'Fireworks AI · Gemma-4-E4B-it-GGUF' })).toBeInTheDocument();
     });
 });

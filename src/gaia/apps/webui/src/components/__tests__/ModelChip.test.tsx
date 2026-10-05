@@ -7,7 +7,7 @@ import { ModelChip } from '../ModelChip';
 import { useModelStore } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
-import type { ActiveModel, ProviderInfo, ProviderModel } from '../../types';
+import type { ActiveModel, ProviderInfo, ProviderModel, Session } from '../../types';
 
 vi.mock('../../services/api');
 
@@ -29,6 +29,12 @@ const AMD_UNCONNECTED: ProviderInfo = {
     id: 'amd', name: 'AMD LLM Gateway', remote: true, models_discovered: false, privacy_notice: 'Sent to the gateway.',
 };
 
+// The backend says this chat is answered on this PC.
+const SESSION: Session = {
+    id: 's1', title: 'Chat', created_at: '', updated_at: '', model: 'Gemma-4-E4B-it-GGUF',
+    system_prompt: null, message_count: 0, document_ids: [], inference_remote: false,
+};
+
 function model(id: string, over: Partial<ProviderModel> = {}): ProviderModel {
     return { id, context_length: null, downloaded: true, labels: [], rank: null, note: null, evidence: null, ...over };
 }
@@ -36,7 +42,7 @@ function model(id: string, over: Partial<ProviderModel> = {}): ProviderModel {
 beforeEach(() => {
     vi.clearAllMocks();
     useModelStore.setState({ active: LOCAL_ACTIVE, error: null, restoreNotice: null });
-    useChatStore.setState({ settingsSection: null });
+    useChatStore.setState({ settingsSection: null, sessions: [SESSION], currentSessionId: SESSION.id });
     mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, FIREWORKS, AMD_UNCONNECTED], active: LOCAL_ACTIVE, lemonade_error: null });
     mockedApi.listProviderModels.mockImplementation(async (id) => ({
         provider: id,
@@ -58,10 +64,20 @@ describe('ModelChip', () => {
         expect(screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF · Local/ })).toBeInTheDocument();
     });
 
-    it('does not claim this PC before the active model is known', () => {
-        useModelStore.setState({ active: null });
+    it('does not claim Local when the backend cannot tell where chat runs', () => {
+        useChatStore.setState({ sessions: [{ ...SESSION, inference_remote: null }] });
         render(<ModelChip />);
-        expect(screen.getByRole('button', { name: 'Model' })).toHaveAttribute('title', expect.stringMatching(/can't tell yet/));
+        const chip = screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF/ });
+        expect(chip.textContent).not.toMatch(/local/i);
+    });
+
+    it('names the cloud provider the backend reports for a non-cloud pick', () => {
+        useChatStore.setState({
+            sessions: [{ ...SESSION, inference_remote: true, inference_provider_name: 'Fireworks AI', inference_description: 'Sent to Fireworks AI.' }],
+        });
+        render(<ModelChip />);
+        const chip = screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF · Fireworks AI/ });
+        expect(chip.getAttribute('title')).toBe('Sent to Fireworks AI.');
     });
 
     it('labels a cloud model with its provider', () => {
