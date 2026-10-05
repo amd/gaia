@@ -12,6 +12,7 @@ data, validates input, and delegates to MemoryStore correctly.
 """
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -66,8 +67,12 @@ def api_client(memory_store):
     original_store = memory_mod._store
     memory_mod._store = memory_store
 
-    client = TestClient(app)
-    yield client
+    # Create/edit embed the row; keep that off any real Lemonade server.
+    provider = MagicMock()
+    provider.embed.return_value = [[0.5] * 768]
+    with patch("gaia.llm.providers.lemonade.LemonadeProvider", return_value=provider):
+        client = TestClient(app)
+        yield client
 
     # Restore original (cleanup)
     memory_mod._store = original_store
