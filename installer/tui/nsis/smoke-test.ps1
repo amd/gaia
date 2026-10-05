@@ -22,8 +22,8 @@ $tuiArp    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerm
 $uiGuid    = '071ff68a-44b8-5d94-b099-f93e99d1c3f3'
 $uiKey     = "HKCU:\Software\$uiGuid"
 $uiArp     = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$uiGuid"
-# The Agent UI's per-user folder; its uninstaller deletes it recursively.
-$uiDefault = "$env:LOCALAPPDATA\Programs\GAIA"
+# Where the desktop app's per-user setup installs (electron-builder's own choice).
+$uiDefault = "$env:LOCALAPPDATA\Programs\gaia-desktop"
 $desktop   = [Environment]::GetFolderPath('Desktop')
 $startMenu = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
 $runKey    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
@@ -59,7 +59,8 @@ foreach ($bad in '/COMPONENTS=bogus', '/COMPONENTS=', '/COMPONENTS=ui,nope') {
     Assert-NothingInstalled "after $bad"
 }
 
-# The developer build shares the desktop app's folder: refused whatever is chosen.
+# The developer build has its own gaia-tui on PATH and its own "GAIA" entry:
+# refused whatever is chosen.
 $devDir = Join-Path ([System.IO.Path]::GetTempPath()) 'gaia-dev-build'
 New-Item -ItemType Directory -Force -Path $devDir | Out-Null
 New-Item -Path 'HKCU:\Software\AMD\GAIA' -Force | Out-Null
@@ -96,7 +97,7 @@ $rc = Invoke-Setup @('/S', '/COMPONENTS=tui')
 if ($rc -ne 0) { throw "terminal-only install exited $rc" }
 
 if (Test-Path $uiDefault) {
-    throw "a terminal-only install wrote to $uiDefault - the desktop app's folder, whose uninstaller deletes it recursively"
+    throw "a terminal-only install wrote to $uiDefault - the desktop app's folder"
 }
 if (Test-Path $uiKey) { throw "a terminal-only install installed the desktop app" }
 foreach ($f in 'gaia-tui.exe', 'gaia-agent.exe', 'Uninstall.exe') {

@@ -34,8 +34,9 @@ The Agent UI's own electron-builder installer (`nsis/installer.nsh` is its
 include) still builds every release: the Windows setup embeds it unchanged as
 its desktop app component, and electron-updater re-runs it to update the app.
 
-`nsis/gaia.nsi` is the developer shareable build. It installs into the same
-folder as the desktop app, so the GAIA setup refuses to install beside it.
+`nsis/gaia.nsi` is the developer shareable build. It puts its own `gaia-tui`
+on PATH under its own "GAIA" Installed-apps entry, so the GAIA setup refuses to
+install beside it rather than leave two of each.
 
 `debian/`, `macos/` and `linux/` back the Agent UI's Electron packaging.
 `tui/` is a separate, self-contained set of installers for the Go terminal

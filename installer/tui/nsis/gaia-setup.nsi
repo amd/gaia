@@ -100,9 +100,9 @@ Unicode true
 !define UI_EXE            "gaia-desktop.exe"
 !define UI_SETUP_NAME     "gaia-agent-ui-setup.exe"
 
-; The developer build (installer/nsis/gaia.nsi) installs into the desktop app's
-; own folder, whose uninstaller deletes that folder recursively -- so Setup
-; refuses to run beside it rather than guess which copy the user wants.
+; The developer build (installer/nsis/gaia.nsi) puts its own gaia-tui on PATH
+; under its own "GAIA" Installed-apps entry, so beside this setup there would be
+; two of each. Setup refuses rather than guess which copy the user wants.
 !define DEV_SETTINGS_KEY  "Software\AMD\GAIA"
 !define DEV_UNINST_KEY    "Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIA"
 
@@ -832,7 +832,7 @@ Function .onInit
   ${AndIf} ${FileExists} "$R0\gaia-tui.exe"
     ; /SD IDOK: under /S the exit code is the message.
     MessageBox MB_OK|MB_ICONSTOP \
-      "A GAIA developer build is installed (Installed apps: GAIA).$\r$\n$\r$\nIt shares a folder with the GAIA desktop app, so Setup cannot install beside it. Uninstall it from Settings > Apps > Installed apps, then run Setup again.$\r$\n$\r$\nNothing was installed." \
+      "A GAIA developer build is installed (Installed apps: GAIA).$\r$\n$\r$\nInstalled beside it, GAIA would have two gaia-tui programs on your PATH and two GAIA entries in Installed apps. Uninstall it from Settings > Apps > Installed apps, then run Setup again.$\r$\n$\r$\nNothing was installed." \
       /SD IDOK
     SetErrorLevel ${EXIT_CONFLICT}
     Quit
