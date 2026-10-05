@@ -993,6 +993,50 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     return None
 
 
+# First-person intent that announces the call it rides with ("I'll read it").
+_TOOL_STEP_INTENT_PATTERN = re.compile(
+    r"^(?:(?:ok(?:ay)?|so|alright|now|first|next|then)[,.]?\s+)*"
+    r"(?:i'll|i will|i'm going to|i am going to|let's"
+    r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b))\b",
+    re.IGNORECASE,
+)
+_TRAILING_SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _answer_beside_tool_calls(content: Any) -> Optional[str]:
+    """The answer in text sent alongside tool calls, or ``None`` if it has none.
+
+    Reasoning and trailing next-step narration ("Let me drop the table.") are
+    removed; what remains counts only if it is not itself a plan or narration.
+    """
+    if not isinstance(content, str):
+        return None
+    text, _ = _split_reasoning(content)
+    while text:
+        last = _TRAILING_SENTENCE_PATTERN.split(text)[-1]
+        sentence = re.sub(r"[*_`#>]", "", last).replace("’", "'").strip()
+        if not (
+            _NEXT_STEP_INTENT_PATTERN.match(sentence)
+            or _TOOL_STEP_INTENT_PATTERN.match(sentence)
+        ):
+            break
+        text = text[: text.rfind(last)].rstrip()
+    if not text or _unfinished_answer_kind(text):
+        return None
+    return text
+
+
+def _with_answer_beside_tool_calls(answer: str, beside: Optional[str]) -> str:
+    """Put the answer sent alongside the turn's last tool calls ahead of *answer*.
+
+    Only when *answer* is a shorter wrap-up ("Scratch table cleaned up.");
+    a reply that restates or outgrows it already stands on its own.
+    """
+    if not beside or beside in answer or len(answer.strip()) >= len(beside):
+        return answer
+    return f"{beside}\n\n{answer.strip()}" if answer.strip() else beside
+
+
 #: Any one of these lets the agent look at a file the request names.
 _LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 
@@ -7149,6 +7193,8 @@ Do NOT wrap conversational replies in JSON.
         cut_off_continuations = 0
         completion_corrections = 0
         completion_gaps = []
+        # Answer text the model sent alongside its latest tool calls.
+        answer_beside_tool_calls: Optional[str] = None
         # Issue #1023: track the latest outcome of any capability tool
         # (currently ``generate_image``) so the verbose-failure override
         # downstream fires only when the tool actually errored.  ``None``
@@ -8130,6 +8176,10 @@ Do NOT wrap conversational replies in JSON.
             # shape for native tool_calls, raw text otherwise — see
             # ``_build_assistant_message`` for the why).
             messages.append(self._build_assistant_message(response, parsed, reasoning))
+            if "answer" not in parsed:
+                answer_beside_tool_calls = _answer_beside_tool_calls(
+                    parsed.get("content") if parsed.get("tool_calls") else None
+                )
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
@@ -8929,7 +8979,10 @@ Do NOT wrap conversational replies in JSON.
 
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
-                answer_candidate = parsed["answer"]
+                # Every check below must see the text the user will see.
+                answer_candidate = _with_answer_beside_tool_calls(
+                    parsed["answer"], answer_beside_tool_calls
+                )
                 completion_gaps = []
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after

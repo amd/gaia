@@ -1173,7 +1173,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.config, "enable_scratchpad", False
         ):
             scratchpad_section = """
-**DATA ANALYSIS WORKFLOW (Scratchpad):** find_files → create_table → read_file + insert_data per doc → query_data (SQL: SUM/AVG/GROUP BY) → drop_table when done.
+**DATA ANALYSIS WORKFLOW (Scratchpad):** find_files → create_table → read_file + insert_data per doc → query_data (SQL: SUM/AVG/GROUP BY) → drop_table → final answer built from the query results.
 """
 
         browser_section = ""
