@@ -1,0 +1,38 @@
+{
+  "family": "IBM Plex Mono",
+  "release": "@ibm/plex-mono@2.5.0",
+  "url": "https://github.com/IBM/plex/releases/download/%40ibm%2Fplex-mono%402.5.0/ibm-plex-mono.zip",
+  "size": 6940652,
+  "sha256": "6d23f01257663d8cc49a0d64c22ced630b79e0e2a0ac08a0da86e9a38bbc481c",
+  "license": {
+    "member": "ibm-plex-mono/LICENSE.txt",
+    "filename": "IBM-Plex-Mono-OFL.txt",
+    "sha256": "7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da"
+  },
+  "fonts": [
+    {
+      "member": "ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-Regular.ttf",
+      "filename": "IBMPlexMono-Regular.ttf",
+      "full_name": "IBM Plex Mono",
+      "sha256": "7c6fbddca4b700be918f5f6183d9bd4464fa427fe435f0b480d77fe2bb8c5a43"
+    },
+    {
+      "member": "ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-Bold.ttf",
+      "filename": "IBMPlexMono-Bold.ttf",
+      "full_name": "IBM Plex Mono Bold",
+      "sha256": "74e5eedcfa4596497d34e19023cabdabd3a8c852b903007a5654a59591a72ffb"
+    },
+    {
+      "member": "ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-Italic.ttf",
+      "filename": "IBMPlexMono-Italic.ttf",
+      "full_name": "IBM Plex Mono Italic",
+      "sha256": "a55368deb953f594ac18336a1029009ed820e2d9abbb57ad601f61e22bec072b"
+    },
+    {
+      "member": "ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-BoldItalic.ttf",
+      "filename": "IBMPlexMono-BoldItalic.ttf",
+      "full_name": "IBM Plex Mono Bold Italic",
+      "sha256": "c8b00068fd2fd69bbcf62059148623f09d19e9ada8bf9e8caf1aedd01347046a"
+    }
+  ]
+}
