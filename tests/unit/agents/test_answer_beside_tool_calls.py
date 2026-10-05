@@ -195,3 +195,22 @@ def test_reasoning_beside_a_call_never_reaches_the_answer(agent):
 
     assert "secret scratch work" not in result["result"]
     assert result["result"].startswith(_ANSWER)
+
+
+def test_progress_beside_a_lookup_is_not_promoted(agent):
+    chatter = "The search returned three files. Reading the largest one now."
+    _script(agent, _calls(_READ, content=chatter), "Timeout is 30s.")
+
+    result = agent.process_query("what is the timeout?")
+
+    assert result["result"].strip() == "Timeout is 30s."
+
+
+def test_report_sent_with_a_memory_save_reaches_the_user(agent):
+    report = "New since last check: the aurora alert for Tromsø is now level 5."
+    remember = ("remember", {"fact": "aurora alert level 5 seen"})
+    _script(agent, _calls(remember, content=report), "Logged.")
+
+    result = agent.process_query("check my watched sources")
+
+    assert result["result"].startswith(report)

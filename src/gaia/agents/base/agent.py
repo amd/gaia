@@ -1001,15 +1001,31 @@ _TOOL_STEP_INTENT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _TRAILING_SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+|\n+")
+# A call that fetches something feeds the reply after it, so text sent beside
+# it is progress, never the answer. Executors count too: they may be lookups.
+_LOOKUP_TOOL_PATTERN = re.compile(
+    r"^(?:read|search|find|list|get|browse|query|analy[sz]e|fetch|recall|describe"
+    r"|inspect|check|view|show|grep|lookup|look|load|open|summari[sz]e|extract"
+    r"|transcribe|download|web|run|execute)(?:_|$)"
+)
 
 
-def _answer_beside_tool_calls(content: Any) -> Optional[str]:
+def _answer_beside_tool_calls(
+    content: Any, tool_calls: Optional[list] = None
+) -> Optional[str]:
     """The answer in text sent alongside tool calls, or ``None`` if it has none.
 
-    Reasoning and trailing next-step narration ("Let me drop the table.") are
-    removed; what remains counts only if it is not itself a plan or narration.
+    Only beside closing actions ("drop_table", "remember"): beside a lookup the
+    reply that follows is the answer. Reasoning and trailing next-step
+    narration ("Let me drop the table.") are removed; what remains counts only
+    if it is not itself a plan or narration.
     """
     if not isinstance(content, str):
+        return None
+    if any(
+        _LOOKUP_TOOL_PATTERN.match(str(call.get("name", "")))
+        for call in tool_calls or []
+    ):
         return None
     text, _ = _split_reasoning(content)
     while text:
@@ -8178,7 +8194,8 @@ Do NOT wrap conversational replies in JSON.
             messages.append(self._build_assistant_message(response, parsed, reasoning))
             if "answer" not in parsed:
                 answer_beside_tool_calls = _answer_beside_tool_calls(
-                    parsed.get("content") if parsed.get("tool_calls") else None
+                    parsed.get("content") if parsed.get("tool_calls") else None,
+                    parsed.get("tool_calls"),
                 )
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
