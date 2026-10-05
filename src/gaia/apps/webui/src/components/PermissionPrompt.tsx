@@ -22,6 +22,8 @@ import './PermissionPrompt.css';
  *
  * Features:
  * - Optional countdown timer (from notification.timeoutSeconds)
+ * - Enter never approves: focus moves to the dialog, so a keystroke meant for
+ *   the composer can't answer it. Esc denies; Tab reaches the buttons.
  * - "Remember this choice" checkbox
  * - Tool name and arguments display
  * - Agent identification
@@ -50,12 +52,26 @@ interface PromptInnerProps {
   onRespond: (id: string, action: 'allow' | 'deny', remember: boolean) => Promise<void>;
 }
 
+/** `45` -> "45s", `600` -> "10:00". */
+export function formatCountdown(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
 function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
   const hasTimeout = notification.timeoutSeconds != null && notification.timeoutSeconds > 0;
+  // A deadline, not a tick count: background tabs throttle timers, and the
+  // backend denies at its own deadline regardless of how often we ticked.
+  const deadlineRef = useRef<number | null>(
+    hasTimeout ? Date.now() + notification.timeoutSeconds! * 1000 : null
+  );
   const [countdown, setCountdown] = useState<number | null>(
     hasTimeout ? notification.timeoutSeconds! : null
   );
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const promptRef = useRef<HTMLDivElement>(null);
 
   // State for UI disabled + ref guard for handler (ref avoids recreating useCallback)
   const [isResponding, setIsResponding] = useState(false);
@@ -72,13 +88,9 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
     if (!hasTimeout) return;
 
     timerRef.current = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev === null || prev <= 1) {
-          if (timerRef.current) clearInterval(timerRef.current);
-          return 0;
-        }
-        return prev - 1;
-      });
+      const left = Math.max(0, Math.ceil((deadlineRef.current! - Date.now()) / 1000));
+      if (left === 0 && timerRef.current) clearInterval(timerRef.current);
+      setCountdown(left);
     }, 1000);
 
     return () => {
@@ -124,27 +136,30 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
     }
   }, [notification.id, onRespond]);
 
-  // Handle keyboard shortcuts — preventDefault stops lower-priority Escape handlers
+  // Take focus from the composer so its Enter can't land on this prompt.
+  useEffect(() => {
+    promptRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // Esc denies. Enter is deliberately unbound — only a focused button approves.
+  // preventDefault stops lower-priority Escape handlers.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        handleAllow();
-      } else if (e.key === 'Escape') {
+      if (e.key === 'Escape') {
         e.preventDefault();
         handleDeny();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleAllow, handleDeny]);
+  }, [handleDeny]);
 
   // Format tool arguments for display
   const toolArgs = notification.toolArgs;
   const hasArgs = toolArgs && Object.keys(toolArgs).length > 0;
 
   return (
-    <div className="permission-prompt">
+    <div className="permission-prompt" ref={promptRef} tabIndex={-1}>
       {/* Header */}
       <div className="permission-header">
         <div className="permission-header-icon">
@@ -157,7 +172,7 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
         {countdown !== null && countdown > 0 && (
           <div className="permission-countdown" title="Auto-deny on timeout">
             <Clock size={14} />
-            <span>{countdown}s</span>
+            <span>{formatCountdown(countdown)}</span>
           </div>
         )}
       </div>
@@ -224,7 +239,7 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
           className="permission-btn permission-btn-allow"
           onClick={handleAllow}
           disabled={isResponding}
-          title="Allow (Enter)"
+          title="Allow"
         >
           <Check size={16} />
           Allow
@@ -233,7 +248,7 @@ function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
 
       {/* Keyboard hints */}
       <div className="permission-hints">
-        <span><kbd>Enter</kbd> Allow</span>
+        <span><kbd>Tab</kbd> Choose</span>
         <span><kbd>Esc</kbd> Deny</span>
       </div>
     </div>

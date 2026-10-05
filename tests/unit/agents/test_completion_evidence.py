@@ -614,7 +614,12 @@ def test_save_instructions_in_requests_are_still_obligations(query, expected):
 def test_symlinked_directory_is_the_same_output(tmp_path):
     real = tmp_path / "real"
     real.mkdir()
-    (tmp_path / "link").symlink_to(real, target_is_directory=True)
+    try:
+        (tmp_path / "link").symlink_to(real, target_is_directory=True)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("symlink creation requires elevated privilege on this host")
+        raise
     ledger = CompletionEvidence(
         f"Save the summary to `{tmp_path / 'link' / 'out.md'}`", str(tmp_path)
     )

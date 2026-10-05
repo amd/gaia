@@ -2622,11 +2622,25 @@ STRIX_HALO_128 = {
     },
     "model_storage": {"free_bytes": 900e9},
 }
+STRIX_HALO_64 = {
+    "Physical Memory": "64 GB",
+    "devices": {
+        "amd_gpu": [
+            {
+                "available": True,
+                "integrated": True,
+                "vram_gb": 48.0,
+                "virtual_mem_gb": 7.9,
+            }
+        ]
+    },
+    "model_storage": {"free_bytes": 900e9},
+}
 
 
 class TestHardwareChatModel(unittest.TestCase):
-    """The chat model follows the hardware: Qwen3.8 Flash where it fits,
-    Gemma 4 E4B everywhere else, and a user's default_model always wins."""
+    """The chat model follows the hardware: Qwen3.6 35B A3B where a GPU holds
+    it, Gemma 4 E4B everywhere else, and a user's default_model always wins."""
 
     def setUp(self):
         from gaia.llm.lemonade_embedded import EmbeddedStatus
@@ -2842,6 +2856,22 @@ class TestHardwareChatModel(unittest.TestCase):
             with_chat_model("minimal", [DEFAULT_MODEL_NAME], fail),
             [DEFAULT_MODEL_NAME],
         )
+
+    def test_flash_chosen_on_a_64gb_strix_halo_is_refused_naming_its_memory(self):
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import resolve_init_chat_model
+        from gaia.llm.lemonade_client import FLASH_OPTION_MODEL_NAME
+        from gaia.llm.model_fit import ModelFitError
+
+        cfg = GaiaConfig()
+        cfg.default_model = FLASH_OPTION_MODEL_NAME
+        cfg.save()
+        client = self._client(STRIX_HALO_64)
+        client.list_models.return_value = {"data": []}
+        with self.assertRaisesRegex(ModelFitError, r"needs ~90 GB of memory") as ctx:
+            resolve_init_chat_model(client, reset_corrupt=True, enforce_fit=True)
+        self.assertIn("gaia config set default_model", str(ctx.exception))
+        client.ensure_model_downloaded.assert_not_called()
 
     def test_a_user_default_the_server_cannot_load_is_refused(self):
         """The default's floor (v11.7.0) is older than the Lemonade gaia init installs, so
