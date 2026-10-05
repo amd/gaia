@@ -231,6 +231,16 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
         elif etype == "agent_error":
             event_log.append(f"[error] {event.get('content', '')}")
 
+        # A judge scoring what the agent did after a "no" has to see the no,
+        # and any question the agent put to the user.
+        elif etype == "tool_confirm_denied":
+            event_log.append(
+                f"[denied] {event.get('tool', '?')}: {event.get('message', '')[:200]}"
+            )
+
+        elif etype == "user_input_request":
+            event_log.append(f"[question to user] {event.get('message', '')[:500]}")
+
         elif etype == "done":
             stats = event.get("stats")
             if stats:

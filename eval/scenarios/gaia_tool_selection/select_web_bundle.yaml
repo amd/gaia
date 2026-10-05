@@ -3,7 +3,7 @@ id: select_web_bundle
 name: "Tool Selection — Research Question Pulls Web Tools"
 category: gaia_tool_selection
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   A research question with a URL must route to web tools (fetch), not to
   file search or RAG flailing. Dynamic tool selection should land the web

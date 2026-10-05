@@ -1157,6 +1157,8 @@ def run_turn(
         agent.conversation_history.prepare(agent, query)
 
     handler = SSEOutputHandler()
+    # stdin carries tool decisions, not answers to free-form questions.
+    handler.answers_questions = False
     previous_console = getattr(agent, "console", None)
     agent.console = handler
     if state is not None:

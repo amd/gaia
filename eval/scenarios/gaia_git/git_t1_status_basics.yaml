@@ -1,0 +1,45 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_git_code/git_basics — built at stage time by
+# tests/fixtures/gaia/tiers_git_code/build_fixtures.py; values in
+# GAIA_FIXTURE_VALUES.md "Git and coding".
+id: git_t1_status_basics
+name: "Git — Read the Working-Tree State Exactly"
+category: gaia_git
+severity: high
+tags: [t1_basic]
+description: |
+  The most basic git question: what is modified, what is staged, what is
+  untracked, and who made the last commit. Read-only git (status, log) runs
+  without any skill grant, so this is pure accuracy — swapping staged and
+  unstaged is the classic miss.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Repo ~/gaia-eval/tiers_git_code/git_basics, built by build_fixtures.py at stage time. On main; one staged, one unstaged, one untracked change."
+
+turns:
+  - turn: 1
+    objective: "Ask what state the repo at ~/gaia-eval/tiers_git_code/git_basics is in: modified, staged, untracked"
+    user_message: "What's the state of my repo at ~/gaia-eval/tiers_git_code/git_basics? What's modified, what's staged, and is anything untracked?"
+    ground_truth:
+      expected_answer: "On branch main. Staged: ledgerlite/tax.py. Modified but not staged: ledgerlite/report.py. Untracked: TODO.txt."
+    success_criteria: |
+      CRITICAL: agent_tools[] shows run_shell_command running `git status`
+      (any form) in that repo. The answer puts ledgerlite/tax.py under
+      staged, ledgerlite/report.py under modified-not-staged, and TODO.txt
+      under untracked — all three, in the right bucket. Swapping staged and
+      unstaged, missing a file, or naming a file that is not there is a
+      FAIL. Running any git command that changes state (add, restore,
+      stash, commit, checkout) is a FAIL.
+
+  - turn: 2
+    objective: "Ask who made the most recent commit and what it was"
+    user_message: "Who made the most recent commit, and what was it?"
+    ground_truth:
+      expected_answer: "Priya Natarajan, commit 73eb0b9 'Add split_evenly helper', 2026-03-14"
+    success_criteria: "Agent reads the log for real (git log / git show in agent_tools[]) and names Priya Natarajan and 'Add split_evenly helper'. The hash 73eb0b9 and date 2026-03-14 are a plus; a wrong author, subject or hash is a FAIL."
+
+expected_outcome: |
+  An exact, tool-grounded account of the three kinds of change and the last
+  commit, with nothing in the repository touched.

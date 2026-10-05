@@ -12,7 +12,9 @@ accessed through ``gaia.ui.server`` so that test patches applied to
 
 import asyncio
 import logging
+import os
 import sys
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -308,6 +310,37 @@ async def user_input(request: UserInputRequest):
             "timed out or been answered).",
         )
     return {"status": "ok", "request_id": request.request_id}
+
+
+class ScriptedUserRequest(BaseModel):
+    """Commands the eval's scripted user declines; empty turns it off."""
+
+    decline_commands: List[str] = []
+
+
+@router.post("/api/eval/scripted-user")
+async def set_scripted_user(request: ScriptedUserRequest):
+    """Script a user who declines these commands and answers nothing (#4447).
+
+    Eval-only: 403 unless the backend runs with ``GAIA_EVAL_SCRIPTED_USER=1``,
+    because a scripted user overrides real approvals for every session.
+    """
+    from gaia.ui import scripted_user
+
+    if os.environ.get(scripted_user.ENV_VAR) != "1":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "The scripted eval user is disabled. Restart the Agent UI backend "
+                f"with {scripted_user.ENV_VAR}=1 to let `gaia eval agent` run "
+                "scenarios that set setup.decline_commands."
+            ),
+        )
+    try:
+        declined = scripted_user.set_declined_commands(request.decline_commands)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"status": "ok", "decline_commands": declined}
 
 
 class CancelStreamRequest(BaseModel):

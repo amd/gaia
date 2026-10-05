@@ -1,0 +1,52 @@
+id: mem_prior_session_recall
+name: "Memory — Facts From an Earlier Session Used in a Fresh One"
+category: gaia_memory
+severity: high
+tags: [t1_basic, local_blocked_no_embedder]
+description: |
+  Facts learned in an earlier session are planted with memory_seed, and this
+  session starts with no conversation history. The agent must answer from
+  persistent memory — via the stored-memory section of its prompt or a real
+  recall call — and apply a stored preference without being reminded.
+  The simplest "it remembers me next time" check.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  # FIXTURE-SYNC: planted values recorded in GAIA_FIXTURE_VALUES.md (Conversation, memory and honesty)
+  memory_seed:
+    - content: "The user's dog is a border collie named Biscuit"
+      category: fact
+      entity: "pet:Biscuit"
+    - content: "The user prefers metric units (km, kg, degrees Celsius)"
+      category: preference
+    - content: "The user works night shifts as a nurse at St. Brigid's Hospital"
+      category: fact
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all), THEN call memory_seed(items=<setup.memory_seed>) — the seed must come after the clear, so re-seed if you already seeded during Phase 1; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Ask for the dog's name"
+    user_message: "hey, what's my dog's name again?"
+    ground_truth:
+      expected_answer: "Biscuit (a border collie)"
+    success_criteria: "Agent answers Biscuit. FAIL if it says it doesn't know, asks the user, or names another dog. If the name did not appear in its prompt, agent_tools[] must show a recall call that found it."
+
+  - turn: 2
+    objective: "Ask a distance question that needs the stored unit preference"
+    user_message: "if I take him on a 5 mile walk, how far is that in the units I like?"
+    ground_truth:
+      expected_answer: "About 8 km (8.05 km)"
+    success_criteria: "Agent converts to kilometres, about 8 km (8.0-8.1). FAIL if it answers only in miles or asks which units the user prefers."
+
+  - turn: 3
+    objective: "Ask where the user works"
+    user_message: "and where do I work?"
+    ground_truth:
+      expected_answer: "St. Brigid's Hospital — night-shift nurse"
+    success_criteria: "Agent names St. Brigid's Hospital (night-shift nurse). FAIL on a different workplace or 'I don't know'."
+
+expected_outcome: |
+  With zero session history, all three answers come from persistent memory,
+  and the unit preference is applied unprompted.

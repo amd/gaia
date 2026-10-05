@@ -5,7 +5,7 @@ id: task_sourcewatch_detects_change
 name: "Skill Task — source-watch Detects the Planted Diff"
 category: gaia_skills_tasks
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   Baseline the v1 page, then check the v2 page (same content plus one new
   notice). The skill must report exactly the new item — not re-report the

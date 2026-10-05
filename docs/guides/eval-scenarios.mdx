@@ -75,6 +75,7 @@ expected_outcome: |
 | `category` | Yes | Free-text label for grouping and `--category` filtering; not validated against a fixed set. |
 | `persona` | Yes | Any non-empty string. The 9 built-in personas below are the documented defaults; a custom string is accepted (and logged). |
 | `setup.index_documents` | Yes | Can be empty (`[]`) for scenarios that test discovery. |
+| `setup.decline_commands` | Optional | Shell commands a scripted user declines, e.g. `["pytest"]`; that user also answers no questions. Needs `GAIA_EVAL_SCRIPTED_USER=1` on the backend. |
 | `turns` | Yes | At least one turn required. Numbers must be sequential starting from 1. |
 | `ground_truth` or `success_criteria` | One required per turn | Providing both gives maximum judging precision. |
 | `expected_answer` | Optional | When non-null, strict automatic-zero rules apply. When `null`, agent must say it doesn't know. |
@@ -167,6 +168,7 @@ records `SKIPPED_NO_MODEL` with the reason instead of running it.
 | `gaia_voice` | How the agent talks: short plain answers to everyday questions, deeper answers on "why?" / "tell me more", stated style preferences kept across turns and sessions, latest preference wins, matching a technical vs non-technical user |
 | `gaia_media` | Committed fixtures only: transcribe a voice memo and quote it (`transcribe_media` / `refine_transcript`), read planted text off an image through the VLM |
 | `gaia_email` | Mailbox read/answer, find-by-recollection, whole-inbox triage and money-owed sweeps over an offline fixture mailbox; phishing lures never turned into advice, injected and exfiltration instructions ignored, ambiguous references asked about, and an honest connect step when no mailbox is connected. The backend needs `GAIA_EVAL_MAILBOX` pointing at `tests/fixtures/gaia/email/eval_inbox.mbox` — the mail tools then read it instead of any connected account |
+| `gaia_resilience` | What the agent does after a "no": a declined effect is never reached through another tool, and the reply says what is blocked and what would unblock it |
 
 ---
 

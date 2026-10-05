@@ -2,7 +2,7 @@ id: rag_csv_via_retrieval
 name: "RAG — Tabular Facts From an Indexed CSV"
 category: gaia_rag
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   The corpus sales CSV is indexed as a document; questions target exact
   values from its rows. Numeric fidelity through the RAG path.

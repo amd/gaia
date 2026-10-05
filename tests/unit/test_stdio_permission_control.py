@@ -734,3 +734,79 @@ def test_a_home_folder_or_drive_root_is_never_a_workspace(tmp_path, monkeypatch)
     assert not edit_is_inside(str(tmp_path / "notes.md"), (str(tmp_path),))
     root = os.path.abspath(os.sep)
     assert not edit_is_inside(os.path.join(root, "notes.md"), (root,))
+
+
+class TestATimeoutReachesTheAgentLoop:
+    """#4446/#4447: the loop records a refusal only when somebody said no."""
+
+    @staticmethod
+    def _agent(tmp_path):
+        from unittest.mock import patch
+
+        from gaia.agents.base.agent import Agent
+        from gaia.agents.base.console import SilentConsole
+        from gaia.agents.base.denied_effects import DeniedEffects
+        from gaia.agents.base.tools import tool
+
+        script = tmp_path / "run_tests.py"
+        script.write_text("import pytest\nraise SystemExit(pytest.main(['-q']))\n")
+
+        class Probe(Agent):
+            def _get_system_prompt(self):
+                return "probe"
+
+            def _create_console(self):
+                return SilentConsole()
+
+            def _register_tools(self):
+                @tool
+                def run_shell_command(command: str) -> dict:
+                    """Probe shell."""
+                    return {"status": "success", "return_code": 0}
+
+                @tool
+                def execute_python_file(file_path: str) -> dict:
+                    """Probe python runner."""
+                    return {"status": "success", "return_code": 0}
+
+            def process_query(self, _query):
+                self.first = self._execute_tool(
+                    "run_shell_command", {"command": "pytest -q"}
+                )
+                self.reroute_blocked = self._denied_effects.conflict(
+                    "execute_python_file", {"file_path": str(script)}
+                )
+                return {"answer": self.first["error"]}
+
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            agent = Probe(silent_mode=True, skip_lemonade=True)
+        agent._denied_effects = DeniedEffects(str(tmp_path))
+        # No history to budget: the model client is a mock with no context size.
+        agent.conversation_history = None
+        return agent
+
+    def test_a_timeout_records_no_refusal(self, tmp_path):
+        from gaia.agents.base.agent import Agent
+
+        agent = self._agent(tmp_path)
+        answer = final_answer(drive(PermissionState(), ["timeout"], agent=agent))
+
+        assert agent.first["status"] == "denied" and agent.first["timed_out"] is True
+        assert "did NOT refuse" in answer
+        assert "ask whether to try again" in answer
+        # Not a "no", so the recovery prompt's "do not retry" is not the one sent.
+        assert not Agent._is_denial_error(agent.first["error"])
+        assert not agent._denied_effects
+        assert agent.reroute_blocked is None
+
+    def test_a_decline_records_a_refusal(self, tmp_path):
+        from gaia.agents.base.agent import Agent
+
+        agent = self._agent(tmp_path)
+        answer = final_answer(drive(PermissionState(), ["deny"], agent=agent))
+
+        assert agent.first["status"] == "denied" and "timed_out" not in agent.first
+        assert "denied by the user" in answer
+        # A real "no" gets the "do not retry" recovery prompt.
+        assert Agent._is_denial_error(agent.first["error"])
+        assert agent.reroute_blocked is not None

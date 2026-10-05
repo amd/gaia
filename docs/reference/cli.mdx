@@ -63,7 +63,7 @@ gaia --cli      # Launch interactive CLI chat instead
 | `--ui-port <port>` | Port for the Agent UI server (default: 4200) |
 | `--ui-dist <path>` | Serve an alternative prebuilt Agent UI bundle (e.g., a PR preview) instead of the one shipped in the installed package |
 | `--cli` | Launch interactive CLI chat |
-| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:13305/api/v1`). Also accepted by the subcommands that talk to Lemonade: `chat`, `prompt`, `talk`, `llm`, `api`, `stats`, and `mcp start`. `gaia email` rejects it — see [Email Command](#email-command). |
+| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:13305/api/v1`). Also accepted by the subcommands that talk to Lemonade: `chat`, `prompt`, `talk`, `llm`, `api`, `stats`, and `mcp start`. |
 
 **Examples:**
 
@@ -147,9 +147,9 @@ actionable error rather than run silently. For an unattended run you trust, set
 `GAIA_AUTO_APPROVE_TOOLS=1` in the launching environment:
 
 ```bash
-# CI / batch use only — the model can then send mail and run shell commands
-# without asking. Every approval is logged with the tool name.
-GAIA_AUTO_APPROVE_TOOLS=1 gaia email -q "Triage my inbox and reply to anything urgent"
+# CI / batch use only — the model can then run shell commands and other gated
+# tools without asking. Every approval is logged with the tool name.
+GAIA_AUTO_APPROVE_TOOLS=1 gaia chat --cli
 ```
 
 A `.env` file cannot set this variable; it must come from the real process
@@ -650,7 +650,7 @@ same way — via the `gaia.agent` entry point, so the registry discovers it
 automatically:
 
 ```bash From PyPI (pip)
-pip install gaia-agent-email          # one agent
+pip install gaia-agent-hello-world          # one agent
 ```
 
 <Note>
@@ -659,7 +659,7 @@ PyPI publishing for `gaia-agent-*` wheels is currently paused (tracked by
 resolve yet. Until publishing lands, install an agent straight from this repo:
 
 ```bash From source (works today)
-uv pip install "gaia-agent-email @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/email/python"
+uv pip install "gaia-agent-hello-world @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/hello-world/python"
 ```
 </Note>
 
@@ -676,7 +676,7 @@ gaia agent install <id> --trust            # required for non-verified agents
 
 `gaia agent list` shows what the hub offers (with an `[installed]` marker) so
 you know which id to pass. This is the supported way to provision a sidecar
-agent (e.g. `email`) on a machine with no UI.
+agent on a machine with no UI.
 
 <Note>
 `gaia agent install` installs **in-process**. [`gaia hub install`](#hub-command)
@@ -688,8 +688,7 @@ when the daemon extras are not installed). Both enforce the same `--trust` gate
 and the same SHA-256 verification.
 </Note>
 
-Running the agent (e.g.
-`gaia email -q "..."`) starts its sidecar automatically on first use;
+Running a sidecar agent starts its sidecar automatically on first use;
 `gaia daemon start-agent <id>` is an optional pre-flight to launch and
 health-check it early.
 
@@ -955,61 +954,6 @@ gaia prompt "Write a story" \
 ---
 
 ## Specialized Agents
-
-### Email Command
-
-<Card title="Email Triage" icon="envelope" href="/guides/email">
-  Read, organize, and reply to Gmail with all email content processed locally on your machine.
-</Card>
-
-```bash
-gaia email -q "<query>"           # one-shot
-gaia email -i                     # interactive REPL
-gaia email -v -q "Triage my inbox"  # verbose logs for benchmarking
-```
-
-**Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `-q, --query` | string | – | Single query to send to the agent (non-interactive). |
-| `-i, --interactive` | flag | false | REPL loop until `/quit`. |
-| `-v, --verbose` | flag | false | Emit structured logs for every triage decision and tool call. |
-| `--debug` | flag | false | Adds full prompt + LLM-response logging (sensitive payloads in logs). |
-| `--trace` | flag | false | Write the run's request and full agent event stream to `./email_trace_<timestamp>_<run-id>.json` (path echoed on stderr). One file per turn in interactive mode; contains real email content. |
-| `--spec` | flag | false | Generate the HTML endpoint spec page, write it to disk, and open it in a browser. No LLM or Lemonade required. |
-| `--output PATH` | path | `~/.gaia/email/endpoint-spec.html` | Where to write the HTML spec (only used with `--spec`). |
-| `--base-url` | – | – | Rejected (exit 2). The email agent runs inside the GAIA daemon and uses the daemon's `LEMONADE_BASE_URL`; to switch servers, run `gaia daemon stop`, set `LEMONADE_BASE_URL`, and re-run `gaia email`. |
-
-**Setup:** requires the Google connector. Run `gaia connectors connect google` first; you'll be asked to grant Gmail and Calendar scopes.
-
-**Privacy:** all email body inference runs locally on Lemonade — the agent **rejects** any non-local LLM endpoint at startup.
-
-[→ Full Email Triage Agent Documentation](/guides/email)
-
-#### `gaia email autonomy` — autonomy control
-
-A thin client over the sidecar's `/v1/email/agent/autonomy*` REST routes, relayed
-through the daemon like every other `gaia email` command (same auth path — no
-sidecar bearer ever reaches the CLI).
-
-```bash
-gaia email autonomy status                    # current level + trust summary
-gaia email autonomy trust                     # earned-trust ledger
-gaia email autonomy set-level earn_trust       # set the level explicitly
-gaia email autonomy pause                      # stop autonomous activity
-gaia email autonomy resume --level earn_trust  # resume (default: earn_trust)
-gaia email autonomy kill                       # kill switch — level -> off
-gaia email autonomy run --max-messages 25      # trigger one cycle now
-```
-
-All subcommands share one persistent `--session-id` (default `cli`) — autonomy
-state lives on that session's in-memory agent, not on disk, so a level you set
-stays set across invocations that use the same session. `run` refuses with an
-actionable error while the level is `off` (#2528) instead of silently reporting
-that nothing happened.
-
----
 
 ### Talk Command
 

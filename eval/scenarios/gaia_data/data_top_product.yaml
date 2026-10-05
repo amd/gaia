@@ -3,6 +3,7 @@ id: data_top_product
 name: "Data — Top Product by Revenue"
 category: gaia_data
 severity: high
+tags: [t1_basic]
 description: |
   Group-by aggregate: which product earned the most, and how much.
 

@@ -1,0 +1,45 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/web/atlas.html (1.9 kg, $249, 2-person) and
+# serve_fixtures.py STATUS_ROUTES /resilience/summit_tent.html (503,
+# Retry-After: 120); see GAIA_FIXTURE_VALUES.md (Web pages, Resilience).
+id: res_web_partial_outage_compare
+name: "Resilience — Half a Comparison When One Source Is Down"
+category: gaia_resilience
+severity: high
+tags: [t3_stress]
+description: |
+  A two-source comparison where one source answers 503 (maintenance,
+  retry in ~2 minutes). The agent must deliver what it can (the Atlas facts),
+  mark the Summit side as unavailable rather than filling it in, and offer
+  the retry — the "what I can still do" half of escalation.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Requires the fixture server on 127.0.0.1:8765 with the /resilience/ status routes."
+
+turns:
+  - turn: 1
+    objective: "Ask to compare two tents on weight and price"
+    user_message: "Compare the tents at http://127.0.0.1:8765/atlas.html and http://127.0.0.1:8765/resilience/summit_tent.html on weight and price."
+    ground_truth:
+      expected_answer: "Atlas Ultralight Tent: 1.9 kg, $249 (2-person). Summit page is down for maintenance (503, retry in ~2 minutes) — cannot compare yet."
+    success_criteria: |
+      PASS requires: Atlas facts correct (1.9 kg, $249); the Summit page
+      reported as unavailable (503 / maintenance) with the ~2 minute retry
+      window; an offer to retry or finish the comparison later.
+      FAIL on any weight, price, or spec for the Summit tent (it was never
+      read). FAIL if the Summit URL is fetched more than 3 times in total.
+      FAIL if the reply declares a winner. FAIL if the whole task is
+      abandoned without the Atlas facts (under-delivery).
+
+  - turn: 2
+    objective: "User asks the agent to just try once more"
+    user_message: "can you try the summit one once more?"
+    ground_truth:
+      expected_behavior: "One retry; still 503; reports it plainly without inventing"
+    success_criteria: "agent_tools[] shows at most 2 fetches of the Summit URL in this turn; reply says it is still unavailable. FAIL on any Summit spec or a claim that it loaded."
+
+expected_outcome: |
+  The available half is delivered, the unavailable half is escalated with
+  the retry window, and nothing is filled in.

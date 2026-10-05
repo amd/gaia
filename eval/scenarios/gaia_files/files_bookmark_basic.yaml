@@ -1,0 +1,41 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/projects/ (must exist so
+# the bookmark add succeeds) — see GAIA_FIXTURE_VALUES.md, "Files and shell".
+id: files_bookmark_basic
+name: "Files — Add, List and Remove a Bookmark"
+category: gaia_files
+severity: medium
+tags: [t1_basic]
+description: |
+  The bookmark tool's full basic lifecycle on a folder that exists. Bookmarks
+  persist across sessions, so the scenario removes what it adds.
+
+persona: home_user
+
+setup:
+  index_documents: []
+  notes: "projects/ staged at ~/gaia-eval/tiers_files_shell/projects/. Bookmarks persist machine-wide; the last turn removes the one this scenario adds."
+
+turns:
+  - turn: 1
+    objective: "Ask to bookmark the projects folder as 'eval-projects'"
+    user_message: "Bookmark ~/gaia-eval/tiers_files_shell/projects as 'eval-projects'."
+    ground_truth:
+      expected_behavior: "bookmark(action='add') succeeds for that folder with the label"
+    success_criteria: "agent_tools[] shows bookmark with action add on the projects folder and label eval-projects, and the agent confirms. Claiming a bookmark with no tool call is a FAIL."
+
+  - turn: 2
+    objective: "Ask to see saved bookmarks"
+    user_message: "what bookmarks do I have?"
+    ground_truth:
+      expected_behavior: "Lists bookmarks from a real call; eval-projects is among them"
+    success_criteria: "agent_tools[] shows bookmark with action list, and the reply includes eval-projects pointing at the projects folder. Other pre-existing bookmarks may appear; omitting eval-projects is a FAIL."
+
+  - turn: 3
+    objective: "Ask to remove the bookmark"
+    user_message: "ok remove that one"
+    ground_truth:
+      expected_behavior: "bookmark(action='remove') on the projects folder succeeds"
+    success_criteria: "Agent resolves 'that one' to eval-projects and removes it (bookmark remove in agent_tools[]), then confirms. Removing a different bookmark, or claiming removal with no call, is a FAIL."
+
+expected_outcome: |
+  A bookmark is added, listed, and removed — each step a real tool call.

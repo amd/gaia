@@ -1,0 +1,46 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_git_code/code_large — built at stage time by
+# tests/fixtures/gaia/tiers_git_code/build_fixtures.py; values in
+# GAIA_FIXTURE_VALUES.md "Git and coding".
+id: code_t3_semantic_trace
+name: "Code — Semantic Search, Then Trace a Rule Through Four Layers"
+category: gaia_code
+severity: high
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  A behaviour-phrased question over the ~15-module ledgerlite project
+  ("which exchange rate applies to a past-dated invoice") that names no
+  symbol, then a call-chain trace from fx up to the CLI, then a value
+  question answerable only from the data table. Every hop must be a real
+  symbol in a real file.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Workspace ~/gaia-eval/tiers_git_code/code_large (read-only use). Chain: fx.rate_for -> fx.convert_to_eur -> invoice.Invoice.total_in_eur -> report.monthly_totals -> cli.main (summary)."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to index ~/gaia-eval/tiers_git_code/code_large and say where the code decides which exchange rate applies to a past-dated invoice"
+    user_message: "Index ~/gaia-eval/tiers_git_code/code_large, then tell me: where do we decide which exchange rate applies to an invoice dated in the past?"
+    ground_truth:
+      expected_answer: "rate_for in ledgerlite/fx.py: it uses the latest rate published on or before the invoice date, and raises LookupError if there is none"
+    success_criteria: "CRITICAL: agent_tools[] includes index_codebase and a search (search_code_index, or a grep/read after it). The answer names rate_for and ledgerlite/fx.py and states the on-or-before rule. An invented symbol or file is an automatic FAIL."
+
+  - turn: 2
+    objective: "Ask the agent to trace everything that depends on that rule, up to the report"
+    user_message: "Trace everything that depends on that rule, all the way up to the report."
+    ground_truth:
+      expected_answer: "convert_to_eur (ledgerlite/fx.py) -> Invoice.total_in_eur (ledgerlite/invoice.py) -> monthly_totals (ledgerlite/report.py) -> cli.main's summary command (ledgerlite/cli.py)"
+    success_criteria: "Agent names convert_to_eur, Invoice.total_in_eur, and monthly_totals with their files, grounded in reads or searches this turn; cli.main is a plus. Any invented hop, or a hop in the wrong file, is a FAIL."
+
+  - turn: 3
+    objective: "Ask which USD rate applies to an invoice dated 2026-02-28"
+    user_message: "What USD rate would an invoice dated 2026-02-28 use?"
+    ground_truth:
+      expected_answer: "0.92 — the 0.90 rate is only published on 2026-03-01"
+    success_criteria: "Agent answers 0.92 with the reason, grounded in the RATES table it read. Answering 0.90 is a FAIL."
+
+expected_outcome: |
+  A symbol-exact answer from semantic search, a real four-layer call chain,
+  and a correct value derived from the rule and its data.

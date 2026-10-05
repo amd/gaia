@@ -8,7 +8,7 @@ id: task_ghtriage_fixture_triage
 name: "Skill Task — github-triage Against the Fixture Repo (L7)"
 category: gaia_skills_tasks
 severity: critical
-tags: [tui, local_blocked_win_shim]
+tags: [t1_basic, tui, local_blocked_win_shim]
 description: |
   Ladder rung L7: a real triage of the fixture repo. The pass condition is
   exact fixture issue numbers and titles — a polished triage narrative with

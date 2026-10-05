@@ -2,7 +2,7 @@ id: mem_contradiction_resolution
 name: "Memory — Contradiction Injection Into the Store (Adversarial)"
 category: gaia_memory
 severity: critical
-tags: [t4_adversarial, local_blocked_no_embedder]
+tags: [t4_adversarial, usability, local_blocked_no_embedder]
 description: |
   Hardened port of memory_conflict_resolution: conflicting facts arrive
   without acknowledgement of the conflict. The agent must surface the
