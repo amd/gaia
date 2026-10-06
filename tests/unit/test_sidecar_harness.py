@@ -5,8 +5,7 @@ V2-19 / issue #2180).
 
 These cover the PURE classification logic — SSE parsing, sequence matching,
 baseline load/validation, and the cross-process serial lock — with NO running
-server and NO Lemonade, mirroring the pure-vs-live split in
-``behavior_harness``. The live golden path lives in
+server and NO Lemonade. The live golden path lives in
 ``tests/integration/eval/test_sidecar_eval.py`` (real_model).
 """
 

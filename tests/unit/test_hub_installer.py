@@ -249,11 +249,6 @@ def test_rollback_without_backup_raises(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_uninstall_refuses_builtin(tmp_path):
-    with pytest.raises(InstallError):
-        uninstall("chat", install_root=tmp_path)
-
-
 def test_uninstall_not_installed_raises(tmp_path):
     with pytest.raises(NotInstalledError):
         uninstall("demo", install_root=tmp_path)

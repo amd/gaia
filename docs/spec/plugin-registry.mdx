@@ -21,12 +21,13 @@ icon: "list"
 `AgentRegistry` is the central catalog of agents available to the Agent UI. It
 is populated at server startup by `AgentRegistry.discover()`, which:
 
-1. Registers **built-in agents** declared in code (today: `chat`, `builder`,
-   optionally others).
-2. Scans `~/.gaia/agents/` for **custom agents**. Each subdirectory must
+1. Scans `~/.gaia/agents/` for **custom agents**. Each subdirectory must
    contain an `agent.py` defining a subclass of `Agent`. The registry imports
    the module via `importlib`, finds the `Agent` subclass with `AGENT_ID` and
    `AGENT_NAME` class attributes, and registers it.
+2. Discovers **installed agent wheels** (e.g. `gaia`, `chat`) through the
+   `gaia.agent` entry-point group, then **native agents** from
+   `agent-manifest.json`.
 
 The result is a keyed dict of `AgentRegistration` objects that the UI router
 (`src/gaia/ui/routers/agents.py`) lists and that `_chat_helpers.py` uses to
@@ -53,9 +54,8 @@ the migration recipe.
 
 ### `KNOWN_TOOLS`
 
-Map of tool-mixin keys to a lazily-imported `(module, class)` pair. Consumed
-by [`builder/template.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/builder/template.py)
-when scaffolding a new `agent.py` so users can opt into a mixin by name.
+Map of tool-mixin keys to a lazily-imported `(module, class)` pair, so agents
+and tooling can refer to a mixin by name.
 
 ```python
 KNOWN_TOOLS = {
@@ -110,10 +110,9 @@ Useful methods (see source for the full surface):
 
 | Method | Purpose |
 |---|---|
-| `discover()` | Scan built-ins and `~/.gaia/agents/`. Idempotent; logs results. |
+| `discover()` | Scan `~/.gaia/agents/`, installed wheels, and native agents. Idempotent; logs results. |
 | `get(id)` | Return the registration for `id` or `None`. |
 | `list()` | Enumerate registered agents as a list of `AgentRegistration`. |
-| `register_from_dir(path)` | Hot-load a single `~/.gaia/agents/<id>/` directory. Used by BuilderAgent so newly-scaffolded agents are immediately available. |
 
 The factory signature is deliberately free-form (`**kwargs`) — the caller
 filters to valid `AgentConfig` fields per agent (see `chat_factory` in the
@@ -132,10 +131,7 @@ source for the common pattern using `dataclasses.fields(...)`).
     README.md              # optional
 ```
 
-The recommended way to scaffold a new agent is the **Gaia Builder Agent**
-(`gaia chat --ui` → **+** → **Build a Custom Agent**), which writes a
-ready-to-edit `agent.py`. See the [Custom Agents guide](/guides/custom-agent)
-for the full minimal example, the tool-mixin table, and the YAML-manifest
+See the [Custom Agents guide](/guides/custom-agent) for the full minimal example, the tool-mixin table, and the YAML-manifest
 migration recipe.
 
 ---

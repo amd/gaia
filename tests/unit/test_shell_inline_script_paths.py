@@ -265,3 +265,216 @@ def test_run_shell_command_refuses_before_running(layout):
     assert result["executed"] is False
     assert str(layout["secret"].resolve()) in result["error"]
     assert not any("Get-Content" in path for path in host.path_validator.asked)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'bash -o pipefail -c "cat ../../outside/secret.txt"',
+        'bash -eo pipefail -c "cat ../../outside/secret.txt"',
+        'bash -c -o pipefail "cat ../../outside/secret.txt"',
+        'bash --norc -O extglob -c "cat ../../outside/secret.txt"',
+        'bash -c -- "-:; cat ../../outside/secret.txt"',
+        "python -X utf8 -c \"open('../../outside/secret.txt')\"",
+        "python -W ignore -c \"open('../../outside/secret.txt')\"",
+        "node -r ./setup.js -e \"require('fs').readFileSync('../../outside/secret.txt')\"",
+        "ruby -I lib -e \"File.read('../../outside/secret.txt')\"",
+        "perl -I lib -e \"open(F, '../../outside/secret.txt')\"",
+    ],
+)
+def test_script_after_interpreter_options_is_checked(command, layout):
+    refusal, _ = _check(command, layout["work"], layout["home"])
+
+    assert refusal is not None, command
+    assert str(layout["secret"].resolve()) in refusal["error"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'env bash -c "cat ../../outside/secret.txt"',
+        'env FOO=1 bash -c "cat ../../outside/secret.txt"',
+        'env -i -u HOME bash -c "cat ../../outside/secret.txt"',
+        "env -S 'bash -c \"cat ../../outside/secret.txt\"'",
+        "env --split-string='bash -c \"cat ../../outside/secret.txt\"'",
+        'timeout 5 bash -c "cat ../../outside/secret.txt"',
+        'timeout -s KILL 5 bash -c "cat ../../outside/secret.txt"',
+        'nice -n 5 bash -c "cat ../../outside/secret.txt"',
+        'nohup bash -c "cat ../../outside/secret.txt"',
+        'stdbuf -oL bash -c "cat ../../outside/secret.txt"',
+        'time -p bash -c "cat ../../outside/secret.txt"',
+        'xargs -n 1 bash -c "cat ../../outside/secret.txt"',
+        "env timeout 5 python -c \"open('../../outside/secret.txt')\"",
+        '/usr/bin/env pwsh -Command "Get-Content ../../outside/secret.txt"',
+    ],
+)
+def test_script_behind_a_command_wrapper_is_checked(command, layout):
+    refusal, _ = _check(command, layout["work"], layout["home"])
+
+    assert refusal is not None, command
+    assert str(layout["secret"].resolve()) in refusal["error"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'bash -o pipefail -c "cat ../Documents/stress/server.log"',
+        "python -X utf8 -c \"open('../Documents/stress/server.log')\"",
+        'env FOO=1 bash -c "cat ../Documents/stress/server.log"',
+        'timeout 5 bash -c "cat ../Documents/stress/server.log"',
+        "env -S 'bash -c \"cat ../Documents/stress/server.log\"'",
+    ],
+)
+def test_an_allowed_path_behind_options_or_a_wrapper_is_not_refused(command, layout):
+    refusal, validator = _check(command, layout["work"], layout["home"])
+
+    assert refusal is None, refusal
+    assert any(
+        path.startswith(str(layout["log"].parent.resolve())) for path in validator.asked
+    )
+
+
+def test_an_env_wrapper_assignment_value_is_checked(layout):
+    outside = layout["secret"].parent.as_posix()
+    refusal, _ = _check(
+        f"env PYTHONPATH={outside} python x.py", layout["work"], layout["home"]
+    )
+
+    assert refusal is not None
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "sort -o{path} data.txt",
+        "sort -o{path}",
+        "pwsh -WorkingDirectory:{path} -Command Get-Process",
+    ],
+)
+@pytest.mark.parametrize("relative", [True, False])
+def test_an_attached_option_value_is_checked_as_a_path(template, relative, layout):
+    path = (
+        "../../outside/secret.txt"
+        if relative
+        else layout["secret"].resolve().as_posix()
+    )
+    refusal, _ = _check(template.format(path=path), layout["work"], layout["home"])
+
+    assert refusal is not None, template
+    assert str(layout["secret"].resolve()) in refusal["error"]
+
+
+def test_an_attached_option_value_inside_the_allowed_paths_passes(layout):
+    refusal, _ = _check(
+        "sort -o../Documents/stress/out.txt data.txt", layout["work"], layout["home"]
+    )
+
+    assert refusal is None, refusal
+
+
+def test_a_path_that_cannot_be_resolved_is_refused(layout, monkeypatch):
+    real_resolve = Path.resolve
+
+    def resolve(self, *args, **kwargs):
+        if "unresolvable" in str(self):
+            raise OSError("simulated resolution failure")
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    refusal, _ = _check("cat sub/unresolvable.txt", layout["work"], layout["home"])
+
+    assert refusal is not None
+    assert refusal["executed"] is False
+    assert "unresolvable" in refusal["error"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "timeout 5 env -S 'bash -c \"cat ../../outside/secret.txt\"'",
+        "timeout 5 env PYTHONPATH={outside} python x.py",
+    ],
+)
+def test_a_wrapper_inside_a_wrapper_is_still_checked(command, layout):
+    outside = layout["secret"].parent.as_posix()
+    refusal, _ = _check(command.format(outside=outside), layout["work"], layout["home"])
+
+    assert refusal is not None, command
+
+
+@pytest.fixture
+def home_layout(layout, monkeypatch):
+    """``layout`` with its allowed ``home/`` as the user's home directory."""
+    from gaia import security
+
+    home = layout["home"]
+    for name in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(name, str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(security, "SECRET_DIRECTORIES", security._secret_directories())
+    return layout
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat ~/.ssh/id_rsa",
+        "cat ../.ssh/id_rsa",
+        "echo x > ~/.aws/config",
+        'bash -c "cp x ~/.kube/config"',
+        'bash -c "cat $HOME/.docker/config.json"',
+        "env timeout 5 python -c \"open('../.azure/token')\"",
+        "sort -o../.gnupg/out data.txt",
+        "ls ~/.config/gcloud",
+    ],
+)
+def test_a_protected_folder_is_refused_inside_the_allowed_paths(command, home_layout):
+    refusal, _ = _check(command, home_layout["work"], home_layout["home"])
+
+    assert refusal is not None, command
+    assert refusal["executed"] is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat ~/Documents/stress/server.log",
+        "cat ../Documents/stress/server.log",
+        'bash -c "cp ~/Documents/stress/server.log ~/Documents/copy.log"',
+        "echo x > ~/Documents/notes.txt",
+        "ls ~/.config",
+    ],
+)
+def test_an_ordinary_home_folder_command_is_still_allowed(command, home_layout):
+    refusal, _ = _check(command, home_layout["work"], home_layout["home"])
+
+    assert refusal is None, refusal
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "bash -c 'cat \"$1\"' _ '{secret}'",
+        "bash -c 'cat \"$1\"' _ '{home}/x y/../../outside/secret.txt'",
+        "python x.py -c '{home}/x y/../../outside/secret.txt'",
+        "python -X utf8 -c pass '{home}/x y/../../outside/secret.txt'",
+        "timeout 5 cat python -c '{home}/x y/../../outside/secret.txt'",
+        "timeout 5 cat bash -c '{home}/x y/../../outside/secret.txt'",
+    ],
+)
+def test_an_operand_that_may_not_be_script_is_still_checked_whole(template, layout):
+    (layout["home"] / "x y").mkdir()
+    command = template.format(
+        secret=layout["secret"].resolve(), home=layout["home"].resolve().as_posix()
+    )
+    refusal, _ = _check(command, layout["work"], layout["home"])
+
+    assert refusal is not None, command
+
+
+def test_a_url_attached_to_a_short_flag_is_not_read_as_a_path(layout):
+    refusal, _ = _check(
+        "pip download -ihttps://pypi.org/simple x", layout["work"], layout["home"]
+    )
+
+    assert refusal is None, refusal

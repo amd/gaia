@@ -1101,3 +1101,17 @@ class TestSessionTitleRequest:
 
     def test_other_models_get_no_template_switch(self):
         assert "chat_template_kwargs" not in self._sent_body("Gemma-4-E4B-it-GGUF")
+
+
+async def test_spawn_background_keeps_the_task_alive_until_done():
+    """asyncio holds tasks weakly; a fire-and-forget title task must be pinned."""
+    import gaia.ui._chat_helpers as ch
+
+    gate = asyncio.Event()
+    task = ch._spawn_background(gate.wait())
+    assert task in ch._background_tasks
+
+    gate.set()
+    await task
+    await asyncio.sleep(0)
+    assert task not in ch._background_tasks

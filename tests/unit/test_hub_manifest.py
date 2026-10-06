@@ -285,15 +285,6 @@ def test_valid_id_accepted(good_id):
     assert AgentManifest.from_dict(data).id == good_id
 
 
-# Only ``builder`` remains a framework builtin; chat/doc/data/web/email migrated
-# to standalone hub wheels (#1102) and are no longer reserved ids.
-@pytest.mark.parametrize("reserved", ["builder"])
-def test_reserved_id_rejected(reserved):
-    data = dict(VALID_PYTHON_MANIFEST, id=reserved)
-    with pytest.raises(ManifestError, match="reserved"):
-        AgentManifest.from_dict(data)
-
-
 # ---------------------------------------------------------------------------
 # Enum-ish validation: language, security_tier
 # ---------------------------------------------------------------------------

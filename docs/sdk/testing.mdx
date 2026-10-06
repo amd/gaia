@@ -104,15 +104,6 @@ and assert the tool's **side-effect actually occurred** — not merely that the 
 - **Planted unguessable facts**: use `secrets.token_hex(4)` in the prompt so a cached or hallucinated reply cannot accidentally pass.
 - **N× repetition**: repeat ≥5 times; treat any single run with a missing side-effect as a failure.
 
-See `src/gaia/eval/behavior_harness.py` for the reusable `Scenario`/`BehaviorHarness` implementation.
-New agents plug in by adding a `Scenario` to `BUILDER_SCENARIOS` (or their own list).
-
-The live tests live in `tests/integration/eval/test_behavior_e2e.py` and are gated by
-`@pytest.mark.real_model` — they skip automatically on Mac/standard CI and only run on
-`[self-hosted, strix-halo]` runners once [#1297](https://github.com/amd/gaia/issues/1297) lands.
-The helper unit tests (`tests/unit/eval/test_behavior_harness.py`) are fully deterministic
-and run in normal CI with no model required.
-
 ---
 
 ## Related Topics

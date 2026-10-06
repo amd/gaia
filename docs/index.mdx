@@ -1,15 +1,15 @@
 ---
 title: "Welcome"
-description: "Build local AI agents in Python and C++ for AMD hardware."
+description: "Use the GAIA agent, or build your own agent harness, on local AMD hardware."
 icon: "hand-wave"
 ---
 
 <div style={{textAlign: 'center', padding: '48px 0 24px 0'}}>
   <h1 style={{fontSize: '3.2rem', fontWeight: 900, marginBottom: '24px', lineHeight: 1.1}}>
-    Build AI Agents That Run <span style={{color: '#E2A33E'}}>Locally</span>
+    AI Agents That Run <span style={{color: '#E2A33E'}}>Locally</span>
   </h1>
   <p style={{fontSize: '1.3rem', maxWidth: '780px', margin: '0 auto', lineHeight: 1.8}}>
-    GAIA is an open-source framework for building AI agents in Python and C++ that run on local hardware. Agents reason, call tools, search documents, and take action — the core runtime needs no cloud, so sensitive data stays on-device. Individual agents can still opt into external services (weather APIs, Jira, MCP servers) when a use case requires them.
+    GAIA is an open-source agent factory. It uses coding-agent skills, evals and an auto-fix loop to improve and build agent harnesses that run on local hardware, so sensitive data stays on-device. Anyone can build a harness with GAIA; the GAIA agent is the one we built to show what it can do.
   </p>
 </div>
 
@@ -47,6 +47,17 @@ icon: "hand-wave"
   </Tab>
 </Tabs>
 
+## Where do you want to start?
+
+<CardGroup cols={2}>
+  <Card title="Use GAIA" icon="sparkles" href="/guides/install">
+    Install the GAIA agent as a desktop app or terminal UI, then see [what it can do](/guides/gaia).
+  </Card>
+  <Card title="Build with GAIA" icon="hammer" href="/guides/composing-skills">
+    Make an agent harness: add [skills](/guides/composing-skills), measure it with [evals](/guides/eval) (`gaia eval agent --fix` patches failures), and build on the [SDK](/sdk).
+  </Card>
+</CardGroup>
+
 ## Get Started
 
 <CardGroup cols={3}>
@@ -54,7 +65,7 @@ icon: "hand-wave"
     Install via npm and run AI agents locally — two commands to get started.
   </Card>
   <Card title="Python Quick Start" icon="python" href="/quickstart#cli-install">
-    Install GAIA, start Lemonade Server, and run your first agent.
+    Install GAIA and run your first agent.
   </Card>
   <Card title="C++ Quickstart" icon="code" href="/cpp/quickstart">
     Build a native C++17 agent binary -- no Python runtime required.
@@ -98,7 +109,7 @@ icon: "hand-wave"
         Diagnose and resolve wireless connectivity issues with registered tools.
       </Card>
       <Card title="Custom Agents" icon="robot" href="/cpp/custom-agent">
-        Build your own C++17 agent with tool registration and state management.
+        Build a native C++17 agent harness with tool registration and state management.
       </Card>
       <Card title="MCP Integration" icon="plug" href="/cpp/overview">
         Connect to MCP servers for extensible tool access.

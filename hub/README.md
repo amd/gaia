@@ -47,7 +47,5 @@ gaia agent init my-agent --language python -o agents/ --layout hub
 
 That lands the package at `agents/my-agent/python/`, matching the layout of every
 agent in this tree. …or copy one of the examples above. See
-[docs/plans/agent-hub-ui.mdx](../docs/plans/agent-hub-ui.mdx) for the full Agent
-Hub platform plan and
 [docs/spec/agent-hub-restructure.mdx](../docs/spec/agent-hub-restructure.mdx)
 for the package format.

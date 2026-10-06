@@ -42,6 +42,7 @@ from typing import Any, Optional
 
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillValidationError
+from gaia.skills.lock import write_text_atomic
 from gaia.skills.tiers import LOWEST_TIER
 
 log = get_logger(__name__)
@@ -609,6 +610,6 @@ class TrustStore:
             "schema_version": 1,
             "keys": [self.entries[k] for k in sorted(self.entries)],
         }
-        target.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        write_text_atomic(target, json.dumps(document, indent=2) + "\n")
         self.path = target
         return target

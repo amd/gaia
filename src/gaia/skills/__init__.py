@@ -126,6 +126,7 @@ from gaia.skills.tiers import (
     LOWEST_TIER,
     TIER_ORDER,
     effective_tier,
+    enforce_skill_tier_ceiling,
     enforce_tier_ceiling,
     tier_rank,
 )
@@ -216,6 +217,7 @@ __all__ = [
     "tier_rank",
     "effective_tier",
     "enforce_tier_ceiling",
+    "enforce_skill_tier_ceiling",
     # Declarative consumption (#2467 scope D)
     "SkillRequirement",
     "ResolvedSkills",

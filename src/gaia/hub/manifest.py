@@ -28,7 +28,6 @@ from typing import Any, Dict, List, Optional, Union
 
 import yaml
 
-from gaia.agents.registry import _RESERVED_BUILTIN_IDS
 from gaia.skills.errors import SkillValidationError
 from gaia.skills.sets import SkillSets, parse_skill_sets
 
@@ -427,12 +426,6 @@ def _validate_id(agent_id: Any, where: str) -> None:
             f"gaia-agent.yaml{where}: id {agent_id!r} is invalid. Use 1–52 "
             f"lowercase alphanumeric characters and internal hyphens "
             f"(must start and end with a letter or digit), e.g. 'my-agent'."
-        )
-    if agent_id in _RESERVED_BUILTIN_IDS:
-        raise ManifestError(
-            f"gaia-agent.yaml{where}: id {agent_id!r} is reserved for a built-in "
-            f"GAIA agent. Choose a different id. Reserved: "
-            f"{_sorted(_RESERVED_BUILTIN_IDS)}."
         )
 
 

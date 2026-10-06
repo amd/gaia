@@ -11,7 +11,7 @@
 ;                   (~/.gaia/agents/gaia/) where the TUI looks for it
 ;
 ; Lemonade and the models are deliberately NOT bundled — they are gigabytes and
-; `gaia init` already owns them. See docs/plans/shareable-custom-build.md.
+; `gaia init` already owns them. See docs/deployment/shareable-build.mdx.
 ;
 ; Build with installer/scripts/build-gaia-installer.ps1, which passes every
 ; define this script requires. Running makensis on it by hand fails at compile

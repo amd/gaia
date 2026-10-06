@@ -563,7 +563,17 @@ class PathValidator:
                     for p in data.get("paths", []):
                         try:
                             path_obj = Path(p).resolve()
-                            if path_obj.exists():
+                            blocked, reason = self.is_read_blocked(str(path_obj))
+                            if not blocked:
+                                blocked, reason = self.is_write_blocked(str(path_obj))
+                            if blocked:
+                                logger.warning(
+                                    "Ignoring saved grant %s from %s: %s",
+                                    path_obj,
+                                    self.config_file,
+                                    reason,
+                                )
+                            elif path_obj.exists():
                                 self.allowed_paths.add(path_obj)
                         except Exception as e:
                             logger.warning(f"Invalid path in cache {p}: {e}")
@@ -847,6 +857,11 @@ class PathValidator:
         if self._access_prompt is not None:
             return self._ask_host_for_access(path)
 
+        reason = self._unaskable_reason(path)
+        if reason:
+            logger.warning("Path %s outside allowlist; not asking: %s", path, reason)
+            return False
+
         if not self._can_prompt():
             logger.warning(
                 "Path %s outside allowlist; auto-denying (no interactive "
@@ -982,6 +997,7 @@ class PathValidator:
 
         Checks against:
         1. System/blocked directories (Windows, /etc, .ssh, ~/.gaia, etc.)
+           and credential folders (~/.aws, ~/.kube, ~/.docker, gcloud, ...)
         2. Sensitive file names (.env, credentials, keys, etc.)
         3. Sensitive file extensions (.pem, .key, .crt, etc.)
         4. Files that execute on their own (shell rc, PowerShell profile,
@@ -1025,6 +1041,16 @@ class PathValidator:
                         True,
                         f"Write blocked: '{real_path}' is inside protected "
                         f"directory '{blocked_dir}'",
+                    )
+
+            # Credential folders also hold config their tools execute.
+            for secret_dir in SECRET_DIRECTORIES:
+                if _path_is_within(real_path, Path(secret_dir)):
+                    return (
+                        True,
+                        f"Write blocked: '{real_path}' is inside protected "
+                        f"directory '{secret_dir}', which holds credentials and "
+                        f"tool configuration. Edit it yourself if you need to.",
                     )
 
             # Check sensitive file names

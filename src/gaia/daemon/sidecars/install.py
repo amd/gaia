@@ -50,7 +50,6 @@ from gaia.daemon.sidecars.errors import (
     InstallFailedError,
     StopFailedError,
     UnknownAgentError,
-    UnsupervisedAgentError,
 )
 from gaia.logger import get_logger
 
@@ -239,15 +238,6 @@ def _validate_agent_id(agent_id: str) -> None:
             f"'{agent_id}' is not a valid agent id. Ids are 1-52 lowercase "
             "alphanumeric characters with internal hyphens (e.g. 'email'). "
             "Run `gaia hub list` for the installable ids."
-        )
-
-
-def _reject_reserved(agent_id: str) -> None:
-    if _installer().is_builtin(agent_id):
-        raise UnsupervisedAgentError(
-            f"'{agent_id}' is a reserved built-in GAIA agent: it ships with the "
-            "wheel and can never be installed or uninstalled from the Agent Hub. "
-            "Use `gaia hub list` to see the installable agents."
         )
 
 
@@ -503,7 +493,6 @@ def start_install(
     and is gated the same way.
 
     Raises:
-        UnsupervisedAgentError: reserved built-in id.
         UnknownAgentError: no sidecar spec — the daemon could not run it.
         AgentTrustRequiredError: non-verified agent without ``trusted=True``.
         InstallBusyError: an install for this id is already running.
@@ -514,7 +503,6 @@ def start_install(
     installer_mod = _installer()
 
     _validate_agent_id(agent_id)
-    _reject_reserved(agent_id)
     _require_supervised(agent_id, supervised_ids(registry), install_root)
 
     url = catalog_mod.manifest_url(agent_id, base_url)
@@ -650,7 +638,6 @@ def uninstall(
     """Stop the sidecar, verify its pid is gone, then remove the install dir.
 
     Raises:
-        UnsupervisedAgentError: reserved built-in id (never uninstallable).
         InstallBusyError: an install for this id is in flight.
         StopFailedError: the sidecar pid survived the tree-kill (nothing is
             removed — mutating a live process's dir is never attempted).
@@ -659,7 +646,6 @@ def uninstall(
     """
     installer_mod = _installer()
     _validate_agent_id(agent_id)
-    _reject_reserved(agent_id)
     # Uninstall takes the SAME slot as install: holding it is what stops a
     # concurrent install from downloading into the directory being removed (and
     # stops this removal from deleting a just-completed install).

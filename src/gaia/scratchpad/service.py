@@ -4,6 +4,7 @@
 """SQLite scratchpad service for structured data analysis."""
 
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -67,11 +68,6 @@ class ScratchpadService(DatabaseMixin):
     MAX_ROWS_PER_TABLE = 1_000_000
     MAX_TOTAL_SIZE_BYTES = 100 * 1024 * 1024  # 100MB
 
-    # Keep on its own file so FileSystemIndexService's integrity_check doesn't
-    # see scratch_* tables as "unexpected corruption" and vice-versa (#495
-    # review feedback).
-    DEFAULT_DB_PATH = "~/.gaia/scratchpad.db"
-
     def __init__(self, db_path: Optional[str] = None):
         """Initialize scratchpad service.
 
@@ -95,6 +91,10 @@ class ScratchpadService(DatabaseMixin):
 
         Returns True if the existing DB is healthy, False if it had to be
         rebuilt (caller may want to log).
+
+        Raises:
+            sqlite3.OperationalError: the file is locked or unreadable. That is
+                not corruption, so the file is left alone.
         """
         try:
             # Both statements fail loudly on a corrupt file — catch together.
@@ -103,7 +103,10 @@ class ScratchpadService(DatabaseMixin):
             if row and row[0] == "ok":
                 return True
             log.error("Scratchpad integrity_check returned %s", row)
-        except Exception as exc:  # pylint: disable=broad-except
+        except sqlite3.OperationalError:
+            # Locked or I/O failure — deleting would destroy a healthy database.
+            raise
+        except sqlite3.DatabaseError as exc:
             log.error("Scratchpad integrity check failed: %s", exc)
 
         # Rebuild: close, delete the file, re-init.
@@ -286,7 +289,10 @@ class ScratchpadService(DatabaseMixin):
         if hits:
             raise ValueError(f"Query contains disallowed keyword: {sorted(hits)[0]}")
 
-        return self.query(normalized)
+        try:
+            return self.query_readonly(normalized)
+        except PermissionError as exc:
+            raise ValueError(str(exc)) from exc
 
     def list_tables(self) -> List[Dict[str, Any]]:
         """List all scratchpad tables with schema and row count.
@@ -376,18 +382,9 @@ class ScratchpadService(DatabaseMixin):
         Returns:
             Estimated size in bytes.
         """
-        try:
-            tables = self.list_tables()
-            total_rows = sum(t["rows"] for t in tables)
-
-            if total_rows == 0:
-                return 0
-
-            # Rough estimate: 200 bytes per row average
-            return total_rows * 200
-        except Exception as exc:
-            log.warning("get_size_bytes failed: %s", exc)
-            return 0
+        # Not guarded: returning 0 on error would silently disable the size cap.
+        total_rows = sum(t["rows"] for t in self.list_tables())
+        return total_rows * 200
 
     def _sanitize_name(self, name: str) -> str:
         """Sanitize table/column names to prevent SQL injection.

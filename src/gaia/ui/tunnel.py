@@ -489,8 +489,8 @@ class TunnelManager:
                     if pipe:
                         try:
                             pipe.close()
-                        except Exception:
-                            pass
+                        except OSError as exc:
+                            logger.debug("Closing an ngrok pipe failed: %s", exc)
                 self._process = None
 
         self._url = None

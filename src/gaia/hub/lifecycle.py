@@ -118,7 +118,7 @@ def configure(
     """Persist per-agent configuration under ``~/.gaia/agents/<id>/config.json``.
 
     Args:
-        agent_id: Agent to configure (hub-installed, builtin, or custom).
+        agent_id: Agent to configure (hub-installed or custom).
         config: Settings to store (e.g. ``{"model": "Gemma-4-E4B-it-GGUF"}``).
         install_root: Override the install root (tests pass a tmp dir).
         merge: When True (default) merge into the existing config; when False
@@ -185,30 +185,20 @@ LoaderProbe = Callable[[str, Any], List[str]]
 def _default_loader(agent_id: str, registry: Any) -> List[str]:
     """Resolve an installed agent's entry point / module to prove it loads.
 
-    Built-ins are in-tree and always importable, so a registered builtin needs
-    no entry-point probe. For installed wheel agents we re-resolve the
+    For installed wheel agents we re-resolve the
     ``gaia.agent`` / ``gaia.agents`` entry point named *agent_id* and ``.load()``
     it — that is precisely "the entry point resolves". A failure raises.
 
     File-based custom agents (``source == "custom_python"``) have no entry point
     by construction — they are exec'd from ``~/.gaia/agents/<id>/agent.py`` during
-    discovery. So the registry's own successful discovery IS the health signal,
-    the same way a registered builtin is proof it loaded. We additionally verify
+    discovery. So the registry's own successful discovery IS the health signal.
+    We additionally verify
     the discovered class is *concrete*: an agent that never implements an abstract
     method (e.g. ``_register_tools``) discovers fine but can never be constructed,
     so it is genuinely broken. This check inspects ``__abstractmethods__`` only —
     it does not construct the agent, so ``gaia agent status`` triggers no
     constructor side effects (#2268).
     """
-    if installer_mod.is_builtin(agent_id):
-        # Builtins ship in the core wheel; presence in the registry is proof.
-        if registry is not None and registry.get(agent_id) is None:
-            raise LifecycleError(
-                f"builtin agent '{agent_id}' is not present in the registry; "
-                f"the core install may be broken."
-            )
-        return []
-
     reg = registry.get(agent_id) if registry is not None else None
     if reg is not None and getattr(reg, "source", None) == "custom_python":
         agent_class = getattr(reg, "agent_class", None)
@@ -316,7 +306,7 @@ def health_check(
 
     Returns one of ``healthy`` / ``degraded`` / ``error`` / ``not_installed``:
 
-    * ``not_installed`` — no install sentinel, not a builtin, and not registered.
+    * ``not_installed`` — no install sentinel and not registered.
     * ``error`` — installed but the entry point / module fails to load.
     * ``degraded`` — loads, but something optional is off (e.g. a corrupt config
       or an optional warning from the loader probe).
@@ -330,10 +320,9 @@ def health_check(
 
     sentinel = installer_mod.read_sentinel(agent_id, install_root)
     installed = sentinel is not None
-    is_builtin = installer_mod.is_builtin(agent_id)
     registered = registry is not None and registry.get(agent_id) is not None
 
-    if not installed and not is_builtin and not registered:
+    if not installed and not registered:
         return HealthStatus(
             id=agent_id,
             state=HEALTH_NOT_INSTALLED,
@@ -413,10 +402,9 @@ def status(
 ) -> AgentStatus:
     """Aggregate installed version, health, and config summary for one agent."""
     sentinel = installer_mod.read_sentinel(agent_id, install_root)
-    is_builtin = installer_mod.is_builtin(agent_id)
     reg = registry.get(agent_id) if registry is not None else None
 
-    installed = sentinel is not None or is_builtin or reg is not None
+    installed = sentinel is not None or reg is not None
     health = health_check(
         agent_id, registry=registry, install_root=install_root, loader=loader
     )
@@ -428,7 +416,7 @@ def status(
     except LifecycleError:
         config = {}
 
-    # Hub-installed agents carry a SemVer in their sentinel; builtins/custom
+    # Hub-installed agents carry a SemVer in their sentinel; custom
     # agents have no published version, so report None rather than guess.
     version = sentinel.version if sentinel is not None else None
 
@@ -437,8 +425,6 @@ def status(
         source = reg.source
     elif sentinel is not None:
         source = "installed"
-    elif is_builtin:
-        source = "builtin"
 
     return AgentStatus(
         id=agent_id,

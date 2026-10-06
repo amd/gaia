@@ -3,19 +3,11 @@
 """
 T-X1: ``REQUIRED_CONNECTORS`` discovery + agent integration smoke tests.
 
-Two distinct paths exercised:
-
-- **Built-in path**: a synthetic ``Agent`` subclass registered through
-  ``_register_builtin_agents`` carries its scope claims through the registry
-  with a ``builtin:`` namespaced id.
-
-- **Custom-agent path**: an ``agent.py`` written under ``~/.gaia/agents/<id>/``
-  is loaded via ``_load_python_agent``. Its ``REQUIRED_CONNECTORS`` survive
-  the round-trip into ``AgentRegistration``, and the namespaced id is
-  ``custom:<sha256-prefix>:<id>`` derived from the ``agent.py`` bytes.
-
-Plus a security check: a custom agent claiming a built-in's reserved id raises
-``ValueError`` (plan amendment A9).
+Exercises the custom-agent path: an ``agent.py`` written under
+``~/.gaia/agents/<id>/`` is loaded via ``_load_python_agent``. Its
+``REQUIRED_CONNECTORS`` survive the round-trip into ``AgentRegistration``, and
+the namespaced id is ``custom:<sha256-prefix>:<id>`` derived from the
+``agent.py`` bytes.
 
 Bridge tests live in ``tests/unit/connectors/test_agent_bridge.py``; this
 file owns the registry-and-class-attribute path.
@@ -29,7 +21,7 @@ import pytest
 from pydantic import ValidationError
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.registry import _RESERVED_BUILTIN_IDS, AgentRegistry
+from gaia.agents.registry import AgentRegistry
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.ui.models import AgentInfo
 
@@ -75,45 +67,6 @@ class TestAgentBaseClassDefault:
     def test_base_default_is_empty_list(self):
         assert Agent.REQUIRED_CONNECTORS == []
         assert isinstance(Agent.REQUIRED_CONNECTORS, list)
-
-
-# Agents that intentionally declare REQUIRED_CONNECTORS — they exist to
-# demonstrate or exercise the connectors framework and are exempt from the
-# "no connector requirements for built-ins" invariant.
-# - ``connectors-demo`` is the framework's reference consumer.
-# - ``email`` (#962) is the first concrete provider — Gmail + Calendar.
-_CONNECTOR_DEMO_AGENTS: frozenset[str] = frozenset({"connectors-demo", "email"})
-
-
-class TestBuiltinPath:
-    def test_chat_builder_have_empty_required_connections(self):
-        registry = AgentRegistry()
-        registry._register_builtin_agents()
-        for reg in registry.list():
-            if reg.id in _CONNECTOR_DEMO_AGENTS:
-                continue
-            assert reg.required_connections == [], (
-                f"Built-in agent {reg.id} unexpectedly declares "
-                f"required_connections={reg.required_connections}"
-            )
-            assert reg.namespaced_agent_id == f"builtin:{reg.id}"
-
-    def test_reserved_ids_match_registered_builtins(self):
-        registry = AgentRegistry()
-        registry._register_builtin_agents()
-        registered = {r.id for r in registry.list()}
-        # Every reserved id must still belong to a real built-in: either it is
-        # registered directly, or it is a legacy "-lite"/gaia-lite alias that
-        # resolves to a registered agent (#1162 — lite variants are now a model
-        # tier, not a separate card, but stay reserved so a custom agent can't
-        # claim the old id and shadow alias resolution).
-        for reserved in _RESERVED_BUILTIN_IDS:
-            resolved = AgentRegistry._LEGACY_ID_ALIASES.get(reserved, reserved)
-            assert resolved in registered, (
-                f"Reserved id {reserved!r} resolves to {resolved!r}, which is "
-                f"not a registered built-in — drop it from _RESERVED_BUILTIN_IDS "
-                f"or restore the agent/alias."
-            )
 
 
 CUSTOM_MCP_CONSUMER_TEMPLATE = textwrap.dedent("""
@@ -173,17 +126,6 @@ class TestConsumesMcpServers:
         chat = registry.get("chat")
         assert ChatAgent.CONSUMES_MCP_SERVERS is True
         assert chat.consumes_mcp_servers == ChatAgent.CONSUMES_MCP_SERVERS
-
-    def test_other_builtins_do_not_consume_mcp_servers(self):
-        registry = AgentRegistry()
-        registry._register_builtin_agents()
-        for reg in registry.list():
-            if reg.id == "chat":
-                continue
-            assert reg.consumes_mcp_servers is False, (
-                f"Built-in agent {reg.id} unexpectedly sets "
-                "consumes_mcp_servers=True"
-            )
 
     def test_custom_agent_flag_round_trips(self, tmp_path, monkeypatch):
         agent_dir = tmp_path / ".gaia" / "agents" / "dyn-mcp"
@@ -290,31 +232,6 @@ class TestCustomAgentPath:
         ns2 = r2.get("inbox_zero").namespaced_agent_id
 
         assert ns1 != ns2
-
-    def test_reserved_id_is_blocked(self, tmp_path, monkeypatch, caplog):
-        # ``builder`` is the canonical reserved framework built-in (chat/doc/file
-        # migrated to the gaia-agent-chat wheel, #1102, and are no longer
-        # reserved). A custom agent must not be able to claim a reserved id.
-        agents_root = tmp_path / ".gaia" / "agents"
-        agent_dir = agents_root / "trojan"
-        agent_dir.mkdir(parents=True)
-        (agent_dir / "agent.py").write_text(
-            CUSTOM_AGENT_TEMPLATE.format(agent_id="builder")
-        )
-
-        monkeypatch.setattr("gaia.agents.registry.Path.home", lambda: tmp_path)
-
-        registry = AgentRegistry()
-        # discover() should log a warning and skip the trojan agent — it must
-        # not register under id "builder" and overwrite the built-in.
-        registry._register_builtin_agents()  # registers built-in builder
-        with caplog.at_level("WARNING"):
-            registry.discover()
-
-        builder_reg = registry.get("builder")
-        # The built-in builder is the one that survives.
-        assert builder_reg.source == "builtin"
-        assert builder_reg.namespaced_agent_id == "builtin:builder"
 
 
 class TestAgentInfoSerialization:

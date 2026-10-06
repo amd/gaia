@@ -482,3 +482,64 @@ class TestTotalSizeLimit:
         # Next insert should be rejected.
         with pytest.raises(ValueError, match="size limit reached"):
             scratchpad.insert_rows("big", [{"val": "more"}])
+
+
+class TestReadOnlyAndFailLoud:
+    """query_data runs under the SQLite read-only authorizer; errors surface."""
+
+    def test_query_data_uses_readonly_authorizer(self, scratchpad):
+        scratchpad.create_table("t", "val TEXT")
+        with patch.object(
+            scratchpad, "query_readonly", side_effect=PermissionError("blocked")
+        ) as readonly:
+            with pytest.raises(ValueError, match="blocked"):
+                scratchpad.query_data("SELECT * FROM scratch_t")
+        readonly.assert_called_once()
+
+    def test_query_data_still_returns_rows(self, scratchpad):
+        scratchpad.create_table("t", "val TEXT")
+        scratchpad.insert_rows("t", [{"val": "a"}])
+        assert scratchpad.query_data("SELECT val FROM scratch_t") == [{"val": "a"}]
+
+    def test_get_size_bytes_does_not_hide_errors(self, scratchpad):
+        with patch.object(scratchpad, "list_tables", side_effect=RuntimeError("io")):
+            with pytest.raises(RuntimeError, match="io"):
+                scratchpad.get_size_bytes()
+
+
+class TestOpenOrRebuild:
+    """Only real corruption rebuilds the file; a lock or I/O error does not."""
+
+    def test_garbage_file_is_rebuilt(self, tmp_path):
+        db_path = tmp_path / "scratch.db"
+        db_path.write_bytes(b"this is not a sqlite database" * 100)
+        service = ScratchpadService(db_path=str(db_path))
+        try:
+            service.create_table("ok", "val TEXT")
+            assert [t["name"] for t in service.list_tables()] == ["ok"]
+        finally:
+            service.close_db()
+
+    def test_operational_error_keeps_the_file(self, tmp_path):
+        import sqlite3
+
+        db_path = tmp_path / "scratch.db"
+        first = ScratchpadService(db_path=str(db_path))
+        first.create_table("keep", "val TEXT")
+        first.close_db()
+
+        class _Locked:
+            def execute(self, *_args, **_kwargs):
+                raise sqlite3.OperationalError("database is locked")
+
+        service = ScratchpadService.__new__(ScratchpadService)
+        service._db = _Locked()
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            service._open_or_rebuild(str(db_path))
+        assert db_path.exists()
+
+        reopened = ScratchpadService(db_path=str(db_path))
+        try:
+            assert [t["name"] for t in reopened.list_tables()] == ["keep"]
+        finally:
+            reopened.close_db()

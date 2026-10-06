@@ -9,8 +9,7 @@ import re
 import sys
 from pathlib import Path
 
-# Fix Windows console encoding for emojis
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+from release_tag import RC_TAG_RE
 
 
 def validate_release_notes(file_path: str, tag: str | None = None) -> list[str]:
@@ -19,13 +18,18 @@ def validate_release_notes(file_path: str, tag: str | None = None) -> list[str]:
 
     Args:
         file_path: Path to the MDX file
-        tag: Optional release tag to validate against (e.g., 'v0.16.0')
+        tag: Optional release tag to validate against (e.g., 'v0.16.0'). A
+            release candidate (``v0.16.0-rc1``) ships its final's notes, so its
+            title is checked against the final's tag.
 
     Returns:
         List of validation errors (empty if valid)
     """
     errors = []
     path = Path(file_path)
+    rc = RC_TAG_RE.match(tag) if tag else None
+    if rc:
+        tag = f"v{rc.group('base')}"
 
     if not path.exists():
         return [f"File not found: {file_path}"]
@@ -81,10 +85,14 @@ def validate_release_notes(file_path: str, tag: str | None = None) -> list[str]:
 
 
 def main():
+    # Fix Windows console encoding for emojis
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
     parser = argparse.ArgumentParser(description="Validate release notes MDX files")
     parser.add_argument("file", nargs="+", help="Path(s) to release notes MDX file(s)")
     parser.add_argument(
-        "--tag", "-t", help="Release tag to validate against (e.g., v0.16.0)"
+        "--tag",
+        "-t",
+        help="Release tag to validate against (e.g., v0.16.0 or v0.16.0-rc1)",
     )
     args = parser.parse_args()
 

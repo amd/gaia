@@ -547,6 +547,13 @@ class TestFormatSizeBoundaries:
 class TestPromptGuardCallbacks:
     """Tests for on_prompt_start / on_prompt_end callback support (#1089)."""
 
+    @pytest.fixture(autouse=True)
+    def _fake_system_temp(self, tmp_path, monkeypatch):
+        # tmp_path is under the real temp dir, which the access prompt refuses.
+        monkeypatch.setattr(
+            "gaia.security._system_temp_roots", lambda: {str(tmp_path / "systemp")}
+        )
+
     def test_callbacks_invoked_on_access_prompt(self, tmp_path):
         """on_prompt_start and on_prompt_end are called around _prompt_user_for_access."""
         calls = []

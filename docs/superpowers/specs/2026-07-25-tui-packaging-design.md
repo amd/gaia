@@ -5,8 +5,8 @@ Extends: [`docs/plans/tui-user-journey.md`](../../plans/tui-user-journey.md) —
 covers stages 1–11 of the user journey and assumes `gaia` is already running. This document
 covers **stage 0**: how `gaia` gets onto a machine at all, and what the machine looks like
 afterwards. It does not replace it.
-Related: [`docs/plans/agent-factory.md`](../../plans/agent-factory.md) (the developer flow,
-specced separately), [`docs/plans/package-publishing.mdx`](../../plans/package-publishing.mdx)
+Related: `docs/plans/agent-factory.md` (the developer flow,
+specced separately), `docs/plans/package-publishing.mdx`
 (the registry-driven publisher this uses), [`docs/plans/desktop-installer.mdx`](../../plans/desktop-installer.mdx)
 (the installers this supersedes in part).
 
@@ -399,7 +399,7 @@ disagree within a release.
 The precise per-command verdicts, with test-coverage and doc-reference counts, live in the
 triage report referenced in §9.3. **The capability-loss ledger in that report is a required
 read before executing plan 3** — several hub agents have close to zero behavioural test
-coverage (`docs/plans/port-audit-6-agents.md:34-36`), so "the hub agent covers it" is a claim
+coverage, so "the hub agent covers it" is a claim
 to verify per agent, not to assume.
 
 ---

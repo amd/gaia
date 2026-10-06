@@ -55,6 +55,7 @@ from .agent_loop import agent_loop
 # pylint: enable=unused-import
 from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
+from .memory_settings import memory_enabled
 from .routers import agents as agents_router_mod
 from .routers import chat as chat_router_mod
 from .routers import connectors as connectors_router_mod
@@ -218,6 +219,43 @@ def lemonade_is_remote() -> bool:
 
     base_url = os.environ.get("LEMONADE_BASE_URL")
     return bool(base_url) and not _is_loopback(urlparse(base_url).hostname or "")
+
+
+def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
+    """Run one scheduled prompt through a fresh GAIA agent; returns the answer."""
+    try:
+        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    except ImportError as e:
+        raise RuntimeError(
+            agent_not_installed_message(
+                "The GAIA agent is not installed",
+                "gaia-agent-gaia",
+                next_step="Then re-run the scheduled task.",
+            )
+        ) from e
+
+    # Beta dynamic tool loader (#1798). Inert here: scheduled runs
+    # use the default "full" prompt profile and the loader only
+    # activates on the "doc" profile — wired for future-proofing so
+    # this path doesn't silently diverge if that ever changes.
+    dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
+    # Nobody is watching a scheduled run, so confirmation-gated tools
+    # (shell, file writes) are denied here — same posture as an
+    # autonomous background tick (#2210).
+    config = GaiaAgentConfig(
+        max_steps=5,
+        silent_mode=True,
+        debug=False,
+        dynamic_tools=dynamic_tools,
+        memory_incognito=not memory_enabled(db),
+    )
+    agent = GaiaAgent(config)
+    agent._incognito_reason = "memory_off"
+    result = agent.process_query(prompt)
+    if isinstance(result, dict):
+        val = result.get("result")
+        return val if val is not None else result.get("answer", "")
+    return str(result) if result else ""
 
 
 # ── Application Factory ────────────────────────────────────────────────────
@@ -442,42 +480,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                     "Stop the tunnel or set GAIA_AUTONOMOUS_ALLOW_TUNNEL=1."
                 )
 
-            def _run() -> str:
-                try:
-                    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-                except ImportError as e:
-                    raise RuntimeError(
-                        agent_not_installed_message(
-                            "The GAIA agent is not installed",
-                            "gaia-agent-gaia",
-                            next_step="Then re-run the scheduled task.",
-                        )
-                    ) from e
-
-                # Beta dynamic tool loader (#1798). Inert here: scheduled runs
-                # use the default "full" prompt profile and the loader only
-                # activates on the "doc" profile — wired for future-proofing so
-                # this path doesn't silently diverge if that ever changes.
-                dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
-                # Nobody is watching a scheduled run, so confirmation-gated tools
-                # (shell, file writes) are denied here — same posture as an
-                # autonomous background tick (#2210).
-                config = GaiaAgentConfig(
-                    max_steps=5,
-                    silent_mode=True,
-                    debug=False,
-                    dynamic_tools=dynamic_tools,
-                )
-                agent = GaiaAgent(config)
-                result = agent.process_query(prompt)
-                if isinstance(result, dict):
-                    val = result.get("result")
-                    return val if val is not None else result.get("answer", "")
-                return str(result) if result else ""
-
             loop = asyncio.get_running_loop()
             return await asyncio.wait_for(
-                loop.run_in_executor(None, _run), timeout=_sched_timeout
+                loop.run_in_executor(None, _run_scheduled_prompt, db, prompt),
+                timeout=_sched_timeout,
             )
 
         scheduler = Scheduler(db=db, executor=_schedule_executor)

@@ -67,8 +67,7 @@ runs.
 
 `ChatAgent` ([`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py))
 sets it before calling `super().__init__()`, because `_register_tools()` runs
-inside that call. The Builder's scaffolding (`gaia.agents.builder.template`)
-does the same for any generated agent that includes the `file_io` tool.
+inside that call.
 
 A host that forgets is told what's missing instead of the tool silently
 skipping its own check, or crashing with a bare, unhelpful `AttributeError`:

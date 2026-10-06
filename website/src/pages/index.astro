@@ -17,12 +17,20 @@ import Downloads from '../components/Downloads.astro';
 import Feature from '../components/Feature.astro';
 import StatBlock from '../components/StatBlock.astro';
 import ReleaseStream from '../components/ReleaseStream.astro';
-import { formatCount, getNpmDownloadStats, getReleaseStats, getRepoStats } from '../data/github';
+import ReleaseCandidate from '../components/ReleaseCandidate.astro';
+import {
+  formatCount,
+  getNpmDownloadStats,
+  getReleaseCandidate,
+  getReleaseStats,
+  getRepoStats,
+} from '../data/github';
 
 const DOCS = 'https://amd-gaia.ai/docs';
 
 const repoStats = await getRepoStats();
 const releaseStats = await getReleaseStats();
+const releaseCandidate = await getReleaseCandidate();
 const npmStats = await getNpmDownloadStats();
 
 // Labels are deliberately specific ("GitHub release downloads", "npm
@@ -156,6 +164,7 @@ const ARCHITECTURE = [
       </p>
 
       <Downloads class="animate-g-rise mt-10 [animation-delay:0.14s]" />
+      <ReleaseCandidate candidate={releaseCandidate} class="mt-6" />
     </section>
 
     <!-- Traction, right under the install — stars/forks/downloads, then

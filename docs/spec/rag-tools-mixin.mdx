@@ -72,8 +72,8 @@ intentional "RAG disabled" value and does not raise. The other four
 attributes (`indexed_files`, `max_chunks`, `current_session`,
 `session_manager`) are still enforced by convention, matching the reasoning
 in [#3316](https://github.com/amd/gaia/issues/3316): a construction-time
-check was considered and rejected — it would break the Builder's own
-generated agents, run before skill-injected tools exist, and require
+check was considered and rejected — it would run before skill-injected
+tools exist and require
 inspecting a process-global tool registry. See the issue for the full
 analysis.
 

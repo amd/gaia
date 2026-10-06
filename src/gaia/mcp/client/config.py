@@ -4,8 +4,7 @@
 
 Mutations to ``~/.gaia/mcp_servers.json`` go through the connectors framework
 (``gaia.connectors.mcp_server.McpServerHandler.configure`` / ``disconnect``).
-This class is the read path used by ``MCPClient``, ``ChatAgent`` and the
-agent-builder template.
+This class is the read path used by ``MCPClient`` and ``ChatAgent``.
 """
 
 import json

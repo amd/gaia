@@ -34,45 +34,9 @@ Custom agents can have their own:
 
 ---
 
-## Quick Start: Gaia Builder Agent
-
-The fastest way to create an agent is to use the built-in **Gaia Builder Agent**.
-
-<Steps>
-  <Step title="Open the Agent UI">
-    Start the GAIA Agent UI: `gaia chat --ui`
-  </Step>
-  <Step title="Click the + button">
-    In the chat input footer, click the **+** icon.
-    On the welcome screen, click **Build a Custom Agent Template**.
-
-    {/* TODO(screenshot): Capture "Build a Custom Agent Template" button on the welcome screen.
-        Save to docs/assets/img/custom-agent/builder-entry-point.png and add a Frame
-        block here pointing at /assets/img/custom-agent/builder-entry-point.png. */}
-  </Step>
-  <Step title="Follow the prompts">
-    The Builder (an **alpha** feature) greets you, asks what to name the agent and what it should do, and asks whether you want MCP support — then scaffolds a starter agent with a personality and conversation starters tailored to your description.
-
-    {/* TODO(screenshot): Capture the Builder Agent conversation creating a new agent.
-        Save to docs/assets/img/custom-agent/builder-conversation.png and add a Frame
-        block here pointing at /assets/img/custom-agent/builder-conversation.png. */}
-  </Step>
-  <Step title="Use your new agent">
-    Your agent registers immediately — no restart needed.
-  </Step>
-</Steps>
-
-The Builder creates a **starter template** at `~/.gaia/agents/<your-agent-name>/agent.py` — a tailored persona and conversation starters (plus MCP wiring if you asked for it). It's a starting point you extend, not a turnkey agent: it won't fetch data or perform complex tasks on its own until you add tools. Open the file to refine the instructions and add capabilities (see [Python Agent](#python-agent) below).
-
-<Tip>
-  Need your agent to read real data — Gmail, GitHub, your calendar? Skip ahead to [Using GAIA connectors](#using-gaia-connectors).
-</Tip>
-
----
-
 ## Python Agent
 
-For full control — custom tools, built-in tool mixins, MCP servers, or complex logic — write a Python module.
+A custom agent is a Python module — add custom tools, built-in tool mixins, MCP servers, or any logic you need.
 
 ### Directory structure
 
@@ -107,9 +71,8 @@ class MyPythonAgent(Agent):
             return f"Hello, {name}! Welcome to GAIA."
 ```
 
-This mirrors what the Builder Agent scaffolds. The only method a subclass **must**
-implement is `_register_tools()` (it's abstract on the base `Agent`); the other two
-have sensible defaults you can override:
+The only method a subclass **must** implement is `_register_tools()` (it's abstract
+on the base `Agent`); the other two have sensible defaults you can override:
 
 | Method | Required? | Purpose |
 |--------|-----------|---------|
@@ -417,7 +380,7 @@ skips indexing.
     - Ensure the directory is under `~/.gaia/agents/<id>/` and contains `agent.py`.
     - The directory name does not need to match the `AGENT_ID` class attribute, but it helps.
     - Check the server logs for warnings like `Failed to load agent from ...`.
-    - If you created the agent manually (not via the Builder), **restart the GAIA server** — discovery runs at boot. Agents created via the Builder Agent are loaded immediately without a restart.
+    - After adding or editing the agent, **restart the GAIA server** — discovery runs at boot.
   </Accordion>
 
   <Accordion title="Agent fails to load">

@@ -6,8 +6,11 @@ name: Update Release Branch
 # Trigger when version tags are pushed
 on:
   push:
+    # A release candidate never moves `release`; filtering it here keeps an RC
+    # tag from showing up as a failed run of the skip step below.
     tags:
       - 'v*'
+      - '!v*-rc*'
 
 jobs:
   update-release-branch:

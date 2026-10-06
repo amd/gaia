@@ -55,7 +55,6 @@ from gaia.daemon.sidecars.errors import (
     SidecarSpawnError,
     StopFailedError,
     UnknownAgentError,
-    UnsupervisedAgentError,
     VersionMismatchError,
 )
 
@@ -205,8 +204,6 @@ def build_agents_router(token: str, registry):
             raise HTTPException(status_code=404, detail=str(e)) from e
         except AgentTrustRequiredError as e:
             raise HTTPException(status_code=403, detail=str(e)) from e
-        except UnsupervisedAgentError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
         except InstallBusyError as e:
             raise HTTPException(status_code=409, detail=str(e)) from e
         except HubUnavailableError as e:
@@ -243,8 +240,6 @@ def build_agents_router(token: str, registry):
             )
         except (AgentNotInstalledError, UnknownAgentError) as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
-        except UnsupervisedAgentError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
         except InstallBusyError as e:
             raise HTTPException(status_code=409, detail=str(e)) from e
         except (StopFailedError, InstallFailedError) as e:

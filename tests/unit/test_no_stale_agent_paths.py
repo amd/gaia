@@ -10,7 +10,7 @@ paths. This test fails loudly the moment a migrated-agent path reappears in one 
 those surfaces, the same way ``test_amd_gaia_urls.py`` guards the docs URL prefix.
 
 Only the *migrated* ids are forbidden. What remains in-core is the framework —
-``base/``, ``tools/``, ``builder/``, ``code_index/``, ``registry.py`` — plus
+``base/``, ``tools/``, ``code_index/``, ``registry.py`` — plus
 ``install_hints.py``. Those keep their ``src/gaia/agents/`` paths and are not flagged.
 
 Keep ``MIGRATED_AGENTS`` in step with ``hub/agents/``: an id that ships as a hub package
@@ -44,6 +44,8 @@ MIGRATED_AGENTS = (
     "chat",
     "docqa",
     "routing",
+    # Deleted outright, not migrated — its in-core path is just as dead.
+    "builder",
     # Hub-native — never lived in-core, so nothing can go stale. Listed anyway to keep
     # the guard exhaustive against hub/agents/ (see the coverage test below).
     "doc-search",

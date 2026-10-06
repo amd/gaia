@@ -5,7 +5,7 @@ components" goal. Assessed against `feat/gaia-flagship-agent-2804` at `418a03b2`
 (2026-08-12), while the minimal `gaia` agent + skills release is still in flight.
 
 Companion to [`tui-user-journey.md`](tui-user-journey.md) (the UX design for the *chat*
-journey, much of which has since landed) and [`agent-hub-ui.mdx`](agent-hub-ui.mdx).
+journey, much of which has since landed).
 Written in the shape of [`gaia-agent-readiness.md`](gaia-agent-readiness.md).
 
 **Verdict: go, but the work is not in the TUI.** The terminal hub is further along than
