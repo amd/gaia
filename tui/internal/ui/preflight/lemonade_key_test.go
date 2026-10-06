@@ -30,7 +30,7 @@ func TestLemonadeAPIKey(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		body, _ := json.Marshal(map[string]any{"pid": 1, "port": 63207, "api_key": key})
+		body, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "port": 63207, "api_key": key})
 		if err := os.WriteFile(filepath.Join(dir, "state.json"), body, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -88,7 +88,7 @@ func TestReadEmbeddedLemonade(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(map[string]any{"pid": 9, "port": 63207, "api_key": "k"})
+	body, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "port": 63207, "api_key": "k"})
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), body, 0o600); err != nil {
 		t.Fatal(err)
 	}

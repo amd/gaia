@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -169,5 +170,40 @@ func TestEmbeddedInstalledSurvivesAStoppedServer(t *testing.T) {
 	}
 	if ReadEmbedded() != nil {
 		t.Fatal("a stopped server produced connection state")
+	}
+}
+
+func writeEmbeddedStateWithPID(t *testing.T, dir string, pid, port int) {
+	t.Helper()
+	dir = filepath.Join(dir, "lemonade")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(EmbeddedState{PID: pid, Port: port, APIKey: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A crash or reboot leaves state.json behind. Following it sent the TUI to a
+// dead port while a healthy Lemonade answered on the standard one.
+func TestEmbeddedStateFromADeadServerIsIgnored(t *testing.T) {
+	dir := isolatedConnection(t)
+
+	child := exec.Command(os.Args[0], "-test.run=^$")
+	if err := child.Run(); err != nil {
+		t.Fatalf("run child: %v", err)
+	}
+	writeEmbeddedStateWithPID(t, dir, child.Process.Pid, 63209)
+	if ReadEmbedded() != nil || ResolveBaseURL("") != DefaultBaseURL || APIKeyFor("") != "" {
+		t.Fatal("a dead embedded server's record was followed")
+	}
+
+	writeEmbeddedStateWithPID(t, dir, os.Getpid(), 63209)
+	if ResolveBaseURL("") != "http://localhost:63209/api/v1" {
+		t.Fatal("a live embedded server's record was ignored")
 	}
 }
