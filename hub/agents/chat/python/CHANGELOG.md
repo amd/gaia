@@ -1,9 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
-- The next release must raise the `amd-gaia` floor to the first core release
-  that ships `gaia.agents.tools.path_access`, which the agent now imports at start.
+- Requires `amd-gaia>=0.25.0`, the first core release that ships
+  `gaia.agents.tools.path_access`, which the agent imports at start. With an
+  older core the agent fails at import.
+- `run_python`, `execute_python_file` and the Windows notification fallback start
+  their child process without GAIA's internal credentials, as core's shell and
+  MCP children already do.
 - Every file tool now checks the same allowed-folders rule as `read_file`:
   listing and searching folders (`list_files` included), indexing documents,
   watching folders, and the files `text_to_speech` and the export tools save. A folder you

@@ -24,6 +24,9 @@ CHAT_ROOT = Path(__file__).resolve().parents[1]
 # (introduced by commit 89db99d6, first tagged in v0.22.0).
 REQUIRED_FLOOR = (0, 22, 0)
 
+# First core release shipping gaia.agents.tools.path_access (#4656).
+PATH_ACCESS_FLOOR = (0, 25, 0)
+
 # Matches the version in "amd-gaia>=X.Y.Z" with or without an extras suffix
 # (e.g. "amd-gaia[api]>=X.Y.Z") — the extras are #1617's concern, not the floor's.
 _AMD_GAIA_FLOOR_RE = r'"amd-gaia(?:\[[^\]]*\])?>=([0-9.]+)"'
@@ -51,6 +54,20 @@ def test_pyproject_floor_covers_registry_symbol():
         "gaia.agents.registry.get_embedding_model_for_device (first shipped in "
         "0.22.0); a fresh resolver may select a core that ImportErrors at "
         "agent start (#2112)"
+    )
+
+
+def test_pyproject_floor_covers_path_access():
+    """An older core has no allowed-folders module, so the agent can't import."""
+    from gaia.agents.tools.path_access import read_access_error
+
+    assert callable(read_access_error)
+    pyproject = (CHAT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(_AMD_GAIA_FLOOR_RE, pyproject)
+    assert match
+    assert _floor_tuple(match.group(1)) >= PATH_ACCESS_FLOOR, (
+        f"amd-gaia floor {match.group(1)} predates gaia.agents.tools.path_access "
+        "(first shipped in 0.25.0); the agent ImportErrors on an older core"
     )
 
 

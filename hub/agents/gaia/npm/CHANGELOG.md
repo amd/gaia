@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Requires `amd-gaia>=0.25.0` and `gaia-agent-chat>=0.2.0`.** Every file tool
+  now checks the allowed-folders rule, and that check ships in core 0.25.0; an
+  older core cannot import the chat agent this one builds on.
+- **`~/.gaia/logs/gaia-agent.log` stays bounded.** It rotates like `gaia.log`
+  (10 MB, three backups; `GAIA_LOG_MAX_MB`, `GAIA_LOG_BACKUPS`) instead of
+  growing without limit.
+
 - **Everyday questions get short, plain answers.** "Why is the sky blue?" got
   140 words with an equation, and a Wi-Fi question got diagnostic shell runs.
   The voice skill now caps an everyday answer at three plain sentences, goes
