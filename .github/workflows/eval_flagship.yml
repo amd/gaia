@@ -44,8 +44,8 @@
 #
 # THIS POOL IS WINDOWS. Every inline `run:` step below is PowerShell, and Python
 # setup goes through ./.github/actions/setup-venv (uv, Windows-aware) — the
-# lab-runner convention shared by test_email_agent_eval.yml,
-# email_scorecard_refresh.yml and test_agent_behavior_e2e.yml. Do NOT reintroduce
+# lab-runner convention shared by test_email_agent_eval.yml and
+# email_scorecard_refresh.yml. Do NOT reintroduce
 # bash here: this workflow's first-ever execution died instantly on
 # `source .venv/bin/activate` because GitHub ran it through powershell.EXE, and
 # every other bash step in the job hit the same parser. Windows also breaks the
@@ -127,8 +127,7 @@
 # that claim is what left this job with no way to bring Lemonade up.) The GAIA UI
 # backend is separate and NOT persistent, so this workflow starts it itself — in
 # the SAME shell session as the evals, because a backgrounded child does not
-# survive a GitHub Actions step boundary (see the single-session note in
-# test_agent_behavior_e2e.yml).
+# survive a GitHub Actions step boundary.
 #
 # Lemonade must serve TWO models, not one. ensure-lemonade-running.ps1 warms
 # only the chat model, but rag_quality and context_retention answer out of RAG
@@ -234,7 +233,6 @@ on:
       # changes the JSON tool schema and is exactly what tool_selection scores.
       # (ChatAgent is not listed: it now lives under hub/agents/chat/python/,
       # already covered above.)
-      - 'src/gaia/agents/builder/**'
       - 'src/gaia/agents/tools/**'
       - 'src/gaia/chat/**'
       - 'src/gaia/eval/flagship_tasks.py'
@@ -1328,9 +1326,8 @@ jobs:
           }
 
           # The GAIA UI backend must live in the SAME shell session as the evals:
-          # a backgrounded child does not survive a step boundary, which is why
-          # test_agent_behavior_e2e.yml starts its server and runs its harness in
-          # one session. Hence backend start + all this lane's categories in one step.
+          # a backgrounded child does not survive a step boundary. Hence backend
+          # start + all this lane's categories in one step.
           # Start-Process resolves relative paths against the .NET process CWD,
           # which is not guaranteed to track the PowerShell location. Pin the
           # child's working directory AND give it absolute redirect targets, so

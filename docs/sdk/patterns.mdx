@@ -202,30 +202,42 @@ def _register_tools(self) -> None:
 
 ---
 
-## Pattern 5: Registering a built-in agent
+## Pattern 5: Registering an agent
 
-Add to `AgentRegistry._register_builtin_agents` in `src/gaia/agents/registry.py`. The factory must filter kwargs to valid dataclass fields so callers can pass extra kwargs without crashing.
+Agents register through the `gaia.agent` entry-point group — there is no
+built-in registration block to edit. Declare the entry point in the package's
+`pyproject.toml` and return an `AgentRegistration` from it; import the agent
+module inside the factory so discovery stays cheap.
+
+```toml
+[project.entry-points."gaia.agent"]
+hello = "gaia_agent_hello:build_registration"
+```
 
 ```python
-def hello_factory(**kwargs):
-    from gaia.agents.hello.agent import HelloAgent, HelloAgentConfig
-    valid_fields = {f.name for f in dataclasses.fields(HelloAgentConfig)}
-    config = HelloAgentConfig(**{k: v for k, v in kwargs.items() if k in valid_fields})
-    return HelloAgent(config=config)
+def build_registration():
+    from gaia.agents.registry import AgentRegistration, class_factory
 
-self._register(
-    AgentRegistration(
+    def factory(**kwargs):
+        from gaia_agent_hello.agent import HelloAgent
+
+        return class_factory(HelloAgent)(**kwargs)
+
+    return AgentRegistration(
         id="hello",
         name="Hello Agent",
         description="Greets the user and tells them the time.",
-        source="builtin",
+        source="installed",
         conversation_starters=["Say hi", "What time is it?"],
-        factory=hello_factory,
+        factory=factory,
         agent_dir=None,
-        models=[],
+        models=["Gemma-4-E4B-it-GGUF"],
+        namespaced_agent_id="installed:hello",
     )
-)
 ```
+
+`gaia agent init hello` scaffolds exactly this layout; `hub/agents/hello-world/python/`
+is the reference package.
 
 ---
 
@@ -275,7 +287,7 @@ python -m pytest tests/test_hello_agent.py -xvs
 | Register `@tool` at module scope | The decorator needs `self`; top-level loses the binding. |
 | Hard-code `http://localhost:13305` | Breaks Docker/CI where Lemonade runs elsewhere. |
 | Mix `time.sleep` into the reasoning loop | Blocks SSE streaming in the UI backend. |
-| Add a mixin without a `KNOWN_TOOLS` entry | The BuilderAgent template scaffolds tool imports from this map; missing entries break agent generation. |
+| Add a mixin without a `KNOWN_TOOLS` entry | Other agents can't compose it by name, and `util/check_agent_conventions.py` never verifies it imports. |
 | Write `.mdx` docs without updating `docs/docs.json` | Mintlify returns 404 for the page. |
 | Call `subprocess` with user input | Command injection; use `shlex.quote` or a list of args. |
 

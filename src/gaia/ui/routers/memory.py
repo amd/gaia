@@ -392,12 +392,7 @@ def list_knowledge(
     if sensitive is None and not include_sensitive:
         effective_sensitive = False
 
-    # Build kwargs for the store.  v2 params are added incrementally so
-    # the router degrades gracefully across MemoryStore versions:
-    #   - v2 full:  include_superseded + time_from + time_to
-    #   - v2 partial:  include_superseded only (time filters not yet in store)
-    #   - v1:  base params only
-    base_kwargs = dict(
+    return _get_store().get_all_knowledge(
         category=category,
         context=context,
         entity=entity,
@@ -407,35 +402,10 @@ def list_knowledge(
         order=order,
         offset=offset,
         limit=limit,
+        include_superseded=include_superseded,
+        time_from=time_from,
+        time_to=time_to,
     )
-
-    # Only add non-None time boundaries so we don't trigger TypeError
-    # on stores that lack time_from/time_to params.
-    v2_kwargs: Dict = {"include_superseded": include_superseded}
-    if time_from is not None:
-        v2_kwargs["time_from"] = time_from
-    if time_to is not None:
-        v2_kwargs["time_to"] = time_to
-
-    store = _get_store()
-    try:
-        return store.get_all_knowledge(**base_kwargs, **v2_kwargs)
-    except TypeError:
-        # Store may not support time_from/time_to yet — retry with
-        # just include_superseded (which the v2 store does support).
-        if "time_from" in v2_kwargs or "time_to" in v2_kwargs:
-            try:
-                return store.get_all_knowledge(
-                    **base_kwargs, include_superseded=include_superseded
-                )
-            except TypeError:
-                pass  # fall through to full v1 fallback
-        # Full v1 fallback — store supports none of the v2 params
-        logger.debug(
-            "[memory router] get_all_knowledge does not accept v2 params, "
-            "falling back to base query"
-        )
-        return store.get_all_knowledge(**base_kwargs)
 
 
 def _make_embed_fn(model: str) -> Callable[[str], bytes]:
@@ -828,7 +798,7 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
     # If an active agent session is available, prefer it (uses cached FAISS index)
     if _reconcile_fn is not None:
         try:
-            return _reconcile_fn()
+            return _reconcile_fn(max_pairs=max_pairs)
         except Exception as exc:
             logger.error("[memory router] agent reconcile failed: %s", exc)
             raise HTTPException(
@@ -955,32 +925,38 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
             if id_b in meta_a["reconciled_with"] or id_a in meta_b["reconciled_with"]:
                 continue
 
-            try:
-                prompt = _RECONCILIATION_PROMPT.format(
-                    date_a=str(item_a.get("created_at", "unknown"))[:10],
-                    content_a=str(item_a.get("content", ""))[:500],
-                    date_b=str(item_b.get("created_at", "unknown"))[:10],
-                    content_b=str(item_b.get("content", ""))[:500],
-                )
-                raw = llm.chat(
-                    [{"role": "user", "content": prompt}],
-                    temperature=0.1,
-                    max_new_tokens=128,
-                )
-                if hasattr(raw, "__iter__") and not isinstance(raw, str):
-                    raw = "".join(raw)
-                raw = raw.strip()
-                # Strip <think> blocks from reasoning models
-                import re as _re
+            prompt = _RECONCILIATION_PROMPT.format(
+                date_a=str(item_a.get("created_at", "unknown"))[:10],
+                content_a=str(item_a.get("content", ""))[:500],
+                date_b=str(item_b.get("created_at", "unknown"))[:10],
+                content_b=str(item_b.get("content", ""))[:500],
+            )
+            # An LLM that is down fails the run; only an unparseable reply skips a pair.
+            raw = llm.chat(
+                [{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_new_tokens=128,
+            )
+            if hasattr(raw, "__iter__") and not isinstance(raw, str):
+                raw = "".join(raw)
+            raw = raw.strip()
+            # Strip <think> blocks from reasoning models
+            import re as _re
 
-                raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
-                if raw.startswith("```"):
-                    raw = _re.sub(r"^```(?:json)?\s*", "", raw)
-                    raw = _re.sub(r"\s*```$", "", raw).strip()
+            raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+            if raw.startswith("```"):
+                raw = _re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = _re.sub(r"\s*```$", "", raw).strip()
+            try:
                 classification = json.loads(raw)
                 relationship = classification.get("relationship", "neutral")
-            except Exception as exc:
-                logger.debug("[memory router] reconcile pair classify failed: %s", exc)
+            except (json.JSONDecodeError, AttributeError) as exc:
+                logger.warning(
+                    "[memory router] skipping pair %s/%s: unparseable reply (%s)",
+                    id_a,
+                    id_b,
+                    exc,
+                )
                 continue
 
             result["pairs_checked"] += 1

@@ -20,7 +20,7 @@ response that fully answers.
 - Design-system decisions (colour, spacing, components) for GAIA apps
 - Accessibility reviews and fixes (WCAG AA minimum)
 - Voice UX — turn-taking, barge-in, error recovery for `gaia talk`
-- Reviewing UI-heavy roadmap plans (`docs/plans/agent-ui.mdx`, `setup-wizard.mdx`, etc.)
+- Reviewing UI-heavy roadmap plans (`docs/plans/gaia-ui-redesign.mdx`, etc.)
 
 ## When NOT to use
 
@@ -33,11 +33,11 @@ response that fully answers.
 | Surface | Where | User |
 |---------|-------|------|
 | Agent UI (primary) | `src/gaia/apps/webui/` | End user, browser / desktop chat |
-| Setup Wizard | Planned — see `docs/plans/setup-wizard.mdx` | First-run onboarding |
+| First-run setup | Agent UI `SetupScreen` (`src/gaia/apps/webui/src/components/SetupScreen.tsx`) | First-run onboarding |
 | Configuration dashboard | Agent UI panel (planned) | Power user |
 | Observability dashboard | Agent UI panel (planned) | Developer/operator |
 | Voice (`gaia talk`) | CLI + optional UI | Hands-free user |
-| Standalone apps | `src/gaia/apps/{jira,llm,summarize,docker,example}/` | Task-specific |
+| Standalone apps | `src/gaia/apps/{llm,example}/` | Task-specific |
 
 ## Design principles
 

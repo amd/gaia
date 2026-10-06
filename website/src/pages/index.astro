@@ -16,12 +16,20 @@ import Downloads from '../components/Downloads.astro';
 import Feature from '../components/Feature.astro';
 import StatBlock from '../components/StatBlock.astro';
 import ReleaseStream from '../components/ReleaseStream.astro';
-import { formatCount, getNpmDownloadStats, getReleaseStats, getRepoStats } from '../data/github';
+import ReleaseCandidate from '../components/ReleaseCandidate.astro';
+import {
+  formatCount,
+  getNpmDownloadStats,
+  getReleaseCandidate,
+  getReleaseStats,
+  getRepoStats,
+} from '../data/github';
 
 const DOCS = 'https://amd-gaia.ai/docs';
 
 const repoStats = await getRepoStats();
 const releaseStats = await getReleaseStats();
+const releaseCandidate = await getReleaseCandidate();
 const npmStats = await getNpmDownloadStats();
 
 // Labels are deliberately specific ("GitHub release downloads", "npm
@@ -193,9 +201,7 @@ const ARCHITECTURE = [
       </p>
 
       <Downloads class="animate-g-rise mt-10 [animation-delay:0.14s]" />
-
-      {/* Release-candidate slot (#4845): a collapsed "Try the release candidate"
-          entry goes here, below the stable downloads and never ahead of them. */}
+      <ReleaseCandidate candidate={releaseCandidate} class="mt-6" />
 
       <!-- What the install does to the machine, said before anyone downloads. -->
       <ul class="mx-auto mt-10 grid w-full max-w-[720px] gap-x-8 gap-y-5 border-t border-g-border pt-8 text-left sm:grid-cols-3">

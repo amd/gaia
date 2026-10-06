@@ -3609,7 +3609,7 @@ Examples:
     init_parser.add_argument(
         "--minimal",
         action="store_true",
-        help="Use minimal profile (~3 GB) - shortcut for --profile minimal",
+        help="Use minimal profile (~6 GB) - shortcut for --profile minimal",
     )
     init_parser.add_argument(
         "--skip-models",

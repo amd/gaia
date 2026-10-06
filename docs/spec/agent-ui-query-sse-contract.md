@@ -13,8 +13,7 @@
 >
 > **Tracks:** [#2015](https://github.com/amd/gaia/issues/2015) (this spec),
 > epic [#2014](https://github.com/amd/gaia/issues/2014) (Agent UI v2, Phase 0).
-> **Design source:** [`docs/plans/agent-ui-agent-capabilities-plan.md`](../plans/agent-ui-agent-capabilities-plan.md)
-> §0.1 (REST contract), §0.2 (SSE schema), §0.15 (contract evolution).
+> **Design source:** the Agent UI v2 design (removed from the tree; this document is now the source of truth).
 > **First consumer:** [#2016](https://github.com/amd/gaia/issues/2016) implements
 > this contract as `POST /v1/email/query` on the email sidecar (contract bump
 > 2.3 → 2.4).

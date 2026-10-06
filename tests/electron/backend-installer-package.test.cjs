@@ -8,7 +8,7 @@ const { EventEmitter } = require("events");
 
 const installerPath = path.resolve(__dirname, "../../src/gaia/apps/webui/services/backend-installer.cjs");
 
-function loadInstaller(platform, localWheel) {
+function loadInstaller(platform, localWheel, versionOutput = "GAIA version 0.23.1") {
   const spawn = jest.fn(() => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
@@ -34,7 +34,7 @@ function loadInstaller(platform, localWheel) {
       if (name === "child_process") return {
         spawn,
         execSync: jest.fn(),
-        spawnSync: jest.fn(() => ({ status: 0, stdout: "GAIA version 0.23.1" })),
+        spawnSync: jest.fn(() => ({ status: 0, stdout: versionOutput })),
       };
       return require(name);
     },
@@ -63,5 +63,28 @@ describe("backend installation package sources", () => {
     const [, args] = spawn.mock.calls.find(([, argv]) => argv[0] === "pip");
     expect(args).toContain("amd-gaia[ui]==0.23.1");
     expect(args.join(" ")).not.toContain("download.pytorch.org");
+  });
+});
+
+describe("release-candidate backend versions", () => {
+  // The app carries npm's 0.25.0-rc.1; PyPI and `gaia --version` say 0.25.0rc1.
+  test("an RC app pins the PEP 440 spelling of its version", async () => {
+    const { installer, spawn } = loadInstaller("linux");
+    await installer.installBackend({ version: "0.25.0-rc.1", skipGaiaInit: true, isPackaged: false });
+    const [, args] = spawn.mock.calls.find(([, argv]) => argv[0] === "pip");
+    expect(args).toContain("amd-gaia[ui]==0.25.0rc1");
+  });
+
+  test("a final version is unchanged", () => {
+    const { installer } = loadInstaller("linux");
+    expect(installer.toPep440("0.25.0")).toBe("0.25.0");
+    expect(installer.toPep440("0.25.0-rc.12")).toBe("0.25.0rc12");
+  });
+
+  // Truncating to 0.25.0 would make an RC backend look like the final's, so
+  // the final app would never upgrade it.
+  test("the installed version keeps its rc suffix", () => {
+    const { installer } = loadInstaller("linux", undefined, "0.25.0rc1");
+    expect(installer.getInstalledVersion("/fixture/gaia")).toBe("0.25.0rc1");
   });
 });

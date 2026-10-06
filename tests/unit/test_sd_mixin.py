@@ -383,3 +383,40 @@ class TestSDHealthCheckRemedy:
 
         assert f"pull {default}" in health["error"], health["error"]
         assert "gaia download" not in health["error"]
+
+
+class TestSDOutputLocation:
+    """Images land under the GAIA config dir and never overwrite each other."""
+
+    def test_default_output_dir_is_under_gaia_config_dir(
+        self, tmp_path, monkeypatch, mock_lemonade_client
+    ):
+        from gaia import config
+
+        monkeypatch.setattr(config, "GAIA_CONFIG_DIR", tmp_path)
+        mixin = SDToolsMixin()
+        mixin.init_sd()
+
+        assert mixin.sd_output_dir == tmp_path / "cache" / "sd" / "images"
+        assert mixin.sd_output_dir.is_dir()
+
+    def test_same_prompt_twice_keeps_both_images(self, tmp_path, mock_lemonade_client):
+        mixin = SDToolsMixin()
+        mixin.init_sd(output_dir=str(tmp_path))
+
+        first = mixin._save_image("a red fox", b"one", "SDXL-Turbo")
+        second = mixin._save_image("a red fox", b"two", "SDXL-Turbo")
+
+        assert first != second
+        assert first.read_bytes() == b"one"
+        assert second.read_bytes() == b"two"
+
+    def test_health_check_names_the_unexpected_error(self, mock_lemonade_client):
+        mock_lemonade_client.list_sd_models.side_effect = OSError("socket closed")
+        mixin = SDToolsMixin()
+        mixin.init_sd()
+
+        health = mixin.sd_health_check()
+
+        assert health["status"] == "unavailable"
+        assert "socket closed" in health["error"]

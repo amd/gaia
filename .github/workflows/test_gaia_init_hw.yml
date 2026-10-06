@@ -13,7 +13,7 @@
 #
 # `Windows` is load-bearing: the pool's Halos are mostly Linux and the steps are
 # PowerShell. init and the prompt share ONE step because a Lemonade started in
-# one step does not survive the step boundary (see test_agent_behavior_e2e.yml).
+# one step does not survive the step boundary.
 name: GAIA Init First Run (Hardware)
 
 on:

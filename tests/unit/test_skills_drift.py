@@ -769,3 +769,27 @@ def test_a_local_skills_remediation_never_tells_you_to_reinstall_from_the_hub(
 
     assert "gaia skill lock --relock" in drift.remediation
     assert "gaia skill install" not in drift.remediation
+
+
+def test_lock_save_failure_leaves_previous_lock_intact(tmp_path, monkeypatch):
+    """A crash mid-save must not truncate skill-lock.json."""
+    import os
+
+    from gaia.skills.lock import LockEntry, SkillLock, lock_path
+
+    lock = SkillLock.load(tmp_path)
+    lock.record(LockEntry(name="alpha", version="1.0.0"))
+    lock.save()
+    before = lock_path(tmp_path).read_text(encoding="utf-8")
+
+    lock.record(LockEntry(name="beta", version="2.0.0"))
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", _boom)
+    with pytest.raises(OSError, match="disk full"):
+        lock.save()
+
+    assert lock_path(tmp_path).read_text(encoding="utf-8") == before
+    assert [p.name for p in tmp_path.iterdir()] == ["skill-lock.json"]

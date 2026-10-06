@@ -94,3 +94,21 @@ async def test_agent_loop_tick_cache_hit_gets_clear_cancel(clean_cache, monkeypa
     await loop._execute_tick(session["id"], session, [goal])
 
     assert agent.seen == {"cancel_set": False, "console_cancelled": False}
+
+
+async def test_agent_loop_tick_keeps_private_chat_incognito(clean_cache):
+    db = ChatDatabase(":memory:")
+    session = db.create_session(model="M-GGUF", agent_type="chat", private=True)
+    agent = _RecordingAgent("M-GGUF")
+    agent._incognito = True
+    agent._incognito_reason = "private"
+    helpers._store_agent(session["id"], "M-GGUF", [], agent, "chat")
+
+    loop = AgentLoop()
+    loop._db = db
+    goal = types.SimpleNamespace(priority="high", title="t", description="")
+
+    await loop._execute_tick(session["id"], session, [goal])
+
+    assert agent._incognito is True
+    assert agent._incognito_reason == "private"

@@ -56,6 +56,20 @@ _HOME_DIRECTORY_REFUSAL = json.dumps(
 )
 
 
+def _dropped_note(result: Any) -> Dict[str, Any]:
+    """Report chunks whose embedding failed, so a partial index is not "ok"."""
+    dropped = getattr(result, "chunks_dropped", 0)
+    if not dropped:
+        return {}
+    return {
+        "chunks_dropped": dropped,
+        "warning": (
+            f"{dropped} chunk(s) failed to embed and are not searchable yet; "
+            "run index_codebase again to retry them."
+        ),
+    }
+
+
 def _is_home_directory(repo_path: str) -> bool:
     return str(Path(repo_path).resolve()) == str(Path.home().resolve())
 
@@ -217,6 +231,7 @@ class CodeIndexToolsMixin:
                         "status": "ok",
                         "files_indexed": result.files_indexed,
                         "chunks_created": result.chunks_created,
+                        **_dropped_note(result),
                     }
                 )
             except Exception as e:
@@ -288,6 +303,7 @@ class CodeIndexToolsMixin:
                             "index_built_now": {
                                 "files_indexed": built.files_indexed,
                                 "chunks_created": built.chunks_created,
+                                **_dropped_note(built),
                             },
                             "results": output,
                         },

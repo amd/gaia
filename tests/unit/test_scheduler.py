@@ -153,6 +153,14 @@ class TestSchedulerCreate:
             await scheduler.create_task("bad", "whenever", "Prompt")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("interval", ["every 0m", "0s"])
+    async def test_create_zero_interval_rejected(self, scheduler, interval):
+        """A zero interval would run the prompt back to back forever."""
+        with pytest.raises(ValueError, match="at least 1 second"):
+            await scheduler.create_task("zero", interval, "Prompt")
+        assert scheduler.get_task("zero") is None
+
+    @pytest.mark.asyncio
     async def test_list_tasks(self, scheduler):
         await scheduler.create_task("a", "every 1h", "Prompt A")
         await scheduler.create_task("b", "every 2h", "Prompt B")
@@ -313,6 +321,21 @@ class TestSchedulerExecution:
         assert task["status"] == "active"
 
         await sched.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_deleted_chat_is_recreated(self, scheduler, fake_db):
+        """Runs keep their history after the user deletes the schedule's chat."""
+        await scheduler.create_task("digest", "every 1h", "Summarize")
+        task = scheduler._tasks["digest"]
+
+        await scheduler._execute_task(task)
+        first_session = task.session_id
+        fake_db.delete_session(first_session)
+        await scheduler._execute_task(task)
+
+        assert task.session_id not in (None, first_session)
+        contents = [m["content"] for m in fake_db.get_messages(task.session_id)]
+        assert contents[-2:] == ["Summarize", "ran: Summarize"]
 
     @pytest.mark.asyncio
     async def test_results_stored(self, fake_db):

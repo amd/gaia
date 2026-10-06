@@ -2,7 +2,6 @@
 
 Status: Design / not started
 Owner: TBD
-Companion to: [`email-agent-tui-port.md`](email-agent-tui-port.md) (engineering scope)
 Related: #1186 (TUI), #2191 (email thin client), #2142 (daemon relay), #2469 (agent-led connector onboarding), #555 (autonomy epic)
 
 ---
@@ -1216,7 +1215,7 @@ data already exists and is not being drawn.
 
 ---
 
-## 7. Disagreements with `email-agent-tui-port.md`
+## 7. Disagreements with the earlier TUI port plan
 
 **D-a. Preflight is not "Phase 5.1, do it early" — it is Phase 1's acceptance criterion.**
 The plan sequences the readiness screen as a UX polish item that "should jump the queue".
@@ -1346,5 +1345,5 @@ keeping.
 
 ---
 
-*Registration note: `docs/docs.json` lists only `.mdx` plan pages. This document is `.md`,
-matching `email-agent-tui-port.md`, and is deliberately not added to the navigation.*
+*Registration note: `docs/docs.json` lists only `.mdx` plan pages. This document is `.md`
+and is deliberately not added to the navigation.*

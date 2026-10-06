@@ -297,8 +297,8 @@ async def start_agent_mcp_server(body: Optional[StartAgentServerRequest] = None)
         stderr_out = ""
         try:
             stderr_out = (_agent_mcp_process.stderr.read() or "")[:500]
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            logger.debug("Could not read the MCP server's stderr: %s", exc)
         _agent_mcp_process = None
         raise HTTPException(
             status_code=500,
