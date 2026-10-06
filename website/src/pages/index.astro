@@ -2,12 +2,11 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// The landing page has exactly one job: get a visitor to install the GAIA agent
-// and put it to work. One product, one install — the hero's only branch is
-// which front end you open it in, desktop app or terminal, and that branch is
-// on screen because both ship and a visitor has to be able to tell them apart.
-// Everything below is what you do with the one agent: run it, integrate it,
-// build on it.
+// GAIA is an agent factory, and the page serves its two audiences equally:
+// people who want to use an agent harness (install the GAIA agent, top of the
+// page) and people who want to build one (skills, evals, the SDK). Everything
+// below the fold is what the GAIA agent does and how it is built, then the
+// open-source project behind it.
 
 import Layout from '../layouts/Layout.astro';
 import Header from '../components/Header.astro';
@@ -39,33 +38,69 @@ const STATS = [
   { value: formatCount(npmStats.lifetime), label: 'npm downloads total' },
 ];
 
-const RECENT_RELEASES = releaseStats.releases.slice(0, 8);
+// Five is enough to show the cadence; the full list is one link away.
+const RECENT_RELEASES = releaseStats.releases.slice(0, 5);
 
-// Three things you can do with the one agent — not three products.
-const PATHS = [
+// The two audiences, side by side and equally weighted: people who want to use
+// an agent harness, and people who want to build one. Every command here is a
+// real entry point (`gaia skill create` is in src/gaia/skills/cli.py, `--fix`
+// in the eval CLI), and every href is a live docs page.
+interface Path {
+  title: string;
+  body: string;
+  href: string;
+  code?: string;
+}
+
+const AUDIENCES: { id: string; title: string; lede: string; paths: Path[] }[] = [
   {
-    title: 'Run it',
-    body: 'Give it a task over your files, your data, or your code — it runs locally.',
-    code: 'gaia-tui',
-    href: `${DOCS}/quickstart`,
-    external: true,
+    id: 'use',
+    title: 'Use GAIA',
+    lede: 'Install the GAIA agent and give it work over your files, data and code.',
+    paths: [
+      {
+        title: 'Desktop app',
+        body: 'Chat, documents and files in a window, with every tool call shown as it runs.',
+        href: `${DOCS}/guides/agent-ui`,
+      },
+      {
+        title: 'Terminal',
+        body: 'The same agent in your shell, on every platform GAIA builds for.',
+        code: 'gaia-tui',
+        href: `${DOCS}/guides/terminal-hub`,
+      },
+      {
+        title: 'Inside your own app',
+        body: 'Run the agent as a local sidecar from Node.',
+        code: 'npm install @amd-gaia/gaia',
+        href: 'https://www.npmjs.com/package/@amd-gaia/gaia',
+      },
+    ],
   },
   {
-    title: 'Integrate it',
-    body: 'Embed the agent in your app as a local sidecar.',
-    code: 'npm install @amd-gaia/gaia',
-    // The npm page, not ${DOCS}/guides/gaia: that guide is not on main yet, so
-    // the docs site 404s it. The package is published (0.1.0) and its README is
-    // the integration reference until the guide ships.
-    href: 'https://www.npmjs.com/package/@amd-gaia/gaia',
-    external: true,
-  },
-  {
-    title: 'Build on it',
-    body: 'Add a skill, or publish your own agent to the hub.',
-    code: 'gaia skill create <name>',
-    href: `${DOCS}/guides/custom-agent`,
-    external: true,
+    id: 'build',
+    title: 'Build with GAIA',
+    lede: 'Make your own agent harness with the same tools that built the GAIA agent.',
+    paths: [
+      {
+        title: 'Skills',
+        body: 'Teach an agent a new task with a SKILL.md file. No code required.',
+        code: 'gaia skill create <name>',
+        href: `${DOCS}/guides/composing-skills`,
+      },
+      {
+        title: 'Evals and auto-fix',
+        body: 'Score an agent on multi-turn scenarios. With --fix, Claude Code patches the failures and re-runs them.',
+        code: 'gaia eval agent --fix',
+        href: `${DOCS}/guides/eval`,
+      },
+      {
+        title: 'Python SDK',
+        body: 'A base agent class with tool calling, state and error recovery. A minimal harness is a prompt and some tools.',
+        code: 'pip install amd-gaia',
+        href: `${DOCS}/sdk`,
+      },
+    ],
   },
 ];
 
@@ -131,142 +166,182 @@ const ARCHITECTURE = [
   },
   {
     title: 'No silent cloud fallback',
-    body: 'A remote model is something you switch on for a run, never a default.',
+    body: 'A cloud model is something you pick, never a default and never a fallback.',
   },
 ];
 ---
 
 <Layout
-  title="GAIA — the agent for AI PCs"
-  description="GAIA is AMD's open-source AI agent for AI PCs. It runs locally on your own hardware: your data stays on the machine, it works air-gapped, and there are no token costs."
+  title="GAIA — the open agent factory for AI PCs"
+  description="GAIA is AMD's open-source agent factory. Install the GAIA agent to work over your files, data and code locally on your PC, or build your own agent harness with skills, evals and an auto-fix loop."
 >
   <Header />
   <main id="main-content">
-    <!-- 1. Hero — the claim, then the one install. A product demo belongs here
-         and will return as a real recording; the scripted stand-in was removed
-         rather than left on the page pretending to be one. -->
-    <section id="install" class="g-shell flex flex-col items-center pb-24 pt-[136px] text-center sm:pb-32 sm:pt-[184px]">
-      <h1 class="g-h-hero animate-g-rise max-w-[14ch]">
-        The agent for<br /><span class="whitespace-nowrap text-g-accent-text">AI PCs.</span>
+    <!-- 1. Hero — what GAIA is, then the one install. -->
+    <section id="install" class="g-shell flex scroll-mt-[66px] flex-col items-center pb-20 pt-[128px] text-center sm:pb-28 sm:pt-[168px]">
+      <p class="g-eyebrow animate-g-rise">Open source · from AMD</p>
+
+      <h1 class="g-h-hero animate-g-rise mt-5 text-balance" style="animation-delay:0.04s">
+        <span class="sm:whitespace-nowrap">The agent factory</span>
+        for <span class="whitespace-nowrap text-g-accent-text">AI PCs.</span>
       </h1>
 
-      <p class="g-lede animate-g-rise mt-6 text-center" style="animation-delay:0.08s">
-        GAIA runs on your own hardware. Your data stays on the machine, it works
-        air-gapped, and there are no token costs.
+      <p class="g-lede animate-g-rise mt-6 max-w-[600px] text-center" style="animation-delay:0.08s">
+        GAIA uses coding-agent skills, evals and an auto-fix loop to build and improve
+        agent harnesses. The GAIA agent is the one it built to show what that can do.
+        Install it below, or <a href="#build" class="prose-link whitespace-nowrap">build your own&nbsp;<span aria-hidden="true">↓</span></a>
       </p>
 
       <Downloads class="animate-g-rise mt-10 [animation-delay:0.14s]" />
-    </section>
 
-    <!-- Traction, right under the install — stars/forks/downloads, then
-         shipping cadence. Both come from live GitHub/npm data, fetched at
-         build time (website/src/data/github.ts); no bundled fixture. -->
-    <section id="stats" class="g-shell g-section scroll-mt-[66px] border-t border-g-border">
-      <div class="g-label mb-8">Live from GitHub &amp; npm</div>
-      <StatBlock stats={STATS} />
-    </section>
+      {/* Release-candidate slot (#4845): a collapsed "Try the release candidate"
+          entry goes here, below the stable downloads and never ahead of them. */}
 
-    <section id="releases" class="g-shell g-section scroll-mt-[66px] border-t border-g-border">
-      <div class="g-label mb-8">Releases</div>
-      <ReleaseStream releases={RECENT_RELEASES} class="max-w-[560px]" />
-      <a
-        href="https://github.com/amd/gaia/releases"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="g-label mt-6 inline-block text-g-gold-text hover:underline"
-      >
-        View all releases on GitHub →
-      </a>
-    </section>
-
-    <!-- 2. The whole product, in three boxes. -->
-    <section id="build" class="g-shell g-section scroll-mt-[66px]">
-      <div class="g-label mb-8">Run · Integrate · Build</div>
-
-      <ul class="grid gap-[18px] md:grid-cols-3">
-        {PATHS.map((p) => (
-          <li>
-            <a
-              href={p.href}
-              target={p.external ? '_blank' : undefined}
-              rel={p.external ? 'noopener noreferrer' : undefined}
-              class="g-card g-card-hover group flex h-full flex-col p-[26px]"
-            >
-              <h2 class="g-h-card flex items-baseline gap-2">
-                {p.title}
-                <span class="text-[15px] text-g-faint transition-colors group-hover:text-g-accent-text" aria-hidden="true">→</span>
-              </h2>
-              <p class="g-body mb-6 mt-2.5">{p.body}</p>
-
-              {/* Focusable: the command overflows at narrow widths, and a scroll
-                  region no keyboard user can reach hides the tail of it. */}
-              <div tabindex="0" class="g-cmd-plain mt-auto overflow-x-auto text-[12px]">
-                <span class="text-g-code-accent" aria-hidden="true">$</span>
-                <span class="whitespace-nowrap">{p.code}</span>
-              </div>
-            </a>
-          </li>
-        ))}
+      <!-- What the install does to the machine, said before anyone downloads. -->
+      <ul class="mx-auto mt-10 grid w-full max-w-[720px] gap-x-8 gap-y-5 border-t border-g-border pt-8 text-left sm:grid-cols-3">
+        <li>
+          <h3 class="g-label">Runs locally</h3>
+          <p class="g-body mt-1.5 text-[13.5px]">
+            By default, on the NPU and GPU of an AMD Ryzen™ AI PC. It also runs on other
+            Windows, macOS and Linux machines.
+          </p>
+        </li>
+        <li>
+          <h3 class="g-label">First launch</h3>
+          <p class="g-body mt-1.5 text-[13.5px]">
+            Sets up the backend and downloads the default local model, about 6&nbsp;GB.
+          </p>
+        </li>
+        <li>
+          <h3 class="g-label">Cloud is opt-in</h3>
+          <p class="g-body mt-1.5 text-[13.5px]">
+            Choose Fireworks AI with your own key and your chat goes to that provider.
+            Documents are still indexed on your PC.
+            <a href={`${DOCS}/guides/ai-providers`} target="_blank" rel="noopener noreferrer" class="prose-link whitespace-nowrap">How providers work</a>
+          </p>
+        </li>
       </ul>
     </section>
 
-    <!-- 3. What it can do, and why it is built that way. One bullet shape for
-         both, so the page reads as one list, twice. -->
+    <!-- 2. The two audiences, equally weighted. -->
+    <section id="use-or-build" class="g-shell g-section scroll-mt-[66px] border-t border-g-border">
+      <h2 class="g-h-section max-w-[22ch] text-balance">Use the GAIA agent, or build your own.</h2>
+      <p class="g-lede-sm mt-4 max-w-[640px]">
+        Anyone can build an agent harness with GAIA. The GAIA agent is the one the project
+        ships, made with the same skills, evals and SDK you get.
+      </p>
+
+      <div class="mt-10 grid gap-[18px] md:grid-cols-2">
+        {AUDIENCES.map((a) => (
+          <section id={a.id} aria-labelledby={`${a.id}-title`} class="g-card scroll-mt-[86px] p-[22px] sm:p-[26px]">
+            <h3 id={`${a.id}-title`} class="g-h-card">{a.title}</h3>
+            <p class="g-body mt-2">{a.lede}</p>
+
+            <ul class="mt-6 divide-y divide-g-border border-t border-g-border">
+              {a.paths.map((p) => (
+                <li class="py-4 last:pb-0">
+                  <a
+                    href={p.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="group inline-flex items-baseline gap-2 text-[15px] font-semibold text-g-text transition-colors hover:text-g-accent-text"
+                  >
+                    {p.title}
+                    <span class="text-[13px] text-g-faint transition-colors group-hover:text-g-accent-text" aria-hidden="true">→</span>
+                  </a>
+                  <p class="g-body mt-1">{p.body}</p>
+                  {p.code && (
+                    /* Focusable: the command overflows at narrow widths, and a
+                       scroll region no keyboard user can reach hides its tail. */
+                    <div tabindex="0" role="region" aria-label={`Command: ${p.code}`} class="g-cmd-plain mt-3 overflow-x-auto text-[12px]">
+                      <span class="text-g-code-accent" aria-hidden="true">$</span>
+                      <code class="whitespace-nowrap bg-transparent p-0">{p.code}</code>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
+    </section>
+
+    <!-- 3. What the GAIA agent can do, and why it is built that way. One bullet
+         shape for both, so the page reads as one list, twice. -->
     <section id="features" class="g-shell g-section scroll-mt-[66px] border-t border-g-border">
-      <div class="g-label mb-8">What it can do</div>
+      <h2 class="g-label mb-8">What the GAIA agent can do</h2>
       <ul class="grid gap-x-12 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
         {CAPABILITIES.map((f) => <Feature {...f} />)}
       </ul>
     </section>
 
     <section id="architecture" class="g-shell g-section scroll-mt-[66px] border-t border-g-border">
-      <div class="g-label mb-8">Under the hood</div>
+      <h2 class="g-label mb-8">Under the hood</h2>
       <ul class="grid gap-x-12 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
         {ARCHITECTURE.map((f) => <Feature {...f} />)}
       </ul>
     </section>
 
-    <!-- 3. The terminal install, for people who would rather not click a
+    <!-- 4. The terminal install, for people who would rather not click a
          download at all. -->
     <section id="terminal-install" class="scroll-mt-[66px] border-t border-g-border">
       <div class="g-shell py-16 text-center sm:py-[88px]">
         <h2 class="g-h-cta mx-auto max-w-[720px]">Or install it from the terminal.</h2>
+        <p class="g-body mx-auto mt-4 max-w-[520px] text-[14.5px]">
+          Installs the <code class="mono text-g-text">gaia</code> CLI and the terminal agent,
+          <code class="mono text-g-text">gaia-tui</code>, checksum-verified.
+        </p>
         <InstallCommand align="center" class="mt-8" />
       </div>
     </section>
 
-    <!-- 5. The contributor CTA. Last on the page on purpose: it is the ask for
-         the small share of visitors who came to build rather than install. -->
-    <section id="contribute" class="border-t border-g-border">
-      <div class="g-shell flex flex-wrap items-center justify-between gap-7 py-14">
+    <!-- 5. The open-source project: the ask to contribute, with the live
+         numbers and shipping cadence as its evidence. Stats come from GitHub
+         and npm at build time (website/src/data/github.ts); no bundled fixture. -->
+    <section id="contribute" class="border-t border-g-border bg-g-bg2">
+      <div class="g-shell grid gap-12 py-16 sm:py-20 lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)] lg:gap-16">
         <div>
-          <h2 class="font-display text-[22px] font-semibold tracking-[-0.02em] text-g-text">
-            Built in the open.
-          </h2>
-          <p class="g-body mt-2.5 max-w-[520px] text-[14.5px] leading-[1.7]">
-            GAIA is MIT-licensed and developed on GitHub. Agents, skills, bug reports and
-            fixes are all welcome — some issues are tagged for first-time contributors.
+          <h2 class="g-h-band">Built in the open.</h2>
+          <p class="g-body mt-4 max-w-[520px] text-[14.5px] leading-[1.7]">
+            GAIA is MIT-licensed and developed on GitHub. Skills, evals, bug reports and
+            fixes are all welcome, and some issues are tagged for first-time contributors.
           </p>
+
+          <div class="mt-7 flex flex-wrap items-center gap-4">
+            <a
+              href="https://github.com/amd/gaia"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="g-btn g-btn-secondary whitespace-nowrap"
+            >
+              <svg class="h-[17px] w-[17px] flex-none" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.604-3.369-1.341-3.369-1.341-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.115 2.504.337 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
+              </svg>
+              Contribute on GitHub
+            </a>
+            <a
+              href="https://github.com/amd/gaia/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="g-cta-link"
+            >Good first issues<span aria-hidden="true">&rarr;</span></a>
+          </div>
+
+          <div id="stats" class="mt-12">
+            <h3 class="g-label mb-5">Live from GitHub &amp; npm</h3>
+            <StatBlock stats={STATS} />
+          </div>
         </div>
 
-        <div class="flex flex-wrap items-center gap-4">
+        <div id="releases">
+          <h3 class="g-label mb-3">Recent releases</h3>
+          <ReleaseStream releases={RECENT_RELEASES} />
           <a
-            href="https://github.com/amd/gaia"
+            href="https://github.com/amd/gaia/releases"
             target="_blank"
             rel="noopener noreferrer"
-            class="g-btn g-btn-secondary whitespace-nowrap"
-          >
-            <svg class="h-[17px] w-[17px] flex-none" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.604-3.369-1.341-3.369-1.341-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.115 2.504.337 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
-            </svg>
-            Contribute on GitHub
-          </a>
-          <a
-            href="https://github.com/amd/gaia/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="g-cta-link"
-          >Good first issues<span aria-hidden="true">&rarr;</span></a>
+            class="g-cta-link mt-5"
+          >All releases on GitHub<span aria-hidden="true">&rarr;</span></a>
         </div>
       </div>
     </section>
