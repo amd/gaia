@@ -69,8 +69,8 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     WaitToolsMixin,
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
-from gaia.env import child_env
 from gaia.agents.tools.rag_tools import documents_still_indexing
+from gaia.env import child_env
 from gaia.llm.inference_location import (
     InferenceLocation,
     resolve_inference_location,
