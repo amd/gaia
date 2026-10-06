@@ -259,6 +259,11 @@ func (m Model) setup() Model {
 	if p.Name == "fireworks" {
 		p.BaseURL = lemonade.FireworksURL
 	}
+	if p.Name == "amd" {
+		p.BaseURL = lemonade.AMDGatewayURL
+		p.Header = lemonade.AMDGatewayAuthHeader
+		p.Prefix = ""
+	}
 	for _, existing := range m.providers {
 		if existing.Name == p.Name {
 			p = existing
@@ -269,6 +274,12 @@ func (m Model) setup() Model {
 		p.BaseURL = lemonade.FireworksURL
 		p.Header = "Authorization"
 		p.Prefix = "Bearer "
+	}
+	// AMD's gateway rejects any other header, so one stored by an earlier
+	// client is corrected here rather than resent and 401'd.
+	if p.Name == "amd" && lemonade.IsAMDGateway(p.BaseURL) {
+		p.Header = lemonade.AMDGatewayAuthHeader
+		p.Prefix = ""
 	}
 	values := []string{p.BaseURL, p.Header, p.Prefix, ""}
 	m.fields = make([]textinput.Model, 4)

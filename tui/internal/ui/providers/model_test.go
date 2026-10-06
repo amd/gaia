@@ -558,3 +558,40 @@ func TestModelListHintIsNeverCutMidWord(t *testing.T) {
 		}
 	}
 }
+
+func amdSetup(providers ...lemonade.Provider) Model {
+	m := New("", 100, 30)
+	m.selected = 2
+	m.providers = providers
+	return m.setup()
+}
+
+func TestAMDGatewayFormStartsWithTheHeaderTheGatewayAccepts(t *testing.T) {
+	m := amdSetup()
+	if m.fields[0].Value() != lemonade.AMDGatewayURL ||
+		m.fields[1].Value() != lemonade.AMDGatewayAuthHeader || m.fields[2].Value() != "" {
+		t.Fatalf("form = %q %q %q, want AMD's URL and subscription-key header",
+			m.fields[0].Value(), m.fields[1].Value(), m.fields[2].Value())
+	}
+	if m.focus != 3 {
+		t.Errorf("focus = %d, want the key field once the URL is known", m.focus)
+	}
+}
+
+func TestAStoredBearerHeaderOnAMDsGatewayIsCorrected(t *testing.T) {
+	m := amdSetup(lemonade.Provider{Name: "amd", BaseURL: lemonade.AMDGatewayURL,
+		Header: "Authorization", Prefix: "Bearer "})
+	if m.fields[1].Value() != lemonade.AMDGatewayAuthHeader || m.fields[2].Value() != "" {
+		t.Fatalf("header = %q prefix = %q, want the stored bearer header replaced",
+			m.fields[1].Value(), m.fields[2].Value())
+	}
+}
+
+func TestAnotherOrganizationsGatewayKeepsItsOwnHeader(t *testing.T) {
+	m := amdSetup(lemonade.Provider{Name: "amd", BaseURL: "https://gateway.example/v1",
+		Header: "api-key"})
+	if m.fields[0].Value() != "https://gateway.example/v1" || m.fields[1].Value() != "api-key" {
+		t.Fatalf("form = %q %q, want the stored endpoint and header kept",
+			m.fields[0].Value(), m.fields[1].Value())
+	}
+}
