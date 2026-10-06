@@ -1041,7 +1041,7 @@ def test_bypass_refuses_an_unsafe_session_id_as_a_400(built, bad_id):
     assert _ALLOWED_CHARS in response.json()["detail"]
 
 
-@pytest.mark.parametrize("good_id", [str(uuid.uuid4()), "s1"])
+@pytest.mark.parametrize("good_id", ["3f2b8c1e-6d4a-4e0b-9c7a-1b2d3e4f5a6b", "s1"])
 def test_ordinary_session_ids_still_work_on_both_routes(built, good_id):
     client, _ = built
 
