@@ -40,7 +40,7 @@ protecting you"; it is not.
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
 from gaia.skills.errors import (
     FORMAT_DOCS_URL,
@@ -48,7 +48,11 @@ from gaia.skills.errors import (
     SkillValidationError,
 )
 from gaia.skills.format import SECURITY_TIERS
+from gaia.skills.lock import SOURCE_LOCAL, SkillLock
 from gaia.skills.permissions import Permission
+
+if TYPE_CHECKING:
+    from gaia.skills.format import Skill
 
 #: Tiers ordered least- to most-trusted. Index == rung on the promotion ladder.
 TIER_ORDER: tuple[str, ...] = ("experimental", "community", "verified")
@@ -160,7 +164,7 @@ def enforce_tier_ceiling(
     declared = ", ".join(str(p) for p in over)
     higher = _lowest_tier_allowing(over)
     remedy = (
-        f"Publish or promote it to '{higher}' first"
+        f"Install a copy signed at '{higher}' or higher from the hub instead"
         if higher
         else "Drop those permissions"
     )
@@ -170,6 +174,43 @@ def enforce_tier_ceiling(
         f"{', '.join(sorted(allowed)) or '(nothing)'}. {remedy} — a skill cannot "
         f"install above its tier's ceiling. See {FORMAT_DOCS_URL}#security-tiers"
     )
+
+
+def held_tier(skill: "Skill") -> str | None:
+    """The tier a recorded install, capture, or import holds *skill* to.
+
+    The front matter is editable after landing, so the lock's
+    ``installed_tier`` caps the claim. ``None`` when no such decision exists
+    (authored, agent-bundled, or ``local`` relock): the tier is then only the
+    author's own claim, which they could raise at will, so it bounds nothing.
+    """
+    directory = skill.directory
+    if directory is None:
+        return None
+    entry = SkillLock.load(directory.parent).get(skill.name)
+    if entry is None or entry.source == SOURCE_LOCAL or not entry.installed_tier:
+        return None
+    return effective_tier(skill.security_tier, entry.installed_tier)
+
+
+def enforce_skill_tier_ceiling(skill: "Skill") -> str | None:
+    """Refuse *skill* if its permissions exceed the tier it was landed at.
+
+    Runs wherever a skill gains reach (load, promote), not only at install, so
+    an edited ``SKILL.md`` cannot grant itself more than its tier allows.
+
+    Returns:
+        The tier checked against, or ``None`` when no landing decision exists.
+
+    Raises:
+        SkillPermissionError: a declared permission sits above the ceiling.
+    """
+    tier = held_tier(skill)
+    if tier is not None:
+        enforce_tier_ceiling(
+            skill.parsed_permissions(), tier=tier, skill_name=skill.name
+        )
+    return tier
 
 
 def _lowest_tier_allowing(permissions: Sequence[Permission]) -> str | None:

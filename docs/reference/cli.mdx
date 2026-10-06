@@ -2397,8 +2397,14 @@ Skills are discovered from three roots, highest precedence first:
     |--------|-------------|
     | `--name` | Install under this name instead of the source's |
     | `--force` | Overwrite an existing installed skill |
+    | `--allow-experimental` | Required when the skill ships code (`tools.py` or `scripts/`) |
 
-    Copies into `~/.gaia/skills/`. **Imported skills re-earn trust:** the security tier is reset to `experimental` regardless of what the source claims, and the reset is reported. `.zip` bundles are checked for path traversal before extraction.
+    Copies into `~/.gaia/skills/` after the same checks a hub install runs. **Imported skills re-earn trust:** the security tier is reset to `experimental` regardless of what the source claims, and the reset is reported.
+
+    - **https only.** A plain `http://` URL, or an https URL that redirects to one, is refused. Download the `.zip` yourself and pass the path if the publisher has no https link.
+    - **Audited before anything is written.** A bundle containing symlinks, or one the security audit blocks, is refused. `.zip` bundles are checked for path traversal.
+    - **Held to the `experimental` ceiling.** Only `network:read` is allowed; a skill asking for `network:write`, `mcp:connect`, or `shell:execute:<binary>` is refused. Install it from the hub so its signature can earn a higher tier.
+    - **Code needs consent.** A skill that ships code is refused without `--allow-experimental`, because that code runs in your agent's own process. If the audit returns REVIEW, the skill lands with its code inert until you run `gaia skill promote <name>`.
   </Tab>
 
   <Tab title="export">
@@ -2540,8 +2546,9 @@ Skills are discovered from three roots, highest precedence first:
           → Expected if you created, imported, or migrated it.
     ```
 
-    Untracked skills are normal right after `create` / `import` / `migrate`;
-    `--relock` starts tracking them as `source: local`.
+    Untracked skills are normal right after `create` / `migrate`;
+    `--relock` starts tracking them as `source: local`. An import is tracked
+    from the moment it lands, as `source: imported`.
 
     <Note>
     **After upgrading from a build that predates content digests**, skills
@@ -2665,8 +2672,10 @@ the tier it *wants*; its signature decides the tier it *gets*.
 | `experimental` | None | `network:read` only | Needs `--allow-experimental` |
 
 The effective tier is `min(claimed, attested)`, so **no unsigned skill installs as
-`verified`** — the claim is collapsed rather than trusted. Imported skills
-(`gaia skill import`) always land `experimental`.
+`verified`** — the claim is collapsed rather than trusted. Imported and captured
+skills (`gaia skill import`, `capture_skill`) always land `experimental`. The ceiling
+is checked again whenever a skill loads or is promoted, against the tier it landed
+at, so editing `SKILL.md` afterwards cannot raise its tier or its grants.
 
 <Warning>
 **v1 skills are instruction + connector-bridged only.** A skill declaring a
@@ -2714,10 +2723,11 @@ tier it was installed at after the ceiling was applied:
 }
 ```
 
-`gaia skill install` writes `source: "hub"` entries; a skill from `create` or
-`import` has no hub provenance, so install never invents one. `gaia skill lock
---relock` may record it as `source: "local"`, which claims exactly the origin it
-has.
+`gaia skill install` writes `source: "hub"` entries, and `gaia skill import`
+writes `source: "imported"` ones held at `experimental`. A skill from `create`
+has no provenance to record; `gaia skill lock --relock` may record it as
+`source: "local"`, which claims exactly the origin it has. Relock never raises
+the tier of a hub, imported, or captured entry.
 
 `content_digest` covers the **installed** directory (after the tier re-stamp), not
 the downloaded archive. That is what makes post-install tampering detectable:
@@ -2752,6 +2762,7 @@ gaia skill list --json | jq '.roots'   # where GAIA looked
 ```bash Adopt a Claude Code skill
 gaia skill list --root claude-import   # what's already visible read-only
 gaia skill import ~/.claude/skills/my-skill    # take ownership, resets to experimental
+gaia skill import ./my-tool-skill --allow-experimental   # it ships tools.py
 ```
 
 ```bash Share a skill

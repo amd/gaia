@@ -288,7 +288,7 @@ def test_export_then_import_round_trips(run, skills_dir, tmp_path):
     assert {"web-search/SKILL.md", "web-search/tools.py"} <= names
 
     shutil.rmtree(skills_dir / "web-search")
-    rc, out, _ = run("import", str(bundle))
+    rc, out, _ = run("import", str(bundle), "--allow-experimental")
     assert rc == 0
     assert "Imported skill 'web-search'" in out
     assert (skills_dir / "web-search" / "tools.py").is_file()
@@ -298,7 +298,7 @@ def test_import_resets_the_security_tier_to_experimental(run, skills_dir, tmp_pa
     source = tmp_path / "incoming"
     copy_fixture("web-search", source)
 
-    rc, out, _ = run("import", str(source / "web-search"))
+    rc, out, _ = run("import", str(source / "web-search"), "--allow-experimental")
     assert rc == 0
     assert "verified → experimental" in out
     assert "security tier: experimental" in run("info", "web-search")[1]
