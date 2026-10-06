@@ -8,6 +8,7 @@ Tests safe_open_document() primitives and upload_by_path endpoint protection.
 
 import os
 import shutil
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,8 +26,8 @@ from gaia.ui.utils import (
 @pytest.fixture
 def home_tmp_dir():
     """Create a temporary directory under $HOME for tests that need ensure_within_home."""
-    d = Path.home() / ".gaia_test_toctou"
-    d.mkdir(exist_ok=True)
+    # Unique per test: parallel workers sharing one dir delete each other's files.
+    d = Path(tempfile.mkdtemp(prefix=".gaia_test_toctou_", dir=Path.home()))
     yield d
     shutil.rmtree(d, ignore_errors=True)
 

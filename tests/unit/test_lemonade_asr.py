@@ -1082,6 +1082,10 @@ class TestErrors:
         monkeypatch.setattr(
             "gaia.llm.lemonade_launcher._macos_app_installed", lambda: False
         )
+        # Nor GAIA's embedded Lemonade, whatever this machine's ~/.gaia holds.
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda *_a: False
+        )
 
         def refuse(_session, _request, **_kwargs):
             raise requests.ConnectionError("connection refused")
