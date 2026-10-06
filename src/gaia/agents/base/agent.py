@@ -40,7 +40,11 @@ from typing import (
     Union,
 )
 
-from gaia.agents.base.completion import CompletionEvidence, incomplete_answer
+from gaia.agents.base.completion import (
+    _BINARY_SUFFIXES,
+    CompletionEvidence,
+    incomplete_answer,
+)
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_KEEP_STEPS,
@@ -1140,6 +1144,10 @@ _VERIFY_REPAIR_STEPS = 2
 # edit that introduces a fresh problem while fixing the first. Past that the
 # turn is looping, and the gaps go into the answer instead.
 _MAX_EDIT_VERIFICATIONS = 2
+# Read-back cap. Past it a file is checked for presence only: parsing a
+# multi-megabyte file on every turn would make the check slow in proportion
+# to what was written.
+_VERIFY_MAX_BYTES = 2 * 1024 * 1024
 _EDIT_VERIFICATION_PROMPT = (
     "[check:edits] The files you changed this turn were read back off disk "
     "and these did not come out right:\n{problems}\n\nFix them now, then "
@@ -7196,7 +7204,7 @@ Do NOT wrap conversational replies in JSON.
         return f"{body.rstrip()}\n\n{statement}"
 
     def _files_written_this_turn(self) -> List[str]:
-        """Every path a write tool successfully wrote this turn.
+        """Every text file a file-editing tool successfully wrote this turn.
 
         Read out of the completion-evidence ledger, which is the only per-turn
         record every write tool feeds: ``CompletionEvidence.record`` is called
@@ -7211,19 +7219,40 @@ Do NOT wrap conversational replies in JSON.
         which is exactly the kind of failure it exists to catch, so it is worth
         the comment.
 
-        Inferred entries are skipped: those are files found by modification
-        time rather than reported by a tool, so the turn may not have written
-        them at all and a complaint about one would be a guess.
+        The ledger also holds files this turn did not *edit*, and those are
+        left out:
+
+        * outputs a tool generated (``generate_image``, ``text_to_speech``,
+          ``take_screenshot``...) — not text, and not an edit to check; only
+          entries whose last writer was a file-editing tool count;
+        * files an executor changed or reported — a file a write tool wrote
+          and a script then rewrote or deleted on purpose is replaced in, or
+          dropped from, the ledger, so it is not read back as a broken edit;
+        * inferred entries — found by modification time rather than reported
+          by a tool, so the turn may not have written them at all.
         """
         paths: List[str] = []
         evidence = getattr(self, "_completion_evidence", None)
-        for item in getattr(evidence, "files", {}).values():
-            if item.written and not item.inferred:
+        files = getattr(evidence, "files", None) or {}
+        removed = getattr(evidence, "removed", None) or set()
+        for item in files.values():
+            if item.written and item.edited and not item.inferred:
                 paths.append(item.path)
         for edit in getattr(self, "_turn_file_edits", None) or []:
             raw = (edit or {}).get("file_path")
-            if raw:
-                paths.append(str(raw))
+            if not raw:
+                continue
+            if evidence is not None:
+                try:
+                    key = evidence.key(str(raw))
+                except (OSError, ValueError):
+                    key = None
+                item = files.get(key)
+                # Deleted on purpose, or rewritten since by something that is
+                # not a file-editing tool: no longer this edit's result.
+                if key in removed or (item is not None and not item.edited):
+                    continue
+            paths.append(str(raw))
         return paths
 
     def _verify_turn_edits(self) -> List[str]:
@@ -7237,6 +7266,12 @@ Do NOT wrap conversational replies in JSON.
         repository, and cannot reach anything the turn had not already
         touched.
 
+        Reads go through the agent's read boundary without prompting: a path
+        the model could not read is not read here either. Binary files (by
+        extension, or a NUL byte in the content) are left alone — "is it
+        empty" and "does it parse" are text questions — and a file over
+        ``_VERIFY_MAX_BYTES`` is checked for presence only.
+
         That is less than a test run would tell you, and it is the part that
         needs no configuration and cannot be wrong about a project it has
         never seen. A `write_file` that reported success and left a file that
@@ -7245,22 +7280,38 @@ Do NOT wrap conversational replies in JSON.
         """
         problems: List[str] = []
         seen: set = set()
+        validator = self._read_validator()
         for raw in self._files_written_this_turn():
             path = Path(str(raw))
             key = os.path.normcase(str(path))
             if key in seen:
                 continue
             seen.add(key)
+            if path.suffix.lower() in _BINARY_SUFFIXES:
+                continue
+            if validator is not None:
+                try:
+                    allowed, _ = validator.validate_read(str(path), prompt_user=False)
+                except (OSError, ValueError):
+                    allowed = False
+                if not allowed:
+                    continue
             try:
                 if not path.is_file():
                     problems.append(
                         f"`{path}` was edited this turn but is not on disk now."
                     )
                     continue
-                text = path.read_text(encoding="utf-8", errors="replace")
+                size = path.stat().st_size
+                if size > _VERIFY_MAX_BYTES:
+                    continue
+                data = path.read_bytes()
             except OSError as e:
                 problems.append(f"`{path}` could not be read back after its edit: {e}")
                 continue
+            if b"\x00" in data:
+                continue
+            text = data.decode("utf-8", errors="replace")
             if not text.strip():
                 problems.append(f"`{path}` is empty after this turn's edit.")
                 continue

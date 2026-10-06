@@ -26,6 +26,7 @@ from gaia.agents.base.agent import (
     Agent,
     verify_edits_enabled,
 )
+from gaia.agents.base.completion import CompletionEvidence
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 from gaia.security import PathValidator
@@ -387,3 +388,159 @@ def test_the_written_path_is_found_without_the_operation_field(real_agent):
     assert (
         real_agent._files_written_this_turn()
     ), "a successful write_file left no trace the check can read"
+
+
+# ------------------------------- only edits are read back, nothing else
+
+
+def _ledger(host, root):
+    host._completion_evidence = CompletionEvidence("", str(root))
+    host._turn_file_edits = []
+    return host._completion_evidence
+
+
+def test_a_generated_image_is_not_read_back_as_an_edit(agent, tmp_path):
+    """Regression. A tool that generates a file reports its path, and the
+    ledger records it — but it is not a text edit, and reading it back as one
+    found a "problem" and sent the model an extra repair turn."""
+    ledger = _ledger(agent, tmp_path)
+    ledger.record(
+        "generate_image",
+        {"prompt": "a forest"},
+        {"status": "success", "image_path": str(tmp_path / "missing.png")},
+        successful=True,
+    )
+
+    assert agent._files_written_this_turn() == []
+    assert agent._verify_turn_edits() == []
+
+
+def test_a_read_only_tool_is_not_read_back(agent, tmp_path):
+    target = tmp_path / "broken.py"
+    target.write_text(BROKEN)
+    ledger = _ledger(agent, tmp_path)
+    ledger.record(
+        "read_file",
+        {"file_path": str(target)},
+        {"status": "success", "file_path": str(target), "content": BROKEN},
+        successful=True,
+    )
+
+    assert agent._verify_turn_edits() == []
+
+
+def test_an_executor_output_is_not_read_back(agent, tmp_path):
+    target = tmp_path / "out.json"
+    target.write_text("not json")
+    ledger = _ledger(agent, tmp_path)
+    ledger.record(
+        "run_python",
+        {"code": "..."},
+        {"status": "success", "output_path": str(target)},
+        successful=True,
+    )
+
+    assert agent._verify_turn_edits() == []
+
+
+def test_a_file_deleted_on_purpose_after_its_edit_is_not_reported(agent, tmp_path):
+    target = tmp_path / "scratch.py"
+    target.write_text(HEALTHY)
+    ledger = _ledger(agent, tmp_path)
+    ledger.record(
+        "write_file",
+        {"file_path": str(target)},
+        {"status": "success", "file_path": str(target)},
+        successful=True,
+    )
+    before = ledger.snapshot("run_shell_command", {"command": "rm scratch.py"})
+    target.unlink()
+    ledger.record(
+        "run_shell_command",
+        {"command": "rm scratch.py"},
+        {"status": "success"},
+        successful=True,
+        before=before,
+    )
+
+    assert agent._verify_turn_edits() == []
+
+
+def test_a_binary_file_written_by_an_edit_tool_is_left_alone(agent, tmp_path):
+    image = tmp_path / "logo.png"
+    image.write_bytes(b"")
+    blob = tmp_path / "data.py"
+    blob.write_bytes(b"\x00\x01\x02 not python")
+    _edited(agent, image, blob)
+
+    assert agent._verify_turn_edits() == []
+
+
+def test_a_path_outside_the_read_boundary_is_not_read(agent, tmp_path):
+    target = tmp_path / "broken.py"
+    target.write_text(BROKEN)
+    _edited(agent, target)
+    validator = MagicMock()
+    validator.validate_read.return_value = (False, "outside the allowed paths")
+    agent.path_validator = validator
+
+    assert agent._verify_turn_edits() == []
+    validator.validate_read.assert_called_once_with(str(target), prompt_user=False)
+
+
+def test_a_real_edit_is_still_read_back_through_the_ledger(agent, tmp_path):
+    target = tmp_path / "broken.py"
+    target.write_text(BROKEN)
+    ledger = _ledger(agent, tmp_path)
+    ledger.record(
+        "write_file",
+        {"file_path": str(target)},
+        {"status": "success", "file_path": str(target)},
+        successful=True,
+    )
+
+    (problem,) = agent._verify_turn_edits()
+
+    assert "no longer parses as Python" in problem
+
+
+class _ImageHost(Agent):
+    """A non-edit tool that reports a path, as generate_image does."""
+
+    def _register_tools(self):
+        @tool
+        def generate_image(prompt: str) -> dict:
+            """Generate an image from a text prompt."""
+            return {"status": "success", "image_path": "/tmp/img.png"}
+
+
+def test_the_loop_does_not_verify_a_generated_image(tmp_path, monkeypatch):
+    """Regression, through the real loop with the check on: one tool call and
+    one answer are two model calls, not three."""
+    monkeypatch.delenv("GAIA_AGENT_VERIFY_EDITS", raising=False)
+    snapshot = dict(_TOOL_REGISTRY)
+    _TOOL_REGISTRY.clear()
+    monkeypatch.chdir(tmp_path)
+    try:
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            host = _ImageHost(silent_mode=True, skip_lemonade=True)
+        host.streaming = False
+        host._tool_requires_confirmation = lambda *a, **kw: False
+        host.console = MagicMock()
+        host.console.cancelled = None
+        assert host._verify_edits_on
+        sent = _script(
+            host,
+            {"tool": "generate_image", "tool_args": {"prompt": "a forest"}},
+            {"answer": "Here is the image."},
+        )
+
+        result = host.process_query("draw a forest", max_steps=5)
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(snapshot)
+
+    assert len(sent) == 2
+    assert host._edit_verification_findings == []
+    assert "[check:edits]" not in json.dumps(sent[-1])
+    assert result["result"].startswith("Here is the image.")
