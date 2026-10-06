@@ -210,7 +210,8 @@ commented out. So **L5–L7 cannot pass on a clean checkout** — not because th
 broken, but because it has nothing to load.
 
 Install the one you are testing, and copy it rather than `gaia skill import` — import
-re-stamps the tier `experimental`, which is not what ships:
+re-stamps the tier `experimental`, which is not what ships, and refuses a skill whose
+grants (like `shell:execute:gh`) sit above that tier's ceiling:
 
 ```bash
 cp -r hub/skills/github-triage ~/.gaia/skills/

@@ -3085,7 +3085,7 @@ Do NOT wrap conversational replies in JSON.
             SkillPermissionError: the skill declares a local-capability
                 permission (``filesystem``/``shell``/``database``/``desktop``/
                 ``env``), which this phase refuses rather than loading
-                unenforced.
+                unenforced, or a permission above its tier's ceiling.
             SkillDriftError: the skill was installed from the hub at
                 ``community`` / ``verified`` and its files no longer match
                 ``skill-lock.json`` — the signature covered different bytes.
@@ -3095,7 +3095,11 @@ Do NOT wrap conversational replies in JSON.
                 def _register_tools(self):
                     self.load_skill("web-research")
         """
-        from gaia.skills import connector_requirements, refuse_unbridged_permissions
+        from gaia.skills import (
+            connector_requirements,
+            enforce_skill_tier_ceiling,
+            refuse_unbridged_permissions,
+        )
         from gaia.skills.binaries import resolve_binary_policies
         from gaia.skills.loader import register_skill_tools, unregister_skill_tools
 
@@ -3122,6 +3126,7 @@ Do NOT wrap conversational replies in JSON.
         # leave tools or prompt fragments behind.
         permissions = skill.parsed_permissions()
         refuse_unbridged_permissions(permissions, skill_name=skill.name)
+        enforce_skill_tier_ceiling(skill)
         requirements = connector_requirements(permissions, skill_name=skill.name)
         # A skill whose CLI is missing must not load and then improvise.
         policies = resolve_binary_policies(permissions, skill_name=skill.name)

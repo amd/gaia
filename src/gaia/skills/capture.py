@@ -46,7 +46,9 @@ from gaia.skills.format import (
 )
 from gaia.skills.lock import SOURCE_CAPTURED, LockEntry, SkillLock
 from gaia.skills.manager import SkillManager
-from gaia.skills.tiers import LOWEST_TIER
+from gaia.skills.naming import skill_directory, validated_skill_name
+from gaia.skills.permissions import refuse_unbridged_permissions
+from gaia.skills.tiers import LOWEST_TIER, effective_tier, enforce_tier_ceiling
 
 log = get_logger(__name__)
 
@@ -57,6 +59,10 @@ _ZIP_MAGIC = b"PK\x03\x04"
 
 #: ``version`` recorded in the lock when the captured SKILL.md declares none.
 UNVERSIONED = "unversioned"
+
+#: Lock ``source`` for ``gaia skill import``. Recorded with ``captured=True`` so
+#: imported code shares the capture deferral and ``gaia skill promote``.
+SOURCE_IMPORTED = "imported"
 
 
 class SkillCaptureError(SkillError):
@@ -225,6 +231,43 @@ def _parse_text_source(source: str, *, origin: str) -> Skill:
     return skill
 
 
+def _refuse_symlinks(source_dir: Path, *, name: str, action: str) -> None:
+    """Refuse a bundle holding symlinks: the audit skips them, copytree follows them."""
+    linked = sorted(
+        str(p.relative_to(source_dir)) for p in source_dir.rglob("*") if p.is_symlink()
+    )
+    if linked:
+        raise SkillCaptureError(
+            f"{action} of '{name}' refused: the bundle contains symlink(s) "
+            f"({', '.join(linked[:5])}). The audit cannot read through a link, "
+            "but copying the bundle would follow it, so the code would never "
+            "have been scanned. Replace the link with the real file and retry."
+        )
+
+
+def _gate_bundle(
+    skill: Skill, source_dir: Optional[Path], *, name: str, action: str
+) -> Any:
+    """Symlink refusal, then the static audit at the lowest tier.
+
+    Returns the audit report (ALLOW or REVIEW). Raises on BLOCK, before anything
+    is written.
+    """
+    from gaia.skills.audit.engine import audit_skill_object
+
+    if source_dir is not None:
+        _refuse_symlinks(source_dir, name=name, action=action)
+    report = audit_skill_object(skill, directory=source_dir, tier=LOWEST_TIER)
+    if report.verdict == "BLOCK":
+        findings = "\n  ".join(_render_findings(report))
+        raise SkillCaptureError(
+            f"{action} of '{name}' refused: the security audit verdict is BLOCK "
+            f"({report.reason}) Findings:\n  {findings}\nNothing was written. Fix "
+            f"the skill and retry, or do not use it. See {_DOCS}"
+        )
+    return report
+
+
 def capture_skill(
     source: str,
     *,
@@ -293,38 +336,10 @@ def capture_skill(
 
         final_name = _validate_name(name or skill.name)
 
-        # Audit at the tier the capture will land on. BLOCK refuses outright;
-        # REVIEW lands but its findings ride the result for the user to see.
-        # A symlinked file is skipped by the audit's source walk but is
-        # DEREFERENCED by copytree, so its real bytes would land in the skills
-        # root having never been scanned. Refuse the bundle instead: "BLOCK
-        # refuses before anything is written" has to hold for every source.
-        if source_dir is not None:
-            linked = sorted(
-                str(p.relative_to(source_dir))
-                for p in source_dir.rglob("*")
-                if p.is_symlink()
-            )
-            if linked:
-                raise SkillCaptureError(
-                    f"Capture of '{final_name}' refused: the bundle contains "
-                    f"symlink(s) ({', '.join(linked[:5])}). The audit cannot "
-                    "read through a link, but copying the bundle would follow "
-                    "it, so the captured code would never have been scanned. "
-                    "Replace the link with the real file and re-capture."
-                )
-
-        from gaia.skills.audit.engine import audit_skill_object
-
-        report = audit_skill_object(skill, directory=source_dir, tier=LOWEST_TIER)
-        if report.verdict == "BLOCK":
-            findings = "\n  ".join(_render_findings(report))
-            raise SkillCaptureError(
-                f"Capture of '{final_name}' refused: the security audit "
-                f"verdict is BLOCK ({report.reason}) Findings:\n  {findings}\n"
-                "Nothing was written. Fix the skill and re-capture, or do not "
-                f"capture it. See {_DOCS}"
-            )
+        permissions = skill.parsed_permissions()
+        refuse_unbridged_permissions(permissions, skill_name=final_name)
+        enforce_tier_ceiling(permissions, tier=LOWEST_TIER, skill_name=final_name)
+        report = _gate_bundle(skill, source_dir, name=final_name, action="Capture")
 
         destination_root = resolver.user_root
         target = destination_root / final_name
@@ -414,6 +429,157 @@ def capture_skill(
         has_scripts=has_scripts,
         deferred_tools=deferred,
         verdict=report.verdict,
+        review_findings=review_findings,
+    )
+
+
+# ---------------------------------------------------------------------------
+# gaia skill import — the capture gate plus install's experimental opt-in
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ImportResult:
+    """What ``gaia skill import`` did — the CLI renders this."""
+
+    name: str
+    path: Path
+    previous_tier: str
+    verdict: str
+    has_code: bool
+    #: True when the code may run on the next load; False while it is deferred
+    #: until ``gaia skill promote`` (REVIEW verdict) or there is no code.
+    code_trusted: bool
+    review_findings: List[str] = field(default_factory=list)
+
+
+def _ships_code(skill: Skill, directory: Path) -> bool:
+    return (
+        bool(skill.gaia.tools)
+        or (directory / SKILL_TOOLS_FILENAME).is_file()
+        or (directory / "scripts").is_dir()
+    )
+
+
+def import_bundle(
+    source_dir: Path,
+    *,
+    origin: str,
+    name: Optional[str] = None,
+    manager: Optional[SkillManager] = None,
+    force: bool = False,
+    allow_experimental: bool = False,
+) -> ImportResult:
+    """Import a materialized skill folder into the user root at ``experimental``.
+
+    Runs the same checks as capture (symlink refusal, permission ceiling, static
+    audit) and the same experimental opt-in as ``gaia skill install``: a bundle
+    that ships code needs ``allow_experimental``. Code is trusted on the next
+    load only with that opt-in and an audit ALLOW; a REVIEW verdict lands with
+    its code deferred until ``gaia skill promote``.
+
+    Raises:
+        SkillInstallError: code shipped without ``allow_experimental``, or the
+            name is taken and ``force`` is unset.
+        SkillCaptureError: symlinks in the bundle, or an audit BLOCK.
+        SkillPermissionError: a permission is un-bridged or above the ceiling.
+        SkillValidationError: the ``SKILL.md`` fails the schema gate.
+    """
+    from gaia.skills.audit.findings import content_digest
+    from gaia.skills.install import SkillInstallError, _gate_tier
+
+    resolver = manager if manager is not None else SkillManager()
+    skill = parse_skill_file(source_dir, check_directory_name=False)
+    label = "--name" if name else str(source_dir / SKILL_FILENAME)
+    final_name = validated_skill_name(name or skill.name, source=label)
+    destination_root = resolver.user_root
+    target = skill_directory(destination_root, final_name, source=label)
+
+    if skill.gaia.tools and not (source_dir / SKILL_TOOLS_FILENAME).is_file():
+        raise SkillCaptureError(
+            f"Skill '{skill.name}' declares tool(s) "
+            f"{', '.join(t.name for t in skill.gaia.tools)} but the bundle ships "
+            f"no {SKILL_TOOLS_FILENAME}. Fix the bundle before importing it."
+        )
+
+    has_code = _ships_code(skill, source_dir)
+    # Instruction-only bundles carry no executable reach, so only code needs
+    # the opt-in; the ceiling and unbridged refusal apply to every import.
+    _gate_tier(
+        skill,
+        tier=LOWEST_TIER,
+        claimed=skill.security_tier,
+        signature=None,
+        allow_experimental=allow_experimental or not has_code,
+        confirmer=lambda _prompt: False,
+    )
+    report = _gate_bundle(skill, source_dir, name=final_name, action="Import")
+
+    if target.exists() and not force:
+        raise SkillInstallError(
+            f"Skill '{final_name}' is already installed at {target}. Pass "
+            "--force to replace it."
+        )
+
+    destination_root.mkdir(parents=True, exist_ok=True)
+    trusted = has_code and report.verdict == "ALLOW"
+    # Bundle and lock entry land together: without the entry the code would
+    # read as an ordinary local skill and import on the next load.
+    try:
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(source_dir, target)
+        landed = parse_skill_file(target, check_directory_name=False)
+        landed.name = final_name
+        previous_tier = reset_security_tier(landed)
+        landed.write(target / SKILL_FILENAME)
+
+        lock = SkillLock.load(destination_root)
+        lock.record(
+            LockEntry(
+                name=final_name,
+                version=landed.version or UNVERSIONED,
+                requested="*",
+                source=SOURCE_IMPORTED,
+                origin=origin,
+                claimed_tier=previous_tier,
+                installed_tier=LOWEST_TIER,
+                permissions=list(landed.gaia.permissions),
+                path=str(target),
+                captured=True,
+                code_trusted=trusted,
+                code_digest=content_digest(target) if trusted else "",
+            )
+        )
+        lock.save()
+    except Exception:
+        shutil.rmtree(target, ignore_errors=True)
+        stale = SkillLock.load(destination_root)
+        if stale.forget(final_name):
+            stale.save()
+        raise
+
+    resolver.reload()
+    review_findings: List[str] = []
+    if report.verdict == "REVIEW" or any(
+        f.severity in ("medium", "high", "critical") for f in report.findings
+    ):
+        review_findings = _render_findings(report)
+    log.info(
+        "Imported skill '%s' from %s at tier '%s' — verdict %s, code %s",
+        final_name,
+        origin,
+        LOWEST_TIER,
+        report.verdict,
+        "trusted" if trusted else ("deferred" if has_code else "none"),
+    )
+    return ImportResult(
+        name=final_name,
+        path=target,
+        previous_tier=previous_tier,
+        verdict=report.verdict,
+        has_code=has_code,
+        code_trusted=trusted,
         review_findings=review_findings,
     )
 
@@ -520,12 +686,30 @@ def promote_skill(
     entry = lock.get(safe_name)
     if entry is None or not entry.captured:
         raise SkillCaptureError(
-            f"Skill '{safe_name}' was not captured, so there is nothing to "
-            "promote. Hub installs earn trust through the install gauntlet "
-            "('gaia skill install'); imported folders load through the normal "
-            f"path. Promote only lifts the code deferral on captured skills. "
-            f"See {_DOCS}"
+            f"Skill '{safe_name}' was not captured or imported, so there is "
+            "nothing to promote. Hub installs earn trust through the install "
+            "gauntlet ('gaia skill install'). Promote only lifts the code "
+            f"deferral on captured and imported skills. See {_DOCS}"
         )
+
+    # Promote trusts code, never raises the tier: the ceiling still applies.
+    skill = parse_skill_file(target, check_directory_name=False)
+    try:
+        refuse_unbridged_permissions(skill.parsed_permissions(), skill_name=safe_name)
+        enforce_tier_ceiling(
+            skill.parsed_permissions(),
+            tier=effective_tier(
+                skill.security_tier, entry.installed_tier or LOWEST_TIER
+            ),
+            skill_name=safe_name,
+        )
+    except SkillError:
+        if entry.code_trusted:
+            entry.code_trusted = False
+            entry.code_digest = ""
+            lock.record(entry)
+            lock.save()
+        raise
 
     report = audit_skill(target)
     if report.verdict != "ALLOW":
@@ -556,10 +740,13 @@ def promote_skill(
 
 __all__ = [
     "CaptureResult",
+    "ImportResult",
     "PromoteResult",
+    "SOURCE_IMPORTED",
     "SkillCaptureError",
     "capture_entry",
     "capture_skill",
     "code_is_deferred",
+    "import_bundle",
     "promote_skill",
 ]

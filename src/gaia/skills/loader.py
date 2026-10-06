@@ -29,6 +29,7 @@ from gaia.logger import get_logger
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillValidationError
 from gaia.skills.format import SKILL_TOOLS_FILENAME, Skill, SkillTool
 from gaia.skills.permissions import refuse_unbridged_permissions
+from gaia.skills.tiers import enforce_skill_tier_ceiling
 
 log = get_logger(__name__)
 
@@ -51,7 +52,8 @@ def register_skill_tools(skill: Skill) -> dict[str, dict[str, Any]]:
 
     Raises:
         SkillPermissionError: if the skill declares a local-capability
-            permission this phase cannot enforce.
+            permission this phase cannot enforce, or one above its tier's
+            ceiling.
         SkillValidationError: if ``tools.py`` is missing, fails to import, or
             contradicts the declared ``metadata.gaia.tools``. The registry is
             left exactly as it was found.
@@ -60,6 +62,7 @@ def register_skill_tools(skill: Skill) -> dict[str, dict[str, Any]]:
     # actually hands a skill executable reach, so the refusal must hold no
     # matter which entry point a caller uses.
     refuse_unbridged_permissions(skill.parsed_permissions(), skill_name=skill.name)
+    enforce_skill_tier_ceiling(skill)
 
     if not skill.gaia.tools:
         tools_path = skill.tools_path

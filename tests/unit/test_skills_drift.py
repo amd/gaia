@@ -21,6 +21,7 @@ import argparse
 import pytest
 
 from gaia.skills import cli as skills_cli
+from gaia.skills.capture import SOURCE_IMPORTED
 from gaia.skills.drift import (
     DRIFT_CONTENT,
     DRIFT_MISSING,
@@ -424,7 +425,7 @@ def test_relock_never_writes_a_hub_entrys_tier_from_the_manifest_it_governs(
 # ----------------------------------------------------------------------
 # Replacing an install locally must retire its provenance
 #
-# Otherwise 'import --force' over a hub skill leaves a lock entry describing
+# Otherwise 'import --force' over a hub skill leaves a hub entry describing
 # bytes that are gone — and the replacement, being unattested, would then be
 # refused as tampered-with hub content.
 # ----------------------------------------------------------------------
@@ -448,7 +449,9 @@ def test_importing_over_a_hub_install_retires_its_lock_entry(
     )
 
     assert exit_code == skills_cli.EXIT_OK
-    assert SkillLock.load(marketplace.skills_root).get("web-research") is None
+    entry = SkillLock.load(marketplace.skills_root).get("web-research")
+    assert entry.source == SOURCE_IMPORTED
+    assert entry.installed_tier == "experimental"
     assert check_drift(marketplace.skills_root).fatal == ()
     marketplace.manager.reload()
     assert marketplace.manager.load("web-research").security_tier == "experimental"
