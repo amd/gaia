@@ -4,6 +4,7 @@
 """Goals & Tasks REST API for GAIA Agent UI."""
 
 import logging
+import sqlite3
 import threading
 from typing import Optional, get_args
 
@@ -42,8 +43,8 @@ def close_store() -> None:
         if _store is not None:
             try:
                 _store.close()
-            except Exception:
-                pass
+            except sqlite3.Error as exc:
+                logger.debug("Closing the goal store failed: %s", exc)
             finally:
                 _store = None
 
