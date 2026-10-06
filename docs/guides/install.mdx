@@ -13,7 +13,7 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 - A computer running **Windows 10/11**, **macOS 14+** (Apple Silicon), or **Linux** (Debian/Ubuntu/Fedora/Arch)
 - **5 GB** of free disk space (for the app + Python environment + minimal model)
 - An **internet connection** for the first launch (the app downloads its Python backend automatically)
-- About **10 minutes** total: ~30 seconds to download, ~10 seconds to install, ~5–10 minutes for the first-launch backend setup
+- About **10–15 minutes** total: ~30 seconds to download, ~10 seconds to install, ~10 minutes or more for the first-launch backend setup
 
 ## Download
 
@@ -128,10 +128,10 @@ The first time you launch the desktop app, it automatically sets up its Python b
 2. **Download `uv`** (~30 seconds) — installs the `uv` Python package manager
 3. **Create Python environment** (~30 seconds) — downloads Python 3.12 and creates a virtualenv at `~/.gaia/venv/`
 4. **Install GAIA backend** (~3-5 minutes) — installs the `amd-gaia[ui]` Python package and its dependencies
-5. **Download minimal model** (~2-3 minutes) — fetches the Qwen3-0.6B model via Lemonade Server
+5. **Download the model** (several minutes; the largest download) — fetches Gemma-4-E4B-it-GGUF (~3 GB) via Lemonade Server
 6. **Verify** (~5 seconds) — runs a quick test to confirm everything works
 
-Total: about 5-10 minutes the first time, depending on your internet speed. **Subsequent launches are instant** — the app reuses the installed environment.
+Total: about 10 minutes the first time, longer on a slow connection — most of it is the backend packages and the ~3 GB model. **Subsequent launches are instant** — the app reuses the installed environment.
 
 ### What if it fails?
 
