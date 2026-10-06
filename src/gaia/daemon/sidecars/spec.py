@@ -186,6 +186,21 @@ _EMAIL_REQUIRED_CONNECTIONS = (
     ),
 )
 
+# Mirrors gaia_agent.connectors.MAILBOX_REQUIREMENTS: the shipped flagship is a
+# frozen binary, so its own declaration cannot be imported to derive scopes.
+_GAIA_REQUIRED_CONNECTIONS = (
+    ConnectorRequirement(
+        connector_id="google",
+        scopes=("https://www.googleapis.com/auth/gmail.readonly",),
+        reason="Read and search your Gmail so the agent can triage your inbox.",
+    ),
+    ConnectorRequirement(
+        connector_id="microsoft",
+        scopes=("https://graph.microsoft.com/Mail.ReadWrite",),
+        reason="Read and search your Outlook mail so the agent can triage your inbox.",
+    ),
+)
+
 
 def agent_dev_src_dir(repo_root: Path, agent_id: str) -> Path:
     """The per-agent dev-mode source directory under a repo root.
@@ -477,6 +492,8 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             # No forward_providers: the flagship reaches external services through
             # MCP servers the user activates, not daemon-forwarded OAuth tokens.
             # Listing a provider here would hand it credentials it cannot use.
+            # required_connections feeds grant scope derivation, not forwarding.
+            required_connections=_GAIA_REQUIRED_CONNECTIONS,
             description=(
                 "The flagship agent — conversation, document Q&A, data "
                 "analysis, and web research, with memory that persists and "
