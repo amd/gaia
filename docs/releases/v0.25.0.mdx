@@ -12,6 +12,7 @@ description: "A larger local default model where the GPU holds it, a single-chat
 - **The Agent UI runs only the GAIA agent** — the Agent Hub home, agent picker, and custom-agent export/import are removed from the UI. The CLI and eval harness can still run other agents. (PR [#4509](https://github.com/amd/gaia/pull/4509))
 - **The retired nomic embedder is removed** — memory saved with it is re-embedded on first start. (PR [#4489](https://github.com/amd/gaia/pull/4489))
 - **Indexed documents are re-indexed once** — the document cache is now keyed on chunking settings, so the first query after upgrading rebuilds it. (PR [#4624](https://github.com/amd/gaia/pull/4624))
+- **A skill that asks for more than its tier allows no longer loads** — the permission ceiling is now checked every time a skill loads, not only at install, so a captured or imported skill already on disk that exceeds it is refused with the reason. (PR [#4849](https://github.com/amd/gaia/pull/4849))
 
 ## What's New
 
@@ -45,6 +46,7 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 - **A meeting or document summary is never cut off mid-sentence** — a thinking model used to spend the summary's output budget reasoning, so a long meeting lost its second half. (PR [#4827](https://github.com/amd/gaia/pull/4827))
 - **"What can you do?" gets an answer** instead of an attempt to generate an image of the question. (PR [#4809](https://github.com/amd/gaia/pull/4809))
 - **Writes and approved edits can't reach credential folders** (`~/.ssh`, `~/.aws`, `~/.kube` and others), and shell option values and script arguments get the same path check as plain paths. (PRs [#4848](https://github.com/amd/gaia/pull/4848), [#4847](https://github.com/amd/gaia/pull/4847))
+- **A "no" to creating a folder also covers writing into it** — GAIA no longer asks again to create the same folder a different way. (PR [#4857](https://github.com/amd/gaia/pull/4857))
 - **`gaia skill import` runs the same checks as a hub install** — https only, the audit, the permission ceiling, and an explicit opt-in for skills that ship code. (PR [#4849](https://github.com/amd/gaia/pull/4849))
 - **Memory off and private chats apply to scheduled and background runs too.** (PRs [#4842](https://github.com/amd/gaia/pull/4842), [#4821](https://github.com/amd/gaia/pull/4821))
 - **Memory stops false apologies and reusing deleted values**, saves "remember this" requests, and skips loading the embedder when memory is off. (PRs [#4708](https://github.com/amd/gaia/pull/4708), [#4756](https://github.com/amd/gaia/pull/4756))
@@ -68,11 +70,13 @@ Thanks to the community members who contributed to this release:
 
 ## Full Changelog
 
-**292 commits** since v0.24.1:
+**294 commits** since v0.24.1:
 
 <details>
-<summary>Expand full changelog (292 commits)</summary>
+<summary>Expand full changelog (294 commits)</summary>
 
+- `e0fd6717f` — fix(agent): a "no" to creating a folder also covers writing into it (#4857)
+- `8c26439c9` — feat(website): lead with the agent factory, with a way in for users and builders (#4851)
 - `5d9308ccf` — fix(skills): imports go through the same checks as hub installs (#4849)
 - `a7d77a8fb` — fix(security): extend protected-path checks to writes and approved edits (#4848)
 - `3798ac97d` — fix(shell): tighten path checks for inline scripts and option values (#4847)

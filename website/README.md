@@ -206,7 +206,7 @@ Open TODO — these are not yet in `public/`, which currently holds only
 `favicon.ico`, `gaia-icon.png`, and `robots.txt`. Nothing references them, so
 nothing is broken; they are polish items, not blockers.
 
-- [ ] `og-image.png` (1200x630) - Social share image
+- [ ] `og-image.png` (1200x630) - Social share image. Until it exists, share cards use the square `gaia-icon.png` with `twitter:card=summary`
 - [ ] Integration logos (VS Code, Blender, Jira, Docker)
 - [ ] GAIA logo SVG (if different from favicon)
 

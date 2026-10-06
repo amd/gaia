@@ -10,8 +10,14 @@ interface Props {
   description?: string;
 }
 
-const { title, description = "Build AI agents that run entirely on your machine. No API keys. No cloud." } = Astro.props;
+const {
+  title,
+  description = "GAIA is AMD's open-source agent factory: use the GAIA agent locally on your PC, or build your own agent harness with skills, evals and an auto-fix loop.",
+} = Astro.props;
 const canonicalURL = new URL(Astro.url.pathname, Astro.site);
+// The real GAIA mark, 180x180. Square, so cards use the `summary` layout
+// rather than stretching it into a 1200x630 banner slot.
+const shareImage = new URL('/gaia-icon.png', Astro.site);
 ---
 
 <!doctype html>
@@ -45,17 +51,19 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
     <meta property="og:url" content={canonicalURL} />
-    <!-- TODO: Add og-image.png (1200x630) to public/ -->
-    <meta property="og:site_name" content="gaia" />
+    <meta property="og:image" content={shareImage} />
+    <meta property="og:image:alt" content="The GAIA logo" />
+    <meta property="og:site_name" content="GAIA" />
 
     <!-- Twitter -->
-    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:card" content="summary" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={shareImage} />
 
     <!-- Favicon -->
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
-    <link rel="apple-touch-icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/gaia-icon.png" />
 
     <!-- Fonts. Space Grotesk carries the identity, so a FOUT on h1 is very
          visible — fetch the stylesheet at highest priority, not lazily. -->

@@ -224,6 +224,17 @@ _PATH_MUTATORS = frozenset(
         "set-content",
         "clear-content",
         "out-file",
+        "mkdir",
+        "md",
+        "touch",
+        "new-item",
+        "ni",
+        "cp",
+        "copy",
+        "copy-item",
+        "cpi",
+        "tee",
+        "tee-object",
     }
 )
 
