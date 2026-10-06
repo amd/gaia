@@ -71,15 +71,16 @@ DEFAULT_AUTH_HEADER_PREFIX = ""
 # Ordered preference for the picker, best first. The first match is what GAIA
 # selects automatically when a gateway is connected with nothing chosen yet.
 #
-# `Gemma-4-31B` leads deliberately: it is currently the ONLY gateway model that
-# streams. The others return zero tokens on a streaming request while
-# non-streaming works, and GAIA's agent path streams by default — so any other
-# default hands a new user an agent that produces nothing. It is also on-prem,
-# so it carries no per-token cost.
+# `DeepSeek-V4.1-Flash` leads: it streams on the gateway (checked live) and is
+# the fastest model in the agent benchmark. A default must stream — GAIA's agent
+# path streams, and a model that returns zero tokens on a stream hands a new user
+# an agent that produces nothing. `Gemma-4-31B` is the fallback: on-prem, no
+# per-token cost. `deepseek-v4.1-flash` does not match `DeepSeek-V4-Flash`.
 #
 # Matching is lowercase-substring: the gateway mixes casing across its
 # catalogue (`Claude-Opus-5` sits next to `claude-opus-4.8`).
 PREFERRED_MODEL_HINTS = (
+    "deepseek-v4.1-flash",
     "gemma-4-31b",
     "claude-opus-5",
     "claude-sonnet-5",

@@ -313,7 +313,7 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// their next agent turn fails on whatever the old default was.
 		// An existing choice is never overridden.
 		if m.state.ActiveModel == "" && len(m.models) > 0 {
-			chosen := m.models[0].ID // preference-ranked, so Gemma-4-31B first
+			chosen := m.models[0].ID // preference-ranked: the default model first
 			m.state = m.state.SetActive(chosen)
 			if err := m.state.Save(); err != nil {
 				m.errMsg = err.Error()

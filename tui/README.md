@@ -191,11 +191,11 @@ handed back to Lemonade after a restart. Provider settings are shared with
 other clients of that server. Each provider lists a ★ **Recommended** group
 first. For Fireworks that group is the models that scored best on GAIA's
 agent benchmark, ranked and labelled with why
-(`fireworks.glm-5p3-flash` — best overall, cheapest;
-`fireworks.deepseek-v4p1-flash` — fastest;
+(`fireworks.deepseek-v4p1-flash` — best overall, fastest;
+`fireworks.glm-5p3-flash` — cheapest;
 `fireworks.deepseek-v4-pro-0813` — most truthful), whenever your account
 exposes them. AMD Gateway accepts your organization's HTTPS endpoint and
-authentication header.
+authentication header, and selects DeepSeek V4.1 Flash when nothing is chosen.
 
 **Local** lists every chat model Lemonade offers, not only downloaded ones.
 Models that fit this PC's memory and disk download in the panel when selected;

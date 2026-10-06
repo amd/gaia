@@ -59,14 +59,14 @@ type Recommendation struct {
 // fails when a figure here drifts from it.
 var RecommendedModels = []Recommendation{
 	{
-		ID:       "fireworks.glm-5p3-flash",
-		Note:     "best overall, cheapest",
-		Evidence: "14/14 tasks · quality 4.89/5 · $0.09 per 14-task run",
+		ID:       "fireworks.deepseek-v4p1-flash",
+		Note:     "best overall, fastest",
+		Evidence: "14/14 tasks · quality 4.92/5 · $0.10 per 14-task run",
 	},
 	{
-		ID:       "fireworks.deepseek-v4p1-flash",
-		Note:     "fastest",
-		Evidence: "14/14 tasks · quality 4.92/5 · $0.10 per 14-task run",
+		ID:       "fireworks.glm-5p3-flash",
+		Note:     "cheapest",
+		Evidence: "14/14 tasks · quality 4.89/5 · $0.09 per 14-task run",
 	},
 	{ID: "fireworks.deepseek-v4-pro-0813", Note: "most truthful"},
 }
