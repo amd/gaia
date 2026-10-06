@@ -534,6 +534,44 @@ func (l localRunner) checkPickedModel(ctx context.Context, row Row) Row {
 	return row
 }
 
+// listedCloudModels lists one provider's models on the Lemonade GAIA talks to.
+// A var so tests can answer without a server.
+var listedCloudModels = func(ctx context.Context, provider string) ([]lemonade.Model, error) {
+	return lemonade.New("").Models(ctx, provider)
+}
+
+// checkCloudModelListed confirms the Lemonade GAIA talks to can serve the chosen
+// cloud model. Provider settings live in each server, so a provider connected on
+// another one — the system server, before setup installed GAIA's own — is unknown
+// here, and the first turn would fail.
+func (l localRunner) checkCloudModelListed(ctx context.Context, row Row) (Row, bool) {
+	chosen := l.opts.Model
+	provider, _, _ := strings.Cut(chosen, ".")
+	models, err := listedCloudModels(ctx, provider)
+	if err != nil {
+		row.State = StateUnknown
+		row.Disposition = status.DispositionNotify
+		row.Line = "could not confirm " + chosen + " is available"
+		row.Detail = err.Error()
+		row.Raw = err.Error()
+		return row, false
+	}
+	for _, m := range models {
+		if lemonade.SameCloudModel(m.ID, chosen) {
+			return row, true
+		}
+	}
+	row.State = StateFailed
+	row.Disposition = status.DispositionHalt
+	row.Line = chosen + " is not available on GAIA's model server"
+	row.Detail = lemonade.Label(provider) + " is not connected on the server GAIA uses, so it cannot answer."
+	row.Fix = FixNone
+	row.Remedy = Remedy{
+		Action: "Press p, choose " + lemonade.Label(provider) + ", and connect it.",
+	}
+	return row, false
+}
+
 // localChatModel is the local chat model to load when the user picked one other
 // than the profile default; empty otherwise.
 func (l localRunner) localChatModel() string {
@@ -590,6 +628,9 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 			row.Line = "embedder loads — chat runs on Claude"
 			return row, "Claude", ""
 		case lemonade.IsCloudID(l.opts.Model):
+			if missing, ok := l.checkCloudModelListed(ctx, row); !ok {
+				return missing, "", ""
+			}
 			row.Line = "embedder loads — chat uses " + l.opts.Model
 			return row, l.opts.Model + " (in the cloud)", ""
 		}

@@ -31,6 +31,9 @@ func TestCloudPreflightStillRequiresEmbeddingReadiness(t *testing.T) {
 				t.Fatalf("missing embedder did not block with cloud-compatible setup: %+v", row)
 			}
 			stubGaiaInit(t, func() (string, error) { return jsonStub(t, 0, embedderLoadsJSON), nil })
+			stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+				return []lemonade.Model{{ID: model, Recipe: "cloud"}}, nil
+			})
 			row = modelRow(r)
 			if row.State != StateOK || !strings.Contains(row.Line, "embedder loads") || !strings.Contains(row.Line, model) {
 				t.Fatalf("ready cloud state is incorrect: %+v", row)
@@ -903,5 +906,48 @@ func TestAPickedLocalModelReplacesTheHardwareDefault(t *testing.T) {
 	}
 	if row := modelRow(r); !row.FirstRun || row.Fix != FixRunSetup {
 		t.Fatalf("user.-prefixed pick not matched to its listed id: %+v", row)
+	}
+}
+
+func stubListedCloudModels(t *testing.T, fn func(context.Context, string) ([]lemonade.Model, error)) {
+	t.Helper()
+	orig := listedCloudModels
+	listedCloudModels = fn
+	t.Cleanup(func() { listedCloudModels = orig })
+}
+
+// Setup can move GAIA onto its own Lemonade after the provider was connected on
+// another one. The gate said "ready" and the first turn failed with "Unknown
+// Lemonade model"; it must stop here and say how to reconnect.
+func TestAGateDoesNotPassACloudModelItsServerCannotServe(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return jsonStub(t, 0, embedderLoadsJSON), nil })
+	r := localRunner{opts: LocalOptions{Model: "amd.DeepSeek-V4.1-Flash"}}
+
+	stubListedCloudModels(t, func(_ context.Context, provider string) ([]lemonade.Model, error) {
+		if provider != "amd" {
+			t.Errorf("asked for provider %q, want amd", provider)
+		}
+		return nil, nil
+	})
+	row, chat, _ := r.verifyModels(context.Background(), localCfg())
+	if row.State != StateFailed || row.Disposition != status.DispositionHalt || chat != "" {
+		t.Fatalf("an unservable cloud model passed the gate: %+v chat=%q", row, chat)
+	}
+	if !strings.Contains(row.Remedy.Action, "Press p") || !strings.Contains(row.Remedy.Action, lemonade.Label("amd")) {
+		t.Errorf("remedy %q does not say how to reconnect", row.Remedy.Action)
+	}
+
+	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+		return []lemonade.Model{{ID: "amd.deepseek-v4.1-flash", Recipe: "cloud"}}, nil
+	})
+	if row, chat, _ := r.verifyModels(context.Background(), localCfg()); row.State != StateOK || chat == "" {
+		t.Fatalf("a served cloud model was refused: %+v chat=%q", row, chat)
+	}
+
+	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+		return nil, errors.New("connection refused")
+	})
+	if row := modelRow(r); row.State != StateUnknown || row.Disposition != status.DispositionNotify {
+		t.Fatalf("an unanswered listing must be reported as unknown, not failed or passed: %+v", row)
 	}
 }

@@ -232,3 +232,19 @@ func TestFireworksRecommendationsMatchTheRanking(t *testing.T) {
 		}
 	}
 }
+
+func TestSameCloudModel(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"fireworks.glm-5p3-flash", "fireworks.accounts/fireworks/models/glm-5p3-flash", true},
+		{"amd.DeepSeek-V4.1-Flash", "amd.deepseek-v4.1-flash", true},
+		{"amd.DeepSeek-V4.1-Flash", "amd.DeepSeek-V4-Flash", false},
+		{"amd.glm-5p3-flash", "fireworks.glm-5p3-flash", false},
+	} {
+		if got := SameCloudModel(c.a, c.b); got != c.want {
+			t.Errorf("SameCloudModel(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
