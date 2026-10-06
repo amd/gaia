@@ -293,12 +293,17 @@ func TestANewMachineGetsAStepNotAFailure(t *testing.T) {
 	}
 }
 
-// GAIA's own server is recorded as installed, so the row must not call it
-// missing — the "not on this machine" remedy is for system installs.
+// GAIA's own server is installed, so the row must not call it missing — the
+// "not on this machine" remedy is for system installs. A stopped server can
+// leave its state file behind, so installed-ness comes from the unpacked binary.
 func TestAStoppedEmbeddedServerIsNotCalledMissing(t *testing.T) {
 	downLemonadeOn(t, fakeHostFor("linux", nil, nil, map[string]string{}))
 	home := os.Getenv("GAIA_HOME")
-	if err := os.MkdirAll(filepath.Join(home, "lemonade"), 0o755); err != nil {
+	dist := filepath.Join(home, "lemonade", "dist", "1")
+	if err := os.MkdirAll(dist, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dist, "lemond"), nil, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	state := `{"pid": 1, "port": 13305, "api_key": "k", "version": "1"}`

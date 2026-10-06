@@ -375,8 +375,8 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	// Installed, and GAIA could not start it: a real failure, with the start
 	// command as the manual alternative to `f`.
 	if !l0.Found {
-		// GAIA's own server: its state file proves it is installed, which the
-		// shared remedy — resolved from system installs — would call missing.
+		// GAIA's own server is installed, which the shared remedy — resolved
+		// from system installs — would call missing.
 		row.Remedy = Remedy{
 			Action:  "Press f and setup starts it. By hand instead: run this, then press r to re-check.",
 			Command: "gaia lemonade embedded start",

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/daemon"
 )
 
 const DefaultBaseURL = "http://localhost:13305/api/v1"
@@ -18,6 +20,7 @@ const DefaultBaseURL = "http://localhost:13305/api/v1"
 // EmbeddedState records the private Lemonade endpoint, whose port and key are
 // chosen when GAIA starts it. Never include this structure in logs or errors.
 type EmbeddedState struct {
+	PID    int    `json:"pid"`
 	Port   int    `json:"port"`
 	APIKey string `json:"api_key"`
 }
@@ -36,6 +39,11 @@ func ReadEmbedded() *EmbeddedState {
 	}
 	var state EmbeddedState
 	if json.Unmarshal(raw, &state) != nil || state.Port < 1 || state.Port > 65535 {
+		return nil
+	}
+	// A server killed without `stop` leaves its record behind; following it
+	// sends every client to a dead port. Python's reader drops it the same way.
+	if state.PID > 0 && !daemon.PIDAlive(state.PID) {
 		return nil
 	}
 	state.APIKey = strings.TrimSpace(state.APIKey)
