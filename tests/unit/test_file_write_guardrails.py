@@ -1493,6 +1493,13 @@ class TestFileIOToolsMixinEditFileGuardrails:
 class TestPathValidatorEdgeCases:
     """Test edge cases and symlink handling in PathValidator."""
 
+    @pytest.fixture(autouse=True)
+    def _fake_system_temp(self, tmp_path, monkeypatch):
+        # tmp_path is under the real temp dir, which the access prompt refuses.
+        monkeypatch.setattr(
+            "gaia.security._system_temp_roots", lambda: {str(tmp_path / "systemp")}
+        )
+
     @pytest.fixture
     def validator(self, tmp_path):
         """Create a PathValidator with tmp_path allowed."""

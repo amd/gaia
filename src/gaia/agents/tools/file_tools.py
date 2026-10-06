@@ -1641,21 +1641,20 @@ class FileSearchToolsMixin:
                         content_size=len(new_content.encode("utf-8")),
                         prompt_user=False,
                     )
-                    # Re-check allowlist with prompting if it failed on allowlist
-                    if not is_allowed and "not in allowed paths" in reason:
-                        if not path_validator.is_path_allowed(
+                    if (
+                        not is_allowed
+                        and "not in allowed paths" in reason
+                        and path_validator.is_path_allowed(
                             str(resolved_path), prompt_user=True
-                        ):
-                            path_validator.audit_write(
-                                "edit", str(resolved_path), 0, "denied", reason
-                            )
-                            return {
-                                **NOT_EXECUTED,
-                                "status": "error",
-                                "error": reason,
-                                "operation": "edit_file",
-                            }
-                    elif not is_allowed:
+                        )
+                    ):
+                        # Approval grants scope only; blocklist and size still apply.
+                        is_allowed, reason = path_validator.validate_write(
+                            str(resolved_path),
+                            content_size=len(new_content.encode("utf-8")),
+                            prompt_user=False,
+                        )
+                    if not is_allowed:
                         path_validator.audit_write(
                             "edit", str(resolved_path), 0, "denied", reason
                         )
