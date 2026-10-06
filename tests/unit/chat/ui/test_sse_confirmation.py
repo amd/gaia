@@ -197,13 +197,32 @@ class TestConfirmToolExecutionDeny:
 
 
 class TestResolveToolConfirmationNoPending:
-    """resolve_tool_confirmation with no pending request just sets the event."""
+    """A decision with nothing pending is refused, so the caller can retry."""
 
-    def test_no_pending_sets_event(self, handler):
-        """Calling resolve with no pending confirm just sets the event/result."""
-        handler.resolve_tool_confirmation(approved=True)
-        assert handler._confirm_result is True
-        assert handler._confirm_event.is_set()
+    def test_no_pending_is_not_delivered(self, handler):
+        assert handler.resolve_tool_confirmation(approved=True) is False
+        assert handler._confirm_event is None
+
+    def test_an_early_answer_does_not_satisfy_a_later_prompt(self, handler):
+        """Reported as delivered, it was then overwritten when the prompt opened,
+        and the run waited out its whole timeout."""
+        assert handler.resolve_tool_confirmation(approved=True) is False
+
+        result = {}
+        thread = threading.Thread(
+            target=lambda: result.setdefault(
+                "approved",
+                handler.confirm_tool_execution("run_shell_command", {}, timeout=10),
+            ),
+            daemon=True,
+        )
+        thread.start()
+        deadline = time.monotonic() + 5
+        while handler._confirm_event is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert handler.resolve_tool_confirmation(approved=True) is True
+        thread.join(timeout=5)
+        assert result == {"approved": True}
 
 
 # ===========================================================================

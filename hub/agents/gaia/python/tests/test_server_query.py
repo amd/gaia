@@ -1089,15 +1089,19 @@ def test_a_gated_tool_runs_once_the_decision_arrives(built):
     client, agents = built
     run_id = str(uuid.uuid4())
 
+    answered = threading.Event()
+
     def answer_when_asked():
         # The decision endpoint 409s until the prompt is actually pending, so
         # poll rather than sleep a guessed interval.
-        for _ in range(400):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
             response = client.post(
                 f"/v1/gaia/query/{run_id}/tool_decision",
                 json={"decision": "allow"},
             )
             if response.status_code == 200:
+                answered.set()
                 return
             time.sleep(0.01)
 
@@ -1116,6 +1120,7 @@ def test_a_gated_tool_runs_once_the_decision_arrives(built):
         )
 
     assert response.status_code == 200, response.text
+    assert answered.is_set(), "the decision was never accepted while the prompt was open"
     events = _events(response)
     types = [e.get("type") for e in events]
     assert "needs_confirmation" in types, f"the prompt must reach the client: {types}"
