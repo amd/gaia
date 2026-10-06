@@ -351,7 +351,7 @@ def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
             "tracks that are gone. Exits "
             f"{EXIT_INVALID} when anything differs, {EXIT_OK} when the lock and "
             "the disk agree. Untracked skills are expected right after "
-            "'gaia skill create' / 'import' / 'migrate' — --relock records them."
+            "'gaia skill create' / 'migrate' — --relock records them."
         ),
     )
     lock_mode = p_lock.add_mutually_exclusive_group()

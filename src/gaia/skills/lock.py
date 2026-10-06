@@ -86,8 +86,8 @@ SOURCE_HUB = "hub"
 SOURCE_CAPTURED = "captured"
 
 #: ``source`` value for a skill that lives in the user root without hub
-#: provenance — authored with ``gaia skill create``, copied in with
-#: ``gaia skill import``, or converted by ``gaia skill migrate``. Recorded only
+#: provenance — authored with ``gaia skill create`` or converted by
+#: ``gaia skill migrate``. Recorded only
 #: by ``gaia skill lock --relock``, so drift detection covers it too.
 SOURCE_LOCAL = "local"
 

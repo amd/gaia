@@ -22,6 +22,7 @@ from gaia.skills.capture import (
     import_bundle,
     promote_skill,
 )
+from gaia.skills.drift import relock
 from gaia.skills.errors import SkillPermissionError
 from gaia.skills.install import SkillInstallError
 from gaia.skills.loader import register_skill_tools
@@ -263,6 +264,23 @@ def test_load_holds_an_edited_skill_to_its_landed_tier(tmp_path, manager):
         enforce_skill_tier_ceiling(skill)
     with pytest.raises(SkillPermissionError, match="'experimental' ceiling"):
         register_skill_tools(skill)
+
+
+@pytest.mark.parametrize("land", ["capture", "import"])
+def test_relock_keeps_the_landed_tier_of_an_edited_skill(tmp_path, manager, land):
+    source = _skill_dir(tmp_path / "src")
+    if land == "capture":
+        capture_skill(str(source), manager=manager)
+    else:
+        import_bundle(source, origin=str(source), manager=manager)
+    _raise_in_place(manager)
+
+    relock(manager.user_root)
+
+    entry = SkillLock.load(manager.user_root).get("notes")
+    assert entry.installed_tier == "experimental"
+    with pytest.raises(SkillPermissionError, match="'experimental' ceiling"):
+        enforce_skill_tier_ceiling(manager.load("notes"))
 
 
 def test_agent_load_skill_refuses_before_granting_anything(tmp_path, manager):

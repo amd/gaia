@@ -2546,8 +2546,9 @@ Skills are discovered from three roots, highest precedence first:
           → Expected if you created, imported, or migrated it.
     ```
 
-    Untracked skills are normal right after `create` / `import` / `migrate`;
-    `--relock` starts tracking them as `source: local`.
+    Untracked skills are normal right after `create` / `migrate`;
+    `--relock` starts tracking them as `source: local`. An import is tracked
+    from the moment it lands, as `source: imported`.
 
     <Note>
     **After upgrading from a build that predates content digests**, skills
@@ -2722,10 +2723,11 @@ tier it was installed at after the ceiling was applied:
 }
 ```
 
-`gaia skill install` writes `source: "hub"` entries; a skill from `create` or
-`import` has no hub provenance, so install never invents one. `gaia skill lock
---relock` may record it as `source: "local"`, which claims exactly the origin it
-has.
+`gaia skill install` writes `source: "hub"` entries, and `gaia skill import`
+writes `source: "imported"` ones held at `experimental`. A skill from `create`
+has no provenance to record; `gaia skill lock --relock` may record it as
+`source: "local"`, which claims exactly the origin it has. Relock never raises
+the tier of a hub, imported, or captured entry.
 
 `content_digest` covers the **installed** directory (after the tier re-stamp), not
 the downloaded archive. That is what makes post-install tampering detectable:
