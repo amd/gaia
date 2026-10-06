@@ -44,6 +44,9 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 - **Stopping a run keeps the turn and its steps visible.** (PR [#4743](https://github.com/amd/gaia/pull/4743))
 - **A meeting or document summary is never cut off mid-sentence** — a thinking model used to spend the summary's output budget reasoning, so a long meeting lost its second half. (PR [#4827](https://github.com/amd/gaia/pull/4827))
 - **"What can you do?" gets an answer** instead of an attempt to generate an image of the question. (PR [#4809](https://github.com/amd/gaia/pull/4809))
+- **Writes and approved edits can't reach credential folders** (`~/.ssh`, `~/.aws`, `~/.kube` and others), and shell option values and script arguments get the same path check as plain paths. (PRs [#4848](https://github.com/amd/gaia/pull/4848), [#4847](https://github.com/amd/gaia/pull/4847))
+- **`gaia skill import` runs the same checks as a hub install** — https only, the audit, the permission ceiling, and an explicit opt-in for skills that ship code. (PR [#4849](https://github.com/amd/gaia/pull/4849))
+- **Memory off and private chats apply to scheduled and background runs too.** (PRs [#4842](https://github.com/amd/gaia/pull/4842), [#4821](https://github.com/amd/gaia/pull/4821))
 - **Memory stops false apologies and reusing deleted values**, saves "remember this" requests, and skips loading the embedder when memory is off. (PRs [#4708](https://github.com/amd/gaia/pull/4708), [#4756](https://github.com/amd/gaia/pull/4756))
 - **A reply cut off by the token limit is continued** instead of ending mid-sentence, and a tool call cut off at the output cap is retried shorter. (PRs [#4054](https://github.com/amd/gaia/pull/4054), [#4556](https://github.com/amd/gaia/pull/4556))
 - **The TUI remembers the chosen model** across restarts and agent-process restarts. (PRs [#4497](https://github.com/amd/gaia/pull/4497), [#4710](https://github.com/amd/gaia/pull/4710))
@@ -62,13 +65,27 @@ Thanks to the community members who contributed to this release:
 - [@GaetanVDB07](https://github.com/GaetanVDB07) — links to upstream credential setup guides for connectors (PR [#4669](https://github.com/amd/gaia/pull/4669))
 - [@rradjabi](https://github.com/rradjabi) — moving self-hosted CI jobs to the xsj-dispatch runner pool (PR [#4534](https://github.com/amd/gaia/pull/4534))
 
+
 ## Full Changelog
 
-**279 commits** since v0.24.1:
+**292 commits** since v0.24.1:
 
 <details>
-<summary>Expand full changelog (279 commits)</summary>
+<summary>Expand full changelog (292 commits)</summary>
 
+- `5d9308ccf` — fix(skills): imports go through the same checks as hub installs (#4849)
+- `a7d77a8fb` — fix(security): extend protected-path checks to writes and approved edits (#4848)
+- `3798ac97d` — fix(shell): tighten path checks for inline scripts and option values (#4847)
+- `c4daa37ae` — feat(release): publish release candidates from vX.Y.Z-rcN tags (#4856)
+- `1fadb48c2` — docs(install): state the real first-launch download (~6 GB, ~23 GB on Ryzen AI Max) (#4855)
+- `fa5f96ae4` — docs: remove obsolete plans and stale per-task-agent references (#4839)
+- `5f71e4e0d` — refactor(agents): remove the Agent Builder (#4843)
+- `693c07244` — fix(ui): memory off and private chats apply to background runs too (#4842)
+- `5c1fc112e` — chore(deps): bump the root-npm-dependencies group across 1 directory with 5 updates (#4703)
+- `11adf184a` — chore(deps-dev): bump the agent-ui-dependencies group across 1 directory with 4 updates (#4837)
+- `0dca5fac9` — fix(ui): stop silent failures in memory, schedules, and DB upgrades (#4821)
+- `78fef2895` — fix: fail-loud fixes in scratchpad, code index, SD, VLM extraction, skill lock (#4831)
+- `c33bd94df` — test: fix two stale expectations failing main's chat and unit jobs (#4844)
 - `c40076bd1` — fix(webui): show newly indexed documents in the chat, and drop dead code (#4810)
 - `b44831903` — fix(agent): stop forcing an image when an answer mentions image generation (#4809)
 - `9dc6b5d9a` — fix(rag): a document summary is never cut off mid-sentence (#4827)
