@@ -1202,6 +1202,19 @@ def _memory_off(session: dict, db) -> bool:
     return bool(session.get("private", 0)) or not memory_enabled(db)
 
 
+def _apply_memory_state(agent, session: dict, db) -> None:
+    """Set *agent*'s memory-off state for this turn from *session* and Settings.
+
+    Call before every turn: a cached agent must follow a toggle flipped since
+    the last one.
+    """
+    if not hasattr(agent, "_incognito"):
+        return
+    private = bool(session.get("private", 0))
+    agent._incognito = _memory_off(session, db)
+    agent._incognito_reason = "private" if private else "memory_off"
+
+
 def _session_mail_provider(session: dict) -> str | None:
     """Session mailbox FILTER for the email agent (#1596 / #1603 Phase 2).
 
@@ -1902,11 +1915,7 @@ async def _get_chat_response(
                 # that don't expose them.
                 _register_agent_memory_ops(agent)
 
-        # Suppress memory writes when private session OR global memory is disabled.
-        if hasattr(agent, "_incognito"):
-            private = bool(session.get("private", 0))
-            agent._incognito = private or not memory_enabled(db)
-            agent._incognito_reason = "private" if private else "memory_off"
+        _apply_memory_state(agent, session, db)
 
         _restore_model_history(agent, db, session_id, request.message)
 
@@ -2452,11 +2461,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     if mcp_report:
                         sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
 
-                # Suppress memory writes when private session OR global memory is disabled.
-                if hasattr(agent, "_incognito"):
-                    private = bool(session.get("private", 0))
-                    agent._incognito = private or not memory_enabled(db)
-                    agent._incognito_reason = "private" if private else "memory_off"
+                _apply_memory_state(agent, session, db)
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
