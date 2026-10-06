@@ -116,6 +116,18 @@ def _register_agent_memory_ops(agent) -> None:
 # endpoint looks up the handler here to resolve a pending confirmation.
 _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
 
+# asyncio keeps only weak references to tasks; this set keeps them alive.
+_background_tasks: set = set()
+
+
+def _spawn_background(coro) -> asyncio.Task:
+    """Run *coro* fire-and-forget without letting it be garbage-collected."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 # ── Agent registry ───────────────────────────────────────────────────────────
 # Set by server lifespan via set_agent_registry() once discovery completes.
 _agent_registry = None
@@ -2821,8 +2833,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 continue
 
         # Capture an explicit Stop BEFORE our own cleanup sets the same flag.
-        # Only run_manager.cancel() sets ``cancelled`` before this point, so a
-        # True here means the user hit Stop (not a normal completion).
+        # Only a Stop (run_manager.cancel() or POST /api/chat/cancel) sets
+        # ``cancelled`` before this point, so True means not a normal completion.
         turn_cancelled = sse_handler.cancelled.is_set()
 
         # Signal cancellation (handles client disconnect) then wait for producer.
@@ -2973,21 +2985,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             # before the producer started) instead — it's the same
             # value ``_effective_model`` would have returned for the
             # default agent factories that honour ``model_id`` kwarg.
-            _bg = asyncio.create_task(
+            _spawn_background(
                 _maybe_update_session_title(
                     db=db,
                     session_id=request.session_id,
                     user_msg=request.message,
                     assistant_msg=full_response,
                     model_id=session_model,
-                )
-            )
-            # Hold a reference so the GC doesn't kill the task before
-            # it completes; discard on done.
-            _active_sse_handlers.setdefault(f"_titlebg:{request.session_id}", _bg)
-            _bg.add_done_callback(
-                lambda _t, _sid=request.session_id: _active_sse_handlers.pop(
-                    f"_titlebg:{_sid}", None
                 )
             )
             done_event = _done_event(

@@ -989,7 +989,7 @@ class TestReconcileEndpoint:
 
     def test_reconcile_returns_200_when_agent_registered(self, client):
         """POST /api/memory/reconcile returns 200 when _reconcile_fn is set."""
-        memory_router_mod._reconcile_fn = lambda: {
+        memory_router_mod._reconcile_fn = lambda max_pairs: {
             "pairs_checked": 10,
             "reinforced": 3,
             "contradicted": 1,
@@ -1001,6 +1001,55 @@ class TestReconcileEndpoint:
         data = resp.json()
         assert data["pairs_checked"] == 10
         assert data["contradicted"] == 1
+
+    def test_agent_reconcile_gets_the_requested_max_pairs(self, client):
+        seen = {}
+
+        def agent_reconcile(max_pairs):
+            seen["max_pairs"] = max_pairs
+            return {"pairs_checked": 0}
+
+        memory_router_mod._reconcile_fn = agent_reconcile
+
+        resp = client.post("/api/memory/reconcile?max_pairs=3")
+
+        assert resp.status_code == 200
+        assert seen == {"max_pairs": 3}
+
+    def test_standalone_reconcile_fails_when_the_llm_is_down(self, client, test_store):
+        """An unreachable LLM is a 500, not a quiet "0 pairs checked"."""
+        require_faiss()
+        import numpy as np
+
+        vec = np.ones(768, dtype=np.float32).tobytes()
+        for content in ("alpha fact one", "alpha fact two"):
+            kid = _create_knowledge(client, content)["knowledge_id"]
+            test_store.store_embedding(kid, vec)
+
+        fake_llm = MagicMock()
+        fake_llm.chat.side_effect = ConnectionError("Lemonade not reachable")
+        with patch("gaia.llm.create_client", return_value=fake_llm):
+            resp = client.post("/api/memory/reconcile")
+
+        assert resp.status_code == 500
+        assert "Lemonade not reachable" in resp.json()["detail"]
+
+    def test_standalone_reconcile_skips_an_unparseable_reply(self, client, test_store):
+        require_faiss()
+        import numpy as np
+
+        vec = np.ones(768, dtype=np.float32).tobytes()
+        for content in ("alpha fact one", "alpha fact two"):
+            kid = _create_knowledge(client, content)["knowledge_id"]
+            test_store.store_embedding(kid, vec)
+
+        fake_llm = MagicMock()
+        fake_llm.chat.return_value = "not json"
+        with patch("gaia.llm.create_client", return_value=fake_llm):
+            resp = client.post("/api/memory/reconcile")
+
+        assert resp.status_code == 200
+        assert resp.json()["pairs_checked"] == 0
 
     def test_a_memory_contradicting_two_others_is_penalised_once(
         self, client, test_store
@@ -1073,7 +1122,7 @@ class TestReconcileEndpoint:
     def test_a_failing_agent_reconcile_is_reported_not_replaced(self, client, mocker):
         """No silent switch to the standalone path when the agent's run fails."""
 
-        def broken():
+        def broken(**_kwargs):
             raise RuntimeError("agent index unavailable")
 
         memory_router_mod._reconcile_fn = broken
@@ -1215,32 +1264,33 @@ class TestKnowledgeSupersededFilter:
         assert new_id in ids
         assert old_id in ids
 
-    def test_include_superseded_fallback_when_time_params_unsupported(
-        self, client, test_store
-    ):
-        """include_superseded still works even when time_from causes TypeError.
+    def test_time_window_filters_the_real_store(self, client, test_store):
+        """time_from / time_to narrow the list instead of being ignored."""
+        old_id = test_store.store(
+            category="fact", content="The deployment pipeline uses Jenkins"
+        )
+        new_id = test_store.store(
+            category="fact", content="Always run pytest before merging"
+        )
+        test_store._conn.execute(
+            "UPDATE knowledge SET created_at = ? WHERE id = ?",
+            ("2025-01-15T10:00:00+00:00", old_id),
+        )
+        test_store._conn.execute(
+            "UPDATE knowledge SET created_at = ? WHERE id = ?",
+            ("2026-03-15T10:00:00+00:00", new_id),
+        )
+        test_store._conn.commit()
 
-        When the store supports include_superseded but not time_from/time_to,
-        the router should fall back to passing just include_superseded.
-        """
-        captured = {}
-        original = test_store.get_all_knowledge
-
-        def mock_only_superseded(include_superseded=False, **kw):
-            # Accepts include_superseded but NOT time_from/time_to
-            captured["include_superseded"] = include_superseded
-            return original(include_superseded=include_superseded, **kw)
-
-        test_store.get_all_knowledge = mock_only_superseded
-
-        # Passes time_from which mock rejects → cascades to just include_superseded
         resp = client.get(
             "/api/memory/knowledge"
-            "?include_superseded=true"
-            "&time_from=2026-01-01T00:00:00%2B00:00"
+            "?time_from=2026-01-01T00:00:00%2B00:00"
+            "&time_to=2026-12-31T23:59:59%2B00:00"
         )
+
         assert resp.status_code == 200
-        assert captured.get("include_superseded") is True
+        ids = [item["id"] for item in resp.json()["items"]]
+        assert ids == [new_id]
 
 
 # ===========================================================================
