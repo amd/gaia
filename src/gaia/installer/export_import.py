@@ -46,7 +46,7 @@ MAX_UNCOMPRESSED_TOTAL = 500 * 1024 * 1024  # 500 MB
 MAX_UNCOMPRESSED_PER_FILE = 50 * 1024 * 1024  # 50 MB
 
 # Lowercase letters/digits/hyphens, 1-52 chars, must start and end with
-# alphanumeric.  Mirrored by BuilderAgent's agent-id template.
+# alphanumeric.
 _AGENT_ID_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$")
 
 # Reserved Windows device names (case-insensitive).

@@ -26,7 +26,6 @@ Safety properties (CLAUDE.md — fail loudly, no silent fallbacks):
   :class:`InstallInProgressError` (HTTP 409) instead of racing on the same dir.
 * **Backup before update** — updating an already-installed agent snapshots the
   current install to ``.backup/<id>/`` first, so :func:`rollback` can restore it.
-* **Builtins are immutable** — :func:`uninstall` refuses reserved builtin ids.
 """
 
 from __future__ import annotations
@@ -48,7 +47,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from gaia.agents.registry import _RESERVED_BUILTIN_IDS
 from gaia.daemon.sidecars.spec import builtin_specs
 from gaia.hub import catalog as catalog_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
@@ -305,11 +303,6 @@ def list_installed(install_root: Optional[Path] = None) -> Dict[str, InstalledAg
 def installed_versions(install_root: Optional[Path] = None) -> Dict[str, str]:
     """Map ``agent_id -> version`` for hub-installed agents (catalog merge)."""
     return {aid: ia.version for aid, ia in list_installed(install_root).items()}
-
-
-def is_builtin(agent_id: str) -> bool:
-    """Whether *agent_id* is a reserved builtin (immutable; never uninstalled)."""
-    return agent_id in _RESERVED_BUILTIN_IDS
 
 
 # ---------------------------------------------------------------------------
@@ -1271,7 +1264,7 @@ def uninstall(
     registry: Any = None,
     active_env_site_packages: Optional[Path] = None,
 ) -> None:
-    """Remove a hub-installed agent. Refuses builtins.
+    """Remove a hub-installed agent.
 
     Args:
         active_env_site_packages: Where the ``.pth`` entry added at install
@@ -1279,13 +1272,8 @@ def uninstall(
             Injectable so tests don't touch the real active environment.
 
     Raises:
-        InstallError: If *agent_id* is a reserved builtin.
         NotInstalledError: If the agent is not installed.
     """
-    if is_builtin(agent_id):
-        raise InstallError(
-            f"'{agent_id}' is a built-in GAIA agent and cannot be uninstalled."
-        )
     root = install_root or default_install_root()
     install_dir = agent_install_dir(agent_id, root)
     installed = read_sentinel(agent_id, root)

@@ -78,7 +78,6 @@ setup(
         "gaia.agents.base",
         "gaia.agents.tools",
         "gaia.agents.tools._email",
-        "gaia.agents.builder",
         "gaia.agents.code_index",
         "gaia.agents.code_index.tools",
         "gaia.governance",

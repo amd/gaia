@@ -380,29 +380,13 @@ def cmd_init(args) -> None:
 
 def _scaffold_python(pkg_dir: Path, names: _Names) -> None:
     """Write the Python package layout (mirrors hub/agents/hello-world/python)."""
-    from gaia.agents.builder.template import (
-        TEMPLATE_INSTRUCTIONS,
-        TEMPLATE_STARTERS,
-        generate_agent_source,
-    )
-
     description = f"{names.display_name} — a GAIA agent (edit this description)"
     code_dir = pkg_dir / names.package
     tests_dir = pkg_dir / "tests"
     code_dir.mkdir(parents=True, exist_ok=True)
     tests_dir.mkdir(parents=True, exist_ok=True)
 
-    # Dev scaffold intentionally seeds the playful demo persona — a complete,
-    # runnable example the developer rewrites. (The conversational UI Builder
-    # instead authors a purpose-matched persona; see agents/builder/agent.py.)
-    agent_source = generate_agent_source(
-        agent_id=names.id,
-        agent_name=names.display_name,
-        description=description,
-        class_name=names.class_name,
-        starters=list(TEMPLATE_STARTERS),
-        system_prompt=TEMPLATE_INSTRUCTIONS,
-    )
+    agent_source = _render_agent_py(names, description)
 
     # Normalise generated Python with the same tools (and defaults) the --lint
     # gate enforces, so a freshly scaffolded package passes 'gaia agent test
@@ -1486,6 +1470,79 @@ def build_registration():
         tools_count=0,
     )
 '''
+
+
+# Demo persona the scaffold seeds — a runnable example the developer rewrites.
+_AGENT_INSTRUCTIONS = """\
+You are a freshly scaffolded GAIA example agent — a working starting point, \
+not a finished product. Introduce yourself as exactly that: a template the \
+developer is about to shape into something of their own.
+
+When someone talks to you, answer helpfully from general knowledge and remind \
+them you can be given a real personality, knowledge, and tools.
+
+Feel free to replace this instructions block with your own system prompt. \
+This is where you define your agent's personality, knowledge, and behavior.\
+"""
+
+_AGENT_STARTERS = [
+    "What are you an example of?",
+    "How do I customize you?",
+    "What could I turn you into?",
+]
+
+
+def _render_agent_py(names: _Names, description: str) -> str:
+    """Return the scaffolded ``agent.py``; user-supplied values go through repr()."""
+    lines = [
+        f"# {names.class_name} -- Custom GAIA Agent",
+        "# Docs: https://amd-gaia.ai/docs/sdk/core/agent-system",
+        "#        https://amd-gaia.ai/docs/sdk/patterns",
+        "",
+        "from gaia.agents.base.agent import Agent",
+        "from gaia.agents.base.tools import _TOOL_REGISTRY, tool  # noqa: F401",
+        "",
+        "",
+        f"class {names.class_name}(Agent):",
+        f"    {repr(description.strip() or 'Custom GAIA agent.')}",
+        "",
+        f"    AGENT_ID = {repr(names.id)}",
+        f"    AGENT_NAME = {repr(names.display_name)}",
+        f"    AGENT_DESCRIPTION = {repr(description)}",
+        f"    CONVERSATION_STARTERS = {repr(_AGENT_STARTERS)}",
+        "",
+        "    # -- System Prompt -----------------------------------------------",
+        "    # This is your agent's personality and instructions.",
+        "    # Edit the text below to change how your agent behaves.",
+        "",
+        "    def _get_system_prompt(self) -> str:",
+        f"        return {repr(_AGENT_INSTRUCTIONS)}",
+        "",
+        "    # -- Tools -------------------------------------------------------",
+        "    # Define custom tools using the @tool decorator.",
+        "    # Each tool becomes an action your agent can take.",
+        "",
+        "    def _register_tools(self):",
+        "        _TOOL_REGISTRY.clear()",
+        "        # Example -- uncomment and modify:",
+        "        #",
+        "        # @tool",
+        "        # def my_tool(query: str) -> str:",
+        '        #     """Describe what this tool does."""',
+        '        #     return f"Result for: {query}"',
+        "        pass",
+        "",
+        "    # -- Advanced (optional) -----------------------------------------",
+        "    #",
+        "    # Change the default model:",
+        "    #     def __init__(self, **kwargs):",
+        '    #         kwargs.setdefault("model_id", "Qwen3-0.6B-GGUF")',
+        "    #         super().__init__(**kwargs)",
+        "    #",
+        "    # MCP: https://amd-gaia.ai/docs/sdk/infrastructure/mcp",
+        "",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _render_test_py(names: _Names) -> str:

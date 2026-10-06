@@ -10,8 +10,7 @@ hub/agents/gaia/python/gaia_agent/stdio.py:home_join 2
 src/gaia/agents/base/goal_store.py:home_join 1
 src/gaia/agents/base/memory.py:home_join 1
 src/gaia/agents/base/memory_store.py:home_join 1
-src/gaia/agents/builder/agent.py:home_join 1
-src/gaia/agents/registry.py:home_join 5
+src/gaia/agents/registry.py:home_join 4
 src/gaia/agents/tools/audio_tools.py:home_join 1
 src/gaia/agents/tools/screenshot_tools.py:home_join 1
 src/gaia/audio/diarize.py:home_join 1
@@ -27,7 +26,6 @@ src/gaia/daemon/paths.py:home_join 1
 src/gaia/daemon/sidecars/fetch.py:home_join 1
 src/gaia/engineering/service.py:home_join 1
 src/gaia/engineering/store.py:home_join 1
-src/gaia/eval/behavior_harness.py:home_join 1
 src/gaia/eval/flagship_tasks.py:home_join 1
 src/gaia/eval/runner.py:home_join 3
 src/gaia/eval/sidecar_harness.py:home_join 1

@@ -157,7 +157,7 @@ def test_ui_classifier_returns_none_for_unrelated_error() -> None:
 def test_ui_classifier_routes_model_not_found_404_and_names_model() -> None:
     """A Lemonade 404 for an uninstalled model → model-not-found, naming the model.
 
-    This is the exact failure in #2243: BuilderAgent requested
+    This is the exact failure in #2243: an agent requested
     ``Qwen3.5-35B-A3B-GGUF`` on an ``npu``-profile box that never
     installed it. The classifier must (a) bucket it as *not-found* (not
     the retryable *not-loaded*) and (b) preserve the model id so the

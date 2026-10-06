@@ -3182,8 +3182,6 @@ gaia hub uninstall email           # stops the sidecar first, then removes the d
   a clean "already in progress" error instead of racing the first.
 - The catalog only lists agents this GAIA build can actually supervise; anything
   else is reported as hidden rather than silently dropped.
-- Reserved built-in agents (e.g. `builder`) ship with the wheel and are refused
-  by both `install` and `uninstall`.
 - **Trust gate.** Any agent outside the `verified` security tier runs
   third-party code on your machine, so it is refused (HTTP 403) until you pass
   `--trust`, with the remedy named in the error. A manifest that omits

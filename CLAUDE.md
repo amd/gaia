@@ -528,10 +528,9 @@ cd src/gaia/apps/webui && npm run dev      # Terminal 2: frontend (port 5174)
 ```
 gaia/
 ├── src/gaia/           # Main source code
-│   ├── agents/         # Agent framework + in-core agents
+│   ├── agents/         # Agent framework (no agents live in core)
 │   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent mixins
 │   │   ├── tools/      # Cross-agent tool mixins (rag, file, shell, browser, scratchpad, screenshot…)
-│   │   ├── builder/    # in-core agent (ChatAgent moved to hub/agents/chat/python/)
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
 │   │   #   Packaged agents live in hub/agents/<id>/python/: gaia (flagship),
@@ -627,8 +626,8 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 
 ### Agent Implementations
 
-In-core agents live under `src/gaia/agents/`; the rest have moved to standalone hub
-packages under `hub/agents/<id>/python/`. The authoritative registry is
+Every registered agent ships as a standalone hub package under `hub/agents/<id>/python/`;
+`src/gaia/agents/` holds only the framework. The authoritative registry is
 [`src/gaia/agents/registry.py`](src/gaia/agents/registry.py); each agent's default model
 is set in its own `agent.py` (see [Default Models](#default-models)).
 
@@ -637,7 +636,6 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 | **GaiaAgent** | The flagship — conversation, documents, data, web, memory, skills — hub (`gaia/`) |
 | **ChatAgent** | The flagship's base class. Its `chat`/`doc`/`file` ids are `hidden` — resolvable, not selectable — hub (`chat/`) |
 | **EmailTriageAgent** | Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector) — hub (`email/`) |
-| **BuilderAgent** | Scaffolds new agents from templates — in-core (`builder/`) |
 
 Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
 docker, blender, sd, emr, routing) were **deleted**: their capability is the flagship's
@@ -675,7 +673,7 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 
 ### Default Models
 - The default chat model follows the hardware. `gaia init` adds `Qwen3.6-35B-A3B-GGUF` (`LARGE_DEFAULT_MODEL_NAME`, a Lemonade built-in MoE with 3B active, listed since Lemonade v11.7.0, run with thinking on) where it fits — 23.3 GB of weights and vision projector plus its KV cache at the window it loads with (20 KiB/token, at least 64K, so ~27 GB for models), and only where a GPU holds it: a 64 GB+ Strix Halo or a 32 GB GPU, not a 24 GB card or a CPU-only PC — and records it as `default_model` in `~/.gaia/config.json` once downloaded; every smaller PC runs `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`), which every PC still downloads because vision loads it by name. "Fits" is [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py), read off Lemonade's `/system-info` and `/health`; the TUI picker applies the same rule from `tui/internal/lemonade/recommended_models.json` (a drift test pins the two). `user.Qwen3.8-Flash-Next-GGUF` (`FLASH_OPTION_MODEL_NAME`, 82.86 GB plus its KV cache at 64K — 24 KiB/token, 1.6 GB — so ~90 GB, multimodal, thinking on, needs Lemonade v2026.39.1+) is opt-in only on a 128 GB Strix Halo — never in `DEFAULT_MODEL_LADDER` — chosen with `gaia config set default_model`; `util/compare_local_models.py` measures both on real hardware.
-- Agents that leave `model_id` unset call `resolve_default_chat_model()` — `default_model`, else `DEFAULT_MODEL_NAME`. That covers GaiaAgent, ChatAgent, BuilderAgent, and the example templates. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
+- Agents that leave `model_id` unset call `resolve_default_chat_model()` — `default_model`, else `DEFAULT_MODEL_NAME`. That covers GaiaAgent, ChatAgent, and the example templates. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
 - **EmailTriageAgent is the one exception.** With no explicit `model_id` it calls `resolve_default_email_model()` (`hub/agents/email/python/gaia_agent_email/model_select.py`), which returns `gemma4-it-e2b-FLM` when an NPU is present *and* that model is already servable, and `DEFAULT_MODEL_NAME` in every other case.
 - Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` in `MODELS` ([`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)) gets the largest window that fits the GPU memory Lemonade reports (`largest_context` in [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py)), and the fit check charges the KV cache at that same window. Every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). `NPU_CTX_SIZE` (32768, the FLM ceiling) applies only to models that run on the NPU, never to a GPU model on a machine whose `default_device` is `npu`. Gemma-4-E4B stays at 65536 because the eval baseline was captured there.
 - Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported, and is the RAG SDK's `vlm_model` default (`src/gaia/rag/sdk.py`)
