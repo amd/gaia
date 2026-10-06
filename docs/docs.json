@@ -545,7 +545,7 @@
     "primary": {
       "type": "button",
       "label": "Download",
-      "href": "https://github.com/amd/gaia/releases"
+      "href": "https://amd-gaia.ai/#install"
     }
   },
   "contextual": {
