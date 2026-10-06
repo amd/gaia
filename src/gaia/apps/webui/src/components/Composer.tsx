@@ -39,13 +39,29 @@ export function Composer({
     const canSend = !disabled && !streaming && !attachments.uploading
         && (value.trim().length > 0 || attachments.hasUploaded);
 
+    const shownPlaceholder = disabledReason || placeholder;
+
     // Grow with the text, up to a cap; shrink back when it is cleared.
+    // Chrome counts the placeholder in scrollHeight, and a narrow first layout
+    // wraps it, so re-measure on placeholder and width changes too.
     useLayoutEffect(() => {
         const el = textareaRef.current;
         if (!el) return;
-        el.style.height = 'auto';
-        el.style.height = `${Math.min(el.scrollHeight, MAX_INPUT_HEIGHT)}px`;
-    }, [value, textareaRef]);
+        const fit = () => {
+            el.style.height = 'auto';
+            el.style.height = `${Math.min(el.scrollHeight, MAX_INPUT_HEIGHT)}px`;
+        };
+        fit();
+        if (typeof ResizeObserver === 'undefined') return;
+        let width = el.clientWidth;
+        const observer = new ResizeObserver(() => {
+            if (el.clientWidth === width) return;
+            width = el.clientWidth;
+            fit();
+        });
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [value, shownPlaceholder, textareaRef]);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -96,7 +112,7 @@ export function Composer({
                 onChange={(e) => onChange(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onPaste={(e) => { attachments.handlePaste(e); }}
-                placeholder={disabledReason || placeholder}
+                placeholder={shownPlaceholder}
                 rows={1}
                 disabled={disabled}
                 autoFocus={autoFocus}
