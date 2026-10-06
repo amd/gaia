@@ -45,6 +45,15 @@ def test_agent_module_imports_and_registry_symbol_exists():
     assert callable(get_embedding_model_for_device)
 
 
+def test_agent_module_imports_and_gaia_home_symbol_exists():
+    """#4381: the agent imports gaia.config.gaia_home at module load; a
+    core released before that symbol (e.g. 0.24.1) dies here."""
+    import gaia_agent_chat.agent  # noqa: F401
+    from gaia.config import gaia_home
+
+    assert callable(gaia_home)
+
+
 def test_pyproject_floor_covers_registry_symbol():
     pyproject = (CHAT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     match = re.search(_AMD_GAIA_FLOOR_RE, pyproject)
