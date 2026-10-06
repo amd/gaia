@@ -805,6 +805,12 @@ class LemonadeProvider(LLMClient):
     def get_last_ttft_seconds(self) -> Optional[float]:
         return self._last_ttft_seconds
 
+    def get_last_retry_count(self) -> Optional[int]:
+        """Retries the backend needed for the most recent request; a stream's
+        count is final once it has been consumed."""
+        count = getattr(self._backend, "last_request_retries", None)
+        return count if isinstance(count, int) else None
+
     def load_model(self, model_name: str, **kwargs) -> None:
         self._backend.load_model(model_name, **kwargs)
         self._model = model_name

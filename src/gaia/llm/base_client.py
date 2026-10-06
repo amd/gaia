@@ -83,6 +83,12 @@ class LLMClient(ABC):
         non-streamed call, or when the provider does not measure it."""
         return None
 
+    def get_last_retry_count(self) -> Optional[int]:
+        """How many times the most recent ``chat()`` request was retried after
+        a transient failure (0 when the first attempt succeeded), or ``None``
+        when the provider does not retry or does not report it."""
+        return None
+
     def load_model(self, model_name: str, **kwargs) -> None:
         raise NotSupportedError(self.provider_name, "load_model")
 
