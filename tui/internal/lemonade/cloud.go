@@ -20,6 +20,23 @@ import (
 
 const FireworksURL = "https://api.fireworks.ai/inference/v1"
 
+// AMD's LLM gateway authenticates on Azure API Management's subscription-key
+// header; `Authorization: Bearer` gets 401 "missing subscription key" there.
+const (
+	AMDGatewayURL        = "https://llm-api.amd.com/Unified/v1"
+	AMDGatewayAuthHeader = "Ocp-Apim-Subscription-Key"
+)
+
+// IsAMDGateway reports whether base is AMD's own gateway host.
+func IsAMDGateway(base string) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil {
+		return false
+	}
+	host, _ := url.Parse(AMDGatewayURL)
+	return strings.EqualFold(u.Hostname(), host.Hostname())
+}
+
 // Recommendation is a Fireworks model worth steering users to, with the reason.
 type Recommendation struct {
 	ID   string
@@ -250,6 +267,9 @@ func (c *Client) Configure(ctx context.Context, p Provider, key string) error {
 	}
 	if p.Name == "fireworks" && p.BaseURL != FireworksURL {
 		return fmt.Errorf("Fireworks must use its official API endpoint")
+	}
+	if p.Name == "amd" && IsAMDGateway(p.BaseURL) && (p.Header != AMDGatewayAuthHeader || p.Prefix != "") {
+		return fmt.Errorf("AMD's gateway authenticates with the %s header and no prefix", AMDGatewayAuthHeader)
 	}
 	if err := validateURL(p.BaseURL, false); err != nil {
 		return err

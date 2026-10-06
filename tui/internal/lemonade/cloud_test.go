@@ -232,3 +232,32 @@ func TestFireworksRecommendationsMatchTheRanking(t *testing.T) {
 		}
 	}
 }
+
+// AMD's gateway 401s a bearer token; registering one left users with an
+// authenticated-looking provider that discovered zero models.
+func TestConfigureRefusesABearerHeaderForAMDsGateway(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("nothing may reach Lemonade, got %s %s", r.Method, r.URL.Path)
+	}))
+	defer s.Close()
+	c := New(s.URL)
+	bearer := Provider{Name: "amd", BaseURL: AMDGatewayURL, Header: "Authorization", Prefix: "Bearer "}
+	if err := c.Configure(context.Background(), bearer, "test-key"); err == nil ||
+		!strings.Contains(err.Error(), AMDGatewayAuthHeader) {
+		t.Fatalf("err = %v, want a refusal naming %s", err, AMDGatewayAuthHeader)
+	}
+}
+
+func TestIsAMDGateway(t *testing.T) {
+	for base, want := range map[string]bool{
+		AMDGatewayURL:                        true,
+		"https://LLM-API.amd.com/other/v1":   true,
+		"https://gateway.example/v1":         false,
+		"https://llm-api.amd.com.evil.io/v1": false,
+		"":                                   false,
+	} {
+		if got := IsAMDGateway(base); got != want {
+			t.Errorf("IsAMDGateway(%q) = %v, want %v", base, got, want)
+		}
+	}
+}

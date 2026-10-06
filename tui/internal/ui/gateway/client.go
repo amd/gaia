@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // Provider is the name the gateway is registered under. Lemonade namespaces
@@ -35,13 +37,13 @@ const APIKeyEnv = "LEMONADE_AMD_API_KEY"
 // DefaultBaseURL is AMD's gateway. `llm.amd.com` is the SSO-gated portal, not
 // the API; the OpenAI-compatible surface is the Unified API on a separate host.
 // Verified live: <base>/models lists 76 models, <base>/chat/completions works.
-const DefaultBaseURL = "https://llm-api.amd.com/Unified/v1"
+const DefaultBaseURL = lemonade.AMDGatewayURL
 
 // The gateway is Azure API Management, which authenticates on its own
 // subscription-key header, not a bearer token. Verified: this header alone
 // returns 200; `Authorization: Bearer` alone returns 401 "missing subscription
 // key". Lemonade can carry exactly one auth header, so this is the one.
-const DefaultAuthHeaderName = "Ocp-Apim-Subscription-Key"
+const DefaultAuthHeaderName = lemonade.AMDGatewayAuthHeader
 const DefaultAuthHeaderPrefix = ""
 
 // cloudRecipe is what Lemonade stamps on a model it proxies to a gateway.
