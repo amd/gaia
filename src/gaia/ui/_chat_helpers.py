@@ -29,6 +29,7 @@ from fastapi import HTTPException
 
 from gaia.agents.install_hints import (
     CHAT_WHEEL_AGENT_IDS,
+    agent_import_error_message,
     agent_not_installed_message,
 )
 from gaia.daemon.broker_client import BrokerUnavailableError
@@ -2244,7 +2245,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         )
                     except ImportError as e:
                         raise RuntimeError(
-                            agent_not_installed_message(
+                            agent_import_error_message(
+                                e,
                                 "The chat agent is not installed",
                                 "gaia-agent-chat",
                                 next_step="Then restart the server.",

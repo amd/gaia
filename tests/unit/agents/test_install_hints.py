@@ -10,6 +10,7 @@ must never recommend either broken command, and the source-install command it
 does recommend must reference a directory that actually exists on disk.
 """
 
+import importlib.metadata
 import json
 import sys
 from pathlib import Path
@@ -19,6 +20,7 @@ import pytest
 from gaia.agents import install_hints
 from gaia.agents.install_hints import (
     _AGENT_SOURCE_SUBDIRS,
+    agent_import_error_message,
     agent_not_installed_message,
     source_install_command,
 )
@@ -29,7 +31,7 @@ AGENTS_DIR = REPO_ROOT / "hub" / "agents"
 
 CHAT_SPEC = (
     "gaia-agent-chat @ git+https://github.com/amd/gaia.git"
-    "#subdirectory=hub/agents/chat/python"
+    f"@v{importlib.metadata.version('amd-gaia')}#subdirectory=hub/agents/chat/python"
 )
 
 
@@ -228,6 +230,87 @@ class TestAgentNotInstalledMessage:
             "The chat agent is not installed", "gaia-agent-chat"
         )
         assert not message.endswith(" ")
+
+
+class TestAgentImportErrorMessage:
+    def test_missing_top_level_module_name_reports_not_installed(self):
+        # No CI environment can produce this for real -- gaia-agent-chat is
+        # installed for the wheel's own tests. CPython assigns ImportError.name
+        # exactly this way at raise time, so the constructed object is the
+        # identical shape the real import machinery produces.
+        error = ModuleNotFoundError("No module named 'gaia_agent_chat'")
+        error.name = "gaia_agent_chat"
+        message = agent_import_error_message(
+            error, "The chat agent is not installed", "gaia-agent-chat"
+        )
+        assert "is not installed" in message
+
+    def test_version_skew_reports_failed_import_not_missing(self):
+        """An ImportError raised *inside* the installed wheel must not be
+        declared "not installed" (the old misdiagnosis) -- report the real
+        error and both package versions. Produced via a real failed import of
+        a symbol the core doesn't export, the exact shape of the 0.24.1 +
+        gaia-agent-chat@main failure."""
+        try:
+            from gaia.config import _symbol_not_exported_by_core  # noqa: F401
+
+            pytest.fail("import of an unexported symbol should fail")
+        except ImportError as exc:
+            error = exc
+        message = agent_import_error_message(
+            error, "The chat agent is not installed", "gaia-agent-chat"
+        )
+        assert "is not installed" not in message
+        assert "is installed, but it could not be imported" in message
+        assert "_symbol_not_exported_by_core" in message
+        assert "Detected versions:" in message
+        assert "amd-gaia" in message
+        assert (
+            source_install_command("gaia-agent-chat", force_reinstall=True) in message
+        )
+        assert "--force-reinstall" in message
+        assert "--no-deps" in message
+
+    def test_missing_transitive_dependency_reports_failed_import(self):
+        # Real ModuleNotFoundError from importing a module that will never
+        # exist -- a wheel missing a transitive dep raises exactly this.
+        try:
+            import _gaia_missing_transitive_dep  # noqa: F401
+
+            pytest.fail("import of a missing module should fail")
+        except ModuleNotFoundError as exc:
+            error = exc
+        assert error.name == "_gaia_missing_transitive_dep"
+        message = agent_import_error_message(
+            error, "The chat agent is not installed", "gaia-agent-chat"
+        )
+        assert "is installed, but it could not be imported" in message
+        assert "_gaia_missing_transitive_dep" in message
+
+    def test_gaia_agent_gaia_missing_top_level_reports_not_installed(self):
+        """gaia-agent-gaia's top-level package is gaia_agent (not gaia_agent_gaia).
+        A ModuleNotFoundError for gaia_agent must be treated as 'not installed'."""
+        error = ModuleNotFoundError("No module named 'gaia_agent'")
+        error.name = "gaia_agent"
+        message = agent_import_error_message(
+            error, "The GAIA agent is not installed", "gaia-agent-gaia"
+        )
+        assert "is not installed" in message
+        assert source_install_command("gaia-agent-gaia") in message
+        assert "--no-deps" not in message
+
+    def test_gaia_agent_gaia_missing_sibling_chat_reports_not_installed(self):
+        """A missing required sibling should reinstall the primary wheel with
+        dependencies enabled, restoring gaia-agent-chat."""
+        error = ModuleNotFoundError("No module named 'gaia_agent_chat'")
+        error.name = "gaia_agent_chat"
+        message = agent_import_error_message(
+            error, "The GAIA agent is not installed", "gaia-agent-gaia"
+        )
+        assert "is not installed" in message
+        assert source_install_command("gaia-agent-gaia") in message
+        assert "subdirectory=hub/agents/gaia/python" in message
+        assert "--no-deps" not in message
 
 
 class TestGaiaExtraRequirements:

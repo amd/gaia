@@ -36,6 +36,21 @@ _AGENT_SOURCE_SUBDIRS = {
     "gaia-agent-gaia": "gaia",
 }
 
+# Map wheel name -> actual top-level Python package name.
+# Needed because wheel names use hyphens but package directories use underscores,
+# and the mapping isn't always a simple replace (e.g. gaia-agent-gaia -> gaia_agent).
+_WHEEL_TOP_LEVEL_PACKAGE = {
+    "gaia-agent-chat": "gaia_agent_chat",
+    "gaia-agent-email": "gaia_agent_email",
+    "gaia-agent-gaia": "gaia_agent",
+}
+
+# Required sibling packages for each primary wheel. If one is missing, suggest
+# installing the primary wheel normally so dependency resolution installs it.
+_WHEEL_REQUIRED_SIBLINGS = {
+    "gaia-agent-gaia": ("gaia-agent-chat", "gaia_agent_chat"),
+}
+
 _REPO_URL = "https://github.com/amd/gaia.git"
 
 # Agent ids the ``gaia-agent-chat`` wheel registers — its three prompt
@@ -43,6 +58,14 @@ _REPO_URL = "https://github.com/amd/gaia.git"
 # session can still ask for one on a box that never installed the wheel; the
 # answer there is this package's install command, not "pick another agent".
 CHAT_WHEEL_AGENT_IDS = frozenset({"chat", "doc", "file"})
+
+
+def _installed_version(package: str) -> Optional[str]:
+    """Installed version string for ``package``, or None when absent."""
+    try:
+        return importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 
 class PackageInstallerUnavailableError(RuntimeError):
@@ -226,17 +249,26 @@ def pip_install_hint(*args: str) -> str:
         return f"install uv ({_UV_INSTALL_DOCS}), then run: {command}"
 
 
-def source_install_command(wheel: str) -> str:
+def source_install_command(wheel: str, *, force_reinstall: bool = False) -> str:
     """Return the command that installs ``wheel`` straight from source.
 
     Raises ``KeyError`` if ``wheel`` isn't a known ``gaia-agent-*`` package --
     that's a bug at the call site (a typo'd wheel name), not a runtime
-    condition to swallow.
+    condition to swallow. With ``force_reinstall=True`` (an installed but
+    broken wheel needs the same file contents replaced), adds
+    ``--force-reinstall --no-deps`` so pip replaces only this wheel rather
+    than re-deploying its whole dependency tree.
     """
     subdir = _AGENT_SOURCE_SUBDIRS[wheel]
-    return pip_install_hint(
-        f"{wheel} @ git+{_REPO_URL}#subdirectory=hub/agents/{subdir}/python"
-    )
+    # Pin the ref to the installed core: the wheels track this repo's trunk,
+    # so pulling `main` against an older released core is exactly the version
+    # skew that produced the misdiagnosed "not installed" ImportErrors.
+    core_version = _installed_version("amd-gaia")
+    ref = f"@v{core_version}" if core_version else ""
+    spec = f"{wheel} @ git+{_REPO_URL}{ref}#subdirectory=hub/agents/{subdir}/python"
+    if force_reinstall:
+        return pip_install_hint(spec, "--force-reinstall", "--no-deps")
+    return pip_install_hint(spec)
 
 
 def agent_not_installed_message(
@@ -264,3 +296,76 @@ def agent_not_installed_message(
     if next_step:
         message = f"{message} {next_step}"
     return message
+
+
+def agent_wheel_failed_message(
+    subject: str, wheel: str, error: ImportError, *, next_step: str = ""
+) -> str:
+    """Build the error text for an installed wheel that fails to import.
+
+    A blanket "not installed" answer here misdiagnoses version skew (a wheel
+    importing symbols a newer/older core does not have) as a missing package,
+    and reinstalling from a mismatched ref reproduces the same failure. Name
+    both package versions and surface the real import error instead.
+    """
+    installed = _installed_version(wheel) or "unknown"
+    core = _installed_version("amd-gaia") or "unknown"
+    if subject.endswith(" is not installed"):
+        opening = (
+            subject[: -len(" is not installed")]
+            + " is installed, but it could not be imported"
+        )
+    else:
+        opening = (
+            f"{subject}. The `{wheel}` package is installed, but it could "
+            "not be imported"
+        )
+    message = (
+        f"{opening}.\n"
+        f"Detected versions: {wheel} {installed}, amd-gaia {core}\n"
+        f"Import error: {type(error).__name__}: {error}\n"
+        "This is usually a version skew between the wheel and the installed "
+        "core. Reinstall the wheel built from the matching core tag:\n"
+        f"`{source_install_command(wheel, force_reinstall=True)}`"
+    )
+    if next_step:
+        message = f"{message} {next_step}"
+    return message
+
+
+def agent_import_error_message(
+    error: ImportError, subject: str, wheel: str, *, next_step: str = ""
+) -> str:
+    """Pick the right error message for a failed agent-wheel import.
+
+    Only a ``ModuleNotFoundError`` that names the wheel's own top-level
+    package means the package is genuinely absent. Anything else -- a
+    missing transitive dependency, or an ImportError from a version-skewed
+    wheel -- means the package is installed but broken.
+
+    Also treats a missing *required sibling* wheel (e.g. gaia-agent-chat
+    for gaia-agent-gaia) as "not installed" so the reinstall hint includes
+    the sibling via normal dependency resolution (no --no-deps).
+    """
+    top_level = _WHEEL_TOP_LEVEL_PACKAGE.get(wheel, wheel.replace("-", "_"))
+
+    # Primary wheel genuinely absent?
+    if isinstance(error, ModuleNotFoundError) and (
+        error.name == top_level or (error.name or "").startswith(top_level + ".")
+    ):
+        return agent_not_installed_message(subject, wheel, next_step=next_step)
+
+    # Missing required sibling (e.g. gaia_agent_chat for gaia-agent-gaia)?
+    siblings = _WHEEL_REQUIRED_SIBLINGS.get(wheel)
+    if siblings:
+        _, sib_pkg = siblings
+        if isinstance(error, ModuleNotFoundError) and (
+            error.name == sib_pkg or (error.name or "").startswith(sib_pkg + ".")
+        ):
+            # Reinstall the primary wheel with dependency resolution enabled;
+            # installing only the sibling would leave any other missing
+            # requirements undiscovered, while --no-deps would preserve this
+            # broken environment.
+            return agent_not_installed_message(subject, wheel, next_step=next_step)
+
+    return agent_wheel_failed_message(subject, wheel, error, next_step=next_step)

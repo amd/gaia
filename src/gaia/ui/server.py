@@ -35,7 +35,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from gaia.agents.install_hints import agent_not_installed_message
+from gaia.agents.install_hints import agent_import_error_message
 from gaia.config import UnsafeGaiaHomeError
 
 # ── Backward-compatible re-exports ──────────────────────────────────────────
@@ -227,7 +227,8 @@ def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
     except ImportError as e:
         raise RuntimeError(
-            agent_not_installed_message(
+            agent_import_error_message(
+                e,
                 "The GAIA agent is not installed",
                 "gaia-agent-gaia",
                 next_step="Then re-run the scheduled task.",

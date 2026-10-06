@@ -13,7 +13,7 @@ from pathlib import Path
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import (
-    agent_not_installed_message,
+    agent_import_error_message,
     gaia_extras_install_args,
     pip_install_hint,
 )
@@ -589,7 +589,8 @@ async def async_main(action, **kwargs):
             from gaia_agent_chat.app import interactive_mode
         except ImportError as e:
             raise RuntimeError(
-                agent_not_installed_message(
+                agent_import_error_message(
+                    e,
                     "The GAIA agent is not installed",
                     "gaia-agent-gaia",
                     next_step="Then re-run `gaia chat`.",
@@ -954,7 +955,8 @@ def _launch_interactive_cli(log=None):
             from gaia_agent_chat.app import interactive_mode
         except ImportError as e:
             raise RuntimeError(
-                agent_not_installed_message(
+                agent_import_error_message(
+                    e,
                     "The GAIA agent is not installed",
                     "gaia-agent-gaia",
                     next_step="Then re-run `gaia chat`.",
@@ -5864,7 +5866,8 @@ def handle_email_command(args):
             from gaia_agent_email.spec_html import write_and_open_spec
         except ImportError as e:
             raise RuntimeError(
-                agent_not_installed_message(
+                agent_import_error_message(
+                    e,
                     "The email agent is not installed",
                     "gaia-agent-email",
                     next_step="Then re-run `gaia email --spec`.",
