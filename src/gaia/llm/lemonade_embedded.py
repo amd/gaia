@@ -210,11 +210,15 @@ def pid_exists(pid: int) -> bool:
     return True
 
 
-#: Display adapters whose Vulkan cooperative-matrix path fails or runs slow
-#: under the llama.cpp Lemonade bundles (b10825, AMD driver 32.0.12078.30):
-#: Qwen3.6 crashed on its first token and Gemma 4 generated at 14 tok/s, not
-#: 34. Strix Halo only — the one GPU this was measured on.
+#: Display adapters whose Vulkan cooperative-matrix path fails under the
+#: llama.cpp Lemonade bundles (b10825) on an old driver: Qwen3.6 crashed on its
+#: first token and Gemma 4 generated at 14 tok/s, not 34. Strix Halo only — the
+#: one GPU this was measured on.
 _COOPMAT_OFF_ADAPTERS = re.compile(r"Radeon\(TM\) 80[4-6]0S", re.IGNORECASE)
+
+#: The newest driver (registry ``DriverVersion``) measured crashing. Newer ones
+#: run Qwen3.6 with coopmat on, and turning it off there halves prompt speed.
+_COOPMAT_BROKEN_THROUGH = (32, 0, 12078, 30)
 
 #: Windows' display-adapter class; each adapter's subkey names the adapter.
 _DISPLAY_CLASS_KEY = (
@@ -222,28 +226,40 @@ _DISPLAY_CLASS_KEY = (
 )
 
 
-def _windows_display_adapters() -> List[str]:
-    """``DriverDesc`` of every display adapter Windows records."""
+def _windows_display_adapters() -> List[Tuple[str, str]]:
+    """``(DriverDesc, DriverVersion)`` of every display adapter Windows records."""
     import winreg  # pylint: disable=import-error
 
-    names = []
+    adapters = []
     try:
         root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _DISPLAY_CLASS_KEY)
     except OSError:
-        return names
+        return adapters
     with root:
         index = 0
         while True:
             try:
                 subkey = winreg.EnumKey(root, index)
             except OSError:
-                return names
+                return adapters
             index += 1
             try:
                 with winreg.OpenKey(root, subkey) as adapter:
-                    names.append(str(winreg.QueryValueEx(adapter, "DriverDesc")[0]))
+                    name = str(winreg.QueryValueEx(adapter, "DriverDesc")[0])
+                    try:
+                        version = str(winreg.QueryValueEx(adapter, "DriverVersion")[0])
+                    except OSError:
+                        version = ""
+                    adapters.append((name, version))
             except OSError:
                 continue  # "Properties" and other non-adapter subkeys
+
+
+def _driver_version(text: str) -> Optional[Tuple[int, ...]]:
+    try:
+        return tuple(int(part) for part in text.strip().split("."))
+    except ValueError:
+        return None
 
 
 def vulkan_workarounds() -> Dict[str, str]:
@@ -253,8 +269,26 @@ def vulkan_workarounds() -> Dict[str, str]:
     """
     if sys.platform != "win32" or "GGML_VK_DISABLE_COOPMAT" in os.environ:
         return {}
-    if any(_COOPMAT_OFF_ADAPTERS.search(n) for n in _windows_display_adapters()):
-        return {"GGML_VK_DISABLE_COOPMAT": "1"}
+    for name, version_text in _windows_display_adapters():
+        if not _COOPMAT_OFF_ADAPTERS.search(name):
+            continue
+        version = _driver_version(version_text)
+        if version is None:
+            log.info(
+                "%s reports no readable driver version (%r); leaving Vulkan coopmat "
+                "on. If Qwen3.6 crashes on its first token, update the AMD driver "
+                "or set GGML_VK_DISABLE_COOPMAT=1.",
+                name,
+                version_text,
+            )
+        elif version <= _COOPMAT_BROKEN_THROUGH:
+            log.info(
+                "%s driver %s is old enough to crash Qwen3.6 under Vulkan coopmat; "
+                "turning coopmat off. Updating the AMD driver keeps it on and faster.",
+                name,
+                version_text,
+            )
+            return {"GGML_VK_DISABLE_COOPMAT": "1"}
     return {}
 
 
