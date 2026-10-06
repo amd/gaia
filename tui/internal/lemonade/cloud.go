@@ -98,6 +98,12 @@ func rankKey(id string) string {
 	return provider + "." + name[strings.LastIndex(name, "/")+1:]
 }
 
+// SameCloudModel reports whether two cloud ids name the same model, in either
+// form Lemonade reports and regardless of case.
+func SameCloudModel(a, b string) bool {
+	return strings.EqualFold(rankKey(a), rankKey(b))
+}
+
 // Evidence returns the measured line behind a recommended model, or "".
 func Evidence(id string) string {
 	key := rankKey(id)
