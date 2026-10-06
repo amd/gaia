@@ -889,6 +889,32 @@ _SCRIPT_BREAKS = {
 }
 _SCRIPT_QUOTES = {"powershell": "'\"", "cmd": '"', "code": "'\"`"}
 
+#: Commands that run another command named among their operands.
+_COMMAND_WRAPPERS = frozenset(
+    {
+        "env",
+        "timeout",
+        "nice",
+        "nohup",
+        "stdbuf",
+        "time",
+        "xargs",
+        "command",
+        "exec",
+        "setsid",
+        "ionice",
+        "taskset",
+        "chrt",
+        "flock",
+        "sudo",
+        "doas",
+    }
+)
+
+#: Marks env's ``-S`` string, which env splits into a command line of its own.
+_ENV_SPLIT = "env-split"
+_ENV_SPLIT_ATTACHED = "env-split-attached"
+
 #: Marks a ``-EncodedCommand`` operand, which is base64 of UTF-16LE PowerShell.
 _PS_ENCODED = "powershell-encoded"
 
@@ -988,14 +1014,92 @@ def _powershell_script_positions(argv: list) -> Dict[int, str]:
     return positions
 
 
+def _env_split_string(argv: list, index: int) -> Optional[Tuple[int, str]]:
+    """``(position, text)`` when ``argv[index]`` is env's ``-S``/``--split-string``."""
+    token = argv[index]
+    if token.startswith("--"):
+        name, sep, value = token.partition("=")
+        if len(name) < 3 or not "--split-string".startswith(name):
+            return None
+        if sep:
+            return index, value
+    elif token.startswith("-") and "S" in token[1:]:
+        value = token[token.index("S") + 1 :]
+        if value:
+            return index, value
+    else:
+        return None
+    return (index + 1, argv[index + 1]) if index + 1 < len(argv) else None
+
+
+def _env_wrapper_assignments(argv: list) -> list:
+    """``(label, entry)`` for each path entry of the values ``env`` itself sets.
+
+    Held to the same rule as a leading ``NAME=value``: ``PYTHONPATH`` decides
+    which code the wrapped command imports.
+    """
+    operands = []
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        index += 1
+        match = _ENV_ASSIGNMENT.fullmatch(token)
+        if match is not None:
+            operands.extend(
+                (f"'{match[1]}='", entry)
+                for entry in match[2].split(os.pathsep)
+                if entry
+            )
+        elif token.startswith("--"):
+            name = token.partition("=")[0]
+            if "=" not in token and any(
+                len(name) > 2 and long.startswith(name)
+                for long in ("--unset", "--chdir", "--split-string")
+            ):
+                index += 1
+        elif token.startswith("-") and len(token) > 1:
+            takes = next((i for i, c in enumerate(token) if c in "uCS"), None)
+            if takes == len(token) - 1:
+                index += 1
+        elif token != "-":
+            break
+    return operands
+
+
+def _wrapped_script_positions(argv: list) -> Dict[int, str]:
+    """Script positions of the command a wrapper (``env``, ``timeout``…) runs.
+
+    Every operand that names an interpreter is tried as the wrapped command,
+    so no wrapper's option grammar has to be modelled to find it.
+    """
+    positions: Dict[int, str] = {}
+    for start in range(1, len(argv)):
+        name = _interpreter_name(argv[start])
+        if name not in _SCRIPT_DIALECTS and name not in _COMMAND_WRAPPERS:
+            continue
+        for index, dialect in _inline_script_positions(argv[start:]).items():
+            if positions.get(start + index, _SWITCH) == _SWITCH:
+                positions[start + index] = dialect
+    if _interpreter_name(argv[0]) == "env":
+        for index in range(1, len(argv)):
+            split = _env_split_string(argv, index)
+            if split is not None:
+                attached = split[0] == index
+                positions[split[0]] = _ENV_SPLIT_ATTACHED if attached else _ENV_SPLIT
+    return positions
+
+
 def _inline_script_positions(argv: list) -> Dict[int, str]:
     """``{index: dialect}`` for each operand of *argv* that is inline script.
 
-    Only the interpreters in ``_SCRIPT_DIALECTS``, and only the operand their
-    script flag names. Any other operand stays a single path candidate, except
-    cmd's and PowerShell's own ``/switch`` operands, marked ``_SWITCH``.
+    Only the interpreters in ``_SCRIPT_DIALECTS``, run directly or behind a
+    ``_COMMAND_WRAPPERS`` command, and only the operands their script flag names.
+    Any other operand stays a single path candidate, except cmd's and
+    PowerShell's own ``/switch`` operands, marked ``_SWITCH``.
     """
     program = _interpreter_name(argv[0])
+    if program in _COMMAND_WRAPPERS:
+        return _wrapped_script_positions(argv)
     dialect = _SCRIPT_DIALECTS.get(program)
     if dialect is None:
         return {}
@@ -1015,16 +1119,18 @@ def _inline_script_positions(argv: list) -> Dict[int, str]:
         return positions
     positions = {}
     reads_script = False
+    options_ended = False
+    # Never stop at the first operand: it may be an option's value
+    # ('-o pipefail', '-X utf8'), and marking a later one is only stricter.
     for index, token in enumerate(argv[1:], start=1):
         if dialect == "posix":
-            if reads_script and not token.startswith(("-", "+")):
-                return {index: dialect}
-            if token.startswith("-") and not token.startswith("--"):
+            if reads_script and (options_ended or not token.startswith(("-", "+"))):
+                positions[index] = dialect
+            elif token in ("-", "--"):
+                options_ended = True
+            elif token.startswith("-") and not token.startswith("--"):
                 reads_script = reads_script or "c" in token[1:]
-                continue
-            if token.startswith(("--", "+")):
-                continue
-            return {}
+            continue
         # A code interpreter: its script flag takes the next operand, or
         # carries the code attached ('-cprint(1)', '--eval=...').
         if reads_script:
@@ -1032,7 +1138,7 @@ def _inline_script_positions(argv: list) -> Dict[int, str]:
             reads_script = False
             continue
         if not token.startswith("-"):
-            break
+            continue
         flags = _CODE_SCRIPT_FLAGS[program]
         if token in flags or any(
             len(flag) == 2 and re.fullmatch(rf"-[A-Za-z]+{flag[1]}", token)
@@ -1139,6 +1245,10 @@ def _path_operands(argv: list) -> list:
     """
     positions = _inline_script_positions(argv)
     operands = []
+    wrapped = _interpreter_name(argv[0]) in _COMMAND_WRAPPERS
+    for start, token in enumerate(argv[:-1] if wrapped else argv[:1]):
+        if _interpreter_name(token) == "env":
+            operands.extend(_env_wrapper_assignments(argv[start:]))
     for index, token in enumerate(argv[1:], start=1):
         dialect = positions.get(index)
         if dialect is None:
@@ -1146,9 +1256,34 @@ def _path_operands(argv: list) -> list:
             continue
         if dialect == _SWITCH:
             continue
+        if dialect in (_ENV_SPLIT, _ENV_SPLIT_ATTACHED):
+            operands.append(("Argument", token))
+            if dialect == _ENV_SPLIT_ATTACHED:
+                token = _env_split_string(argv, index)[1]
+            operands.extend(_path_operands(["env", *_script_words(token, "posix")]))
+            continue
         label = f"Path in the {_interpreter_name(argv[0])} script"
         operands.extend((label, word) for word in _script_words(token, dialect))
     return operands
+
+
+def _flag_path_values(arg: str) -> list:
+    """Every string in *arg* the path check reads as a possible path.
+
+    A flag can carry its value attached — ``--out=x``, ``-ox``, ``-Path:x`` —
+    and that value is checked on its own, never only as part of the flag.
+    """
+    if not arg.startswith("-"):
+        return [arg]
+    if "=" in arg:
+        return [arg.split("=", 1)[1]]
+    values = [arg] if os.sep in arg or "/" in arg else []
+    if not arg.startswith("--") and len(arg) > 2:
+        values.append(arg[2:])
+    _, colon, value = arg.partition(":")
+    if colon and value and not re.match(r"[A-Za-z]:", arg[2:]):
+        values.append(value)
+    return values
 
 
 def _grant_route(binary: str, skill_manager: Any) -> str:
@@ -2482,54 +2617,49 @@ class ShellToolsMixin:
             if entry
         ]
         for label, arg in candidates:
-            candidate_path = arg
-            if arg.startswith("-"):
-                if "=" in arg:
-                    _, candidate_path = arg.split("=", 1)
-                else:
-                    if os.sep not in arg and "/" not in arg:
-                        continue
+            for candidate_path in _flag_path_values(arg):
+                refusal = self._path_candidate_refusal(label, arg, candidate_path, cwd)
+                if refusal:
+                    return refusal
+        return None
 
-            # On Windows, skip flags starting with / (e.g., /i, /n, /c:)
-            # These are Windows command switches, not Unix paths
-            if os.name == "nt" and candidate_path.startswith("/"):
-                # Only treat as a real path if it has multiple segments
-                # (e.g., /proc/cpuinfo) not single flags (/i, /format:list)
-                if "/" not in candidate_path[1:]:
-                    continue
-
-            # Check if it looks like a path
-            if (
-                os.sep in candidate_path
-                or "/" in candidate_path
-                or ".." in candidate_path
-            ):
-                # Ignore URLs
-                if candidate_path.startswith(
-                    ("http://", "https://", "git://", "ssh://")
-                ):
-                    continue
-
-                # Resolve path relative to CWD
-                try:
-                    resolved_path = str(Path(cwd).joinpath(candidate_path).resolve())
-
-                    if not self.path_validator.is_path_allowed(resolved_path):
-                        return {
-                            **NOT_EXECUTED,
-                            "status": "error",
-                            "error": f"Access denied: {label} '{arg}' resolves to forbidden path '{resolved_path}'",
-                            "has_errors": True,
-                        }
-                except (OSError, ValueError) as exc:
-                    # Unresolvable is not a verdict — say so rather than
-                    # letting the argument through unnoticed.
-                    logger.warning(
-                        "Could not resolve '%s' against the allowed "
-                        "paths (%s); it was not path-checked.",
-                        arg,
-                        exc,
-                    )
+    def _path_candidate_refusal(
+        self, label: str, arg: str, candidate_path: str, cwd: str
+    ) -> Optional[Dict[str, Any]]:
+        """Refuse *candidate_path* (read from *arg*) when it leaves the allowed paths."""
+        # A lone '/x' is a Windows switch there (/i, /format:list), not a path.
+        if os.name == "nt" and candidate_path.startswith("/"):
+            if "/" not in candidate_path[1:]:
+                return None
+        if not (
+            os.sep in candidate_path or "/" in candidate_path or ".." in candidate_path
+        ):
+            return None
+        if candidate_path.startswith(("http://", "https://", "git://", "ssh://")):
+            return None
+        try:
+            resolved_path = str(Path(cwd).joinpath(candidate_path).resolve())
+        except (OSError, ValueError) as exc:
+            # Fail closed: a path nobody could resolve was never shown to be inside.
+            logger.warning("Refusing unresolvable path '%s': %s", arg, exc)
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": (
+                    f"Access denied: {label} '{arg}' could not be resolved to a "
+                    f"real path ({exc}), so it cannot be checked against the "
+                    "allowed paths."
+                ),
+                "has_errors": True,
+                "hint": "Pass a plain path inside an allowed folder.",
+            }
+        if not self.path_validator.is_path_allowed(resolved_path):
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": f"Access denied: {label} '{arg}' resolves to forbidden path '{resolved_path}'",
+                "has_errors": True,
+            }
         return None
 
     def _check_rate_limit(self) -> tuple:
