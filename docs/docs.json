@@ -460,7 +460,6 @@
           {
             "group": "Agents",
             "pages": [
-              "plans/image-agent",
               "plans/vision-sdk"
             ]
           }

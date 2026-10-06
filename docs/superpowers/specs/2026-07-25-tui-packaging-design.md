@@ -399,7 +399,7 @@ disagree within a release.
 The precise per-command verdicts, with test-coverage and doc-reference counts, live in the
 triage report referenced in §9.3. **The capability-loss ledger in that report is a required
 read before executing plan 3** — several hub agents have close to zero behavioural test
-coverage (`docs/plans/port-audit-6-agents.md:34-36`), so "the hub agent covers it" is a claim
+coverage, so "the hub agent covers it" is a claim
 to verify per agent, not to assume.
 
 ---
