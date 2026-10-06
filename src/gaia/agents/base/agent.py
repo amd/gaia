@@ -516,9 +516,12 @@ class HardwareRequirement:
     reason: str = ""
 
 
-# Prefixes for tools that represent SD (Stable Diffusion) capability.
-# Used to detect whether the agent has attempted image-generation tools.
+# Prefixes of the image-generation tools whose recorded outcome an answer must match.
 _SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
+
+
+def _is_image_tool(tool_name: str) -> bool:
+    return tool_name.lower().startswith(_SD_CAPABILITY_TOOLS)
 
 
 # Final answer when a turn still overflows the model's context window after
@@ -7419,12 +7422,9 @@ Do NOT wrap conversational replies in JSON.
         completion_gaps = []
         # Answer text the model sent alongside its latest tool calls.
         answer_beside_tool_calls: Optional[str] = None
-        # Issue #1023: track the latest outcome of any capability tool
-        # (currently ``generate_image``) so the verbose-failure override
-        # downstream fires only when the tool actually errored.  ``None``
-        # = not called yet, ``True`` = last call succeeded, ``False`` =
-        # last call returned an error.
+        # Latest generate_image outcome this turn: None until one has run.
         capability_tool_last_succeeded: Optional[bool] = None
+        image_outcome_corrected = False
         query_result_cache: dict[str, int] = (
             {}
         )  # result_hash → call count (result-based dedup)
@@ -7607,15 +7607,7 @@ Do NOT wrap conversational replies in JSON.
                     # Stop progress indicator
                     self.console.stop_progress()
 
-                    # Issue #1023: record success/failure of capability tools
-                    # so the verbose-failure override downstream can fire
-                    # only when the tool actually errored.  ``.lower()``
-                    # mirrors the defensive check at
-                    # ``has_tried_capability_tool`` so a model that emits
-                    # ``Generate_Image`` doesn't slip past the tracker.
-                    if any(
-                        tool_name.lower().startswith(_s) for _s in _SD_CAPABILITY_TOOLS
-                    ):
+                    if _is_image_tool(tool_name):
                         capability_tool_last_succeeded = not (
                             isinstance(tool_result, dict)
                             and tool_result.get("status") in ("error", "denied")
@@ -9047,12 +9039,7 @@ Do NOT wrap conversational replies in JSON.
                     tool_call_history.pop()
                     self._wait_out_rate_limit(tool_result)
 
-                # Issue #1023: record success/failure of capability tools so
-                # the verbose-failure override downstream fires only when the
-                # tool actually errored.  ``.lower()`` mirrors the defensive
-                # check at ``has_tried_capability_tool`` so a model that emits
-                # ``Generate_Image`` doesn't slip past the tracker.
-                if any(tool_name.lower().startswith(_s) for _s in _SD_CAPABILITY_TOOLS):
+                if _is_image_tool(tool_name):
                     capability_tool_last_succeeded = not (
                         isinstance(tool_result, dict)
                         and tool_result.get("status") in ("error", "denied")
@@ -9550,13 +9537,15 @@ Do NOT wrap conversational replies in JSON.
                     )
                     continue
 
-                # Capability-claim-without-attempt guard: catch responses that declare
-                # a tool's availability or unavailability (e.g. "I can generate images
-                # when the --sd flag is active") without having tried the tool first.
-                # This fires for generate_image only — the most common failure pattern.
-                # If the tool was already attempted (successfully or not), the claim is
-                # based on real evidence and should be allowed through.
-                _CAPABILITY_CLAIM_PATTERNS = [
+                # Only a generate_image call that ran leaves an outcome to check
+                # the answer against; a mention of the capability is not one.
+                image_outcome_recorded = (
+                    capability_tool_last_succeeded is not None
+                    and any(_is_image_tool(_n) for _n in self._tools_registry)
+                )
+                # The record cannot say what the answer claims, so the answer
+                # is read — but only against an outcome that exists.
+                _IMAGE_AVAILABILITY_CLAIM = [
                     r"--sd\b",
                     r"\bsd flag\b",
                     r"stable diffusion.*active",
@@ -9567,18 +9556,7 @@ Do NOT wrap conversational replies in JSON.
                     r"i can.*create.*image",
                     r"when.*--sd",
                 ]
-                has_tried_capability_tool = any(
-                    any(_tname.lower().startswith(_s) for _s in _SD_CAPABILITY_TOOLS)
-                    for _tname, _ in tool_call_log
-                )
-                is_capability_claim = any(
-                    re.search(_p, answer_candidate, re.IGNORECASE)
-                    for _p in _CAPABILITY_CLAIM_PATTERNS
-                )
-                # Even when generate_image was attempted, block if the response
-                # STILL makes a conditional capability claim without acknowledging
-                # the actual tool outcome (error or success).
-                _SD_OUTCOME_ACKNOWLEDGMENT = [
+                _IMAGE_OUTCOME_REPORTED = [
                     r"not available",
                     r"unavailable",
                     r"not.*active",
@@ -9595,78 +9573,45 @@ Do NOT wrap conversational replies in JSON.
                     r"generated.*image",
                     r"here.*image",
                 ]
-                outcome_acknowledged = has_tried_capability_tool and any(
-                    re.search(_p, answer_candidate, re.IGNORECASE)
-                    for _p in _SD_OUTCOME_ACKNOWLEDGMENT
-                )
-                _should_block_sd = (
-                    is_capability_claim
-                    and not outcome_acknowledged
+                if (
+                    image_outcome_recorded
+                    and not image_outcome_corrected
                     and steps_taken < steps_limit - 1
-                )
-                if _should_block_sd:
+                    and any(
+                        re.search(_p, answer_candidate, re.IGNORECASE)
+                        for _p in _IMAGE_AVAILABILITY_CLAIM
+                    )
+                    and not any(
+                        re.search(_p, answer_candidate, re.IGNORECASE)
+                        for _p in _IMAGE_OUTCOME_REPORTED
+                    )
+                ):
+                    image_outcome_corrected = True
+                    _outcome = (
+                        "generate_image succeeded"
+                        if capability_tool_last_succeeded
+                        else "generate_image returned an error"
+                    )
                     logger.debug(
-                        "[WORKFLOW] Blocking SD capability claim%s: %s",
-                        " (post-attempt)" if has_tried_capability_tool else "",
+                        "[WORKFLOW] Answer ignores the recorded outcome (%s): %s",
+                        _outcome,
                         answer_candidate[:80],
                     )
-                    # Extract what the user asked for from the last user message
-                    _last_user_msg = next(
-                        (
-                            m.get("content", "")
-                            for m in reversed(messages)
-                            if m.get("role") == "user"
-                            and isinstance(m.get("content"), str)
-                        ),
-                        "the requested image",
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"SYSTEM: This turn {_outcome}. Your answer says when "
+                                "image generation is available instead of what "
+                                "happened. Answer again and report that outcome."
+                            ),
+                        }
                     )
-                    if not has_tried_capability_tool:
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "SYSTEM: STOP. Do NOT write text. You must output a JSON tool call. "
-                                    "You attempted to describe image generation capability without calling "
-                                    "the tool. The ONLY valid next response is a generate_image tool call. "
-                                    "Output this JSON right now (replace the prompt with what the user asked for):\n"
-                                    '{"tool": "generate_image", "tool_args": {"prompt": "high quality photorealistic image, '
-                                    + _last_user_msg[:80].replace('"', "'")
-                                    + '"}}\n'
-                                    "Do not write anything else. Just the JSON above."
-                                ),
-                            }
-                        )
-                    else:
-                        # Tool was tried — force acknowledgment of the actual outcome
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "SYSTEM: You called generate_image and received a result. "
-                                    "Your response must describe what ACTUALLY happened — either "
-                                    "the image was generated successfully, or the tool returned an error. "
-                                    "Do NOT say 'I can generate images when --sd is active'. "
-                                    "Describe the actual tool outcome now."
-                                ),
-                            }
-                        )
                     continue
 
-                # Post-failure verbosity guard: when generate_image was called and
-                # failed, the LLM often apologises and explains "what it would have done"
-                # with prompt-engineering tips. Intercept and replace with a clean response.
-                #
-                # Issue #1023: gate on the LATEST outcome of the capability tool.
-                # When generate_image succeeded and a *different* tool's parse
-                # error provoked a verbose apology, the override used to clobber
-                # the model's reply with a misleading "Image generation is not
-                # available" message even though the image was generated.  Now
-                # the override fires only when the most recent capability call
-                # actually returned an error.
-                if (
-                    has_tried_capability_tool
-                    and capability_tool_last_succeeded is False
-                ):
+                # A failed generate_image is reported, not padded with what the
+                # model would have done; #1023: only when the latest call failed.
+                if image_outcome_recorded and capability_tool_last_succeeded is False:
                     _SD_POST_FAILURE_VERBOSE = [
                         r"would have done",
                         r"what i would",
