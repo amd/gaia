@@ -131,10 +131,6 @@ export async function getSystemStatus(): Promise<SystemStatus> {
     return apiFetch<SystemStatus>('GET', '/system/status');
 }
 
-export async function getHealth(): Promise<{ status: string; stats: Record<string, number> }> {
-    return apiFetch('GET', '/health');
-}
-
 // -- Settings ------------------------------------------------------------------
 
 export async function getSettings(): Promise<Settings> {
@@ -176,10 +172,6 @@ export async function startSetup(skipChatModel: boolean): Promise<SetupRunStatus
 
 export async function getSetupStatus(): Promise<SetupRunStatus> {
     return apiFetch('GET', '/setup/status');
-}
-
-export async function cancelSetup(): Promise<{ cancelled: boolean }> {
-    return apiFetch('POST', '/setup/cancel', {});
 }
 
 // -- AI providers and models (the TUI's /provider) -------------------------------
@@ -279,12 +271,6 @@ export async function configureConnector(
     config: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
     return apiFetch('POST', `/connectors/${connectorId}/configure`, { config }, UI_HEADER);
-}
-
-export async function testConnector(
-    connectorId: string,
-): Promise<{ ok: boolean; detail: string }> {
-    return apiFetch('POST', `/connectors/${connectorId}/test`, {}, UI_HEADER);
 }
 
 export async function disconnectConnector(connectorId: string): Promise<void> {
@@ -430,10 +416,6 @@ export async function listSessions(): Promise<{ sessions: Session[]; total: numb
 
 export async function createSession(data: Partial<Session> = {}): Promise<Session> {
     return apiFetch('POST', '/sessions', data);
-}
-
-export async function getSession(id: string): Promise<Session> {
-    return apiFetch('GET', `/sessions/${id}`);
 }
 
 export async function updateSession(id: string, data: { title?: string; title_is_custom?: boolean; system_prompt?: string; private?: boolean; agent_type?: string }): Promise<Session> {
@@ -950,10 +932,6 @@ export async function listSchedules(): Promise<{ schedules: Schedule[]; total: n
 
 export async function createSchedule(name: string, interval: string, prompt: string): Promise<Schedule> {
     return apiFetch('POST', '/schedules', { name, interval, prompt });
-}
-
-export async function getSchedule(name: string): Promise<Schedule> {
-    return apiFetch('GET', `/schedules/${encodeURIComponent(name)}`);
 }
 
 export async function updateSchedule(name: string, status: string): Promise<Schedule> {

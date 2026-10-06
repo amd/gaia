@@ -21,6 +21,7 @@ import { PermissionModeChip } from './PermissionModeChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { useAttachments } from '../hooks/useAttachments';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
+import { STARTING_REASON } from '../utils/constants';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -145,6 +146,15 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
         default:
             return null;
     }
+}
+
+/** Messages as the API sends them, with steps and stats under the names the view reads. */
+function fromApiMessages(raw: unknown[] | undefined): Message[] {
+    return (raw || []).map((m: any) => ({
+        ...m,
+        agentSteps: m.agentSteps || m.agent_steps || undefined,
+        stats: m.stats || m.inference_stats || undefined,
+    }));
 }
 
 function policyReceiptAnchor(receiptId: string): string {
@@ -288,13 +298,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
                 const data = await api.getMessages(sessionId);
                 if (cancelled) return;
-                const msgs = (data.messages || []).map((m: any) => ({
-                    ...m,
-                    // Map snake_case agent_steps from API to camelCase agentSteps
-                    agentSteps: m.agentSteps || m.agent_steps || undefined,
-                    // Map inference_stats from API to stats field
-                    stats: m.stats || m.inference_stats || undefined,
-                }));
+                const msgs = fromApiMessages(data.messages);
                 if (isInitial) {
                     setMessages(msgs);
                     lastMsgCountRef.current = msgs.length;
@@ -331,7 +335,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     useEffect(() => {
         api.listDocuments()
             .then((data) => setDocuments(data.documents || []))
-            .catch(() => {});
+            .catch((err) => log.doc.error('Could not load the document list', err));
     }, [setDocuments]);
 
     // Send a prompt queued before this view mounted (a new chat's first
@@ -449,17 +453,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }, STOP_GRACE_MS);
     }, [sessionId]);
 
-    // Global keyboard shortcuts: Escape → stop streaming, Ctrl+K → focus sidebar search
+    // Escape stops the reply. Ctrl+K is App's.
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
             // An open permission prompt claims Escape first (it denies).
             if (e.key === 'Escape' && isStreaming && !e.defaultPrevented) {
                 e.preventDefault();
                 handleStop();
-            }
-            if (e.key === 'k' && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                window.dispatchEvent(new CustomEvent('gaia:focus-search'));
             }
         };
         window.addEventListener('keydown', handler);
@@ -949,14 +949,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             // stopState isn't persisted either; carry it by id.
                             const prevMsgs = useChatStore.getState().messages;
                             const prevWithCards = prevMsgs.filter((m) => m.cards && m.cards.length > 0);
-                            const msgs: Message[] = (data.messages || []).map((m: any) => {
+                            const msgs: Message[] = fromApiMessages(data.messages).map((m) => {
                                 const prev = prevWithCards.find(
                                     (p) => p.id === m.id || (p.role === m.role && p.content === m.content),
                                 );
                                 return {
                                     ...m,
-                                    agentSteps: m.agentSteps || m.agent_steps || undefined,
-                                    stats: m.stats || m.inference_stats || undefined,
                                     cards: prev?.cards,
                                     stopState: prevMsgs.find((p) => p.id === m.id)?.stopState,
                                 };
@@ -1144,9 +1142,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 api.getMessages(sessionId)
                     .then((data) => {
                         if (isStale()) return;
-                        setMessages(data.messages || []);
+                        setMessages(fromApiMessages(data.messages));
                     })
-                    .catch(() => {});
+                    .catch((reloadErr) => log.chat.error(`Could not reload messages for session=${sessionId}`, reloadErr));
             }
         }, 250);
     }, [sessionId, isStreaming, removeMessage, setMessages, isStale]);
@@ -1168,9 +1166,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
             api.getMessages(sessionId)
                 .then((data) => {
                     if (isStale()) return;
-                    setMessages(data.messages || []);
+                    setMessages(fromApiMessages(data.messages));
                 })
-                .catch(() => {});
+                .catch((reloadErr) => log.chat.error(`Could not reload messages for session=${sessionId}`, reloadErr));
             return;
         }
 
@@ -1288,7 +1286,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 log.doc.error(`Upload failed: ${file.name}`, err);
             }
         }
-    }, [sessionId, updateSessionInList]);
+        // The document bar lists only documents the store knows about.
+        try {
+            const data = await api.listDocuments();
+            setDocuments(data.documents || []);
+        } catch (err) {
+            log.doc.error('Could not refresh the document list after a drop', err);
+        }
+    }, [sessionId, updateSessionInList, setDocuments]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
@@ -1321,7 +1326,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const composerBlocked = retiredAgent
         ? `This chat used the retired "${retiredAgent}" agent and is read-only. Start a new chat.`
         : systemStatus?.init_state === 'initializing'
-            ? 'GAIA is starting…'
+            ? STARTING_REASON
             : null;
 
     return (

@@ -219,12 +219,6 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
 export const selectUnreadCount = (state: NotificationState): number =>
   state.notifications.filter((n) => !n.read && !n.dismissed).length;
 
-/** Get pending permission requests. */
-export const selectPendingPermissions = (state: NotificationState): GaiaNotification[] =>
-  state.notifications.filter(
-    (n) => n.type === 'permission_request' && !n.response && !n.dismissed
-  );
-
 /** Get visible (non-dismissed) notifications, optionally filtered by type. */
 export const selectVisibleNotifications = (state: NotificationState): GaiaNotification[] => {
   const visible = state.notifications.filter((n) => !n.dismissed);
