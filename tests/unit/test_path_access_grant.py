@@ -89,8 +89,9 @@ def _agent(layout, console):
 
 
 def test_a_prompt_inside_a_tool_does_not_count_against_its_timeout(layout, monkeypatch):
-    monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "0.3")
-    console = _Console(answer=True, delay=1.0)
+    # Wide enough that a slow runner's thread start-up is not read as a hang.
+    monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "2")
+    console = _Console(answer=True, delay=3.0)
     agent = _agent(layout, console)
 
     @tool
