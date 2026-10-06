@@ -117,6 +117,45 @@ instance-scoped exact pin and takes precedence over this environment variable.
 Installer verification uses the profile being installed, even before it is saved.
 This setting does not change overflow recovery; it controls requested load capacity.
 
+## Retrying a flaky model endpoint
+
+Hosted OpenAI-compatible endpoints, the proxies in front of them, and a busy
+local server occasionally drop a request: a reset connection, a 502/503/504, a
+429, a 500 from a failed upstream hop. GAIA retries those, and only those.
+
+**Each request** is retried with exponential backoff and full jitter, honouring
+`Retry-After`. Retried: connection errors and timeouts, 408, 429, 502, 503, 504,
+and 500 unless its body says the request itself was rejected. Never retried:
+400 (including content-filter rejections), 401, 403, 404, 413, 422, and
+context-window overflow. A stream is retried only before its first token, so
+output is never duplicated.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GAIA_LLM_RETRY_ATTEMPTS` | `5` | Attempts per request, the first included. `1` turns retry off. |
+| `GAIA_LLM_RETRY_BASE_DELAY` | `2` | Backoff base in seconds: retry *n* waits up to `base × 2ⁿ`. |
+| `GAIA_LLM_RETRY_MAX_DELAY` | `30` | Longest single wait in seconds, `Retry-After` included. |
+| `GAIA_LLM_RETRY_DEADLINE` | `120` | Seconds one request may spend across all its attempts and waits. |
+
+**An agent step** whose request still fails after that is not the end of the
+run. The agent waits, then asks again with its conversation and tool history
+intact; the wait doubles each time. If the model stays unreachable, the turn
+ends with an answer that says so and lists what had already been done, and the
+run is reported as failed.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GAIA_AGENT_MODEL_RETRIES` | `2` | Extra attempts per step after the request gave up. `0` turns this off. |
+| `GAIA_AGENT_MODEL_RETRY_COOLDOWN` | `30` | Seconds before the first of those attempts; doubles after that. |
+
+```bash
+# Fail fast while debugging an endpoint
+GAIA_LLM_RETRY_ATTEMPTS=1 GAIA_AGENT_MODEL_RETRIES=0 gaia chat
+```
+
+Invalid nonempty values fail with an actionable error; unset or blank values
+use the defaults. Stop cancels the agent's wait between step attempts.
+
 ## 16.2 Configuration in Code
 
 ```python
