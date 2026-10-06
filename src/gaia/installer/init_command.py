@@ -115,7 +115,7 @@ INIT_PROFILES = {
         "description": "Fast setup with Gemma 4 E4B multimodal model",
         "agent": "minimal",
         "models": ["Gemma-4-E4B-it-GGUF"],
-        "approx_size": "~3 GB",
+        "approx_size": "~6 GB",
         "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
@@ -125,7 +125,7 @@ INIT_PROFILES = {
         "agent": "sd",
         "models": [
             "SDXL-Turbo",  # Image generation (6.5GB)
-            "Gemma-4-E4B-it-GGUF",  # Agentic reasoning + VLM + prompt enhancement (~3GB)
+            "Gemma-4-E4B-it-GGUF",  # Agentic reasoning + VLM + prompt enhancement (~6GB)
         ],
         "approx_size": "~10 GB",
         "min_lemonade_version": LEMONADE_MIN_VERSION,
@@ -158,7 +158,7 @@ INIT_PROFILES = {
         "description": "Vision pipeline for document and image extraction",
         "agent": "vlm",
         "models": ["Gemma-4-E4B-it-GGUF"],
-        "approx_size": "~3 GB",
+        "approx_size": "~6 GB",
         "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
@@ -167,7 +167,7 @@ INIT_PROFILES = {
         "description": "Email triage for Gmail/Outlook (local inference)",
         "agent": "email",
         "models": ["Gemma-4-E4B-it-GGUF"],
-        "approx_size": "~3 GB",
+        "approx_size": "~6 GB",
         # Keep in lock-step with gaia_agent_email.version.MIN_LEMONADE_VERSION
         # and the email gaia-agent.yaml manifest (the GET /v1/email/init readiness
         # check reads the same minimum). A test asserts the three agree.
@@ -1762,7 +1762,10 @@ class InitCommand:
                     f"   [dim]Ensuring {min_ctx} token context for {self.profile} profile...[/dim]"
                 )
                 success = LemonadeManager.ensure_ready(
-                    min_context_size=min_ctx, quiet=True
+                    min_context_size=min_ctx,
+                    quiet=True,
+                    # The local model set up above, even when default_model is cloud.
+                    model=self._chat_model(client),
                 )
                 if success:
                     self._print_success(f"Context size verified: {min_ctx} tokens")

@@ -10,7 +10,7 @@ icon: "wand-magic-sparkles"
 
 ## Overview
 
-GAIA's agent registry lets you extend the Agent UI with your own custom agents. Each agent lives in its own directory under `~/.gaia/agents/` as a Python module. Once placed there, the agent appears automatically in the **agent selector** dropdown of the Gaia Agent UI.
+GAIA's agent registry lets you extend the Agent UI with your own custom agents. Each agent lives in its own directory under `~/.gaia/agents/` as a Python module. Once placed there, the agent registers automatically and is listed by the Agent UI backend's `GET /api/agents`.
 
 Custom agents can have their own:
 - **Personality and instructions** (system prompt)
@@ -34,49 +34,9 @@ Custom agents can have their own:
 
 ---
 
-## Quick Start: Gaia Builder Agent
-
-The fastest way to create an agent is to use the built-in **Gaia Builder Agent**.
-
-<Steps>
-  <Step title="Open the Agent UI">
-    Start the GAIA Agent UI: `gaia chat --ui`
-  </Step>
-  <Step title="Click the + button">
-    In the chat input footer, click the **+** icon (to the left of the agent picker).
-    On the welcome screen, click **Build a Custom Agent Template**.
-
-    {/* TODO(screenshot): Capture "Build a Custom Agent Template" button on the welcome screen.
-        Save to docs/assets/img/custom-agent/builder-entry-point.png and add a Frame
-        block here pointing at /assets/img/custom-agent/builder-entry-point.png. */}
-  </Step>
-  <Step title="Follow the prompts">
-    The Builder (an **alpha** feature) greets you, asks what to name the agent and what it should do, and asks whether you want MCP support — then scaffolds a starter agent with a personality and conversation starters tailored to your description.
-
-    {/* TODO(screenshot): Capture the Builder Agent conversation creating a new agent.
-        Save to docs/assets/img/custom-agent/builder-conversation.png and add a Frame
-        block here pointing at /assets/img/custom-agent/builder-conversation.png. */}
-  </Step>
-  <Step title="Use your new agent">
-    Your agent is immediately available in the agent selector dropdown — no restart needed.
-
-    {/* TODO(screenshot): Capture the new agent appearing in the agent selector dropdown.
-        Save to docs/assets/img/custom-agent/agent-selector-dropdown.png and add a Frame
-        block here pointing at /assets/img/custom-agent/agent-selector-dropdown.png. */}
-  </Step>
-</Steps>
-
-The Builder creates a **starter template** at `~/.gaia/agents/<your-agent-name>/agent.py` — a tailored persona and conversation starters (plus MCP wiring if you asked for it). It's a starting point you extend, not a turnkey agent: it won't fetch data or perform complex tasks on its own until you add tools. Open the file to refine the instructions and add capabilities (see [Python Agent](#python-agent) below).
-
-<Tip>
-  Need your agent to read real data — Gmail, GitHub, your calendar? Skip ahead to [Using GAIA connectors](#using-gaia-connectors).
-</Tip>
-
----
-
 ## Python Agent
 
-For full control — custom tools, built-in tool mixins, MCP servers, or complex logic — write a Python module.
+A custom agent is a Python module — add custom tools, built-in tool mixins, MCP servers, or any logic you need.
 
 ### Directory structure
 
@@ -111,9 +71,8 @@ class MyPythonAgent(Agent):
             return f"Hello, {name}! Welcome to GAIA."
 ```
 
-This mirrors what the Builder Agent scaffolds. The only method a subclass **must**
-implement is `_register_tools()` (it's abstract on the base `Agent`); the other two
-have sensible defaults you can override:
+The only method a subclass **must** implement is `_register_tools()` (it's abstract
+on the base `Agent`); the other two have sensible defaults you can override:
 
 | Method | Required? | Purpose |
 |--------|-----------|---------|
@@ -195,24 +154,7 @@ is a working reference for both `oauth_pkce` (Google) and `mcp_server`
 
 ## Export and import agents
 
-Custom agents can be packaged into a single `.zip` bundle and shared between machines, teammates, or environments. GAIA supports export and import from both the Agent UI and the CLI. Exports include every `~/.gaia/agents/*` directory with an `agent.py` — the installer-seeded bundled example included; imported copies land as user-owned agents the seeder never touches.
-
-### From the Agent UI
-
-Open **Settings → Custom Agents**.
-
-{/* TODO(screenshot): Capture the Custom Agents settings panel with Export All and
-    Import buttons. Save to docs/assets/img/custom-agent/custom-agents-settings.png and
-    add a Frame block here pointing at /assets/img/custom-agent/custom-agents-settings.png. */}
-
-- **Export All** — packages every custom agent under `~/.gaia/agents/` into a single `.zip` file and downloads it. Disabled when you have no custom agents.
-- **Import** — opens a file picker for a `.zip` bundle and shows a confirmation dialog listing the agent IDs that will be installed. Imported agents register into the live registry; in most cases no restart is required.
-
-{/* TODO(screenshot): Capture the import confirmation dialog listing agent IDs to
-    install. Save to docs/assets/img/custom-agent/import-confirmation.png and add a
-    Frame block here pointing at /assets/img/custom-agent/import-confirmation.png. */}
-
-### From the CLI
+Custom agents can be packaged into a single `.zip` bundle and shared between machines, teammates, or environments with the `gaia agent export` and `gaia agent import` CLI commands. Exports include every `~/.gaia/agents/*` directory with an `agent.py` — the installer-seeded bundled example included; imported copies land as user-owned agents the seeder never touches.
 
 ```bash
 # Export every custom agent to ~/.gaia/export.zip
@@ -244,7 +186,7 @@ my-agents.zip
     └── agent.py
 ```
 
-Bundles are validated on import. The receiving end enforces conservative limits (max 1000 entries, 500 MB uncompressed, 50 MB per file, 100 MB upload via the UI) and rejects symlinks, device or other special files, and path-traversal entries.
+Bundles are validated on import. The receiving end enforces conservative limits (max 1000 entries, 500 MB uncompressed, 50 MB per file) and rejects symlinks, device or other special files, and path-traversal entries.
 
 ### Security
 
@@ -253,10 +195,8 @@ Bundles are validated on import. The receiving end enforces conservative limits 
 </Warning>
 
 <Note>
-  **Importing runs third-party code.** A bundle's `agent.py` files execute inside your GAIA process. Both the CLI (`gaia agent import` without `--yes`) and the UI surface the agent IDs and require explicit confirmation before installing. Only import bundles from sources you trust.
+  **Importing runs third-party code.** A bundle's `agent.py` files execute inside your GAIA process. `gaia agent import` (without `--yes`) lists the agent IDs and requires explicit confirmation before installing. Only import bundles from sources you trust.
 </Note>
-
-The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are localhost-only, CSRF-guarded with the `X-Gaia-UI` header, and disabled while a [tunnel](/guides/agent-ui) is active.
 
 ---
 
@@ -436,11 +376,11 @@ skips indexing.
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="My agent doesn't appear in the selector">
+  <Accordion title="My agent isn't registered">
     - Ensure the directory is under `~/.gaia/agents/<id>/` and contains `agent.py`.
     - The directory name does not need to match the `AGENT_ID` class attribute, but it helps.
     - Check the server logs for warnings like `Failed to load agent from ...`.
-    - If you created the agent manually (not via the Builder), **restart the GAIA server** — discovery runs at boot. Agents created via the Builder Agent are loaded immediately without a restart.
+    - After adding or editing the agent, **restart the GAIA server** — discovery runs at boot.
   </Accordion>
 
   <Accordion title="Agent fails to load">
@@ -448,9 +388,9 @@ skips indexing.
   </Accordion>
 
   <Accordion title="Imported agent doesn't appear or shows errors">
-    - The import response (UI status banner or CLI output) lists per-agent errors under `errors[]` — check those first.
+    - `gaia agent import` prints per-agent errors after `Errors:` — check those first.
     - Confirm each agent directory in the bundle contains an `agent.py` at its root. Bundles missing `agent.py` are rejected.
-    - If `requires_restart: true` is reported, restart the GAIA server to pick up the new agent.
+    - Restart the GAIA server so discovery picks up the imported agents.
     - Bundles produced on a different GAIA version may reference imports that don't exist locally — check the server logs for `ImportError`.
   </Accordion>
 

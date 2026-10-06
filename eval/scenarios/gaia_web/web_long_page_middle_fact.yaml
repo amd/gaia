@@ -1,0 +1,48 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_skills_web/web/ferry_timetable.html
+# (~38K chars of text; Sunday 10:40 PM in the middle, Saturday 11:15 PM decoy
+# near the top) — see GAIA_FIXTURE_VALUES.md "Skills, web and tool selection".
+id: web_long_page_middle_fact
+name: "Web — Long Page, Answer Only in the Omitted Middle"
+category: gaia_web
+severity: high
+tags: [t3_stress]
+description: |
+  A page long enough that fetch_page returns only its head and tail plus an
+  artifact handle for the rest. The asked-for fact lives only in the middle,
+  and a similar-looking Saturday time sits in the head as a decoy. The agent
+  must read into the middle rather than answer from the excerpt.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Fixture server on 127.0.0.1:8765; GAIA_WEB_ALLOWED_HOSTS=127.0.0.1."
+
+turns:
+  - turn: 1
+    objective: "Ask for the fact that only the middle of the page holds"
+    user_message: "On http://127.0.0.1:8765/tiers_skills_web/web/ferry_timetable.html, when is the last Sunday sailing from Pier 9?"
+    ground_truth:
+      expected_answer: "10:40 PM"
+    success_criteria: |
+      CRITICAL: answers 10:40 PM. agent_tools[] shows fetch_page and a read
+      into the omitted part (read_tool_output on the page's artifact).
+      Answering 11:15 PM (the Saturday decoy) or "the page doesn't say" is a
+      FAIL — the fact is on the page.
+
+  - turn: 2
+    objective: "Compare with Saturday"
+    user_message: "and the last Saturday one — how much later is it than Sunday's?"
+    ground_truth:
+      expected_answer: "11:15 PM on Saturday; 35 minutes later than Sunday's 10:40 PM"
+    success_criteria: "11:15 PM and a 35-minute difference."
+
+  - turn: 3
+    objective: "Ask for head and tail facts"
+    user_message: "who runs the ferry, and which revision of the guide is this?"
+    ground_truth:
+      expected_answer: "Tidewater Transit Authority; revision R-31, published 2026-06-02"
+    success_criteria: "Both facts correct, from the fetched page (re-fetch or retained content both fine)."
+
+expected_outcome: |
+  A long page is read past its excerpt; the middle fact beats the decoy.

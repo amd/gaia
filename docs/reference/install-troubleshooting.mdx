@@ -112,7 +112,7 @@ surfaces here, at the actual download, with a precise error.
 - Python 3.12 (~100 MB)
 - amd-gaia + dependencies (~1.5 GB)
 - Lemonade Server (~50 MB)
-- Minimal model (~400 MB)
+- The default model, Gemma-4-E4B-it-GGUF (~6 GB; ~23 GB Qwen3.6-35B-A3B-GGUF on PCs whose GPU can hold it)
 
 Subsequent launches work fully offline.
 
@@ -125,7 +125,7 @@ Subsequent launches work fully offline.
 **Windows (PowerShell)**:
 ```powershell
 $env:HTTPS_PROXY = "http://proxy.example.com:8080"
-& "$env:LOCALAPPDATA\Programs\gaia-desktop\gaia-desktop.exe"
+& "$env:LOCALAPPDATA\Programs\GAIA\gaia-desktop.exe"
 ```
 
 **macOS/Linux**:
@@ -149,7 +149,7 @@ corporate root CA explicitly:
 **Windows (PowerShell)** — export the root CA from `certmgr.msc` as Base-64 `.cer`/`.pem`, then:
 ```powershell
 $env:NODE_EXTRA_CA_CERTS = "C:\path\to\corp-root-ca.pem"
-& "$env:LOCALAPPDATA\Programs\gaia-desktop\gaia-desktop.exe"
+& "$env:LOCALAPPDATA\Programs\GAIA\gaia-desktop.exe"
 ```
 
 **macOS/Linux**:

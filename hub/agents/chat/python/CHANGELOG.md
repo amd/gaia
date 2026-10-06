@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The next release must raise the `amd-gaia` floor to the first core release
+  that ships `gaia.agents.tools.path_access`, which the agent now imports at start.
+- Every file tool now checks the same allowed-folders rule as `read_file`:
+  listing and searching folders (`list_files` included), indexing documents,
+  watching folders, and the files `text_to_speech` and the export tools save. A folder you
+  approve for the chat is now readable by document indexing too. Symlinks and
+  `..` are resolved before the check, and secrets such as `.env` inside an allowed
+  folder are no longer indexed.
 - `ChatAgentConfig.memory_incognito` starts a session with memory off and does
   not load the embedding model until memory is used. The Agent UI sets it for
   private chats and when memory is switched off, which used to load the ~300 MB

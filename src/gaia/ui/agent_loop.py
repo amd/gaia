@@ -30,11 +30,9 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.install_hints import agent_import_error_message
-from gaia.ui.memory_settings import memory_enabled
 from gaia.ui.run_manager import run_manager
 
 logger = logging.getLogger(__name__)
@@ -255,7 +253,9 @@ class AgentLoop:
         Returns a LoopDirective describing what the loop should do next.
         """
         # ── Startup gate ─────────────────────────────────────────────────
-        initialized = (Path.home() / ".gaia" / "chat" / "initialized").exists()
+        from gaia.ui.setup_runner import is_initialized
+
+        initialized = is_initialized()
         if not initialized:
             logger.debug("AgentLoop: startup gate — not yet initialized")
             return LoopDirective("idle")
@@ -435,15 +435,14 @@ class AgentLoop:
                     agent._register_tools()
                 else:
                     # Run the heavier sync work inline (we're in a thread).
-                    # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
                     try:
-                        from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+                        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
                     except ImportError as e:
                         raise RuntimeError(
                             agent_import_error_message(
                                 e,
-                                "The chat agent is not installed",
-                                "gaia-agent-chat",
+                                "The GAIA agent is not installed",
+                                "gaia-agent-gaia",
                                 next_step="Then restart the server.",
                             )
                         ) from e
@@ -458,7 +457,7 @@ class AgentLoop:
                     # proofing so this path stays in lock-step with server.py's
                     # scheduled-prompt build if that ever changes.
                     dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
-                    config = ChatAgentConfig(
+                    config = GaiaAgentConfig(
                         model_id=model_id,
                         streaming=False,
                         silent_mode=True,
@@ -468,18 +467,16 @@ class AgentLoop:
                         allowed_paths=allowed,
                         ui_session_id=session_id,
                         dynamic_tools=dynamic_tools,
-                        memory_incognito=not memory_enabled(db),
+                        memory_incognito=_helpers._memory_off(session, db),
                     )
-                    agent = ChatAgent(config)
+                    agent = GaiaAgent(config)
                     _helpers._register_agent_memory_ops(agent)
                     agent.console = sse_handler
 
                 _helpers._restore_model_history(agent, db, session_id, tick_prompt)
 
-                # Set incognito flag (respect private/memory settings)
-                if hasattr(agent, "_incognito"):
-                    agent._incognito = not memory_enabled(db)
-                    agent._incognito_reason = "memory_off"
+                # A private chat stays private; a tick must not switch memory on.
+                _helpers._apply_memory_state(agent, session, db)
 
                 # Also replaces a prior streaming turn's fired cancel event.
                 agent._cancel_event = cancel_event

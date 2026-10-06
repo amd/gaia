@@ -1,0 +1,22 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.new-chat {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    min-height: 0;
+    padding: 24px 16px 18vh;
+}
+
+.new-chat-inner {
+    width: 100%;
+    max-width: var(--content-w);
+}
+
+.new-chat-error {
+    margin-top: 10px;
+    color: var(--danger);
+    font-size: 13px;
+}

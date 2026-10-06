@@ -16,6 +16,14 @@ from gaia.security import PathValidator
 from gaia.ui.sse_handler import SSEOutputHandler as UiSSEOutputHandler
 
 
+@pytest.fixture(autouse=True)
+def _fake_system_temp(tmp_path, monkeypatch):
+    # tmp_path is under the real temp dir, which the access prompt refuses.
+    monkeypatch.setattr(
+        "gaia.security._system_temp_roots", lambda: {str(tmp_path / "systemp")}
+    )
+
+
 @pytest.mark.parametrize(
     "console_cls, expected",
     [

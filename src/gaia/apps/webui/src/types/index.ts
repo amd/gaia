@@ -12,6 +12,8 @@ export interface Session {
     created_at: string;
     updated_at: string;
     model: string;
+    /** The model a turn actually runs (custom override, agent preference, device). */
+    effective_model?: string | null;
     system_prompt: string | null;
     message_count: number;
     document_ids: string[];
@@ -51,16 +53,12 @@ export interface ModelTier {
 }
 
 /**
- * An agent as the backend describes it.
+ * An agent as ``GET /api/agents`` (``gaia.ui.models.AgentInfo``) describes it.
+ * Settings → Connectors uses it to grant scopes.
  *
- * Every field here must be emitted by a real backend response — either
- * ``GET /api/agents`` (``gaia.ui.models.AgentInfo``) or
- * ``GET /api/agents/catalog`` (``gaia.hub.catalog.merge_with_registry``).
- * Declaring one that nothing sends costs nothing at compile time and reads as
- * ``undefined`` forever at runtime (#2970, #3842), so
- * ``tests/unit/test_webui_agent_info_contract.py`` fails the build on any field
- * no emitter produces. The one deliberate exception is ``version``, normalized
- * client-side and listed in that test's allowlist.
+ * Every field must be emitted by that response: declaring one nothing sends
+ * reads as ``undefined`` forever at runtime (#2970, #3842), so
+ * ``tests/unit/test_webui_agent_info_contract.py`` fails the build on it.
  */
 export interface AgentInfo {
     id: string;
@@ -92,14 +90,7 @@ export interface AgentInfo {
      * the grants endpoint.
      */
     namespaced_agent_id?: string;
-    /** Agent Hub metadata — used to render rich discovery cards. */
     category?: string;
-    /**
-     * Catalog lane: ``agent`` | ``app`` | ``component`` (#1716) | ``skill``
-     * (#2467). Drives the Hub page's Apps · Components · Agents · Skills lanes.
-     * Undefined = treated as ``agent``.
-     */
-    type?: 'agent' | 'app' | 'component' | 'skill';
     tags?: string[];
     icon?: string;
     tools_count?: number;
@@ -113,114 +104,6 @@ export interface AgentInfo {
      * model size.
      */
     model_tiers?: ModelTier[];
-
-    // ── Agent Hub catalog/install fields (issue #1097) ──────────────────────
-    // Populated by GET /api/agents/catalog (#1096). Locally-registered agents
-    // returned by GET /api/agents leave these undefined; the Hub merges catalog
-    // data in by id so installed cards can show versions and update badges.
-
-    /**
-     * Lifecycle status from the catalog. ``installed`` = present locally,
-     * ``available`` = downloadable from the Hub, ``update_available`` = a newer
-     * version exists than the installed one, ``installing`` = an install is in
-     * flight. Undefined for local-only agents (treated as ``installed``).
-     */
-    status?: AgentCardState;
-    /**
-     * Installed version (semver), when known. The catalog wire payload never
-     * sends this key directly — it sends ``installed_version`` (below). This
-     * field is populated client-side by ``mergeCatalogStatus`` so components
-     * have one place to read "the version to display".
-     */
-    version?: string;
-    /** Installed version as reported by ``GET /api/agents/catalog`` (raw wire field). */
-    installed_version?: string;
-    /** Latest version offered by the catalog — set when newer than ``version``. */
-    latest_version?: string;
-    /** Download size of the agent package in bytes (Available cards). */
-    download_size_bytes?: number;
-    /**
-     * Declared install requirements (platforms, and future hardware/model
-     * constraints). Shown in the install trust gate. Absent for local-only
-     * agents.
-     */
-    requirements?: { platforms?: string[] };
-    /** Trust tier: AMD-verified, community-published, or experimental opt-in. */
-    security_tier?: 'verified' | 'community' | 'experimental';
-    /**
-     * Declared permission scopes (``<domain>:<action>``, e.g. ``fs:read``)
-     * shown in the install trust gate so the user sees what an agent can do
-     * before installing. Empty/undefined = no special permissions declared.
-     */
-    permissions?: string[];
-    /**
-     * True when installing this agent needs an explicit trust opt-in — any
-     * non-verified package (of any language) that runs third-party code. The
-     * Hub shows a "Trust & Install" confirmation before sending ``trust_native``.
-     */
-    requires_trust?: boolean;
-    /** True when the publisher has deprecated this agent. */
-    deprecated?: boolean;
-    /** Public URL of the eval scorecard markdown; absent when none was published. */
-    eval_scorecard_url?: string;
-    /** Aggregate eval score (0–100) from the latest published scorecard; absent when none. */
-    eval_score?: number;
-    /**
-     * Agent version the scorecard was actually measured at (#2965) — the
-     * scorecard is only regenerated on a fresh eval, not on every release, so
-     * this is often behind `version`. Absent when none published/parseable.
-     */
-    eval_score_version?: string;
-}
-
-/** Derived card state for the Agent Hub (issue #1097). */
-export type AgentCardState =
-    | 'installed'
-    | 'available'
-    | 'update_available'
-    | 'installing';
-
-/**
- * Wire-level install state machine from the backend (issue #1096), distinct
- * from the derived card-state enum. Polled via GET /api/agents/{id}/install-status.
- */
-export type AgentInstallState =
-    | 'downloading'
-    | 'verifying'
-    | 'installing'
-    | 'installed'
-    | 'failed';
-
-/** Install progress snapshot returned by the install-status endpoint. */
-export interface InstallStatus {
-    agent_id: string;
-    state: AgentInstallState;
-    /** 0–100 overall progress. */
-    progress: number;
-    /** Populated only when ``state === 'failed'``. */
-    error?: string | null;
-}
-
-/**
- * Response from GET /api/agents/catalog (issue #1096).
- *
- * ``offline`` is ``true`` when the backend served a cached copy because R2 was
- * unreachable — the UI surfaces a "Showing cached catalog" banner rather than
- * silently presenting stale data as fresh (CLAUDE.md: no silent fallbacks).
- */
-export interface AgentCatalogResponse {
-    agents: AgentInfo[];
-    offline: boolean;
-    /** ISO timestamp the cached catalog was last refreshed (when offline). */
-    cached_at?: string | null;
-}
-
-export interface DiskAgentInfo {
-    id: string;
-    name: string;
-    registered: boolean;
-    registered_agent_id?: string | null;
-    source?: string | null;
 }
 
 /**
@@ -374,6 +257,11 @@ export interface Message {
     /** Structured cards emitted via tool_result.render during this turn
      *  (issue #2108). Rendered by RenderCard above the markdown content. */
     cards?: RenderCardData[];
+    /** Set when the user stopped this turn. 'unconfirmed' means the server
+     *  never acknowledged the stop, so the client closed the turn itself. */
+    stopState?: 'stopped' | 'unconfirmed';
+    /** Error the server reported while a stopped turn was closing. */
+    stopError?: string;
 }
 
 /** One card instance transferred onto a finalized Message (issue #2108). */
@@ -433,14 +321,6 @@ export interface Settings {
     dynamic_tools_locked: boolean;
     /** Background agent behaviour; a legacy stored "autonomous" is reported as "goal_driven". */
     agent_mode: 'manual' | 'goal_driven';
-}
-
-/** Status of the GAIA Agent UI MCP server (exposes UI tools to Claude Code etc.). */
-export interface AgentMCPServerStatus {
-    running: boolean;
-    port: number;
-    pid: number | null;
-    url: string | null;
 }
 
 /**
@@ -518,8 +398,8 @@ export interface SystemStatus {
 }
 
 /**
- * First-run hardware pre-flight report from GET /api/onboarding/preflight
- * (#1726, #1727). ``compatible`` is false only when there is a hard blocker
+ * Hardware report from GET /api/onboarding/preflight, shown on the setup
+ * screen. ``compatible`` is false only when there is a hard blocker
  * (e.g. not enough disk for the model download).
  */
 export interface PreflightReport {
@@ -542,13 +422,6 @@ export interface PreflightReport {
     compatible: boolean;
     blockers: string[];
     warnings: string[];
-}
-
-/** First-run completion state from GET /api/onboarding/status. */
-export interface OnboardingStatusResponse {
-    initialized: boolean;
-    skipped: boolean;
-    completed_at: string | null;
 }
 
 // ── File Browser Types ───────────────────────────────────────────────────
@@ -587,14 +460,6 @@ export interface IndexFolderResponse {
 }
 
 // ── MCP Server Types ──────────────────────────────────────────────────────
-
-export interface MCPServerInfo {
-    name: string;
-    command: string;
-    args: string[];
-    env: Record<string, string>;
-    enabled: boolean;
-}
 
 export interface MCPServerStatus {
     name: string;
@@ -751,9 +616,13 @@ export interface StreamEvent {
     type: StreamEventType;
     content?: string;
     message_id?: number;
+    /** On `done`: the user's Stop ended this run (absent when it completed normally). */
+    cancelled?: boolean;
     // Agent-specific fields
     status?: string;
     message?: string;
+    /** Model phase on a status event: reading, loading_model, reasoning, tool_call, … */
+    phase?: string;
     step?: number;
     total?: number;
     tool?: string;
@@ -785,6 +654,8 @@ export interface StreamEvent {
     agent_id?: string;
     /** Confirmation ID (for permission_request events). */
     confirm_id?: string;
+    /** What "always allow" would grant for this call; absent means it is not offered. */
+    always_scope?: string;
     /** Machine tool name a confirmation is about (for needs_confirmation events). */
     action?: string;
     /** Question id to echo back on POST /chat/user-input (for needs_input events). */
@@ -838,4 +709,107 @@ export interface StreamEvent {
     render?: string;
     /** Card payload for `render` (issue #2108, additive on `tool_result`). */
     data?: unknown;
+}
+
+// ── First-run setup (GET /api/setup/*) ────────────────────────────────────
+
+export type SetupStepStatus = 'pending' | 'active' | 'done' | 'failed' | 'cancelled';
+
+export interface SetupStep {
+    key: 'server' | 'models' | 'finish';
+    label: string;
+    detail: string;
+    status?: SetupStepStatus;
+}
+
+/** `gaia init --check --json`: ready, or the stage and reasons it is not. */
+export interface SetupCheck {
+    ready: boolean;
+    stage?: 'setup' | 'server' | 'load' | string;
+    reasons?: string[];
+    models?: Array<{ id: string; role: string; size_gb: number | null; loaded: boolean; error: string | null }>;
+    steps: SetupStep[];
+}
+
+export interface SetupRunStatus {
+    state: 'idle' | 'running' | 'verifying' | 'ready' | 'failed' | 'cancelled';
+    steps?: SetupStep[];
+    text?: string;
+    percent?: number | null;
+    error?: string | null;
+    command?: string;
+    log_tail?: string[];
+    skip_chat_model?: boolean;
+}
+
+// ── AI providers (GET /api/providers) ─────────────────────────────────────
+
+export type ProviderId = 'local' | 'fireworks' | 'amd';
+
+export interface ProviderInfo {
+    id: ProviderId;
+    name: string;
+    remote: boolean;
+    privacy_notice: string;
+    registered?: boolean;
+    /** Where Lemonade's key comes from; null when none is configured. */
+    key_source?: 'environment' | 'lemonade' | 'stored' | null;
+    models_discovered?: boolean;
+    env_var?: string;
+    base_url?: string | null;
+    error?: string;
+}
+
+export interface ActiveModel {
+    provider: ProviderId;
+    model: string;
+    label: string;
+    remote: boolean;
+    is_default: boolean;
+    /** `pending` while the model server is still starting; ask again. */
+    restore?: { status: 'restored' | 'failed' | 'none' | 'pending'; message: string | null };
+}
+
+export interface ProvidersResponse {
+    providers: ProviderInfo[];
+    active: ActiveModel;
+    lemonade_error: string | null;
+}
+
+export interface ProviderModel {
+    id: string;
+    context_length: number | null;
+    downloaded: boolean;
+    labels: string[];
+    rank: number | null;
+    note: string | null;
+    evidence: string | null;
+}
+
+export interface ConnectProviderBody {
+    api_key?: string;
+    base_url?: string;
+    auth_header_name?: string;
+    auth_header_prefix?: string;
+}
+
+// ── Tool permissions (GET /api/chat/permissions) ─────────────────────────
+
+export type PermissionMode = 'ask' | 'full_access';
+
+export interface SessionPermissions {
+    session_id: string;
+    mode: PermissionMode;
+    grants: Array<{ key: string; label: string }>;
+}
+
+// ── Skills (GET /api/skills) ──────────────────────────────────────────────
+
+export interface SkillInfo {
+    name: string;
+    description: string;
+    version: string | null;
+    tier: string | null;
+    tools: string[];
+    path: string;
 }

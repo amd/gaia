@@ -1,0 +1,202 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.composer {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    padding: 10px 10px 8px 14px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-sm);
+    transition: border-color var(--duration-fast) var(--ease);
+}
+
+.composer:focus-within {
+    border-color: var(--accent-light);
+}
+
+.composer-disabled {
+    opacity: 0.75;
+}
+
+.composer-input {
+    width: 100%;
+    min-height: 24px;
+    max-height: 240px;
+    padding: 4px 0;
+    border: none;
+    outline: none;
+    resize: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+}
+
+.composer-input::placeholder {
+    color: var(--text-muted);
+}
+
+.composer-input:focus-visible {
+    outline: none;
+}
+
+.composer-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.composer-row-left,
+.composer-row-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.composer-row-right {
+    flex: 1;
+    justify-content: flex-end;
+}
+
+.composer-row .composer-chip-wrap {
+    min-width: 0;
+}
+
+.composer-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.composer-icon-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.composer-icon-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.composer-send {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-full);
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
+    flex-shrink: 0;
+    transition: background var(--duration-fast) var(--ease), opacity var(--duration-fast) var(--ease);
+}
+
+.composer-send:hover:not(:disabled) {
+    background: var(--accent-fill-hover);
+}
+
+.composer-send:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.composer-send.is-stop {
+    background: var(--text-primary);
+    color: var(--text-inverse);
+}
+
+.composer-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    list-style: none;
+}
+
+.composer-attachment {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 260px;
+    padding: 3px 4px 3px 8px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.composer-attachment.has-error {
+    border-color: var(--danger);
+}
+
+.composer-attachment-thumb {
+    width: 20px;
+    height: 20px;
+    object-fit: cover;
+    border-radius: var(--radius-xs);
+}
+
+.composer-attachment-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+}
+
+.composer-attachment-state {
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.composer-attachment.has-error .composer-attachment-state {
+    color: var(--danger);
+}
+
+.composer-attachment .composer-icon-btn {
+    width: 22px;
+    height: 22px;
+}
+
+/* Small inline chips (model, permission mode) in the composer's bottom row. */
+.composer-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    white-space: nowrap;
+}
+
+.composer-chip:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.composer-chip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.composer-chip.is-warning {
+    color: var(--accent-yellow);
+}
+
+.composer-chip.is-danger {
+    color: var(--danger);
+}

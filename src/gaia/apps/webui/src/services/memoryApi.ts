@@ -84,8 +84,16 @@ export interface KnowledgeCreateBody {
     due_at?: string;
 }
 
+/** A saved entry; `embedded` is absent when an edit left the content alone. */
+export interface KnowledgeSaveResult {
+    status: string;
+    knowledge_id: string;
+    embedded?: boolean;
+    embed_error?: string;
+}
+
 export function createKnowledge(body: KnowledgeCreateBody) {
-    return memFetch<any>('POST', '/memory/knowledge', body);
+    return memFetch<KnowledgeSaveResult>('POST', '/memory/knowledge', body);
 }
 
 export interface KnowledgeUpdateBody {
@@ -100,7 +108,7 @@ export interface KnowledgeUpdateBody {
 }
 
 export function editKnowledge(id: string, body: KnowledgeUpdateBody) {
-    return memFetch<any>('PUT', `/memory/knowledge/${encodeURIComponent(id)}`, body);
+    return memFetch<KnowledgeSaveResult>('PUT', `/memory/knowledge/${encodeURIComponent(id)}`, body);
 }
 
 export function deleteKnowledge(id: string) {
@@ -113,26 +121,10 @@ export function getEntities() {
     return memFetch<any[]>('GET', '/memory/entities');
 }
 
-export function getEntityKnowledge(entity: string) {
-    return memFetch<any[]>('GET', `/memory/entities/${encodeURIComponent(entity)}`);
-}
-
-export function getContexts() {
-    return memFetch<any[]>('GET', '/memory/contexts');
-}
-
 // ── Tools ───────────────────────────────────────────────────────────────────
 
 export function getToolSummary() {
     return memFetch<any[]>('GET', '/memory/tools');
-}
-
-export function getToolHistory(toolName: string, limit = 50) {
-    return memFetch<any[]>('GET', `/memory/tools/${encodeURIComponent(toolName)}/history?limit=${limit}`);
-}
-
-export function getRecentErrors(limit = 20) {
-    return memFetch<any[]>('GET', `/memory/errors?limit=${limit}`);
 }
 
 // ── Conversations ───────────────────────────────────────────────────────────
@@ -185,12 +177,6 @@ export function reconcileMemory() {
 
 export function rebuildFts() {
     return memFetch<{ status: string }>('POST', '/memory/rebuild-fts');
-}
-
-export function pruneMemory(days = 90) {
-    return memFetch<{ tool_history_deleted: number; conversations_deleted: number; knowledge_deleted: number }>(
-        'POST', `/memory/prune?days=${days}`
-    );
 }
 
 export function refreshSystemContext() {
@@ -340,10 +326,6 @@ export function listGoals(params: {
     );
 }
 
-export function getGoal(goalId: string) {
-    return memFetch<Goal>('GET', `/goals/${encodeURIComponent(goalId)}`);
-}
-
 export function createGoal(body: {
     title: string;
     description: string;
@@ -367,20 +349,4 @@ export function cancelGoal(goalId: string) {
 
 export function deleteGoal(goalId: string) {
     return memFetch<void>('DELETE', `/goals/${encodeURIComponent(goalId)}`);
-}
-
-export function addTask(goalId: string, body: { description: string; order_index?: number }) {
-    return memFetch<GoalTask>('POST', `/goals/${encodeURIComponent(goalId)}/tasks`, body);
-}
-
-export function updateTaskStatus(
-    goalId: string,
-    taskId: string,
-    body: { status: TaskStatus; result?: string },
-) {
-    return memFetch<GoalTask>(
-        'PUT',
-        `/goals/${encodeURIComponent(goalId)}/tasks/${encodeURIComponent(taskId)}`,
-        body,
-    );
 }

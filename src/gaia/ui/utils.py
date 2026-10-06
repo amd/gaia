@@ -136,7 +136,9 @@ LARGE_FILE_THRESHOLD = 5 * 1024 * 1024  # 5 MB
 # ── Data Conversion Helpers ────────────────────────────────────────────────────
 
 
-def session_to_response(session: dict) -> SessionResponse:
+def session_to_response(
+    session: dict, effective_model: Optional[str] = None
+) -> SessionResponse:
     """Convert database session dict to response model."""
     return SessionResponse(
         id=session["id"],
@@ -145,6 +147,7 @@ def session_to_response(session: dict) -> SessionResponse:
         created_at=session["created_at"],
         updated_at=session["updated_at"],
         model=session["model"],
+        effective_model=effective_model,
         system_prompt=session.get("system_prompt"),
         message_count=session.get("message_count", 0),
         document_ids=session.get("document_ids", []),

@@ -32,7 +32,6 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 src/gaia/
 ├── agents/base/       # Agent, MCPAgent, ApiAgent, @tool, AgentConsole, errors
 ├── agents/tools/      # Cross-agent tool mixins (file_tools, screenshot_tools, …)
-├── agents/builder/    # BuilderAgent (scaffolding) — the only agent left in core
 ├── agents/registry.py # AgentRegistry + KNOWN_TOOLS + the gaia.agent entry-point groups
 ├── chat/              # AgentSDK (class `AgentSDK`, formerly `ChatSDK`)
 ├── rag/               # RAGSDK / RAGConfig

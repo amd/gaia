@@ -2,6 +2,7 @@ id: files_find_read_summarize
 name: "Files — Find, Read, Summarize"
 category: gaia_files
 severity: high
+tags: [t2_compound]
 description: |
   Locate a file by name, read it, and summarize a fact from it. The whole
   chain must run on real tool calls.

@@ -588,10 +588,11 @@ def relock(skills_root: Path | str) -> RelockResult:
         entry.content_digest = content_digest(directory)
         entry.permissions = list(skill.gaia.permissions)
         entry.path = str(directory)
-        if entry.source != SOURCE_HUB:
+        if entry.source == SOURCE_LOCAL:
             # A local entry's tier is a record of the author's claim, not an
-            # enforcement decision, so it tracks the manifest. A hub entry's is
-            # the enforced tier — never overwritten from the file it governs.
+            # enforcement decision, so it tracks the manifest. Every other
+            # entry's is the enforced tier — never overwritten from the file
+            # it governs.
             entry.installed_tier = skill.security_tier
         if before != (entry.version, entry.installed_tier, entry.content_digest):
             updated.append(name)

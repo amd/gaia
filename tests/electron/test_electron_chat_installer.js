@@ -95,8 +95,11 @@ describe('Chat App Installer Readiness', () => {
       const components = [
         'ChatView',
         'Sidebar',
-        'WelcomeScreen',
+        'NewChat',
+        'Composer',
+        'SetupScreen',
         'MessageBubble',
+        'settings/SettingsDialog',
       ];
 
       components.forEach(component => {
@@ -452,10 +455,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         .map(f => fs.readFileSync(f, 'utf8'))
         .join('\n');
 
-      // Verify key endpoints exist in both frontend and backend
+      // Verify key endpoints exist in both frontend and backend. /api/health
+      // is the Electron shell's readiness probe, checked under app.config.json.
       const endpoints = [
         '/api/system/status',
-        '/api/health',
         '/api/sessions',
         '/api/chat/send',
         '/api/documents',

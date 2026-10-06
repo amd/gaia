@@ -38,8 +38,13 @@ class FakeLemonade:
         self.provider = provider
         self.discovered = discovered
         self.auth_calls: list = []
+        self.redirects_allowed: list = []
 
-    def __call__(self, method, url, json=None, headers=None, timeout=None):
+    def __call__(
+        self, method, url, json=None, headers=None, timeout=None, allow_redirects=True
+    ):
+        self.redirects_allowed.append(allow_redirects)
+
         class _Resp:
             status_code = 200
             content = b"{}"
@@ -85,6 +90,8 @@ def test_a_kept_key_is_replayed_into_a_lemonade_that_lost_it(vault, lemonade):
 
     assert cloud_keys.ensure_authenticated("fireworks") is True
     assert fake.auth_calls == [{"provider": "fireworks", "api_key": KEY}]
+    # A redirect could carry the key to another host.
+    assert fake.redirects_allowed and not any(fake.redirects_allowed)
 
 
 def test_a_key_lemonade_already_has_is_not_overwritten(vault, lemonade):

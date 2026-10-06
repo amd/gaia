@@ -27,8 +27,12 @@ name: Publish Hub Components (R2)
 
 on:
   push:
+    # Not for a release candidate (vX.Y.Z-rcN): the catalog has no pre-release
+    # channel and picks latest_version by highest SemVer, so an RC published to
+    # these immutable paths would become what the website offers everyone.
     tags:
       - 'v*'
+      - '!v*-rc*'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -165,7 +169,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: workers/agent-hub/package-lock.json
 
@@ -232,7 +236,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: workers/agent-hub/package-lock.json
 

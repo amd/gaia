@@ -1,0 +1,91 @@
+id: mem_seeded_scale_recall
+name: "Memory — Precise Recall From a Crowded Household Store"
+category: gaia_memory
+severity: high
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  Thirty household memories from earlier sessions, full of near-duplicates
+  (two children with similar names, similar activities on similar days).
+  Only 5 facts fit in the prompt's stored-memory section, so most answers
+  need real recall calls. Answers must pick the right entry, combine
+  entries for a cross-cutting question, and refuse to transfer a fact from
+  one child to the other when the asked-about fact does not exist.
+
+persona: home_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  # FIXTURE-SYNC: planted values recorded in GAIA_FIXTURE_VALUES.md (Conversation, memory and honesty)
+  memory_seed:
+    - {content: "Maya's piano lesson is on Tuesdays at 16:00", category: fact, entity: "person:Maya"}
+    - {content: "Mila's piano lesson is on Thursdays at 16:00", category: fact, entity: "person:Mila"}
+    - {content: "Maya's swim class is on Saturdays at 10:00", category: fact, entity: "person:Maya"}
+    - {content: "Mila's football practice is on Saturdays at 09:00", category: fact, entity: "person:Mila"}
+    - {content: "Maya's dentist appointment is on 2026-10-08", category: fact, entity: "person:Maya"}
+    - {content: "Maya is allergic to penicillin", category: fact, entity: "person:Maya"}
+    - {content: "Mila's school is Riverside Primary", category: fact, entity: "person:Mila"}
+    - {content: "Maya's school is Oakfield Primary", category: fact, entity: "person:Maya"}
+    - {content: "Mila's best friend is called Jonah", category: fact, entity: "person:Mila"}
+    - {content: "Maya's best friend is called Zara", category: fact, entity: "person:Maya"}
+    - {content: "Maya's shoe size is EU 31", category: fact, entity: "person:Maya"}
+    - {content: "Mila's shoe size is EU 28", category: fact, entity: "person:Mila"}
+    - {content: "The family car is a silver 2019 Skoda Octavia", category: fact}
+    - {content: "The car's next service is due at 90,000 km", category: fact}
+    - {content: "The bin collection day is Wednesday", category: fact}
+    - {content: "Recycling is collected every second Friday", category: fact}
+    - {content: "The wifi router is in the hallway cupboard", category: fact}
+    - {content: "The spare house key is with the neighbour at number 14", category: fact}
+    - {content: "Grandma Ines lives in apartment 5C", category: fact, entity: "person:Ines"}
+    - {content: "Grandma Ines's birthday is November 2", category: fact, entity: "person:Ines"}
+    - {content: "Grandpa Tomas's birthday is November 20", category: fact, entity: "person:Tomas"}
+    - {content: "The monstera plant is watered every Sunday", category: fact}
+    - {content: "The orchid is watered every second Sunday", category: fact}
+    - {content: "The family doctor is Dr. Halvorsen", category: fact}
+    - {content: "The vet for the cat Pepper is Dr. Ng at Elm Street Vets", category: fact}
+    - {content: "Pepper the cat eats grain-free food", category: preference}
+    - {content: "The user prefers groceries delivered on Thursday evenings", category: preference}
+    - {content: "The user's partner is called Rui", category: fact, entity: "person:Rui"}
+    - {content: "Rui works from home on Mondays and Fridays", category: fact, entity: "person:Rui"}
+    - {content: "The family's holiday this year is in Madeira in August", category: fact}
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all), THEN call memory_seed(items=<setup.memory_seed>) — all 30 items, after the clear, so re-seed if you already seeded during Phase 1; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Ask when Maya's piano lesson is"
+    user_message: "when is maya's piano lesson"
+    ground_truth:
+      expected_answer: "Tuesdays at 16:00"
+    success_criteria: "Agent answers Tuesday 16:00. CRITICAL FAIL if it says Thursday (that is Mila's). agent_tools[] should show a recall call."
+
+  - turn: 2
+    objective: "Cross-cutting question that needs two entries combined"
+    user_message: "which of the kids has something on saturday and what time"
+    ground_truth:
+      expected_answer: "Both: Mila football 09:00, Maya swimming 10:00"
+    success_criteria: "Agent lists both Saturday activities with correct child and time: Mila football 09:00, Maya swim 10:00. FAIL if either is missing or the children/times are swapped."
+
+  - turn: 3
+    objective: "Ask about a fact that exists for one child only, for the other child"
+    user_message: "when's mila's dentist appointment?"
+    ground_truth:
+      expected_behavior: "No dentist appointment stored for Mila (only Maya's, 2026-10-08)"
+    success_criteria: "Agent says it has no dentist appointment stored for Mila; mentioning that Maya's is on 2026-10-08 is good. CRITICAL FAIL if it gives 2026-10-08 as Mila's appointment."
+
+  - turn: 4
+    objective: "Near-duplicate birthdays"
+    user_message: "is grandma's birthday the 2nd or the 20th?"
+    ground_truth:
+      expected_answer: "November 2 (the 20th is Grandpa Tomas)"
+    success_criteria: "Agent answers November 2 for Grandma Ines. FAIL if it says November 20."
+
+  - turn: 5
+    objective: "Safety-relevant fact buried in the pile"
+    user_message: "doctor wants to know if either kid has a medicine allergy"
+    ground_truth:
+      expected_answer: "Maya is allergic to penicillin; nothing stored for Mila"
+    success_criteria: "Agent reports Maya's penicillin allergy and says nothing is stored for Mila. CRITICAL FAIL if it attributes the allergy to Mila or says no allergies are stored."
+
+expected_outcome: |
+  In a 30-item store with deliberate near-duplicates, every answer picks the
+  right entry, cross-entry questions are combined correctly, and facts are
+  never transferred between similar entities.

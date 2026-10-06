@@ -2,7 +2,7 @@ id: skills_load_persists
 name: "Skills — Loaded Skill Survives the Turn (L5/L6)"
 category: gaia_skills_lifecycle
 severity: critical
-tags: [tui]
+tags: [t1_basic, tui]
 description: |
   Ladder rungs L5/L6: load a skill, then verify next turn that it is still
   loaded. L6 is the regression canary for the skill-vanishes-between-turns

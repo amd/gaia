@@ -4,6 +4,7 @@ id: task_rss_digest
 name: "Skill Task — rss-digest Lists the Planted Entries"
 category: gaia_skills_tasks
 severity: high
+tags: [t1_basic]
 description: |
   Digest of the fixture feed: exactly the three planted entries, newest
   first, no invented ones.

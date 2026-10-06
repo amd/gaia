@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import React, { useCallback, useRef, useState, useEffect, useMemo } from 'react';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -11,7 +11,6 @@ import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta'
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import gaiaRobot from '../assets/gaia-robot.png';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import './MessageBubble.css';
 
@@ -32,18 +31,24 @@ interface MessageBubbleProps {
     onResend?: (message: Message) => void;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
-    /** Display name of the agent that produced this message (e.g. "Chat Agent"). */
-    agentName?: string;
+    /** The model's current phase while streaming; null shows "Thinking...". */
+    liveStatus?: string | null;
 }
 
 
 
-/** Thinking indicator next to GAIA name — types out "Thinking...", erases when done. */
-function ThinkingIndicator({ active }: { active: boolean }) {
-    const text = 'Thinking...';
+/**
+ * Live status next to GAIA's name: the model's current phase ("Reading your request",
+ * "Reasoning — 38 words so far"), or "Thinking..." until the first one arrives.
+ * Types out on first show, swaps text in place after that, erases when done.
+ */
+function ThinkingIndicator({ active, label }: { active: boolean; label?: string | null }) {
+    const text = label || 'Thinking...';
     const [chars, setChars] = useState(0);
     const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>('typing');
     const wasActiveRef = useRef(active);
+    const textLengthRef = useRef(text.length);
+    textLengthRef.current = text.length;
 
     // Type out characters
     useEffect(() => {
@@ -51,11 +56,12 @@ function ThinkingIndicator({ active }: { active: boolean }) {
         if (chars >= text.length) { setPhase('idle'); return; }
         const timer = setTimeout(() => setChars(c => c + 1), 30);
         return () => clearTimeout(timer);
-    }, [phase, chars]);
+    }, [phase, chars, text.length]);
 
     // Detect active → false: start erasing
     useEffect(() => {
         if (wasActiveRef.current && !active) {
+            setChars(textLengthRef.current);
             setPhase('erasing');
         }
         wasActiveRef.current = active;
@@ -81,7 +87,7 @@ function ThinkingIndicator({ active }: { active: boolean }) {
 
     return (
         <span className="thinking-indicator">
-            <span className="thinking-indicator-text">{text.slice(0, chars)}</span>
+            <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
             {active && <span className="cursor" />}
         </span>
     );
@@ -337,20 +343,6 @@ function cleanToolCallContent(content: string, streaming = false): string {
     return cleaned;
 }
 
-/** Format a timestamp as relative time ("2m ago") or absolute for older messages. */
-function formatMsgTime(iso: string): string {
-    if (!iso) return '';
-    const d = new Date(iso);
-    const now = new Date();
-    const diff = now.getTime() - d.getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}
-
 /** Format a full absolute timestamp for the stats tooltip. */
 function formatFullTimestamp(iso: string): string {
     if (!iso) return '';
@@ -366,8 +358,14 @@ function formatLatency(ms: number): string {
     return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, agentName }: MessageBubbleProps) {
+/** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
+const SERVER_CANCELLED_TEXT = 'Cancelled.';
+
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, liveStatus }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
+    const stopState = message.role === 'assistant'
+        ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
+        : undefined;
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
     const cleanedContent = useMemo(
@@ -441,32 +439,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             <div className="msg-inner">
                 <div className="msg-header">
                     <div className="msg-header-left">
-                        {message.role === 'assistant' && (
-                            <>
-                                <div className="msg-avatar msg-avatar-assistant" aria-hidden="true">
-                                    <img src={gaiaRobot} alt="" />
-                                </div>
-                                <span className="msg-role-brand">GAIA</span>
-                                {(() => {
-                                    // Strip a leading "Gaia" / "GAIA" from the agent name so
-                                    // "Gaia Lite" renders as "GAIA Lite" (not "GAIA Gaia Lite").
-                                    // Word-boundary match: "Gaiadocs" (hypothetical) stays intact.
-                                    const trimmed = agentName?.trim() ?? '';
-                                    const stripped = trimmed.replace(/^gaia\b\s*/i, '');
-                                    return stripped ? (
-                                        <span className="msg-role-agent">{stripped}</span>
-                                    ) : null;
-                                })()}
-                                {(isStreaming || message.created_at) && (
-                                    <span className="msg-header-sep">|</span>
-                                )}
-                                {isStreaming && (
-                                    <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} />
-                                )}
-                                {!isStreaming && message.created_at && (
-                                    <span className="msg-timestamp">{formatMsgTime(message.created_at)}</span>
-                                )}
-                            </>
+                        {message.role === 'assistant' && isStreaming && (
+                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} />
                         )}
                     </div>
                     {!isStreaming && (
@@ -527,7 +501,21 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     ))}
                     {/* The cursor is a streaming indicator, not decoration — it never
                         outlives the write. See docs/spec/gaia-design-language.mdx. */}
-                    <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} />
+                    {!(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
+                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} />
+                    )}
+                    {stopState && (
+                        <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
+                            <Square size={9} fill="currentColor" aria-hidden="true" />
+                            <span>
+                                {stopState === 'unconfirmed'
+                                    ? 'Stopped. GAIA did not confirm the stop, so some steps may be missing here. Reload the chat to see what it saved.'
+                                    : message.stopError
+                                        ? `Stopped. GAIA reported an error while stopping: ${message.stopError}`
+                                        : 'Stopped'}
+                            </span>
+                        </div>
+                    )}
                     {message.role === 'assistant'
                         && !isStreaming
                         && isAuthRequiredMessage(cleanedContent) && (

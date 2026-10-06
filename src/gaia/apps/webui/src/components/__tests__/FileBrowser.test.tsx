@@ -172,3 +172,44 @@ describe('FileBrowser search truncation', () => {
         expect(screen.queryByText(/Search stopped early/)).not.toBeInTheDocument();
     });
 });
+
+describe('FileBrowser Index Selected', () => {
+    const DOC = {
+        id: 'doc-1', filename: 'notes.txt', filepath: '/home/user/docs/notes.txt', file_size: 512,
+        chunk_count: 1, indexed_at: '', last_accessed_at: null, sessions_using: 1, indexing_status: 'complete',
+    };
+
+    beforeEach(() => {
+        useChatStore.setState({
+            sessions: [{ id: 'session-1', title: 'Chat', document_ids: [] } as never],
+            documents: [],
+        });
+        mockedApi.uploadDocumentByPath.mockResolvedValue(DOC as never);
+        mockedApi.listDocuments.mockResolvedValue({
+            documents: [DOC] as never, total: 1, total_size_bytes: 512, total_chunks: 1,
+        });
+    });
+
+    async function indexNotes() {
+        render(<FileBrowser />);
+        const row = (await screen.findByText('notes.txt')).closest('.fb-entry') as HTMLElement;
+        fireEvent.click(within(row).getByRole('checkbox'));
+        fireEvent.click(screen.getByRole('button', { name: /Index Selected/i }));
+        await waitFor(() => expect(mockedApi.uploadDocumentByPath).toHaveBeenCalled());
+    }
+
+    it('refreshes the document list so the chat bar shows the new document', async () => {
+        mockedApi.attachDocument.mockResolvedValue(undefined as never);
+        await indexNotes();
+        await waitFor(() => expect(useChatStore.getState().documents.map((d) => d.id)).toEqual(['doc-1']));
+        expect(useChatStore.getState().sessions[0].document_ids).toEqual(['doc-1']);
+    });
+
+    it('does not list a document on the chat when attaching it failed', async () => {
+        mockedApi.attachDocument.mockRejectedValue(new Error('API 500'));
+        await indexNotes();
+        await waitFor(() => expect(mockedApi.attachDocument).toHaveBeenCalled());
+        await waitFor(() => expect(screen.queryByText(/Indexing 1 file/)).not.toBeInTheDocument());
+        expect(useChatStore.getState().sessions[0].document_ids).toEqual([]);
+    });
+});

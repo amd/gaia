@@ -44,11 +44,11 @@ class _FakeAgent:
 
 @pytest.fixture
 def env(monkeypatch, tmp_path):
-    # The tick imports ChatAgent before it checks the cache; a cache hit never uses it.
-    fake_mod = types.ModuleType("gaia_agent_chat.agent")
-    fake_mod.ChatAgent = fake_mod.ChatAgentConfig = object
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat", types.ModuleType("x"))
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat.agent", fake_mod)
+    # The tick imports GaiaAgent before it checks the cache; a cache hit never uses it.
+    fake_mod = types.ModuleType("gaia_agent.agent")
+    fake_mod.GaiaAgent = fake_mod.GaiaAgentConfig = object
+    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("x"))
+    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
 
     registry = MagicMock()
     registry.canonical_id.side_effect = lambda t: t
@@ -58,7 +58,7 @@ def env(monkeypatch, tmp_path):
     initialized = tmp_path / ".gaia" / "chat" / "initialized"
     initialized.parent.mkdir(parents=True)
     initialized.touch()
-    monkeypatch.setattr(agent_loop_mod.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / ".gaia"))
     monkeypatch.setattr(AgentLoop, "_get_actionable_goals", lambda self: [_GOAL])
 
     helpers._agent_cache.clear()
@@ -164,3 +164,30 @@ async def test_followup_gives_up_when_session_stays_busy(env, monkeypatch):
 
     assert directive.reason == "session busy"
     assert agent.calls == []
+
+
+async def test_tick_without_a_cached_agent_builds_the_flagship(env, monkeypatch):
+    built = []
+
+    class FakeConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeGaiaAgent(_FakeAgent):
+        def __init__(self, config):
+            super().__init__(config.kwargs["model_id"])
+            built.append((config, self))
+
+    fake_mod = sys.modules["gaia_agent.agent"]
+    monkeypatch.setattr(fake_mod, "GaiaAgent", FakeGaiaAgent, raising=False)
+    monkeypatch.setattr(fake_mod, "GaiaAgentConfig", FakeConfig, raising=False)
+    loop, session, _cached = _make("gaia")
+    helpers._agent_cache.clear()
+
+    await loop._run_step(AgentTrigger("idle_tick", session["id"]))
+
+    assert len(built) == 1
+    config, agent = built[0]
+    assert config.kwargs["ui_session_id"] == session["id"]
+    assert config.kwargs["silent_mode"] is True
+    assert len(agent.calls) == 1

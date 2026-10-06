@@ -3,6 +3,7 @@
 """Where and how ChatAgent's SessionManager stores session transcripts."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -74,7 +75,7 @@ def test_truncated_session_is_loud_and_not_overwritten():
     truncated = path.read_text(encoding="utf-8")[:40]
     path.write_text(truncated, encoding="utf-8")
 
-    with pytest.raises(SessionCorruptError, match=str(path)):
+    with pytest.raises(SessionCorruptError, match=re.escape(str(path))):
         manager.load_session("session_keep")
     assert path.read_text(encoding="utf-8") == truncated
 

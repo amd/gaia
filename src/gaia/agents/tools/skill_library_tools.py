@@ -432,6 +432,8 @@ class SkillLibraryToolsMixin:
                 if rejection is not None:
                     return rejection
 
+            # A local source may sit outside the allowed folders: every capture
+            # is confirmed by the user with the source shown, and is never grantable.
             try:
                 result = _capture(
                     source,

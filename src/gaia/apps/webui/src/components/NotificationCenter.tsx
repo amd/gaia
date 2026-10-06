@@ -18,6 +18,7 @@ import {
   useNotificationStore,
   selectUnreadCount,
   selectVisibleNotifications,
+  PATH_ACCESS_TOOL,
 } from '../stores/notificationStore';
 import type { GaiaNotification, NotificationType } from '../types/agent';
 import './NotificationCenter.css';
@@ -124,7 +125,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
   // Handle approve for permission_request
   const handleApprove = useCallback(
     (notif: GaiaNotification) => {
-      respondToPermission(notif.id, 'allow', false);
+      respondToPermission(notif.id, 'allow').catch((err) => console.error('[NotificationCenter] allow failed:', err));
     },
     [respondToPermission]
   );
@@ -132,7 +133,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
   // Handle deny for permission_request
   const handleDeny = useCallback(
     (notif: GaiaNotification) => {
-      respondToPermission(notif.id, 'deny', false);
+      respondToPermission(notif.id, 'deny').catch((err) => console.error('[NotificationCenter] deny failed:', err));
     },
     [respondToPermission]
   );
@@ -233,7 +234,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                   <span className="notification-message">{n.message}</span>
 
                   {/* Tool info for permission requests */}
-                  {n.type === 'permission_request' && n.tool && (
+                  {n.type === 'permission_request' && n.tool && n.tool !== PATH_ACCESS_TOOL && (
                     <span className="notification-tool">
                       Tool: <code>{n.tool}</code>
                     </span>

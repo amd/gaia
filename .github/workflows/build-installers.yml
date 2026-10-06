@@ -183,10 +183,20 @@ jobs:
           fetch-depth: 0  # full history for any version calculations
           ref: ${{ inputs.tag || github.ref }}
 
+      # A vX.Y.Z-rcN tag builds X.Y.Z-rc.N installers (and an X.Y.ZrcN wheel)
+      # from a tree committed at X.Y.Z. Never runs for a final or a PR build.
+      - name: Stamp the release-candidate version
+        if: contains(inputs.tag, '-rc')
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY="$(command -v python || command -v python3)"
+          "$PY" util/release_tag.py stamp "${{ inputs.tag }}"
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: src/gaia/apps/webui/package-lock.json
 

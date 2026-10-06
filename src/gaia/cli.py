@@ -113,6 +113,7 @@ def initialize_lemonade_for_agent(
     host: str | None = None,
     port: int | None = None,
     base_url: str | None = None,
+    model: str | None = None,
 ):
     """
     Initialize Lemonade Server for a specific GAIA agent.
@@ -130,6 +131,8 @@ def initialize_lemonade_for_agent(
         port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         base_url: Full base URL for the Lemonade server (e.g., https://abc.ngrok-free.app).
                   When provided, takes priority over host/port.
+        model: Chat model the command will run (e.g. ``--model``); unset means
+               this machine's default. A cloud model is never preloaded locally.
 
     Returns:
         Tuple of (success: bool, base_url: str | None)
@@ -185,9 +188,13 @@ def initialize_lemonade_for_agent(
         # No floor passed: ensure_ready resolves the same one, and then also
         # seeds an idle server with the default model at its own window.
         if base_url:
-            success = LemonadeManager.ensure_ready(quiet=quiet, base_url=base_url)
+            success = LemonadeManager.ensure_ready(
+                quiet=quiet, base_url=base_url, model=model
+            )
         else:
-            success = LemonadeManager.ensure_ready(quiet=quiet, host=host, port=port)
+            success = LemonadeManager.ensure_ready(
+                quiet=quiet, host=host, port=port, model=model
+            )
     except LemonadeClientError as e:
         print(f"❌ Error: {e}", file=sys.stderr)
         return False, None
@@ -545,6 +552,7 @@ async def async_main(action, **kwargs):
             use_claude=use_claude,
             use_chatgpt=use_chatgpt,
             base_url=lemonade_base_url,
+            model=kwargs.get("model"),
         )
         if not success:
             sys.exit(1)
@@ -859,7 +867,11 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
     from gaia.config import UnsafeGaiaHomeError
 
     try:
-        from gaia.ui.server import create_app
+        from gaia.ui.server import (
+            create_app,
+            lemonade_is_remote,
+            start_model_server_owner,
+        )
 
         # Forward --base-url to the UI server via environment variable
         if base_url:
@@ -874,15 +886,12 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print(f"   Open your browser to http://127.0.0.1:{port}")
         print("   Press Ctrl+C to stop")
         print()
-        if not base_url:
-            print("   Prerequisites:")
-            print("     1. Models downloaded  : gaia init  (first time only, ~4 GB)")
-            print(f"     2. Lemonade running   : {describe_start_hint().instruction}")
-            print()
-
         import uvicorn
 
         app = create_app(webui_dist=webui_dist)
+        if not base_url and not lemonade_is_remote():
+            # First run is set up in the app; the daemon owns the model server.
+            start_model_server_owner()
         uvicorn.run(
             app,
             host="127.0.0.1",
@@ -3602,7 +3611,7 @@ Examples:
     init_parser.add_argument(
         "--minimal",
         action="store_true",
-        help="Use minimal profile (~400 MB) - shortcut for --profile minimal",
+        help="Use minimal profile (~6 GB) - shortcut for --profile minimal",
     )
     init_parser.add_argument(
         "--skip-models",
@@ -5033,6 +5042,7 @@ Let me know your answer!
             agent="minimal",
             quiet=False,
             base_url=getattr(args, "base_url", None),
+            model=getattr(args, "model", None),
         )
         if not success:
             return

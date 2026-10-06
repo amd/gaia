@@ -1,0 +1,62 @@
+id: mem_mind_change_multilingual
+name: "Memory — Mind Changes, Typos and Mixed Languages (Adversarial)"
+category: gaia_memory
+severity: high
+tags: [t4_adversarial, usability, local_blocked_no_embedder]
+description: |
+  A storage request arrives in Spanish, is corrected in typo-laden English,
+  then retracted entirely, then probed in German, and finally a new fact is
+  stored in mixed German/English. Persistent memory must track the user's
+  latest intent at every step: wrong value replaced, then removed, and the
+  later fact stored — regardless of language.
+
+persona: confused_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention and the only cross-scenario isolation; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Ask in Spanish to remember a birthday"
+    user_message: "recuerda que mi cumpleaños es el 3 de marzo"
+    ground_truth:
+      expected_behavior: "Stores the birthday (March 3); replies in Spanish or English"
+    success_criteria: "agent_tools[] includes a remember call for a March 3 birthday. FAIL if there is no call or it replies it cannot understand Spanish."
+
+  - turn: 2
+    objective: "Correct it with typos"
+    user_message: "wait no dont save that, i typed it wrong. its march 13 not 3"
+    ground_truth:
+      expected_behavior: "Replaces March 3 with March 13"
+    success_criteria: |
+      agent_tools[] shows update_memory on the birthday entry (or forget +
+      remember). VERIFY VIA MCP: memory_recall(query="birthday") returns
+      exactly one active birthday item and it says March 13 — no active
+      "3 de marzo"/March 3 item. FAIL if both dates are stored.
+
+  - turn: 3
+    objective: "Retract the whole thing"
+    user_message: "actualy forget the birthday thing entirely, i dont want it stored"
+    ground_truth:
+      expected_behavior: "Deletes the birthday entry"
+    success_criteria: "agent_tools[] includes forget on the birthday entry. VERIFY VIA MCP: memory_recall(query=\"birthday\") returns no birthday item. FAIL if it only says 'ok' with no forget call."
+
+  - turn: 4
+    objective: "Probe in German"
+    user_message: "wann ist mein Geburtstag?"
+    ground_truth:
+      expected_behavior: "Says nothing is stored (the user asked to delete it); may note the user mentioned March 13 earlier in this chat"
+    success_criteria: "Agent says the birthday is not stored in memory (in German or English). Referencing that the user mentioned March 13 earlier in THIS conversation, clearly labelled as not saved, is acceptable. CRITICAL FAIL if it claims the birthday is still saved, or answers March 3."
+
+  - turn: 5
+    objective: "Store a new fact in mixed German/English"
+    user_message: "ok whatever. merk dir: my favourite tea is genmaicha"
+    ground_truth:
+      expected_behavior: "Stores the tea preference"
+    success_criteria: "agent_tools[] includes remember for genmaicha. VERIFY VIA MCP: memory_recall(query=\"tea\") returns the genmaicha item and still no birthday item. FAIL if the birthday reappears."
+
+expected_outcome: |
+  Memory follows the user's latest intent through a correction, a
+  retraction, and three languages; the final state holds only the tea
+  preference.

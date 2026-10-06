@@ -92,7 +92,8 @@ class SDToolsMixin:
         No need to call register_sd_tools() separately.
 
         Args:
-            output_dir: Directory to save generated images (default: .gaia/cache/sd/images)
+            output_dir: Directory to save generated images
+                (default: ``<GAIA config dir>/cache/sd/images``)
             default_model: Default SD model (SDXL-Turbo, the default; SD-Turbo for
                 faster/lower quality; SDXL-Base-1.0 for photorealistic)
             default_size: Default image size (None = auto: 512px for SD-1.5/Turbo, 1024px for SDXL)
@@ -115,9 +116,13 @@ class SDToolsMixin:
         # Create LemonadeClient for API calls - resolves base URL from LEMONADE_BASE_URL env var
         self.sd_client = LemonadeClient(verbose=False)
 
-        self.sd_output_dir = (
-            Path(output_dir) if output_dir else Path(".gaia/cache/sd/images")
-        )
+        if output_dir:
+            self.sd_output_dir = Path(output_dir)
+        else:
+            # Read at call time; a cwd-relative default scattered images per launch dir.
+            from gaia.config import GAIA_CONFIG_DIR
+
+            self.sd_output_dir = GAIA_CONFIG_DIR / "cache" / "sd" / "images"
         self.sd_output_dir.mkdir(parents=True, exist_ok=True)
 
         self.sd_default_model = default_model
@@ -498,7 +503,9 @@ class SDToolsMixin:
         # Create safe filename from prompt
         safe_prompt = re.sub(r"[^\w\s-]", "", prompt[:40]).strip().replace(" ", "_")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{safe_prompt}_{model}_{timestamp}.png"
+        # Content hash: two fast Turbo runs of one prompt land in the same second.
+        digest = hashlib.sha256(image_bytes).hexdigest()[:8]
+        filename = f"{safe_prompt}_{model}_{timestamp}_{digest}.png"
 
         image_path = self.sd_output_dir / filename
         image_path.write_bytes(image_bytes)
@@ -584,9 +591,9 @@ class SDToolsMixin:
                 "endpoint": f"{self.sd_client.base_url}/images/generations",
                 "error": str(e),
             }
-        except Exception:
+        except Exception as e:  # pylint: disable=broad-except
             return {
                 "status": "unavailable",
                 "endpoint": f"{self.sd_client.base_url}/images/generations",
-                "error": "Cannot connect to Lemonade Server",
+                "error": f"Cannot connect to Lemonade Server: {e}",
             }

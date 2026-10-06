@@ -1,519 +1,286 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, Brain, EyeOff, Clock, Loader2, LayoutGrid } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+    Bell, Brain, Clock, Cloud, Cpu, EyeOff, FileText, HelpCircle, Loader2, PanelLeftClose, PanelLeftOpen,
+    Search, Settings, Smartphone, SquarePen, Trash2, X,
+} from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
+import { useModelStore, useInferencePlace, shortModelName, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
+import { useNotificationStore, selectUnreadCount } from '../stores/notificationStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import { getSessionHash } from '../utils/format';
-import { groupSessionsByAgent, resolveAgentName, resolveAgentIcon } from '../utils/sessionGrouping';
+import { groupSessionsByRecency } from '../utils/sessionGrouping';
 import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
-import { getAgentIcon } from './agentIcons';
-import { selectInferenceLocation } from './InferenceLocationBadge';
 import gaiaRobot from '../assets/gaia-robot.png';
 import type { Session } from '../types';
 import './Sidebar.css';
 
-/** Copy a session's hash link to the clipboard. */
-function copySessionLink(e: React.MouseEvent, sessionId: string) {
-    e.stopPropagation();
-    e.preventDefault();
-    const hash = getSessionHash(sessionId);
-    const url = `${window.location.origin}${window.location.pathname}#${hash}`;
-    navigator.clipboard.writeText(url).then(() => {
-        log.ui.info(`Copied session link: ${url}`);
-    }).catch(() => {
-        // Fallback: select the URL in a temporary input
-        log.ui.warn('Clipboard write failed');
-    });
-}
-
 interface SidebarProps {
-    onNewTask: () => void;
-    onHome?: () => void;
+    onNewChat: () => void;
+    onMobileAccess?: () => void;
     tunnelActive?: boolean;
-    tunnelLoading?: boolean;
-    onMobileToggle?: () => void;
 }
 
-/** Extracted session row to share between grouped and flat rendering. */
-function SessionItem({ session: s, isActive, isRunning, isPendingDelete, isDeleting, onSelect, onKeyDown, onDelete, formatTime, agentChip }: {
+function SessionRow({ session, active, running, onSelect, onDelete }: {
     session: Session;
-    isActive: boolean;
-    isRunning: boolean;
-    isPendingDelete: boolean;
-    isDeleting: boolean;
+    active: boolean;
+    running: boolean;
     onSelect: (id: string) => void;
-    onKeyDown: (e: React.KeyboardEvent, id: string) => void;
-    onDelete: (e: React.MouseEvent | React.KeyboardEvent, id: string) => void;
-    formatTime: (iso: string) => string;
-    /** Optional agent identity chip (icon + name). Shown in the flat/search
-     *  list where there are no per-agent section headers to convey it. */
-    agentChip?: { name: string; icon?: string };
+    onDelete: (id: string) => void;
 }) {
-    const [copied, setCopied] = useState(false);
-
-    const handleCopyHash = useCallback((e: React.MouseEvent) => {
-        copySessionLink(e, s.id);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-    }, [s.id]);
-
-    const AgentChipIcon = agentChip ? getAgentIcon(agentChip.icon) : null;
+    const [confirm, setConfirm] = useState(false);
+    useEffect(() => {
+        if (!confirm) return;
+        const t = setTimeout(() => setConfirm(false), 3000);
+        return () => clearTimeout(t);
+    }, [confirm]);
 
     return (
-        <div
-            className={`session-item ${isActive ? 'active' : ''} ${isDeleting ? 'session-deleting' : ''}`}
-            onClick={() => onSelect(s.id)}
-            onKeyDown={(e) => onKeyDown(e, s.id)}
-            role="button"
-            tabIndex={0}
-            aria-label={`Open task: ${s.title}`}
-            aria-current={isActive ? 'true' : undefined}
-        >
-            <span className="session-title">
-                {s.private && <EyeOff size={10} className="session-private-icon" aria-label="Private session" />}
-                {isRunning && (
-                    <Loader2
-                        size={11}
-                        className="session-running-spinner"
-                        aria-label="Agent running"
-                    />
-                )}
-                {s.title}
-            </span>
-            {agentChip && AgentChipIcon && (
-                <span className="session-agent-chip" title={`Agent: ${agentChip.name}`}>
-                    <AgentChipIcon size={10} className="session-agent-chip-icon" />
-                    <span className="session-agent-chip-name">{agentChip.name}</span>
-                </span>
-            )}
-            <a
-                className={`session-hash ${copied ? 'copied' : ''}`}
-                href={`#${getSessionHash(s.id)}`}
-                onClick={handleCopyHash}
-                title={copied ? 'Copied!' : `Copy link #${getSessionHash(s.id)}`}
-                aria-label={`Copy link for session ${getSessionHash(s.id)}`}
+        <li className={`sb-row${active ? ' is-active' : ''}`}>
+            <button
+                type="button"
+                className="sb-row-main"
+                onClick={() => onSelect(session.id)}
+                aria-current={active ? 'page' : undefined}
+                title={session.title}
             >
-                #{getSessionHash(s.id)}
-            </a>
-            <span className="session-time">{formatTime(s.updated_at)}</span>
-            {isPendingDelete ? (
-                <button
-                    className="session-delete confirm"
-                    onClick={(e) => onDelete(e, s.id)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onDelete(e, s.id); }}
-                    title="Click to confirm delete"
-                    aria-label={`Confirm delete: ${s.title}`}
-                >
-                    <Trash2 size={12} />
-                    <span className="confirm-label">Delete?</span>
-                </button>
-            ) : (
-                <button
-                    className="session-delete"
-                    onClick={(e) => onDelete(e, s.id)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onDelete(e, s.id); }}
-                    title="Delete"
-                    aria-label={`Delete: ${s.title}`}
-                >
-                    <Trash2 size={13} />
-                </button>
-            )}
-        </div>
+                {running && <Loader2 size={12} className="spin sb-row-icon" aria-label="Running" />}
+                {session.private && <EyeOff size={12} className="sb-row-icon" aria-label="Private chat" />}
+                <span className="sb-row-title">{session.title}</span>
+            </button>
+            <button
+                type="button"
+                className={`sb-row-delete${confirm ? ' is-confirm' : ''}`}
+                onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
+                aria-label={confirm ? `Confirm delete ${session.title}` : `Delete ${session.title}`}
+                title={confirm ? 'Click again to delete' : 'Delete'}
+            >
+                {confirm ? <span className="sb-row-delete-label">Delete?</span> : <Trash2 size={13} />}
+            </button>
+        </li>
     );
 }
 
-export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
-    const {
-        sessions, currentSessionId, setCurrentSession, removeSession, addSession,
-        setMessages, theme, toggleTheme, setShowSettings, setShowMemoryDashboard, setShowSchedules, setShowHub,
-        sidebarOpen, setSidebarOpen, setLoadingMessages,
-        sidebarCollapsed, toggleSidebarCollapsed,
-        sidebarWidth, setSidebarWidth,
-        addPendingDelete, removePendingDelete,
-        runningSessionIds, agents,
-    } = useChatStore();
-    const location = selectInferenceLocation(sessions, currentSessionId);
+export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProps) {
+    const sessions = useChatStore((s) => s.sessions);
+    const currentSessionId = useChatStore((s) => s.currentSessionId);
+    const runningSessionIds = useChatStore((s) => s.runningSessionIds);
+    const sidebarOpen = useChatStore((s) => s.sidebarOpen);
+    const collapsed = useChatStore((s) => s.sidebarCollapsed);
+    const toggleCollapsed = useChatStore((s) => s.toggleSidebarCollapsed);
+    const setSidebarOpen = useChatStore((s) => s.setSidebarOpen);
+    const setCurrentSession = useChatStore((s) => s.setCurrentSession);
+    const setMessages = useChatStore((s) => s.setMessages);
+    const removeSession = useChatStore((s) => s.removeSession);
+    const addPendingDelete = useChatStore((s) => s.addPendingDelete);
+    const removePendingDelete = useChatStore((s) => s.removePendingDelete);
+    const openSettings = useChatStore((s) => s.openSettings);
+    const setShowMemoryDashboard = useChatStore((s) => s.setShowMemoryDashboard);
+    const setShowSchedules = useChatStore((s) => s.setShowSchedules);
+    const setShowDocLibrary = useChatStore((s) => s.setShowDocLibrary);
+    const showMemory = useChatStore((s) => s.showMemoryDashboard);
+    const showSchedules = useChatStore((s) => s.showSchedules);
+    const active = useModelStore((s) => s.active);
+    const place = useInferencePlace();
+    const unread = useNotificationStore(selectUnreadCount);
+    const showNotifications = useNotificationStore((s) => s.showPanel);
+    const setShowNotifications = useNotificationStore((s) => s.setShowPanel);
 
-    const [search, setSearch] = useState('');
-    const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-    const [deletingId, setDeletingId] = useState<string | null>(null);
-    const [isResizing, setIsResizing] = useState(false);
-    // Undo-delete: temporarily preserve the deleted session for restoration
-    const [deletedSession, setDeletedSession] = useState<{ session: Session; timer: ReturnType<typeof setTimeout> } | null>(null);
-    const sidebarRef = useRef<HTMLElement>(null);
-    const searchInputRef = useRef<HTMLInputElement>(null);
-    const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [query, setQuery] = useState('');
+    const [deleteError, setDeleteError] = useState<string | null>(null);
+    const searchRef = useRef<HTMLInputElement>(null);
 
-    // Listen for Ctrl+K focus-search event from ChatView
     useEffect(() => {
-        const handler = () => {
-            if (sidebarCollapsed) {
-                toggleSidebarCollapsed();
-                // Delay focus until after React re-renders the search input
-                requestAnimationFrame(() => searchInputRef.current?.focus());
-            } else {
-                searchInputRef.current?.focus();
-            }
+        const focusSearch = () => {
+            if (collapsed) toggleCollapsed();
+            requestAnimationFrame(() => searchRef.current?.focus());
         };
-        window.addEventListener('gaia:focus-search', handler);
-        return () => window.removeEventListener('gaia:focus-search', handler);
-    }, [sidebarCollapsed, toggleSidebarCollapsed]);
+        window.addEventListener('gaia:focus-search', focusSearch);
+        return () => window.removeEventListener('gaia:focus-search', focusSearch);
+    }, [collapsed, toggleCollapsed]);
 
-    const filtered = search
-        ? sessions.filter((s) => s.title.toLowerCase().includes(search.toLowerCase()))
-        : sessions;
+    const groups = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        const list = q ? sessions.filter((s) => s.title.toLowerCase().includes(q)) : sessions;
+        return groupSessionsByRecency(list);
+    }, [sessions, query]);
 
-    // Group sessions by the agent that runs them (#2106). When searching we
-    // fall back to a flat list (each row carries an agent chip instead).
-    const agentGroups = useMemo(() => {
-        if (search) return null;
-        return groupSessionsByAgent(filtered, agents);
-    }, [filtered, search, agents]);
+    const closeOnMobile = useCallback(() => {
+        if (window.innerWidth <= 768) setSidebarOpen(false);
+    }, [setSidebarOpen]);
 
-    const handleSelect = useCallback(async (id: string) => {
-        if (id === currentSessionId) return;
-        const title = sessions.find((s) => s.id === id)?.title || '?';
-        log.nav.info(`Selecting session: "${title}" (${id})`);
-        // Drop the session we're leaving if it was an abandoned "New Task"
-        // draft, so switching away doesn't strand a phantom row (#2119).
+    const select = useCallback((id: string) => {
+        if (id === currentSessionId) {
+            // Still leaves Memory / Scheduled tasks for the open chat.
+            setCurrentSession(id);
+            closeOnMobile();
+            return;
+        }
         void cleanupAbandonedDraft(currentSessionId);
         setCurrentSession(id);
         setMessages([]);
-        setLoadingMessages(true);
-        // Auto-close sidebar on mobile
-        if (window.innerWidth <= 768) setSidebarOpen(false);
+        closeOnMobile();
+    }, [currentSessionId, setCurrentSession, setMessages, closeOnMobile]);
+
+    const remove = useCallback(async (id: string) => {
+        setDeleteError(null);
+        addPendingDelete(id);
         try {
-            const data = await api.getMessages(id);
-            // Guard: only apply if this session is still the current one
-            // (prevents stale data from overwriting when user rapidly switches)
-            const stillCurrent = useChatStore.getState().currentSessionId === id;
-            if (!stillCurrent) {
-                log.nav.debug(`Discarding stale message load for session=${id} (user switched away)`);
-                return;
-            }
-            setMessages(data.messages || []);
-            log.nav.info(`Loaded ${(data.messages || []).length} message(s) for "${title}"`);
+            await api.deleteSession(id);
+            removeSession(id);
         } catch (err) {
-            log.nav.error(`Failed to load messages for session ${id}`, err);
-            setMessages([]);
+            log.chat.error(`Delete failed for session ${id}`, err);
+            setDeleteError(err instanceof Error ? err.message : 'Could not delete the chat.');
         } finally {
-            setLoadingMessages(false);
+            removePendingDelete(id);
         }
-    }, [currentSessionId, sessions, setCurrentSession, setMessages, setSidebarOpen, setLoadingMessages]);
+    }, [addPendingDelete, removePendingDelete, removeSession]);
 
-    const handleDelete = useCallback(async (e: React.MouseEvent | React.KeyboardEvent, id: string) => {
-        e.stopPropagation();
-        e.preventDefault();
-        const session = sessions.find((s) => s.id === id);
-        const title = session?.title || '?';
-        // If already pending confirm for this id, execute the delete
-        if (pendingDeleteId === id) {
-            log.chat.info(`Deleting session: "${title}" (${id})`);
-            setPendingDeleteId(null);
-
-            // Start shrink + fade animation, then remove after it completes
-            setDeletingId(id);
-
-            // Mark as pending-delete so session polling won't resurrect it
-            addPendingDelete(id);
-
-            // Delete from backend immediately (fixes bug where deferred delete
-            // was lost on page refresh, causing sessions to reappear)
-            api.deleteSession(id)
-                .then(() => {
-                    log.chat.info(`Session deleted from backend: "${title}"`);
-                    removePendingDelete(id);
-                })
-                .catch((err) => {
-                    log.chat.warn(`Backend delete failed for "${title}"`, err);
-                    removePendingDelete(id);
-                });
-
-            // Show undo toast for 5 seconds — undo will re-create the session
-            if (deletedSession?.timer) clearTimeout(deletedSession.timer);
-            const timer = setTimeout(() => {
-                setDeletedSession(null);
-            }, 5000);
-            if (session) setDeletedSession({ session, timer });
-
-            // Remove from UI after the animation completes (250ms)
-            setTimeout(() => {
-                removeSession(id);
-                setDeletingId(null);
-            }, 250);
-            return;
-        }
-        // First click: request confirmation
-        log.chat.debug(`Delete pending confirmation for: "${title}" (${id})`);
-        setPendingDeleteId(id);
-        // Auto-cancel after 3s
-        if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
-        deleteTimerRef.current = setTimeout(() => setPendingDeleteId((prev) => (prev === id ? null : prev)), 3000);
-    }, [pendingDeleteId, sessions, removeSession, deletedSession, addPendingDelete, removePendingDelete]);
-
-    const handleUndoDelete = useCallback(() => {
-        if (!deletedSession) return;
-        clearTimeout(deletedSession.timer);
-        const { session } = deletedSession;
-        log.chat.info(`Undo delete: re-creating "${session.title}"`);
-        // Remove from pending-delete filter so it can appear again
-        removePendingDelete(session.id);
-        // Re-create the session on the backend (original was already deleted)
-        api.createSession({ title: session.title })
-            .then((newSession) => {
-                addSession(newSession);
-                log.chat.info(`Undo delete: re-created "${newSession.title}" (new id=${newSession.id})`);
-            })
-            .catch((err) => {
-                log.chat.warn(`Undo delete failed for "${session.title}"`, err);
-            });
-        setDeletedSession(null);
-    }, [deletedSession, addSession, removePendingDelete]);
-
-    // Cancel pending delete on outside click
-    useEffect(() => {
-        if (!pendingDeleteId) return;
-        const handler = () => setPendingDeleteId(null);
-        window.addEventListener('click', handler, { once: true });
-        return () => window.removeEventListener('click', handler);
-    }, [pendingDeleteId]);
-
-    const handleSessionKeyDown = useCallback((e: React.KeyboardEvent, id: string) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            handleSelect(id);
-        }
-    }, [handleSelect]);
-
-    // Drag-to-resize handler — store cleanup ref to prevent listener leak on unmount
-    const resizeCleanupRef = useRef<(() => void) | null>(null);
-
-    const handleResizeStart = useCallback((e: React.MouseEvent) => {
-        e.preventDefault();
-        setIsResizing(true);
-        log.ui.debug('Sidebar resize started');
-
-        const startX = e.clientX;
-        const startWidth = sidebarWidth;
-
-        const onMouseMove = (ev: MouseEvent) => {
-            const delta = ev.clientX - startX;
-            setSidebarWidth(startWidth + delta);
-        };
-
-        const cleanup = () => {
-            setIsResizing(false);
-            document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('mouseup', cleanup);
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-            resizeCleanupRef.current = null;
-            log.ui.debug('Sidebar resize ended');
-        };
-
-        resizeCleanupRef.current = cleanup;
-        document.body.style.cursor = 'col-resize';
-        document.body.style.userSelect = 'none';
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', cleanup);
-    }, [sidebarWidth, setSidebarWidth]);
-
-    // Clean up resize listeners and delete timer if component unmounts
-    useEffect(() => {
-        return () => {
-            if (resizeCleanupRef.current) resizeCleanupRef.current();
-            if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
-        };
-    }, []);
-
-    const formatTime = (iso: string) => {
-        const d = new Date(iso);
-        const now = new Date();
-        const diff = now.getTime() - d.getTime();
-        const mins = Math.floor(diff / 60000);
-        if (mins < 1) return 'now';
-        if (mins < 60) return `${mins}m`;
-        const hrs = Math.floor(mins / 60);
-        if (hrs < 24) return `${hrs}h`;
-        const days = Math.floor(hrs / 24);
-        if (days < 7) return `${days}d`;
-        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    };
-
-    // Compute inline width style (only on desktop)
+    const LocationIcon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
-    const sidebarStyle = isMobile ? undefined : {
-        width: sidebarCollapsed ? 56 : sidebarWidth,
-        minWidth: sidebarCollapsed ? 56 : sidebarWidth,
-    };
+    const isCollapsed = collapsed && !isMobile;
+
+    const nav = [
+        { key: 'memory', label: 'Memory', icon: Brain, on: showMemory, onClick: () => { setShowMemoryDashboard(true); closeOnMobile(); } },
+        { key: 'schedules', label: 'Scheduled tasks', icon: Clock, on: showSchedules, onClick: () => { setShowSchedules(true); closeOnMobile(); } },
+        { key: 'documents', label: 'Documents', icon: FileText, on: false, onClick: () => { setShowDocLibrary(true); closeOnMobile(); } },
+    ];
 
     return (
         <aside
-            ref={sidebarRef}
-            className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''} ${isResizing ? 'resizing' : ''}`}
-            style={sidebarStyle}
-            role="complementary"
-            aria-label="Task sidebar"
+            className={`sb${sidebarOpen ? ' is-open' : ''}${isCollapsed ? ' is-collapsed' : ''}`}
+            aria-label="Chats"
         >
-            <div className="sidebar-top">
-                <button className="sidebar-brand" onClick={onHome} title="Agent Hub" aria-label="Go to Agent Hub">
-                    <div className="brand-icon" aria-hidden="true">
-                        <img src={gaiaRobot} alt="" width={28} height={28} />
-                    </div>
-                    <div className="brand-text">
-                        <span className="brand-name">GAIA</span>
-                        <span className="brand-version">v{__APP_VERSION__}</span>
-                        <span className="beta-badge">BETA</span>
-                    </div>
-                </button>
-                <div className="sidebar-top-actions">
-                    <button className="new-task-btn" onClick={onNewTask} title="New Task" aria-label="New Task">
-                        <Plus size={18} />
-                    </button>
-                    <button
-                        className="collapse-btn"
-                        onClick={toggleSidebarCollapsed}
-                        title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                        aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                    >
-                        {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-                    </button>
-                </div>
-            </div>
-
-            <div className="sidebar-search">
-                <Search size={14} className="search-icon" aria-hidden="true" />
-                <input
-                    ref={searchInputRef}
-                    type="text"
-                    placeholder="Search... (Ctrl+K)"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    aria-label="Search tasks"
-                />
-            </div>
-
-            <nav className="session-list" aria-label="Task sessions">
-                {filtered.length === 0 && (
-                    <div className="empty-hint">
-                        {search ? 'No results' : 'No tasks yet'}
+            <div className="sb-top">
+                {!isCollapsed && (
+                    <div className="sb-brand">
+                        <img src={gaiaRobot} alt="" width={22} height={22} />
+                        <span>GAIA</span>
                     </div>
                 )}
-                {agentGroups ? (
-                    /* Render sessions grouped by agent (#2106) */
-                    agentGroups.map((group) => {
-                        const GroupIcon = getAgentIcon(group.icon);
-                        return (
-                            <div key={group.agentId}>
-                                <div className="session-group-label session-agent-group-label">
-                                    <GroupIcon size={12} className="session-agent-group-icon" aria-hidden="true" />
-                                    <span className="session-agent-group-name">{group.name}</span>
-                                    <span className="session-agent-group-count">{group.sessions.length}</span>
-                                </div>
-                                {group.sessions.map((s) => (
-                                    <SessionItem
+                <button
+                    type="button"
+                    className="sb-icon-btn"
+                    onClick={isMobile ? () => setSidebarOpen(false) : toggleCollapsed}
+                    aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                    title={isCollapsed ? 'Expand sidebar (Ctrl+B)' : 'Collapse sidebar (Ctrl+B)'}
+                >
+                    {isMobile ? <X size={17} /> : isCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+                </button>
+            </div>
+
+            <div className="sb-actions">
+                <button type="button" className="sb-nav-item" onClick={() => { onNewChat(); closeOnMobile(); }} title="New chat (Ctrl+Shift+O)">
+                    <SquarePen size={16} aria-hidden="true" />
+                    {!isCollapsed && <span>New chat</span>}
+                </button>
+                {isCollapsed ? (
+                    <button type="button" className="sb-nav-item" onClick={() => window.dispatchEvent(new CustomEvent('gaia:focus-search'))} aria-label="Search chats">
+                        <Search size={16} aria-hidden="true" />
+                    </button>
+                ) : (
+                    <label className="sb-search">
+                        <Search size={14} aria-hidden="true" />
+                        <input
+                            ref={searchRef}
+                            type="search"
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Escape') { setQuery(''); searchRef.current?.blur(); } }}
+                            placeholder="Search chats"
+                            aria-label="Search chats (Ctrl+K)"
+                        />
+                    </label>
+                )}
+                {nav.map(({ key, label, icon: Icon, on, onClick }) => (
+                    <button
+                        key={key}
+                        type="button"
+                        className={`sb-nav-item${on ? ' is-active' : ''}`}
+                        onClick={onClick}
+                        aria-current={on ? 'page' : undefined}
+                        aria-label={label}
+                        title={isCollapsed ? label : undefined}
+                    >
+                        <Icon size={16} aria-hidden="true" />
+                        {!isCollapsed && <span>{label}</span>}
+                    </button>
+                ))}
+            </div>
+
+            {!isCollapsed && (
+                <nav className="sb-list" aria-label="Recent chats">
+                    {groups.length === 0 && (
+                        <p className="sb-empty">{query ? 'No chats match.' : 'No chats yet.'}</p>
+                    )}
+                    {groups.map((g) => (
+                        <section key={g.label} className="sb-group">
+                            <h2 className="sb-group-label">{g.label}</h2>
+                            <ul>
+                                {g.sessions.map((s) => (
+                                    <SessionRow
                                         key={s.id}
                                         session={s}
-                                        isActive={s.id === currentSessionId}
-                                        isRunning={runningSessionIds.includes(s.id)}
-                                        isPendingDelete={pendingDeleteId === s.id}
-                                        isDeleting={deletingId === s.id}
-                                        onSelect={handleSelect}
-                                        onKeyDown={handleSessionKeyDown}
-                                        onDelete={handleDelete}
-                                        formatTime={formatTime}
+                                        active={s.id === currentSessionId}
+                                        running={runningSessionIds.includes(s.id)}
+                                        onSelect={select}
+                                        onDelete={remove}
                                     />
                                 ))}
-                            </div>
-                        );
-                    })
-                ) : (
-                    /* Flat list when searching — each row carries an agent chip */
-                    filtered.map((s) => (
-                        <SessionItem
-                            key={s.id}
-                            session={s}
-                            isActive={s.id === currentSessionId}
-                            isRunning={runningSessionIds.includes(s.id)}
-                            isPendingDelete={pendingDeleteId === s.id}
-                            isDeleting={deletingId === s.id}
-                            onSelect={handleSelect}
-                            onKeyDown={handleSessionKeyDown}
-                            onDelete={handleDelete}
-                            formatTime={formatTime}
-                            agentChip={{ name: resolveAgentName(s, agents), icon: resolveAgentIcon(s, agents) }}
-                        />
-                    ))
-                )}
-            </nav>
+                            </ul>
+                        </section>
+                    ))}
+                    {deleteError && <p className="sb-error" role="alert">{deleteError}</p>}
+                </nav>
+            )}
 
-            <div className="sidebar-bottom">
-                <div className="privacy-badge" title={location?.inference_description ?? undefined}>
-                    {location?.inference_remote === false && (
-                        <>
-                            <span className="privacy-dot" aria-hidden="true" />
-                            <span>100% Local</span>
-                        </>
-                    )}
-                    {location?.inference_remote === true && (
-                        <>
-                            <span className="privacy-dot privacy-dot-cloud" aria-hidden="true" />
-                            <span>Cloud: {location.inference_provider_name || 'remote'}</span>
-                        </>
-                    )}
-                    <span className="version-badge">v{__APP_VERSION__}</span>
-                </div>
-                <div className="sidebar-actions">
-                    {/* Mobile Access Gateway */}
-                    {onMobileToggle && (
+            <div className="sb-bottom">
+                {!isCollapsed && (
+                    <button
+                        type="button"
+                        className="sb-location"
+                        onClick={() => openSettings('model')}
+                        title={!place
+                            ? UNKNOWN_PLACE_TITLE
+                            : place.description
+                                ?? (place.remote ? `Chat history is sent to ${place.label}` : 'Runs on this PC')}
+                    >
+                        <LocationIcon size={13} aria-hidden="true" />
+                        <span className="sb-location-text">
+                            {[place?.label, active && shortModelName(active.model)].filter(Boolean).join(' · ') || 'Model'}
+                        </span>
+                    </button>
+                )}
+                <div className="sb-bottom-actions">
+                    <button
+                        type="button"
+                        className={`sb-icon-btn${showNotifications ? ' is-active' : ''}`}
+                        onClick={() => setShowNotifications(!showNotifications)}
+                        aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
+                        aria-expanded={showNotifications}
+                        title="Notifications"
+                    >
+                        <Bell size={16} />
+                        {unread > 0 && <span className="sb-badge" aria-hidden="true">{unread > 99 ? '99+' : unread}</span>}
+                    </button>
+                    {onMobileAccess && (
                         <button
-                            className={`btn-icon mobile-toggle-btn ${tunnelActive ? 'active' : ''} ${tunnelLoading ? 'loading' : ''}`}
-                            onClick={onMobileToggle}
-                            disabled={tunnelLoading}
-                            title={tunnelActive ? 'Stop mobile access' : 'Enable mobile access'}
-                            aria-label={tunnelActive ? 'Stop mobile access' : 'Enable mobile access'}
+                            type="button"
+                            className={`sb-icon-btn${tunnelActive ? ' is-active' : ''}`}
+                            onClick={onMobileAccess}
+                            aria-label={tunnelActive ? 'Mobile access is on' : 'Mobile access'}
+                            title="Mobile access"
                         >
-                            <Smartphone size={17} />
+                            <Smartphone size={16} />
                         </button>
                     )}
-                    <button className="btn-icon" onClick={() => setShowHub(true)} title="Agent Hub" aria-label="Open Agent Hub">
-                        <LayoutGrid size={17} />
-                    </button>
-                    <button className="btn-icon" onClick={() => setShowMemoryDashboard(true)} title="Memory Dashboard" aria-label="Memory Dashboard">
-                        <Brain size={17} />
-                    </button>
-                    <button className="btn-icon" onClick={() => setShowSchedules(true)} title="Scheduled Tasks" aria-label="Scheduled Tasks">
-                        <Clock size={17} />
-                    </button>
-                    <button className="btn-icon" onClick={() => setShowSettings(true)} title="Settings" aria-label="Settings">
-                        <Settings size={17} />
-                    </button>
-                    <button className="btn-icon" onClick={toggleTheme} title="Toggle theme" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
-                        {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+                    <button type="button" className="sb-icon-btn" onClick={() => openSettings()} aria-label="Settings" title="Settings (Ctrl+,)">
+                        <Settings size={16} />
                     </button>
                 </div>
             </div>
-
-            {/* Drag-to-resize handle */}
-            {!sidebarCollapsed && (
-                <div
-                    className="sidebar-resize-handle"
-                    onMouseDown={handleResizeStart}
-                    title="Drag to resize sidebar"
-                    aria-hidden="true"
-                />
-            )}
-
-            {/* Undo-delete toast */}
-            {deletedSession && (
-                <div className="toast toast-undo" role="status">
-                    Deleted &ldquo;{deletedSession.session.title}&rdquo;
-                    <span className="toast-action" onClick={handleUndoDelete}>Undo</span>
-                </div>
-            )}
         </aside>
     );
 }

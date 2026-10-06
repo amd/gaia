@@ -800,7 +800,8 @@ def _gaia(*args: str, home: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-m", "gaia.cli", *args],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=home,
         env=env,
         timeout=180,
@@ -850,15 +851,42 @@ def test_cli_import_list_info_round_trip(cli_home: Path):
     assert manifest["security_tier"] == "experimental"
 
 
+def _within_experimental_ceiling(skill_dir: Path) -> bool:
+    from gaia.skills.errors import SkillPermissionError
+    from gaia.skills.tiers import LOWEST_TIER, enforce_tier_ceiling
+
+    skill = parse_skill_file(skill_dir)
+    try:
+        enforce_tier_ceiling(
+            skill.parsed_permissions(), tier=LOWEST_TIER, skill_name=skill.name
+        )
+    except SkillPermissionError:
+        return False
+    return True
+
+
 def test_cli_imports_every_starter_skill(cli_home: Path):
-    """The whole pack installs together and lists without a single error."""
+    """Every pack skill imports, except those asking for more than 'experimental'.
+
+    An import lands at 'experimental', so a skill wanting a local CLI is refused
+    at import rather than granted it — it has to come from the hub instead.
+    """
+    importable = {d.name for d in STARTER_DIRS if _within_experimental_ceiling(d)}
+    assert importable and importable != {d.name for d in STARTER_DIRS}
+
     for skill_dir in STARTER_DIRS:
-        result = _gaia("skill", "import", str(skill_dir), home=cli_home)
-        assert result.returncode == 0, f"{skill_dir.name}: {result.stderr}"
+        result = _gaia(
+            "skill", "import", str(skill_dir), "--allow-experimental", home=cli_home
+        )
+        if skill_dir.name in importable:
+            assert result.returncode == 0, f"{skill_dir.name}: {result.stderr}"
+        else:
+            assert result.returncode == 4, f"{skill_dir.name}: {result.stdout}"
+            assert "ceiling" in result.stderr
 
     listed = _gaia("skill", "list", "--json", home=cli_home)
     payload = json.loads(listed.stdout)
 
     assert listed.returncode == 0, listed.stderr
     assert not payload["errors"]
-    assert {s["name"] for s in payload["skills"]} == {d.name for d in STARTER_DIRS}
+    assert {s["name"] for s in payload["skills"]} == importable

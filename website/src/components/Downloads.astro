@@ -165,7 +165,8 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
         <h3 class="g-h-card">GAIA for Windows</h3>
         <p class="g-body mt-2.5">
           One installer for both ways to use GAIA. While it runs, choose the desktop app,
-          the terminal, or both — each gets its own shortcut on your desktop.
+          the terminal, or both. Choosing both installs the two side by side, each with its
+          own shortcut, and they use the same local models.
         </p>
         <div class="mt-5">
           <a href={windowsSetup.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
@@ -245,11 +246,18 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
               hidden
             >
               <div class="flex flex-wrap items-center gap-3">
+                {/* One installer reads like the desktop card's button, so two cards
+                    side by side do not offer "Download" against "Install GAIA" for
+                    the same machine. Linux keeps its package-format labels. */}
                 {row.installers.length > 0
                   ? row.installers.map((i) => (
                       <a href={i.artifact.url} class="g-btn g-btn-primary px-5 py-3 text-[15px]">
                         <Fragment set:html={DOWNLOAD_ICON} />
-                        <span>{INSTALLER_CTA_LABELS[i.key]}</span>
+                        <span>
+                          {row.installers.length > 1
+                            ? INSTALLER_CTA_LABELS[i.key]
+                            : `Download for ${PLATFORM_LABELS[row.platform]}`}
+                        </span>
                       </a>
                     ))
                   : row.binary && (
@@ -409,13 +417,18 @@ const DOWNLOAD_ICON = `<svg class="h-4 w-4 flex-none" fill="none" stroke="curren
     const listLabel = root.querySelector('[data-dl-list-label]');
     if (!list || !listLabel) return;
     const details = document.createElement('details');
-    details.className = 'mx-auto mt-8 w-full max-w-[720px] text-left';
+    details.className = 'group mx-auto mt-8 w-full max-w-[720px] text-left';
     const summary = document.createElement('summary');
-    summary.className = 'g-label cursor-pointer list-none transition-colors hover:text-g-text';
-    summary.textContent = 'All downloads, every platform';
+    summary.className =
+      'g-label inline-flex cursor-pointer list-none items-center gap-2 py-1 transition-colors hover:text-g-text [&::-webkit-details-marker]:hidden';
+    const chevron = document.createElement('span');
+    chevron.setAttribute('aria-hidden', 'true');
+    chevron.className = 'inline-block transition-transform group-open:rotate-90';
+    chevron.textContent = '›';
+    summary.append(chevron, 'Other platforms and formats');
     list.replaceWith(details);
     details.append(summary, list);
-    list.classList.remove('mt-8');
+    list.classList.replace('mt-8', 'mt-4');
     listLabel.remove();
   });
 </script>

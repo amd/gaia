@@ -9,14 +9,14 @@ chat package. NOTE: file search is handled by
 ``shell_tools.run_shell_command`` for flexibility.
 """
 
-import logging
 import os
 from pathlib import Path
 from typing import Any, Dict
 
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FileToolsMixin:
@@ -35,13 +35,10 @@ class FileToolsMixin:
         def add_watch_directory(directory: str) -> Dict[str, Any]:
             """Add directory to watch list with path validation and auto-indexing."""
             try:
-                # Validate path with PathValidator (handles user prompting and persistence)
-                if not self.path_validator.is_path_allowed(directory):
-                    return {
-                        **NOT_EXECUTED,
-                        "status": "error",
-                        "error": f"Access denied: {directory}",
-                    }
+                directory = os.path.expanduser(directory)
+                is_allowed, reason = self.path_validator.validate_read(directory)
+                if not is_allowed:
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 if not os.path.exists(directory):
                     return {

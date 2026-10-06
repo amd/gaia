@@ -291,6 +291,22 @@ describe('Downloads.astro', () => {
     expect(actual).toEqual(expected);
   });
 
+  it('labels a lone terminal installer like the desktop button, and keeps Linux formats', () => {
+    const label = (surface: string, platform: string) =>
+      ctas()
+        .filter((b) => b.attrs['data-surface'] === surface && b.attrs['data-platform'] === platform)
+        .flatMap((b) => descendants(b).filter((e) => e.tag === 'a'))
+        .map(textOf);
+
+    expect(label('tui', 'win-x64')).toEqual(['Download for Windows (x64)']);
+    expect(label('desktop', 'win-x64')).toEqual(['Download for Windows (x64)']);
+    expect(label('tui', 'darwin-arm64')).toEqual(['Download for macOS (Apple Silicon)']);
+    expect(label('tui', 'linux-x64')).toEqual([
+      'Debian / Ubuntu (.deb)',
+      'Fedora / RHEL / SUSE (.rpm)',
+    ]);
+  });
+
   it('names the platform in every link of the all-downloads list', () => {
     const [list] = descendants(rendered.root).filter((e) => 'data-dl-list' in e.attrs);
     const names = descendants(list)

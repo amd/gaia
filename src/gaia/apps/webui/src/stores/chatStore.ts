@@ -4,10 +4,20 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData } from '../types';
-import { applyTheme } from '../utils/theme';
+import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode } from '../types';
+import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
 import { log } from '../utils/logger';
-import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
+
+/** Settings sections, in the order the settings nav shows them. */
+export type SettingsSection =
+    | 'general'
+    | 'model'
+    | 'permissions'
+    | 'skills'
+    | 'connectors'
+    | 'memory'
+    | 'privacy'
+    | 'advanced';
 
 /**
  * Read a UI preference, saying so when the store is unreadable.
@@ -30,6 +40,12 @@ function readPref(key: string, fallback: string): string {
     }
 }
 
+/** The stored appearance; anything unrecognised reads as the dark default. */
+function readThemePreference(): ThemePreference {
+    const v = readPref('gaia-chat-theme', 'dark');
+    return v === 'light' || v === 'system' ? v : 'dark';
+}
+
 /** Persist a UI preference. Never throws: a zustand setter must still update state. */
 function writePref(key: string, value: string): void {
     try {
@@ -44,25 +60,15 @@ function writePref(key: string, value: string): void {
 }
 
 interface ChatState {
-    // Agents
+    /** Registered agents; Settings → Connectors grants scopes to them. */
     agents: AgentInfo[];
-    activeAgentId: string;
     setAgents: (agents: AgentInfo[]) => void;
-    setActiveAgentId: (id: string) => void;
-    /** Loud, user-facing error when agent discovery (GET /api/agents) fails.
-     *  Surfaced in the Hub view so a broken discovery is never a dead button. */
-    agentsError: string | null;
-    setAgentsError: (error: string | null) => void;
 
     // Device selection (CPU / GPU / NPU)
     activeDevice: string;
     setActiveDevice: (device: string) => void;
     detectedDevices: string[];
     setDetectedDevices: (devices: string[]) => void;
-
-    // Model-size tier selection (issue #1162): "full" | "lite"
-    activeModelTier: string;
-    setActiveModelTier: (tier: string) => void;
 
     // Sessions
     sessions: Session[];
@@ -94,7 +100,6 @@ interface ChatState {
     isStreaming: boolean;
     streamingContent: string;
     setStreaming: (streaming: boolean) => void;
-    appendStreamContent: (content: string) => void;
     setStreamContent: (content: string) => void;
     clearStreamContent: () => void;
     /** Atomically clear all streaming state (streaming flag, content, steps).
@@ -112,6 +117,9 @@ interface ChatState {
     /** Update the last tool step (not the absolute last step). */
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
     clearAgentSteps: () => void;
+    /** What the model is doing right now, from the latest phase status event; null before one arrives. */
+    liveStatus: string | null;
+    setLiveStatus: (status: string | null) => void;
 
     // Structured cards from tool_result.render events (issue #2108).
     // Accumulated during the stream, transferred onto the finalized
@@ -132,61 +140,46 @@ interface ChatState {
     setBackendConnected: (connected: boolean) => void;
 
     // UI state
+    /** What the user picked; `theme` is what is painted. */
+    themePreference: ThemePreference;
     theme: 'light' | 'dark';
     showDocLibrary: boolean;
     showFileBrowser: boolean;
-    showSettings: boolean;
+    /** Open settings section, or null when settings is closed. */
+    settingsSection: SettingsSection | null;
     showMemoryDashboard: boolean;
     showSchedules: boolean;
-    showHub: boolean;
+    /** Permission mode picked on the new-chat screen, applied when the chat is created. */
+    draftPermissionMode: PermissionMode;
+    /** The mode a new chat starts in: `full_access` in config, else ask. */
+    defaultPermissionMode: PermissionMode;
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
-    sidebarWidth: number;
     isLoadingMessages: boolean;
-    /** Prompt queued from WelcomeScreen to be consumed by ChatView on mount. */
+    /** A first message queued before its chat view mounted; ChatView sends it. */
     pendingPrompt: string | null;
-    toggleTheme: () => void;
+    setThemePreference: (pref: ThemePreference) => void;
+    /** Re-resolve a `system` preference after the OS appearance changed. */
+    syncSystemTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
     setShowFileBrowser: (show: boolean) => void;
-    setShowSettings: (show: boolean) => void;
+    openSettings: (section?: SettingsSection) => void;
+    closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
-    setShowHub: (show: boolean) => void;
-    toggleSidebar: () => void;
+    setDraftPermissionMode: (mode: PermissionMode) => void;
+    /** Adopt the configured default; an untouched draft follows it. */
+    setDefaultPermissionMode: (mode: PermissionMode) => void;
     setSidebarOpen: (open: boolean) => void;
     toggleSidebarCollapsed: () => void;
     setSidebarCollapsed: (collapsed: boolean) => void;
-    setSidebarWidth: (width: number) => void;
     setLoadingMessages: (loading: boolean) => void;
     setPendingPrompt: (prompt: string | null) => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
-    // Agents
     agents: [],
-    activeAgentId: readPref('gaia-active-agent-id', FLAGSHIP_AGENT_ID),
-    // Re-point a stored selection the backend no longer offers -- a retired
-    // `chat`/`doc`/`file`, or an uninstalled agent -- so the picker is never
-    // highlighting nothing. Only ever TO the flagship, and only when the
-    // flagship is actually in the list: a list without it is discovery still
-    // settling, and falling back to whatever came first would drop the user on
-    // an agent nobody chose.
-    setAgents: (agents) => {
-        const { activeAgentId } = get();
-        const flagship = agents.find((a) => a.id === FLAGSHIP_AGENT_ID);
-        if (!flagship || agents.some((a) => a.id === activeAgentId)) {
-            set({ agents });
-            return;
-        }
-        writePref('gaia-active-agent-id', flagship.id);
-        set({ agents, activeAgentId: flagship.id });
-    },
-    setActiveAgentId: (id) => {
-        writePref('gaia-active-agent-id', id);
-        set({ activeAgentId: id });
-    },
-    agentsError: null,
-    setAgentsError: (error) => set({ agentsError: error }),
+    setAgents: (agents) => set({ agents }),
 
     // Device selection
     activeDevice: readPref('gaia-active-device', 'gpu'),
@@ -196,13 +189,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     },
     detectedDevices: ['gpu'],
     setDetectedDevices: (devices) => set({ detectedDevices: devices }),
-
-    // Model-size tier selection (#1162)
-    activeModelTier: readPref('gaia-active-model-tier', 'full'),
-    setActiveModelTier: (tier) => {
-        writePref('gaia-active-model-tier', tier);
-        set({ activeModelTier: tier });
-    },
 
     // Sessions
     sessions: [],
@@ -225,11 +211,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // results don't resurrect sessions the user already deleted.
             sessions: sessions.filter((s) => !state.pendingDeleteIds.includes(s.id)),
         })),
-    // Selecting a session must leave the full-screen Hub (Home sets showHub=true
-    // and nothing else cleared it, stranding the user on the Hub — #2206).
-    // Clear only for a real selection; setCurrentSession(null) is the Home path
-    // that opens the Hub, so it must not fight setShowHub(true).
-    setCurrentSession: (id) => set(id ? { currentSessionId: id, showHub: false } : { currentSessionId: id }),
+    // Opening a chat leaves any full-page view (memory, schedules).
+    setCurrentSession: (id) => set(id
+        ? { currentSessionId: id, showMemoryDashboard: false, showSchedules: false }
+        : { currentSessionId: id }),
     addSession: (session) =>
         set((state) => ({ sessions: [session, ...state.sessions] })),
     removeSession: (id) =>
@@ -269,11 +254,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     isStreaming: false,
     streamingContent: '',
     setStreaming: (streaming) => set({ isStreaming: streaming }),
-    appendStreamContent: (content) =>
-        set((state) => ({ streamingContent: state.streamingContent + content })),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
-    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [] }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null }),
 
     // Agent activity
     agentSteps: [],
@@ -319,7 +302,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // No tool step found — don't corrupt non-tool steps
             return state;
         }),
-    clearAgentSteps: () => set({ agentSteps: [] }),
+    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null }),
+    liveStatus: null,
+    setLiveStatus: (status) => set({ liveStatus: status }),
 
     // Streaming cards (#2108)
     cards: [],
@@ -338,36 +323,46 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setBackendConnected: (connected) => set({ backendConnected: connected }),
 
     // UI
-    theme: readPref('gaia-chat-theme', 'dark') as 'light' | 'dark',
+    themePreference: readThemePreference(),
+    theme: resolveTheme(readThemePreference()),
     showDocLibrary: false,
     showFileBrowser: false,
-    showSettings: false,
+    settingsSection: null,
     showMemoryDashboard: false,
     showSchedules: false,
-    showHub: false,
-    toggleTheme: () =>
-        set((state) => {
-            const next = state.theme === 'dark' ? 'light' : 'dark';
-            writePref('gaia-chat-theme', next);
-            applyTheme(next);
-            return { theme: next };
-        }),
+    draftPermissionMode: 'ask',
+    defaultPermissionMode: 'ask',
+    setThemePreference: (pref) => {
+        writePref('gaia-chat-theme', pref);
+        const theme = resolveTheme(pref);
+        applyTheme(theme);
+        set({ themePreference: pref, theme });
+    },
+    syncSystemTheme: () => {
+        if (get().themePreference !== 'system') return;
+        const theme = resolveTheme('system');
+        applyTheme(theme);
+        set({ theme });
+    },
     sidebarOpen: typeof window !== 'undefined' ? window.innerWidth > 768 : true,
     sidebarCollapsed: readPref('gaia-chat-sidebar-collapsed', 'false') === 'true',
-    sidebarWidth: parseInt(readPref('gaia-chat-sidebar-width', '300'), 10) || 300,
     isLoadingMessages: false,
     pendingPrompt: null,
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
-    setShowSettings: (show) =>
-        set(show ? { showSettings: true, showMemoryDashboard: false, showSchedules: false, showHub: false } : { showSettings: false }),
+    openSettings: (section = 'general') => set({ settingsSection: section }),
+    closeSettings: () => set({ settingsSection: null }),
     setShowMemoryDashboard: (show) =>
-        set(show ? { showMemoryDashboard: true, showSettings: false, showSchedules: false, showHub: false } : { showMemoryDashboard: false }),
+        set(show ? { showMemoryDashboard: true, showSchedules: false } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>
-        set(show ? { showSchedules: true, showSettings: false, showMemoryDashboard: false, showHub: false } : { showSchedules: false }),
-    setShowHub: (show) =>
-        set(show ? { showHub: true, showSettings: false, showMemoryDashboard: false, showSchedules: false } : { showHub: false }),
-    toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+        set(show ? { showSchedules: true, showMemoryDashboard: false } : { showSchedules: false }),
+    setDraftPermissionMode: (mode) => set({ draftPermissionMode: mode }),
+    setDefaultPermissionMode: (mode) =>
+        set((state) => ({
+            defaultPermissionMode: mode,
+            draftPermissionMode:
+                state.draftPermissionMode === state.defaultPermissionMode ? mode : state.draftPermissionMode,
+        })),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     toggleSidebarCollapsed: () =>
         set((state) => {
@@ -378,11 +373,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setSidebarCollapsed: (collapsed) => {
         writePref('gaia-chat-sidebar-collapsed', String(collapsed));
         set({ sidebarCollapsed: collapsed });
-    },
-    setSidebarWidth: (width) => {
-        const clamped = Math.max(200, Math.min(500, width));
-        writePref('gaia-chat-sidebar-width', String(clamped));
-        set({ sidebarWidth: clamped });
     },
     setLoadingMessages: (loading) => set({ isLoadingMessages: loading }),
     setPendingPrompt: (prompt) => set({ pendingPrompt: prompt }),

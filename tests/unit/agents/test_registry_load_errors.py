@@ -10,8 +10,6 @@ import textwrap
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from gaia.agents.registry import AgentRegistry
 
 
@@ -33,10 +31,9 @@ class TestRegistryLoadErrors:
 
         registry = AgentRegistry()
         with patch.object(Path, "home", return_value=tmp_path):
-            with patch.object(registry, "_register_builtin_agents"):
-                with patch.object(registry, "_discover_installed_agents"):
-                    with patch.object(registry, "_discover_native_agents"):
-                        registry.discover()
+            with patch.object(registry, "_discover_installed_agents"):
+                with patch.object(registry, "_discover_native_agents"):
+                    registry.discover()
 
         # Must record the error
         err = registry.get_load_error("broken-agent")
@@ -78,20 +75,3 @@ class TestRegistryLoadErrors:
         # Broken recorded, good loaded (or at least broken recorded)
         bad_err = registry.get_load_error("broken")
         assert bad_err is not None
-
-    def test_hot_reload_broken_agent_records_error(self, tmp_path):
-        """register_from_dir of a broken agent records the error."""
-        agents_root = tmp_path / ".gaia" / "agents"
-        agents_root.mkdir(parents=True)
-        agent_dir = agents_root / "bad"
-        agent_dir.mkdir()
-        (agent_dir / "agent.py").write_text("not valid python!!!")
-
-        registry = AgentRegistry()
-        with patch.object(Path, "home", return_value=tmp_path):
-            with pytest.raises(Exception):
-                registry.register_from_dir(agent_dir)
-
-        # Must be recorded despite the exception propagating
-        err = registry.get_load_error("bad")
-        assert err is not None

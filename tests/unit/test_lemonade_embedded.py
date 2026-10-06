@@ -7,6 +7,7 @@ import io
 import json
 import platform
 import stat
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -432,6 +433,11 @@ class TestStatus:
     def test_start_leaves_vulkan_coopmat_on_for_chat_models(self, manager, monkeypatch):
         """The global flag halved chat prompt speed; the embedder runs on CPU instead."""
         monkeypatch.delenv("GGML_VK_DISABLE_COOPMAT", raising=False)
+        # Any GPU but the Strix Halo iGPU (see TestVulkanWorkarounds).
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded._windows_display_adapters",
+            lambda: [("NVIDIA GeForce RTX 4090", "32.0.15.6094")],
+        )
         monkeypatch.setattr(manager, "is_installed", lambda: True)
         monkeypatch.setattr(manager, "write_config", lambda: None)
         monkeypatch.setattr(manager, "_health", lambda *a, **k: {"status": "ok"})
@@ -661,3 +667,89 @@ def test_pinned_digests_are_bare_hex_like_the_installer_computes():
     assert EMBEDDABLE_SHA256
     for asset, digest in EMBEDDABLE_SHA256.items():
         assert re.fullmatch(r"[0-9a-f]{64}", digest), f"{asset}: {digest!r}"
+
+
+class TestVulkanWorkarounds:
+    """An old Strix Halo driver crashed Qwen3.6 under Vulkan coopmat; newer ones don't."""
+
+    OLD = "32.0.12078.30"  # measured crashing
+    NEW = "32.0.31016.2"  # measured running Qwen3.6 with coopmat on
+
+    @pytest.fixture(autouse=True)
+    def _windows(self, monkeypatch):
+        monkeypatch.setattr("gaia.llm.lemonade_embedded.sys.platform", "win32")
+        monkeypatch.delenv("GGML_VK_DISABLE_COOPMAT", raising=False)
+
+    def _adapters(self, monkeypatch, *adapters):
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded._windows_display_adapters",
+            lambda: list(adapters),
+        )
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "AMD Radeon(TM) 8060S Graphics",
+            "AMD Radeon(TM) 8050S Graphics",
+            "AMD Radeon(TM) 8040S Graphics",
+        ],
+    )
+    @pytest.mark.parametrize("version", [OLD, "32.0.11021.1"])
+    def test_strix_halo_on_an_old_driver_turns_coopmat_off(
+        self, monkeypatch, name, version
+    ):
+        from gaia.llm.lemonade_embedded import vulkan_workarounds
+
+        self._adapters(
+            monkeypatch,
+            ("Microsoft Basic Display Adapter", "10.0.26100.1"),
+            (name, version),
+        )
+        assert vulkan_workarounds() == {"GGML_VK_DISABLE_COOPMAT": "1"}
+
+    @pytest.mark.parametrize("version", [NEW, "32.0.12078.31", "33.0.1.0"])
+    def test_strix_halo_on_a_newer_driver_keeps_coopmat(self, monkeypatch, version):
+        from gaia.llm.lemonade_embedded import vulkan_workarounds
+
+        self._adapters(monkeypatch, ("AMD Radeon(TM) 8060S Graphics", version))
+        assert vulkan_workarounds() == {}
+
+    @pytest.mark.parametrize("version", ["", "unknown"])
+    def test_an_unreadable_driver_version_leaves_coopmat_on(self, monkeypatch, version):
+        from gaia.llm.lemonade_embedded import vulkan_workarounds
+
+        self._adapters(monkeypatch, ("AMD Radeon(TM) 8060S Graphics", version))
+        assert vulkan_workarounds() == {}
+
+    @pytest.mark.parametrize(
+        "name", ["AMD Radeon(TM) 890M Graphics", "NVIDIA GeForce RTX 4090", ""]
+    )
+    def test_other_gpus_are_left_alone(self, monkeypatch, name):
+        from gaia.llm.lemonade_embedded import vulkan_workarounds
+
+        self._adapters(monkeypatch, (name, self.OLD))
+        assert vulkan_workarounds() == {}
+
+    def test_a_value_the_user_set_wins(self, monkeypatch):
+        from gaia.llm.lemonade_embedded import vulkan_workarounds
+
+        self._adapters(monkeypatch, ("AMD Radeon(TM) 8060S Graphics", self.OLD))
+        monkeypatch.setenv("GGML_VK_DISABLE_COOPMAT", "0")
+        assert vulkan_workarounds() == {}
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="reads the Windows registry")
+    def test_the_real_registry_reads_without_raising(self, monkeypatch):
+        from gaia.llm.lemonade_embedded import _windows_display_adapters
+
+        for name, version in _windows_display_adapters():
+            assert isinstance(name, str) and isinstance(version, str)
+
+    def test_not_windows_reads_nothing(self, monkeypatch):
+        from gaia.llm.lemonade_embedded import vulkan_workarounds
+
+        monkeypatch.setattr("gaia.llm.lemonade_embedded.sys.platform", "linux")
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded._windows_display_adapters",
+            lambda: pytest.fail("read the registry off Windows"),
+        )
+        assert vulkan_workarounds() == {}

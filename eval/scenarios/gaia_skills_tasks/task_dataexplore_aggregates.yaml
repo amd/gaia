@@ -3,6 +3,7 @@ id: task_dataexplore_aggregates
 name: "Skill Task — data-explore Answers With Real Queries"
 category: gaia_skills_tasks
 severity: high
+tags: [t1_basic]
 description: |
   The data-explore skill loads the fixture CSV into scratchpad tables and
   answers aggregate questions with exact numbers from real SQL.

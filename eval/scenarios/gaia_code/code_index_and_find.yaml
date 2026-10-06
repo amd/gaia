@@ -4,7 +4,7 @@ id: code_index_and_find
 name: "Code — Index the Mini Repo, Find the Right Function"
 category: gaia_code
 severity: high
-tags: [local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   Index the fixture repo, then answer "where does X happen" with the real
   symbol and file.

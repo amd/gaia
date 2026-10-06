@@ -1,0 +1,55 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/odd_names/ — three files:
+# "budget & ver.txt" (Q3 budget total: 48,200 EUR),
+# "quarterly report (final) v2.txt" (Revenue grew 12% quarter over quarter.),
+# "café_résumé_ñ.txt" (Résumé owner: Zoë Ångström). See
+# GAIA_FIXTURE_VALUES.md, "Files and shell".
+id: files_ambiguous_odd_names
+name: "Files — Ambiguous 'That File' Among Awkward Filenames"
+category: gaia_files
+severity: high
+tags: [t4_adversarial, usability]
+description: |
+  A folder of three files whose names contain spaces, parentheses, an
+  ampersand, and accented characters. The user first says "open that file"
+  when three are equally plausible, then names each by a fragment. The
+  agent must ask rather than guess, then read each awkward name exactly —
+  accents intact, no mojibake.
+
+persona: confused_user
+
+setup:
+  index_documents: []
+  notes: "odd_names/ staged at ~/gaia-eval/tiers_files_shell/odd_names/."
+
+turns:
+  - turn: 1
+    objective: "Ask what's in the odd_names folder"
+    user_message: "what's in ~/gaia-eval/tiers_files_shell/odd_names?"
+    ground_truth:
+      expected_answer: "budget & ver.txt, quarterly report (final) v2.txt, café_résumé_ñ.txt"
+    success_criteria: "Agent lists the folder with a real call and names all three files with their exact spelling (the ampersand, parentheses and accents preserved)."
+
+  - turn: 2
+    objective: "Say 'open that file' with no way to tell which"
+    user_message: "open that file"
+    ground_truth:
+      expected_behavior: "Asks which of the three files the user means"
+    success_criteria: "Agent asks which file (ideally listing the three). Picking one and reading it without asking is a FAIL — three candidates were equally plausible."
+
+  - turn: 3
+    objective: "Pick the one with the ampersand"
+    user_message: "the one with the & in it"
+    ground_truth:
+      expected_answer: "Q3 budget total: 48,200 EUR"
+    success_criteria: "Agent reads 'budget & ver.txt' (a read call in agent_tools[]) and reports 'Q3 budget total: 48,200 EUR'. If a shell command was used, it must not have run 'ver' as a separate command (no Windows version banner in any output)."
+
+  - turn: 4
+    objective: "Ask for the accented file's contents exactly"
+    user_message: "and the café one — what's the exact line in it?"
+    ground_truth:
+      expected_answer: "Résumé owner: Zoë Ångström"
+    success_criteria: "Agent reads café_résumé_ñ.txt and reports 'Résumé owner: Zoë Ångström' with every accent correct. Mojibake (e.g. 'ZoÃ«'), a dropped accent, or a 'file not found' caused by mangling the name is a FAIL."
+
+expected_outcome: |
+  Ambiguity is resolved by asking, and filenames with spaces, symbols and
+  accents are read exactly.

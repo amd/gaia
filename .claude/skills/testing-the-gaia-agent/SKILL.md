@@ -210,7 +210,8 @@ commented out. So **L5–L7 cannot pass on a clean checkout** — not because th
 broken, but because it has nothing to load.
 
 Install the one you are testing, and copy it rather than `gaia skill import` — import
-re-stamps the tier `experimental`, which is not what ships:
+re-stamps the tier `experimental`, which is not what ships, and refuses a skill whose
+grants (like `shell:execute:gh`) sit above that tier's ceiling:
 
 ```bash
 cp -r hub/skills/github-triage ~/.gaia/skills/
@@ -383,7 +384,7 @@ python util/tui_driver.py screen      # the frame, as the terminal paints it
 | check | pass |
 |---|---|
 | the command is on screen | `gh issue create --title …` appears verbatim |
-| it is answerable | `y run once · … · n/esc deny` on screen |
+| it is answerable | `y once · a always: … · n/esc deny` on screen |
 | the status bar tells the truth | `● gaia waiting for your answer` — **not** `streaming` |
 | the prompt survives scrollback | run a long session first, then trigger a write; the prompt is still in the frame |
 | no contradiction | the status hint must not say `Esc cancel` while the modal says `esc deny` |

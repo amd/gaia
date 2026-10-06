@@ -43,8 +43,10 @@
 
 :root {
     /* ── Light theme (the default) ──────────────────────────────────
-     * Canvas Porcelain #F5F2EC, raised surface Pale stone #EAE5DC.
-     * Everything else is derived to sit between, above, or on those two. */
+     * Near-neutral: white canvas, faintly cool greys for raised surfaces,
+     * rules and hover. The Agent UI departs from the shared porcelain/stone
+     * here on purpose (see docs/spec/gaia-design-language.mdx); the accent
+     * and the status hues are the shared ones. */
 
     /* Accent — Burnished copper. Marks the prompt, focus, selection, and the
      * single primary action. Nothing else on the screen is copper. */
@@ -83,7 +85,6 @@
     --accent-purple: #6B3FBF;
 
     --danger: #B4292E;
-    --danger-dark: #8E1F23;
     --danger-dim: rgba(180, 41, 46, 0.07);
     --danger-dim2: rgba(180, 41, 46, 0.035);
 
@@ -101,39 +102,37 @@
     --code-success: #5CC96E;
     --code-warning: #E5B567;
     --code-danger: #F2787C;
-    --code-info: #6FB4FF;
 
-    --bg-primary: #F5F2EC;           /* canvas */
-    --bg-secondary: #EFEBE3;         /* header / composer band */
-    --bg-tertiary: #E2DCD1;          /* badges, tool panels */
-    --bg-sidebar: #EAE5DC;           /* raised */
-    --bg-input: #EAE5DC;             /* raised */
-    --bg-card: #EAE5DC;              /* raised */
-    --bg-hover: #E2DCD1;
-    --bg-active: #D9D2C5;
-    --bg-user-msg: rgba(36, 33, 41, 0.025);
-    --bg-assistant-msg: rgba(36, 33, 41, 0.015);
-    --bg-modal-overlay: rgba(23, 22, 28, 0.55);
-    --bg-recessed: #E4DED3;          /* sunk below the canvas: log + detail panes */
+    --bg-primary: #FFFFFF;           /* canvas */
+    --bg-secondary: #F8F9FA;         /* header / composer band */
+    --bg-tertiary: #EEF0F2;          /* badges, tool panels */
+    --bg-sidebar: #F6F7F8;           /* raised */
+    --bg-input: #FFFFFF;             /* raised */
+    --bg-card: #F6F7F8;              /* raised */
+    --bg-hover: #ECEEF1;
+    --bg-active: #E2E5E9;
+    --bg-user-msg: #F1F3F5;
+    --bg-modal-overlay: rgba(15, 17, 20, 0.45);
+    --bg-recessed: #F1F3F5;          /* sunk below the canvas: log + detail panes */
     --switch-knob: #ffffff;          /* rides both the off (--border) and on track */
 
     /* Theme-aware overlay tints (visible on light backgrounds) */
-    --tint-subtle: rgba(36, 33, 41, 0.03);
-    --tint-hover: rgba(36, 33, 41, 0.05);
+    --tint-subtle: rgba(31, 35, 40, 0.03);
+    --tint-hover: rgba(31, 35, 40, 0.05);
 
-    --text-primary: #242129;
-    --text-secondary: #645D6A;
-    --text-muted: #6F6776;
-    --text-inverse: #F5F2EC;
+    --text-primary: #1F2328;
+    --text-secondary: #555D66;
+    --text-muted: #5F6770;
+    --text-inverse: #FFFFFF;
 
     /* Rules, one per surface they are drawn on: --border against the
      * canvas, --border-light against a raised surface, --border-recessed
      * against a sunk one. Each clears the 1.5:1 chrome floor on its own
      * background -- a sunk pane cannot reach it on fill alone, because
      * even pure black is 1.17:1 against the dark canvas. */
-    --border: #CCC4B4;
-    --border-light: #C2B9A6;
-    --border-recessed: #BEB5A3;
+    --border: #C3C9D0;
+    --border-light: #BBC2CA;
+    --border-recessed: #B6BDC5;
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
     --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
@@ -146,11 +145,15 @@
     --radius-xl: 14px;
     --radius-full: 9999px;
 
+    /* Left inset that keeps top-row content clear of the floating .sidebar-toggle. */
+    --sidebar-toggle-clearance: 58px;
+
     --font-sans: 'DM Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Roboto, Helvetica, Arial, sans-serif;
     --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
     --font-display: 'Space Mono', 'JetBrains Mono', monospace;
 
-    --sidebar-w: 300px;
+    --sidebar-w: 260px;
+    --content-w: 760px;
     --ease: cubic-bezier(0.22, 1, 0.36, 1);
     --duration: 200ms;
     --duration-fast: 120ms;
@@ -186,7 +189,6 @@
     --accent-purple: #B39AF0;
 
     --danger: #F2787C;
-    --danger-dark: #C0342E;
     --danger-dim: rgba(242, 120, 124, 0.14);
     --danger-dim2: rgba(242, 120, 124, 0.07);
 
@@ -199,7 +201,6 @@
     --bg-hover: #2A2831;
     --bg-active: #33313B;
     --bg-user-msg: rgba(240, 237, 231, 0.02);
-    --bg-assistant-msg: rgba(240, 237, 231, 0.03);
     --bg-modal-overlay: rgba(12, 11, 15, 0.86);
     --bg-recessed: #121117;      /* sunk below the canvas */
     --switch-knob: #F0EDE7;
@@ -273,61 +274,8 @@ a:hover { text-decoration: underline; }
 .main-content { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; position: relative; }
 
 /* ── View transitions ───────────────────────────────────────────── */
-.view-container {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    transition: opacity 220ms var(--ease), transform 220ms var(--ease);
-    will-change: opacity, transform;
-}
-
-.view-container.view-transitioning {
-    opacity: 0;
-    transform: scale(0.984) translateY(10px);
-}
 
 /* ── Notification center trigger/popover ───────────────────────── */
-.notification-center-trigger {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: var(--radius-md);
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    box-shadow: var(--shadow-sm);
-    transition: color var(--duration-fast) var(--ease),
-                border-color var(--duration-fast) var(--ease),
-                background var(--duration-fast) var(--ease);
-}
-
-.notification-center-trigger:hover,
-.notification-center-trigger[aria-expanded="true"],
-.notification-center-trigger.has-unread {
-    color: var(--text-primary);
-    border-color: var(--accent);
-    background: var(--bg-hover);
-}
-
-.notification-center-trigger-badge {
-    position: absolute;
-    top: -5px;
-    right: -5px;
-    min-width: 17px;
-    height: 17px;
-    padding: 0 4px;
-    border-radius: var(--radius-full);
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
-    font-size: 9px;
-    font-weight: 700;
-    line-height: 17px;
-    text-align: center;
-}
 
 .notification-center-popover {
     position: fixed;
@@ -359,13 +307,11 @@ textarea:focus-visible {
 
 .btn-primary {
     display: inline-flex; align-items: center; gap: 8px;
-    padding: 11px 28px;
+    padding: 7px 14px;
     background: var(--accent-fill); color: var(--accent-fill-text);
     border-radius: var(--radius-md);
-    font-weight: 600; font-size: 14px;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    font-weight: 500; font-size: 13.5px;
+    font-family: var(--font-sans);
     transition: all var(--duration) var(--ease);
     position: relative;
     overflow: hidden;
@@ -380,10 +326,10 @@ textarea:focus-visible {
 
 .btn-secondary {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 8px 18px;
+    padding: 6px 12px;
     border: 1px solid var(--border); border-radius: var(--radius-md);
     font-weight: 500; font-size: 13px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     transition: all var(--duration) var(--ease);
 }
 .btn-secondary:hover {
@@ -489,12 +435,6 @@ textarea:focus-visible {
 .modal-body::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ── AnimatedPresence exit animations ──────────────────────────── */
-.animated-presence.exiting .modal-overlay {
-    animation: modalOverlayOut 200ms var(--ease) forwards;
-}
-.animated-presence.exiting .modal-panel {
-    animation: modalPanelOut 250ms var(--ease) forwards;
-}
 
 @keyframes modalOverlayOut {
     from { opacity: 1; }
@@ -581,19 +521,6 @@ textarea:focus-visible {
     backdrop-filter: blur(12px);
 }
 
-.toast-undo {
-    pointer-events: all;
-    cursor: pointer;
-}
-
-.toast-undo .toast-action {
-    color: var(--accent);
-    font-weight: 600;
-    margin-left: 12px;
-    cursor: pointer;
-    text-decoration: underline;
-}
-
 /* ── Animations ──────────────────────────────────────────────────── */
 
 @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
@@ -636,15 +563,6 @@ textarea:focus-visible {
 }
 
 /* ── Theme transition smoothing ─────────────────────────────────── */
-html.theme-transitioning,
-html.theme-transitioning *,
-html.theme-transitioning *::before,
-html.theme-transitioning *::after {
-    transition: background-color 400ms ease,
-                color 300ms ease,
-                border-color 300ms ease,
-                box-shadow 300ms ease !important;
-}
 
 /* ── Reduced Motion ──────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
@@ -658,65 +576,55 @@ html.theme-transitioning *::after {
     }
 }
 
-/* ── Responsive: Tablet (<= 900px) ─────────────────────────────── */
-@media (max-width: 900px) {
-    :root { --sidebar-w: 260px; }
+/* ── Small shared pieces ────────────────────────────────────────── */
+.spin { animation: spin 0.9s linear infinite; }
+
+.link-btn {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.composer-chip-wrap { position: relative; }
+
+/* One-line notice at the top of the main area (restored model, setup check). */
+.app-notice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.app-notice.is-warning {
+    color: var(--accent-yellow);
+}
+
+.app-notice > span {
+    flex: 1;
+    min-width: 0;
+}
+
+.app-notice-close {
+    display: inline-flex;
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+}
+
+.app-notice-close:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
 }
 
 /* ── Responsive: Mobile (<= 768px) ─────────────────────────────── */
 @media (max-width: 768px) {
     .sidebar-toggle { display: flex; }
     .sidebar-overlay.visible { display: block; }
-
-    .sidebar {
-        position: fixed !important;
-        left: 0; top: 0; bottom: 0;
-        z-index: 50;
-        width: var(--sidebar-w) !important;
-        min-width: var(--sidebar-w) !important;
-        transform: translateX(-100%);
-        transition: transform 250ms var(--ease);
-        box-shadow: none;
-    }
-
-    .sidebar.open {
-        transform: translateX(0);
-        box-shadow: var(--shadow-lg);
-    }
-
-    /* On mobile, sidebar is never collapsed -- use slide-out instead */
-    .sidebar.collapsed {
-        width: var(--sidebar-w) !important;
-        min-width: var(--sidebar-w) !important;
-    }
-    .sidebar.collapsed .sidebar-brand .brand-text,
-    .sidebar.collapsed .sidebar-search,
-    .sidebar.collapsed .session-list,
-    .sidebar.collapsed .privacy-badge span:not(.privacy-dot),
-    .sidebar.collapsed .version-badge,
-    .sidebar.collapsed .new-task-btn {
-        display: revert;
-    }
-    .sidebar.collapsed .sidebar-top { padding: 16px 16px 12px; justify-content: space-between; }
-    .sidebar.collapsed .sidebar-brand { gap: 10px; }
-    .sidebar.collapsed .sidebar-top-actions { gap: 4px; }
-    .sidebar.collapsed .sidebar-bottom { flex-direction: row; padding: 12px 14px; gap: 0; align-items: center; }
-    .sidebar.collapsed .sidebar-actions { flex-direction: row; gap: 2px; }
-
-    /* Hide collapse button on mobile (use hamburger instead) */
-    .collapse-btn { display: none; }
-
-    /* Hide resize handle on mobile */
-    .sidebar-resize-handle { display: none !important; }
-
-    .chat-view,
-    .welcome {
-        padding-top: 48px;
-    }
-
-    .chat-header {
-        padding-left: 52px !important;
-    }
+    .app-notice { padding-left: var(--sidebar-toggle-clearance); }
 
     .modal-panel {
         max-width: 96%;
@@ -735,8 +643,6 @@ html.theme-transitioning *::after {
 
 /* ── Responsive: Small mobile (<= 480px) ───────────────────────── */
 @media (max-width: 480px) {
-    :root { --sidebar-w: 280px; }
-
     .modal-panel {
         max-width: 100%;
         max-height: 100vh;

@@ -122,6 +122,8 @@ def _launch_with_mocked_server(client):
 
     with (
         patch.object(client, "health_check", return_value=None),
+        # Never the developer's own embedded Lemonade from ~/.gaia/lemonade.
+        patch("gaia.llm.lemonade_client.gaia_runs_lemonade", return_value=False),
         patch("gaia.llm.lemonade_client.resolve_lemonade", return_value=tooling),
         patch(
             "gaia.llm.lemonade_client.build_start_command",

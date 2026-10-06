@@ -438,3 +438,82 @@ class Test2408GuardRealDiscoveryNoWheel:
             sorted(captured["grant_agents"]["installed:email"])
             == expected_google_scopes
         )
+
+
+# ---------------------------------------------------------------------------
+# #4531 — the flagship ships as a frozen binary, so `--grant-agent
+# installed:gaia` must derive its scopes from the daemon spec alone.
+# ---------------------------------------------------------------------------
+
+
+class TestFlagshipSidecarGrantDerivation:
+    @staticmethod
+    def _fake_installed_gaia():
+        from gaia.hub.installer import ARTIFACT_KIND_BINARY, InstalledAgent
+
+        return {
+            "gaia": InstalledAgent(
+                id="gaia",
+                version="0.2.0",
+                language="python",
+                installed_at="2026-01-01T00:00:00Z",
+                artifact_kind=ARTIFACT_KIND_BINARY,
+            )
+        }
+
+    def test_grant_agent_installed_gaia_requests_gmail_readonly_only(self, monkeypatch):
+        # A frozen binary has no wheel to discover, even where one is installed.
+        monkeypatch.setattr(
+            "gaia.agents.registry.AgentRegistry.discover", lambda self: None
+        )
+        monkeypatch.setattr(
+            "gaia.hub.installer.list_installed",
+            lambda *a, **kw: self._fake_installed_gaia(),
+        )
+
+        captured = {}
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+            captured["grant_agents"] = grant_agents
+            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, _out, err = _run_cli(
+            "connectors", "connect", "google", "--grant-agent", "installed:gaia"
+        )
+        assert rc == 0, err
+        assert captured["grant_agents"] == {
+            "installed:gaia": ["https://www.googleapis.com/auth/gmail.readonly"]
+        }
+
+    def test_spec_scopes_match_declared_scopes(self):
+        from gaia.agents.tools._email.scopes import DECLARED_SCOPES
+        from gaia.daemon.sidecars.spec import builtin_specs
+
+        gaia_spec = builtin_specs()["gaia"]
+        by_provider = {cr.connector_id: cr for cr in gaia_spec.required_connections}
+        assert set(by_provider) == set(DECLARED_SCOPES)
+        for provider, scopes in DECLARED_SCOPES.items():
+            assert by_provider[provider].scopes == tuple(scopes)
+
+    def test_spec_matches_flagship_required_connectors(self):
+        connectors = pytest.importorskip("gaia_agent.connectors")
+
+        from gaia.daemon.sidecars.spec import builtin_specs
+
+        gaia_spec = builtin_specs()["gaia"]
+        assert tuple(gaia_spec.required_connections) == tuple(
+            connectors.MAILBOX_REQUIREMENTS
+        )
+
+    def test_flagship_spec_still_forwards_no_tokens(self):
+        from gaia.daemon.sidecars.spec import builtin_specs
+
+        assert builtin_specs()["gaia"].forward_providers == ()

@@ -4,6 +4,7 @@ id: data_total_revenue
 name: "Data — Load CSV and Compute the Exact Total"
 category: gaia_data
 severity: high
+tags: [t1_basic]
 description: |
   Load the fixture sales CSV into the scratchpad and answer with the exact
   total. The number must come from a real query, not eyeballing.

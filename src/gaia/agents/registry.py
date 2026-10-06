@@ -40,8 +40,6 @@ AGENT_ENTRY_POINT_GROUP = "gaia.agents"
 AGENT_ENTRY_POINT_GROUPS = ("gaia.agents", "gaia.agent")
 
 # KNOWN_TOOLS maps tool name -> (module_path, class_name) for lazy import.
-# Consumed by BuilderAgent's template (src/gaia/agents/builder/template.py) to
-# scaffold tool-mixin imports and base classes when generating agent.py files.
 KNOWN_TOOLS: Dict[str, tuple] = {
     "rag": ("gaia.agents.tools.rag_tools", "RAGToolsMixin"),
     "code_index": ("gaia.agents.tools.code_index_tools", "CodeIndexToolsMixin"),
@@ -76,48 +74,12 @@ _MANIFEST_FINGERPRINT_KEYS = frozenset(
 )
 
 
-# Reserved agent IDs that custom agents (under ~/.gaia/agents/) must not claim.
-# Covers the built-ins ``_register_builtin_agents`` registers plus the legacy
-# "-lite" / ``gaia-lite`` aliases — those no longer register their own card
-# (#1162) but remain reserved so a custom agent can't claim the old ID and
-# shadow the alias resolution in ``_LEGACY_ID_ALIASES``.
-# Only ids that resolve to a framework *builtin* belong here. The chat/doc/file
-# profiles, data, web, email (and all their -lite / gaia-lite aliases) migrated
-# to standalone hub wheels (#1102), so they register via the gaia.agent entry
-# point and are no longer reserved builtins. ``builder`` is the only remaining
-# framework agent.
-_RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
-    {
-        "builder",
-    }
-)
-
-
-# BuilderAgent's model preference, best-to-worst. The first two entries match
-# what `gaia init` profiles actually install (`Gemma-4-E4B-it-GGUF` is the
-# default-profile model; `gemma4-it-e2b-FLM` is the npu-profile one — see
-# `INIT_PROFILES` in `gaia.installer.init_command`); no profile installs the
-# 35B, so it must not be the only entry (#2243).
-#
-# Gemma leads so the builder resolves to the same model every other agent uses.
-# Preferring the 35B would reintroduce the evict-and-reload this consolidation
-# removed, on the machines that happen to still have it installed. The 35B stays
-# last so an existing install keeps working.
-BUILDER_PREFERRED_MODELS: List[str] = [
-    "Gemma-4-E4B-it-GGUF",
-    "gemma4-it-e2b-FLM",
-    "Qwen3.5-35B-A3B-GGUF",
-]
-
-
 def resolve_preferred_model(
     preferred_models: List[str], available_models: List[str]
 ) -> Optional[str]:
     """Return the first of *preferred_models* present in *available_models*.
 
-    Pure ordering primitive shared by ``AgentRegistry.resolve_model`` and any
-    caller (e.g. ``BuilderAgent``) that needs to pick a model from a live
-    Lemonade catalog without going through a full registry instance.
+    Pure ordering primitive used by ``AgentRegistry.resolve_model``.
     """
     for model in preferred_models:
         if model in available_models:
@@ -569,8 +531,8 @@ class AgentRegistration:
 class AgentRegistry:
     """Central registry for discovering, loading, and creating agents.
 
-    Call :meth:`discover` once at server startup to scan built-in agents
-    and the ``~/.gaia/agents/`` directory for custom agents.
+    Call :meth:`discover` once at server startup to scan the
+    ``~/.gaia/agents/`` directory, installed agent wheels, and native agents.
     """
 
     # Legacy agent IDs that were consolidated (issue #1162). Each agent used to
@@ -604,8 +566,10 @@ class AgentRegistry:
         self._agents: Dict[str, AgentRegistration] = {}
         self._lemonade_models: Optional[List[str]] = None  # cache
         self._lemonade_models_last_fail: Optional[float] = None  # monotonic timestamp
+        # Last resolve_model() outcome per agent; the session list polls it.
+        self._resolved_models: Dict[str, Optional[str]] = {}
         self._lock = threading.Lock()
-        # Records agent IDs whose load failed during discover() / register_from_dir().
+        # Records agent IDs whose load failed during discover().
         # Populated by _record_load_error(); read by get_load_error() and Stage D.
         self._load_errors: Dict[str, str] = {}
 
@@ -657,10 +621,7 @@ class AgentRegistry:
         """Discover and register all agents. Call once at server startup."""
         logger.info("registry: Starting agent discovery")
 
-        # 1. Register built-in agents
-        self._register_builtin_agents()
-
-        # 2. Scan ~/.gaia/agents/
+        # 1. Scan ~/.gaia/agents/
         agents_dir = Path.home() / ".gaia" / "agents"
         if agents_dir.exists():
             subdirs = sorted(d for d in agents_dir.iterdir() if d.is_dir())
@@ -680,7 +641,7 @@ class AgentRegistry:
         else:
             logger.info("registry: No custom agent directory found at %s", agents_dir)
 
-        # 2.5. Prime sys.path with every hub-installed wheel agent's
+        # 2. Prime sys.path with every hub-installed wheel agent's
         # site-packages BEFORE the entry-point scan below. installer.install()
         # only mutates sys.path in the process that ran the install
         # (_hot_register); a fresh process (e.g. the next `gaia chat`
@@ -706,11 +667,8 @@ class AgentRegistry:
         ``sys.path`` so the entry-point scan in ``_discover_installed_agents``
         can find it, even in a process that never ran the install (#2358).
 
-        Import of ``gaia.hub.installer`` is deliberately function-local:
-        ``installer.py`` does an unconditional module-level ``from
-        gaia.agents.registry import _RESERVED_BUILTIN_IDS``, so a module-level
-        import here would create a circular partial-init error on whichever
-        module happens to import ``gaia.agents.registry`` first.
+        Import of ``gaia.hub.installer`` is deliberately function-local so
+        importing the registry never pulls in the hub installer's import graph.
 
         Uses ``sys.path.append`` (never ``insert(0)``): entry-point discovery
         via ``importlib.metadata.entry_points()`` unions dist-info across
@@ -753,74 +711,6 @@ class AgentRegistry:
         # Invalidate import-machinery caches (mirrors _hot_register) so the
         # entry-point scan right after this sees the newly appended paths.
         importlib.invalidate_caches()
-
-    # ------------------------------------------------------------------
-    # Built-in agents
-    # ------------------------------------------------------------------
-
-    def _register_builtin_agents(self) -> None:
-        """Register built-in agents (ChatAgent, BuilderAgent, etc.)."""
-
-        # ChatAgent ships as the standalone ``gaia-agent-chat`` wheel (#1102)
-        # exposing three prompt-profile ids — ``chat``/``doc``/``file`` — each
-        # via its own ``gaia.agent`` entry point, discovered in
-        # ``_discover_installed_agents``. The full+lite model tiers live in the
-        # package's ``build_chat``/``build_doc``/``build_file`` using the
-        # module-level ``build_model_tiers`` helper. No built-in registration
-        # here.
-
-        # The analyst (id="data") and browser (id="web") agents were removed;
-        # their capability is the flagship's scratchpad and browser tools, driven
-        # by the data-explore and research-report skills. Their ``-lite`` aliases
-        # are gone too — the surviving aliases still resolve through
-        # ``_LEGACY_ID_ALIASES`` so existing chat/doc/file sessions keep working.
-
-        # EmailTriageAgent (id="email") ships as the standalone
-        # ``gaia-agent-email`` wheel (#1102), discovered via the ``gaia.agent``
-        # entry point in ``_discover_installed_agents`` — no built-in
-        # registration here. Its REST + MCP surfaces ship in that wheel too
-        # (``gaia_agent_email.api_routes`` / ``gaia_agent_email.mcp_server``).
-
-        # --- BuilderAgent ---
-        try:
-            from gaia.agents.builder.agent import BuilderAgent, BuilderAgentConfig
-
-            def builder_factory(**kwargs):
-                valid_fields = {f.name for f in dataclasses.fields(BuilderAgentConfig)}
-                config = BuilderAgentConfig(
-                    **{k: v for k, v in kwargs.items() if k in valid_fields}
-                )
-                return BuilderAgent(config=config)
-
-            self._register(
-                AgentRegistration(
-                    id="builder",
-                    name="Gaia Builder",
-                    description="Create a new custom GAIA agent through conversation",
-                    source="builtin",
-                    conversation_starters=[
-                        "Help me create a custom agent",
-                        "I want to build a new agent",
-                    ],
-                    factory=_wrap_factory_with_namespaced_id(
-                        builder_factory, "builtin:builder"
-                    ),
-                    agent_dir=None,
-                    models=BUILDER_PREFERRED_MODELS,
-                    hidden=True,
-                    required_connections=[],
-                    namespaced_agent_id="builtin:builder",
-                    category="infrastructure",
-                    tags=["scaffold", "create"],
-                    icon="wrench",
-                    tools_count=1,
-                )
-            )
-            logger.info("registry: Registered built-in agent: builder (BuilderAgent)")
-        except ImportError:
-            logger.debug(
-                "registry: BuilderAgent not available, skipping built-in registration"
-            )
 
     # ------------------------------------------------------------------
     # Installed Python agent discovery
@@ -1142,16 +1032,6 @@ class AgentRegistry:
         agent_tags = list(getattr(agent_class, "AGENT_TAGS", []) or [])
         agent_tools_count = getattr(agent_class, "AGENT_TOOLS_COUNT", 0)
 
-        # T-X2 (issue #915, plan amendment A9): block custom agents from
-        # claiming a built-in's reserved AGENT_ID. Without this, a custom
-        # agent with `AGENT_ID = "chat"` could inherit a grant the user
-        # previously gave to the built-in chat agent.
-        if agent_id in _RESERVED_BUILTIN_IDS:
-            raise ValueError(
-                f"AGENT_ID {agent_id!r} is reserved for the built-in agent. "
-                f"Choose a different id in {py_file}."
-            )
-
         # T-X2: collect declarative scope claims and namespaced grant key.
         required_connections = list(
             getattr(agent_class, "REQUIRED_CONNECTORS", []) or []
@@ -1266,40 +1146,6 @@ class AgentRegistry:
             agent_id,
             agent_class.__name__,
         )
-
-    # ------------------------------------------------------------------
-    # Runtime registration helper
-    # ------------------------------------------------------------------
-
-    def register_from_dir(self, agent_dir: Path) -> None:
-        """Load a single agent directory and register it at runtime.
-
-        Used by BuilderAgent's ``create_agent`` tool so a newly written
-        ``agent.py`` is immediately available without a server restart.
-
-        Args:
-            agent_dir: Path to the agent directory (must contain ``agent.py``).
-                Must be located under ``~/.gaia/agents/`` to prevent loading
-                code from arbitrary filesystem locations.
-        """
-        agent_dir = Path(agent_dir).resolve()
-        agents_root = (Path.home() / ".gaia" / "agents").resolve()
-        try:
-            agent_dir.relative_to(agents_root)
-        except ValueError:
-            raise ValueError(
-                f"register_from_dir: agent_dir '{agent_dir}' is outside the "
-                f"allowed agents root '{agents_root}'"
-            )
-        try:
-            self._load_from_dir(agent_dir)
-            logger.info("registry: Hot-loaded agent from %s", agent_dir)
-        except Exception as exc:
-            logger.warning(
-                "registry: Failed to hot-load agent from %s: %s", agent_dir, exc
-            )
-            self._record_load_error(agent_dir.name, f"{type(exc).__name__}: {exc}")
-            raise
 
     # ------------------------------------------------------------------
     # Registration & lookup
@@ -1470,19 +1316,25 @@ class AgentRegistry:
             available_models = self._get_available_models()
 
         resolved = resolve_preferred_model(preferred_models, available_models)
+        # Chat turns and the polled session list resolve from different threads.
+        with self._lock:
+            changed = self._resolved_models.get(agent_id, "") != resolved
+            self._resolved_models[agent_id] = resolved
         if resolved is not None:
-            logger.info(
-                "registry: Agent %s: preferred model %s available",
-                agent_id,
-                resolved,
-            )
+            if changed:
+                logger.info(
+                    "registry: Agent %s: preferred model %s available",
+                    agent_id,
+                    resolved,
+                )
             return resolved
 
-        logger.warning(
-            "registry: Agent %s: no preferred models available (%s), using server default",
-            agent_id,
-            preferred_models,
-        )
+        if changed:
+            logger.warning(
+                "registry: Agent %s: no preferred models available (%s), using server default",
+                agent_id,
+                preferred_models,
+            )
         return None
 
     _LEMONADE_RETRY_INTERVAL = 10.0  # seconds between retries when offline

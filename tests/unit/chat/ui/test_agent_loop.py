@@ -11,6 +11,7 @@ loop's behavior for a legacy 'autonomous' value is bit-identical to
 """
 
 import asyncio
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -88,7 +89,7 @@ class TestRunStepModeGate:
         initialized = tmp_path / ".gaia" / "chat" / "initialized"
         initialized.parent.mkdir(parents=True, exist_ok=True)
         initialized.touch()
-        with patch("gaia.ui.agent_loop.Path.home", return_value=tmp_path):
+        with patch.dict(os.environ, {"GAIA_HOME": str(tmp_path / ".gaia")}):
             with patch.object(AgentLoop, "_get_actionable_goals", return_value=[]):
                 trigger = agent_loop_mod.AgentTrigger("idle_tick", None)
                 return await loop._run_step(trigger)
@@ -134,7 +135,7 @@ class TestHourlyBudgetOnlySpentOnRealTicks:
         initialized = tmp_path / ".gaia" / "chat" / "initialized"
         initialized.parent.mkdir(parents=True, exist_ok=True)
         initialized.touch()
-        with patch("gaia.ui.agent_loop.Path.home", return_value=tmp_path):
+        with patch.dict(os.environ, {"GAIA_HOME": str(tmp_path / ".gaia")}):
             trigger = agent_loop_mod.AgentTrigger("idle_tick", None)
             return await loop._run_step(trigger)
 

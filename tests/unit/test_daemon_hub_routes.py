@@ -632,15 +632,14 @@ def test_verified_tier_agent_installs_without_a_trust_flag(monkeypatch, install_
 
 
 def test_id_checks_run_before_the_trust_check(monkeypatch):
-    """An unknown or reserved id must not be answered with a trust prompt —
-    a client would render 'Trust & Install' for an agent that cannot exist."""
+    """An unknown id must not be answered with a trust prompt — a client
+    would render 'Trust & Install' for an agent that cannot exist."""
     fetcher = _RecordingFetcher(_hub_files())
     _patch_hub(monkeypatch, fetcher)
-    client = _client(_FakeRegistry(agent_ids=("email", "builder")))
+    client = _client(_FakeRegistry(agent_ids=("email",)))
 
     assert _post_install(client, "nope", trusted=False).status_code == 404
-    assert _post_install(client, "builder", trusted=False).status_code == 400
-    assert fetcher.calls == []  # neither reached the hub
+    assert fetcher.calls == []  # never reached the hub
 
 
 def test_install_unknown_agent_is_404_listing_installable_ids(monkeypatch):
@@ -730,17 +729,6 @@ def test_a_failing_classification_probe_still_refuses_loudly(monkeypatch, caplog
     assert r.json()["detail"].startswith("no installable agent 'chat'")
     assert "installable: email" in r.json()["detail"]
     assert "dist-info is corrupt" in caplog.text
-
-
-def test_install_reserved_builtin_is_refused(monkeypatch):
-    fetcher = _RecordingFetcher(_hub_files())
-    _patch_hub(monkeypatch, fetcher)
-    client = _client(_FakeRegistry(agent_ids=("email", "builder")))
-
-    r = client.post("/daemon/v1/agents/builder/install", headers=_auth(), json={})
-    assert r.status_code == 400
-    assert "built-in" in r.json()["detail"]
-    assert fetcher.calls == []
 
 
 def test_install_hub_manifest_failure_is_502(monkeypatch):
@@ -1095,13 +1083,6 @@ def test_uninstall_not_installed_is_404(install_root):
     assert "not installed" in detail  # what failed
     assert ".installed" in detail  # where to look
     assert "gaia hub list --installed" in detail  # what to do next
-
-
-def test_uninstall_reserved_builtin_is_refused(install_root):
-    client = _client(_FakeRegistry(agent_ids=("email", "builder")))
-    r = client.delete("/daemon/v1/agents/builder", headers=_auth())
-    assert r.status_code == 400
-    assert "built-in" in r.json()["detail"]
 
 
 def test_uninstall_of_an_unsupervised_but_installed_agent_still_works(install_root):

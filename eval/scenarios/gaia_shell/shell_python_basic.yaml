@@ -1,0 +1,35 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/scripts/sum_numbers.py
+# (prints SUM=5050) — see GAIA_FIXTURE_VALUES.md, "Files and shell".
+id: shell_python_basic
+name: "Shell — Run a Python Snippet and a Python File"
+category: gaia_shell
+severity: high
+tags: [t1_basic]
+description: |
+  The two Python execution tools on their simplest inputs: run_python for
+  an inline computation, execute_python_file for a fixture script. Both
+  answers must come from what the process printed.
+
+persona: student
+
+setup:
+  index_documents: []
+  notes: "scripts/ staged at ~/gaia-eval/tiers_files_shell/scripts/. CI auto-approves run_python/execute_python_file (GAIA_AUTO_APPROVE_TOOLS=1)."
+
+turns:
+  - turn: 1
+    objective: "Ask for the sum of squares 1..20 computed with Python"
+    user_message: "Use Python to compute the sum of the squares of 1 through 20."
+    ground_truth:
+      expected_answer: "2870"
+    success_criteria: "agent_tools[] must include run_python (or execute_python_file) and the answer is 2870, matching the tool's stdout. Answering from mental arithmetic with no Python call is a FAIL even if correct."
+
+  - turn: 2
+    objective: "Ask to run the fixture script and report exactly what it printed"
+    user_message: "Now run ~/gaia-eval/tiers_files_shell/scripts/sum_numbers.py and tell me exactly what it prints."
+    ground_truth:
+      expected_answer: "SUM=5050"
+    success_criteria: "agent_tools[] must include execute_python_file (run_python or a shell python call also passes) on sum_numbers.py, and the agent reports the output SUM=5050 verbatim. Paraphrasing to 'the sum is 5050' is fine; reporting a different value, or output with no call, is a FAIL."
+
+expected_outcome: |
+  Both Python tools run, and each answer is the process's real output.

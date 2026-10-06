@@ -509,20 +509,6 @@
     "title": "AuthorizeRequest",
     "type": "object"
   },
-  "Body_import_agents_api_agents_import_post": {
-    "properties": {
-      "bundle": {
-        "contentMediaType": "application/octet-stream",
-        "title": "Bundle",
-        "type": "string"
-      }
-    },
-    "required": [
-      "bundle"
-    ],
-    "title": "Body_import_agents_api_agents_import_post",
-    "type": "object"
-  },
   "Body_upload_document_blob_api_documents_upload_post": {
     "properties": {
       "file": {
@@ -710,48 +696,6 @@
     "title": "CommandOutputResponse",
     "type": "object"
   },
-  "CompleteOnboardingRequest": {
-    "properties": {
-      "completed_at": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Completed At"
-      },
-      "skipped": {
-        "default": false,
-        "title": "Skipped",
-        "type": "boolean"
-      }
-    },
-    "title": "CompleteOnboardingRequest",
-    "type": "object"
-  },
-  "ConfigRequest": {
-    "description": "Body for ``POST /api/agents/{id}/config``.",
-    "properties": {
-      "config": {
-        "additionalProperties": true,
-        "title": "Config",
-        "type": "object"
-      },
-      "replace": {
-        "default": false,
-        "title": "Replace",
-        "type": "boolean"
-      }
-    },
-    "required": [
-      "config"
-    ],
-    "title": "ConfigRequest",
-    "type": "object"
-  },
   "ConfigureRequest": {
     "properties": {
       "config": {
@@ -761,6 +705,57 @@
       }
     },
     "title": "ConfigureRequest",
+    "type": "object"
+  },
+  "ConnectRequest": {
+    "description": "Register a cloud provider in Lemonade; ``api_key`` blank keeps the current key.",
+    "properties": {
+      "api_key": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Api Key"
+      },
+      "auth_header_name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Auth Header Name"
+      },
+      "auth_header_prefix": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Auth Header Prefix"
+      },
+      "base_url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Base Url"
+      }
+    },
+    "title": "ConnectRequest",
     "type": "object"
   },
   "CreateScheduleRequest": {
@@ -959,74 +954,6 @@
       "content"
     ],
     "title": "DiscoveryCommitItem",
-    "type": "object"
-  },
-  "DiskAgentInfo": {
-    "description": "Information about an agent present under ~/.gaia/agents.",
-    "properties": {
-      "id": {
-        "title": "Id",
-        "type": "string"
-      },
-      "name": {
-        "title": "Name",
-        "type": "string"
-      },
-      "registered": {
-        "title": "Registered",
-        "type": "boolean"
-      },
-      "registered_agent_id": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Registered Agent Id"
-      },
-      "source": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Source"
-      }
-    },
-    "required": [
-      "id",
-      "name",
-      "registered"
-    ],
-    "title": "DiskAgentInfo",
-    "type": "object"
-  },
-  "DiskAgentListResponse": {
-    "description": "List of custom agents found on disk.",
-    "properties": {
-      "agents": {
-        "items": {
-          "$ref": "#/components/schemas/DiskAgentInfo"
-        },
-        "title": "Agents",
-        "type": "array"
-      },
-      "total": {
-        "title": "Total",
-        "type": "integer"
-      }
-    },
-    "required": [
-      "agents",
-      "total"
-    ],
-    "title": "DiskAgentListResponse",
     "type": "object"
   },
   "DocumentListResponse": {
@@ -2206,33 +2133,6 @@
     "title": "ModelStatus",
     "type": "object"
   },
-  "OnboardingStatus": {
-    "properties": {
-      "completed_at": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Completed At"
-      },
-      "initialized": {
-        "default": false,
-        "title": "Initialized",
-        "type": "boolean"
-      },
-      "skipped": {
-        "default": false,
-        "title": "Skipped",
-        "type": "boolean"
-      }
-    },
-    "title": "OnboardingStatus",
-    "type": "object"
-  },
   "OpenFileRequest": {
     "description": "Request to open a file or folder in the system file explorer.",
     "properties": {
@@ -2347,6 +2247,20 @@
       "valid"
     ],
     "title": "ParseScheduleResponse",
+    "type": "object"
+  },
+  "PermissionModeRequest": {
+    "description": "``ask`` prompts for every gated tool; ``full_access`` runs them unasked.",
+    "properties": {
+      "mode": {
+        "title": "Mode",
+        "type": "string"
+      }
+    },
+    "required": [
+      "mode"
+    ],
+    "title": "PermissionModeRequest",
     "type": "object"
   },
   "PreflightReport": {
@@ -2667,6 +2581,34 @@
     "title": "ScheduleResultsResponse",
     "type": "object"
   },
+  "ScriptedUserRequest": {
+    "description": "Commands the eval's scripted user declines; empty turns it off.",
+    "properties": {
+      "decline_commands": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "title": "Decline Commands",
+        "type": "array"
+      }
+    },
+    "title": "ScriptedUserRequest",
+    "type": "object"
+  },
+  "SelectModelRequest": {
+    "properties": {
+      "model": {
+        "title": "Model",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "title": "SelectModelRequest",
+    "type": "object"
+  },
   "SessionListResponse": {
     "description": "List of sessions.",
     "properties": {
@@ -2712,6 +2654,17 @@
         },
         "title": "Document Ids",
         "type": "array"
+      },
+      "effective_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Effective Model"
       },
       "id": {
         "title": "Id",
@@ -2931,31 +2884,16 @@
     "title": "SettingsUpdateRequest",
     "type": "object"
   },
-  "SetupRequest": {
-    "description": "Body for ``POST /api/agents/setup`` (progressive multi-agent install).",
+  "SetupRunRequest": {
+    "description": "``skip_chat_model`` when the chat runs on a cloud provider.",
     "properties": {
-      "ids": {
-        "items": {
-          "type": "string"
-        },
-        "title": "Ids",
-        "type": "array"
-      },
-      "max_parallel": {
-        "default": 2,
-        "title": "Max Parallel",
-        "type": "integer"
-      },
-      "resume": {
-        "default": true,
-        "title": "Resume",
+      "skip_chat_model": {
+        "default": false,
+        "title": "Skip Chat Model",
         "type": "boolean"
       }
     },
-    "required": [
-      "ids"
-    ],
-    "title": "SetupRequest",
+    "title": "SetupRunRequest",
     "type": "object"
   },
   "SourceInfo": {
@@ -3411,11 +3349,27 @@
     "type": "object"
   },
   "ToolConfirmRequest": {
-    "description": "Request body for the tool confirmation endpoint.",
+    "description": "Request body for the tool confirmation endpoint.\n\n``always`` answers \"allow\" and grants this exact invocation for the rest of\nthe chat (see ``gaia.agents.base.tool_grants``). ``confirm_id`` echoes the\nprompt being answered, so a late click cannot approve a newer prompt.",
     "properties": {
+      "always": {
+        "default": false,
+        "title": "Always",
+        "type": "boolean"
+      },
       "approved": {
         "title": "Approved",
         "type": "boolean"
+      },
+      "confirm_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Confirm Id"
       },
       "session_id": {
         "title": "Session Id",

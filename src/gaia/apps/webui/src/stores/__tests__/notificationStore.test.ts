@@ -1,21 +1,27 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../../services/api', () => ({
-    confirmTool: vi.fn(() => Promise.resolve()),
+    confirmTool: vi.fn(() => Promise.resolve({ status: 'ok', approved: true, granted: null })),
 }));
 
 import { confirmTool } from '../../services/api';
 import {
     useNotificationStore,
     purgeLegacyAlwaysAllow,
+    selectSessionPermissionPrompt,
     LEGACY_ALWAYS_ALLOW_TOOLS_KEY,
 } from '../notificationStore';
 import type { GaiaNotification } from '../../types/agent';
 
-function permissionRequest(id: string, tool: string, sessionId?: string): GaiaNotification {
+function permissionRequest(
+    id: string,
+    tool: string,
+    sessionId?: string,
+    extra: Partial<GaiaNotification> = {},
+): GaiaNotification {
     return {
         id,
         type: 'permission_request',
@@ -29,100 +35,123 @@ function permissionRequest(id: string, tool: string, sessionId?: string): GaiaNo
         dismissed: false,
         priority: 'high',
         tool,
+        ...extra,
     };
 }
 
-async function allow(id: string, tool: string, sessionId: string | undefined, remember: boolean) {
-    useNotificationStore.getState().addNotification(permissionRequest(id, tool, sessionId));
-    await useNotificationStore.getState().respondToPermission(id, 'allow', remember);
+const respondPermission = vi.fn();
+
+beforeEach(() => {
+    localStorage.clear();
+    useNotificationStore.setState({ notifications: [] });
+    vi.mocked(confirmTool).mockClear();
+    respondPermission.mockReset().mockResolvedValue(undefined);
+    delete window.gaiaAPI;
+});
+afterEach(() => { delete window.gaiaAPI; });
+
+function withIpc() {
+    Object.defineProperty(window, 'gaiaAPI', {
+        configurable: true,
+        value: { notification: { respondPermission } },
+    });
 }
 
-describe('always-allow grants are scoped to one chat session', () => {
-    beforeEach(() => {
-        localStorage.clear();
-        useNotificationStore.setState({ notifications: [], alwaysAllowGrants: [] });
-        vi.mocked(confirmTool).mockClear();
+describe('respondToPermission for chat prompts', () => {
+    it('allow once sends approved=true, always=false with the confirm id', async () => {
+        useNotificationStore.getState().addNotification(
+            permissionRequest('p1', 'run_shell_command', 'chat-A', { confirmId: 'c-1' }),
+        );
+        await useNotificationStore.getState().respondToPermission('p1', 'allow');
+        expect(confirmTool).toHaveBeenCalledExactlyOnceWith('chat-A', true, { always: false, confirmId: 'c-1' });
+        expect(useNotificationStore.getState().notifications[0].response).toBe('allow');
     });
 
-    it('grants the tool in the chat that asked, and only there', async () => {
-        await allow('p1', 'run_shell_command', 'chat-A', true);
-
-        const { isAlwaysAllowed } = useNotificationStore.getState();
-        expect(isAlwaysAllowed('chat-A', 'run_shell_command')).toBe(true);
-        expect(isAlwaysAllowed('chat-B', 'run_shell_command')).toBe(false);
-        expect(isAlwaysAllowed('chat-A', 'write_file')).toBe(false);
+    it('always sends always=true and records an allow', async () => {
+        useNotificationStore.getState().addNotification(
+            permissionRequest('p1', 'run_shell_command', 'chat-A', { confirmId: 'c-1', alwaysScope: 'git status' }),
+        );
+        await useNotificationStore.getState().respondToPermission('p1', 'always');
+        expect(confirmTool).toHaveBeenCalledExactlyOnceWith('chat-A', true, { always: true, confirmId: 'c-1' });
+        expect(useNotificationStore.getState().notifications[0].response).toBe('allow');
     });
 
-    it('never writes a grant to localStorage', async () => {
-        await allow('p1', 'run_shell_command', 'chat-A', true);
-        expect(localStorage.length).toBe(0);
-    });
-
-    it('a remember=false allow creates no grant', async () => {
-        await allow('p1', 'write_file', 'chat-A', false);
-        expect(useNotificationStore.getState().alwaysAllowGrants).toEqual([]);
-        expect(useNotificationStore.getState().isAlwaysAllowed('chat-A', 'write_file')).toBe(false);
-    });
-
-    it('a deny with remember ticked creates no grant', async () => {
+    it('deny sends approved=false', async () => {
         useNotificationStore.getState().addNotification(permissionRequest('p1', 'delete_file', 'chat-A'));
-        await useNotificationStore.getState().respondToPermission('p1', 'deny', true);
-        expect(useNotificationStore.getState().alwaysAllowGrants).toEqual([]);
+        await useNotificationStore.getState().respondToPermission('p1', 'deny');
+        expect(confirmTool).toHaveBeenCalledExactlyOnceWith('chat-A', false, { always: false, confirmId: undefined });
+        expect(useNotificationStore.getState().notifications[0].response).toBe('deny');
     });
 
-    it('a request with no chat session (an OS agent) creates no renderer grant', async () => {
-        await allow('p1', 'read_file', undefined, true);
-        expect(useNotificationStore.getState().alwaysAllowGrants).toEqual([]);
+    it('goes to the API, not IPC, even inside Electron', async () => {
+        withIpc();
+        useNotificationStore.getState().addNotification(permissionRequest('p1', 'write_file', 'chat-A'));
+        await useNotificationStore.getState().respondToPermission('p1', 'allow');
+        expect(confirmTool).toHaveBeenCalledOnce();
+        expect(respondPermission).not.toHaveBeenCalled();
     });
 
-    it('does not grant when the answer never reached the agent', async () => {
+    it('throws and stays pending when the answer does not reach the agent', async () => {
         vi.mocked(confirmTool).mockRejectedValueOnce(new Error('offline'));
-        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-        await allow('p1', 'run_shell_command', 'chat-A', true);
-        expect(useNotificationStore.getState().alwaysAllowGrants).toEqual([]);
-        errorSpy.mockRestore();
+        useNotificationStore.getState().addNotification(permissionRequest('p1', 'write_file', 'chat-A'));
+        await expect(useNotificationStore.getState().respondToPermission('p1', 'allow')).rejects.toThrow('offline');
+        expect(useNotificationStore.getState().notifications[0].response).toBeUndefined();
+        expect(selectSessionPermissionPrompt('chat-A')(useNotificationStore.getState())?.id).toBe('p1');
     });
 
-    it('granting twice keeps one grant', async () => {
-        await allow('p1', 'web_search', 'chat-A', true);
-        await allow('p2', 'web_search', 'chat-A', true);
-        expect(useNotificationStore.getState().alwaysAllowGrants).toHaveLength(1);
-    });
-
-    it('revoking removes exactly that grant; Revoke All removes the rest', async () => {
-        await allow('p1', 'run_shell_command', 'chat-A', true);
-        await allow('p2', 'run_shell_command', 'chat-B', true);
-        await allow('p3', 'web_search', 'chat-A', true);
-
-        useNotificationStore.getState().revokeAlwaysAllow('chat-A', 'run_shell_command');
-        const s = useNotificationStore.getState();
-        expect(s.isAlwaysAllowed('chat-A', 'run_shell_command')).toBe(false);
-        expect(s.isAlwaysAllowed('chat-B', 'run_shell_command')).toBe(true);
-        expect(s.isAlwaysAllowed('chat-A', 'web_search')).toBe(true);
-
-        useNotificationStore.getState().revokeAllAlwaysAllow();
-        expect(useNotificationStore.getState().alwaysAllowGrants).toEqual([]);
+    it('throws for an unknown request id', async () => {
+        await expect(useNotificationStore.getState().respondToPermission('nope', 'allow')).rejects.toThrow(/no longer pending/);
+        expect(confirmTool).not.toHaveBeenCalled();
     });
 });
 
-describe('grants do not survive a reload', () => {
-    it('a freshly loaded store (page reload / restart) starts with no grants', async () => {
-        localStorage.clear();
-        await allow('p1', 'run_shell_command', 'chat-A', true);
-        expect(useNotificationStore.getState().alwaysAllowGrants).toHaveLength(1);
+describe('respondToPermission for OS-agent prompts', () => {
+    it('delivers through IPC, forwarding always', async () => {
+        withIpc();
+        useNotificationStore.getState().addNotification(permissionRequest('p1', 'read_file'));
+        await useNotificationStore.getState().respondToPermission('p1', 'always');
+        expect(respondPermission).toHaveBeenCalledExactlyOnceWith('p1', 'allow', true);
+        expect(confirmTool).not.toHaveBeenCalled();
+        expect(useNotificationStore.getState().notifications[0].response).toBe('allow');
+    });
 
-        vi.resetModules();
-        const reloaded = await import('../notificationStore');
-        expect(reloaded.useNotificationStore.getState().alwaysAllowGrants).toEqual([]);
-        expect(
-            reloaded.useNotificationStore.getState().isAlwaysAllowed('chat-A', 'run_shell_command')
-        ).toBe(false);
+    it('throws and stays pending with no IPC bridge', async () => {
+        useNotificationStore.getState().addNotification(permissionRequest('p1', 'read_file'));
+        await expect(useNotificationStore.getState().respondToPermission('p1', 'allow')).rejects.toThrow();
+        expect(confirmTool).not.toHaveBeenCalled();
+        expect(useNotificationStore.getState().notifications[0].response).toBeUndefined();
+    });
+
+    it('throws and stays pending when IPC rejects', async () => {
+        withIpc();
+        respondPermission.mockRejectedValueOnce(new Error('main process gone'));
+        useNotificationStore.getState().addNotification(permissionRequest('p1', 'read_file'));
+        await expect(useNotificationStore.getState().respondToPermission('p1', 'deny')).rejects.toThrow('main process gone');
+        expect(useNotificationStore.getState().notifications[0].response).toBeUndefined();
+    });
+});
+
+describe('selectSessionPermissionPrompt', () => {
+    it('returns the newest pending prompt for that chat only', () => {
+        const add = useNotificationStore.getState().addNotification;
+        add(permissionRequest('old', 'write_file', 'chat-A'));
+        add(permissionRequest('other', 'write_file', 'chat-B'));
+        add(permissionRequest('new', 'write_file', 'chat-A'));
+        const state = useNotificationStore.getState();
+        expect(selectSessionPermissionPrompt('chat-A')(state)?.id).toBe('new');
+        expect(selectSessionPermissionPrompt('chat-B')(state)?.id).toBe('other');
+        expect(selectSessionPermissionPrompt('chat-C')(state)).toBeNull();
+    });
+
+    it('skips answered and dismissed prompts', () => {
+        const add = useNotificationStore.getState().addNotification;
+        add(permissionRequest('answered', 'write_file', 'chat-A', { response: 'allow' }));
+        add(permissionRequest('dismissed', 'write_file', 'chat-A', { dismissed: true }));
+        expect(selectSessionPermissionPrompt('chat-A')(useNotificationStore.getState())).toBeNull();
     });
 });
 
 describe('purgeLegacyAlwaysAllow', () => {
-    beforeEach(() => localStorage.clear());
-
     it('deletes a list persisted by an earlier build and says so', () => {
         localStorage.setItem(LEGACY_ALWAYS_ALLOW_TOOLS_KEY, '["run_shell_command"]');
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});

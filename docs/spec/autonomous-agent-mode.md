@@ -10,8 +10,7 @@
 > so the settings API rejects `agent_mode="autonomous"` there. **The Email
 > Triage agent is the first concrete implementation of the observe→decide→act
 > cycle**, on an earn-trust gradient with an inviolable confirm-floor and a
-> closed correction→learning loop — see
-> [`docs/plans/email-full-autonomy.mdx`](/plans/email-full-autonomy)
+> closed correction→learning loop
 > (`autonomy_level = earn_trust`). Generalizing that engine back into the base
 > `Agent` loop for every agent remains #2005.
 

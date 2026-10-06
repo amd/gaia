@@ -49,11 +49,14 @@ export interface NpmDownloadStats {
   lifetime: number;
 }
 
-interface GithubReleaseAsset {
+export interface GithubReleaseAsset {
+  name: string;
+  browser_download_url: string;
+  size: number;
   download_count: number;
 }
 
-interface GithubRelease {
+export interface GithubRelease {
   tag_name: string;
   draft: boolean;
   prerelease: boolean;
@@ -73,6 +76,90 @@ const MAIN_RELEASE_TAG_RE = /^v\d+(\.\d+){2,3}$/;
 
 export function isMainReleaseTag(tag: string): boolean {
   return MAIN_RELEASE_TAG_RE.test(tag);
+}
+
+// A release candidate: "v0.25.0-rc1". publish.yml marks its GitHub release a
+// pre-release; the hub catalog never carries one.
+const RC_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)-rc([1-9]\d*)$/;
+
+export interface ReleaseCandidateDownload {
+  label: string;
+  url: string;
+  sizeBytes: number;
+}
+
+export interface ReleaseCandidate {
+  tag: string;
+  // The final release this is a candidate for, e.g. "0.25.0".
+  version: string;
+  htmlUrl: string;
+  downloads: ReleaseCandidateDownload[];
+}
+
+// The desktop app installers publish.yml attaches to every release, in the
+// order the list shows them. Everything else (terminal binaries, the wheel)
+// is one click away on the release page.
+const RC_DOWNLOADS: { label: string; match: RegExp }[] = [
+  { label: 'Windows — desktop app (.exe)', match: /^gaia-agent-ui-.+-x64-setup\.exe$/ },
+  { label: 'macOS, Apple Silicon — desktop app (.dmg)', match: /^gaia-agent-ui-.+-arm64\.dmg$/ },
+  { label: 'Linux — desktop app (.AppImage)', match: /^gaia-agent-ui-.+-x86_64\.AppImage$/ },
+  { label: 'Debian / Ubuntu — desktop app (.deb)', match: /^gaia-agent-ui-.+-amd64\.deb$/ },
+];
+
+// Numeric parts of a main tag ("v0.24.1" or "v0.15.4.1"), padded to four so
+// a hotfix sorts after its base.
+function versionParts(version: string): number[] {
+  const parts = version.split('.').map(Number);
+  while (parts.length < 4) parts.push(0);
+  return parts;
+}
+
+function compareParts(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+export function isReleaseCandidateTag(tag: string): boolean {
+  return RC_TAG_RE.test(tag);
+}
+
+// The release candidate worth offering, or null. Only a candidate for a
+// version NEWER than the latest stable release qualifies: once v0.25.0 ships,
+// v0.25.0-rc2 is history, not something to try.
+export function pickReleaseCandidate(releases: GithubRelease[]): ReleaseCandidate | null {
+  const live = releases.filter((r) => !r.draft);
+
+  const stable = live
+    .filter((r) => !r.prerelease && isMainReleaseTag(r.tag_name))
+    .map((r) => versionParts(r.tag_name.slice(1)))
+    .sort(compareParts)
+    .at(-1);
+
+  const candidates = live
+    .filter((r) => r.prerelease)
+    .flatMap((r) => {
+      const m = RC_TAG_RE.exec(r.tag_name);
+      return m ? [{ release: r, parts: [m[1], m[2], m[3], '0', m[4]].map(Number) }] : [];
+    })
+    .sort((a, b) => compareParts(a.parts, b.parts));
+  const newest = candidates.at(-1);
+  if (!newest) return null;
+  if (stable && compareParts(newest.parts.slice(0, 4), stable) <= 0) return null;
+
+  const { release } = newest;
+  const downloads = RC_DOWNLOADS.flatMap(({ label, match }) => {
+    const asset = release.assets.find((a) => match.test(a.name));
+    return asset ? [{ label, url: asset.browser_download_url, sizeBytes: asset.size }] : [];
+  });
+  return {
+    tag: release.tag_name,
+    version: newest.parts.slice(0, 3).join('.'),
+    htmlUrl: release.html_url,
+    downloads,
+  };
 }
 
 export function sumAssetDownloads(assets: { download_count: number }[]): number {
@@ -219,7 +306,9 @@ async function fetchNpmLifetime(): Promise<number> {
 
 // One fetch chain per build, shared across pages.
 let repoStatsPromise: Promise<RepoStats> | null = null;
+let allReleasesPromise: Promise<GithubRelease[]> | null = null;
 let releaseStatsPromise: Promise<ReleaseStats> | null = null;
+let releaseCandidatePromise: Promise<ReleaseCandidate | null> | null = null;
 let npmStatsPromise: Promise<NpmDownloadStats> | null = null;
 
 export async function getRepoStats(): Promise<RepoStats> {
@@ -227,9 +316,14 @@ export async function getRepoStats(): Promise<RepoStats> {
   return repoStatsPromise;
 }
 
+function getAllReleases(): Promise<GithubRelease[]> {
+  allReleasesPromise ??= fetchAllReleases();
+  return allReleasesPromise;
+}
+
 export async function getReleaseStats(): Promise<ReleaseStats> {
   releaseStatsPromise ??= (async () => {
-    const all = await fetchAllReleases();
+    const all = await getAllReleases();
     const nonDraft = all.filter((r) => !r.draft);
     const main = nonDraft
       .filter((r) => isMainReleaseTag(r.tag_name))
@@ -245,6 +339,11 @@ export async function getReleaseStats(): Promise<ReleaseStats> {
     };
   })();
   return releaseStatsPromise;
+}
+
+export async function getReleaseCandidate(): Promise<ReleaseCandidate | null> {
+  releaseCandidatePromise ??= getAllReleases().then(pickReleaseCandidate);
+  return releaseCandidatePromise;
 }
 
 export async function getNpmDownloadStats(): Promise<NpmDownloadStats> {

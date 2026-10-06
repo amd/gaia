@@ -312,6 +312,30 @@ def test_the_gaia_child_records_where_the_turn_first_answered(tmp_path):
     assert agent._turn_scope.answered
 
 
+def test_the_gaia_child_records_a_reopened_turn(tmp_path):
+    from gaia.agents.base.turn_scope import TurnScopeGuard
+    from gaia.eval.bench import gaia_child
+
+    class Agent:
+        def __init__(self):
+            self.chat = None
+            self._turn_scope = TurnScopeGuard(failure_limit=4)
+
+        def _execute_tool(self, name, args):
+            return {"status": "success"}
+
+    agent = Agent()
+    progress = tmp_path / "progress.jsonl"
+    gaia_child.instrument(progress)(agent)
+    agent._turn_scope.mark_answered()
+    agent._turn_scope.reopen()
+    agent._turn_scope.reopen()  # nothing to reopen: no second marker
+    agent._turn_scope.mark_answered()
+    markers = [e["content"]["type"] for e in harness._progress(progress)]
+    assert markers == ["answered", "reopened", "answered"]
+    assert agent._turn_scope.answered
+
+
 def test_a_task_repository_cannot_replace_a_package_gaia_imports(tmp_path):
     """SWE-bench's psf/requests checkout shadowed GAIA's own requests."""
     import os

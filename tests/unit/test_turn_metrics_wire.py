@@ -444,6 +444,10 @@ class TestApprovalTimeIsNotToolTime:
                 time.sleep(0.05)
                 return False
 
+            @staticmethod
+            def confirmation_timed_out(name):
+                return False
+
         agent.console = _SlowHuman()
 
         result = Agent._execute_tool(agent, "run_shell_command", {})
@@ -532,6 +536,10 @@ class TestApprovalTimeIsNotToolTime:
             @staticmethod
             def confirm_tool_execution(name, args):
                 time.sleep(0.05)
+                return False
+
+            @staticmethod
+            def confirmation_timed_out(name):
                 return False
 
         agent.console = _SlowHuman()

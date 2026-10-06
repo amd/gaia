@@ -44,8 +44,8 @@
 #
 # THIS POOL IS WINDOWS. Every inline `run:` step below is PowerShell, and Python
 # setup goes through ./.github/actions/setup-venv (uv, Windows-aware) — the
-# lab-runner convention shared by test_email_agent_eval.yml,
-# email_scorecard_refresh.yml and test_agent_behavior_e2e.yml. Do NOT reintroduce
+# lab-runner convention shared by test_email_agent_eval.yml and
+# email_scorecard_refresh.yml. Do NOT reintroduce
 # bash here: this workflow's first-ever execution died instantly on
 # `source .venv/bin/activate` because GitHub ran it through powershell.EXE, and
 # every other bash step in the job hit the same parser. Windows also breaks the
@@ -127,8 +127,7 @@
 # that claim is what left this job with no way to bring Lemonade up.) The GAIA UI
 # backend is separate and NOT persistent, so this workflow starts it itself — in
 # the SAME shell session as the evals, because a backgrounded child does not
-# survive a GitHub Actions step boundary (see the single-session note in
-# test_agent_behavior_e2e.yml).
+# survive a GitHub Actions step boundary.
 #
 # Lemonade must serve TWO models, not one. ensure-lemonade-running.ps1 warms
 # only the chat model, but rag_quality and context_retention answer out of RAG
@@ -234,7 +233,6 @@ on:
       # changes the JSON tool schema and is exactly what tool_selection scores.
       # (ChatAgent is not listed: it now lives under hub/agents/chat/python/,
       # already covered above.)
-      - 'src/gaia/agents/builder/**'
       - 'src/gaia/agents/tools/**'
       - 'src/gaia/chat/**'
       - 'src/gaia/eval/flagship_tasks.py'
@@ -353,6 +351,9 @@ env:
   # tool to call and the judge is left scoring the reply text alone.
   GAIA_MEMORY_ADMIN: '0'
   GAIA_MEMORY_MCP_ALWAYS: '0'
+  # Lets a scenario's setup.decline_commands script a user who says no
+  # (gaia_resilience); inert for every scenario that does not set it.
+  GAIA_EVAL_SCRIPTED_USER: '1'
 
 jobs:
   # Build the lane matrix, and refuse to build a bad one. Runs on a hosted runner
@@ -983,8 +984,15 @@ jobs:
             foreach ($category in $categories) {
               $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
               if (-not (Test-Path $baseline)) {
-                Write-Host "::error::Missing baseline $baseline. Pick the baseline matching the model under test; do not substitute another directory."
-                exit 1
+                # A category added since the baseline was captured has none until
+                # its first nightly; that is reported, and never enforced against.
+                if ($env:ENFORCE -eq 'true') {
+                  Write-Host "::error::enforce=true but there is no baseline at $baseline, so '$category' would pass by default. Commit its scorecard from a nightly on this hardware first, or re-run without [eval-enforce]."
+                  exit 1
+                }
+                Write-Host "::warning::${category}: NOT COMPARED - no baseline at $baseline yet. The category still runs and its scorecard is uploaded; commit that scorecard as the baseline."
+                "``$category``: not compared, no baseline yet. Its scorecard from this run is the baseline candidate." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+                continue
               }
               Write-Host "baseline ok: $baseline"
             }
@@ -1318,9 +1326,8 @@ jobs:
           }
 
           # The GAIA UI backend must live in the SAME shell session as the evals:
-          # a backgrounded child does not survive a step boundary, which is why
-          # test_agent_behavior_e2e.yml starts its server and runs its harness in
-          # one session. Hence backend start + all this lane's categories in one step.
+          # a backgrounded child does not survive a step boundary. Hence backend
+          # start + all this lane's categories in one step.
           # Start-Process resolves relative paths against the .NET process CWD,
           # which is not guaranteed to track the PowerShell location. Pin the
           # child's working directory AND give it absolute redirect targets, so
@@ -1767,6 +1774,11 @@ jobs:
               # verdict and it has already rendered it under the enforce policy.
               # Counting it again here would fail the job regardless of enforce.
               Write-Host "::warning::${category}: no scorecard produced - nothing to compare (already reported by the integrity gate)."
+              continue
+            }
+            if (-not (Test-Path $baseline)) {
+              # Preflight already refused this under enforce=true.
+              Write-Host "::warning::${category}: NOT COMPARED - no baseline at $baseline yet (reported at preflight)."
               continue
             }
             # `--compare` exits 2 on status/score/time regressions, 0 otherwise

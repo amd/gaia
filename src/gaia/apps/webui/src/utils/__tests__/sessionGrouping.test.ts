@@ -1,102 +1,77 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { describe, it, expect } from 'vitest';
-import {
-    groupSessionsByAgent,
-    resolveAgentName,
-    resolveAgentIcon,
-    DEFAULT_AGENT_ID,
-} from '../sessionGrouping';
-import type { Session, AgentInfo } from '../../types';
+import { describe, expect, it } from 'vitest';
+import { groupSessionsByRecency } from '../sessionGrouping';
+import type { Session } from '../../types';
 
-function session(id: string, agent_type: string | undefined, updated_at: string): Session {
+// Local time, so day boundaries match the function's calendar-day math in any TZ.
+const NOW = new Date(2026, 8, 29, 12, 0, 0);
+
+function at(id: string, date: Date | string): Session {
     return {
         id,
-        title: `Task ${id}`,
-        created_at: updated_at,
-        updated_at,
-        model: 'm',
+        title: id,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: typeof date === 'string' ? date : date.toISOString(),
+        model: '',
         system_prompt: null,
-        message_count: 0,
+        message_count: 1,
         document_ids: [],
-        ...(agent_type !== undefined ? { agent_type } : {}),
     };
 }
 
-function agent(id: string, name: string, icon?: string): AgentInfo {
-    return {
-        id,
-        name,
-        description: '',
-        source: 'builtin',
-        conversation_starters: [],
-        models: [],
-        ...(icon ? { icon } : {}),
-    };
-}
+const daysAgo = (n: number, hour = 12) => new Date(2026, 8, 29 - n, hour, 0, 0);
 
-const AGENTS = [agent('chat', 'Chat Agent', 'message-circle'), agent('email', 'Email Triage', 'mail')];
+describe('groupSessionsByRecency', () => {
+    it('buckets by calendar day relative to now', () => {
+        const groups = groupSessionsByRecency([
+            at('today-early', new Date(2026, 8, 29, 0, 1)),
+            at('yesterday-late', new Date(2026, 8, 28, 23, 59)),
+            at('three-days', daysAgo(3)),
+            at('twenty-days', daysAgo(20)),
+            at('ninety-days', daysAgo(90)),
+        ], NOW);
 
-describe('groupSessionsByAgent', () => {
-    it('buckets sessions by agent_type', () => {
-        const sessions = [
-            session('a', 'chat', '2026-07-10T10:00:00Z'),
-            session('b', 'email', '2026-07-10T11:00:00Z'),
-            session('c', 'chat', '2026-07-10T09:00:00Z'),
-        ];
-        const groups = groupSessionsByAgent(sessions, AGENTS);
-        expect(groups).toHaveLength(2);
-        const chat = groups.find((g) => g.agentId === 'chat')!;
-        expect(chat.name).toBe('Chat Agent');
-        expect(chat.icon).toBe('message-circle');
-        expect(chat.sessions.map((s) => s.id)).toEqual(['a', 'c']); // newest first
+        expect(groups.map((g) => [g.label, g.sessions.map((s) => s.id)])).toEqual([
+            ['Today', ['today-early']],
+            ['Yesterday', ['yesterday-late']],
+            ['Previous 7 days', ['three-days']],
+            ['Previous 30 days', ['twenty-days']],
+            ['Older', ['ninety-days']],
+        ]);
     });
 
-    it('orders groups by most-recent session', () => {
-        const sessions = [
-            session('a', 'chat', '2026-07-10T10:00:00Z'),
-            session('b', 'email', '2026-07-10T12:00:00Z'), // newest overall
-        ];
-        const groups = groupSessionsByAgent(sessions, AGENTS);
-        expect(groups[0].agentId).toBe('email');
-        expect(groups[1].agentId).toBe('chat');
+    it('puts the 7- and 30-day edges in the nearer bucket', () => {
+        const groups = groupSessionsByRecency([
+            at('seven', daysAgo(7, 0)),
+            at('thirty', daysAgo(30, 0)),
+        ], NOW);
+        expect(groups.map((g) => g.label)).toEqual(['Previous 7 days', 'Previous 30 days']);
     });
 
-    it('falls back to the default agent id when agent_type is missing', () => {
-        const groups = groupSessionsByAgent([session('a', undefined, '2026-07-10T10:00:00Z')], AGENTS);
-        expect(groups).toHaveLength(1);
-        expect(groups[0].agentId).toBe(DEFAULT_AGENT_ID);
-        expect(groups[0].unknown).toBe(false);
+    it('orders newest first within a bucket', () => {
+        const [today] = groupSessionsByRecency([
+            at('morning', new Date(2026, 8, 29, 8)),
+            at('noon', new Date(2026, 8, 29, 11)),
+            at('dawn', new Date(2026, 8, 29, 5)),
+        ], NOW);
+        expect(today.sessions.map((s) => s.id)).toEqual(['noon', 'morning', 'dawn']);
     });
 
-    it('marks unknown agents but still groups their sessions by id', () => {
-        const groups = groupSessionsByAgent([session('a', 'ghost', '2026-07-10T10:00:00Z')], AGENTS);
-        expect(groups[0].agentId).toBe('ghost');
-        expect(groups[0].name).toBe('ghost'); // falls back to the id
-        expect(groups[0].unknown).toBe(true);
+    it('drops empty buckets and handles no chats', () => {
+        expect(groupSessionsByRecency([], NOW)).toEqual([]);
+        expect(groupSessionsByRecency([at('a', daysAgo(2))], NOW).map((g) => g.label)).toEqual(['Previous 7 days']);
     });
 
-    it('returns an empty array for no sessions', () => {
-        expect(groupSessionsByAgent([], AGENTS)).toEqual([]);
-    });
-});
-
-describe('resolveAgentName / resolveAgentIcon', () => {
-    it('resolves a known agent', () => {
-        const s = session('a', 'email', '2026-07-10T10:00:00Z');
-        expect(resolveAgentName(s, AGENTS)).toBe('Email Triage');
-        expect(resolveAgentIcon(s, AGENTS)).toBe('mail');
+    it('files an unparseable timestamp under Older', () => {
+        const groups = groupSessionsByRecency([at('bad', 'not a date')], NOW);
+        expect(groups).toEqual([{ label: 'Older', sessions: [expect.objectContaining({ id: 'bad' })] }]);
     });
 
-    it('falls back to the default agent when agent_type is missing', () => {
-        const s = session('a', undefined, '2026-07-10T10:00:00Z');
-        expect(resolveAgentName(s, AGENTS)).toBe('Chat Agent');
-    });
-
-    it('returns the raw id for an unknown agent', () => {
-        const s = session('a', 'ghost', '2026-07-10T10:00:00Z');
-        expect(resolveAgentName(s, AGENTS)).toBe('ghost');
-        expect(resolveAgentIcon(s, AGENTS)).toBeUndefined();
+    it('does not mutate the input order', () => {
+        const input = [at('old', daysAgo(40)), at('new', daysAgo(0))];
+        groupSessionsByRecency(input, NOW);
+        expect(input.map((s) => s.id)).toEqual(['old', 'new']);
     });
 });

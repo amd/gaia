@@ -1,0 +1,43 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_git_code/git_basics — built at stage time by
+# tests/fixtures/gaia/tiers_git_code/build_fixtures.py; values in
+# GAIA_FIXTURE_VALUES.md "Git and coding".
+id: git_t1_blame_line
+name: "Git — Who Last Changed This Line"
+category: gaia_git
+severity: high
+tags: [t1_basic]
+description: |
+  Line-level attribution. `git blame` needs the coding skill's git grant;
+  `git log -L` / `git log -S` answer the same question with the ungranted
+  read-only floor. Either is fine — attributing the line to the initial
+  import (the plausible guess) is the failure.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Repo ~/gaia-eval/tiers_git_code/git_basics (read-only use). The coding skill is installed at ~/.gaia/skills."
+
+turns:
+  - turn: 1
+    objective: "Ask who last changed the DEFAULT_CURRENCY line in ledgerlite/config.py of ~/gaia-eval/tiers_git_code/git_basics, and in which commit"
+    user_message: "In ~/gaia-eval/tiers_git_code/git_basics, who last changed the line that sets DEFAULT_CURRENCY in ledgerlite/config.py, and in which commit?"
+    ground_truth:
+      expected_answer: "Marcus Chen, in commit 97c44aa 'Switch default currency to EUR' (2026-03-09)"
+    success_criteria: |
+      CRITICAL: agent_tools[] shows a real history read (git blame, git log
+      -L, git log -S/-G, or git log -p on the file). The answer names
+      Marcus Chen and 'Switch default currency to EUR'; the hash 97c44aa is
+      expected. Naming Priya Natarajan or the 'Initial ledgerlite import'
+      commit is a FAIL. An answer with no git call behind it is a FAIL.
+
+  - turn: 2
+    objective: "Ask what the value was before that change"
+    user_message: "What was it set to before that?"
+    ground_truth:
+      expected_answer: "\"USD\" — from the initial import, bce65c4, by Priya Natarajan"
+    success_criteria: "Agent answers USD, grounded in the diff or the older revision (git show / git log -p in agent_tools[]). Guessing without a read is a FAIL."
+
+expected_outcome: |
+  Exact line attribution (Marcus Chen, 97c44aa) and the prior value (USD),
+  both read from history.

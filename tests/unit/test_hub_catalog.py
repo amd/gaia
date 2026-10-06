@@ -246,8 +246,8 @@ def test_merge_propagates_eval_score_version_from_real_worker_payload_shape():
 def test_merge_omits_hidden_registry_only_agents():
     """A hidden registration is not a choice, so it must not reach the browse
     listing — the same reason GET /api/agents drops it. Retired agents (chat/
-    doc/file) and scaffolding (builder) stay resolvable by id without
-    reappearing as something a user can pick.
+    doc/file) stay resolvable by id without reappearing as something a user
+    can pick.
     """
     merged = merge_with_registry(
         [],

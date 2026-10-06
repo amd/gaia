@@ -6,6 +6,7 @@ import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircl
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { formatSize } from '../utils/format';
 import { UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
 import type { Document } from '../types';
 import './DocumentLibrary.css';
@@ -197,14 +198,6 @@ export function DocumentLibrary() {
 
     const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
     const totalChunks = documents.reduce((sum, d) => sum + d.chunk_count, 0);
-
-    const formatSize = (bytes: number) => {
-        if (bytes <= 0) return '0 B';
-        const k = 1024;
-        const sizes = ['B', 'KB', 'MB', 'GB'];
-        const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-    };
 
     // Shared upload state-machine: preflight extension check, set UI state,
     // run the caller-provided uploader, auto-attach the result to the current

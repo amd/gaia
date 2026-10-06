@@ -47,6 +47,7 @@ from gaia.ui.email_sidecar.profiles import (
 )
 from gaia.ui.memory_settings import memory_enabled
 
+from . import permissions as session_permissions
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .sse_handler import (
@@ -115,6 +116,18 @@ def _register_agent_memory_ops(agent) -> None:
 # Active SSE handlers keyed by session_id.  The /api/chat/confirm-tool
 # endpoint looks up the handler here to resolve a pending confirmation.
 _active_sse_handlers: dict = {}  # session_id -> SSEOutputHandler
+
+# asyncio keeps only weak references to tasks; this set keeps them alive.
+_background_tasks: set = set()
+
+
+def _spawn_background(coro) -> asyncio.Task:
+    """Run *coro* fire-and-forget without letting it be garbage-collected."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
 
 # ── Agent registry ───────────────────────────────────────────────────────────
 # Set by server lifespan via set_agent_registry() once discovery completes.
@@ -611,11 +624,37 @@ def _apply_device_model(
     device_is_explicit = device != "gpu"
     if dev_model == model_id or is_default_model or device_is_explicit:
         if dev_model != model_id:
-            logger.info(
+            logger.debug(
                 "chat: device=%s -> model %s (was %s)", device, dev_model, model_id
             )
         return dev_model, dev_ctx
     return model_id, None
+
+
+def resolve_session_model(
+    session: dict,
+    agent_type: str,
+    custom_model: str | None,
+    registry=None,
+) -> tuple[str | None, int | None]:
+    """Return ``(model_id, device_ctx)`` for the model a turn in ``session`` runs.
+
+    The user's ``custom_model`` override wins; otherwise the agent's preferred
+    model replaces the session's stored one; then the device config applies.
+    """
+    model_id = custom_model or session.get("model")
+    if not custom_model and registry:
+        preferred = registry.resolve_model(agent_type)
+        if preferred:
+            # Debug: the polled session list runs this for every session.
+            logger.debug(
+                "chat: Agent %s prefers model %s (was %s)",
+                agent_type,
+                preferred,
+                model_id,
+            )
+            model_id = preferred
+    return _apply_device_model(session, agent_type, model_id, custom_model, registry)
 
 
 def _ui_cloud_provider(model_id: str) -> str | None:
@@ -1176,6 +1215,19 @@ def _memory_off(session: dict, db) -> bool:
     return bool(session.get("private", 0)) or not memory_enabled(db)
 
 
+def _apply_memory_state(agent, session: dict, db) -> None:
+    """Set *agent*'s memory-off state for this turn from *session* and Settings.
+
+    Call before every turn: a cached agent must follow a toggle flipped since
+    the last one.
+    """
+    if not hasattr(agent, "_incognito"):
+        return
+    private = bool(session.get("private", 0))
+    agent._incognito = _memory_off(session, db)
+    agent._incognito_reason = "private" if private else "memory_off"
+
+
 def _session_mail_provider(session: dict) -> str | None:
     """Session mailbox FILTER for the email agent (#1596 / #1603 Phase 2).
 
@@ -1457,6 +1509,23 @@ def _empty_answer_outcome(
     return _EMPTY_ANSWER_LEMONADE_MSG, "error", False
 
 
+def _done_event(
+    msg_id: int, content: str, turn_cancelled: bool, stats: Optional[dict] = None
+) -> dict:
+    """Build the closing ``done`` SSE payload for a persisted turn.
+
+    ``cancelled`` is set only when the user's Stop actually ended the run, so
+    the UI labels the turn from what happened rather than from the click — a
+    Stop that lands after the agent already answered stays an ordinary turn.
+    """
+    event: dict = {"type": "done", "message_id": msg_id, "content": content}
+    if turn_cancelled:
+        event["cancelled"] = True
+    if stats:
+        event["stats"] = stats
+    return event
+
+
 # Tight timeout for pre-flight load_model. The default Lemonade
 # DEFAULT_MODEL_LOAD_TIMEOUT is 12000 s (200 min) — a hung Lemonade
 # would block the chat thread that long. Cold-load of a 4B GGUF on
@@ -1732,23 +1801,10 @@ async def _get_chat_response(
             )
         logger.info("chat: Session %s using agent type: %s", session_id[:8], agent_type)
 
-        # Honour agent model preferences from the registry (skipped when the
-        # user has set a custom model override, which always takes priority).
-        if not custom_model and registry:
-            preferred = registry.resolve_model(agent_type)
-            if preferred:
-                logger.info(
-                    "chat: Agent %s prefers model %s (was %s)",
-                    agent_type,
-                    preferred,
-                    model_id,
-                )
-                model_id = preferred
-
         # The UI device dropdown drives the model + ctx window.
         device = session.get("device")
-        model_id, device_ctx = _apply_device_model(
-            session, agent_type, model_id, custom_model, registry
+        model_id, device_ctx = resolve_session_model(
+            session, agent_type, custom_model, registry
         )
 
         # ── Agent cache ──────────────────────────────────────────────────────
@@ -1872,11 +1928,7 @@ async def _get_chat_response(
                 # that don't expose them.
                 _register_agent_memory_ops(agent)
 
-        # Suppress memory writes when private session OR global memory is disabled.
-        if hasattr(agent, "_incognito"):
-            private = bool(session.get("private", 0))
-            agent._incognito = private or not memory_enabled(db)
-            agent._incognito_reason = "private" if private else "memory_off"
+        _apply_memory_state(agent, session, db)
 
         _restore_model_history(agent, db, session_id, request.message)
 
@@ -2014,6 +2066,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             # the orphan-cleanup mirror of the explicit /api/chat/cancel path.
             sse_handler.close_active_relay_response()
         _active_sse_handlers.pop(session_id, None)
+        if sse_handler is not None:
+            session_permissions.for_session(session_id).detach(sse_handler)
         if producer is not None:
             await asyncio.to_thread(producer.join, 5.0)
             if producer.is_alive():
@@ -2027,6 +2081,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     try:
         # Create SSE handler for streaming events
         sse_handler = SSEOutputHandler()
+        session_permissions.for_session(session_id).attach(sse_handler)
         # Expose the handler on the run so an external Stop can signal the
         # producer to bail even after every client has detached (#1580).
         run.handler = sse_handler
@@ -2124,23 +2179,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             agent_type,
         )
 
-        # Honour agent model preferences from the registry (skipped when the
-        # user has set a custom model override, which always takes priority).
-        if not custom_model and registry:
-            preferred = registry.resolve_model(agent_type)
-            if preferred:
-                logger.info(
-                    "chat: Agent %s prefers model %s (was %s) (streaming)",
-                    agent_type,
-                    preferred,
-                    model_id,
-                )
-                model_id = preferred
-
         # The UI device dropdown drives the model + ctx window.
         device = session.get("device")
-        model_id, device_ctx = _apply_device_model(
-            session, agent_type, model_id, custom_model, registry
+        model_id, device_ctx = resolve_session_model(
+            session, agent_type, custom_model, registry
         )
 
         # Move ALL slow work into the background thread so the SSE generator
@@ -2433,11 +2475,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     if mcp_report:
                         sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
 
-                # Suppress memory writes when private session OR global memory is disabled.
-                if hasattr(agent, "_incognito"):
-                    private = bool(session.get("private", 0))
-                    agent._incognito = private or not memory_enabled(db)
-                    agent._incognito_reason = "private" if private else "memory_off"
+                _apply_memory_state(agent, session, db)
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -2802,8 +2840,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 continue
 
         # Capture an explicit Stop BEFORE our own cleanup sets the same flag.
-        # Only run_manager.cancel() sets ``cancelled`` before this point, so a
-        # True here means the user hit Stop (not a normal completion).
+        # Only a Stop (run_manager.cancel() or POST /api/chat/cancel) sets
+        # ``cancelled`` before this point, so True means not a normal completion.
         turn_cancelled = sse_handler.cancelled.is_set()
 
         # Signal cancellation (handles client disconnect) then wait for producer.
@@ -2954,7 +2992,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             # before the producer started) instead — it's the same
             # value ``_effective_model`` would have returned for the
             # default agent factories that honour ``model_id`` kwarg.
-            _bg = asyncio.create_task(
+            _spawn_background(
                 _maybe_update_session_title(
                     db=db,
                     session_id=request.session_id,
@@ -2963,21 +3001,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     model_id=session_model,
                 )
             )
-            # Hold a reference so the GC doesn't kill the task before
-            # it completes; discard on done.
-            _active_sse_handlers.setdefault(f"_titlebg:{request.session_id}", _bg)
-            _bg.add_done_callback(
-                lambda _t, _sid=request.session_id: _active_sse_handlers.pop(
-                    f"_titlebg:{_sid}", None
-                )
+            done_event = _done_event(
+                msg_id, full_response, turn_cancelled, stats=inference_stats
             )
-            done_event: dict = {
-                "type": "done",
-                "message_id": msg_id,
-                "content": full_response,
-            }
-            if inference_stats:
-                done_event["stats"] = inference_stats
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
         else:
@@ -3015,11 +3041,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
                 )
-                done_event = {
-                    "type": "done",
-                    "message_id": msg_id,
-                    "content": content,
-                }
+                done_event = _done_event(msg_id, content, turn_cancelled)
                 yield f"data: {json.dumps(done_event)}\n\n"
 
     except Exception as e:

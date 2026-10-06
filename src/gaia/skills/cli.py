@@ -41,8 +41,6 @@ from gaia.skills.format import (
     GaiaMetadata,
     Skill,
     SkillTool,
-    parse_skill_file,
-    reset_security_tier,
 )
 from gaia.skills.lock import forget_skill
 from gaia.skills.manager import SkillManager
@@ -147,7 +145,8 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
 
     p_import = sub.add_parser(
         "import",
-        help="Copy a skill folder, .zip, or URL into ~/.gaia/skills/ (stamped experimental)",
+        help="Audit and copy a skill folder, .zip, or https URL into ~/.gaia/skills/ "
+        "(stamped experimental)",
     )
     p_import.add_argument(
         "source", help="Path to a skill directory or .zip, or an https URL"
@@ -157,6 +156,12 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     )
     p_import.add_argument(
         "--force", action="store_true", help="Overwrite an existing installed skill"
+    )
+    p_import.add_argument(
+        "--allow-experimental",
+        action="store_true",
+        help=f"Required to import a skill that ships code ({SKILL_TOOLS_FILENAME} "
+        "or scripts/); that code runs in your agent's process",
     )
 
     p_export = sub.add_parser("export", help="Export a skill to a .zip bundle")
@@ -346,7 +351,7 @@ def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
             "tracks that are gone. Exits "
             f"{EXIT_INVALID} when anything differs, {EXIT_OK} when the lock and "
             "the disk agree. Untracked skills are expected right after "
-            "'gaia skill create' / 'import' / 'migrate' — --relock records them."
+            "'gaia skill create' / 'migrate' — --relock records them."
         ),
     )
     lock_mode = p_lock.add_mutually_exclusive_group()
@@ -695,45 +700,35 @@ def _handle_create(args: argparse.Namespace) -> int:
 
 
 def _handle_import(args: argparse.Namespace) -> int:
-    manager = _manager()
-    destination_root = manager.user_root
+    from gaia.skills.capture import import_bundle
 
     with tempfile.TemporaryDirectory(prefix="gaia-skill-import-") as tmp:
         source_dir = _materialize_source(args.source, Path(tmp))
-        skill = parse_skill_file(source_dir, check_directory_name=False)
-        # Without --name the name comes from the imported bundle's own SKILL.md,
-        # which nothing validated on the way in.
-        origin = "--name" if args.name else f"{source_dir / SKILL_FILENAME}"
-        name = validated_skill_name(args.name or skill.name, source=origin)
-        target = skill_directory(destination_root, name, source=origin)
+        result = import_bundle(
+            source_dir,
+            origin=args.source,
+            name=args.name,
+            manager=_manager(),
+            force=args.force,
+            allow_experimental=getattr(args, "allow_experimental", False),
+        )
 
-        if target.exists():
-            if not args.force:
-                sys.stderr.write(
-                    f"❌ Skill '{name}' is already installed at {target}. Pass "
-                    "--force to replace it.\n"
-                )
-                return EXIT_INVALID
-            shutil.rmtree(target)
-
-        shutil.copytree(source_dir, target)
-        # Imported skills re-earn trust: stamp experimental regardless of claim.
-        imported = parse_skill_file(target, check_directory_name=False)
-        imported.name = name
-        previous_tier = reset_security_tier(imported)
-        imported.write(target / SKILL_FILENAME)
-
-    # These bytes are not the hub's any more, so its provenance must not describe
-    # them — otherwise the replaced skill reads as tampered-with hub content.
-    forget_skill(destination_root, name)
-
-    print(f"✅ Imported skill '{name}' into {target}")
-    if previous_tier != "experimental":
+    print(f"✅ Imported skill '{result.name}' into {result.path}")
+    if result.previous_tier != LOWEST_TIER:
         print(
-            f"   Security tier reset: {previous_tier} → experimental "
+            f"   Security tier reset: {result.previous_tier} → {LOWEST_TIER} "
             "(imported skills re-earn trust)."
         )
-    print(f"   Inspect it with: gaia skill info {name}")
+    if result.review_findings:
+        print(f"   Audit verdict {result.verdict}:")
+        for line in result.review_findings:
+            print(f"     {line}")
+    if result.has_code and not result.code_trusted:
+        print(
+            "   Its code stays inert until you review the findings and run: "
+            f"gaia skill promote {result.name}"
+        )
+    print(f"   Inspect it with: gaia skill info {result.name}")
     return EXIT_OK
 
 
@@ -1321,9 +1316,17 @@ def _skill_summary(skill: Skill) -> dict:
 
 def _materialize_source(source: str, workdir: Path) -> Path:
     """Return a directory containing the source skill, downloading/unzipping."""
-    if source.startswith(("http://", "https://")):
+    scheme = source.split("://", 1)[0].lower() if "://" in source else ""
+    if scheme == "https":
         archive = _download(source, workdir / "download.zip")
         return _unpack(archive, workdir / "unpacked")
+    if scheme:
+        raise SkillValidationError(
+            f"Refusing to import {source!r}: only https URLs are accepted, because "
+            "a skill fetched over an unencrypted connection can be altered in "
+            "transit. Use the https:// form of the URL, or download the .zip "
+            "yourself and pass its local path."
+        )
 
     path = Path(source).expanduser()
     if path.is_dir():
@@ -1351,6 +1354,14 @@ def _download(url: str, destination: Path) -> Path:
             f"Could not download {url}: {exc}. Check the URL and your network, then "
             "retry — or download the .zip yourself and pass the local path."
         ) from exc
+
+    if not str(response.url).lower().startswith("https://"):
+        response.close()
+        raise SkillValidationError(
+            f"Refusing to import {url}: it redirected to {response.url}, which is "
+            "not https. Ask the publisher for an https download link, or download "
+            "the .zip yourself and pass its local path."
+        )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("wb") as handle:

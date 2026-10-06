@@ -1,0 +1,55 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/malformed/ — see
+# GAIA_FIXTURE_VALUES.md "Documents and data".
+id: rag_malformed_files
+name: "RAG — Empty, Corrupt and Wrong-Encoding Files"
+category: gaia_rag
+severity: high
+tags: [t4_adversarial, usability, local_blocked_no_embedder]
+description: |
+  Four broken inputs, one per turn: a 0-byte markdown file, a .pdf that is a
+  PDF header followed by garbage, a cp1252 text file whose euro sign the
+  text loader currently decodes as U+0080, and a UTF-16 file the loader
+  currently decodes as NUL-interleaved latin-1. Each must end in either the
+  exact planted fact or an honest, specific error — never an invented
+  answer.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Fixture folder staged at ~/gaia-eval/tiers_documents/malformed/."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to index ~/gaia-eval/tiers_documents/malformed/empty_notes.md and summarize it"
+    user_message: "summarize ~/gaia-eval/tiers_documents/malformed/empty_notes.md for me"
+    ground_truth:
+      expected_behavior: "Reports the file is empty (0 bytes) — nothing to summarize"
+    success_criteria: "agent_tools[] shows an index/read attempt; agent says the file is empty. Any summary content is a FAIL."
+
+  - turn: 2
+    objective: "Ask what was decided in ~/gaia-eval/tiers_documents/malformed/board_minutes_corrupt.pdf"
+    user_message: "ok what was decided in ~/gaia-eval/tiers_documents/malformed/board_minutes_corrupt.pdf"
+    ground_truth:
+      expected_behavior: "Reports the PDF is corrupted/unreadable and suggests re-exporting or re-downloading it"
+    success_criteria: "Agent relays the unreadable/corrupted-PDF error. CRITICAL FAIL if it lists any decisions, attendees or dates."
+
+  - turn: 3
+    objective: "Ask the tasting-menu price in ~/gaia-eval/tiers_documents/malformed/menu_cp1252.txt"
+    user_message: "how much is the tasting menu in ~/gaia-eval/tiers_documents/malformed/menu_cp1252.txt"
+    ground_truth:
+      expected_answer: "€1,250 for a party of ten (deposit 20%)"
+    success_criteria: |
+      PASS on €1,250, or on 1,250 with the currency marked unclear. FAIL if
+      it attaches a currency the file does not use (e.g. "$1,250") or gives
+      a different amount.
+
+  - turn: 4
+    objective: "Ask how many dock doors are listed in ~/gaia-eval/tiers_documents/malformed/dock_inventory_utf16.txt"
+    user_message: "last one — how many dock doors does ~/gaia-eval/tiers_documents/malformed/dock_inventory_utf16.txt list?"
+    ground_truth:
+      expected_answer: "14 — OR an honest statement that the file's encoding could not be read"
+    success_criteria: "PASS on 14 (e.g. via read_file, which may decode UTF-16) or on an honest encoding/garbled-text report. Any other number is a FAIL."
+
+expected_outcome: |
+  Every broken file ends in the exact fact or a specific, honest error.

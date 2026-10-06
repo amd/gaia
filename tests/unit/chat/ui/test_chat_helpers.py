@@ -22,6 +22,7 @@ from gaia.ui._chat_helpers import (
     _build_history_pairs,
     _canonical_agent_type,
     _compute_allowed_paths,
+    _done_event,
     _empty_answer_outcome,
     _find_last_tool_step,
     _managed_documents_dir,
@@ -427,6 +428,28 @@ class TestEmptyAnswerOutcome:
         assert "Lemonade Server is running" in content
         assert sse_type == "error"
         assert keep_steps is False
+
+
+class TestDoneEvent:
+    """``_done_event`` reports whether Stop actually ended the run, so the UI
+    labels a turn from the outcome rather than from the Stop click."""
+
+    def test_cancelled_turn_is_flagged(self):
+        event = _done_event(42, "Cancelled.", turn_cancelled=True)
+        assert event == {
+            "type": "done",
+            "message_id": 42,
+            "content": "Cancelled.",
+            "cancelled": True,
+        }
+
+    def test_completed_turn_carries_no_cancelled_flag(self):
+        event = _done_event(
+            7, "Deleted 3 files.", turn_cancelled=False, stats={"tokens": 5}
+        )
+        assert "cancelled" not in event
+        assert event["content"] == "Deleted 3 files."
+        assert event["stats"] == {"tokens": 5}
 
 
 # ── _canonical_agent_type ─────────────────────────────────────────────────
@@ -1078,3 +1101,17 @@ class TestSessionTitleRequest:
 
     def test_other_models_get_no_template_switch(self):
         assert "chat_template_kwargs" not in self._sent_body("Gemma-4-E4B-it-GGUF")
+
+
+async def test_spawn_background_keeps_the_task_alive_until_done():
+    """asyncio holds tasks weakly; a fire-and-forget title task must be pinned."""
+    import gaia.ui._chat_helpers as ch
+
+    gate = asyncio.Event()
+    task = ch._spawn_background(gate.wait())
+    assert task in ch._background_tasks
+
+    gate.set()
+    await task
+    await asyncio.sleep(0)
+    assert task not in ch._background_tasks
