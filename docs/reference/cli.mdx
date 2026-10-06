@@ -1070,6 +1070,32 @@ gaia slack stop
 
 ---
 
+### Email Command
+
+<Card title="Email triage" icon="envelope" href="/guides/email">
+  The standalone email triage agent for Gmail or Outlook, with all body inference running locally on Lemonade. Needs the Google or Microsoft connector. The flagship agent reads mail too, through its own tools.
+</Card>
+
+```bash
+gaia email -q "Which messages need a reply today?"   # one-shot query
+gaia email -i                                        # interactive loop
+gaia email autonomy status                           # autonomy level and trust summary
+```
+
+| Option | Description |
+|--------|-------------|
+| `-q, --query` | One-shot query; non-interactive |
+| `-i, --interactive` | Read queries from stdin in a loop |
+| `--model` | Model ID (default: chosen per device) |
+| `-v, --verbose` / `--debug` | Log every triage decision and tool call / add full prompt and response logging (sensitive payloads) |
+| `--spec` | Write the HTML endpoint spec to disk (`--output PATH`, default `~/.gaia/email/endpoint-spec.html`) and open it; needs no LLM |
+
+`gaia email autonomy` takes `status`, `trust`, `set-level`, `pause`, `resume`, `kill` and `run`.
+
+[→ Email Guide](/guides/email)
+
+---
+
 ## API Server
 
 <Card title="API Server" icon="server" href="/reference/api">
@@ -1483,6 +1509,7 @@ gaia gateway uninstall                # remove the provider
 | `--auth-header-name` | `install` | Auth header name (default `Ocp-Apim-Subscription-Key`) |
 | `--auth-header-prefix` | `install` | Header value prefix (default empty — the AMD gateway takes a bare key) |
 | `--skip-probe` | `install` | Register without first testing the gateway |
+| `--allow-insecure-http` | `install` | Permit an `http://` gateway. Lemonade refuses to hold a token over plaintext otherwise; only for an on-prem gateway without TLS |
 | `--token` | `auth` | Token value — prefer the prompt, which keeps it out of shell history |
 | `--token-stdin` | `auth` | Read the token from stdin — best for scripts |
 | `--no-remember` | `auth` | Do not store the token; you are asked again after a restart |
@@ -2059,7 +2086,7 @@ gaia eval tasks run --suite everyday --harness claude-code --model claude-opus-5
 gaia eval tasks run --suite therock --harness claude-code --model fireworks.glm-5p3-flash --out runs/cc-therock
 gaia eval tasks report runs/cc-opus runs/gaia-glm --out runs/report
 gaia eval tasks controls                           # Check the judge on planted attempts
-gaia eval tasks gateway --port 8788                # One model gateway for a whole matrix
+gaia eval tasks gateway --port 8788                # One model gateway for a whole matrix (--upstream URL overrides $LEMONADE_BASE_URL)
 ```
 
 | Option | Default | Description |

@@ -10,6 +10,7 @@ import {
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { formatSize } from '../utils/format';
 import { UploadErrorToast, isExtensionSupported, getUnsupportedCategory } from './UnsupportedFeature';
 import type { FileEntry, BrowseResponse, QuickLink } from '../types';
 import './FileBrowser.css';
@@ -23,15 +24,6 @@ function getFileIcon(entry: FileEntry) {
     if (['.py', '.js', '.ts', '.java', '.c', '.cpp', '.go', '.rs'].includes(ext)) return <Code size={16} />;
     if (['.pdf', '.doc', '.docx', '.txt', '.md'].includes(ext)) return <FileText size={16} />;
     return <File size={16} />;
-}
-
-// Format file size
-function formatSize(bytes: number): string {
-    if (bytes <= 0) return '';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
 // Format date
@@ -148,18 +140,29 @@ async function indexAndAttachFiles(
 
     // Attach indexed documents to the active session
     if (sessionId && docIds.length > 0) {
+        const attached: string[] = [];
         for (const docId of docIds) {
             try {
                 await api.attachDocument(sessionId, docId);
+                attached.push(docId);
             } catch (attachErr) {
                 log.doc.warn(`Could not attach document to session: ${attachErr}`);
             }
         }
         const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
         const existing = freshSession?.document_ids ?? [];
-        const toAdd = docIds.filter(id => !existing.includes(id));
+        const toAdd = attached.filter(id => !existing.includes(id));
         if (toAdd.length > 0) {
             updateSessionInList(sessionId, { document_ids: [...existing, ...toAdd] });
+        }
+    }
+    // The chat's document bar lists only documents the store knows about.
+    if (docIds.length > 0) {
+        try {
+            const data = await api.listDocuments();
+            useChatStore.getState().setDocuments(data.documents || []);
+        } catch (err) {
+            log.doc.error('Could not refresh the document list after indexing', err);
         }
     }
 

@@ -21,6 +21,7 @@ from gaia.agents.tools.path_access import (
     readable_entry,
     write_access_error,
 )
+from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
 from gaia.tool_cancellation import raise_if_cancelled
 
@@ -28,6 +29,27 @@ logger = get_logger(__name__)
 
 _RAG_HINT = "Set self.rag = <RAGSDK instance, or None to disable RAG>."
 _RAG_DOC_ANCHOR = "docs/spec/rag-tools-mixin.mdx#host-agent-contract"
+
+#: Output budget for one summary reply. The RAG client's 1024 default cut a
+#: meeting summary off mid-sentence; a model that always reasons (Gemma 4)
+#: spends part of this before it writes anything.
+SUMMARY_MAX_TOKENS = 8192
+
+
+def _summary_text(chat: Any, prompt: str) -> str:
+    """One summary reply, never one the output limit cut short."""
+    response = chat.send(
+        prompt,
+        no_history=True,
+        max_tokens=SUMMARY_MAX_TOKENS,
+        **no_thinking_kwargs(getattr(chat, "effective_model", None)),
+    )
+    if response.finish_reason == "length":
+        raise RuntimeError(
+            f"the summary was cut off at its {SUMMARY_MAX_TOKENS}-token output "
+            "limit before it covered the whole document"
+        )
+    return response.text
 
 
 #: How long an indexing call waits before leaving the rest to a background
@@ -1757,9 +1779,7 @@ Use the {summary_type} style for the content sections."""
 
                     # Use chat SDK to generate summary
                     try:
-                        # Use RAG's chat SDK for summary generation
-                        response = self.rag.chat.send(prompt, no_history=True)
-                        summary_text = response.text
+                        summary_text = _summary_text(self.rag.chat, prompt)
 
                         return {
                             "status": "success",
@@ -1775,6 +1795,7 @@ Use the {summary_type} style for the content sections."""
                         return {
                             "status": "error",
                             "error": f"Failed to generate summary: {e}",
+                            "hint": "Answer from query_documents on the parts the user asked about instead.",
                         }
 
                 # For long documents, iterate over sections (preserving semantic boundaries)
@@ -1801,20 +1822,13 @@ CRITICAL GROUNDING RULE: Only summarize information explicitly present in the se
 
 Generate a summary of this section:"""
 
-                    try:
-                        # Each section stands alone: carried history put every
-                        # earlier section into the next request and overflowed.
-                        response = self.rag.chat.send(section_prompt, no_history=True)
-                        segment_summary = response.text
-
-                        section_summaries.append(
-                            {"section": section_num, "summary": segment_summary}
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to summarize segment {section_num}: {e}"
-                        )
-                        continue
+                    # Each section stands alone: carried history put every
+                    # earlier section into the next request and overflowed. A
+                    # failed section fails the summary rather than vanishing from it.
+                    segment_summary = _summary_text(self.rag.chat, section_prompt)
+                    section_summaries.append(
+                        {"section": section_num, "summary": segment_summary}
+                    )
 
                 # Combine section summaries into final summary
                 if not section_summaries:
@@ -1860,9 +1874,7 @@ Synthesize these into a single, well-structured summary using this format:
 Use the {summary_type} style. Ensure page references from section summaries are preserved."""
 
                 try:
-                    # Use RAG's chat SDK for final summary synthesis
-                    response = self.rag.chat.send(final_prompt, no_history=True)
-                    final_summary = response.text
+                    final_summary = _summary_text(self.rag.chat, final_prompt)
 
                     return {
                         "status": "success",

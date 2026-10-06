@@ -11,6 +11,7 @@ import {
 import { useChatStore } from '../stores/chatStore';
 import * as memoryApi from '../services/memoryApi';
 import { log } from '../utils/logger';
+import { formatSize } from '../utils/format';
 import './MemoryDashboard.css';
 
 // ── Type definitions ─────────────────────────────────────────────────────
@@ -210,14 +211,6 @@ function formatRelativeDate(iso: string | null): string {
             return formatDateFull(iso);
         }
     } catch { return '\u2014'; }
-}
-
-function formatBytes(bytes: number): string {
-    if (bytes <= 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
 function formatDuration(ms: number): string {
@@ -2322,7 +2315,7 @@ export function MemoryDashboard() {
                             {stats && (
                                 <div className="mem-db-footer">
                                     <span>
-                                        Database: {formatBytes(stats.db_size_bytes)}
+                                        Database: {formatSize(stats.db_size_bytes)}
                                         {stats.knowledge?.avg_confidence != null &&
                                             ` \u00B7 Avg confidence: ${stats.knowledge.avg_confidence.toFixed(2)}`}
                                     </span>

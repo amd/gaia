@@ -41,3 +41,21 @@ def test_memory_turned_off_says_where_to_turn_it_on():
 
 def test_an_unknown_reason_claims_no_private_chat():
     assert "private" not in memory_off_reason(SimpleNamespace())
+
+
+def test_a_new_chat_on_a_fresh_install_remembers():
+    from gaia.ui._chat_helpers import _memory_off
+    from gaia.ui.database import ChatDatabase
+
+    db = ChatDatabase(":memory:")
+    try:
+        session = db.create_session(model="M-GGUF", agent_type="chat")
+        assert _memory_off(session, db) is False
+
+        private = db.create_session(model="M-GGUF", agent_type="chat", private=True)
+        assert _memory_off(private, db) is True
+
+        db.set_setting("memory_enabled", "false")
+        assert _memory_off(session, db) is True
+    finally:
+        db.close()
