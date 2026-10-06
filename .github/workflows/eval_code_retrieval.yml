@@ -63,7 +63,6 @@ jobs:
     env:
       SUITE: ${{ github.event.schedule == '41 7 * * 0' && 'scale' || (github.event_name == 'schedule' && 'nightly' || (github.event.inputs.suite || 'pr')) }}
       OUT: eval-out/code-retrieval
-      GAIA_BENCH_WORK_ROOT: ${{ runner.temp }}/gaia-bench
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -89,6 +88,9 @@ jobs:
       - name: Run the benchmark
         # The step owns its timeout so an overrun still reaches the upload below.
         timeout-minutes: ${{ github.event.schedule == '41 7 * * 0' && 690 || 270 }}
+        # Step-level: the runner context does not exist in job-level env.
+        env:
+          GAIA_BENCH_WORK_ROOT: ${{ runner.temp }}/gaia-bench
         run: |
           $baseline = "tests/fixtures/eval_baselines/code-retrieval/$env:SUITE.json"
           $gate = @()
