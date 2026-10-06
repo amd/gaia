@@ -66,7 +66,7 @@ func TestTheConfirmationIsVisibleUnderALongTranscript(t *testing.T) {
 			frame := visibleFrame(m)
 			for _, want := range []string{
 				`command="pwd"`, // the command, verbatim
-				"y run once",    // and that it can be answered
+				"y once",        // and that it can be answered
 				"n/esc deny",
 			} {
 				if !strings.Contains(frame, want) {
@@ -159,7 +159,7 @@ func TestResolvingTheConfirmationReturnsTheRowsToTheTranscript(t *testing.T) {
 		t.Errorf("the transcript did not get its rows back: %d, want %d",
 			m.viewport.Height, tall)
 	}
-	if strings.Contains(visibleFrame(m), "y run once") {
+	if strings.Contains(visibleFrame(m), "y once") {
 		t.Error("the answered prompt is still on screen")
 	}
 }

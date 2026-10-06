@@ -11,6 +11,7 @@ import {
 import { useChatStore } from '../stores/chatStore';
 import * as memoryApi from '../services/memoryApi';
 import { log } from '../utils/logger';
+import { formatSize } from '../utils/format';
 import './MemoryDashboard.css';
 
 // ── Type definitions ─────────────────────────────────────────────────────
@@ -212,14 +213,6 @@ function formatRelativeDate(iso: string | null): string {
     } catch { return '\u2014'; }
 }
 
-function formatBytes(bytes: number): string {
-    if (bytes <= 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-}
-
 function formatDuration(ms: number): string {
     if (ms < 1000) return `${Math.round(ms)}ms`;
     return `${(ms / 1000).toFixed(1)}s`;
@@ -339,6 +332,7 @@ export function MemoryDashboard() {
     const [systemDiscoveryConsent, setSystemDiscoveryConsent] = useState(false);
     const [settingsLoading, setSettingsLoading] = useState(false);
     const [deleteConfirm, setDeleteConfirm] = useState(false);
+    const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
     const [reinitConfirm, setReinitConfirm] = useState(false);
     const [betaConfirm, setBetaConfirm] = useState<null | 'memory' | 'mcp' | 'discovery'>(null);
 
@@ -638,10 +632,20 @@ export function MemoryDashboard() {
 
     // ── Knowledge CRUD handlers ─────────────────────────────────────────
 
+    // Every panel that shows a memory: a changed due date or entity moves it
+    // in Upcoming and the entity filter, not just in the table.
+    const refreshKnowledgeViews = useCallback(() => {
+        loadKnowledge();
+        loadStats();
+        loadEmbeddingCoverage();
+        loadUpcoming();
+        loadEntities();
+    }, [loadKnowledge, loadStats, loadEmbeddingCoverage, loadUpcoming, loadEntities]);
+
     const handleCreateKnowledge = useCallback(async () => {
         if (!formData.content.trim()) return;
         try {
-            await memoryApi.createKnowledge({
+            const created = await memoryApi.createKnowledge({
                 content: formData.content,
                 category: formData.category,
                 domain: formData.domain || undefined,
@@ -652,21 +656,20 @@ export function MemoryDashboard() {
             });
             setShowAddForm(false);
             setFormData({ content: '', category: 'fact', domain: '', context: 'global', entity: '', sensitive: false, due_at: '' });
-            loadKnowledge();
-            loadStats();
-            loadEmbeddingCoverage();
+            refreshKnowledgeViews();
             log.ui.info('Created new knowledge entry');
-            showToast('Memory created successfully', 'success');
+            if (created?.embedded === false) showToast(created.embed_error ?? 'Saved, but not embedded', 'error');
+            else showToast('Memory created successfully', 'success');
         } catch (err) {
             log.system.error('Failed to create knowledge', err);
             showToast('Failed to create memory', 'error');
         }
-    }, [formData, loadKnowledge, loadStats, loadEmbeddingCoverage, showToast]);
+    }, [formData, refreshKnowledgeViews, showToast]);
 
     const handleEditKnowledge = useCallback(async () => {
         if (!editingId || !formData.content.trim()) return;
         try {
-            await memoryApi.editKnowledge(editingId, {
+            const updated = await memoryApi.editKnowledge(editingId, {
                 content: formData.content,
                 category: formData.category,
                 domain: formData.domain || undefined,
@@ -677,28 +680,38 @@ export function MemoryDashboard() {
             });
             setEditingId(null);
             setFormData({ content: '', category: 'fact', domain: '', context: 'global', entity: '', sensitive: false, due_at: '' });
-            loadKnowledge();
+            refreshKnowledgeViews();
             log.ui.info(`Updated knowledge ${editingId}`);
-            showToast('Memory updated', 'success');
+            if (updated?.embedded === false) showToast(updated.embed_error ?? 'Saved, but not embedded', 'error');
+            else showToast('Memory updated', 'success');
         } catch (err) {
             log.system.error('Failed to update knowledge', err);
             showToast('Failed to update memory', 'error');
         }
-    }, [editingId, formData, loadKnowledge, showToast]);
+    }, [editingId, formData, refreshKnowledgeViews, showToast]);
 
     const handleDeleteKnowledge = useCallback(async (id: string) => {
+        if (confirmDeleteId !== id) {
+            setConfirmDeleteId(id);
+            return;
+        }
+        setConfirmDeleteId(null);
         try {
             await memoryApi.deleteKnowledge(id);
-            loadKnowledge();
-            loadStats();
-            loadEmbeddingCoverage();
+            refreshKnowledgeViews();
             log.ui.info(`Deleted knowledge ${id}`);
             showToast('Memory deleted', 'info');
         } catch (err) {
             log.system.error('Failed to delete knowledge', err);
             showToast('Failed to delete memory', 'error');
         }
-    }, [loadKnowledge, loadStats, loadEmbeddingCoverage, showToast]);
+    }, [confirmDeleteId, refreshKnowledgeViews, showToast]);
+
+    useEffect(() => {
+        if (!confirmDeleteId) return;
+        const t = setTimeout(() => setConfirmDeleteId(null), 3000);
+        return () => clearTimeout(t);
+    }, [confirmDeleteId]);
 
     const handleToggleSensitive = useCallback(async (entry: KnowledgeEntry) => {
         try {
@@ -1241,19 +1254,21 @@ export function MemoryDashboard() {
                                 <div className="mem-stat-card" data-accent="green">
                                     <div className="mem-stat-value">{stats?.tools?.total_calls ?? 0}</div>
                                     <div className="mem-stat-label">Tool Calls</div>
-                                    <div className="mem-stat-sub">
-                                        {stats?.tools?.unique_tools ?? 0} tools
+                                    <div className="mem-stat-sub" title="Memory tools (remember, recall, ...) are not logged">
+                                        {stats?.tools?.unique_tools ?? 0} tools, excl. memory
                                     </div>
                                 </div>
                                 <div className="mem-stat-card" data-accent="red">
                                     <div className="mem-stat-value">
-                                        {stats?.tools?.overall_success_rate != null
+                                        {stats?.tools?.overall_success_rate != null && (stats.tools.total_calls ?? 0) > 0
                                             ? `${Math.round(stats.tools.overall_success_rate * 100)}%`
                                             : '\u2014'}
                                     </div>
                                     <div className="mem-stat-label">Success Rate</div>
                                     <div className="mem-stat-sub">
-                                        {stats?.tools?.total_errors ?? 0} errors
+                                        {(stats?.tools?.total_calls ?? 0) > 0
+                                            ? `${stats?.tools?.total_errors ?? 0} errors`
+                                            : 'No tool calls yet'}
                                     </div>
                                 </div>
                             </div>
@@ -1515,7 +1530,7 @@ export function MemoryDashboard() {
                                                             Created{renderSortArrow('created_at')}
                                                         </th>
                                                         <th>Due</th>
-                                                        <th></th>
+                                                        <th className="mem-actions-cell"></th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -1620,7 +1635,7 @@ export function MemoryDashboard() {
                                                                     <span className="mem-due-badge none">{'\u2014'}</span>
                                                                 )}
                                                             </td>
-                                                            <td>
+                                                            <td className="mem-actions-cell">
                                                                 <div className="mem-row-actions" onClick={e => e.stopPropagation()}>
                                                                     <button className="mem-row-action-btn" onClick={() => startEdit(entry)} title="Edit">
                                                                         <Pencil size={13} />
@@ -1632,8 +1647,13 @@ export function MemoryDashboard() {
                                                                     <button className="mem-row-action-btn" onClick={() => copyId(entry.id)} title="Copy ID">
                                                                         <Copy size={13} />
                                                                     </button>
-                                                                    <button className="mem-row-action-btn delete" onClick={() => handleDeleteKnowledge(entry.id)} title="Delete">
-                                                                        <Trash2 size={13} />
+                                                                    <button
+                                                                        className={`mem-row-action-btn delete${confirmDeleteId === entry.id ? ' is-confirm' : ''}`}
+                                                                        onClick={() => handleDeleteKnowledge(entry.id)}
+                                                                        title={confirmDeleteId === entry.id ? 'Click again to delete' : 'Delete'}
+                                                                        aria-label={confirmDeleteId === entry.id ? 'Confirm delete memory' : 'Delete memory'}
+                                                                    >
+                                                                        {confirmDeleteId === entry.id ? <span className="mem-row-delete-label">Delete?</span> : <Trash2 size={13} />}
                                                                     </button>
                                                                 </div>
                                                             </td>
@@ -1742,6 +1762,7 @@ export function MemoryDashboard() {
                                 <div className="mem-section">
                                     <div className="mem-section-title">
                                         <Wrench size={14} /> Tool Performance
+                                        <span className="mem-section-note" title="remember, recall, update_memory, forget and search_past_conversations are not logged">excludes memory tools</span>
                                     </div>
                                     {tools.length > 0 ? (
                                         <div style={{ overflowX: 'auto' }}>
@@ -2294,7 +2315,7 @@ export function MemoryDashboard() {
                             {stats && (
                                 <div className="mem-db-footer">
                                     <span>
-                                        Database: {formatBytes(stats.db_size_bytes)}
+                                        Database: {formatSize(stats.db_size_bytes)}
                                         {stats.knowledge?.avg_confidence != null &&
                                             ` \u00B7 Avg confidence: ${stats.knowledge.avg_confidence.toFixed(2)}`}
                                     </span>

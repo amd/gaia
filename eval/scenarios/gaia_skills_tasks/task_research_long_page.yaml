@@ -1,0 +1,44 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_skills_web/web/ferry_timetable.html
+# (~38K chars of text; Sunday fact in the middle, Saturday decoy near the top)
+# — see GAIA_FIXTURE_VALUES.md "Skills, web and tool selection".
+id: task_research_long_page
+name: "Skill Task — research-report Reads Past the Excerpt of a Long Page"
+category: gaia_skills_tasks
+severity: high
+tags: [t3_stress]
+description: |
+  research-report on one long page whose answer sits in the middle. fetch_page
+  returns only the head and tail of a page this size, with an artifact handle
+  for the rest; the near-top Saturday time is a decoy for an agent that stops
+  at the excerpt. The report must use all four planted facts.
+
+persona: student
+
+setup:
+  index_documents: []
+  notes: "research-report installed at ~/.gaia/skills/; fixture server on 127.0.0.1:8765; GAIA_WEB_ALLOWED_HOSTS=127.0.0.1."
+
+turns:
+  - turn: 1
+    objective: "Load the research-report skill"
+    user_message: "Load the research-report skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "Ask for a short rider brief from the long page"
+    user_message: "Using only http://127.0.0.1:8765/tiers_skills_web/web/ferry_timetable.html, write me a short rider brief: who operates the ferry, the last Sunday sailing from Pier 9, the last Saturday sailing, and which guide revision it's based on."
+    ground_truth:
+      expected_answer: "Operator: Tidewater Transit Authority; last Sunday sailing from Pier 9: 10:40 PM; last Saturday sailing: 11:15 PM; guide revision R-31 (published 2026-06-02)"
+    success_criteria: |
+      CRITICAL: the Sunday time is 10:40 PM. agent_tools[] shows fetch_page
+      and a read into the omitted middle (read_tool_output on the page's
+      artifact, or an equivalent that demonstrably reached it). Giving
+      11:15 PM for Sunday, or saying the page does not list a Sunday time, is
+      a FAIL — the fact is on the page. All four facts must be present and
+      none invented.
+
+expected_outcome: |
+  A long source is read in full before it is summarised: the middle-of-page
+  fact is found, and the decoy near the top is not mistaken for it.

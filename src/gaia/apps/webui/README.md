@@ -1,6 +1,6 @@
 # @amd-gaia/agent-ui
 
-Privacy-first agentic AI interface with document Q&A — runs **100% locally** on AMD Ryzen AI hardware.
+One chat window for the GAIA agent — local and private by default on AMD Ryzen AI hardware, with cloud models (Fireworks AI, AMD LLM Gateway) when you choose them.
 
 No cloud. No API keys. No data leaves your device.
 

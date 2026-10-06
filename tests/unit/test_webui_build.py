@@ -654,6 +654,7 @@ class TestCliEnsureWebuiBuiltDegrades(unittest.TestCase):
         with (
             patch("gaia.ui.build.ensure_webui_built", return_value=fake_result),
             patch("gaia.ui.server.create_app") as mock_create_app,
+            patch("gaia.ui.server.start_model_server_owner"),
             patch("uvicorn.run"),
         ):
             try:

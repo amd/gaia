@@ -332,7 +332,7 @@ jobs:
 
             ### 2. GAIA-Specific Architecture Checks
             - **New agents** must be a Python `agent.py` (subclass of `Agent` with `AGENT_ID` / `AGENT_NAME` class attributes). Legacy agent-definition YAML manifests (tools/prompt-in-YAML) were removed in v0.17.5 (#912) — but do NOT confuse that with the `gaia-agent.yaml` *packaging* manifest every hub agent under `hub/agents/<id>/python/` now ships (required; see `src/gaia/hub/manifest.py`).
-            - **New tool mixins** MUST be added to `KNOWN_TOOLS` in `src/gaia/agents/registry.py` so other agents can compose them by name; the BuilderAgent template uses this map to scaffold imports.
+            - **New tool mixins** MUST be added to `KNOWN_TOOLS` in `src/gaia/agents/registry.py` so other agents can compose them by name.
             - **New LLM providers** belong under `src/gaia/llm/providers/` with registration in `src/gaia/llm/factory.py` (`create_client`).
             - **AMD-specific paths** (NPU / Ryzen AI / Lemonade): use existing `src/gaia/llm/lemonade_client.py` — flag direct HTTP calls to the Lemonade server as a pattern violation.
             - **New CLI commands** need both an entry in `src/gaia/cli.py` subparsers AND `docs/reference/cli.mdx`.
@@ -1056,11 +1056,10 @@ jobs:
       - name: Install dependencies
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
-          # faiss-cpu + pypdf are required by tests/unit/test_doc_examples_runnable.py,
-          # playwright by tests/unit/agents/test_builder_template_host_wiring.py;
+          # faiss-cpu + pypdf are required by tests/unit/test_doc_examples_runnable.py;
           # PHASE 3 below runs the full tests/unit/ suite with -x.
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pyfakefs \
-                                  keyring httpx respx faiss-cpu pypdf playwright
+                                  keyring httpx respx faiss-cpu pypdf
           uv pip install --system -e ".[api]"
 
       - name: Attempt auto-fix

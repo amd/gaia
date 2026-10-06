@@ -83,7 +83,8 @@ async function main() {
     const schemas = JSON.parse(await readFile(SCHEMAS_PATH, 'utf-8'));
     const generated = await generateApiTypes(schemas);
     if (process.argv.includes('--check')) {
-        const committed = await readFile(OUTPUT_PATH, 'utf-8');
+        // A Windows checkout with autocrlf has CRLF endings the generator never writes.
+        const committed = (await readFile(OUTPUT_PATH, 'utf-8')).replace(/\r\n/g, '\n');
         if (committed !== generated) {
             console.error(
                 `${OUTPUT_PATH} is out of date with api.schemas.json.\n` +

@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
-import type { AgentInfo, Session } from '../../types';
+import type { Session } from '../../types';
 import * as api from '../../services/api';
 
 vi.mock('../../services/api');
@@ -13,44 +13,28 @@ vi.mock('../../services/api');
 const mockedApi = vi.mocked(api);
 
 const SESSION: Session = {
-    id: 'session-email',
-    title: 'New Task',
+    id: 'session-gaia',
+    title: 'Existing chat',
     created_at: '2026-06-10T00:00:00Z',
     updated_at: '2026-06-10T00:00:00Z',
     model: 'gemma',
     system_prompt: null,
     message_count: 0,
     document_ids: [],
-    // Session is pinned to email, even though the globally-active agent is chat.
-    agent_type: 'email',
-};
-
-const CHAT_AGENT: AgentInfo = {
-    id: 'chat', name: 'Chat', description: '', source: 'builtin',
-    conversation_starters: [], models: [],
-};
-const EMAIL_AGENT: AgentInfo = {
-    id: 'email', name: 'Email', description: '', source: 'installed',
-    conversation_starters: [], models: [],
+    agent_type: 'gaia',
 };
 
 beforeEach(() => {
     vi.clearAllMocks();
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
     mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+    mockedApi.getPermissions.mockResolvedValue({ session_id: SESSION.id, mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({
         documents: [], total: 0, total_size_bytes: 0, total_chunks: 0,
     });
     mockedApi.sendMessageStream.mockImplementation(() => new AbortController());
 
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-        configurable: true,
-        value: vi.fn(),
-    });
-
     useChatStore.setState({
-        agents: [CHAT_AGENT, EMAIL_AGENT],
-        activeAgentId: 'chat', // global selection differs from the session's
         sessions: [SESSION],
         currentSessionId: SESSION.id,
         messages: [],
@@ -64,22 +48,22 @@ beforeEach(() => {
     });
 });
 
-afterEach(() => vi.useRealTimers());
-
-describe('ChatView per-session dispatch (#2179)', () => {
-    it('dispatches to the session-pinned agent, not the globally-active one', async () => {
+describe('ChatView dispatch', () => {
+    it('sends the session, the text and the callbacks — the backend owns the agent', async () => {
         render(<ChatView sessionId={SESSION.id} />);
 
         await act(async () => {
-            fireEvent.change(screen.getByLabelText('Message input'), {
+            fireEvent.change(screen.getByLabelText('Message'), {
                 target: { value: 'triage my inbox' },
             });
-            fireEvent.click(screen.getByLabelText('Send message'));
+            fireEvent.click(screen.getByLabelText('Send'));
         });
 
         expect(mockedApi.sendMessageStream).toHaveBeenCalledTimes(1);
-        // 6th positional arg is the agent_type dispatch target.
-        const agentTypeArg = mockedApi.sendMessageStream.mock.calls[0][5];
-        expect(agentTypeArg).toBe('email');
+        const call = mockedApi.sendMessageStream.mock.calls[0];
+        expect(call).toHaveLength(3);
+        expect(call[0]).toBe(SESSION.id);
+        expect(call[1]).toBe('triage my inbox');
+        expect(typeof (call[2] as api.StreamCallbacks).onChunk).toBe('function');
     });
 });

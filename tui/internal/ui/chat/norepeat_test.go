@@ -83,7 +83,7 @@ func TestUserModeNeverShowsTheStepCount(t *testing.T) {
 	m := midTurn(t)
 	// Wide enough that the hint's lowest-ranked item survives the fit, so a
 	// missing step count means it was never offered, not that it was thinned.
-	m.width, m.height = 120, 30
+	m.width, m.height = 140, 30
 	m.resize()
 	m.totalSteps = 7
 

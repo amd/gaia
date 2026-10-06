@@ -1091,7 +1091,7 @@ type fullAccessRequest struct {
 // instead.
 func decisionWire(d PermissionDecision) (string, error) {
 	switch d {
-	case PermissionAllow, PermissionAlways, PermissionDeny:
+	case PermissionAllow, PermissionAlways, PermissionDeny, PermissionTimeout:
 		return string(d), nil
 	default:
 		return "", fmt.Errorf(

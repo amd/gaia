@@ -5,6 +5,7 @@ id: capture_paste_load_use
 name: "Capture — Pasted SKILL.md Is Captured, Loaded, and Actually Used"
 category: gaia_skills_capture
 severity: critical
+tags: [t2_compound]
 description: |
   The user pastes a complete SKILL.md and asks the agent to save and use it.
   The agent must run the real capture_skill -> load_skill chain and then

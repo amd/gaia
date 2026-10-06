@@ -27,9 +27,9 @@ icon: "puzzle-piece"
 
 The agent registry exposes these mixins by name in `KNOWN_TOOLS`
 ([`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)).
-A [custom agent](/guides/custom-agent) can compose any of them by listing the
-tool name — BuilderAgent's template wires the import and base class for you.
-Each row is the exact `name → module.Class` mapping the registry resolves:
+A [custom agent](/guides/custom-agent) composes any of them by inheriting the
+mixin and calling its `register_*_tools()` method. Each row is the exact
+`name → module.Class` mapping the registry resolves:
 
 | Tool name | Import | Purpose |
 |-----------|--------|---------|
@@ -183,8 +183,8 @@ class MyImageAgent(Agent, SDToolsMixin):
         )
 
         # Initialize SD tools (auto-registers generate_image, list_sd_models, etc.)
+        # Images save to ~/.gaia/cache/sd/images unless you pass output_dir=.
         self.init_sd(
-            output_dir=".gaia/cache/sd/images",
             default_model="SDXL-Turbo",  # Fast, good quality
         )
 

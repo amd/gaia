@@ -33,9 +33,7 @@ icon: "clock"
 > cheapest signal for "has the user gone quiet long enough to consider a follow-up."
 >
 > **Related plans:**
-> - [Agent UI](/plans/agent-ui) -- Phase C (autonomous infra), still future, re-cast under
 >   the daemon per its own v2 crosswalk note
-> - [Email Full Autonomy](/plans/email-full-autonomy) -- **shipped precedent.** Read this
 >   before building anything else here; it already solves "decide when to act, not just
 >   on a fixed schedule" for one agent, and the general engine should generalize its
 >   mechanism rather than invent a second one (§9).
@@ -373,7 +371,7 @@ quiet hours.
 
 This is the section that answers "how do we make sure GAIA only engages with intention,
 not just because a timer fired." **Don't design this from scratch — it's already shipped
-once**, for `EmailTriageAgent` (`docs/plans/email-full-autonomy.mdx`):
+once**, for `EmailTriageAgent`:
 
 - `on_heartbeat` runs a **zero-token delta-check** first (has anything actually changed
   since last time) — the real Tier-0 in production, today, not a plan.

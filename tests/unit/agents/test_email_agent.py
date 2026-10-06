@@ -349,7 +349,6 @@ class TestRegistryIntegration:
         from gaia.connectors.providers.base import ConnectorRequirement
 
         reg = AgentRegistry()
-        reg._register_builtin_agents()
         demo = reg.get("connectors-demo")
         if demo is None:
             pytest.skip("connectors-demo not loaded")

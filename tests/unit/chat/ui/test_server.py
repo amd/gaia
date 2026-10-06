@@ -7,6 +7,7 @@ Tests all API endpoints using TestClient with an in-memory database.
 LLM and RAG calls are mocked - these tests validate HTTP layer behavior.
 """
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -1038,6 +1039,49 @@ class TestSessionEndpoints:
     def test_get_session_not_found(self, client):
         resp = client.get("/api/sessions/nonexistent-uuid")
         assert resp.status_code == 404
+
+    def test_session_names_the_custom_model_that_answers(self, client):
+        sid = client.post("/api/sessions", json={"model": "Stored-GGUF"}).json()["id"]
+        client.put("/api/settings", json={"custom_model": "My-Override-GGUF"})
+
+        got = client.get(f"/api/sessions/{sid}").json()
+        assert got["model"] == "Stored-GGUF"
+        assert got["effective_model"] == "My-Override-GGUF"
+        listed = client.get("/api/sessions").json()["sessions"][0]
+        assert listed["effective_model"] == "My-Override-GGUF"
+
+    def test_session_names_the_agents_preferred_model(self, client):
+        sid = client.post("/api/sessions", json={"model": "Stored-GGUF"}).json()["id"]
+        registry = MagicMock()
+        registry.resolve_model.return_value = "Preferred-GGUF"
+        with patch(
+            "gaia.ui.routers.sessions.get_agent_registry", return_value=registry
+        ):
+            got = client.get(f"/api/sessions/{sid}").json()
+        assert got["effective_model"] == "Preferred-GGUF"
+
+    def test_session_list_resolves_models_off_the_event_loop(self, client):
+        # The lookup can block 2 s on an unreachable Lemonade; on the loop it
+        # would stall every request, mid-stream chat replies included.
+        client.post("/api/sessions", json={"model": "Stored-GGUF"})
+        on_loop = []
+
+        def resolve_model(_agent_type):
+            try:
+                asyncio.get_running_loop()
+                on_loop.append(True)
+            except RuntimeError:
+                on_loop.append(False)
+            return "Preferred-GGUF"
+
+        registry = MagicMock()
+        registry.resolve_model.side_effect = resolve_model
+        with patch(
+            "gaia.ui.routers.sessions.get_agent_registry", return_value=registry
+        ):
+            listed = client.get("/api/sessions").json()["sessions"]
+        assert listed[0]["effective_model"] == "Preferred-GGUF"
+        assert on_loop == [False]
 
     def test_create_session_default_mail_provider_is_null(self, client):
         # #1596: no pick → null in the API response, so the UI selector shows

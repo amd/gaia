@@ -68,7 +68,7 @@ def runtime():
     state = SimpleNamespace(
         session_locks={}, chat_semaphore=asyncio.BoundedSemaphore(1)
     )
-    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    request = SimpleNamespace(app=SimpleNamespace(state=state), headers={})
     server = SimpleNamespace(_stream_chat_response=helpers._stream_chat_response)
     helpers._agent_cache.clear()
     with (
@@ -152,7 +152,9 @@ async def test_delete_waits_for_a_turn_holding_the_session_lock(runtime):
 
 
 @pytest.fixture
-def app_client():
+def app_client(monkeypatch):
+    # An earlier test's app can leave a process-wide registry without "chat".
+    monkeypatch.setattr(helpers, "_agent_registry", None)
     app = create_app(db_path=":memory:")
     client = TestClient(app)
     helpers._agent_cache.clear()

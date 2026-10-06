@@ -59,12 +59,6 @@ def _hub_agent_ids() -> set[str]:
     return ids
 
 
-def _builtin_registry() -> AgentRegistry:
-    registry = AgentRegistry()
-    registry._register_builtin_agents()
-    return registry
-
-
 def _known_agent_ids(registry: AgentRegistry) -> set[str]:
     """The ids ``POST /api/sessions`` accepts, sidecars included.
 
@@ -91,7 +85,7 @@ def test_hub_entry_points_parsed():
 
 
 def test_default_agent_type_resolves():
-    registry = _builtin_registry()
+    registry = AgentRegistry()
     known = _known_agent_ids(registry)
 
     assert registry.canonical_id(DEFAULT_AGENT_TYPE) in known, (

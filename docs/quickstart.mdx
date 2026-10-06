@@ -8,7 +8,7 @@ icon: "rocket"
   **Not a developer?** Start with [Install GAIA](/guides/install) — one download, then pick the desktop app, the terminal, or both. No terminal required for the desktop app.
 </Info>
 
-Run AI agents **100% locally** on your AMD hardware — analyze documents, generate code, answer questions, and accomplish tasks on your PC without sending data to the cloud.
+Run AI agents **locally** on your AMD hardware — analyze documents, generate code, answer questions, and accomplish tasks on your PC without sending data to the cloud. Cloud models are there when you choose them.
 
 ## Recommended: Install GAIA
 
@@ -57,7 +57,7 @@ On first run, GAIA automatically installs the Python backend and all dependencie
   Requires [Node.js 20+](https://nodejs.org). If you don't have it:
 
   - **Windows:** `winget install OpenJS.NodeJS.LTS`
-  - **macOS:** `brew install node@20`
+  - **macOS:** `brew install node@22`
   - **Linux:** `curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs`
 </Note>
 
@@ -224,7 +224,7 @@ Choose your platform and installation type:
     ```
 
     <Note>
-      A bare `gaia init` sets up the flagship agent (~6 GB). Use `--profile vlm` for vision/document extraction (~3 GB), or `--profile minimal` for a smaller start (~3 GB).
+      A bare `gaia init` sets up the flagship agent (~6 GB). Use `--profile vlm` for vision/document extraction (~6 GB), or `--profile minimal` for a smaller start (~6 GB).
       See [CLI Reference](/reference/cli#init-command) for all profiles.
     </Note>
   </Tab>
@@ -286,7 +286,7 @@ Choose your platform and installation type:
     ```
 
     <Note>
-      A bare `gaia init` sets up the flagship agent (~6 GB). Use `--profile vlm` for vision/document extraction (~3 GB), or `--profile minimal` for a smaller start (~3 GB).
+      A bare `gaia init` sets up the flagship agent (~6 GB). Use `--profile vlm` for vision/document extraction (~6 GB), or `--profile minimal` for a smaller start (~6 GB).
       See [CLI Reference](/reference/cli#init-command) for all profiles.
     </Note>
   </Tab>
@@ -364,7 +364,7 @@ Choose your platform and installation type:
     ```
 
     <Note>
-      A bare `gaia init` sets up the flagship agent (~6 GB). Use `--profile vlm` for vision/document extraction (~3 GB), or `--profile minimal` for a smaller start (~3 GB).
+      A bare `gaia init` sets up the flagship agent (~6 GB). Use `--profile vlm` for vision/document extraction (~6 GB), or `--profile minimal` for a smaller start (~6 GB).
       See [CLI Reference](/reference/cli#init-command) for all profiles.
     </Note>
   </Tab>
@@ -434,7 +434,7 @@ Choose your platform and installation type:
     ```
 
     <Note>
-      A bare `gaia init` sets up the flagship agent (~6 GB). Use `--profile vlm` for vision/document extraction (~3 GB), or `--profile minimal` for a smaller start (~3 GB).
+      A bare `gaia init` sets up the flagship agent (~6 GB). Use `--profile vlm` for vision/document extraction (~6 GB), or `--profile minimal` for a smaller start (~6 GB).
       See [CLI Reference](/reference/cli#init-command) for all profiles.
     </Note>
   </Tab>
@@ -631,7 +631,7 @@ You've built a simple agent. Now let's build something practical: an agent that 
 
 <CardGroup cols={2}>
   <Card title="All User Guides" icon="book" href="/guides">
-    Pre-built agents for chat, voice, code, Jira, Docker, and more
+    Guides for the GAIA agent, chat, voice, documents, skills, and more
   </Card>
 
   <Card title="Connect to External Tools" icon="plug" href="/sdk/sdks/mcp">

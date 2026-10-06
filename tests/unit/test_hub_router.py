@@ -11,10 +11,8 @@ from gaia.agents.registry import AgentRegistry
 from gaia.daemon.sidecars.errors import StopFailedError
 from gaia.hub import catalog as catalog_mod
 from gaia.hub import installer as installer_mod
-from gaia.hub import lifecycle as lifecycle_mod
 from gaia.hub.catalog import UnifiedCatalog
-from gaia.hub.installer import InstalledAgent, InstallError, NotInstalledError
-from gaia.hub.lifecycle import AgentStatus, HealthStatus
+from gaia.hub.installer import NotInstalledError
 from gaia.ui.email_sidecar import daemon_client as daemon_client_module
 from gaia.ui.routers import hub as hub_router
 from gaia.ui.server import create_app
@@ -76,18 +74,6 @@ def test_catalog_returns_merged_list(client, monkeypatch):
     assert body["total"] == 1
     assert body["agents"][0]["id"] == "demo"
     assert body["offline"] is False
-
-
-def test_catalog_not_swallowed_by_agents_route(client, monkeypatch):
-    # Regression guard: /api/agents/catalog must hit the hub router, not the
-    # greedy GET /api/agents/{agent_id:path} in routers/agents.py.
-    monkeypatch.setattr(
-        catalog_mod,
-        "build_catalog",
-        lambda *a, **k: UnifiedCatalog(agents=[], offline=False),
-    )
-    resp = client.get("/api/agents/catalog")
-    assert resp.status_code == 200
 
 
 def test_catalog_offline_503_when_no_cache(client, monkeypatch):
@@ -204,13 +190,6 @@ def test_uninstall_success(client, monkeypatch):
     assert resp.json()["status"] == "uninstalled"
 
 
-def test_uninstall_builtin_refused(client):
-    # Real uninstall refuses builtins -> 400 (no mock needed). ``builder`` is the
-    # only remaining framework builtin after the #1102 hub migrations.
-    resp = client.delete("/api/agents/builder", headers=UI)
-    assert resp.status_code == 400
-
-
 def test_uninstall_not_installed_404(client, monkeypatch):
     def boom(*a, **k):
         raise NotInstalledError("not installed")
@@ -223,172 +202,6 @@ def test_uninstall_not_installed_404(client, monkeypatch):
 def test_uninstall_requires_ui_header(client_no_ui_header):
     resp = client_no_ui_header.delete("/api/agents/demo")
     assert resp.status_code == 403
-
-
-# ---------------------------------------------------------------------------
-# Rollback
-# ---------------------------------------------------------------------------
-
-
-def test_rollback_success(client, monkeypatch):
-    restored = InstalledAgent(
-        id="demo", version="1.0.0", language="python", installed_at="now"
-    )
-    monkeypatch.setattr(installer_mod, "rollback", lambda *a, **k: restored)
-    resp = client.post("/api/agents/demo/rollback", headers=UI)
-    assert resp.status_code == 200
-    assert resp.json()["version"] == "1.0.0"
-
-
-def test_rollback_no_backup_400(client, monkeypatch):
-    def boom(*a, **k):
-        raise InstallError("no backup")
-
-    monkeypatch.setattr(installer_mod, "rollback", boom)
-    resp = client.post("/api/agents/demo/rollback", headers=UI)
-    assert resp.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# Lifecycle: configure / health / status (#465)
-# ---------------------------------------------------------------------------
-
-
-def test_set_config_success(client, monkeypatch):
-    captured = {}
-
-    def fake_configure(agent_id, config, *, merge):
-        captured["id"] = agent_id
-        captured["config"] = config
-        captured["merge"] = merge
-        return config
-
-    monkeypatch.setattr(lifecycle_mod, "configure", fake_configure)
-    resp = client.post(
-        "/api/agents/demo/config",
-        json={"config": {"model": "m1"}},
-        headers=UI,
-    )
-    assert resp.status_code == 200
-    assert resp.json()["config"] == {"model": "m1"}
-    assert captured["merge"] is True
-
-
-def test_set_config_replace_flag(client, monkeypatch):
-    captured = {}
-    monkeypatch.setattr(
-        lifecycle_mod,
-        "configure",
-        lambda agent_id, config, *, merge: captured.update(merge=merge) or config,
-    )
-    client.post(
-        "/api/agents/demo/config",
-        json={"config": {"model": "m1"}, "replace": True},
-        headers=UI,
-    )
-    assert captured["merge"] is False
-
-
-def test_set_config_requires_ui_header(client_no_ui_header):
-    resp = client_no_ui_header.post(
-        "/api/agents/demo/config", json={"config": {"a": 1}}
-    )
-    assert resp.status_code == 403
-
-
-def test_get_config(client, monkeypatch):
-    monkeypatch.setattr(lifecycle_mod, "read_config", lambda *a, **k: {"model": "m1"})
-    resp = client.get("/api/agents/demo/config")
-    assert resp.status_code == 200
-    assert resp.json()["config"] == {"model": "m1"}
-
-
-def test_health_endpoint(client, monkeypatch):
-    monkeypatch.setattr(
-        lifecycle_mod,
-        "health_check",
-        lambda *a, **k: HealthStatus(id="demo", state="healthy", detail="ok"),
-    )
-    resp = client.get("/api/agents/demo/health")
-    assert resp.status_code == 200
-    assert resp.json()["state"] == "healthy"
-
-
-def test_status_endpoint(client, monkeypatch):
-    monkeypatch.setattr(
-        lifecycle_mod,
-        "status",
-        lambda *a, **k: AgentStatus(
-            id="demo",
-            installed=True,
-            installed_version="1.2.3",
-            health="healthy",
-            config={"model": "m1"},
-            source="installed",
-        ),
-    )
-    resp = client.get("/api/agents/demo/status")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["installed_version"] == "1.2.3"
-    assert body["health"] == "healthy"
-
-
-# ---------------------------------------------------------------------------
-# Setup executor (#468)
-# ---------------------------------------------------------------------------
-
-
-def test_setup_returns_202_and_schedules(client, monkeypatch):
-    called = {}
-    monkeypatch.setattr(catalog_mod, "fetch_manifest", lambda aid, *a, **k: {"id": aid})
-    monkeypatch.setattr(
-        installer_mod,
-        "run_setup",
-        lambda manifests, **k: called.update(ids=sorted(manifests)),
-    )
-    resp = client.post("/api/agents/setup", json={"ids": ["a", "b"]}, headers=UI)
-    assert resp.status_code == 202
-    assert resp.json()["status"] == "queued"
-    assert called.get("ids") == ["a", "b"]
-
-
-def test_setup_empty_ids_400(client):
-    resp = client.post("/api/agents/setup", json={"ids": []}, headers=UI)
-    assert resp.status_code == 400
-
-
-def test_setup_requires_ui_header(client_no_ui_header):
-    resp = client_no_ui_header.post("/api/agents/setup", json={"ids": ["a"]})
-    assert resp.status_code == 403
-
-
-def test_setup_status_polling(client, monkeypatch):
-    monkeypatch.setattr(
-        installer_mod,
-        "get_setup_status",
-        lambda *a, **k: {"status": "running", "steps": []},
-    )
-    resp = client.get("/api/agents/setup-status")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "running"
-
-
-def test_setup_status_unknown_404(client, monkeypatch):
-    monkeypatch.setattr(installer_mod, "get_setup_status", lambda *a, **k: None)
-    resp = client.get("/api/agents/setup-status")
-    assert resp.status_code == 404
-
-
-def test_setup_status_not_swallowed_by_agents_route(client, monkeypatch):
-    # Regression guard: /api/agents/setup-status must hit the hub router, not
-    # the greedy GET /api/agents/{agent_id:path} in routers/agents.py.
-    monkeypatch.setattr(
-        installer_mod, "get_setup_status", lambda *a, **k: {"status": "completed"}
-    )
-    resp = client.get("/api/agents/setup-status")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -472,18 +285,6 @@ def test_email_uninstall_shuts_down_running_sidecar_first(client, monkeypatch):
     monkeypatch.setattr(daemon_client_module, "stop_sidecar", recorder)
     monkeypatch.setattr(installer_mod, "uninstall", lambda *a, **k: None)
     resp = client.delete("/api/agents/email", headers=UI)
-    assert resp.status_code == 200
-    assert recorder.calls == ["email"]
-
-
-def test_email_rollback_shuts_down_running_sidecar_first(client, monkeypatch):
-    recorder = _StopSidecarRecorder()
-    monkeypatch.setattr(daemon_client_module, "stop_sidecar", recorder)
-    restored = InstalledAgent(
-        id="email", version="1.0.0", language="python", installed_at="now"
-    )
-    monkeypatch.setattr(installer_mod, "rollback", lambda *a, **k: restored)
-    resp = client.post("/api/agents/email/rollback", headers=UI)
     assert resp.status_code == 200
     assert recorder.calls == ["email"]
 

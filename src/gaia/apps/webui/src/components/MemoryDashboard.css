@@ -2,7 +2,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Memory Dashboard — agent memory observability */
 
-/* ── Full-page layout (same pattern as SettingsPage) ─── */
+/* ── Full-page layout ─── */
 .memory-dashboard-page {
     display: flex;
     flex-direction: column;
@@ -31,6 +31,8 @@
     padding: 24px;
     overflow-y: auto;
     flex: 1;
+    /* Lay out by the panel's width, not the window's: the sidebar takes a share. */
+    container-type: inline-size;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
 }
@@ -62,6 +64,14 @@
 .mem-section-title-left {
     display: flex; align-items: center; gap: 8px;
 }
+.mem-section-note {
+    margin-left: 8px;
+    font-weight: 400;
+    letter-spacing: 0.5px;
+    text-transform: none;
+    opacity: 0.8;
+}
+
 .mem-section-count {
     display: inline-flex;
     align-items: center;
@@ -163,7 +173,7 @@
 /* ── 1. Header Stat Cards ────────────────────────────────────── */
 .mem-stat-cards {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 14px;
     margin-bottom: 28px;
 }
@@ -378,6 +388,8 @@
 
 .mem-filter-search {
     flex: 1;
+    box-sizing: border-box;
+    width: 100%;
     min-width: 180px;
     padding: 7px 12px 7px 32px;
     font-size: 12px;
@@ -544,7 +556,21 @@
     display: flex; gap: 2px; opacity: 0;
     transition: opacity var(--duration-fast) var(--ease);
 }
-.mem-knowledge-table tbody tr:hover .mem-row-actions { opacity: 1; }
+.mem-knowledge-table tbody tr:hover .mem-row-actions,
+.mem-knowledge-table tbody tr:focus-within .mem-row-actions,
+.mem-row-actions:has(.is-confirm) { opacity: 1; }
+
+/* Actions stay pinned to the visible edge while the table scrolls sideways. */
+.mem-knowledge-table .mem-actions-cell {
+    position: sticky;
+    right: 0;
+    background: var(--bg-primary);
+    box-shadow: -8px 0 8px -8px rgba(0, 0, 0, 0.35);
+}
+.mem-knowledge-table tbody tr:hover .mem-actions-cell,
+.mem-knowledge-table .mem-expanded-row .mem-actions-cell {
+    background: color-mix(in srgb, var(--text-primary) 3%, var(--bg-primary));
+}
 
 .mem-row-action-btn {
     display: flex; align-items: center; justify-content: center;
@@ -554,7 +580,10 @@
     transition: all var(--duration-fast) var(--ease);
 }
 .mem-row-action-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.mem-row-action-btn.delete:hover { color: var(--danger); }
+.mem-row-action-btn.delete:hover,
+.mem-row-action-btn.delete.is-confirm { color: var(--danger); }
+.mem-row-action-btn.is-confirm { width: auto; padding: 0 6px; }
+.mem-row-delete-label { font-size: 11px; font-weight: 600; }
 
 /* Pagination */
 .mem-pagination {
@@ -655,6 +684,8 @@
 .mem-success-rate.low { color: var(--danger); }
 
 .mem-tool-error {
+    display: inline-block;
+    vertical-align: top;
     max-width: 260px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -881,10 +912,20 @@
 }
 
 /* ── Two-column layout for bottom sections ───────────────────── */
+/* minmax(0, ...) + min-width: 0 so a wide table scrolls in its own wrapper
+   instead of stretching the column past the panel. */
 .mem-two-col {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 24px;
+}
+.mem-two-col > * { min-width: 0; }
+
+@container (max-width: 860px) {
+    .mem-two-col { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-width: 640px) {
+    .mem-stat-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* ── Empty state ─────────────────────────────────────────────── */
@@ -1571,6 +1612,12 @@
 }
 
 /* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .memory-dashboard-header {
+        padding-left: var(--sidebar-toggle-clearance);
+    }
+}
+
 @media (max-width: 900px) {
     .mem-stat-cards {
         grid-template-columns: repeat(2, 1fr);

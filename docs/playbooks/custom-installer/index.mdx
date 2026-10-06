@@ -225,38 +225,24 @@ The bundle is a `.zip` containing your custom agents plus a `bundle.json` table 
 
 ### Export
 
-<CodeGroup>
-```bash CLI
+```bash
 gaia agent export
 # → creates ~/.gaia/export.zip containing every agent under ~/.gaia/agents/
 ```
 
-```text UI
-Settings → Custom Agents → Export All
-# Saves the bundle via a native file-picker dialog.
-```
-</CodeGroup>
-
-Under the hood both flows call `export_custom_agents()` in [`src/gaia/installer/export_import.py`](https://github.com/amd/gaia/blob/main/src/gaia/installer/export_import.py), which walks `~/.gaia/agents/` and writes a deterministic zip with a `bundle.json` manifest.
+Under the hood this calls `export_custom_agents()` in [`src/gaia/installer/export_import.py`](https://github.com/amd/gaia/blob/main/src/gaia/installer/export_import.py), which walks `~/.gaia/agents/` and writes a deterministic zip with a `bundle.json` manifest.
 
 ### Import
 
-<CodeGroup>
-```bash CLI
+```bash
 gaia agent import ~/Downloads/gaia-agents-export.zip
 # Prompts for trust confirmation before installing.
 ```
 
-```text UI
-Settings → Custom Agents → Import
-# File picker → trust confirmation → done.
-```
-</CodeGroup>
-
 Imports go through `import_agent_bundle()` in [`src/gaia/installer/export_import.py`](https://github.com/amd/gaia/blob/main/src/gaia/installer/export_import.py). Each agent is staged in a temp directory and atomically moved into `~/.gaia/agents/<id>/`, so a partial failure leaves previously-installed agents intact. Zip entries are validated for path traversal, absolute paths, symlinks, size, and entry count before anything touches disk.
 
 <Warning>
-  **Importing a bundle installs third-party Python code that runs on your machine when the agent is selected.** Only import bundles from sources you trust. The UI import flow shows the list of agent IDs in the bundle and requires an explicit confirmation click before extraction.
+  **Importing a bundle installs third-party Python code that runs on your machine when the agent is selected.** Only import bundles from sources you trust. `gaia agent import` lists the agent IDs in the bundle and requires explicit confirmation (unless `--yes`) before extraction.
 </Warning>
 
 ### When to use which path

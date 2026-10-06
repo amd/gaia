@@ -252,169 +252,73 @@ class ChatDatabase:
             )""")
         self._conn.commit()
 
+    def _add_column(
+        self,
+        table: str,
+        column: str,
+        ddl: str,
+        backfill: str | None = None,
+        params: tuple = (),
+    ) -> None:
+        """Add *column* to *table* unless present; a failure stops startup."""
+        cols = {row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+        if column in cols:
+            return
+        try:
+            with self._transaction():
+                # Explicit BEGIN so the ALTER and its backfill commit together.
+                self._conn.execute("BEGIN")
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+                if backfill:
+                    self._conn.execute(backfill, params)
+        except sqlite3.Error as e:
+            raise RuntimeError(
+                f"Could not upgrade the chat database at {self._db_path}: adding "
+                f"{table}.{column} failed ({e}). Close other GAIA windows using it "
+                "and restart; if it keeps failing, move the file aside to start fresh."
+            ) from e
+        logger.info("Migrated %s table: added %s column", table, column)
+
     def _migrate(self):
         """Apply incremental schema migrations for existing databases."""
-        # Ensure settings table exists
         self._ensure_settings_table()
-        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(messages)")}
-        if "model_messages" not in cols:
-            self._conn.execute("ALTER TABLE messages ADD COLUMN model_messages TEXT")
-            self._conn.commit()
-        # Add agent_steps column if it doesn't exist (added for observability persistence)
-        try:
-            cols = [
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
-            ]
-            if "agent_steps" not in cols:
-                self._conn.execute("ALTER TABLE messages ADD COLUMN agent_steps TEXT")
-                self._conn.commit()
-                logger.info("Migrated messages table: added agent_steps column")
-        except Exception as e:
-            logger.debug("Migration check for agent_steps: %s", e)
-
-        # Add inference_stats column for persisting LLM performance metrics
-        try:
-            cols = [
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
-            ]
-            if "inference_stats" not in cols:
-                self._conn.execute(
-                    "ALTER TABLE messages ADD COLUMN inference_stats TEXT"
-                )
-                self._conn.commit()
-                logger.info("Migrated messages table: added inference_stats column")
-        except Exception as e:
-            logger.debug("Migration check for inference_stats: %s", e)
-
-        # Add indexing_status column for background indexing progress
-        try:
-            doc_cols = [
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(documents)").fetchall()
-            ]
-            if "indexing_status" not in doc_cols:
-                self._conn.execute(
-                    "ALTER TABLE documents ADD COLUMN indexing_status TEXT DEFAULT 'complete'"
-                )
-                self._conn.commit()
-                logger.info("Migrated documents table: added indexing_status column")
-        except Exception as e:
-            logger.debug("Migration check for indexing_status: %s", e)
-
-        # Add file_mtime column for tracking file modification times
-        try:
-            doc_cols = [
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(documents)").fetchall()
-            ]
-            if "file_mtime" not in doc_cols:
-                self._conn.execute("ALTER TABLE documents ADD COLUMN file_mtime REAL")
-                self._conn.commit()
-                logger.info("Migrated documents table: added file_mtime column")
-        except Exception as e:
-            logger.debug("Migration check for file_mtime: %s", e)
-
-        # Add last_error column for persisting indexing failure messages
-        try:
-            doc_cols = [
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(documents)").fetchall()
-            ]
-            if "last_error" not in doc_cols:
-                self._conn.execute("ALTER TABLE documents ADD COLUMN last_error TEXT")
-                self._conn.commit()
-                logger.info("Migrated documents table: added last_error column")
-        except Exception as e:
-            logger.debug("Migration check for last_error: %s", e)
-
-        # Add private column to sessions for per-session incognito mode,
-        # and agent_type column for per-session agent selection.
-        try:
-            sess_cols = [
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
-            ]
-            if "private" not in sess_cols:
-                self._conn.execute(
-                    "ALTER TABLE sessions ADD COLUMN private INTEGER NOT NULL DEFAULT 0"
-                )
-                self._conn.commit()
-                logger.info("Migrated sessions table: added private column")
-            if "agent_type" not in sess_cols:
-                self._conn.execute(
-                    "ALTER TABLE sessions ADD COLUMN agent_type TEXT DEFAULT 'chat'"
-                )
-                # SQLite ALTER TABLE DEFAULT doesn't backfill existing rows
-                self._conn.execute(
-                    "UPDATE sessions SET agent_type = 'chat' WHERE agent_type IS NULL"
-                )
-                self._conn.commit()
-                logger.info("Migrated sessions table: added agent_type column")
-        except Exception as e:
-            logger.debug("Migration check for sessions columns: %s", e)
-
-        # Add device column for multi-device support (issue #1220)
-        try:
-            sess_cols = [
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
-            ]
-            if "device" not in sess_cols:
-                self._conn.execute(
-                    "ALTER TABLE sessions ADD COLUMN device TEXT DEFAULT 'gpu'"
-                )
-                self._conn.execute(
-                    "UPDATE sessions SET device = 'gpu' WHERE device IS NULL"
-                )
-                self._conn.commit()
-                logger.info("Migrated sessions table: added device column")
-        except Exception as e:
-            logger.debug("Migration check for device column: %s", e)
-
-        # Add mail_provider column for per-session email-backend selection
-        # (Gmail vs Outlook). See EmailAgentConfig.mail_provider.
-        try:
-            sess_cols = [
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
-            ]
-            if "mail_provider" not in sess_cols:
-                self._conn.execute(
-                    "ALTER TABLE sessions ADD COLUMN mail_provider TEXT DEFAULT 'google'"
-                )
-                self._conn.execute(
-                    "UPDATE sessions SET mail_provider = 'google' WHERE mail_provider IS NULL"
-                )
-                self._conn.commit()
-                logger.info("Migrated sessions table: added mail_provider column")
-        except Exception as e:
-            logger.debug("Migration check for mail_provider column: %s", e)
-
-        # Add title_is_custom column so the auto-retitler can tell explicit
-        # titles from its own (#2165). Backfill: existing non-placeholder
-        # titles could be user-set or auto-generated — pin them all, since
-        # wrongly renaming a user's title is worse than never renaming.
-        try:
-            sess_cols = [
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
-            ]
-            if "title_is_custom" not in sess_cols:
-                self._conn.execute(
-                    "ALTER TABLE sessions ADD COLUMN title_is_custom INTEGER NOT NULL DEFAULT 0"
-                )
-                placeholders = ", ".join("?" for _ in PLACEHOLDER_TITLES)
-                self._conn.execute(
-                    f"UPDATE sessions SET title_is_custom = 1 "
-                    f"WHERE LOWER(TRIM(COALESCE(title, ''))) NOT IN ({placeholders})",
-                    tuple(PLACEHOLDER_TITLES),
-                )
-                self._conn.commit()
-                logger.info("Migrated sessions table: added title_is_custom column")
-        except Exception as e:
-            logger.debug("Migration check for title_is_custom column: %s", e)
+        self._add_column("messages", "model_messages", "TEXT")
+        self._add_column("messages", "agent_steps", "TEXT")
+        self._add_column("messages", "inference_stats", "TEXT")
+        self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
+        self._add_column("documents", "file_mtime", "REAL")
+        self._add_column("documents", "last_error", "TEXT")
+        # Per-session incognito mode and agent selection.
+        self._add_column("sessions", "private", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column(
+            "sessions",
+            "agent_type",
+            "TEXT DEFAULT 'chat'",
+            "UPDATE sessions SET agent_type = 'chat' WHERE agent_type IS NULL",
+        )
+        self._add_column(
+            "sessions",
+            "device",
+            "TEXT DEFAULT 'gpu'",
+            "UPDATE sessions SET device = 'gpu' WHERE device IS NULL",
+        )
+        # Legacy rows predate the "every mailbox" filter (#1596) and stay on Gmail.
+        self._add_column(
+            "sessions",
+            "mail_provider",
+            "TEXT DEFAULT 'google'",
+            "UPDATE sessions SET mail_provider = 'google' WHERE mail_provider IS NULL",
+        )
+        # Existing titles may be user-set; never auto-rename them (#2165).
+        placeholders = ", ".join("?" for _ in PLACEHOLDER_TITLES)
+        self._add_column(
+            "sessions",
+            "title_is_custom",
+            "INTEGER NOT NULL DEFAULT 0",
+            "UPDATE sessions SET title_is_custom = 1 "
+            f"WHERE LOWER(TRIM(COALESCE(title, ''))) NOT IN ({placeholders})",
+            tuple(PLACEHOLDER_TITLES),
+        )
 
     def close(self):
         """Close database connection."""

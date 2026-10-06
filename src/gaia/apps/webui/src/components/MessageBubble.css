@@ -1,181 +1,36 @@
-/* Message -- refined conversation style.
- * Default fade-in: 380ms with a soft cubic-bezier curve and a small
- * 6-px upward drift. Long enough to read as a deliberate appearance
- * (not a pop), short enough that quick-replies don't feel sluggish.
- * Removed the scale step — scaling rounded cards causes a brief
- * subpixel blur on retina screens. */
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* Plain transcript: assistant text sits on the page, the user's turn in a
+ * quiet bubble on the right. No cards, avatars or shadows. */
 .msg {
-    padding: 16px 24px;
-    max-width: 900px;
-    margin: 0 auto;
-    width: 100%;
     position: relative;
-    animation: msgFadeIn 380ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+    width: 100%;
+    padding: 10px 0;
+    animation: msgFadeIn 240ms var(--ease) both;
 }
 
 @keyframes msgFadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(6px);
-        /* filter: blur reads as a "developing" effect — very subtle
-           but adds polish on entry without slowing perception. */
-        filter: blur(2px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-        filter: blur(0);
-    }
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
-/* User messages — right-anchored bubble (chat-app convention).
- * Mirrors the assistant card treatment but smaller and pinned to the
- * right side of the column, so the conversation reads as a back-and-
- * forth between two visual columns rather than "floating right-aligned
- * text" vs. "card". The outer .msg keeps its 900px column; flex
- * justify-content pushes .msg-inner (the actual bubble) to the right. */
 .msg-user {
-    background: transparent;
-    border: none;
-    /* Right-anchor the inner bubble within the 900px column. */
     display: flex;
     justify-content: flex-end;
 }
+
 .msg-user .msg-inner {
-    /* Cap bubble width so short messages stay compact; long messages
-       wrap inside the bubble instead of spanning the whole column. */
-    max-width: 70%;
+    max-width: min(80%, 620px);
+    padding: 10px 14px;
     background: var(--bg-user-msg);
-    border: 1px solid var(--border-light);
     border-radius: var(--radius-xl);
-    padding: 12px 18px;
-    /* Subtle elevation — slightly lighter than the assistant card so
-       the assistant's reply visually anchors the conversation. */
-    box-shadow:
-        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 4%, transparent),
-        0 1px 1px rgba(0, 0, 0, 0.04),
-        0 4px 10px -2px rgba(0, 0, 0, 0.10),
-        0 8px 20px -8px rgba(0, 0, 0, 0.08);
-    transition: box-shadow var(--duration) var(--ease),
-                transform var(--duration) var(--ease);
 }
-.msg-user .msg-inner:hover {
-    transform: translateY(-1px);
-    box-shadow:
-        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 5%, transparent),
-        0 2px 2px rgba(0, 0, 0, 0.05),
-        0 6px 14px -2px rgba(0, 0, 0, 0.12),
-        0 12px 28px -10px rgba(0, 0, 0, 0.10);
-}
-[data-theme="dark"] .msg-user .msg-inner {
-    box-shadow:
-        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent),
-        0 1px 2px rgba(0, 0, 0, 0.30),
-        0 6px 16px -2px rgba(0, 0, 0, 0.45),
-        0 12px 28px -10px rgba(0, 0, 0, 0.30);
-}
-[data-theme="dark"] .msg-user .msg-inner:hover {
-    box-shadow:
-        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 8%, transparent),
-        0 2px 3px rgba(0, 0, 0, 0.35),
-        0 8px 22px -2px rgba(0, 0, 0, 0.55),
-        0 16px 36px -12px rgba(0, 0, 0, 0.40);
-}
-/* Header inside user bubble: empty .msg-header-left on the left,
-   .msg-actions on the right (default flex layout — no order swap). */
+
 .msg-user .msg-header {
-    justify-content: space-between;
-    /* When the left side is empty (user has no avatar/name), collapse
-       the header height so the bubble doesn't gain phantom top padding.
-       Actions still appear on hover via a small absolute overlay. */
     min-height: 0;
     margin-bottom: 0;
 }
-/* Body: no avatar gutter, left-aligned text inside the bubble. */
-.msg-user .msg-body {
-    padding-left: 0;
-}
-
-[data-theme="dark"] .msg-user {
-    background: transparent;
-}
-
-/* Assistant messages — soft rounded card, no error-style red bar.
- * Previously this was a hard-edged horizontal strip with a 2px AMD-red
- * left border (shared with .msg-error) so every reply read as a
- * warning. Now it's a softly rounded panel that visually sits inside
- * the chat column instead of cutting it horizontally — feels like a
- * conversation card rather than a console log line. The red is
- * reserved for actual errors and the small brand accents only. */
-.msg-assistant {
-    background: var(--bg-assistant-msg);
-    border-radius: var(--radius-xl); /* 14px — matches the visual weight
-                                         of avatar/buttons elsewhere */
-    border: 1px solid var(--border-light);
-    /* Inset slightly from the chat column so the rounding is actually
-       visible — full-bleed strips with rounded corners look amateur. */
-    width: calc(100% - 16px);
-    margin: 4px auto 8px;
-    /* Slightly tighter padding than the old strip — the rounded
-       container already gives breathing room. */
-    padding: 14px 22px;
-    /* Lift the card off the page in 3D — multi-layer shadow gives
-       depth without the cartoon "drop shadow" look. Order of layers:
-         (1) tiny inset top-edge highlight  → catches "light from above"
-         (2) crisp 1-px contact shadow      → defines the bottom edge
-         (3) soft mid-distance shadow       → the actual elevation
-         (4) wider ambient shadow           → grounds the card on the
-             surface so it doesn't float
-       Numbers tuned for a calm, professional feel — not a button-
-       press bounce. The hover state lifts marginally for affordance
-       without becoming a CTA. */
-    box-shadow:
-        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 4%, transparent),
-        0 1px 1px rgba(0, 0, 0, 0.04),
-        0 4px 10px -2px rgba(0, 0, 0, 0.10),
-        0 8px 20px -8px rgba(0, 0, 0, 0.08);
-    transition: box-shadow var(--duration) var(--ease),
-                transform var(--duration) var(--ease);
-    /* Slightly slower than user messages — assistant cards have more
-       to "land" (shadow + border + bg). Same fade keyframes for a
-       coherent rhythm down the thread. */
-    animation: msgFadeIn 450ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
-}
-
-/* On hover the card lifts ~1px and the shadow softens to give a
-   subtle 3D affordance. Threading hover here (not on .msg) keeps
-   user messages flat — they're not a card. */
-.msg-assistant:hover {
-    transform: translateY(-1px);
-    box-shadow:
-        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 5%, transparent),
-        0 2px 2px rgba(0, 0, 0, 0.05),
-        0 6px 14px -2px rgba(0, 0, 0, 0.12),
-        0 12px 28px -10px rgba(0, 0, 0, 0.10);
-}
-
-[data-theme="dark"] .msg-assistant {
-    /* Dark mode needs deeper shadows to read as elevation; on a
-       near-black surface a 0.10 alpha shadow effectively disappears.
-       Keep the inset highlight tinted brighter to mimic top-light. */
-    box-shadow:
-        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent),
-        0 1px 2px rgba(0, 0, 0, 0.30),
-        0 6px 16px -2px rgba(0, 0, 0, 0.45),
-        0 12px 28px -10px rgba(0, 0, 0, 0.30);
-}
-[data-theme="dark"] .msg-assistant:hover {
-    box-shadow:
-        inset 0 1px 0 color-mix(in srgb, var(--text-primary) 8%, transparent),
-        0 2px 3px rgba(0, 0, 0, 0.35),
-        0 8px 22px -2px rgba(0, 0, 0, 0.55),
-        0 16px 36px -12px rgba(0, 0, 0, 0.40);
-}
-
-/* Dark theme override removed: the base --bg-assistant-msg already
-   resolves to a neutral white-tinted rgba in dark mode (see
-   styles/index.css), so the previous red-haze override here was
-   actively wrong. Now both themes inherit the variable directly. */
 
 .msg-inner { max-width: 100%; }
 
@@ -183,7 +38,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 8px;
+    min-height: 0;
 }
 
 .msg-header-left {
@@ -192,95 +47,16 @@
     gap: 4px;
 }
 
-/* Avatar -- rounded for modern feel */
-.msg-avatar {
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-md);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    font-weight: 700;
-    font-family: var(--font-mono);
-    flex-shrink: 0;
-    letter-spacing: 0;
-}
-.msg-avatar-user {
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
-}
-.msg-avatar-assistant {
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
-    color: var(--text-secondary);
-    overflow: hidden;
-}
-[data-theme="dark"] .msg-avatar-assistant {
-    /* Soft neutral border + subtle lift instead of the previous red glow.
-       The red glow contributed to the "error vibe" the user complained
-       about. Brand red is reserved for the small "GAIA" name text; the
-       avatar itself reads as a calm UI element. */
-    border-color: var(--border);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-primary) 2%, transparent);
-}
-.msg-avatar-assistant img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.msg-role {
-    font-size: 11px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: var(--text-muted);
-}
-.role-assistant { color: var(--accent); }
-
-/* Agent name in message header: "GAIA Chat Agent | 3m ago" */
-.msg-role-brand {
-    font-size: 11px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: var(--accent);
-    margin: 0 4px;
-}
-.msg-role-agent {
-    font-size: 11px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    color: var(--text-muted);
-}
-.msg-header-sep {
-    font-size: 11px;
-    font-family: var(--font-mono);
-    color: var(--text-muted);
-    opacity: 0.4;
-    user-select: none;
-}
-
-/* Timestamp -- always visible at reduced opacity, full on hover */
-.msg-timestamp {
-    font-size: 10px;
-    font-family: var(--font-mono);
-    color: var(--text-muted);
-    opacity: 0.6;
-    transition: opacity 200ms var(--ease);
-    white-space: nowrap;
-}
-.msg:hover .msg-timestamp { opacity: 1; }
-
 .msg-actions {
+    position: absolute;
+    right: 0;
+    bottom: -14px;
     display: flex;
     gap: 2px;
     opacity: 0;
-    transition: opacity 200ms var(--ease);
+    transition: opacity var(--duration-fast) var(--ease);
 }
+
 .msg:hover .msg-actions,
 .msg:focus-within .msg-actions { opacity: 1; }
 
@@ -289,18 +65,16 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 5px 10px;
+    padding: 4px 6px;
     border-radius: var(--radius-sm);
-    font-size: 10px;
-    font-family: var(--font-mono);
     color: var(--text-muted);
-    transition: all var(--duration-fast) var(--ease);
+    font-size: 11px;
 }
+
 .msg-action-btn:hover,
 .msg-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
-.msg-copy.copied { color: var(--accent-green); background: var(--accent-green-dim); }
+.msg-copy.copied { color: var(--accent-green); }
 
-/* Delete button */
 .msg-delete:hover { color: var(--danger); }
 .msg-delete.confirm {
     color: var(--danger);
@@ -308,15 +82,11 @@
     opacity: 1;
 }
 
-/* Message body -- assistant uses sans-serif for readability */
 .msg-body {
-    font-size: 14.5px;
-    line-height: 1.78;
-    word-wrap: break-word;
-    overflow-wrap: break-word;
-    padding-left: 32px;
-    overflow-y: hidden;
     min-width: 0;
+    font-size: 15px;
+    line-height: 1.65;
+    overflow-wrap: break-word;
 }
 
 /* Assistant message body: use sans-serif for long prose readability */
@@ -343,6 +113,21 @@
 
 [data-theme="dark"] .msg-error {
     background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+
+.msg-stopped {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 12px;
+}
+.msg-stopped.is-unconfirmed {
+    color: var(--accent-yellow);
 }
 
 .error-banner {

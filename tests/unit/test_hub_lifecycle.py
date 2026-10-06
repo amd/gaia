@@ -259,15 +259,9 @@ def test_default_loader_installed_wheel_path_unregressed():
     assert "entry point" in str(exc.value)
 
 
-def test_default_loader_builtin_path_unregressed():
-    # 'builder' is a reserved builtin id; presence in the registry is proof.
-    reg = _FakeRegistry([_FakeRegistration("builder", source="builtin")])
-    assert lifecycle._default_loader("builder", reg) == []
-
-
-def test_health_builtin_without_sentinel_is_checked(tmp_path):
-    # A builtin id (e.g. "chat") has no sentinel but must still be health-checked
-    # rather than reported not_installed.
+def test_health_registered_without_sentinel_is_checked(tmp_path):
+    # A registered agent with no sentinel must still be health-checked rather
+    # than reported not_installed.
     reg = _FakeRegistry([_FakeRegistration("chat", source="builtin")])
     result = health_check(
         "chat", registry=reg, install_root=tmp_path, loader=lambda aid, r: []

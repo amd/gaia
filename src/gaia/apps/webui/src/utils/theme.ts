@@ -3,6 +3,19 @@
 
 export type Theme = 'light' | 'dark';
 
+/** What the user picked; `system` follows the OS appearance. */
+export type ThemePreference = Theme | 'system';
+
+/** The OS appearance, or dark (the designed default) where it can't be read. */
+export function systemTheme(): Theme {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'dark';
+    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+export function resolveTheme(pref: ThemePreference): Theme {
+    return pref === 'system' ? systemTheme() : pref;
+}
+
 /**
  * The canvas, spelled out. `<meta name="theme-color">` is what paints the
  * browser frame around the app on mobile Chrome, an installed PWA, and some
@@ -11,7 +24,7 @@ export type Theme = 'light' | 'dark';
  * token in both themes.
  */
 const CANVAS: Record<Theme, string> = {
-    light: '#F5F2EC',
+    light: '#FFFFFF',
     dark: '#17161C',
 };
 

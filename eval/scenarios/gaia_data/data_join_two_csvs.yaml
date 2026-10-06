@@ -1,0 +1,50 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/csv/orders.csv + customers.csv —
+# see GAIA_FIXTURE_VALUES.md "Documents and data".
+id: data_join_two_csvs
+name: "Data — Join Two CSVs in the Scratchpad"
+category: gaia_data
+severity: high
+tags: [t2_compound]
+description: |
+  Two related CSVs (orders keyed by customer_id; customers with a tier) are
+  loaded into two scratchpad tables and answered with JOINs across a chain of
+  follow-ups. Neither file alone can answer the tier questions.
+
+persona: data_analyst
+
+setup:
+  index_documents: []
+  notes: "Fixture CSVs staged at ~/gaia-eval/tiers_documents/csv/orders.csv (12 rows) and customers.csv (5 rows)."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to load both ~/gaia-eval/tiers_documents/csv/orders.csv and ~/gaia-eval/tiers_documents/csv/customers.csv into the scratchpad and confirm row counts"
+    user_message: "Load ~/gaia-eval/tiers_documents/csv/orders.csv and ~/gaia-eval/tiers_documents/csv/customers.csv into scratchpad tables and confirm how many rows each has."
+    ground_truth:
+      expected_answer: "orders: 12 rows; customers: 5 rows"
+    success_criteria: "agent_tools[] shows two create_table + insert_data pairs. Agent reports 12 orders and 5 customers."
+
+  - turn: 2
+    objective: "Ask for revenue by customer tier"
+    user_message: "Revenue by customer tier?"
+    ground_truth:
+      expected_answer: "Gold $3,010; Silver $600; Bronze $135 (total $3,745)"
+    success_criteria: "agent_tools[] shows a query_data JOIN of the two tables. All three tier totals exact. FAIL on any wrong total or a tier answer with no JOIN query."
+
+  - turn: 3
+    objective: "Ask which customer, by name, spent the most"
+    user_message: "Which customer spent the most? Name, not ID."
+    ground_truth:
+      expected_answer: "Cedar Gym, $2,030"
+    success_criteria: "Agent answers Cedar Gym $2,030. Answering 'C3' alone or a different customer is a FAIL."
+
+  - turn: 4
+    objective: "Ask for the average order value for Gold-tier customers"
+    user_message: "And the average order size for Gold customers?"
+    ground_truth:
+      expected_answer: "$501.67 ($3,010 over 6 orders)"
+    success_criteria: "Agent answers $501.67 (accept $501.66-$501.67) from a query. Averaging per customer ($1,505) instead of per order is a FAIL."
+
+expected_outcome: |
+  Two tables, correct JOINs, exact tier totals, the top customer by name and
+  a correct per-order average.

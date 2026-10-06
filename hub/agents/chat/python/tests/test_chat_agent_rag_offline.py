@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
+from gaia.agents.tools.rag_tools import SUMMARY_MAX_TOKENS
 from gaia.llm.lemonade_client import MODELS, LemonadeClient
 
 EMBED_DIM = 64
@@ -337,7 +338,10 @@ def test_summarize_document_sends_full_text_to_llm(agent, workdir):
     assert result["summary"] == "A summary."
     prompt = _llm_prompt(agent)
     assert "testing release pipelines" in prompt
-    assert agent.rag.chat.send.call_args.kwargs == {"no_history": True}
+    assert agent.rag.chat.send.call_args.kwargs == {
+        "no_history": True,
+        "max_tokens": SUMMARY_MAX_TOKENS,
+    }
 
 
 # ── Search keys and tool surface ─────────────────────────────────────────

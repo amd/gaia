@@ -24,7 +24,7 @@ jobs:
           python-version: "3.x"
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Clean previous builds
         run: rm -rf dist/ build/ *.egg-info
       - name: Install frontend dependencies

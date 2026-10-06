@@ -29,6 +29,7 @@ except ImportError as _watchdog_err:
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
 from gaia_agent_chat.session import SessionManager
 from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
+from gaia_agent_chat.tool_requests import requested_tools
 
 from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.checks import (
@@ -67,6 +68,8 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ShellToolsMixin,
     WaitToolsMixin,
 )
+from gaia.agents.tools.path_access import read_access_error, write_access_error
+from gaia.agents.tools.rag_tools import documents_still_indexing
 from gaia.llm.inference_location import (
     InferenceLocation,
     resolve_inference_location,
@@ -237,6 +240,9 @@ class ChatAgentConfig:
 
     # Session persistence (UI session ID for cross-turn document retention)
     ui_session_id: Optional[str] = None
+    # Memory starts off (private chat / memory off in the UI): the embedder
+    # loads only once memory is actually used.
+    memory_incognito: bool = False
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
     enable_sd_tools: bool = False  # Stable Diffusion image generation
@@ -506,7 +512,10 @@ class ChatAgent(
         self.tool_loader = self._maybe_build_tool_loader()
 
         # Initialize memory subsystem (before super().__init__ which calls _register_tools)
-        self.init_memory(embedding_model=effective_embedding_model)
+        self.init_memory(
+            embedding_model=effective_embedding_model,
+            incognito=config.memory_incognito,
+        )
 
         # Store base URL for use in _register_tools() (VLM, etc.)
         self._base_url = effective_base_url
@@ -621,14 +630,27 @@ class ChatAgent(
             self._start_watching()
 
     def _indexed_documents_line(self) -> str:
-        """``[Indexed documents: a.pdf, b.txt]``, or "" when none are indexed."""
+        """``[Indexed documents: a.pdf, b.txt]``, or "" when none are indexed.
+
+        A document still indexing in the background is not searchable, so it
+        is named on a line of its own instead.
+        """
         profile = getattr(self.config, "prompt_profile", "full")
         if "doc_rag" not in get_profile_spec(profile).tool_groups:
             return ""
-        if not (self.rag and self.rag.indexed_files):
+        if not self.rag:
             return ""
-        names = sorted({Path(fp).name for fp in self.rag.indexed_files})
-        return f"[Indexed documents: {', '.join(names)}]"
+        lines = []
+        if self.rag.indexed_files:
+            names = sorted({Path(fp).name for fp in self.rag.indexed_files})
+            lines.append(f"[Indexed documents: {', '.join(names)}]")
+        pending = sorted({Path(fp).name for fp in documents_still_indexing(self.rag)})
+        if pending:
+            lines.append(
+                "[Still indexing in the background, not searchable yet: "
+                f"{', '.join(pending)}]"
+            )
+        return "\n".join(lines)
 
     def get_memory_dynamic_context(self) -> str:
         """Per-turn context, plus which documents are indexed right now."""
@@ -669,7 +691,8 @@ class ChatAgent(
             # was already logged there) — nothing to retry.
             return None
         try:
-            return RAGSDK(self._rag_config)
+            # Shared, so access the user grants mid-chat reaches indexing too.
+            return RAGSDK(self._rag_config, path_validator=self.path_validator)
         except Exception as e:
             logger.warning(
                 "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
@@ -856,6 +879,10 @@ class ChatAgent(
         join the same signal, ahead of recalled-procedure tools: the user's
         skill is the stronger signal. A skill stops contributing when the body
         filter hides it or it is unloaded.
+
+        Tools the current message explicitly asks for (``requested_tools``)
+        go ahead of both: semantic ranking alone dropped ``run_shell_command``
+        from "use your shell tool to run pwd".
         """
         if not self._dynamic_tools_active():
             return None
@@ -870,7 +897,10 @@ class ChatAgent(
             if name not in skill_tools:
                 skill_tools.append(name)
         return self.tool_loader.select(
-            query, self._tools_registry, skill_tools=skill_tools
+            query,
+            self._tools_registry,
+            skill_tools=skill_tools,
+            requested_tools=requested_tools(user_input, self._tools_registry),
         )
 
     def _admit_skill_tools(self, names: List[str]) -> None:
@@ -1173,7 +1203,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.config, "enable_scratchpad", False
         ):
             scratchpad_section = """
-**DATA ANALYSIS WORKFLOW (Scratchpad):** find_files → create_table → read_file + insert_data per doc → query_data (SQL: SUM/AVG/GROUP BY) → drop_table when done.
+**DATA ANALYSIS WORKFLOW (Scratchpad):** find_files → create_table → read_file + insert_data per doc → query_data (SQL: SUM/AVG/GROUP BY) → drop_table → final answer built from the query results.
 """
 
         browser_section = ""
@@ -1389,7 +1419,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
     def _is_path_allowed(self, path: str) -> bool:
         """
-        Check if a path is within allowed directories.
+        Check if a path may be read, without asking the user.
         Uses PathValidator for the actual check.
 
         Args:
@@ -1398,7 +1428,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         Returns:
             True if path is allowed, False otherwise
         """
-        return self.path_validator.is_path_allowed(path, prompt_user=False)
+        return self.path_validator.validate_read(path, prompt_user=False)[0]
 
     def _script_project_root(self) -> Optional[str]:
         """This session's project root, or ``None`` when there is no project.
@@ -1608,6 +1638,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 Returns:
                     Dictionary with files, directories, and total count
                 """
+                path = os.path.expanduser(path)
+                denied = read_access_error(self, path)
+                if denied:
+                    return denied
                 try:
                     items = os.listdir(path)
                     files = sorted(
@@ -2284,10 +2318,16 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     ),
                 }
             if not output_path:
+                # GAIA's own output folder, not the user's files.
                 tts_dir = Path.home() / ".gaia" / "tts"
                 tts_dir.mkdir(parents=True, exist_ok=True)
                 ts = time.strftime("%Y%m%d_%H%M%S")
                 output_path = str(tts_dir / f"speech_{ts}.wav")
+            else:
+                output_path = os.path.expanduser(output_path)
+                denied = write_access_error(self, output_path)
+                if denied:
+                    return denied
 
             try:
                 client = LemonadeTTSClient(

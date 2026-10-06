@@ -799,6 +799,11 @@ class Scheduler:
             interval_seconds = parse_interval(interval)
             config = None
             schedule_config_json = None
+        if interval_seconds <= 0:
+            raise ValueError(
+                f"Interval '{interval}' is zero; a schedule must wait at least "
+                "1 second between runs. Use a form like 'every 30m'."
+            )
 
         async with self._lock:
             if name in self._tasks:
@@ -1072,6 +1077,15 @@ class Scheduler:
 
         # ── Create / reuse chat session for this schedule ────────────
         has_sessions = hasattr(self._db, "create_session")
+        if (
+            has_sessions
+            and task.session_id
+            and not self._db.get_session(task.session_id)
+        ):
+            logger.warning(
+                "Chat for schedule '%s' was deleted; starting a new one", task.name
+            )
+            task.session_id = None
         if has_sessions and not task.session_id:
             try:
                 session = self._db.create_session(title=f"Schedule: {task.name}")

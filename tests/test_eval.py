@@ -286,6 +286,8 @@ class TestAgentEvalRunner:
             "gaia_voice",
             "gaia_media",
             "gaia_email",
+            "gaia_git",
+            "gaia_resilience",
         }
         known_tags = {
             "t1_basic",

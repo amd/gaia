@@ -110,7 +110,7 @@ the failure becomes common.
 | `state` CSRF on callback         | Random `state` + `hmac.compare_digest`; missing state → 400                            |
 | XSS on success page              | Static HTML literal — no echoed user input                                             |
 | Prompt-injection scope escalation | Per-agent grants gate every token fetch; no implicit consent                           |
-| Malicious custom agent claim AGENT_ID | Reserved built-in IDs blocked; grants keyed by `(origin_hash, id)`                     |
+| Malicious custom agent claim AGENT_ID | Grants keyed by `(origin_hash, id)`, so a reused id never inherits another agent's grants |
 | Forged agent identity in tool body | `_agent_context` is private (not in `gaia.connectors.__init__`)                       |
 | Keychain backend regression      | Backend allowlist refuses `Plaintext*Keyring` / `Encrypted*Keyring`                    |
 | Stale token after rotation       | Eager `client_id_hash` tripwire on every load                                          |

@@ -53,6 +53,14 @@ from gaia.agents.base.context_eviction import (
     evict_threshold_from_env,
     resolve_context_eviction,
 )
+from gaia.agents.base.denied_effects import (
+    NETWORK,
+    PATH,
+    Denial,
+    DeniedEffects,
+    Effect,
+    render_call,
+)
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.extraction import MAX_SECONDS as EXTRACTION_MAX_SECONDS
 from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
@@ -80,6 +88,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
     POST_ANSWER_CLOSING_PROMPT,
+    REOPENED_MARKER,
     TurnScopeGuard,
 )
 from gaia.agents.base.verification import (
@@ -382,6 +391,35 @@ class ToolCallTruncated(ValueError):
         )
 
 
+class _UserWaitClock:
+    """Time a tool body spends blocked on the user, which its timeout excludes."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._done = 0.0
+        self._open: List[float] = []
+
+    def begin(self) -> None:
+        with self._lock:
+            self._open.append(time.monotonic())
+
+    def end(self) -> None:
+        with self._lock:
+            self._done += time.monotonic() - self._open.pop()
+
+    def waited(self) -> float:
+        """Seconds waited so far, including a question still on screen."""
+        now = time.monotonic()
+        with self._lock:
+            return self._done + sum(now - started for started in self._open)
+
+
+# Set inside a bounded tool worker so a prompt raised from its body pauses its clock.
+_TOOL_USER_WAIT: contextvars.ContextVar[Optional[_UserWaitClock]] = (
+    contextvars.ContextVar("gaia_tool_user_wait", default=None)
+)
+
+
 class ToolExecutionTimeout(Exception):
     """Raised when a tool body exceeds its bounded execution window.
 
@@ -478,9 +516,12 @@ class HardwareRequirement:
     reason: str = ""
 
 
-# Prefixes for tools that represent SD (Stable Diffusion) capability.
-# Used to detect whether the agent has attempted image-generation tools.
+# Prefixes of the image-generation tools whose recorded outcome an answer must match.
 _SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
+
+
+def _is_image_tool(tool_name: str) -> bool:
+    return tool_name.lower().startswith(_SD_CAPABILITY_TOOLS)
 
 
 # Final answer when a turn still overflows the model's context window after
@@ -991,6 +1032,66 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     ):
         return "narration"
     return None
+
+
+# First-person intent that announces the call it rides with ("I'll read it").
+_TOOL_STEP_INTENT_PATTERN = re.compile(
+    r"^(?:(?:ok(?:ay)?|so|alright|now|first|next|then)[,.]?\s+)*"
+    r"(?:i'll|i will|i'm going to|i am going to|let's"
+    r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b))\b",
+    re.IGNORECASE,
+)
+_TRAILING_SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+|\n+")
+# A call that fetches something feeds the reply after it, so text sent beside
+# it is progress, never the answer. Executors count too: they may be lookups.
+_LOOKUP_TOOL_PATTERN = re.compile(
+    r"^(?:read|search|find|list|get|browse|query|analy[sz]e|fetch|recall|describe"
+    r"|inspect|check|view|show|grep|lookup|look|load|open|summari[sz]e|extract"
+    r"|transcribe|download|web|run|execute)(?:_|$)"
+)
+
+
+def _answer_beside_tool_calls(
+    content: Any, tool_calls: Optional[list] = None
+) -> Optional[str]:
+    """The answer in text sent alongside tool calls, or ``None`` if it has none.
+
+    Only beside closing actions ("drop_table", "remember"): beside a lookup the
+    reply that follows is the answer. Reasoning and trailing next-step
+    narration ("Let me drop the table.") are removed; what remains counts only
+    if it is not itself a plan or narration.
+    """
+    if not isinstance(content, str):
+        return None
+    if any(
+        _LOOKUP_TOOL_PATTERN.match(str(call.get("name", "")))
+        for call in tool_calls or []
+    ):
+        return None
+    text, _ = _split_reasoning(content)
+    while text:
+        last = _TRAILING_SENTENCE_PATTERN.split(text)[-1]
+        sentence = re.sub(r"[*_`#>]", "", last).replace("’", "'").strip()
+        if not (
+            _NEXT_STEP_INTENT_PATTERN.match(sentence)
+            or _TOOL_STEP_INTENT_PATTERN.match(sentence)
+        ):
+            break
+        text = text[: text.rfind(last)].rstrip()
+    if not text or _unfinished_answer_kind(text):
+        return None
+    return text
+
+
+def _with_answer_beside_tool_calls(answer: str, beside: Optional[str]) -> str:
+    """Put the answer sent alongside the turn's last tool calls ahead of *answer*.
+
+    Only when *answer* is a shorter wrap-up ("Scratch table cleaned up.");
+    a reply that restates or outgrows it already stands on its own.
+    """
+    if not beside or beside in answer or len(answer.strip()) >= len(beside):
+        return answer
+    return f"{beside}\n\n{answer.strip()}" if answer.strip() else beside
 
 
 #: Any one of these lets the agent look at a file the request names.
@@ -1637,6 +1738,8 @@ Do NOT wrap conversational replies in JSON.
         # running. Drained at the step boundary beside the cancel check, so a
         # second thought reaches the model without waiting out the turn.
         self._followup_queue: Optional["queue.Queue[str]"] = None
+        # Effects the user declined this turn; reset per turn (#4447).
+        self._denied_effects = DeniedEffects()
 
         # Resolve the same endpoint as TUI setup, including an isolated runtime.
         from gaia.llm.lemonade_client import resolve_lemonade_base_url
@@ -1674,6 +1777,8 @@ Do NOT wrap conversational replies in JSON.
                     base_url=base_url,
                     required_min_device=required_min_device,
                     device=device,
+                    # A cloud default_model must not stop this local model's preload.
+                    model=model_id,
                 )
                 # Starting GAIA's own server picks its port, so follow it.
                 if resolve_after_start:
@@ -2260,12 +2365,17 @@ Do NOT wrap conversational replies in JSON.
         elif path.is_file():
             args["kind"] = "file"
         started = time.perf_counter()
+        clock = _TOOL_USER_WAIT.get()
+        if clock is not None:
+            clock.begin()
         try:
             return (
                 self.console.confirm_tool_execution(PATH_ACCESS_PROMPT_TOOL, args)
                 is True
             )
         finally:
+            if clock is not None:
+                clock.end()
             self._confirmation_wait_s += time.perf_counter() - started
 
     def _check_extraction_sources(self):
@@ -2975,7 +3085,7 @@ Do NOT wrap conversational replies in JSON.
             SkillPermissionError: the skill declares a local-capability
                 permission (``filesystem``/``shell``/``database``/``desktop``/
                 ``env``), which this phase refuses rather than loading
-                unenforced.
+                unenforced, or a permission above its tier's ceiling.
             SkillDriftError: the skill was installed from the hub at
                 ``community`` / ``verified`` and its files no longer match
                 ``skill-lock.json`` — the signature covered different bytes.
@@ -2985,7 +3095,11 @@ Do NOT wrap conversational replies in JSON.
                 def _register_tools(self):
                     self.load_skill("web-research")
         """
-        from gaia.skills import connector_requirements, refuse_unbridged_permissions
+        from gaia.skills import (
+            connector_requirements,
+            enforce_skill_tier_ceiling,
+            refuse_unbridged_permissions,
+        )
         from gaia.skills.binaries import resolve_binary_policies
         from gaia.skills.loader import register_skill_tools, unregister_skill_tools
 
@@ -3012,6 +3126,7 @@ Do NOT wrap conversational replies in JSON.
         # leave tools or prompt fragments behind.
         permissions = skill.parsed_permissions()
         refuse_unbridged_permissions(permissions, skill_name=skill.name)
+        enforce_skill_tier_ceiling(skill)
         requirements = connector_requirements(permissions, skill_name=skill.name)
         # A skill whose CLI is missing must not load and then improvise.
         policies = resolve_binary_policies(permissions, skill_name=skill.name)
@@ -4853,9 +4968,11 @@ Do NOT wrap conversational replies in JSON.
         timeout = self._resolve_tool_timeout(tool_name)
         holder: Dict[str, Any] = {}
         cancel = threading.Event()
+        user_wait = _UserWaitClock()
 
         def _target():
             set_tool_cancel_event(cancel)
+            _TOOL_USER_WAIT.set(user_wait)
             try:
                 holder["result"] = tool(**tool_args)
             except BaseException as exc:  # noqa: BLE001 — re-raised in caller
@@ -4873,7 +4990,14 @@ Do NOT wrap conversational replies in JSON.
             target=lambda: ctx.run(_target), name=f"tool:{tool_name}", daemon=True
         )
         worker.start()
-        worker.join(timeout)
+        # Time spent on a question the body raised (e.g. path access) is the
+        # user's, not the tool's: abandoning there strands a live prompt.
+        started = time.monotonic()
+        while worker.is_alive():
+            remaining = started + timeout + user_wait.waited() - time.monotonic()
+            if remaining <= 0:
+                break
+            worker.join(min(remaining, 0.5))
         if worker.is_alive():
             cancel.set()
             raise ToolExecutionTimeout(tool_name, timeout)
@@ -4956,6 +5080,116 @@ Do NOT wrap conversational replies in JSON.
             return None
         return refuses(tool_name, tool_args)  # pylint: disable=not-callable
 
+    #: The answers the denied-effect question offers (#4447).
+    ALLOW_DENIED_EFFECT = "Allow once"
+    KEEP_DENIED_EFFECT = "Don't run it"
+
+    def _check_denied_effects(
+        self, tool_name: str, tool_args: Optional[Dict[str, Any]]
+    ) -> Tuple[Optional[Dict[str, Any]], bool]:
+        """Stop a call that reaches an effect the user declined this turn.
+
+        Returns ``(refusal, allowed)``. ``allowed`` means the user was just
+        shown this exact call and said yes, which already is their answer to
+        it, so the confirmation prompt is not shown a second time.
+        """
+        conflict = self._denied_effects.conflict(tool_name, tool_args)
+        if conflict is None:
+            return None, False
+        denial, effect = conflict
+        command = render_call(tool_name, tool_args)
+        answer = self._ask_to_lift_denial(denial, effect, command)
+        if answer is True:
+            # Once: the denial stands for any other route this turn.
+            logger.info("User allowed %s after declining %s", command, denial.rendered)
+            return None, True
+
+        if answer is None:
+            asked = (
+                "Stop and ask the user: name the exact command you need "
+                f"(`{command}`) and why you need it, or tell them what you can "
+                "still do without it."
+            )
+        elif answer is False:
+            asked = (
+                "The user was asked about this exact call and said no again. "
+                "Tell them what is blocked and what you can do without it."
+            )
+        else:
+            asked = f"The user was asked about this exact call and replied: {answer!r}."
+        logger.info(
+            "Refused %s: it %s, declined earlier as %s",
+            tool_name,
+            effect.describe(),
+            denial.rendered,
+        )
+        return (
+            {
+                **NOT_EXECUTED,
+                "status": "denied",
+                "blocked_effect": effect.describe(),
+                "declined_call": denial.rendered,
+                "error": (
+                    f"Not run: this {effect.describe()}, which the user declined "
+                    f"earlier in this request (`{denial.rendered}` — "
+                    f"{denial.reason}). A denial covers the effect, not only the "
+                    "tool it was asked through, so do not reach it with another "
+                    f"tool, command, or script. {asked}"
+                ),
+            },
+            False,
+        )
+
+    def _ask_to_lift_denial(
+        self, denial: Denial, effect: Effect, command: str
+    ) -> Union[bool, str, None]:
+        """Put the rerouted call to the user; None when nobody can answer.
+
+        True is "allow once", False is "no", a string is whatever else they
+        typed. Consoles without a question channel (plain terminals, headless
+        hosts) get None, and the model is told to ask in its reply instead.
+        """
+        console = getattr(self, "console", None)
+        asker = getattr(console, "request_user_input_blocking", None)
+        if (
+            not callable(asker)
+            or getattr(console, "background_mode", False)
+            or not getattr(console, "answers_questions", True)
+        ):
+            return None
+        # The user's own words, not the memory context the loop prepends.
+        raw = getattr(self, "_original_user_input", None) or getattr(
+            self, "_current_query", ""
+        )
+        request = " ".join(str(raw or "").split())
+        purpose = f" to finish “{request[:160]}”" if request else ""
+        question = (
+            f"You declined `{denial.rendered}` earlier in this request. My next "
+            f"step{purpose} {effect.describe()} another way:\n\n{command}\n\n"
+            "I stopped instead of running it. Allow it once?"
+        )
+        timeout = getattr(console, "confirm_timeout_seconds", None) or 300
+        raw = asker(
+            message=question,
+            choices=[self.ALLOW_DENIED_EFFECT, self.KEEP_DENIED_EFFECT],
+            default_if_no_response=None,
+            timeout_seconds=int(timeout),
+            continue_if_no_response=True,
+        )
+        answer = raw.strip() if isinstance(raw, str) else ""
+        if not answer or answer == "__NO_RESPONSE__":
+            return None
+        lowered = answer.lower().strip(" .!")
+        if lowered == self.KEEP_DENIED_EFFECT.lower() or re.match(
+            r"^(?:no|n|nope|don'?t|do not|stop|cancel)\b", lowered
+        ):
+            return False
+        if lowered == self.ALLOW_DENIED_EFFECT.lower() or re.match(
+            r"^(?:allow|yes|y|yep|yeah|ok|okay|sure|go ahead|do it|run it)\b", lowered
+        ):
+            return True
+        return answer
+
     def _call_is_pre_authorized(
         self, tool_name: str, tool_args: Optional[Dict[str, Any]]
     ) -> bool:
@@ -4976,6 +5210,10 @@ Do NOT wrap conversational replies in JSON.
         answer yes, so its gate stays byte-identical.
         """
         if not tool_args:
+            return False
+        # A console may insist on asking about a call a grant would cover.
+        insists = getattr(getattr(self, "console", None), "insists_on_asking", None)
+        if callable(insists) and insists(tool_name, tool_args) is True:
             return False
         covers = getattr(self, "skill_grant_covers_call", None)
         if not callable(covers):
@@ -5253,13 +5491,36 @@ Do NOT wrap conversational replies in JSON.
         # must never reach a prompt.
         refusal = self._policy_refusal(tool_name, tool_args)
         if refusal is not None:
+            ledger = getattr(self, "_denied_effects", None)
+            # Shell policy refusals only: a tool's own preflight ("read it
+            # first") is a step to take, not a no. And one refused command
+            # shape is not the whole family — the host or file it aimed at is.
+            if ledger is not None and isinstance((tool_args or {}).get("command"), str):
+                ledger.record(
+                    tool_name,
+                    tool_args,
+                    str(refusal.get("error") if isinstance(refusal, dict) else refusal),
+                    kinds={NETWORK, PATH},
+                )
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
+
+        # A "no" covers the effect, not the tool: another route to it is asked
+        # about, never taken silently.
+        asked_and_allowed = False
+        if getattr(self, "_denied_effects", None):
+            rerouted, asked_and_allowed = self._check_denied_effects(
+                tool_name, tool_args
+            )
+            if rerouted is not None:
+                return rerouted
 
         # Guardrail: require explicit user confirmation for high-risk tools.
         # Consoles that cannot reach a human deny rather than answer for them
         # (#2210): AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
         # frontend modal, everything else denies with an actionable message.
-        if self._tool_requires_confirmation(tool_name, tool_args):
+        if not asked_and_allowed and self._tool_requires_confirmation(
+            tool_name, tool_args
+        ):
             # Blocking on a human is not tool cost. Timed separately so a turn
             # where approval took five minutes does not report the tool as
             # having taken five minutes.
@@ -5273,10 +5534,16 @@ Do NOT wrap conversational replies in JSON.
                     getattr(self, "_confirmation_wait_s", 0.0) or 0.0
                 ) + (time.perf_counter() - _confirm_started)
             if not approved:
-                return {
-                    "status": "denied",
-                    "error": self._confirmation_denied_error(tool_name),
-                }
+                denied_error = self._confirmation_denied_error(tool_name)
+                denied = {"status": "denied", "error": denied_error}
+                if self.console.confirmation_timed_out(tool_name) is True:
+                    # Nobody said no, so this is not a refusal to route around.
+                    denied["timed_out"] = True
+                else:
+                    ledger = getattr(self, "_denied_effects", None)
+                    if ledger is not None:
+                        ledger.record(tool_name, tool_args, denied_error)
+                return denied
 
         # Dynamic tool loader (#1449): record use for LRU recency. The name is
         # fully resolved and confirmed in the registry here. Execution stays on
@@ -6761,6 +7028,14 @@ Do NOT wrap conversational replies in JSON.
         explicit = getattr(getattr(self, "config", None), "project_root", None)
         return resolve_project_root(explicit)
 
+    def _reopen_turn_scope(self, conversation: List[Dict[str, Any]]) -> None:
+        """A check is sending the answer back; the work it asks for is in scope."""
+        scope = getattr(self, "_turn_scope", None)
+        if scope is None or not scope.answered:
+            return
+        scope.reopen()
+        conversation.append({"role": "system", "content": {"type": REOPENED_MARKER}})
+
     def _verify_after_change_prompt(self) -> Optional[str]:
         """Corrective message when files changed after the last check, else ``None``.
 
@@ -7042,6 +7317,7 @@ Do NOT wrap conversational replies in JSON.
         self._current_query = user_input
         self._single_tool_done = False
         self._turn_seq += 1
+        self._denied_effects = DeniedEffects(os.getcwd())
         self._begin_turn_provenance()
         # Cleared per turn: a trace must never report the previous turn's
         # schema for a turn that never reached the backend.
@@ -7149,12 +7425,11 @@ Do NOT wrap conversational replies in JSON.
         cut_off_continuations = 0
         completion_corrections = 0
         completion_gaps = []
-        # Issue #1023: track the latest outcome of any capability tool
-        # (currently ``generate_image``) so the verbose-failure override
-        # downstream fires only when the tool actually errored.  ``None``
-        # = not called yet, ``True`` = last call succeeded, ``False`` =
-        # last call returned an error.
+        # Answer text the model sent alongside its latest tool calls.
+        answer_beside_tool_calls: Optional[str] = None
+        # Latest generate_image outcome this turn: None until one has run.
         capability_tool_last_succeeded: Optional[bool] = None
+        image_outcome_corrected = False
         query_result_cache: dict[str, int] = (
             {}
         )  # result_hash → call count (result-based dedup)
@@ -7337,15 +7612,7 @@ Do NOT wrap conversational replies in JSON.
                     # Stop progress indicator
                     self.console.stop_progress()
 
-                    # Issue #1023: record success/failure of capability tools
-                    # so the verbose-failure override downstream can fire
-                    # only when the tool actually errored.  ``.lower()``
-                    # mirrors the defensive check at
-                    # ``has_tried_capability_tool`` so a model that emits
-                    # ``Generate_Image`` doesn't slip past the tracker.
-                    if any(
-                        tool_name.lower().startswith(_s) for _s in _SD_CAPABILITY_TOOLS
-                    ):
+                    if _is_image_tool(tool_name):
                         capability_tool_last_succeeded = not (
                             isinstance(tool_result, dict)
                             and tool_result.get("status") in ("error", "denied")
@@ -7584,7 +7851,7 @@ Do NOT wrap conversational replies in JSON.
                         if tool_call_history
                         else "unknown tool"
                     )
-                    prompt = (
+                    header = (
                         "TOOL EXECUTION FAILED!\n\n"
                         f"You were trying to execute: {last_tool}\n"
                         f"Error: {last_error}\n\n"
@@ -7592,13 +7859,32 @@ Do NOT wrap conversational replies in JSON.
                         f"Current plan step {self.current_step + 1}/{self.total_plan_steps} failed.\n"
                         f"Current plan: {self.current_plan}\n\n"
                         f"Previous successful outputs: {truncated_outputs}\n\n"
-                        "INSTRUCTIONS:\n"
-                        "1. Analyze the error and understand what went wrong\n"
-                        "2. Create a NEW corrected plan that fixes the error\n"
-                        "3. Make sure to use correct tool parameters (check the available tools)\n"
-                        "4. Start executing the corrected plan\n\n"
-                        "Respond with your analysis, a corrected plan, and the first tool to execute."
                     )
+                    if self._is_denial_error(last_error):
+                        # "Fix the error" read as "find another way" is how a
+                        # user's no got routed around (#4447).
+                        prompt = header + (
+                            "This was a denial or refusal, not a mistake to fix. "
+                            "It is a decision about what the action DOES, so the "
+                            "same effect through another tool, command, or script "
+                            "is also declined.\n\n"
+                            "INSTRUCTIONS:\n"
+                            "1. Do not retry it, and do not reach the same result "
+                            "another way.\n"
+                            "2. Continue only with steps that do not need it.\n"
+                            "3. Otherwise stop and tell the user what is blocked, "
+                            "the exact command you need and why, and what you can "
+                            "do without it."
+                        )
+                    else:
+                        prompt = header + (
+                            "INSTRUCTIONS:\n"
+                            "1. Analyze the error and understand what went wrong\n"
+                            "2. Create a NEW corrected plan that fixes the error\n"
+                            "3. Make sure to use correct tool parameters (check the available tools)\n"
+                            "4. Start executing the corrected plan\n\n"
+                            "Respond with your analysis, a corrected plan, and the first tool to execute."
+                        )
 
                     # Add the error recovery prompt to the messages array so it gets sent to LLM
                     messages.append({"role": "user", "content": prompt})
@@ -8130,6 +8416,11 @@ Do NOT wrap conversational replies in JSON.
             # shape for native tool_calls, raw text otherwise — see
             # ``_build_assistant_message`` for the why).
             messages.append(self._build_assistant_message(response, parsed, reasoning))
+            if "answer" not in parsed:
+                answer_beside_tool_calls = _answer_beside_tool_calls(
+                    parsed.get("content") if parsed.get("tool_calls") else None,
+                    parsed.get("tool_calls"),
+                )
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
@@ -8753,12 +9044,7 @@ Do NOT wrap conversational replies in JSON.
                     tool_call_history.pop()
                     self._wait_out_rate_limit(tool_result)
 
-                # Issue #1023: record success/failure of capability tools so
-                # the verbose-failure override downstream fires only when the
-                # tool actually errored.  ``.lower()`` mirrors the defensive
-                # check at ``has_tried_capability_tool`` so a model that emits
-                # ``Generate_Image`` doesn't slip past the tracker.
-                if any(tool_name.lower().startswith(_s) for _s in _SD_CAPABILITY_TOOLS):
+                if _is_image_tool(tool_name):
                     capability_tool_last_succeeded = not (
                         isinstance(tool_result, dict)
                         and tool_result.get("status") in ("error", "denied")
@@ -8929,7 +9215,10 @@ Do NOT wrap conversational replies in JSON.
 
             # Check for final answer (after collecting stats)
             if "answer" in parsed:
-                answer_candidate = parsed["answer"]
+                # Every check below must see the text the user will see.
+                answer_candidate = _with_answer_beside_tool_calls(
+                    parsed["answer"], answer_beside_tool_calls
+                )
                 completion_gaps = []
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after
@@ -9253,13 +9542,15 @@ Do NOT wrap conversational replies in JSON.
                     )
                     continue
 
-                # Capability-claim-without-attempt guard: catch responses that declare
-                # a tool's availability or unavailability (e.g. "I can generate images
-                # when the --sd flag is active") without having tried the tool first.
-                # This fires for generate_image only — the most common failure pattern.
-                # If the tool was already attempted (successfully or not), the claim is
-                # based on real evidence and should be allowed through.
-                _CAPABILITY_CLAIM_PATTERNS = [
+                # Only a generate_image call that ran leaves an outcome to check
+                # the answer against; a mention of the capability is not one.
+                image_outcome_recorded = (
+                    capability_tool_last_succeeded is not None
+                    and any(_is_image_tool(_n) for _n in self._tools_registry)
+                )
+                # The record cannot say what the answer claims, so the answer
+                # is read — but only against an outcome that exists.
+                _IMAGE_AVAILABILITY_CLAIM = [
                     r"--sd\b",
                     r"\bsd flag\b",
                     r"stable diffusion.*active",
@@ -9270,18 +9561,7 @@ Do NOT wrap conversational replies in JSON.
                     r"i can.*create.*image",
                     r"when.*--sd",
                 ]
-                has_tried_capability_tool = any(
-                    any(_tname.lower().startswith(_s) for _s in _SD_CAPABILITY_TOOLS)
-                    for _tname, _ in tool_call_log
-                )
-                is_capability_claim = any(
-                    re.search(_p, answer_candidate, re.IGNORECASE)
-                    for _p in _CAPABILITY_CLAIM_PATTERNS
-                )
-                # Even when generate_image was attempted, block if the response
-                # STILL makes a conditional capability claim without acknowledging
-                # the actual tool outcome (error or success).
-                _SD_OUTCOME_ACKNOWLEDGMENT = [
+                _IMAGE_OUTCOME_REPORTED = [
                     r"not available",
                     r"unavailable",
                     r"not.*active",
@@ -9298,78 +9578,45 @@ Do NOT wrap conversational replies in JSON.
                     r"generated.*image",
                     r"here.*image",
                 ]
-                outcome_acknowledged = has_tried_capability_tool and any(
-                    re.search(_p, answer_candidate, re.IGNORECASE)
-                    for _p in _SD_OUTCOME_ACKNOWLEDGMENT
-                )
-                _should_block_sd = (
-                    is_capability_claim
-                    and not outcome_acknowledged
+                if (
+                    image_outcome_recorded
+                    and not image_outcome_corrected
                     and steps_taken < steps_limit - 1
-                )
-                if _should_block_sd:
+                    and any(
+                        re.search(_p, answer_candidate, re.IGNORECASE)
+                        for _p in _IMAGE_AVAILABILITY_CLAIM
+                    )
+                    and not any(
+                        re.search(_p, answer_candidate, re.IGNORECASE)
+                        for _p in _IMAGE_OUTCOME_REPORTED
+                    )
+                ):
+                    image_outcome_corrected = True
+                    _outcome = (
+                        "generate_image succeeded"
+                        if capability_tool_last_succeeded
+                        else "generate_image returned an error"
+                    )
                     logger.debug(
-                        "[WORKFLOW] Blocking SD capability claim%s: %s",
-                        " (post-attempt)" if has_tried_capability_tool else "",
+                        "[WORKFLOW] Answer ignores the recorded outcome (%s): %s",
+                        _outcome,
                         answer_candidate[:80],
                     )
-                    # Extract what the user asked for from the last user message
-                    _last_user_msg = next(
-                        (
-                            m.get("content", "")
-                            for m in reversed(messages)
-                            if m.get("role") == "user"
-                            and isinstance(m.get("content"), str)
-                        ),
-                        "the requested image",
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"SYSTEM: This turn {_outcome}. Your answer says when "
+                                "image generation is available instead of what "
+                                "happened. Answer again and report that outcome."
+                            ),
+                        }
                     )
-                    if not has_tried_capability_tool:
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "SYSTEM: STOP. Do NOT write text. You must output a JSON tool call. "
-                                    "You attempted to describe image generation capability without calling "
-                                    "the tool. The ONLY valid next response is a generate_image tool call. "
-                                    "Output this JSON right now (replace the prompt with what the user asked for):\n"
-                                    '{"tool": "generate_image", "tool_args": {"prompt": "high quality photorealistic image, '
-                                    + _last_user_msg[:80].replace('"', "'")
-                                    + '"}}\n'
-                                    "Do not write anything else. Just the JSON above."
-                                ),
-                            }
-                        )
-                    else:
-                        # Tool was tried — force acknowledgment of the actual outcome
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "SYSTEM: You called generate_image and received a result. "
-                                    "Your response must describe what ACTUALLY happened — either "
-                                    "the image was generated successfully, or the tool returned an error. "
-                                    "Do NOT say 'I can generate images when --sd is active'. "
-                                    "Describe the actual tool outcome now."
-                                ),
-                            }
-                        )
                     continue
 
-                # Post-failure verbosity guard: when generate_image was called and
-                # failed, the LLM often apologises and explains "what it would have done"
-                # with prompt-engineering tips. Intercept and replace with a clean response.
-                #
-                # Issue #1023: gate on the LATEST outcome of the capability tool.
-                # When generate_image succeeded and a *different* tool's parse
-                # error provoked a verbose apology, the override used to clobber
-                # the model's reply with a misleading "Image generation is not
-                # available" message even though the image was generated.  Now
-                # the override fires only when the most recent capability call
-                # actually returned an error.
-                if (
-                    has_tried_capability_tool
-                    and capability_tool_last_succeeded is False
-                ):
+                # A failed generate_image is reported, not padded with what the
+                # model would have done; #1023: only when the latest call failed.
+                if image_outcome_recorded and capability_tool_last_succeeded is False:
                     _SD_POST_FAILURE_VERBOSE = [
                         r"would have done",
                         r"what i would",
@@ -9437,6 +9684,7 @@ Do NOT wrap conversational replies in JSON.
                         logger.info(
                             "%s fired at step %d", VERIFY_AFTER_CHANGE_TAG, steps_taken
                         )
+                        self._reopen_turn_scope(conversation)
                         messages.append({"role": "user", "content": _correction})
                         conversation.append({"role": "user", "content": _correction})
                         continue
@@ -9484,6 +9732,7 @@ Do NOT wrap conversational replies in JSON.
                                 "not see."
                             ),
                         }
+                        self._reopen_turn_scope(conversation)
                         messages.append(correction)
                         conversation.append(dict(correction))
                         continue
@@ -9555,14 +9804,29 @@ Do NOT wrap conversational replies in JSON.
                         )
                         refused = set(self._completion_evidence.refused.values())
                         if artifact_gaps and set(artifact_gaps) <= refused:
-                            # Asking for the write again would re-ask a "no".
-                            correction = (
-                                "[check:completion] "
-                                + " ".join(artifact_gaps)
-                                + " Do not retry that write, here or anywhere "
-                                "else. Say it was not saved, and give your "
-                                "complete answer again."
-                            )
+                            unconfirmed = self._completion_evidence.unconfirmed
+                            if unconfirmed & set(artifact_gaps):
+                                # Nobody said no, but retrying unasked skips them.
+                                correction = (
+                                    "[check:completion] "
+                                    + " ".join(artifact_gaps)
+                                    + " Do not retry that write now. Say it was "
+                                    "not saved because the approval expired, ask "
+                                    "whether to try again, and give your complete "
+                                    "answer again."
+                                )
+                            else:
+                                # Asking for the write again would re-ask a "no".
+                                correction = (
+                                    "[check:completion] "
+                                    + " ".join(artifact_gaps)
+                                    + " Do not retry that write, here or anywhere "
+                                    "else. Say it was not saved, and give your "
+                                    "complete answer again."
+                                )
+                        else:
+                            # Only the files it names: other reads are still drift.
+                            self._turn_scope.widen(correction)
                         messages.append({"role": "user", "content": correction})
                         conversation.append({"role": "user", "content": correction})
                         continue
@@ -9897,6 +10161,20 @@ Do NOT wrap conversational replies in JSON.
         r"|refus(?:ed|es) (?:the )?(?:request|access|operation)",
         re.IGNORECASE,
     )
+
+    _DENIAL_RE = re.compile(
+        r"\bwas denied\b|\bdeclined\b|\bdenied by\b|execution denied"
+        r"|with no user response|requires (?:explicit|live) user approval",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _is_denial_error(cls, error: Any) -> bool:
+        """True when a failure was a no from the user or a policy, not a bug."""
+        text = str(error or "")
+        return bool(
+            cls._DENIAL_RE.search(text) or cls._LOOP_NOT_PERMITTED_RE.search(text)
+        )
 
     @staticmethod
     def _is_throttled_result(result: Any) -> bool:

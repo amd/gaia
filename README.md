@@ -1,4 +1,4 @@
-# <img src="https://raw.githubusercontent.com/amd/gaia/main/src/gaia/img/gaia.ico" alt="GAIA Logo" width="64" height="64" style="vertical-align: middle;"> GAIA: AI Agent Framework for AMD Ryzen AI
+# <img src="https://raw.githubusercontent.com/amd/gaia/main/src/gaia/img/gaia.ico" alt="GAIA Logo" width="64" height="64" style="vertical-align: middle;"> GAIA: Local AI Agents for AMD Ryzen AI
 
 [![GAIA CLI Tests](https://github.com/amd/gaia/actions/workflows/test_gaia_cli_linux.yml/badge.svg)](https://github.com/amd/gaia/tree/main/tests "Check out our cli tests")
 [![Latest Release](https://img.shields.io/github/v/release/amd/gaia?include_prereleases)](https://github.com/amd/gaia/releases/latest "Download the latest release")
@@ -10,7 +10,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-7289DA?logo=discord&logoColor=white)](https://discord.com/channels/1392562559122407535/1402013282495102997)
 
-**GAIA** is AMD's open-source framework for building intelligent AI agents that run **locally by default** on AMD Ryzen AI hardware. Local inference keeps your data private, avoids cloud usage fees, and supports air-gapped deployment with hardware-accelerated performance.
+**GAIA** is AMD's open-source agent factory. It uses coding-agent skills, evals and an auto-fix loop to improve and build agent harnesses that run **locally by default** on AMD Ryzen AI hardware. Local inference keeps your data private, avoids cloud usage fees, and supports air-gapped deployment with hardware-accelerated performance.
+
+Anyone can build an agent harness with GAIA. The **GAIA agent** is the one we built to show what it can do: conversation, documents, data, web, memory and skills in one agent.
+
+| I want to... | Start here |
+|--------------|-----------|
+| **Use GAIA**: run the flagship agent in the desktop app or terminal | [Install GAIA](https://amd-gaia.ai/docs/guides/install), then the [GAIA agent guide](https://amd-gaia.ai/docs/guides/gaia) |
+| **Build with GAIA**: make an agent harness with skills, evals and the SDK | [Composing skills](https://amd-gaia.ai/docs/guides/composing-skills), [Agent evals](https://amd-gaia.ai/docs/guides/eval), [SDK reference](https://amd-gaia.ai/docs/sdk) |
 
 The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** chat through Lemonade. Use `/provider` to connect and choose a model; cloud chat sends conversation history to the selected provider. See [AI provider setup](docs/guides/ai-providers.mdx).
 
@@ -43,7 +50,9 @@ One download for users: on Windows, one installer offers the desktop app, the te
 
 ---
 
-## Build Your First Agent
+## Build with GAIA
+
+The SDK is the base layer under the GAIA agent. A minimal harness is a class with a prompt and tools:
 
 ```python
 from gaia.agents.base.agent import Agent
@@ -72,13 +81,14 @@ print(result)
 
 ## Key Capabilities
 
-- **Agent Framework** — Base class with tool orchestration, state management, and error recovery
+- **Agent Factory** — Skills, an eval benchmark, and `gaia eval agent --fix`, which patches failing scenarios and re-runs them ([guide](https://amd-gaia.ai/docs/guides/eval))
+- **Agent SDK** — Base class with tool orchestration, state management, and error recovery
 - **Agent UI** — Privacy-first desktop app with chat, file browser, document indexing, and tool execution
 - **RAG System** — Document indexing and semantic search for Q&A over 50+ file formats
 - **Voice Integration** — Whisper ASR + Kokoro TTS for speech interaction (P0 enabling technology)
 - **Vision Models** — Extract text from images with Qwen3-VL-4B
 - **MCP Integration** — Connect to any MCP server for external tool access
-- **Plugin System** — Distribute agents via PyPI with auto-discovery
+- **Skills** — Extend the GAIA agent with a `SKILL.md`, no code required ([guide](https://amd-gaia.ai/docs/guides/composing-skills))
 
 ---
 
@@ -123,7 +133,7 @@ For complete setup instructions including Lemonade Server, see the **[Quickstart
 
 ## Documentation
 
-- **[Quickstart](https://amd-gaia.ai/docs/quickstart)** — Build your first agent in 10 minutes
+- **[Quickstart](https://amd-gaia.ai/docs/quickstart)** — Install GAIA and build a first harness in 10 minutes
 - **[SDK Reference](https://amd-gaia.ai/docs/sdk)** — Complete API documentation
 - **[Guides](https://amd-gaia.ai/docs/guides)** — Chat, Voice, RAG, and more
 - **[FAQ](https://amd-gaia.ai/docs/reference/faq)** — Frequently asked questions

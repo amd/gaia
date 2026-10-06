@@ -1,256 +1,167 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronRight, ShieldQuestion } from 'lucide-react';
 import {
-  ShieldAlert,
-  Check,
-  X,
-  Clock,
-  AlertTriangle,
-} from 'lucide-react';
-import { useNotificationStore, selectActivePermissionPrompt, requiresFreshConsent } from '../stores/notificationStore';
+    useNotificationStore,
+    selectSessionPermissionPrompt,
+    requiresFreshConsent,
+    PATH_ACCESS_TOOL,
+    type PermissionDecision,
+} from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import './PermissionPrompt.css';
 
-/**
- * PermissionPrompt — Modal dialog for permission requests from agents.
- *
- * Shown as an overlay when an agent requests permission for a tool invocation.
- * Only one prompt is shown at a time; additional requests are queued in the
- * notification store and displayed sequentially.
- *
- * Features:
- * - Optional countdown timer (from notification.timeoutSeconds)
- * - Enter never approves: focus moves to the dialog, so a keystroke meant for
- *   the composer can't answer it. Esc denies; Tab reaches the buttons.
- * - "Remember this choice" checkbox
- * - Tool name and arguments display
- * - Agent identification
- */
-export function PermissionPrompt() {
-  const activePrompt = useNotificationStore(selectActivePermissionPrompt);
-  const respondToPermission = useNotificationStore((s) => s.respondToPermission);
-
-  if (!activePrompt) return null;
-
-  return (
-    <div className="permission-overlay" role="dialog" aria-modal="true" aria-label="Permission Request">
-      <PermissionPromptInner
-        key={activePrompt.id}
-        notification={activePrompt}
-        onRespond={respondToPermission}
-      />
-    </div>
-  );
+/** One-line description of a tool call, e.g. `run_shell_command · git status`. */
+function summarize(n: GaiaNotification): string {
+    const args = n.toolArgs ?? {};
+    const primary = ['command', 'file_path', 'path', 'url', 'query', 'name']
+        .map((k) => args[k])
+        .find((v) => typeof v === 'string' && v.trim());
+    return typeof primary === 'string' ? primary : '';
 }
 
-// ── Inner prompt (keyed to reset state per prompt) ───────────────────────
-
-interface PromptInnerProps {
-  notification: GaiaNotification;
-  onRespond: (id: string, action: 'allow' | 'deny', remember: boolean) => Promise<void>;
+/**
+ * The permission question for this chat, inline above the composer: allow once,
+ * always allow this exact call in this chat, or deny — the TUI's choices.
+ *
+ * Enter never answers it: focus moves to the card, not a button, so a keystroke
+ * meant for the composer can't approve. Esc denies; Tab reaches the buttons.
+ */
+export function PermissionPrompt({ sessionId }: { sessionId: string }) {
+    const selector = useMemo(() => selectSessionPermissionPrompt(sessionId), [sessionId]);
+    const prompt = useNotificationStore(selector);
+    if (!prompt) return null;
+    return <PromptCard key={prompt.id} notification={prompt} />;
 }
 
 /** `45` -> "45s", `600` -> "10:00". */
 export function formatCountdown(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${String(secs).padStart(2, '0')}`;
+    if (seconds < 60) return `${seconds}s`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${String(secs).padStart(2, '0')}`;
 }
 
-function PermissionPromptInner({ notification, onRespond }: PromptInnerProps) {
-  const hasTimeout = notification.timeoutSeconds != null && notification.timeoutSeconds > 0;
-  // A deadline, not a tick count: background tabs throttle timers, and the
-  // backend denies at its own deadline regardless of how often we ticked.
-  const deadlineRef = useRef<number | null>(
-    hasTimeout ? Date.now() + notification.timeoutSeconds! * 1000 : null
-  );
-  const [countdown, setCountdown] = useState<number | null>(
-    hasTimeout ? notification.timeoutSeconds! : null
-  );
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const promptRef = useRef<HTMLDivElement>(null);
+function PromptCard({ notification }: { notification: GaiaNotification }) {
+    const respond = useNotificationStore((s) => s.respondToPermission);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [showArgs, setShowArgs] = useState(false);
+    const hasTimeout = notification.timeoutSeconds != null && notification.timeoutSeconds > 0;
+    // A deadline, not a tick count: background tabs throttle timers, and the
+    // backend denies at its own deadline regardless of how often we ticked.
+    const deadline = useRef(hasTimeout ? Date.now() + notification.timeoutSeconds! * 1000 : null);
+    const [remaining, setRemaining] = useState<number | null>(hasTimeout ? notification.timeoutSeconds! : null);
+    const cardRef = useRef<HTMLElement>(null);
+    const freshConsent = requiresFreshConsent(notification.tool);
+    const scope = freshConsent ? undefined : notification.alwaysScope;
+    const detail = summarize(notification);
+    const args = notification.toolArgs ?? {};
+    const hasArgs = Object.keys(args).length > 0;
 
-  // State for UI disabled + ref guard for handler (ref avoids recreating useCallback)
-  const [isResponding, setIsResponding] = useState(false);
-  const [remember, setRemember] = useState(false);
-  const freshConsent = requiresFreshConsent(notification.tool);
-  const isRespondingRef = useRef(false);
+    // Take focus from the composer so its Enter can't land on a button here.
+    useEffect(() => { cardRef.current?.focus({ preventScroll: true }); }, []);
 
-  // Stable ref for onRespond to avoid stale closures in timer
-  const onRespondRef = useRef(onRespond);
-  onRespondRef.current = onRespond;
+    // The backend denies on its own when the wait runs out; this only shows it.
+    useEffect(() => {
+        if (deadline.current === null) return;
+        const t = setInterval(() => {
+            const left = Math.max(0, Math.ceil((deadline.current! - Date.now()) / 1000));
+            setRemaining(left);
+            if (left === 0) clearInterval(t);
+        }, 1000);
+        return () => clearInterval(t);
+    }, []);
 
-  // Countdown timer — tick every second, auto-deny handled by separate effect
-  useEffect(() => {
-    if (!hasTimeout) return;
+    const answer = useCallback(async (decision: PermissionDecision) => {
+        setBusy(true);
+        setError(null);
+        try {
+            await respond(notification.id, decision);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+            setBusy(false);
+        }
+    }, [notification.id, respond]);
 
-    timerRef.current = setInterval(() => {
-      const left = Math.max(0, Math.ceil((deadlineRef.current! - Date.now()) / 1000));
-      if (left === 0 && timerRef.current) clearInterval(timerRef.current);
-      setCountdown(left);
-    }, 1000);
+    // Esc denies. Enter is deliberately unbound — only a focused button approves.
+    // Capture phase, so this runs before ChatView's Escape-stops-the-reply.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape' || e.defaultPrevented) return;
+            if (remaining !== null && remaining <= 0) return;
+            // Claimed even mid-answer: a second Esc would otherwise stop the whole reply.
+            e.preventDefault();
+            if (!busy) void answer('deny');
+        };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    }, [answer, busy, remaining]);
 
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [hasTimeout]);
-
-  // Auto-deny when countdown reaches zero (side-effect outside state setter).
-  // Uses the same isRespondingRef guard to prevent racing with a manual click.
-  useEffect(() => {
-    if (countdown === 0) {
-      if (isRespondingRef.current) return;
-      isRespondingRef.current = true;
-      setIsResponding(true);
-      onRespondRef.current(notification.id, 'deny', false);
-    }
-  }, [countdown, notification.id]);
-
-  // Define handlers before they're used in the keyboard effect
-  const handleAllow = useCallback(async () => {
-    if (isRespondingRef.current) return;
-    isRespondingRef.current = true;
-    setIsResponding(true);
-    if (timerRef.current) clearInterval(timerRef.current);
-    try {
-      await onRespond(notification.id, 'allow', freshConsent ? false : remember);
-    } finally {
-      isRespondingRef.current = false;
-      setIsResponding(false);
-    }
-  }, [notification.id, onRespond, remember, freshConsent]);
-
-  const handleDeny = useCallback(async () => {
-    if (isRespondingRef.current) return;
-    isRespondingRef.current = true;
-    setIsResponding(true);
-    if (timerRef.current) clearInterval(timerRef.current);
-    try {
-      await onRespond(notification.id, 'deny', false);
-    } finally {
-      isRespondingRef.current = false;
-      setIsResponding(false);
-    }
-  }, [notification.id, onRespond]);
-
-  // Take focus from the composer so its Enter can't land on this prompt.
-  useEffect(() => {
-    promptRef.current?.focus({ preventScroll: true });
-  }, []);
-
-  // Esc denies. Enter is deliberately unbound — only a focused button approves.
-  // preventDefault stops lower-priority Escape handlers.
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        handleDeny();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleDeny]);
-
-  // Format tool arguments for display
-  const toolArgs = notification.toolArgs;
-  const hasArgs = toolArgs && Object.keys(toolArgs).length > 0;
-
-  return (
-    <div className="permission-prompt" ref={promptRef} tabIndex={-1}>
-      {/* Header */}
-      <div className="permission-header">
-        <div className="permission-header-icon">
-          <ShieldAlert size={24} />
-        </div>
-        <div className="permission-header-text">
-          <h2 className="permission-title">Permission Request</h2>
-          <span className="permission-agent">{notification.agentName}</span>
-        </div>
-        {countdown !== null && countdown > 0 && (
-          <div className="permission-countdown" title="Auto-deny on timeout">
-            <Clock size={14} />
-            <span>{formatCountdown(countdown)}</span>
-          </div>
-        )}
-      </div>
-
-      {/* Body */}
-      <div className="permission-body">
-        <p className="permission-message">{notification.message}</p>
-
-        {/* Tool info */}
-        {notification.tool && (
-          <div className="permission-tool-info">
-            <div className="permission-tool-header">
-              <AlertTriangle size={14} />
-              <span>Tool Invocation</span>
-            </div>
-            <div className="permission-tool-name">
-              <code>{notification.tool}</code>
+    const expired = remaining !== null && remaining <= 0;
+    return (
+        <section
+            ref={cardRef}
+            tabIndex={-1}
+            className="perm-card"
+            role="alertdialog"
+            aria-labelledby={`perm-${notification.id}`}
+        >
+            <div className="perm-card-head">
+                <ShieldQuestion size={16} className="perm-card-icon" aria-hidden="true" />
+                <div className="perm-card-text">
+                    <h2 id={`perm-${notification.id}`} className="perm-card-title">
+                        {notification.tool === PATH_ACCESS_TOOL
+                            ? notification.title
+                            : <>Allow GAIA to use <code>{notification.tool}</code>?</>}
+                    </h2>
+                    {detail && <p className="perm-card-detail"><code>{detail}</code></p>}
+                    {freshConsent && notification.message && <p className="perm-card-detail">{notification.message}</p>}
+                </div>
+                {remaining !== null && !expired && (
+                    <span className="perm-card-timer" title="Denied automatically when the time runs out">{formatCountdown(remaining)}</span>
+                )}
             </div>
             {hasArgs && (
-              <div className="permission-tool-args">
-                <pre>{JSON.stringify(toolArgs, null, 2)}</pre>
-              </div>
+                <div className="perm-card-args">
+                    <button
+                        type="button"
+                        className="perm-card-args-toggle"
+                        onClick={() => setShowArgs((v) => !v)}
+                        aria-expanded={showArgs}
+                    >
+                        <ChevronRight size={13} className={showArgs ? 'is-open' : ''} aria-hidden="true" />
+                        Details
+                    </button>
+                    {showArgs && <pre className="perm-card-pre">{JSON.stringify(args, null, 2)}</pre>}
+                </div>
             )}
-          </div>
-        )}
-
-        {/* Priority indicator */}
-        {notification.priority === 'critical' && (
-          <div className="permission-critical-banner">
-            <AlertTriangle size={14} />
-            <span>This is a critical-tier operation</span>
-          </div>
-        )}
-
-        {/* Remember choice */}
-        {!freshConsent && <label className="permission-remember">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-            disabled={isResponding}
-          />
-          <span>
-            Allow this tool for the rest of this chat
-            <small className="permission-remember-hint">
-              Only in this chat, until you reload or restart GAIA. Revoke any time in Settings → Tools &amp; Permissions.
-            </small>
-          </span>
-        </label>}
-      </div>
-
-      {/* Actions */}
-      <div className="permission-actions">
-        <button
-          className="permission-btn permission-btn-deny"
-          onClick={handleDeny}
-          disabled={isResponding}
-          title="Deny (Esc)"
-        >
-          <X size={16} />
-          Deny
-        </button>
-        <button
-          className="permission-btn permission-btn-allow"
-          onClick={handleAllow}
-          disabled={isResponding}
-          title="Allow"
-        >
-          <Check size={16} />
-          Allow
-        </button>
-      </div>
-
-      {/* Keyboard hints */}
-      <div className="permission-hints">
-        <span><kbd>Tab</kbd> Choose</span>
-        <span><kbd>Esc</kbd> Deny</span>
-      </div>
-    </div>
-  );
+            {expired ? (
+                <p className="perm-card-detail">No answer in time, so GAIA was told no.</p>
+            ) : (
+                <div className="perm-card-actions">
+                    <button type="button" className="perm-btn is-primary" onClick={() => answer('allow')} disabled={busy}>
+                        Allow once
+                    </button>
+                    {scope && (
+                        <button
+                            type="button"
+                            className="perm-btn"
+                            onClick={() => answer('always')}
+                            disabled={busy}
+                            aria-label={`Always allow ${scope} in this chat`}
+                        >
+                            Always allow <code>{scope}</code> in this chat
+                        </button>
+                    )}
+                    <button type="button" className="perm-btn" onClick={() => answer('deny')} disabled={busy}>
+                        Deny
+                    </button>
+                </div>
+            )}
+            {error && <p className="perm-card-error" role="alert">{error}</p>}
+        </section>
+    );
 }

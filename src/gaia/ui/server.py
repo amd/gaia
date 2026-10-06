@@ -23,6 +23,7 @@ import logging
 import os
 import shutil  # noqa: F401  # pylint: disable=unused-import
 import sys
+import threading
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -54,6 +55,7 @@ from .agent_loop import agent_loop
 # pylint: enable=unused-import
 from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
+from .memory_settings import memory_enabled
 from .routers import agents as agents_router_mod
 from .routers import chat as chat_router_mod
 from .routers import connectors as connectors_router_mod
@@ -64,8 +66,11 @@ from .routers import hub as hub_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
 from .routers import onboarding as onboarding_router_mod
+from .routers import providers as providers_router_mod
 from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
+from .routers import setup as setup_router_mod
+from .routers import skills as skills_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
 from .security import UIRequestGuardMiddleware
@@ -190,6 +195,69 @@ class TunnelAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+def start_model_server_owner() -> threading.Thread:
+    """Bring up GAIA's daemon, which starts and supervises the model server.
+
+    What the CLI does for its front-ends; a library ``create_app`` must not, so
+    only the runners that serve the UI call this. Off the main thread so the
+    page loads while the daemon starts.
+    """
+    from gaia.llm.lemonade_service import ensure_daemon_owns_lemonade
+
+    thread = threading.Thread(
+        target=ensure_daemon_owns_lemonade, name="gaia-daemon-start", daemon=True
+    )
+    thread.start()
+    return thread
+
+
+def lemonade_is_remote() -> bool:
+    """Whether ``LEMONADE_BASE_URL`` names another machine, which no daemon here owns."""
+    from urllib.parse import urlparse
+
+    from gaia.llm.lemonade_supervisor import _is_loopback
+
+    base_url = os.environ.get("LEMONADE_BASE_URL")
+    return bool(base_url) and not _is_loopback(urlparse(base_url).hostname or "")
+
+
+def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
+    """Run one scheduled prompt through a fresh GAIA agent; returns the answer."""
+    try:
+        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    except ImportError as e:
+        raise RuntimeError(
+            agent_not_installed_message(
+                "The GAIA agent is not installed",
+                "gaia-agent-gaia",
+                next_step="Then re-run the scheduled task.",
+            )
+        ) from e
+
+    # Beta dynamic tool loader (#1798). Inert here: scheduled runs
+    # use the default "full" prompt profile and the loader only
+    # activates on the "doc" profile — wired for future-proofing so
+    # this path doesn't silently diverge if that ever changes.
+    dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
+    # Nobody is watching a scheduled run, so confirmation-gated tools
+    # (shell, file writes) are denied here — same posture as an
+    # autonomous background tick (#2210).
+    config = GaiaAgentConfig(
+        max_steps=5,
+        silent_mode=True,
+        debug=False,
+        dynamic_tools=dynamic_tools,
+        memory_incognito=not memory_enabled(db),
+    )
+    agent = GaiaAgent(config)
+    agent._incognito_reason = "memory_off"
+    result = agent.process_query(prompt)
+    if isinstance(result, dict):
+        val = result.get("result")
+        return val if val is not None else result.get("answer", "")
+    return str(result) if result else ""
+
+
 # ── Application Factory ────────────────────────────────────────────────────
 
 
@@ -262,10 +330,13 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         def _check_lemonade():
             """Pre-warm LemonadeManager — check reachability only."""
             from gaia.llm.lemonade_manager import LemonadeManager
+            from gaia.ui.routers.system import _default_model_name
 
             LemonadeManager.ensure_ready(
                 quiet=True,
                 min_context_size=0,  # Only check reachability — don't trigger model reloads
+                # The selected model, so a cloud pick never seeds a local one.
+                model=db.get_setting("custom_model") or _default_model_name(),
             )
 
         def _import_modules():
@@ -392,7 +463,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         _sched_timeout = float(os.environ.get("GAIA_SCHEDULE_TIMEOUT", "300"))
 
         async def _schedule_executor(prompt: str) -> str:
-            """Execute a scheduled prompt through a fresh ChatAgent.
+            """Execute a scheduled prompt through a fresh GAIA (flagship) agent.
 
             Constructs the agent inline rather than via the chat router's
             session cache: `_get_cached_agent` is a lookup keyed to live
@@ -409,43 +480,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                     "Stop the tunnel or set GAIA_AUTONOMOUS_ALLOW_TUNNEL=1."
                 )
 
-            def _run() -> str:
-                # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
-                try:
-                    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
-                except ImportError as e:
-                    raise RuntimeError(
-                        agent_not_installed_message(
-                            "The chat agent is not installed",
-                            "gaia-agent-chat",
-                            next_step="Then re-run the scheduled chat task.",
-                        )
-                    ) from e
-
-                # Beta dynamic tool loader (#1798). Inert here: scheduled runs
-                # use the default "full" prompt profile and the loader only
-                # activates on the "doc" profile — wired for future-proofing so
-                # this path doesn't silently diverge if that ever changes.
-                dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
-                # Nobody is watching a scheduled run, so confirmation-gated tools
-                # (shell, file writes) are denied here — same posture as an
-                # autonomous background tick (#2210).
-                config = ChatAgentConfig(
-                    max_steps=5,
-                    silent_mode=True,
-                    debug=False,
-                    dynamic_tools=dynamic_tools,
-                )
-                agent = ChatAgent(config)
-                result = agent.process_query(prompt)
-                if isinstance(result, dict):
-                    val = result.get("result")
-                    return val if val is not None else result.get("answer", "")
-                return str(result) if result else ""
-
             loop = asyncio.get_running_loop()
             return await asyncio.wait_for(
-                loop.run_in_executor(None, _run), timeout=_sched_timeout
+                loop.run_in_executor(None, _run_scheduled_prompt, db, prompt),
+                timeout=_sched_timeout,
             )
 
         scheduler = Scheduler(db=db, executor=_schedule_executor)
@@ -631,9 +669,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     # ── Include Routers ──────────────────────────────────────────────────
     app.include_router(system_router_mod.router)
     app.include_router(onboarding_router_mod.router)
-    # Hub routes (catalog/install/...) MUST precede the agents router: that
-    # router has a greedy GET /api/agents/{agent_id:path} that would otherwise
-    # capture /api/agents/catalog and /api/agents/{id}/install-status.
+    app.include_router(setup_router_mod.router)
+    app.include_router(providers_router_mod.router)
+    app.include_router(skills_router_mod.router)
     app.include_router(hub_router_mod.router)
     app.include_router(agents_router_mod.router)
     app.include_router(sessions_router_mod.router)
@@ -919,6 +957,8 @@ def main():
         # rather than a traceback. 64 is EX_USAGE, as gaia uninstall uses.
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(64) from exc
+    if not lemonade_is_remote():
+        start_model_server_owner()
     uvicorn.run(
         server_app,
         host=args.host,

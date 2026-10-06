@@ -1,0 +1,50 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_git_code/git_basics — built at stage time by
+# tests/fixtures/gaia/tiers_git_code/build_fixtures.py; values in
+# GAIA_FIXTURE_VALUES.md "Git and coding".
+id: git_t2_history_and_staged
+name: "Git — File History Plus the Staged Change Plain `git diff` Hides"
+category: gaia_git
+severity: high
+tags: [t2_compound]
+description: |
+  Composes a path-filtered log with the index. The trap: the uncommitted
+  change to tax.py is STAGED, so a plain `git diff` shows nothing for it —
+  only `git diff --cached` (or `git status`) reveals it. "Nothing
+  uncommitted" is the wrong answer an agent reaches by running the obvious
+  command.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Repo ~/gaia-eval/tiers_git_code/git_basics (read-only use)."
+
+turns:
+  - turn: 1
+    objective: "Ask which commits touched ledgerlite/tax.py in ~/gaia-eval/tiers_git_code/git_basics, by whom and when"
+    user_message: "In ~/gaia-eval/tiers_git_code/git_basics, which commits have touched ledgerlite/tax.py? Who made them and when?"
+    ground_truth:
+      expected_answer: "Exactly two: bce65c4 'Initial ledgerlite import' (Priya Natarajan, 2026-03-02) and ce693e6 'Add zero-rated VAT band' (Marcus Chen, 2026-03-05)"
+    success_criteria: "agent_tools[] shows git log scoped to the file. The answer lists exactly those two commits with the right authors; listing any other commit (e.g. 'Switch default currency to EUR') or missing one is a FAIL."
+
+  - turn: 2
+    objective: "Ask whether anything about tax.py is not committed yet"
+    user_message: "And is there anything about tax.py that isn't committed yet?"
+    ground_truth:
+      expected_answer: "Yes — a staged change adds a \"super_reduced\" band at Decimal(\"0.02\")"
+    success_criteria: |
+      CRITICAL: Agent reports the staged change and what it does (adds a
+      super_reduced band at 0.02), from git diff --cached or git status +
+      git diff --cached in agent_tools[]. Answering "no uncommitted
+      changes" because plain git diff was empty is a FAIL.
+
+  - turn: 3
+    objective: "Ask for a one-sentence summary of what tax.py will contain after the next commit"
+    user_message: "In one sentence, what VAT bands will tax.py have after my next commit?"
+    ground_truth:
+      expected_answer: "Four: standard 20%, reduced 5%, zero 0%, and the new super_reduced 2%"
+    success_criteria: "Agent names all four bands with their rates. Omitting super_reduced (ignoring the staged change) or inventing a band is a FAIL."
+
+expected_outcome: |
+  Correct path history, the staged change found despite a clean `git diff`,
+  and an accurate post-commit picture.

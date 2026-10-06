@@ -1,0 +1,51 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_git_code/git_branches — built at stage time by
+# tests/fixtures/gaia/tiers_git_code/build_fixtures.py; values in
+# GAIA_FIXTURE_VALUES.md "Git and coding".
+id: git_t2_branch_compare
+name: "Git — Compare a Feature Branch With Main (Ahead and Behind)"
+category: gaia_git
+severity: high
+tags: [t2_compound]
+description: |
+  Ahead/behind accounting and a merge-risk judgement, composed from log
+  ranges and diffs. The branch is 3 ahead and 1 behind; an agent that
+  diffs two-dot instead of three-dot reports main's currency change as
+  something the branch "removes".
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Repo ~/gaia-eval/tiers_git_code/git_branches (read-only use). main checked out; feature/csv-export exists."
+
+turns:
+  - turn: 1
+    objective: "Ask what feature/csv-export adds compared with main in ~/gaia-eval/tiers_git_code/git_branches, and whether it is behind main"
+    user_message: "Compare feature/csv-export with main in ~/gaia-eval/tiers_git_code/git_branches. What does the branch add, and is it behind main?"
+    ground_truth:
+      expected_answer: "3 commits ahead, all by Dana Okafor: 'Add CSV export for invoices' (0bb26f8), 'Add export tests' (344a948), 'Document CSV export in README' (8e9c270) — adding ledgerlite/export_csv.py, tests/test_export_csv.py and a README paragraph. 1 commit behind: 'Switch default currency to EUR' (97c44aa, Marcus Chen)."
+    success_criteria: |
+      CRITICAL: agent_tools[] shows git log over a range (main..feature or
+      equivalent) and a diff or --stat. The answer lists the three branch
+      commits and the one main-only commit correctly. Claiming the branch
+      reverts or removes the EUR currency change (a two-dot diff misread)
+      is a FAIL. Checking out either branch is a FAIL — this is a
+      read-only question.
+
+  - turn: 2
+    objective: "Ask which of the branch's commits touch tests"
+    user_message: "Which of those branch commits touch tests?"
+    ground_truth:
+      expected_answer: "Only 'Add export tests' (344a948), which adds tests/test_export_csv.py"
+    success_criteria: "Agent names only 'Add export tests', grounded in per-commit file lists (git show --stat / git log --stat)."
+
+  - turn: 3
+    objective: "Ask whether merging would conflict with main's currency change"
+    user_message: "If I merge it, will main's currency change conflict with anything on the branch?"
+    ground_truth:
+      expected_answer: "No conflict expected: main's change is to ledgerlite/config.py, which the branch never touches"
+    success_criteria: "Agent says no conflict is expected and gives the reason (disjoint files: config.py vs export_csv.py/test/README). Actually running a merge or checkout is a FAIL; claiming a conflict is a FAIL."
+
+expected_outcome: |
+  Correct ahead/behind lists, per-commit file awareness, and a grounded
+  merge-risk call, with no branch switched.

@@ -2563,12 +2563,15 @@ class MemoryStore:
         offset: int = 0,
         limit: int = 50,
         include_superseded: bool = False,
+        time_from: str | None = None,
+        time_to: str | None = None,
     ) -> Dict:
         """Paginated knowledge browser with full filtering.
 
         By default excludes superseded items.  Set ``include_superseded=True``
         to see the full history including superseded entries (their
         ``superseded_by`` field will be non-None in the returned dicts).
+        ``time_from`` / ``time_to`` bound ``created_at`` (ISO 8601, inclusive).
 
         Returns: {"items": [...], "total": N, "offset": N, "limit": N}
         """
@@ -2619,6 +2622,12 @@ class MemoryStore:
         if sensitive is not None:
             conditions.append("k.sensitive = ?")
             params.append(int(sensitive))
+        if time_from is not None:
+            conditions.append("k.created_at >= ?")
+            params.append(time_from)
+        if time_to is not None:
+            conditions.append("k.created_at <= ?")
+            params.append(time_to)
 
         # FTS5 search filter
         fts_join = ""

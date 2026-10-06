@@ -3,7 +3,7 @@
 **Status:** Proposed
 **Date:** 2026-08-19
 **Target agent:** `ChatAgent` (`hub/agents/chat/python/gaia_agent_chat/`) — the flagship
-**Milestone:** Agent Factory M2/M3 (see [`agent-factory.md`](agent-factory.md))
+**Milestone:** Agent Factory M2/M3
 
 ---
 

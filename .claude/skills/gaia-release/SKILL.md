@@ -1,6 +1,6 @@
 ---
 name: "gaia-release"
-description: "Cut a GAIA release end-to-end: draft notes, open release PR, run pre-tag verification, push the tag, monitor the publish pipeline, and produce the Discord announcement. Use when the user asks to 'cut a release', 'release vX.Y.Z', 'tag a release', or 'publish v...'. Pauses at every irreversible step for user approval."
+description: "Cut a GAIA release end-to-end: draft notes, open release PR, run pre-tag verification, push the tag, monitor the publish pipeline, and produce the Discord announcement. Also cuts release candidates (vX.Y.Z-rcN) for testing before the final. Use when the user asks to 'cut a release', 'cut a release candidate', 'release vX.Y.Z', 'tag a release', or 'publish v...'. Pauses at every irreversible step for user approval."
 ---
 
 # GAIA Release
@@ -40,6 +40,7 @@ Resume table:
 |-------|--------|
 | `RELEASE_EXISTS` matches | Release already shipped. Skip to Phase 6 (smoke test + announcement) only. |
 | `TAG_EXISTS`, no release | Tag pushed, publish workflow in progress or failed. Resume at Phase 5 (monitor). |
+| `v<version>-rcN` tags exist, no final tag | A release candidate is out. Resume at Phase 3.5 step 4 (test pass) for the highest `N`. List them with `git tag --list "v<version>-rc*"`. |
 | `PR_MERGED`, no tag | Notes on `main`. Resume at Phase 3 (pre-tag verification). **Do not re-run Phase 1** — never overwrite merged notes. |
 | `PR_OPEN` | PR still open. Tell user "PR #N already open at <url> — waiting for merge." Exit. |
 | `NOTES_ON_MAIN` ≥ 1 but no PR | Half-finished prior attempt landed notes without a PR (rare). Stop and ask the user before continuing. |
@@ -394,6 +395,56 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 
 ---
 
+## Phase 3.5 — Release candidate (default for minor/major; ask for a patch)
+
+**Goal:** put the exact build users will get in front of a tester before it becomes the default. An RC tag runs the same `publish.yml`, behind the same approval gate, but stays off every stable channel:
+
+| | Final `v<version>` | RC `v<version>-rcN` |
+|---|---|---|
+| GitHub Release | normal, becomes latest | pre-release, never latest |
+| PyPI | `<version>` | `<version>rcN` — `pip install amd-gaia` ignores it without `--pre` |
+| npm `@amd-gaia/agent-ui` | dist-tag `latest` | `<version>-rc.N` under dist-tag `next` |
+| Agent Hub R2 (`release_components.yml`) | publishes | does not run — the catalog has no pre-release channel |
+| Website | stable downloads | a collapsed "Try the release candidate" entry, hidden once the final ships |
+| Context7 refresh, `release` branch, release-notes bot | run | skipped |
+| Release notes | `docs/releases/v<version>.mdx` | the same file — no RC-specific notes |
+
+`version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. The one-step Windows setup and the terminal's `.pkg`/`.deb`/`.rpm` packages are not built for an RC (they come from `release_components.yml` and need a numeric-only version); the RC carries the desktop app installers, the raw terminal binaries, and the wheel/sdist.
+
+### Steps
+
+1. **Dry-run the classification** — a malformed tag fails `validate` before anything builds, but catching it locally is cheaper:
+   ```bash
+   python util/release_tag.py classify v<version>-rc1
+   python util/validate_release_notes.py docs/releases/v<version>.mdx --tag v<version>-rc1
+   ```
+   `IS_RC=true`, `PEP440_VERSION=<version>rc1`, `NPM_VERSION=<version>-rc.1`. Anything else (`-rc.1`, `rc1` without the dash, `-rc0`, `-beta1`) is rejected.
+
+2. **Tag the verified SHA from Gate 3 and push** — same confirmation rule as Phase 4: the SHA and the green pre-tag run go in the question.
+   ```bash
+   git tag -a v<version>-rc1 <merged-sha> -m "Release candidate v<version>-rc1"
+   git rev-list -n1 v<version>-rc1   # MUST equal <merged-sha>
+   git push origin v<version>-rc1
+   ```
+
+3. **Monitor and approve exactly as in Phase 5.** The approval gate is the same `publish` environment. There is no `refresh-context7` job to wait for; `redeploy-website-rc` asks the website to rebuild so the RC entry appears.
+
+4. **Personal test pass** on a machine that does not already have the release installed (CLAUDE.md: test from the user's real initial state):
+   ```bash
+   pip install amd-gaia==<version>rc1 && gaia -v      # must print <version>rc1
+   npm view @amd-gaia/agent-ui dist-tags                # latest unchanged, next = <version>-rc.1
+   gh release view v<version>-rc1 --repo amd/gaia       # Pre-release, installers attached
+   ```
+   Then install the desktop app from the pre-release and walk the golden paths the release notes advertise.
+
+5. **Problems → fix forward, then `-rc2`.** Land the fix on `main` through a normal PR, re-run Phase 3 on the new merged SHA, and tag `v<version>-rc2` from step 2. Never move or delete an RC tag — each one is a published version on PyPI and npm.
+
+### Gate 3.5 — RC passed
+
+Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` on that same SHA?"** Phase 4 then tags that SHA (re-derive it with `git rev-list -n1 v<version>-rcN`), not necessarily the release PR's merge commit.
+
+---
+
 ## Phase 4 — Tag and trigger the publish pipeline
 
 **Goal:** push the annotated tag; do nothing else.
@@ -501,5 +552,6 @@ Do not bundle two phases into one user prompt. The gates exist for review.
 
 - The argument-passing convention is the *target tag*, not the previous tag. If the user says "release v0.17.5", that is what gets created — the previous tag is derived via `git tag --sort=-v:refname | head -1`.
 - Hotfix releases (`v0.15.4.1`) follow the same flow; the `validate_release_notes.py` check accepts the four-part form.
+- Release candidates are `v<version>-rcN` only (Phase 3.5). There is no RC form of a four-part hotfix tag.
 - Minor/major releases (`v0.18.0`, `v1.0.0`) need a richer notes structure — a "Highlights" block, the `pip install` instructions, and migration notes if breaking. The skeleton above is patch-shaped; expand for non-patch releases by mirroring the prior minor/major release notes.
 - If the publish run fails partway through (e.g. PyPI publishes but npm doesn't), do **not** delete the tag and start over. Resolve the failing job, rerun only that job (`gh run rerun <run-id> --failed`), and let the rest of the pipeline complete idempotently. The tag is the source of truth — preserve it.

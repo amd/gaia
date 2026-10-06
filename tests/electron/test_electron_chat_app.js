@@ -127,7 +127,9 @@ describe('Chat App Integration', () => {
     const requiredComponents = [
       'ChatView',
       'Sidebar',
-      'WelcomeScreen',
+      'NewChat',
+      'Composer',
+      'SetupScreen',
       'MessageBubble',
     ];
 
@@ -233,15 +235,9 @@ describe('Chat App Integration', () => {
       expect(apiContent).toContain('/system/status');
     });
 
-    it('should have health check endpoint function', () => {
-      expect(apiContent).toContain('getHealth');
-      expect(apiContent).toContain('/health');
-    });
-
     it('should have session CRUD functions', () => {
       expect(apiContent).toContain('listSessions');
       expect(apiContent).toContain('createSession');
-      expect(apiContent).toContain('getSession');
       expect(apiContent).toContain('updateSession');
       expect(apiContent).toContain('deleteSession');
     });
@@ -396,7 +392,6 @@ describe('Chat App Integration', () => {
       expect(storeContent).toContain('isStreaming');
       expect(storeContent).toContain('streamingContent');
       expect(storeContent).toContain('setStreaming');
-      expect(storeContent).toContain('appendStreamContent');
       expect(storeContent).toContain('clearStreamContent');
     });
 
@@ -408,8 +403,8 @@ describe('Chat App Integration', () => {
     it('should manage UI state (theme, modals)', () => {
       expect(storeContent).toContain('theme:');
       expect(storeContent).toContain('showDocLibrary');
-      expect(storeContent).toContain('showSettings');
-      expect(storeContent).toContain('toggleTheme');
+      expect(storeContent).toContain('settingsSection:');
+      expect(storeContent).toContain('setThemePreference');
     });
 
     it('should support dark theme via data-theme attribute', () => {
@@ -440,7 +435,9 @@ describe('Chat App Integration', () => {
     it('should import required components', () => {
       expect(appContent).toContain('Sidebar');
       expect(appContent).toContain('ChatView');
-      expect(appContent).toContain('WelcomeScreen');
+      expect(appContent).toContain("import { NewChat } from './components/NewChat'");
+      expect(appContent).toContain("import { SetupScreen } from './components/SetupScreen'");
+      expect(appContent).toContain("import { SettingsDialog } from './components/settings/SettingsDialog'");
     });
 
     it('should use Zustand chat store', () => {
@@ -457,13 +454,16 @@ describe('Chat App Integration', () => {
     });
 
     it('should handle new chat creation', () => {
-      expect(appContent).toContain('handleNewTask');
-      expect(appContent).toContain('createSession');
+      expect(appContent).toContain('const newChat = useCallback(');
+      // The session is created lazily, on the first message of an empty chat.
+      expect(appContent).toContain('const startChat = useCallback(');
+      expect(appContent).toContain('api.createSession(');
     });
 
-    it('should render WelcomeScreen when no session is active', () => {
-      expect(appContent).toContain('WelcomeScreen');
-      expect(appContent).toContain('currentSessionId');
+    it('should render the empty-chat screen (NewChat) when no session is active', () => {
+      expect(appContent).toMatch(
+        /currentSessionId \? \(\s*<ChatView[^>]*\/>\s*\) : \(\s*<NewChat onSend=\{startChat\} \/>/
+      );
     });
 
     it('should render ChatView when a session is active', () => {
@@ -476,9 +476,13 @@ describe('Chat App Integration', () => {
       expect(appContent).toContain('DocumentLibrary');
     });
 
-    it('should conditionally render SettingsPage', () => {
-      expect(appContent).toContain('showSettings');
-      expect(appContent).toContain('SettingsPage');
+    it('should conditionally render SettingsDialog', () => {
+      expect(appContent).toContain('useChatStore((s) => s.settingsSection)');
+      expect(appContent).toContain('{settingsSection && <SettingsDialog');
+    });
+
+    it('should render SetupScreen when first-run setup is needed', () => {
+      expect(appContent).toContain('<SetupScreen');
     });
   });
 
@@ -542,7 +546,11 @@ describe('Chat App Integration', () => {
   describe('additional components', () => {
     const additionalComponents = [
       'DocumentLibrary',
-      'SettingsPage',
+      'FileBrowser',
+      'MemoryDashboard',
+      'ScheduleManager',
+      'MobileAccessModal',
+      'settings/SettingsDialog',
     ];
 
     additionalComponents.forEach(name => {
@@ -554,6 +562,24 @@ describe('Chat App Integration', () => {
       it(`should have ${name} CSS (.css)`, () => {
         const cssPath = path.join(CHAT_APP_PATH, `src/components/${name}.css`);
         expect(fs.existsSync(cssPath)).toBe(true);
+      });
+    });
+
+    const settingsSections = [
+      'GeneralSettings',
+      'ModelSettings',
+      'PermissionsSettings',
+      'SkillsSettings',
+      'ConnectorsPane',
+      'MemorySettings',
+      'PrivacySettings',
+      'AdvancedSettings',
+    ];
+
+    settingsSections.forEach(name => {
+      it(`should have ${name} settings section (.tsx)`, () => {
+        const sectionPath = path.join(CHAT_APP_PATH, `src/components/settings/${name}.tsx`);
+        expect(fs.existsSync(sectionPath)).toBe(true);
       });
     });
   });
@@ -636,9 +662,10 @@ describe('Chat App Integration', () => {
       expect(storeContent).toMatch(/['"]gaia-chat-theme['"]\s*,\s*['"]dark['"]/);
     });
 
-    it('should have setShowDocLibrary and setShowSettings actions', () => {
+    it('should have setShowDocLibrary and open/close settings actions', () => {
       expect(storeContent).toContain('setShowDocLibrary');
-      expect(storeContent).toContain('setShowSettings');
+      expect(storeContent).toContain('openSettings:');
+      expect(storeContent).toContain('closeSettings:');
     });
   });
 
@@ -652,12 +679,12 @@ describe('Chat App Integration', () => {
       appContent = fs.readFileSync(appPath, 'utf8');
     });
 
-    it('should have handleNewTaskWithPrompt for quick-start prompts', () => {
-      expect(appContent).toContain('handleNewTaskWithPrompt');
+    it('should start a chat from a prompt', () => {
+      expect(appContent).toMatch(/const startChat = useCallback\(async \(text: string\)/);
     });
 
     it('should pass prompt handler to child components', () => {
-      expect(appContent).toContain('onSendPrompt={handleNewTaskWithPrompt}');
+      expect(appContent).toContain('<NewChat onSend={startChat} />');
     });
 
     it('should use useCallback for memoized handlers', () => {
@@ -819,10 +846,6 @@ describe('Chat App Integration', () => {
       expect(indexCss).toContain('max-width: 768px');
     });
 
-    it('should have tablet breakpoint at 900px', () => {
-      expect(indexCss).toContain('max-width: 900px');
-    });
-
     it('should have small mobile breakpoint at 480px', () => {
       expect(indexCss).toContain('max-width: 480px');
     });
@@ -843,30 +866,51 @@ describe('Chat App Integration', () => {
       expect(indexCss).toContain('position: fixed');
     });
 
-    it('should have sidebar slide transform', () => {
-      expect(indexCss).toContain('translateX(-100%)');
-      expect(indexCss).toContain('translateX(0)');
+    it('should have sidebar slide transform on mobile', () => {
+      const sidebarCss = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/components/Sidebar.css'),
+        'utf8'
+      );
+      const mobile = sidebarCss.slice(sidebarCss.indexOf('@media (max-width: 768px)'));
+      expect(sidebarCss).toContain('@media (max-width: 768px)');
+      expect(mobile).toContain('position: fixed');
+      expect(mobile).toContain('translateX(-100%)');
+      expect(mobile).toContain('translateX(0)');
     });
   });
 
-  describe('responsive welcome screen', () => {
-    let welcomeCss;
+  describe('empty chat screen (NewChat)', () => {
+    let newChatContent;
+    let newChatCss;
 
     beforeAll(() => {
-      const cssPath = path.join(CHAT_APP_PATH, 'src/components/WelcomeScreen.css');
-      welcomeCss = fs.readFileSync(cssPath, 'utf8');
+      newChatContent = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/components/NewChat.tsx'),
+        'utf8'
+      );
+      newChatCss = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/components/NewChat.css'),
+        'utf8'
+      );
     });
 
-    it('should have responsive feature cards (2x2 on mobile)', () => {
-      expect(welcomeCss).toContain('repeat(2, 1fr)');
+    it('should render only the composer, focused and ready to type', () => {
+      expect(newChatContent).toContain('<Composer');
+      expect(newChatContent).toContain('autoFocus');
+      expect(newChatContent).toContain('aria-label="New chat"');
     });
 
-    it('should reduce title font size on mobile', () => {
-      expect(welcomeCss).toContain('font-size: 28px');
+    it('should surface a failed chat start as an alert', () => {
+      expect(newChatContent).toContain('await onSend(message)');
+      expect(newChatContent).toContain('role="alert"');
     });
 
-    it('should stack suggestion chips on small mobile', () => {
-      expect(welcomeCss).toContain('flex-direction: column');
+    it('should size the composer to the content column on any width', () => {
+      expect(newChatCss).toContain('.new-chat {');
+      expect(newChatCss).toContain('.new-chat-inner {');
+      expect(newChatCss).toContain('width: 100%');
+      expect(newChatCss).toContain('max-width: var(--content-w)');
+      expect(newChatCss).toContain('.new-chat-error');
     });
   });
 
@@ -883,7 +927,9 @@ describe('Chat App Integration', () => {
     });
 
     it('should reduce padding on mobile', () => {
-      expect(chatCss).toMatch(/padding:\s*10px\s+16px/);
+      expect(chatCss).toMatch(
+        /@media \(max-width: 768px\)\s*\{[\s\S]{0,200}?\.messages-column,\s*\.input-column\s*\{\s*padding:/
+      );
     });
   });
 
@@ -898,19 +944,23 @@ describe('Chat App Integration', () => {
     });
 
     it('should have keyboard accessibility on session items', () => {
-      expect(sidebarContent).toContain('role="button"');
-      expect(sidebarContent).toContain('tabIndex={0}');
-      expect(sidebarContent).toContain('onKeyDown');
+      // Session rows are native buttons, so Tab/Enter/Space work without handlers.
+      expect(sidebarContent).toMatch(
+        /<button\s+type="button"\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
+      );
+      expect(sidebarContent).not.toContain('role="button"');
     });
 
-    it('should have ARIA labels on sidebar buttons', () => {
-      expect(sidebarContent).toContain('aria-label="New Task"');
+    it('should have accessible names on sidebar buttons', () => {
+      expect(sidebarContent).toContain('title="New chat (Ctrl+Shift+O)"');
       expect(sidebarContent).toContain('aria-label="Settings"');
-      expect(sidebarContent).toContain('aria-label="Search tasks"');
+      expect(sidebarContent).toContain('aria-label="Search chats"');
+      expect(sidebarContent).toContain("aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}");
     });
 
-    it('should have ARIA labels on sessions', () => {
-      expect(sidebarContent).toContain('aria-label={`Open task:');
+    it('should have ARIA labels on session actions', () => {
+      expect(sidebarContent).toContain('aria-label={confirm ? `Confirm delete ${session.title}` : `Delete ${session.title}`}');
+      expect(sidebarContent).toContain('<nav className="sb-list" aria-label="Recent chats">');
     });
 
     it('should have aria-current on active session', () => {
@@ -918,9 +968,9 @@ describe('Chat App Integration', () => {
     });
 
     it('should have delete confirmation flow', () => {
-      expect(sidebarContent).toContain('pendingDeleteId');
-      // Confirmation UI shows "Delete?" label and "Click to confirm delete" title
-      expect(sidebarContent).toMatch(/Click.*confirm.*delete|Delete\?/);
+      // First click arms the row, second click deletes.
+      expect(sidebarContent).toContain('onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}');
+      expect(sidebarContent).toContain('Delete?');
     });
 
     it('should auto-cancel delete confirmation after timeout', () => {
@@ -934,16 +984,11 @@ describe('Chat App Integration', () => {
     });
 
     it('should support sidebar open/close class', () => {
-      expect(sidebarContent).toContain("sidebarOpen ? 'open' : ''");
+      expect(sidebarContent).toContain("sidebarOpen ? ' is-open' : ''");
     });
 
     it('should have search with aria-label', () => {
-      expect(sidebarContent).toContain('aria-label="Search tasks"');
-    });
-
-    it('should have version badge', () => {
-      expect(sidebarContent).toContain('version-badge');
-      expect(sidebarContent).toContain('__APP_VERSION__');
+      expect(sidebarContent).toContain('aria-label="Search chats (Ctrl+K)"');
     });
   });
 
@@ -956,15 +1001,17 @@ describe('Chat App Integration', () => {
     });
 
     it('should have delete confirmation style', () => {
-      expect(sidebarCss).toContain('.session-delete.confirm');
+      expect(sidebarCss).toContain('.sb-row-delete.is-confirm');
     });
 
     it('should have focus-visible style on session items', () => {
-      expect(sidebarCss).toContain('.session-item:focus-visible');
-    });
-
-    it('should have version badge style', () => {
-      expect(sidebarCss).toContain('.version-badge');
+      // Session rows are <button>s, covered by the global button focus ring.
+      const indexCss = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/styles/index.css'),
+        'utf8'
+      );
+      expect(indexCss).toContain('button:focus-visible');
+      expect(sidebarCss).not.toMatch(/\.sb-row-main:focus(-visible)?\s*\{[^}]*outline:\s*none/);
     });
   });
 
@@ -993,8 +1040,9 @@ describe('Chat App Integration', () => {
     });
 
     it('should auto-restore sidebar on resize to desktop', () => {
-      expect(appContent).toContain('resize');
-      expect(appContent).toContain('innerWidth > 768');
+      expect(appContent).toContain("window.matchMedia?.('(max-width: 768px)')");
+      expect(appContent).toContain('setSidebarOpen(!mq.matches)');
+      expect(appContent).toContain("mq.addEventListener('change', sync)");
     });
 
     it('should close sidebar on mobile after creating new chat', () => {
@@ -1053,14 +1101,16 @@ describe('Chat App Integration', () => {
       chatContent = fs.readFileSync(chatPath, 'utf8');
     });
 
-    it('should have empty chat onboarding suggestions', () => {
-      expect(chatContent).toContain('EMPTY_SUGGESTIONS');
-      expect(chatContent).toContain('What can I help you with?');
+    it('should prompt differently on an empty chat than on a reply', () => {
+      expect(chatContent).toContain(
+        "placeholder={messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}"
+      );
     });
 
-    it('should have empty chat suggestion chips', () => {
-      expect(chatContent).toContain('empty-task-chip');
-      expect(chatContent).toContain('handleSuggestionClick');
+    it('should use the shared Composer for input', () => {
+      expect(chatContent).toContain("import { Composer } from './Composer'");
+      expect(chatContent).toContain('<Composer');
+      expect(chatContent).toContain('onStop={handleStop}');
     });
 
     it('should show loading skeleton during message fetch', () => {
@@ -1088,12 +1138,17 @@ describe('Chat App Integration', () => {
     });
 
     it('should have ARIA labels on input and buttons', () => {
-      expect(chatContent).toContain('aria-label="Message input"');
-      expect(chatContent).toContain('aria-label="Send message"');
-      expect(chatContent).toContain('aria-label="Upload document"');
-      expect(chatContent).toContain('aria-label="Rename task"');
-      expect(chatContent).toContain('aria-label="Export task"');
-      expect(chatContent).toContain('aria-label="Attach documents"');
+      const composerContent = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/components/Composer.tsx'),
+        'utf8'
+      );
+      expect(composerContent).toContain('aria-label="Message"');
+      expect(composerContent).toContain('aria-label="Send"');
+      expect(composerContent).toContain('aria-label="Stop"');
+      expect(composerContent).toContain('aria-label="Attach files"');
+      expect(chatContent).toContain('aria-label="Chat title"');
+      expect(chatContent).toContain('aria-label="Export chat"');
+      expect(chatContent).toContain('aria-label="Browse files on this PC"');
     });
 
     it('should convert policy_alert events into policy steps and notifications', () => {
@@ -1180,12 +1235,6 @@ describe('Chat App Integration', () => {
       chatCss = fs.readFileSync(cssPath, 'utf8');
     });
 
-    it('should have empty chat state styles', () => {
-      expect(chatCss).toContain('.empty-task');
-      expect(chatCss).toContain('.empty-task-title');
-      expect(chatCss).toContain('.empty-task-chip');
-    });
-
     it('should have drag overlay styles', () => {
       expect(chatCss).toContain('.drag-overlay');
       expect(chatCss).toContain('.drag-active');
@@ -1196,9 +1245,15 @@ describe('Chat App Integration', () => {
     });
 
     it('should use the native browser caret instead of a custom block cursor', () => {
-      expect(chatCss).toContain('Custom block cursor in the input box was removed');
-      expect(chatCss).toContain('The native browser caret is enough');
-      expect(chatCss).not.toContain('.input-cursor');
+      const composerCss = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/components/Composer.css'),
+        'utf8'
+      );
+      expect(composerCss).toContain('.composer-input');
+      for (const css of [chatCss, composerCss]) {
+        expect(css).not.toContain('.input-cursor');
+        expect(css).not.toMatch(/caret-color:\s*transparent/);
+      }
     });
   });
 
@@ -1284,50 +1339,88 @@ describe('Chat App Integration', () => {
 
   // ── Settings Page Enhancements ────────────────────────────────────
 
-  describe('SettingsPage enhancements', () => {
-    let settingsContent;
+  describe('SettingsDialog enhancements', () => {
+    const settingsDir = path.join(CHAT_APP_PATH, 'src/components/settings');
+    let dialogContent;
+    let advancedContent;
+    let privacyContent;
 
     beforeAll(() => {
-      const settingsPath = path.join(CHAT_APP_PATH, 'src/components/SettingsPage.tsx');
-      settingsContent = fs.readFileSync(settingsPath, 'utf8');
+      dialogContent = fs.readFileSync(path.join(settingsDir, 'SettingsDialog.tsx'), 'utf8');
+      advancedContent = fs.readFileSync(path.join(settingsDir, 'AdvancedSettings.tsx'), 'utf8');
+      privacyContent = fs.readFileSync(path.join(settingsDir, 'PrivacySettings.tsx'), 'utf8');
     });
 
     it('should use dynamic version from build constant', () => {
-      expect(settingsContent).toContain('__APP_VERSION__');
+      expect(advancedContent).toContain('const version = __APP_VERSION__');
+      expect(advancedContent).toContain('GAIA v{version}');
     });
 
-    it('should render as a full-page settings view', () => {
-      expect(settingsContent).toContain('settings-page');
-      expect(settingsContent).toContain('settings-page-body');
+    it('should render as a modal settings dialog with section nav', () => {
+      expect(dialogContent).toContain('className="settings-dialog" role="dialog" aria-modal="true"');
+      expect(dialogContent).toContain('aria-label="Settings sections"');
+      expect(dialogContent).toContain('className="settings-body"');
+      expect(dialogContent).toContain('aria-label="Close settings"');
     });
 
-    it('should have danger zone section at bottom', () => {
-      expect(settingsContent).toContain('danger-divider');
-      expect(settingsContent).toContain('danger-warning');
+    it('should lazy-load the heavy Connectors and Advanced sections', () => {
+      expect(dialogContent).toContain("lazy(() => import('./ConnectorsPane')");
+      expect(dialogContent).toContain("lazy(() => import('./AdvancedSettings')");
+      expect(dialogContent).toContain('<Suspense');
     });
 
-    it('should have danger zone warning text', () => {
-      expect(settingsContent).toContain('permanently delete all sessions');
+    it('should keep model-server status, context size, custom model, dynamic tools and MCP in Advanced', () => {
+      expect(advancedContent).toContain('className="status-grid"');
+      expect(advancedContent).toContain('className="ctx-preset-row"');
+      expect(advancedContent).toContain('className="model-override-desc"');
+      expect(advancedContent).toContain('Dynamic Tools');
+      expect(advancedContent).toContain('mcp-status-connected');
+    });
+
+    it('should have danger zone section in Privacy', () => {
+      expect(privacyContent).toContain('danger-divider');
+      expect(privacyContent).toContain('danger-warning');
+      expect(privacyContent).toContain('className="btn-danger"');
+    });
+
+    it('should have danger zone warning text and two-step confirm', () => {
+      expect(privacyContent).toContain('Deletes every chat and its messages');
+      expect(privacyContent).toContain("confirm ? 'Click again to delete all chats' : 'Delete all chats'");
     });
   });
 
-  describe('SettingsPage CSS enhancements', () => {
-    let settingsCss;
+  describe('SettingsDialog CSS enhancements', () => {
+    let dialogCss;
+    let sharedCss;
 
     beforeAll(() => {
-      const cssPath = path.join(CHAT_APP_PATH, 'src/components/SettingsPage.css');
-      settingsCss = fs.readFileSync(cssPath, 'utf8');
+      dialogCss = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/components/settings/SettingsDialog.css'),
+        'utf8'
+      );
+      sharedCss = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/components/SettingsModal.css'),
+        'utf8'
+      );
     });
 
-    it('should have full-page layout styles', () => {
-      expect(settingsCss).toContain('.settings-page');
-      expect(settingsCss).toContain('.settings-page-header');
-      expect(settingsCss).toContain('.settings-page-body');
+    it('should have dialog layout styles', () => {
+      expect(dialogCss).toContain('.settings-overlay {');
+      expect(dialogCss).toContain('.settings-dialog {');
+      expect(dialogCss).toContain('.settings-nav {');
+      expect(dialogCss).toContain('.settings-body {');
+    });
+
+    it('should go full-screen with a horizontal nav on mobile', () => {
+      const mobile = dialogCss.slice(dialogCss.indexOf('@media (max-width: 768px)'));
+      expect(dialogCss).toContain('@media (max-width: 768px)');
+      expect(mobile).toMatch(/\.settings-dialog\s*\{[^}]*flex-direction:\s*column/);
+      expect(mobile).toMatch(/\.settings-nav\s*\{[^}]*flex-direction:\s*row/);
     });
 
     it('should have danger zone styles', () => {
-      expect(settingsCss).toContain('.danger-divider');
-      expect(settingsCss).toContain('.danger-warning');
+      expect(sharedCss).toContain('.danger-divider');
+      expect(sharedCss).toContain('.danger-warning');
     });
   });
 

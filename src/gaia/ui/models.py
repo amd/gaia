@@ -274,23 +274,6 @@ class AgentListResponse(BaseModel):
     total: int
 
 
-class DiskAgentInfo(BaseModel):
-    """Information about an agent present under ~/.gaia/agents."""
-
-    id: str
-    name: str
-    registered: bool
-    registered_agent_id: Optional[str] = None
-    source: Optional[str] = None
-
-
-class DiskAgentListResponse(BaseModel):
-    """List of custom agents found on disk."""
-
-    agents: List[DiskAgentInfo]
-    total: int
-
-
 # ── Sessions ────────────────────────────────────────────────────────────────
 
 
@@ -336,6 +319,8 @@ class SessionResponse(BaseModel):
     created_at: str
     updated_at: str
     model: str
+    # The model a turn actually runs: custom override, agent preference, device.
+    effective_model: Optional[str] = None
     system_prompt: Optional[str] = None
     message_count: int = 0
     document_ids: List[str] = Field(default_factory=list)

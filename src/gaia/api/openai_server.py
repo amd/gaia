@@ -436,6 +436,46 @@ async def create_chat_completion(request: ChatCompletionRequest):
         )
 
 
+def _drain_content_chunks(
+    output_handler, completion_id: str, created: int, model: str
+) -> List[str]:
+    """SSE content chunks for the events the output handler has queued so far."""
+    if not (hasattr(output_handler, "has_events") and output_handler.has_events()):
+        return []
+    chunks = []
+    for event in output_handler.get_events():
+        event_type = event.get("type", "message")
+        if not output_handler.should_stream_as_content(event_type):
+            if _api_debug_enabled():
+                logger.debug(f"📝 Skipping event: {event_type}")
+            continue
+        content_text = output_handler.format_event_as_content(event)
+        if not content_text:
+            continue
+        content_chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": content_text},
+                    "finish_reason": None,
+                }
+            ],
+        }
+        if _api_debug_enabled():
+            logger.debug(
+                "📤 Streaming event: %s -> %s (%d chars)",
+                event_type,
+                _REDACTED_LOG_VALUE,
+                len(content_text),
+            )
+        chunks.append(f"data: {json.dumps(content_chunk)}\n\n")
+    return chunks
+
+
 async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str, None]:
     """
     Create Server-Sent Events stream for chat completion.
@@ -489,7 +529,7 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
         logger.debug("🔄 Starting agent query processing in thread pool...")
 
     # Process query in thread pool to avoid blocking event loop
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     # Get the SSEOutputHandler from the agent (try output_handler first, fall back to console)
     output_handler = getattr(agent, "output_handler", None) or getattr(
@@ -507,50 +547,10 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
 
         # Stream events as they are generated
         while not task.done():
-            # Check for new events from the output handler
-            if hasattr(output_handler, "has_events") and output_handler.has_events():
-                events = output_handler.get_events()
-
-                for event in events:
-                    event_type = event.get("type", "message")
-
-                    # Check if this event should be streamed to client
-                    if not output_handler.should_stream_as_content(event_type):
-                        # Still log it in debug mode
-                        if _api_debug_enabled():
-                            logger.debug(f"📝 Skipping event: {event_type}")
-                        continue
-
-                    # Format event as clean content
-                    content_text = output_handler.format_event_as_content(event)
-
-                    # Skip empty content (filtered events)
-                    if not content_text:
-                        continue
-
-                    content_chunk = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": content_text},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-
-                    if _api_debug_enabled():
-                        logger.debug(
-                            "📤 Streaming event: %s -> %s (%d chars)",
-                            event_type,
-                            _REDACTED_LOG_VALUE,
-                            len(content_text),
-                        )
-
-                    yield f"data: {json.dumps(content_chunk)}\n\n"
+            for chunk in _drain_content_chunks(
+                output_handler, completion_id, created, model
+            ):
+                yield chunk
 
             # Small delay to avoid busy waiting
             await asyncio.sleep(0.1)
@@ -558,37 +558,10 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
         # Get the final result
         result = await task
 
-        # Get any remaining events
-        if hasattr(output_handler, "has_events") and output_handler.has_events():
-            events = output_handler.get_events()
-            for event in events:
-                event_type = event.get("type", "message")
-
-                # Check if this event should be streamed
-                if not output_handler.should_stream_as_content(event_type):
-                    continue
-
-                # Format event as clean content
-                content_text = output_handler.format_event_as_content(event)
-
-                # Skip empty content
-                if not content_text:
-                    continue
-
-                content_chunk = {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": content_text},
-                            "finish_reason": None,
-                        }
-                    ],
-                }
-                yield f"data: {json.dumps(content_chunk)}\n\n"
+        for chunk in _drain_content_chunks(
+            output_handler, completion_id, created, model
+        ):
+            yield chunk
 
         # Debug logging: show what agent returned
         if _api_debug_enabled():

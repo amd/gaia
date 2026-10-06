@@ -1,0 +1,46 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/big/server_2026-09.txt —
+# 5,000 lines; exactly one ERROR at line 4812
+# ("2026-09-14T22:43:24Z ERROR [ledger] checksum mismatch batch=7731");
+# exactly 37 WARN lines. Regenerate with _gen_fixtures.py. See
+# GAIA_FIXTURE_VALUES.md, "Files and shell".
+id: files_large_file_needle
+name: "Files — Needle in a 5,000-Line File"
+category: gaia_files
+severity: high
+tags: [t3_stress]
+description: |
+  A ~300 KB log with one ERROR line near the end and 37 WARN lines. Reading
+  it whole overflows a small context; the agent has to page (read_file
+  offset/limit), search, or count with a tool — and still report exact
+  values, not an estimate from the first page it saw.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "server_2026-09.txt staged at ~/gaia-eval/tiers_files_shell/big/."
+
+turns:
+  - turn: 1
+    objective: "Ask for the single error in the big log"
+    user_message: "~/gaia-eval/tiers_files_shell/big/server_2026-09.txt is a big log. Find the ERROR in it — what's the full line and which line number is it on?"
+    ground_truth:
+      expected_answer: "Line 4812: 2026-09-14T22:43:24Z ERROR [ledger] checksum mismatch batch=7731"
+    success_criteria: |
+      agent_tools[] shows a real search/page/count over the file (read_file
+      with offset/limit, find_files content search, run_shell_command
+      findstr/grep, or run_python). The line text must match exactly
+      (batch=7731, 22:43:24Z) and the line number must be 4812. Saying
+      there is no error because the first page had none is a FAIL; an
+      invented line is a FAIL.
+
+  - turn: 2
+    objective: "Ask how many WARN lines and total lines the file has"
+    user_message: "how many WARN lines are there, and how many lines in total?"
+    ground_truth:
+      expected_answer: "37 WARN lines; 5,000 lines total"
+    success_criteria: "Agent reports 37 and 5,000, computed with a tool (count, search, or run_python) in agent_tools[]. An estimate ('about 40'), or numbers extrapolated from a partial read, are a FAIL."
+
+expected_outcome: |
+  Exact needle and exact counts from a file too large to read in one go,
+  every number traceable to a tool call.

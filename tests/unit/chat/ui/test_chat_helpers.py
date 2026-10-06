@@ -22,6 +22,7 @@ from gaia.ui._chat_helpers import (
     _build_history_pairs,
     _canonical_agent_type,
     _compute_allowed_paths,
+    _done_event,
     _empty_answer_outcome,
     _find_last_tool_step,
     _managed_documents_dir,
@@ -429,6 +430,28 @@ class TestEmptyAnswerOutcome:
         assert keep_steps is False
 
 
+class TestDoneEvent:
+    """``_done_event`` reports whether Stop actually ended the run, so the UI
+    labels a turn from the outcome rather than from the Stop click."""
+
+    def test_cancelled_turn_is_flagged(self):
+        event = _done_event(42, "Cancelled.", turn_cancelled=True)
+        assert event == {
+            "type": "done",
+            "message_id": 42,
+            "content": "Cancelled.",
+            "cancelled": True,
+        }
+
+    def test_completed_turn_carries_no_cancelled_flag(self):
+        event = _done_event(
+            7, "Deleted 3 files.", turn_cancelled=False, stats={"tokens": 5}
+        )
+        assert "cancelled" not in event
+        assert event["content"] == "Deleted 3 files."
+        assert event["stats"] == {"tokens": 5}
+
+
 # ── _canonical_agent_type ─────────────────────────────────────────────────
 
 
@@ -521,7 +544,29 @@ class TestSessionAgentKwargsShape:
             "allowed_paths",
             "ui_session_id",
             "dynamic_tools",
+            "memory_incognito",
         }
+
+    def test_memory_off_reaches_the_agent_at_construction(self):
+        """Memory off must be known when the agent is built, so it never
+        loads the embedder for a session that does not use memory."""
+        from gaia.ui._chat_helpers import _memory_off, _session_agent_kwargs
+
+        db = MagicMock()
+        db.get_setting.return_value = "false"
+        assert _memory_off({"private": 0}, db) is True
+        db.get_setting.return_value = "true"
+        assert _memory_off({"private": 0}, db) is False
+        assert _memory_off({"private": 1}, db) is True
+
+        kwargs = _session_agent_kwargs(
+            rag_file_paths=[],
+            library_paths=[],
+            allowed=["/root"],
+            session_id="s",
+            memory_incognito=True,
+        )
+        assert kwargs["memory_incognito"] is True
 
     def test_dynamic_tools_defaults_off_and_forwards_when_set(self):
         """The Beta tool-loader toggle (#1798) defaults off and round-trips
@@ -1056,3 +1101,17 @@ class TestSessionTitleRequest:
 
     def test_other_models_get_no_template_switch(self):
         assert "chat_template_kwargs" not in self._sent_body("Gemma-4-E4B-it-GGUF")
+
+
+async def test_spawn_background_keeps_the_task_alive_until_done():
+    """asyncio holds tasks weakly; a fire-and-forget title task must be pinned."""
+    import gaia.ui._chat_helpers as ch
+
+    gate = asyncio.Event()
+    task = ch._spawn_background(gate.wait())
+    assert task in ch._background_tasks
+
+    gate.set()
+    await task
+    await asyncio.sleep(0)
+    assert task not in ch._background_tasks

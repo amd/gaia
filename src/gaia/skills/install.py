@@ -355,11 +355,15 @@ def _gate_tier(
     *,
     tier: str,
     claimed: str,
-    signature: VerifiedSignature,
+    signature: Optional[VerifiedSignature],
     allow_experimental: bool,
     confirmer: Confirmer,
 ) -> None:
-    """Run every tier and permission gate. Raises rather than downgrading."""
+    """Run every tier and permission gate. Raises rather than downgrading.
+
+    ``signature`` is ``None`` for ``gaia skill import``, which has no hub
+    provenance to verify and always lands at the lowest tier.
+    """
     permissions = skill.parsed_permissions()
 
     # v1 has no local-capability sandbox, so a skill wanting one is refused at
@@ -369,11 +373,12 @@ def _gate_tier(
     enforce_tier_ceiling(permissions, tier=tier, skill_name=skill.name)
 
     if tier == LOWEST_TIER and not allow_experimental:
-        why = (
-            f"its signature attests only to '{tier}' ({signature.describe()})"
-            if claimed != tier
-            else "it is published at that tier"
-        )
+        if signature is None:
+            why = "it was imported, and nothing attests to an imported skill"
+        elif claimed != tier:
+            why = f"its signature attests only to '{tier}' ({signature.describe()})"
+        else:
+            why = "it is published at that tier"
         # Name the concrete risk when the skill ships code. "Unsandboxed" is
         # abstract; "its tools.py runs in your agent's process" is the decision the
         # user is actually being asked to make.

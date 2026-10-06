@@ -1,98 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** Types for agent management, terminal, notifications, and permissions. */
-
-// ── Agent Types ──────────────────────────────────────────────────────────
-
-export interface AgentInfo {
-  id: string;
-  name: string;
-  description: string;
-  /** Version string, when known. Not every source populates this field. */
-  version?: string;
-  binaries: Record<string, string>;  // platform → binary name
-  language?: string;
-  toolsCount: number;
-  categories: string[];
-  requiresAdmin: boolean;
-  capabilities: {
-    standaloneMode: boolean;
-    notifications: boolean;
-    interactiveChat: boolean;
-  };
-  downloadUrls?: Record<string, string>;
-  sha256?: Record<string, string>;
-  sizeBytes?: number;
-}
-
-export interface AgentStatus {
-  installed: boolean;
-  running: boolean;
-  pid?: number;
-  uptime?: number;         // seconds
-  memoryMB?: number;
-  lastHealthCheck?: number; // timestamp
-  healthy?: boolean;
-  error?: string;
-}
-
-export type AgentInstallState = 'not_installed' | 'downloading' | 'verifying' | 'installing' | 'installed' | 'failed';
-
-export interface AgentInstallProgress {
-  agentId: string;
-  state: AgentInstallState;
-  progress: number;  // 0-100
-  error?: string;
-}
-
-// ── Terminal Types ───────────────────────────────────────────────────────
-
-export type TerminalLineType = 'info' | 'warn' | 'error' | 'tool' | 'permission' | 'rpc' | 'stdout' | 'stderr';
-
-export interface TerminalLine {
-  id: number;
-  timestamp: number;
-  type: TerminalLineType;
-  source: 'stdout' | 'stderr';
-  content: string;
-  /** Parsed JSON-RPC message (for stdout lines). */
-  rpcMessage?: JsonRpcMessage;
-  /** Whether this line can be expanded for details. */
-  expandable?: boolean;
-  /** Expanded detail content. */
-  detail?: string;
-}
-
-export type TerminalTab = 'activity' | 'logs' | 'raw';
-
-// ── JSON-RPC Types ───────────────────────────────────────────────────────
-
-export interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  method: string;
-  id?: string | number;
-  params?: Record<string, unknown>;
-}
-
-export interface JsonRpcResponse {
-  jsonrpc: '2.0';
-  id: string | number;
-  result?: unknown;
-  error?: {
-    code: number;
-    message: string;
-    data?: unknown;
-  };
-}
-
-export interface JsonRpcNotification {
-  jsonrpc: '2.0';
-  method: string;
-  params?: Record<string, unknown>;
-}
-
-export type JsonRpcMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
+/** Notification types, and the slice of the Electron preload API the UI uses. */
 
 // ── Notification Types ───────────────────────────────────────────────────
 
@@ -121,6 +30,10 @@ export interface GaiaNotification {
   toolArgs?: Record<string, unknown>;
   /** Chat session that raised the request; "always allow" grants are scoped to it. */
   sessionId?: string;
+  /** Echoed back on the answer so a late click cannot answer a newer prompt. */
+  confirmId?: string;
+  /** What "always allow" would grant, e.g. `gh issue list`; absent means it is not offered. */
+  alwaysScope?: string;
   /** For policy_alert type. */
   decision?: string;
   reason?: string;
@@ -134,152 +47,14 @@ export interface GaiaNotification {
   respondedAt?: number;
 }
 
-// ── Permission Types ─────────────────────────────────────────────────────
-
-export type PermissionTier = 'auto' | 'confirm' | 'escalate';
-
-export interface ToolPermission {
-  tool: string;
-  defaultTier: PermissionTier;
-  overrideTier?: PermissionTier;
-}
-
-export interface AgentPermissions {
-  agentId: string;
-  tools: ToolPermission[];
-}
-
-// ── Tray Config Types ────────────────────────────────────────────────────
-
-export interface AgentConfig {
-  autoStart: boolean;
-  restartOnCrash: boolean;
-  logLevel: 'debug' | 'info' | 'warn' | 'error';
-}
-
-export interface TrayConfig {
-  agents: Record<string, AgentConfig>;
-  tray: {
-    minimizeToTray: boolean;
-    startMinimized: boolean;
-    startOnLogin: boolean;
-    showNotificationBadge: boolean;
-  };
-}
-
-/** Payload for `tray.setConfig`; `agents` entries are merged by agent id. */
-export interface TrayConfigUpdate {
-  agents?: Record<string, AgentConfig>;
-  tray?: Partial<TrayConfig['tray']>;
-}
-
-// ── Agent Chat Types ─────────────────────────────────────────────────────
-
-export interface AgentChatMessage {
-  id: string;
-  agentId: string;
-  role: 'user' | 'agent';
-  content: string;
-  timestamp: number;
-  /** Tool calls made during this response. */
-  toolCalls?: AgentToolCall[];
-  /** Whether this message is still streaming. */
-  streaming?: boolean;
-}
-
-export interface AgentToolCall {
-  tool: string;
-  args: Record<string, unknown>;
-  resultSummary?: string;
-  success?: boolean;
-}
-
-export interface AgentChatSession {
-  agentId: string;
-  agentName: string;
-  messages: AgentChatMessage[];
-  /** Quick action buttons for this agent. */
-  quickActions?: QuickAction[];
-}
-
-export interface QuickAction {
-  label: string;
-  method: string;
-  params?: Record<string, unknown>;
-  icon?: string;
-}
-
-// ── Audit Log Types ──────────────────────────────────────────────────────
-
-export interface AuditEntry {
-  id: string;
-  timestamp: number;
-  agentId: string;
-  agentName: string;
-  tool: string;
-  tier: PermissionTier;
-  args: Record<string, unknown>;
-  success: boolean;
-  resultSummary?: string;
-  reversible: boolean;
-  rolledBack?: boolean;
-}
-
-// ── System Metrics Types ─────────────────────────────────────────────────
-
-export interface ProcessInfo {
-  pid: number;
-  name: string;
-  cpuPercent: number;
-  memoryMB: number;
-  uptime: number;  // seconds
-}
-
-export interface SystemMetrics {
-  cpuPercent: number;
-  memoryUsedGB: number;
-  memoryTotalGB: number;
-  diskUsedGB: number;
-  diskTotalGB: number;
-  gpuPercent?: number;
-  gpuMemoryUsedMB?: number;
-  gpuMemoryTotalMB?: number;
-  gpuTempC?: number;
-  npuPercent?: number;
-  networkUp: boolean;
-  processes: ProcessInfo[];
-  timestamp: number;
-}
-
 // ── Electron Preload API ─────────────────────────────────────────────────
 
-/**
- * Type-safe interface for window.gaiaAPI exposed by preload.cjs.
- * Available only when running inside Electron.
- */
+/** The part of window.gaiaAPI (preload.cjs) the UI calls. Present only in Electron. */
 export interface GaiaElectronAPI {
-  agent: {
-    start: (id: string) => Promise<void>;
-    stop: (id: string) => Promise<void>;
-    restart: (id: string) => Promise<void>;
-    status: (id: string) => Promise<AgentStatus>;
-    statusAll: () => Promise<Record<string, AgentStatus>>;
-    sendRpc: (id: string, method: string, params?: Record<string, unknown>) => Promise<unknown>;
-    onStdout: (cb: (data: { agentId: string; message: JsonRpcMessage }) => void) => void;
-    onStderr: (cb: (data: { agentId: string; line: string }) => void) => void;
-    onCrashed: (cb: (data: { agentId: string; exitCode: number; signal?: string }) => void) => void;
-  };
-  tray: {
-    getConfig: () => Promise<TrayConfig>;
-    setConfig: (config: TrayConfigUpdate) => Promise<TrayConfig>;
-  };
   notification: {
     onPermissionRequest: (cb: (data: GaiaNotification) => void) => void;
     respondPermission: (id: string, action: 'allow' | 'deny', remember: boolean) => Promise<void>;
     onNotification: (cb: (data: GaiaNotification) => void) => void;
-  };
-  system: {
-    getMetrics: () => Promise<SystemMetrics>;
   };
 }
 

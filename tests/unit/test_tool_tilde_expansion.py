@@ -245,7 +245,8 @@ class TestRagTools:
         result = _tool("index_document")(file_path="~/doc.txt")
 
         assert result["status"] == "success"
-        rag.index_document.assert_called_once_with(str(doc))
+        rag.index_document.assert_called_once()
+        assert rag.index_document.call_args.args == (str(doc),)
 
     def test_index_directory(self, home, rag):
         docs = home / "docs"

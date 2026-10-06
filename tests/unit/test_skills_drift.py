@@ -21,6 +21,7 @@ import argparse
 import pytest
 
 from gaia.skills import cli as skills_cli
+from gaia.skills.capture import SOURCE_IMPORTED
 from gaia.skills.drift import (
     DRIFT_CONTENT,
     DRIFT_MISSING,
@@ -424,7 +425,7 @@ def test_relock_never_writes_a_hub_entrys_tier_from_the_manifest_it_governs(
 # ----------------------------------------------------------------------
 # Replacing an install locally must retire its provenance
 #
-# Otherwise 'import --force' over a hub skill leaves a lock entry describing
+# Otherwise 'import --force' over a hub skill leaves a hub entry describing
 # bytes that are gone — and the replacement, being unattested, would then be
 # refused as tampered-with hub content.
 # ----------------------------------------------------------------------
@@ -448,7 +449,9 @@ def test_importing_over_a_hub_install_retires_its_lock_entry(
     )
 
     assert exit_code == skills_cli.EXIT_OK
-    assert SkillLock.load(marketplace.skills_root).get("web-research") is None
+    entry = SkillLock.load(marketplace.skills_root).get("web-research")
+    assert entry.source == SOURCE_IMPORTED
+    assert entry.installed_tier == "experimental"
     assert check_drift(marketplace.skills_root).fatal == ()
     marketplace.manager.reload()
     assert marketplace.manager.load("web-research").security_tier == "experimental"
@@ -769,3 +772,27 @@ def test_a_local_skills_remediation_never_tells_you_to_reinstall_from_the_hub(
 
     assert "gaia skill lock --relock" in drift.remediation
     assert "gaia skill install" not in drift.remediation
+
+
+def test_lock_save_failure_leaves_previous_lock_intact(tmp_path, monkeypatch):
+    """A crash mid-save must not truncate skill-lock.json."""
+    import os
+
+    from gaia.skills.lock import LockEntry, SkillLock, lock_path
+
+    lock = SkillLock.load(tmp_path)
+    lock.record(LockEntry(name="alpha", version="1.0.0"))
+    lock.save()
+    before = lock_path(tmp_path).read_text(encoding="utf-8")
+
+    lock.record(LockEntry(name="beta", version="2.0.0"))
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", _boom)
+    with pytest.raises(OSError, match="disk full"):
+        lock.save()
+
+    assert lock_path(tmp_path).read_text(encoding="utf-8") == before
+    assert [p.name for p in tmp_path.iterdir()] == ["skill-lock.json"]

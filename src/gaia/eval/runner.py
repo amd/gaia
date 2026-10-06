@@ -353,6 +353,16 @@ def validate_scenario(path: Path, data: dict) -> None:
                 "(required so the runner can verify the file exists before running)"
             )
 
+    declined = (data.get("setup") or {}).get("decline_commands")
+    if declined is not None and (
+        not isinstance(declined, list)
+        or not all(isinstance(c, str) and c.strip() for c in declined)
+    ):
+        errors.append(
+            "setup.decline_commands must be a list of shell commands the scripted "
+            "user declines, e.g. ['pytest']"
+        )
+
     # Validate persona: must be a non-empty string.
     # The 5 built-in personas (casual_user, power_user, etc.) are documented defaults,
     # but any non-empty string is accepted to support custom persona descriptions.
@@ -1217,6 +1227,14 @@ def preflight_check(backend_url, scenarios=None):
         if mailbox_error:
             errors.append(mailbox_error)
 
+    # Clearing the script is harmless, so it doubles as the probe.
+    if scenarios is not None and any(
+        _decline_commands(sd or {}) for _path, sd in scenarios
+    ):
+        scripted_user_error = _set_scripted_user(backend_url, [])
+        if scripted_user_error:
+            errors.append(scripted_user_error)
+
     return errors
 
 
@@ -1493,6 +1511,92 @@ def _load_merged_manifest(extra_corpus_dirs=None):
                 )
 
     return manifest_data
+
+
+def _decline_commands(scenario_data: dict) -> list:
+    return list((scenario_data.get("setup") or {}).get("decline_commands") or [])
+
+
+def _set_scripted_user(backend_url: str, commands: list) -> Optional[str]:
+    """Script the backend's eval user to decline *commands*; ``[]`` clears it.
+
+    Returns an actionable error, or None once the backend accepted it.
+    """
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"{backend_url}/api/eval/scripted-user",
+        data=json.dumps({"decline_commands": commands}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            if r.status == 200:
+                return None
+            return f"Scripted-user setup returned HTTP {r.status} from {backend_url}"
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return (
+                "This scenario needs a scripted user who declines "
+                f"{commands or 'commands'}, which the backend at {backend_url} "
+                "refused (403). Restart the Agent UI backend with "
+                "GAIA_EVAL_SCRIPTED_USER=1 set."
+            )
+        return f"Scripted-user setup failed with HTTP {e.code} from {backend_url}: {e.reason}"
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+        return f"Scripted-user setup could not reach {backend_url}: {e}"
+
+
+def run_scripted_scenario(
+    _scenario_path,
+    scenario_data,
+    run_dir,
+    backend_url,
+    *args,
+    **kwargs,
+):
+    """Run one scenario, scripting the user's denials around it when it asks.
+
+    ``setup.decline_commands`` scripts a user who says no to those commands
+    and answers no questions, then is cleared so it never leaks into the next
+    scenario.
+    """
+    declined = _decline_commands(scenario_data)
+    if not declined:
+        return run_scenario_subprocess(
+            _scenario_path, scenario_data, run_dir, backend_url, *args, **kwargs
+        )
+    error = _set_scripted_user(backend_url, declined)
+    if error:
+        print(f"[ERROR] {scenario_data['id']} — {error}", file=sys.stderr)
+        return {
+            "scenario_id": scenario_data["id"],
+            "status": "ERRORED",
+            "overall_score": None,
+            "turns": [],
+            "error": error,
+            "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
+        }
+    try:
+        result = run_scenario_subprocess(
+            _scenario_path, scenario_data, run_dir, backend_url, *args, **kwargs
+        )
+    except BaseException:
+        # The scenario's own failure is the one to surface; still try to clear.
+        leftover = _set_scripted_user(backend_url, [])
+        if leftover:
+            logger.error("Could not clear the scripted eval user: %s", leftover)
+        raise
+    cleared = _set_scripted_user(backend_url, [])
+    if cleared:
+        raise RuntimeError(
+            f"Could not clear the scripted eval user after "
+            f"{scenario_data['id']}: {cleared}. Later scenarios would inherit "
+            "its denials; restart the Agent UI backend before re-running."
+        )
+    return result
 
 
 def run_scenario_subprocess(
@@ -2617,7 +2721,7 @@ class AgentEvalRunner:
                         flush=True,
                     )
                 attempts.append(
-                    run_scenario_subprocess(
+                    run_scripted_scenario(
                         scenario_path,
                         scenario_data,
                         run_dir,
@@ -2743,7 +2847,7 @@ class AgentEvalRunner:
                 effective_timeout = _compute_effective_timeout(
                     self.timeout, scenario_data
                 )
-                result = run_scenario_subprocess(
+                result = run_scripted_scenario(
                     scenario_path,
                     scenario_data,
                     run_dir,

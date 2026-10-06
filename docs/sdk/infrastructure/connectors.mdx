@@ -123,7 +123,7 @@ summary = conn.import_forwarded_connection(
         "https://www.googleapis.com/auth/calendar.events",
     ],
     account_email="alice@example.com",   # display-only in v1
-    grant_agents=["installed:email"],       # agents that may use it
+    grant_agents=["installed:gaia"],        # agents that may use it
 )
 # summary carries metadata only — never the refresh token or client secret.
 ```
@@ -145,7 +145,7 @@ curl -X POST http://localhost:4200/v1/connections/google \
                    "https://www.googleapis.com/auth/gmail.send",
                    "https://www.googleapis.com/auth/calendar.events"],
         "account_email": "alice@example.com",
-        "grant_agents": ["installed:email"]
+        "grant_agents": ["installed:gaia"]
       }'
 ```
 
@@ -463,26 +463,38 @@ the previous user's tool-visibility decisions.
 
 1. Create `src/gaia/connectors/providers/<name>.py` satisfying the
    `OAuthProvider` protocol (auth/token URLs, client env vars, etc.).
-2. Register in `src/gaia/connectors/providers/__init__.py:get`.
-3. Add a `ConnectorSpec` entry in `src/gaia/connectors/catalog.py`.
+2. Register it in `src/gaia/connectors/providers/__init__.py:get`.
+3. Add a `ConnectorSpec` for it in a module under `src/gaia/connectors/catalog/`
+   (see `google.py`, `microsoft.py`) and import that module in
+   `src/gaia/connectors/catalog/__init__.py`.
 4. Add unit tests under `tests/unit/connectors/test_providers.py`.
 
 ## Adding a new MCP server connector
 
-Add one entry to the `_MCP_CATALOG` list in
-`src/gaia/connectors/catalog.py`:
+Add a `ConnectorSpec` to `_ALL_SPECS` in
+`src/gaia/connectors/catalog/mcp_servers.py`. Pin the package version:
 
 ```python
-ConnectorSpec(
-    id="my-service",
+_MY_SERVICE = ConnectorSpec(
+    id="mcp-my-service",
     display_name="My Service",
+    icon="🔌",
+    category="dev-tools",
+    tier=1,
     type="mcp_server",
-    category="dev",
-    tier="community",
-    mcp_command=["npx", "-y", "@my/mcp-server"],
-    mcp_env_keys=["MY_SERVICE_API_KEY"],
     description="Integrates My Service via MCP.",
-),
+    mcp_command="npx",
+    mcp_args=("-y", "@my/mcp-server@1.2.3"),
+    mcp_env_keys=("MY_SERVICE_API_KEY",),
+    config_schema=(
+        ConfigField(
+            key="MY_SERVICE_API_KEY",
+            label="My Service API Key",
+            kind="secret",
+            secret=True,
+        ),
+    ),
+)
 ```
 
 The MCP bridge will inject `MY_SERVICE_API_KEY` from the keyring as an

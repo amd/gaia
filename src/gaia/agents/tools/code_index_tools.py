@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
 from gaia.agents.base.tools import tool
+from gaia.agents.tools.path_access import read_access_error
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -53,6 +54,20 @@ _HOME_DIRECTORY_REFUSAL = json.dumps(
         )
     }
 )
+
+
+def _dropped_note(result: Any) -> Dict[str, Any]:
+    """Report chunks whose embedding failed, so a partial index is not "ok"."""
+    dropped = getattr(result, "chunks_dropped", 0)
+    if not dropped:
+        return {}
+    return {
+        "chunks_dropped": dropped,
+        "warning": (
+            f"{dropped} chunk(s) failed to embed and are not searchable yet; "
+            "run index_codebase again to retry them."
+        ),
+    }
 
 
 def _is_home_directory(repo_path: str) -> bool:
@@ -167,6 +182,10 @@ class CodeIndexToolsMixin:
                 # and a model following that advice literally must not get
                 # "<cwd>/~/..." back.
                 resolved = os.path.abspath(os.path.expanduser(repo_path))
+                # Before the existence probe, as in read_file.
+                denied = read_access_error(self, resolved)
+                if denied:
+                    return json.dumps({"error": denied["error"]})
                 if not os.path.isdir(resolved):
                     return json.dumps({"error": f"Not a directory: {resolved}"})
                 # Restrict to the agent's original repo_path to prevent
@@ -212,6 +231,7 @@ class CodeIndexToolsMixin:
                         "status": "ok",
                         "files_indexed": result.files_indexed,
                         "chunks_created": result.chunks_created,
+                        **_dropped_note(result),
                     }
                 )
             except Exception as e:
@@ -283,6 +303,7 @@ class CodeIndexToolsMixin:
                             "index_built_now": {
                                 "files_indexed": built.files_indexed,
                                 "chunks_created": built.chunks_created,
+                                **_dropped_note(built),
                             },
                             "results": output,
                         },

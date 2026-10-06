@@ -30,7 +30,7 @@ const SESSION: Session = {
     system_prompt: null,
     message_count: 0,
     document_ids: [],
-    agent_type: 'doc',
+    agent_type: 'gaia',
 };
 
 const DOC_AGENT: AgentInfo = {
@@ -76,6 +76,7 @@ beforeEach(() => {
 
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
     mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
+    mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({
         documents: [],
         total: 0,
@@ -96,7 +97,6 @@ beforeEach(() => {
 
     useChatStore.setState({
         agents: [DOC_AGENT],
-        activeAgentId: 'doc',
         sessions: [SESSION],
         currentSessionId: SESSION.id,
         messages: [],
@@ -120,10 +120,10 @@ async function driveSend() {
     render(<ChatView sessionId={SESSION.id} />);
 
     await act(async () => {
-        fireEvent.change(screen.getByLabelText('Message input'), {
+        fireEvent.change(screen.getByLabelText('Message'), {
             target: { value: 'scan my inbox' },
         });
-        fireEvent.click(screen.getByLabelText('Send message'));
+        fireEvent.click(screen.getByLabelText('Send'));
     });
 
     expect(capturedCallbacks).not.toBeNull();
@@ -216,12 +216,11 @@ describe('ChatView streaming cards (#2108)', () => {
         }
     });
 
-    it('handleStop transfers in-flight cards onto the partial message', async () => {
+    it('Stop transfers in-flight cards onto the stopped message', async () => {
         vi.useFakeTimers();
         try {
             await driveSend();
 
-            // handleStop only saves a partial message when content is non-empty.
             act(() => {
                 capturedCallbacks!.onChunk({ type: 'chunk', content: 'partial answer text' } as unknown as StreamEvent);
             });
@@ -233,7 +232,19 @@ describe('ChatView streaming cards (#2108)', () => {
             });
 
             act(() => {
-                fireEvent.click(screen.getByLabelText('Stop generating'));
+                fireEvent.click(screen.getByLabelText('Stop'));
+            });
+            // The server closes a stopped turn with a done carrying the partial
+            // text; the refetch that follows returns no cards field.
+            mockedApi.getMessages.mockResolvedValue({
+                messages: [
+                    { id: 10, session_id: SESSION.id, role: 'user', content: 'scan my inbox', created_at: '2026-07-16T00:00:00.000Z', rag_sources: null },
+                    { id: 11, session_id: SESSION.id, role: 'assistant', content: 'partial answer text', created_at: '2026-07-16T00:00:01.000Z', rag_sources: null },
+                ],
+                total: 2,
+            });
+            act(() => {
+                capturedCallbacks!.onDone({ type: 'done', content: 'partial answer text' } as unknown as StreamEvent);
             });
 
             // Stay under the 3s message-poll interval so a stray poll doesn't

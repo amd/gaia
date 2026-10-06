@@ -256,7 +256,7 @@ class TestConfirmToolEndpoint:
             )
 
             assert resp.status_code == 200
-            assert resp.json() == {"status": "ok", "approved": True}
+            assert resp.json() == {"status": "ok", "approved": True, "granted": None}
             assert handler._confirm_result is True
             assert handler._confirm_event.is_set()
         finally:

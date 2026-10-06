@@ -985,8 +985,6 @@ def test_is_llm_model_entry_rejects_non_llm_types():
     "configured,expected",
     [
         ("user.Qwen3.8-Flash-Next-GGUF", "user.Qwen3.8-Flash-Next-GGUF"),
-        # A cloud default has nothing to load locally; the floor model is seeded.
-        ("fireworks.deepseek-v4-flash-0731", "Gemma-4-E4B-it-GGUF"),
     ],
 )
 @patch("gaia.llm.lemonade_manager.LemonadeClient")
@@ -1007,3 +1005,141 @@ def test_idle_preload_loads_this_machines_default_model(mock_cls, configured, ex
 
     assert LemonadeManager.ensure_ready(min_context_size=65536, quiet=True) is True
     assert client.load_model.call_args.args[0] == expected
+
+
+# ---------------------------------------------------------------------------
+# A cloud chat model never seeds a local one
+# ---------------------------------------------------------------------------
+
+CLOUD_MODEL = "fireworks.deepseek-v4p1-flash"
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_cloud_model_on_idle_server_loads_nothing(mock_cls, caplog):
+    """The Agent UI on a Fireworks model must not load Gemma at boot."""
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    mock_cls.return_value = client
+
+    with caplog.at_level(logging.DEBUG, logger="gaia.llm.lemonade_manager"):
+        ok = LemonadeManager.ensure_ready(
+            min_context_size=0, quiet=True, model=CLOUD_MODEL
+        )
+
+    assert ok is True
+    client.load_model.assert_not_called()
+    assert LemonadeManager.get_base_url() == client.base_url
+    assert any(
+        "not preloading" in r.getMessage() and CLOUD_MODEL in r.getMessage()
+        for r in caplog.records
+    )
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_cloud_default_model_loads_nothing(mock_cls):
+    """No model passed and default_model is cloud: the CLI must not seed Gemma."""
+    from gaia.config import GaiaConfig
+
+    cfg = GaiaConfig()
+    cfg.default_model = CLOUD_MODEL
+    cfg.save()
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    mock_cls.return_value = client
+
+    assert LemonadeManager.ensure_ready(quiet=True) is True
+    client.load_model.assert_not_called()
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_cloud_caller_repeat_calls_skip_status_and_warnings(mock_cls, caplog):
+    """A cloud caller's later calls neither re-probe nor warn "no LLM loaded"."""
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    mock_cls.return_value = client
+
+    LemonadeManager.ensure_ready(quiet=True, model=CLOUD_MODEL)
+    probes = client.get_status.call_count
+    with caplog.at_level(logging.WARNING):
+        assert LemonadeManager.ensure_ready(quiet=True, model=CLOUD_MODEL) is True
+
+    assert client.get_status.call_count == probes
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    client.load_model.assert_not_called()
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_local_caller_after_cloud_caller_still_gets_preload(mock_cls):
+    """Switching the UI from a cloud to a local model keeps the #839 preload."""
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.get_status.side_effect = [
+        _status(running=True, context_size=0, loaded_models=[]),  # cloud caller
+        _status(running=True, context_size=0, loaded_models=[]),  # local init
+        _status(
+            running=True,
+            context_size=65536,
+            loaded_models=[{"id": "Gemma-4-E4B-it-GGUF"}],
+        ),
+    ]
+    mock_cls.return_value = client
+
+    LemonadeManager.ensure_ready(quiet=True, model=CLOUD_MODEL)
+    client.load_model.assert_not_called()
+
+    assert (
+        LemonadeManager.ensure_ready(
+            min_context_size=65536, quiet=True, model="Gemma-4-E4B-it-GGUF"
+        )
+        is True
+    )
+    client.load_model.assert_called_once()
+    assert client.load_model.call_args.args[0] == "Gemma-4-E4B-it-GGUF"
+    assert client.load_model.call_args.kwargs["ctx_size"] == 65536
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_reachability_check_preloads_selected_local_model_at_its_window(mock_cls):
+    """``min_context_size=0`` (the UI boot check) used to seed the default model
+    at ctx_size=0 — Lemonade's own small default. A local selection is seeded
+    at its own window instead, so the first chat does not reload it."""
+    from gaia.llm.lemonade_client import resolve_ctx_size
+
+    selected = "user.Qwen3.8-Flash-Next-GGUF"
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.get_status.side_effect = [
+        _status(running=True, context_size=0, loaded_models=[]),
+        _status(running=True, context_size=65536, loaded_models=[{"id": selected}]),
+    ]
+    mock_cls.return_value = client
+
+    assert (
+        LemonadeManager.ensure_ready(min_context_size=0, quiet=True, model=selected)
+        is True
+    )
+
+    client.load_model.assert_called_once()
+    assert client.load_model.call_args.args[0] == selected
+    ctx = client.load_model.call_args.kwargs["ctx_size"]
+    assert ctx == resolve_ctx_size(model=selected) and ctx > 0
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_local_caller_on_cloud_default_machine_still_preloads(mock_cls):
+    """An agent pinned to a local model must keep its preload even when
+    default_model is cloud — the caller's model decides, not the config."""
+    from gaia.config import GaiaConfig
+
+    cfg = GaiaConfig()
+    cfg.default_model = CLOUD_MODEL
+    cfg.save()
+    local = "gemma4-it-e2b-FLM"
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    client.get_status.side_effect = [
+        _status(running=True, context_size=0, loaded_models=[]),
+        _status(running=True, context_size=32768, loaded_models=[{"id": local}]),
+    ]
+    mock_cls.return_value = client
+
+    assert (
+        LemonadeManager.ensure_ready(min_context_size=32768, quiet=True, model=local)
+        is True
+    )
+    assert client.load_model.call_args.args[0] == local
+    assert client.load_model.call_args.kwargs["ctx_size"] == 32768

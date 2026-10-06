@@ -2,6 +2,7 @@ id: files_edit_file
 name: "Files — Targeted Edit of an Existing File"
 category: gaia_files
 severity: high
+tags: [t2_compound]
 description: |
   Write a small file, then change ONE line without touching the rest.
   Verifies the edit path (edit_file) does a surgical change.
@@ -13,8 +14,8 @@ setup:
 
 turns:
   - turn: 1
-    objective: "Create gaia_eval_todo.txt in the home directory with three lines"
-    user_message: "Create gaia_eval_todo.txt in my home directory containing three lines: 'task1: water plants', 'task2: pay rent', 'task3: call mum'."
+    objective: "Create gaia_eval_todo.txt in the working folder with three lines"
+    user_message: "Create gaia_eval_todo.txt in your working folder containing three lines: 'task1: water plants', 'task2: pay rent', 'task3: call mum'."
     ground_truth:
       expected_behavior: "File created with the three task lines"
     success_criteria: "Agent creates the file (write_file in agent_tools[])."

@@ -4,6 +4,7 @@ id: web_download_file
 name: "Web — Download a File to Disk"
 category: gaia_web
 severity: medium
+tags: [t2_compound]
 description: |
   Download a fixture URL to a local file and prove it landed by checking
   the saved copy.

@@ -18,7 +18,7 @@ import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -106,6 +106,10 @@ EMBED_MAX_CHARS = int(
 )
 
 
+#: Chunks embedded between two progress reports during indexing.
+PROGRESS_SLICE_CHUNKS = 250
+
+
 def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
     """Split *text* into pieces of at most *max_chars*, dropping nothing but whitespace.
 
@@ -168,6 +172,8 @@ class RAGConfig:
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
     vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
+    # False skips image text extraction even when the VLM is installed
+    use_vlm: bool = True
     # Security settings
     allowed_paths: Optional[List[str]] = None
 
@@ -208,8 +214,19 @@ class RAGSDK:
         ```
     """
 
-    def __init__(self, config: Optional[RAGConfig] = None):
-        """Initialize RAG SDK."""
+    def __init__(
+        self,
+        config: Optional[RAGConfig] = None,
+        path_validator: Optional[PathValidator] = None,
+    ):
+        """Initialize RAG SDK.
+
+        Args:
+            config: RAG settings; defaults to ``RAGConfig()``.
+            path_validator: The host's validator, shared so a path the user
+                grants mid-session is readable here too. Defaults to one built
+                from ``config.allowed_paths``.
+        """
         self.config = config or RAGConfig()
         self.log = get_logger(__name__)
         if self.config.chunk_size * 4 > EMBED_MAX_CHARS:
@@ -268,8 +285,9 @@ class RAGSDK:
         )
         self.chat = AgentSDK(chat_config)
 
-        # Initialize path validator
-        self.path_validator = PathValidator(self.config.allowed_paths)
+        if path_validator is None:
+            path_validator = PathValidator(self.config.allowed_paths)
+        self.path_validator = path_validator
 
         self.log.debug("RAG SDK initialized")
 
@@ -489,6 +507,8 @@ class RAGSDK:
                 "chunk_overlap": self.config.chunk_overlap,
                 "use_llm_chunking": bool(self.config.use_llm_chunking),
                 "embed_max_chars": EMBED_MAX_CHARS,
+                # Only when off, so existing caches keep their keys.
+                **({} if self.config.use_vlm else {"use_vlm": False}),
             },
             sort_keys=True,
         )
@@ -796,7 +816,7 @@ class RAGSDK:
             - page_warnings: dict[int, str], why each degraded page is listed
 
         Raises:
-            EncryptedPDFError: PDF is password-protected.
+            EncryptedPDFError: PDF needs a password to open.
             CorruptedPDFError: PDF is malformed / unreadable.
             EmptyPDFError: PDF parsed OK but contained no extractable text.
         """
@@ -830,13 +850,13 @@ class RAGSDK:
             self.log.error(f"Corrupted PDF {pdf_path}: {e}")
             raise CorruptedPDFError(msg) from e
 
-        # Step 1: Refuse password-protected PDFs up-front. Without this check
-        # pypdf silently returns empty text for every page and the document
-        # gets "indexed" with zero chunks (see issue #451).
-        if getattr(reader, "is_encrypted", False):
+        # Step 1: Refuse PDFs that need a user password up-front, or every page
+        # extracts as empty text (#451). Owner-password-only PDFs (permission
+        # restrictions, common in SEC filings) open with the empty password.
+        if getattr(reader, "is_encrypted", False) and not reader.decrypt(""):
             msg = (
                 f"PDF is password-protected: {file_name}\n"
-                "GAIA cannot index encrypted PDFs.\n"
+                "GAIA cannot index PDFs that need a password to open.\n"
                 "Suggestions:\n"
                 "  1. Remove the password with qpdf:\n"
                 "     qpdf --decrypt --password=YOUR_PASSWORD input.pdf output.pdf\n"
@@ -866,11 +886,13 @@ class RAGSDK:
                 vlm = VLMClient(
                     vlm_model=self.config.vlm_model, base_url=self.config.base_url
                 )
-                vlm_available = vlm.check_availability()
+                vlm_available = self.config.use_vlm and vlm.check_availability()
 
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from images")
-                elif not vlm_available and self.config.show_stats:
+                elif (
+                    not vlm_available and self.config.use_vlm and self.config.show_stats
+                ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
                     print(
@@ -1244,11 +1266,13 @@ class RAGSDK:
                 vlm = VLMClient(
                     vlm_model=self.config.vlm_model, base_url=self.config.base_url
                 )
-                vlm_available = vlm.check_availability()
+                vlm_available = self.config.use_vlm and vlm.check_availability()
 
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from slide images")
-                elif not vlm_available and self.config.show_stats:
+                elif (
+                    not vlm_available and self.config.use_vlm and self.config.show_stats
+                ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
                     print(
@@ -2398,9 +2422,16 @@ These positions indicate where to split the text."""
         return index
 
     def _create_vector_index(
-        self, chunks: List[str], return_embeddings: bool = False
+        self,
+        chunks: List[str],
+        return_embeddings: bool = False,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> tuple:
-        """Create FAISS vector index from chunks with progress reporting."""
+        """Create FAISS vector index from chunks with progress reporting.
+
+        ``progress_callback(done, total)`` is called before the first chunk is
+        embedded and after every ``PROGRESS_SLICE_CHUNKS`` chunks.
+        """
         import time as time_module  # pylint: disable=reimported
 
         self._load_embedder()
@@ -2416,7 +2447,20 @@ These positions indicate where to split the text."""
             print(f"{'='*60}")
 
         embed_start = time_module.time()
-        embeddings = self._encode_texts(chunks, show_progress=self.config.show_stats)
+        if progress_callback is None or not chunks:
+            embeddings = self._encode_texts(
+                chunks, show_progress=self.config.show_stats
+            )
+        else:
+            progress_callback(0, len(chunks))
+            parts = []
+            for start in range(0, len(chunks), PROGRESS_SLICE_CHUNKS):
+                part = chunks[start : start + PROGRESS_SLICE_CHUNKS]
+                parts.append(
+                    self._encode_texts(part, show_progress=self.config.show_stats)
+                )
+                progress_callback(start + len(part), len(chunks))
+            embeddings = np.concatenate(parts)
         embed_duration = time_module.time() - embed_start
 
         if self.config.show_stats:
@@ -2731,9 +2775,16 @@ These positions indicate where to split the text."""
         # At limit with no eviction possible
         return False
 
-    def index_document(self, file_path: str) -> Dict[str, Any]:
+    def index_document(
+        self,
+        file_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> Dict[str, Any]:
         """
         Index a document for retrieval.
+
+        Embedding runs outside the index lock, so searches over other
+        documents keep working while a large document embeds.
 
         Supports:
         - Documents: PDF, PPTX, TXT, MD, CSV, JSON
@@ -2745,6 +2796,8 @@ These positions indicate where to split the text."""
 
         Args:
             file_path: Path to document or code file
+            progress_callback: Optional ``(chunks_embedded, total_chunks)``
+                callback, called as embedding starts and while it runs.
 
         Returns:
             Dict with indexing results and statistics:
@@ -2903,6 +2956,13 @@ These positions indicate where to split the text."""
                         vlm_info = f" (VLM: {cached_metadata['vlm_pages']} pages)"
                     print(f"  ✅ Loaded {len(cached_chunks)} cached chunks{vlm_info}")
 
+                # The cache holds chunks, not vectors, so this re-embeds.
+                new_index, _, file_embeddings = self._create_vector_index(
+                    list(cached_chunks),
+                    return_embeddings=True,
+                    progress_callback=progress_callback,
+                )
+
                 with self._state_lock:
                     if file_path in self.indexed_files:
                         self.log.info(f"Document already indexed: {file_path}")
@@ -2933,13 +2993,8 @@ These positions indicate where to split the text."""
                         stats["memory_limit_reached"] = True
                         return stats
 
-                    # Encode once; reuse for both the global and per-file index.
                     if self.index is None:
-                        new_index, rebuilt_chunks, file_embeddings = (
-                            self._create_vector_index(
-                                list(cached_chunks), return_embeddings=True
-                            )
-                        )
+                        rebuilt_chunks = list(cached_chunks)
                         file_chunk_indices = list(range(len(cached_chunks)))
                         rebuilt_chunk_to_file = {
                             idx: file_path for idx in file_chunk_indices
@@ -2959,10 +3014,6 @@ These positions indicate where to split the text."""
                             print(
                                 f"  ➕ Appending {len(cached_chunks)} cached chunks to existing index ({old_count} -> {len(rebuilt_chunks)} total)"
                             )
-                        self._load_embedder()
-                        file_embeddings = self._encode_texts(
-                            list(cached_chunks), show_progress=False
-                        )
 
                     file_index = self._create_faiss_index(file_embeddings)
 
@@ -3059,6 +3110,12 @@ These positions indicate where to split the text."""
             # Split into chunks
             new_chunks = self._split_text_into_chunks(text)
 
+            new_index, _, file_embeddings = self._create_vector_index(
+                list(new_chunks),
+                return_embeddings=True,
+                progress_callback=progress_callback,
+            )
+
             with self._state_lock:
                 if file_path in self.indexed_files:
                     if self.config.show_stats:
@@ -3092,15 +3149,8 @@ These positions indicate where to split the text."""
                     stats["memory_limit_reached"] = True
                     return stats
 
-                # Encode once; reuse for both the global and per-file index.
                 if self.index is None:
-                    if self.config.show_stats:
-                        print("🏗️  Building initial search index...")
-                    new_index, rebuilt_chunks, file_embeddings = (
-                        self._create_vector_index(
-                            list(new_chunks), return_embeddings=True
-                        )
-                    )
+                    rebuilt_chunks = list(new_chunks)
                     file_chunk_indices = list(range(len(new_chunks)))
                     rebuilt_chunk_to_file = {
                         idx: file_path for idx in file_chunk_indices
@@ -3121,11 +3171,6 @@ These positions indicate where to split the text."""
                         print(
                             f"➕ Appending {len(new_chunks)} new chunks to existing index ({old_count} -> {len(rebuilt_chunks)} total)"
                         )
-
-                    self._load_embedder()
-                    file_embeddings = self._encode_texts(
-                        new_chunks, show_progress=False
-                    )
 
                 if self.config.show_stats:
                     print("🔍 Building per-file search index...")

@@ -121,6 +121,9 @@ const (
 	// the scope the agent actually records
 	// (OutputHandler.session_approved_tools); any UI offering this must say so.
 	PermissionAlways PermissionDecision = "always"
+	// PermissionTimeout refuses this call because nobody answered in time. The
+	// agent reports it as a timeout, never as the user saying no.
+	PermissionTimeout PermissionDecision = "timeout"
 )
 
 // ToolPermissionResponder is implemented by transports that can answer a
@@ -155,6 +158,13 @@ type FullAccessSetter interface {
 	// SetFullAccess turns unattended approval on or off. It takes
 	// effect on the next gated tool, including one in a turn already running.
 	SetFullAccess(enabled bool) error
+}
+
+// AcceptEditsSetter is implemented by transports that can put the agent into
+// "accept edits" mode: file edits inside the workspace run without asking,
+// while shell commands and code still ask.
+type AcceptEditsSetter interface {
+	SetAcceptEdits(enabled bool) error
 }
 
 // Capability names one optional thing a session can do, so the UI can offer

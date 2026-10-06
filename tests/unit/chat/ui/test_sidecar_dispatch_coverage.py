@@ -161,7 +161,7 @@ class TestRelayDecision:
         assert _should_relay_to_sidecar("email", registry) is True
 
     def test_non_sidecar_agent_never_relays(self):
-        assert _should_relay_to_sidecar("builder", _Registry(None)) is False
+        assert _should_relay_to_sidecar("my-custom-agent", _Registry(None)) is False
 
     def test_no_registry_at_all_still_relays_a_sidecar(self):
         assert _should_relay_to_sidecar("gaia", None) is True

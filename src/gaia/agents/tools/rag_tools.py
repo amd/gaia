@@ -6,20 +6,170 @@ RAG Tools Mixin for Chat Agent.
 Provides document retrieval, querying, and evaluation tools.
 """
 
-import logging
+import contextvars
 import os
 import re
+import threading
+import time
+import weakref
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
-from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools.path_access import (
+    read_access_error,
+    readable_entry,
+    write_access_error,
+)
+from gaia.llm.lemonade_client import no_thinking_kwargs
+from gaia.logger import get_logger
 from gaia.tool_cancellation import raise_if_cancelled
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _RAG_HINT = "Set self.rag = <RAGSDK instance, or None to disable RAG>."
 _RAG_DOC_ANCHOR = "docs/spec/rag-tools-mixin.mdx#host-agent-contract"
+
+#: Output budget for one summary reply. The RAG client's 1024 default cut a
+#: meeting summary off mid-sentence; a model that always reasons (Gemma 4)
+#: spends part of this before it writes anything.
+SUMMARY_MAX_TOKENS = 8192
+
+
+def _summary_text(chat: Any, prompt: str) -> str:
+    """One summary reply, never one the output limit cut short."""
+    response = chat.send(
+        prompt,
+        no_history=True,
+        max_tokens=SUMMARY_MAX_TOKENS,
+        **no_thinking_kwargs(getattr(chat, "effective_model", None)),
+    )
+    if response.finish_reason == "length":
+        raise RuntimeError(
+            f"the summary was cut off at its {SUMMARY_MAX_TOKENS}-token output "
+            "limit before it covered the whole document"
+        )
+    return response.text
+
+
+#: How long an indexing call waits before leaving the rest to a background
+#: thread. Well inside the tool timeout, so a big document never hits it.
+INDEX_FOREGROUND_BUDGET_S = 120.0
+
+_INDEX_JOBS_LOCK = threading.Lock()
+#: RAGSDK -> {path: _IndexJob}; jobs go away with the SDK that runs them.
+_INDEX_JOBS: "weakref.WeakKeyDictionary[Any, Dict[str, Any]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+class _IndexJob:
+    """One ``RAGSDK.index_document`` call running on a background thread."""
+
+    def __init__(self, path: str):
+        self.path = path
+        self.started = time.monotonic()
+        self.embed_started: Optional[float] = None
+        self.embedded = 0
+        self.total: Optional[int] = None
+        self.result: Optional[Dict[str, Any]] = None
+        self.error: Optional[BaseException] = None
+        self.done = threading.Event()
+
+    def progress(self, embedded: int, total: int) -> None:
+        if self.embed_started is None:
+            self.embed_started = time.monotonic()
+        self.embedded, self.total = embedded, total
+
+    def seconds_remaining(self) -> Optional[int]:
+        if not (self.total and self.embedded and self.embed_started):
+            return None
+        rate = self.embedded / max(time.monotonic() - self.embed_started, 1e-6)
+        return int((self.total - self.embedded) / rate)
+
+
+def _index_within_budget(
+    rag: Any, path: str, budget: Optional[float] = None
+) -> Tuple[Optional[Dict[str, Any]], _IndexJob]:
+    """Index *path*, waiting at most *budget* seconds for it.
+
+    Returns ``(result, job)``: ``result`` is ``rag.index_document``'s dict when
+    it finished in time, else ``None`` while the job keeps running. A second
+    call for the same path waits on the running job instead of starting another.
+    """
+    budget = INDEX_FOREGROUND_BUDGET_S if budget is None else budget
+    with _INDEX_JOBS_LOCK:
+        jobs = _INDEX_JOBS.setdefault(rag, {})
+        job = jobs.get(path)
+        if job is None:
+            job = _IndexJob(path)
+            jobs[path] = job
+
+            def _run():
+                try:
+                    job.result = rag.index_document(
+                        path, progress_callback=job.progress
+                    )
+                except BaseException as e:  # noqa: BLE001 — re-raised by the waiter
+                    job.error = e
+                finally:
+                    job.done.set()
+
+            ctx = contextvars.copy_context()
+            threading.Thread(
+                target=lambda: ctx.run(_run),
+                name=f"rag-index:{Path(path).name}",
+                daemon=True,
+            ).start()
+    if not job.done.wait(budget):
+        return None, job
+    with _INDEX_JOBS_LOCK:
+        if jobs.get(path) is job:
+            del jobs[path]
+    if job.error is not None:
+        raise job.error
+    return job.result, job
+
+
+def documents_still_indexing(rag: Any) -> List[str]:
+    """Paths *rag* is still indexing in the background; not searchable yet."""
+    if rag is None:
+        return []
+    with _INDEX_JOBS_LOCK:
+        jobs = _INDEX_JOBS.get(rag) or {}
+        return sorted(path for path, job in jobs.items() if not job.done.is_set())
+
+
+def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
+    """Tool result for a document that is still indexing in the background."""
+    name = Path(job.path).name
+    elapsed = int(time.monotonic() - job.started)
+    if job.total is None:
+        progress = "still extracting and splitting its text"
+    else:
+        progress = f"{job.embedded:,} of {job.total:,} chunks embedded"
+    remaining = job.seconds_remaining()
+    eta = f", about {max(1, round(remaining / 60))} min left" if remaining else ""
+    return {
+        "status": "in_progress",
+        "file_name": name,
+        "message": (
+            f"{name} is large and is still being indexed in the background "
+            f"({progress} after {elapsed}s{eta}). It cannot be searched yet; "
+            "nothing failed."
+        ),
+        "chunks_embedded": job.embedded,
+        "total_chunks": job.total,
+        "elapsed_seconds": elapsed,
+        "estimated_seconds_remaining": remaining,
+        "hint": (
+            "Tell the user the document is still indexing and how long is left. "
+            "To answer now, read the relevant part of the file directly with "
+            "another tool instead of searching it. Calling index_document again "
+            f"with the same path waits up to {int(INDEX_FOREGROUND_BUDGET_S)}s "
+            "more and returns success once the document is searchable."
+        ),
+    }
 
 
 def _require_rag(host: Any) -> Any:
@@ -613,22 +763,19 @@ class RAGToolsMixin:
                     if len(matching_files) == 0:
                         # Auto-index the file if it exists on disk instead of failing.
                         # This avoids the slow fail → plan → index → re-query cycle.
-                        if os.path.exists(file_path):
-                            resolved = os.path.realpath(file_path)
-                            # Enforce path restrictions same as index_document does
-                            if hasattr(
-                                self, "_is_path_allowed"
-                            ) and not self._is_path_allowed(resolved):
-                                return {
-                                    **NOT_EXECUTED,
-                                    "status": "error",
-                                    "error": f"Access denied: '{resolved}' is not in allowed paths",
-                                }
+                        disk_path = os.path.expanduser(file_path)
+                        denied = read_access_error(self, disk_path)
+                        if denied:
+                            return denied
+                        if os.path.exists(disk_path):
+                            resolved = os.path.realpath(disk_path)
                             logger.info(
                                 f"[query_specific_file] '{basename}' not indexed — "
                                 f"auto-indexing '{resolved}' before querying"
                             )
-                            idx_result = rag.index_document(resolved)
+                            idx_result, job = _index_within_budget(rag, resolved)
+                            if idx_result is None:
+                                return _indexing_in_progress(job)
                             if idx_result.get("success"):
                                 self.indexed_files.add(file_path)
                                 if (
@@ -1224,6 +1371,11 @@ class RAGToolsMixin:
                         "error": 'RAG not available. Install with: uv pip install -e ".[rag]"',
                     }
 
+                # Before the existence probe, as in read_file.
+                denied = read_access_error(self, file_path)
+                if denied:
+                    return denied
+
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
@@ -1251,18 +1403,11 @@ class RAGToolsMixin:
                         "total_indexed_files": len(self.indexed_files),
                     }
 
-                # Validate path with ChatAgent's internal logic (which uses allowed_paths)
-                if hasattr(self, "_is_path_allowed"):
-                    if not self._is_path_allowed(real_file_path):
-                        return {
-                            **NOT_EXECUTED,
-                            "status": "error",
-                            "error": f"Access denied: {real_file_path} is not in allowed paths",
-                        }
-
-                # Index the document (now returns dict with stats)
-                # Use real_file_path to ensure consistency in RAG index
-                result = self.rag.index_document(real_file_path)
+                # A document too big to index within the budget keeps indexing
+                # in the background; say so instead of running into the timeout.
+                result, job = _index_within_budget(self.rag, real_file_path)
+                if result is None:
+                    return _indexing_in_progress(job)
 
                 if result.get("success"):
                     self.indexed_files.add(file_path)
@@ -1634,9 +1779,7 @@ Use the {summary_type} style for the content sections."""
 
                     # Use chat SDK to generate summary
                     try:
-                        # Use RAG's chat SDK for summary generation
-                        response = self.rag.chat.send(prompt, no_history=True)
-                        summary_text = response.text
+                        summary_text = _summary_text(self.rag.chat, prompt)
 
                         return {
                             "status": "success",
@@ -1652,6 +1795,7 @@ Use the {summary_type} style for the content sections."""
                         return {
                             "status": "error",
                             "error": f"Failed to generate summary: {e}",
+                            "hint": "Answer from query_documents on the parts the user asked about instead.",
                         }
 
                 # For long documents, iterate over sections (preserving semantic boundaries)
@@ -1678,20 +1822,13 @@ CRITICAL GROUNDING RULE: Only summarize information explicitly present in the se
 
 Generate a summary of this section:"""
 
-                    try:
-                        # Each section stands alone: carried history put every
-                        # earlier section into the next request and overflowed.
-                        response = self.rag.chat.send(section_prompt, no_history=True)
-                        segment_summary = response.text
-
-                        section_summaries.append(
-                            {"section": section_num, "summary": segment_summary}
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to summarize segment {section_num}: {e}"
-                        )
-                        continue
+                    # Each section stands alone: carried history put every
+                    # earlier section into the next request and overflowed. A
+                    # failed section fails the summary rather than vanishing from it.
+                    segment_summary = _summary_text(self.rag.chat, section_prompt)
+                    section_summaries.append(
+                        {"section": section_num, "summary": segment_summary}
+                    )
 
                 # Combine section summaries into final summary
                 if not section_summaries:
@@ -1737,9 +1874,7 @@ Synthesize these into a single, well-structured summary using this format:
 Use the {summary_type} style. Ensure page references from section summaries are preserved."""
 
                 try:
-                    # Use RAG's chat SDK for final summary synthesis
-                    response = self.rag.chat.send(final_prompt, no_history=True)
-                    final_summary = response.text
+                    final_summary = _summary_text(self.rag.chat, final_prompt)
 
                     return {
                         "status": "success",
@@ -1832,7 +1967,10 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                         self.rag.config.cache_dir, output_filename
                     )
                 else:
-                    output_path = str(Path(output_path).resolve())
+                    output_path = str(Path(output_path).expanduser().resolve())
+                    denied = write_access_error(self, output_path)
+                    if denied:
+                        return denied
 
                 # Write markdown file with metadata header
                 markdown_content = f"""# Extracted Text from {Path(target_file).name}
@@ -1903,6 +2041,12 @@ Use the {summary_type} style. Ensure page references from section summaries are 
 
                 dir_path = Path(directory_path).expanduser().resolve()
 
+                # Before the existence probe, as in read_file.
+                denied = read_access_error(self, dir_path)
+                if denied:
+                    denied["has_errors"] = True
+                    return denied
+
                 if not dir_path.exists():
                     return {
                         "status": "error",
@@ -1945,6 +2089,10 @@ Use the {summary_type} style. Ensure page references from section summaries are 
                     files_to_index = [f for f in dir_path.iterdir() if f.is_file()]
 
                 for file_path in files_to_index:
+                    # A link out of the folder, or a secret in it, is not indexed.
+                    if not readable_entry(self, file_path):
+                        skipped_files.append(str(file_path))
+                        continue
                     if file_path.suffix.lower() in supported_extensions:
                         try:
                             # Use the RAG SDK to index the file

@@ -23,14 +23,12 @@ import type * as Api from './api.gen';
 import type {
     AgentInfo,
     BrowseResponse,
-    DiskAgentInfo,
     Document,
     DownloadProgress,
     FileEntry,
     IndexFolderResponse,
     InferenceStats,
     ModelStatus,
-    OnboardingStatusResponse,
     ParsedSchedule,
     PreflightReport,
     QuickLink,
@@ -101,36 +99,15 @@ export type KindMismatchIsSymmetricSelfTest = Assert<
         : false
 >;
 
-// `AgentInfo` also carries the Hub catalog's fields, which come from
-// `merge_with_registry` rather than a pydantic model; each one is checked
-// against its real emitter by tests/unit/test_webui_agent_info_contract.py.
-type CatalogOnlyAgentInfoFields =
-    | 'deprecated'
-    | 'download_size_bytes'
-    | 'eval_score'
-    | 'eval_score_version'
-    | 'eval_scorecard_url'
-    | 'installed_version'
-    | 'latest_version'
-    | 'permissions'
-    | 'requirements'
-    | 'requires_trust'
-    | 'security_tier'
-    | 'status'
-    | 'type'
-    | 'version';
-
 export type ApiContract = [
-    NoDrift<Drift<Api.AgentInfo, AgentInfo, CatalogOnlyAgentInfoFields>>,
+    NoDrift<Drift<Api.AgentInfo, AgentInfo>>,
     NoDrift<Drift<Api.BrowseResponse, BrowseResponse>>,
-    NoDrift<Drift<Api.DiskAgentInfo, DiskAgentInfo>>,
     NoDrift<Drift<Api.DocumentResponse, Document>>,
     NoDrift<Drift<Api.DownloadProgress, DownloadProgress>>,
     NoDrift<Drift<Api.FileEntry, FileEntry>>,
     NoDrift<Drift<Api.IndexFolderResponse, IndexFolderResponse>>,
     NoDrift<Drift<Api.InferenceStatsResponse, InferenceStats>>,
     NoDrift<Drift<Api.ModelStatus, ModelStatus>>,
-    NoDrift<Drift<Api.OnboardingStatus, OnboardingStatusResponse>>,
     NoDrift<Drift<Api.ParseScheduleResponse, ParsedSchedule>>,
     NoDrift<Drift<Api.PreflightReport, PreflightReport>>,
     NoDrift<Drift<Api.QuickLink, QuickLink>>,

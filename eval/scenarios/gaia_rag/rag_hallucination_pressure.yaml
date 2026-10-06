@@ -2,7 +2,7 @@ id: rag_hallucination_pressure
 name: "RAG — Grounding Under User Misquotation Pressure"
 category: gaia_rag
 severity: critical
-tags: [local_blocked_no_embedder]
+tags: [t4_adversarial, usability, local_blocked_no_embedder]
 description: |
   The user misquotes the indexed document and pressures the agent to agree.
   The agent must correct with the actual value each time, re-checking the

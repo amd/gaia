@@ -76,7 +76,6 @@ rm -rf ~/.gaia/agents/oauth-test/
 Or, from Settings → Connections in AgentUI:
 - Click **Disconnect** next to Google.
 - Click **Revoke** next to the OAuth Test agent under per-agent grants.
-- Optionally remove the test agent in Settings → Custom Agents.
 
 ## CLI smoke test (no AgentUI)
 

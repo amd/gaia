@@ -113,6 +113,7 @@ def initialize_lemonade_for_agent(
     host: str | None = None,
     port: int | None = None,
     base_url: str | None = None,
+    model: str | None = None,
 ):
     """
     Initialize Lemonade Server for a specific GAIA agent.
@@ -130,6 +131,8 @@ def initialize_lemonade_for_agent(
         port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         base_url: Full base URL for the Lemonade server (e.g., https://abc.ngrok-free.app).
                   When provided, takes priority over host/port.
+        model: Chat model the command will run (e.g. ``--model``); unset means
+               this machine's default. A cloud model is never preloaded locally.
 
     Returns:
         Tuple of (success: bool, base_url: str | None)
@@ -185,9 +188,13 @@ def initialize_lemonade_for_agent(
         # No floor passed: ensure_ready resolves the same one, and then also
         # seeds an idle server with the default model at its own window.
         if base_url:
-            success = LemonadeManager.ensure_ready(quiet=quiet, base_url=base_url)
+            success = LemonadeManager.ensure_ready(
+                quiet=quiet, base_url=base_url, model=model
+            )
         else:
-            success = LemonadeManager.ensure_ready(quiet=quiet, host=host, port=port)
+            success = LemonadeManager.ensure_ready(
+                quiet=quiet, host=host, port=port, model=model
+            )
     except LemonadeClientError as e:
         print(f"❌ Error: {e}", file=sys.stderr)
         return False, None
@@ -545,6 +552,7 @@ async def async_main(action, **kwargs):
             use_claude=use_claude,
             use_chatgpt=use_chatgpt,
             base_url=lemonade_base_url,
+            model=kwargs.get("model"),
         )
         if not success:
             sys.exit(1)
@@ -858,7 +866,11 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
     from gaia.config import UnsafeGaiaHomeError
 
     try:
-        from gaia.ui.server import create_app
+        from gaia.ui.server import (
+            create_app,
+            lemonade_is_remote,
+            start_model_server_owner,
+        )
 
         # Forward --base-url to the UI server via environment variable
         if base_url:
@@ -873,15 +885,12 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print(f"   Open your browser to http://127.0.0.1:{port}")
         print("   Press Ctrl+C to stop")
         print()
-        if not base_url:
-            print("   Prerequisites:")
-            print("     1. Models downloaded  : gaia init  (first time only, ~4 GB)")
-            print(f"     2. Lemonade running   : {describe_start_hint().instruction}")
-            print()
-
         import uvicorn
 
         app = create_app(webui_dist=webui_dist)
+        if not base_url and not lemonade_is_remote():
+            # First run is set up in the app; the daemon owns the model server.
+            start_model_server_owner()
         uvicorn.run(
             app,
             host="127.0.0.1",
@@ -2365,6 +2374,168 @@ the suite decides — no LLM judge. A TUI must already be running with
         help="Where to materialize the task projects (default: a temp directory)",
     )
 
+    # Retrieval benchmarks, one per component: gaia eval retrieval [--component rag|code]
+    retrieval_eval_parser = eval_subparsers.add_parser(
+        "retrieval",
+        help="Retrieval benchmarks: document Q&A (rag) and code search (code)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples (document Q&A, the default component):
+  gaia eval retrieval --suite pr
+  gaia eval retrieval --suite pr --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json
+  gaia eval retrieval --suite full --judge
+  gaia eval retrieval --suite full --datasets technical_docs --retrieval-only --no-scale
+  gaia eval retrieval --fetch-only
+  gaia eval retrieval --suite pr --repo-root /path/to/gaia
+
+Examples (code search):
+  gaia eval retrieval --component code
+  gaia eval retrieval --component code --suite nightly
+  gaia eval retrieval --component code --suite pr \\
+      --gate tests/fixtures/eval_baselines/code-retrieval/pr.json
+  gaia eval retrieval --component code --suite scale
+
+rag: `pr` is offline and deterministic: retrieval only, over documents committed
+in the gaia repository, plus the hard cases that need no LLM. `full` downloads
+FinanceBench, public AMD documents, XQuAD and Wikipedia distractors (pinned,
+sha256-checked, cached in ~/.gaia/cache/eval-retrieval), generates answers, and
+runs the scale tiers. The labels and the `pr` documents are read from a gaia
+checkout: the current directory, or --repo-root. Needs a running Lemonade.
+
+code: queries are real issues (SWE-bench Verified, SWE-rebench); the relevant
+files and functions are the ones the merged fix edits. Scored with real
+embeddings and no LLM, against a `git grep` baseline. Needs Lemonade and git.
+""",
+    )
+    retrieval_eval_parser.add_argument(
+        "--component",
+        choices=["rag", "code"],
+        default="rag",
+        help="What to benchmark: rag (document Q&A, the default) or code (the "
+        "code index behind semantic code search)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--suite",
+        default="pr",
+        choices=["pr", "full", "nightly", "scale"],
+        help="rag: pr (offline, gates PRs) or full. code: pr (gates PRs), "
+        "nightly (sampled, larger) or scale (big repos, hours). Default: pr",
+    )
+    retrieval_eval_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/retrieval-<suite>-<timestamp>, "
+        "or retrieval-code-<suite>-<timestamp> for code)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--gate",
+        default=None,
+        metavar="BASELINE",
+        help="Compare to a baseline results.json; exit 1 on a regression",
+    )
+    retrieval_eval_parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=None,
+        help="Allowed absolute drop in a gated metric before --gate fails "
+        "(default: 0.02 for rag, 0.05 for code)",
+    )
+    retrieval_eval_parser.add_argument(
+        "--keep-work",
+        action="store_true",
+        help="Keep the indexes built during the run (default: deleted at the end)",
+    )
+    rag_retrieval_group = retrieval_eval_parser.add_argument_group(
+        "document Q&A (--component rag)"
+    )
+    rag_retrieval_group.add_argument(
+        "--repo-root",
+        default=None,
+        help="gaia checkout holding eval/retrieval/ (labels, corpus manifest) and "
+        "the committed documents (default: the current directory)",
+    )
+    rag_retrieval_group.add_argument(
+        "--datasets",
+        default=None,
+        help="Comma-separated subset: repo_docs, technical_docs, financebench, xquad",
+    )
+    rag_retrieval_group.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help="Skip answer generation (no chat model needed)",
+    )
+    rag_retrieval_group.add_argument(
+        "--judge",
+        action="store_true",
+        help="Grade free-form answers with the Claude judge; without it they are "
+        "reported as unscored",
+    )
+    rag_retrieval_group.add_argument(
+        "--judge-model", default=None, help="Claude model for --judge"
+    )
+    rag_retrieval_group.add_argument(
+        "--model", default=None, help="Chat model for answers (default: RAG default)"
+    )
+    rag_retrieval_group.add_argument(
+        "--scale-tiers",
+        default=None,
+        help="Comma-separated corpus sizes, e.g. 10,100,1000 (default: the suite's)",
+    )
+    rag_retrieval_group.add_argument(
+        "--no-scale", action="store_true", help="Skip the scale tiers"
+    )
+    rag_retrieval_group.add_argument(
+        "--no-hard-cases", action="store_true", help="Skip the hard cases"
+    )
+    rag_retrieval_group.add_argument(
+        "--xquad-languages",
+        default=None,
+        help="Comma-separated XQuAD languages (default: en,de,es,ru,zh,ar,hi)",
+    )
+    rag_retrieval_group.add_argument(
+        "--xquad-per-language",
+        type=int,
+        default=None,
+        help="Questions per XQuAD language (default: 40)",
+    )
+    rag_retrieval_group.add_argument(
+        "--financebench-docs",
+        type=int,
+        default=None,
+        help="Keep only the questions over the first N FinanceBench filings",
+    )
+    rag_retrieval_group.add_argument(
+        "--no-vlm",
+        action="store_true",
+        help="Do not read PDF images with the VLM (the pr suite never does); "
+        "otherwise the VLM must pass a probe before the run starts",
+    )
+    rag_retrieval_group.add_argument(
+        "--offline",
+        action="store_true",
+        help="Never download; fail if a corpus file is not cached",
+    )
+    rag_retrieval_group.add_argument(
+        "--fetch-only",
+        action="store_true",
+        help="Download and verify every corpus file in eval/retrieval/sources.json, then stop",
+    )
+    code_retrieval_group = retrieval_eval_parser.add_argument_group(
+        "code search (--component code)"
+    )
+    code_retrieval_group.add_argument(
+        "--parts",
+        default=None,
+        help="Comma-separated subset of quality,incremental,robustness,scale "
+        "(default: everything the suite defines)",
+    )
+    code_retrieval_group.add_argument(
+        "--work-root",
+        default=None,
+        help="Where repositories and indexes live (default: $GAIA_BENCH_WORK_ROOT "
+        "or <tmp>/gaia-bench, shared with `gaia eval tasks`)",
+    )
+
     # Outcome-scored tasks for the flagship GaiaAgent, gated in CI: gaia eval tasks
     tasks_eval_parser = eval_subparsers.add_parser(
         "tasks",
@@ -3438,7 +3609,7 @@ Examples:
     init_parser.add_argument(
         "--minimal",
         action="store_true",
-        help="Use minimal profile (~400 MB) - shortcut for --profile minimal",
+        help="Use minimal profile (~6 GB) - shortcut for --profile minimal",
     )
     init_parser.add_argument(
         "--skip-models",
@@ -3582,6 +3753,171 @@ def _run_controls(args, judge_model):
         )
         sys.exit(1)
     print("✅ The judge separated honest, fabricated and empty work.")
+
+
+_RETRIEVAL_SUITES = {"rag": ("pr", "full"), "code": ("pr", "nightly", "scale")}
+_RETRIEVAL_TOLERANCE = {"rag": 0.02, "code": 0.05}
+_RETRIEVAL_ONLY_FLAGS = {
+    "rag": (
+        "repo_root",
+        "datasets",
+        "retrieval_only",
+        "judge",
+        "judge_model",
+        "model",
+        "scale_tiers",
+        "no_scale",
+        "no_hard_cases",
+        "xquad_languages",
+        "xquad_per_language",
+        "financebench_docs",
+        "no_vlm",
+        "offline",
+        "fetch_only",
+    ),
+    "code": ("parts", "work_root"),
+}
+
+
+def _check_retrieval_args(args):
+    """Reject a suite or flag that belongs to the other retrieval component."""
+    component = args.component
+    suites = _RETRIEVAL_SUITES[component]
+    if args.suite not in suites:
+        sys.exit(
+            f"gaia eval retrieval: --component {component} has no suite "
+            f"{args.suite!r}; choose one of: {', '.join(suites)}."
+        )
+    for other, flags in _RETRIEVAL_ONLY_FLAGS.items():
+        if other == component:
+            continue
+        given = [
+            "--" + name.replace("_", "-")
+            for name in flags
+            if getattr(args, name) not in (None, False)
+        ]
+        if given:
+            sys.exit(
+                f"gaia eval retrieval: {', '.join(given)} only applies to "
+                f"--component {other}; drop it or pass --component {other}."
+            )
+    if args.tolerance is None:
+        args.tolerance = _RETRIEVAL_TOLERANCE[component]
+
+
+def _handle_eval_retrieval(args):
+    """gaia eval retrieval — see gaia.eval.retrieval.runner."""
+    from gaia.eval.eval_lock import exclusive_eval
+    from gaia.eval.retrieval import runner, sources
+
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True, errors="replace")
+
+    try:
+        root = sources.set_repo_root(args.repo_root)
+    except sources.SourceError as e:
+        sys.exit(f"gaia eval retrieval: {e}")
+    print(f"[DATA] labels and committed documents from {root}")
+
+    if args.fetch_only:
+        items = [
+            (name, rel)
+            for name, spec in sources.load_manifest().items()
+            for rel in spec["files"]
+        ]
+
+        def _fetched(done, total, label):
+            if done == total or done % 25 == 0:
+                print(f"  [{done}/{total}] {label}")
+
+        sources.fetch_many(items, on_progress=_fetched)
+        print(f"[FETCH] {len(items)} file(s) verified in {sources.cache_dir()}")
+        return
+
+    def _split(value):
+        return [v.strip() for v in value.split(",") if v.strip()] if value else None
+
+    suite = runner.SUITES[args.suite]
+    tiers = _split(args.scale_tiers)
+    opts = runner.RunOptions(
+        suite=suite,
+        out_dir=Path(
+            args.out
+            or f"eval/results/retrieval-{args.suite}-{time.strftime('%Y%m%d-%H%M%S')}"
+        ),
+        model=args.model,
+        datasets=_split(args.datasets),
+        answers=False if args.retrieval_only else None,
+        judge=args.judge,
+        judge_model=args.judge_model,
+        scale_tiers=(
+            [] if args.no_scale else ([int(t) for t in tiers] if tiers else None)
+        ),
+        run_hard_cases=not args.no_hard_cases,
+        xquad_languages=_split(args.xquad_languages),
+        xquad_per_language=args.xquad_per_language,
+        financebench_docs=args.financebench_docs,
+        offline=args.offline,
+        keep_work=args.keep_work,
+        vlm=False if args.no_vlm else None,
+    )
+    with exclusive_eval(f"gaia eval retrieval --suite {args.suite}"):
+        results = runner.run(opts)
+    print()
+    print((opts.out_dir / "report.md").read_text(encoding="utf-8"))
+    print(f"[OUTPUT] {(opts.out_dir / 'results.json').resolve()}")
+
+    failed = bool(opts.errors)
+    if args.gate:
+        baseline = json.loads(Path(args.gate).read_text(encoding="utf-8"))
+        passed, lines = runner.compare(baseline, results, args.tolerance)
+        print(f"[GATE] vs {args.gate} (tolerance {args.tolerance})")
+        for line in lines:
+            print(f"  {line}")
+        print("[GATE] " + ("passed" if passed else "FAILED"))
+        failed |= not passed
+    if opts.errors:
+        print(f"[ERROR] {len(opts.errors)} hard case(s) crashed: {opts.errors}")
+    if failed:
+        sys.exit(1)
+
+
+def _handle_eval_retrieval_code(args):
+    """gaia eval retrieval --component code — see gaia.eval.code_retrieval.runner."""
+    import tempfile
+
+    from gaia.eval.bench.config import ENV_WORK_ROOT
+    from gaia.eval.code_retrieval.runner import run
+    from gaia.eval.eval_lock import exclusive_eval
+
+    out_dir = Path(
+        args.out
+        or f"eval/results/retrieval-code-{args.suite}-{time.strftime('%Y%m%d-%H%M%S')}"
+    )
+    work_root = Path(
+        args.work_root
+        or os.environ.get(ENV_WORK_ROOT)
+        or Path(tempfile.gettempdir()) / "gaia-bench"
+    )
+    parts = [p.strip() for p in args.parts.split(",")] if args.parts else None
+    with exclusive_eval(f"gaia eval retrieval --component code --suite {args.suite}"):
+        result = run(
+            args.suite,
+            out_dir,
+            work_root,
+            parts=parts,
+            baseline=Path(args.gate) if args.gate else None,
+            max_drop=args.tolerance,
+            keep_index=args.keep_work,
+        )
+    print(f"[OUTPUT] {(out_dir / 'report.md').resolve()}")
+    regressions = (result.get("comparison") or {}).get("regressions") or []
+    for line in regressions:
+        print(f"[REGRESSION] {line}")
+    if args.gate:
+        print("[GATE] " + ("FAILED" if regressions else "passed"))
+        if regressions:
+            sys.exit(1)
 
 
 def _handle_eval_tasks(args):
@@ -4704,6 +5040,7 @@ Let me know your answer!
             agent="minimal",
             quiet=False,
             base_url=getattr(args, "base_url", None),
+            model=getattr(args, "model", None),
         )
         if not success:
             return
@@ -4948,6 +5285,15 @@ Let me know your answer!
                 f"{card['dishonest']} false success claim(s)"
             )
             print(f"[OUTPUT] {report_path.resolve()}")
+            return
+
+        # Retrieval benchmarks: gaia eval retrieval [--component rag|code]
+        if getattr(args, "eval_command", None) == "retrieval":
+            _check_retrieval_args(args)
+            if args.component == "code":
+                _handle_eval_retrieval_code(args)
+            else:
+                _handle_eval_retrieval(args)
             return
 
         # Flagship agent tasks: gaia eval tasks run|judge|gate

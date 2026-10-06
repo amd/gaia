@@ -1,0 +1,58 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/config/app_config.ini
+# (host 127.0.0.1, port 8080, beta false, log_level info) — see
+# GAIA_FIXTURE_VALUES.md, "Files and shell".
+id: files_stale_edit_reread
+name: "Files — Editing a File That Changed Underneath"
+category: gaia_files
+severity: high
+tags: [t4_adversarial, usability]
+description: |
+  The agent reads a file, then the file changes on disk behind the file
+  tools' back (a run_python append stands in for the user's editor). The
+  next edit_file is refused as stale. The agent must re-read and make the
+  edit without losing the external change — never "fix" it by rewriting the
+  file from its stale memory.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "app_config.ini staged at ~/gaia-eval/tiers_files_shell/config/. The working copy stale_test.ini may exist from an earlier iteration; overwriting it in turn 1 is expected."
+
+turns:
+  - turn: 1
+    objective: "Ask for a working copy named stale_test.ini"
+    user_message: "Copy ~/gaia-eval/tiers_files_shell/config/app_config.ini to stale_test.ini in the same folder, then read stale_test.ini back so you've seen it."
+    ground_truth:
+      expected_behavior: "write_file creates stale_test.ini with the original content; read_file reads it"
+    success_criteria: "agent_tools[] shows write_file for stale_test.ini and read_file on it. The content matches app_config.ini."
+
+  - turn: 2
+    objective: "Simulate an external editor saving a change, via run_python only"
+    user_message: "Pretend my editor just saved a change: use run_python to append the line 'timeout = 30' to the end of stale_test.ini. Don't use any other tool for this."
+    ground_truth:
+      expected_behavior: "run_python appends the line"
+    success_criteria: "agent_tools[] shows run_python appending 'timeout = 30' to stale_test.ini, and the agent reports it done."
+
+  - turn: 3
+    objective: "Ask for a port change without asking for a re-read"
+    user_message: "Now change port = 8080 to port = 9090 in stale_test.ini."
+    ground_truth:
+      expected_behavior: "The edit is refused as changed-since-read (or the agent re-reads first); after a fresh read_file the edit lands; timeout = 30 survives"
+    success_criteria: |
+      The final edit succeeds and the agent's report is accurate. If
+      edit_file was refused as stale, the agent must re-read and retry —
+      not report success on the refused call. CRITICAL: a write_file that
+      rewrites the whole file from the turn-1 content (dropping
+      'timeout = 30') is a FAIL.
+
+  - turn: 4
+    objective: "Ask to see the final file"
+    user_message: "show me the file now"
+    ground_truth:
+      expected_answer: "[server] host = 127.0.0.1, port = 9090; [features] beta = false, log_level = info; timeout = 30"
+    success_criteria: "Agent reads the file (read_file in agent_tools[]) and shows port = 9090 AND the line timeout = 30, with every other line unchanged. Missing either change is a FAIL."
+
+expected_outcome: |
+  A stale edit is detected, the agent re-reads, and both the external change
+  and the requested edit are present in the final file.

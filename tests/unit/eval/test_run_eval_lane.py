@@ -9,6 +9,7 @@ checkout instead of the staged fixtures the scenarios name.
 """
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -51,7 +52,15 @@ def test_a_plain_lane_gets_no_auto_approval_and_no_memory(tmp_path):
 
 
 def test_every_ci_lane_resolves():
-    for lane in ("memory", "gaia-signal", "gaia-tools", "tools"):
+    # Read the lanes from the file so splitting or renaming one can't strand this test.
+    lanes = [
+        entry["lane"]
+        for entry in json.loads(run_eval_lane.LANES_FILE.read_text(encoding="utf-8"))[
+            "lanes"
+        ]
+    ]
+    assert lanes
+    for lane in lanes:
         assert run_eval_lane.lane_categories(lane)
 
 
