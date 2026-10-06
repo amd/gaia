@@ -305,8 +305,7 @@
               "spec/rag-tools-mixin",
               "spec/shell-tools-mixin",
               "spec/file-search-mixin",
-              "spec/browser-tools",
-              "spec/file-system-agent"
+              "spec/browser-tools"
             ]
           },
           {
@@ -325,8 +324,7 @@
             "group": "Agents & Apps",
             "pages": [
               "spec/mcp-agent",
-              "spec/chat-agent",
-              "spec/component-status"
+              "spec/chat-agent"
             ]
           }
         ]
@@ -408,17 +406,10 @@
           {
             "group": "Agent UI",
             "pages": [
-              "plans/agent-ui",
               "plans/gaia-ui-redesign",
-              "plans/agent-ui-claude-desktop",
-              "plans/setup-wizard",
               "plans/security-model",
-              "plans/connectors",
-              "plans/email-calendar-integration",
-              "plans/email-triage-agent",
               "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
-              "plans/slack-tui-integration",
               "plans/daemon-convergence",
               "plans/autonomy-engine"
             ]
@@ -426,10 +417,6 @@
           {
             "group": "Ecosystem",
             "pages": [
-              "plans/agent-hub",
-              "plans/agent-hub-ui",
-              "plans/agent-ui-hub-publish",
-              "plans/email-agent-packaging",
               "plans/flagship-installer",
               "plans/embedded-onboarding",
               "spec/agent-hub-restructure",
@@ -439,8 +426,7 @@
               "plans/adaptive-skills",
               "spec/harness-engineering-mode",
               "plans/adaptive-memory",
-              "plans/adaptive-recovery",
-              "plans/oem-bundling"
+              "plans/adaptive-recovery"
             ]
           },
           {
@@ -452,7 +438,6 @@
               "plans/mcp-docs",
               "plans/desktop-installer",
               "plans/tool-loader",
-              "plans/code-index-review",
               "plans/nightly-benchmarks",
               "plans/eval-hillclimbing"
             ]

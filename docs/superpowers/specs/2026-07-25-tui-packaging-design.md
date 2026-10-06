@@ -5,8 +5,8 @@ Extends: [`docs/plans/tui-user-journey.md`](../../plans/tui-user-journey.md) —
 covers stages 1–11 of the user journey and assumes `gaia` is already running. This document
 covers **stage 0**: how `gaia` gets onto a machine at all, and what the machine looks like
 afterwards. It does not replace it.
-Related: [`docs/plans/agent-factory.md`](../../plans/agent-factory.md) (the developer flow,
-specced separately), [`docs/plans/package-publishing.mdx`](../../plans/package-publishing.mdx)
+Related: `docs/plans/agent-factory.md` (the developer flow,
+specced separately), `docs/plans/package-publishing.mdx`
 (the registry-driven publisher this uses), [`docs/plans/desktop-installer.mdx`](../../plans/desktop-installer.mdx)
 (the installers this supersedes in part).
 

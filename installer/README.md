@@ -61,8 +61,7 @@ This is the one you send to a colleague: a single per-user `.exe` that installs
 
 **[docs/deployment/shareable-build.mdx](../docs/deployment/shareable-build.mdx)**
 is the guide — build commands, install paths, and how to verify the binary before
-you send it. See [the plan](../docs/plans/shareable-custom-build.md) for why it
-exists.
+you send it.
 
 ### Building the Agent UI installer locally
 

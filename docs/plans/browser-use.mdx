@@ -29,7 +29,7 @@ Measured against the current fetcher:
 
 The failure mode is not JavaScript. Server-rendered SPAs extract fine. The failure is **authentication** — and secondarily bot gates and genuinely client-rendered content. Every shipped skill that watches a page (`price-watch`, `source-watch`) inherits that hole: point either one at a retailer that requires a session and it silently reads a login screen.
 
-Note what is *not* in scope. Google, Microsoft and GitHub already authenticate through [connectors](/plans/connectors) via OAuth, which is strictly better than driving a browser — real tokens, real scopes, no screen-scraping. Browser login is for the long tail with no API.
+Note what is *not* in scope. Google, Microsoft and GitHub already authenticate through connectors via OAuth, which is strictly better than driving a browser — real tokens, real scopes, no screen-scraping. Browser login is for the long tail with no API.
 
 ## The thing to get right first: what actually costs time
 
@@ -245,7 +245,6 @@ Mitigations, all of which reuse existing machinery rather than inventing a paral
 - [Browser Tools spec](/spec/browser-tools) — the lightweight fetcher this extends
 - [Agent latency study](https://github.com/amd/gaia/blob/main/docs/plans/gaia-agent-latency.md) — source of the 387 tok/s prefill figure
 - [CUA plan](/plans/cua) — desktop control; adjacent, deliberately separate
-- [Connectors](/plans/connectors) — OAuth, which beats browser login wherever it exists
 - [Security model](/plans/security-model)
 
 ## Test record
