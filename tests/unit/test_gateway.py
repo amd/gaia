@@ -356,6 +356,19 @@ class TestListModels:
                 "labels": ["tool-calling"],
                 "context_length": 131072,
             },
+            {
+                "id": "amd.DeepSeek-V4.1-Flash",
+                "recipe": "cloud",
+                "labels": ["tool-calling"],
+                "context_length": 131072,
+            },
+            # The older flash is a different model: it must not win the default.
+            {
+                "id": "amd.DeepSeek-V4-Flash",
+                "recipe": "cloud",
+                "labels": ["tool-calling"],
+                "context_length": 131072,
+            },
             # Another provider's cloud model must not leak into the AMD list.
             {"id": "fireworks.kimi", "recipe": "cloud", "labels": []},
         ]
@@ -368,13 +381,17 @@ class TestListModels:
             "amd.Claude-Opus-5",
             "amd.zephyr-small",
             "amd.gemma-4-31b-it",
+            "amd.DeepSeek-V4.1-Flash",
+            "amd.DeepSeek-V4-Flash",
         }
 
     def test_recommended_models_sort_first(self, manager):
         manager.client.list_models.return_value = self.CATALOG
         ids = [m.id for m in manager.list_models()]
-        # Claude-Opus-5 and gemma-4-31b are recommended; zephyr is not.
+        # DeepSeek-V4.1-Flash, gemma-4-31b and Claude-Opus-5 are recommended;
+        # zephyr and the older DeepSeek-V4-Flash are not.
         assert ids[-1] == "amd.zephyr-small"
+        assert ids.index("amd.DeepSeek-V4-Flash") > ids.index("amd.Claude-Opus-5")
 
     def test_capabilities_come_from_the_gateway(self, manager):
         manager.client.list_models.return_value = self.CATALOG
@@ -393,26 +410,39 @@ class TestListModels:
         the two models this feature exists to reach, so the hints deliberately
         match only the current flagship and the on-prem model.
         """
-        for model_id in ("amd.Claude-Opus-5", "amd.Claude-Sonnet-5", "amd.Gemma-4-31B"):
+        for model_id in (
+            "amd.Claude-Opus-5",
+            "amd.Claude-Sonnet-5",
+            "amd.Gemma-4-31B",
+            "amd.DeepSeek-V4.1-Flash",
+        ):
             assert GatewayModel(id=model_id).recommended, model_id
 
         for model_id in (
             "amd.claude-opus-4.8",  # superseded — still selectable, just not surfaced
             "amd.claude-haiku-4.5",
             "amd.gpt-oss-20b",
+            "amd.DeepSeek-V4-Flash",  # the older flash, not V4.1
         ):
             assert not GatewayModel(id=model_id).recommended, model_id
 
-    def test_gemma_is_the_default_because_it_is_the_only_one_that_streams(
-        self, manager
-    ):
-        """Alphabetical order put Claude-Opus-5 first, which cannot stream.
+    def test_deepseek_v4_1_flash_is_the_default(self, manager):
+        """The default must stream, and DeepSeek-V4.1-Flash does.
 
-        GAIA's agent path streams by default, so that default handed a new
-        user an agent that produced nothing.
+        Alphabetical order once put Claude-Opus-5 first; the explicit hint list
+        is what keeps the default deterministic.
         """
         manager.client.list_models.return_value = self.CATALOG
-        assert manager.list_models()[0].id == "amd.gemma-4-31b-it"
+        assert manager.list_models()[0].id == "amd.DeepSeek-V4.1-Flash"
+        assert manager.default_model() == "amd.DeepSeek-V4.1-Flash"
+
+    def test_gemma_is_the_default_when_deepseek_is_not_on_the_gateway(self, manager):
+        catalog = {
+            "data": [
+                m for m in self.CATALOG["data"] if "deepseek" not in m["id"].lower()
+            ]
+        }
+        manager.client.list_models.return_value = catalog
         assert manager.default_model() == "amd.gemma-4-31b-it"
 
     def test_ensure_active_model_does_not_override_a_choice(self, manager):
@@ -422,7 +452,7 @@ class TestListModels:
 
     def test_ensure_active_model_picks_the_preferred_one_when_unset(self, manager):
         manager.client.list_models.return_value = self.CATALOG
-        assert manager.ensure_active_model() == "amd.gemma-4-31b-it"
+        assert manager.ensure_active_model() == "amd.DeepSeek-V4.1-Flash"
 
     def test_recommendation_is_case_insensitive(self):
         """The gateway mixes casing across ids (`Claude-Opus-5` vs

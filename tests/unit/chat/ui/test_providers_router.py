@@ -617,13 +617,13 @@ def test_cloud_models_are_prefixed_and_ranked_first(client, lemonade):
     lemonade.models = _CATALOG
     models = client.get("/api/providers/fireworks/models").json()["models"]
     assert [m["id"] for m in models] == [
-        "fireworks.glm-5p3-flash",
         "fireworks.accounts/fireworks/models/deepseek-v4p1-flash",
+        "fireworks.glm-5p3-flash",
         "fireworks.aa-model",
         "fireworks.zz-model",
     ]
     top = models[0]
-    assert (top["rank"], top["note"]) == (1, "best overall, cheapest")
+    assert (top["rank"], top["note"]) == (1, "best overall, fastest")
     assert top["evidence"] == RECOMMENDED_MODELS[0].evidence
     assert top["downloaded"] is True
     assert models[1]["rank"] == 2
@@ -737,10 +737,10 @@ def test_provider_of_and_label(model_id, provider, label):
 
 
 def test_rank_matches_both_cloud_id_forms():
-    assert rank("fireworks.accounts/fireworks/models/glm-5p3-flash")[0] == 1
-    assert rank("fireworks.glm-5p3-flash")[0] == 1
-    assert rank("amd.glm-5p3-flash") is None
-    assert rank("glm-5p3-flash") is None
+    assert rank("fireworks.accounts/fireworks/models/deepseek-v4p1-flash")[0] == 1
+    assert rank("fireworks.deepseek-v4p1-flash")[0] == 1
+    assert rank("amd.deepseek-v4p1-flash") is None
+    assert rank("deepseek-v4p1-flash") is None
 
 
 # ── Drift against the TUI ──────────────────────────────────────────────────

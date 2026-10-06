@@ -58,10 +58,11 @@ Type `/gateway` in chat (or pick it from the `/` command palette).
     The field is masked. GAIA sends it to Lemonade and keeps no copy.
   </Step>
   <Step title="Done — a model is already selected">
-    GAIA picks `Gemma-4-31B` for you and makes it the default. It is the only
-    gateway model that currently streams, and GAIA's agent path streams by default,
-    so it is the one that works out of the box. It is also on-prem, so it costs
-    nothing per token.
+    GAIA picks `DeepSeek-V4.1-Flash` for you and makes it the default. GAIA's
+    agent path streams, so the default has to be a model the gateway streams, and
+    this one does; it is also the fastest model on GAIA's agent benchmark. If your
+    gateway doesn't offer it, GAIA picks `Gemma-4-31B`, which streams too and is
+    on-prem, so it costs nothing per token.
 
     To use a different one: <kbd>space</kbd> enables a model, <kbd>enter</kbd> makes it
     active. Preferred models are marked `*` and sorted first.
@@ -118,16 +119,16 @@ will not try native tool calls against a model that cannot do them.
 
 ### Models that cannot stream
 
-The gateway currently accepts a streaming request for every model except
-`Gemma-4-31B` and then sends no tokens, while the same prompt works
-non-streaming. Nothing in the catalog advertises this, so GAIA learns it the
+For some models the gateway accepts a streaming request and then sends no
+tokens, while the same prompt works non-streaming. `DeepSeek-V4.1-Flash` and
+`Gemma-4-31B` stream. Nothing in the catalog advertises this, so GAIA learns it the
 first time it happens: it tells you the gateway did not stream that model,
 answers the turn without streaming, and remembers the model in
 `~/.gaia/gateway.json` so later turns skip straight to the working path. You see
 one delayed first answer per model, then normal speed.
 
-This is why `Gemma-4-31B` is the default when the gateway is enabled — it is the
-one model that streams.
+This is why the default is a model that streams: `DeepSeek-V4.1-Flash`, or
+`Gemma-4-31B` when the gateway doesn't offer it.
 
 ## Troubleshooting
 
@@ -152,9 +153,9 @@ one model that streams.
 | `Claude-Opus-5` | Azure OpenAI | 5.6s | 53 |
 | `GPT-oss-120B` | On-Prem | 8.4s | 31 |
 
-`Gemma-4-31B` streams at 78 TPS with 1.8s to first token. **Streaming currently
-returns no tokens for the other models**, while non-streaming works for all of
-them — a gateway-side limitation, not a GAIA one.
+`Gemma-4-31B` streams at 78 TPS with 1.8s to first token, and `DeepSeek-V4.1-Flash`
+streams too. **Streaming returns no tokens for some other models**, while
+non-streaming works for all of them — a gateway-side limitation, not a GAIA one.
 
 **Every chat model on this gateway — Claude included — is served over OpenAI Chat
 Completions**, not the Anthropic Messages format. That is why GAIA registers the
