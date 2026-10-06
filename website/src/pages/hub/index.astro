@@ -34,13 +34,15 @@ const ordered = [
 ];
 const categories = distinct(agents, 'category').sort();
 
+// Counts only. An "on-device" figure would overclaim: the GAIA agent can be
+// pointed at a cloud model by choice.
 const stats = [
-  { value: String(agents.length), label: 'Published' },
-  { value: '100%', label: 'On-device' },
+  { value: String(agents.length), label: agents.length === 1 ? 'Package' : 'Packages' },
+  ...(skills.length ? [{ value: String(skills.length), label: skills.length === 1 ? 'Skill' : 'Skills' }] : []),
 ];
 ---
 
-<Layout title="Agent Hub — gaia" description="Browse and install local AI agents for GAIA.">
+<Layout title="Agent Hub — GAIA" description="The GAIA agent, the desktop app and terminal that run it, and the skills it can load. Versioned, and published from the open GAIA repository.">
   <Header />
   <main id="main-content" class="g-shell pb-24 pt-[112px] sm:pt-[138px]">
 
@@ -48,17 +50,16 @@ const stats = [
 
     <div class="flex flex-wrap items-end justify-between gap-7">
       <div>
-        <h1 class="g-h-page">Agents for<br />your machine.</h1>
-        <p class="mt-[18px] max-w-[520px] text-[17px] leading-[1.6] text-g-muted">
-          Each agent is purpose-built for one job, tested, and versioned.
-          {agents.length === 1 ? ' One is' : ` ${agents.length} are`} published
-          today — the rest are in development in the open, at
+        <h1 class="g-h-page">The GAIA agent,<br />apps and skills.</h1>
+        <p class="mt-[18px] max-w-[560px] text-[17px] leading-[1.6] text-g-muted">
+          The GAIA agent, the desktop app and terminal you run it in, and the skills it can
+          load. Each is versioned, and built from the open
           <a
-            href="https://github.com/amd/gaia/tree/main/hub/agents"
+            href="https://github.com/amd/gaia/tree/main/hub"
             target="_blank"
             rel="noopener noreferrer"
             class="prose-link"
-          >hub/agents</a>.
+          >GAIA repository</a>.
         </p>
       </div>
       <StatBlock stats={stats} />
@@ -85,8 +86,8 @@ const stats = [
         <input
           id="hub-search"
           type="search"
-          placeholder="Search agents…"
-          aria-label="Search agents"
+          placeholder="Search the hub…"
+          aria-label="Search the hub"
           class="mono w-full flex-1 border-0 bg-transparent py-[11px] text-[12.5px] text-g-text outline-none placeholder:text-g-faint"
         />
       </label>
@@ -99,12 +100,12 @@ const stats = [
     <!-- List. Both groups are real lists, so a screen reader announces how many
          agents there are instead of reading loose rows. -->
     <div id="hub-list" class="mt-[22px] overflow-hidden rounded-g-card border border-g-border bg-g-surface">
-      <ul aria-label="Published agents">
+      <ul aria-label="Published packages">
         {ordered.map((agent) => <li><AgentRow agent={agent} /></li>)}
       </ul>
 
       <div id="hub-empty" class="hidden px-[22px] py-11 text-center text-[14px] text-g-muted">
-        No agents match your search.
+        Nothing matches your search.
       </div>
     </div>
 
@@ -116,7 +117,7 @@ const stats = [
           <div>
             <h2 class="font-display text-[22px] font-semibold tracking-[-0.015em]">Skills</h2>
             <p class="mt-2 max-w-[560px] text-[14px] leading-[1.6] text-g-muted">
-              Reusable capabilities any agent can compose — install one with
+              Tasks the GAIA agent can pick up while it runs. Install one with
               <code class="mono text-[12.5px] text-g-text">gaia skill install &lt;name&gt;</code>.
               Each carries a trust tier and the permissions it asks for.
             </p>
@@ -131,21 +132,16 @@ const stats = [
       </section>
     )}
 
-    <!-- Publish CTA -->
-    <div class="mt-11 flex flex-wrap items-center justify-between gap-6 rounded-g-card border border-dashed border-g-border2 p-[30px]">
+    <!-- Build CTA. The hub carries the GAIA agent and its parts; a harness
+         someone else builds ships on its own, so this points at building. -->
+    <div class="mt-11 flex flex-wrap items-center justify-between gap-6 rounded-g-card border border-dashed border-g-border2 p-[22px] sm:p-[30px]">
       <div>
-        <h2 class="font-display text-[20px] font-semibold tracking-[-0.015em]">Publish your own agent.</h2>
+        <h2 class="font-display text-[20px] font-semibold tracking-[-0.015em]">Build your own agent harness.</h2>
         <p class="mt-2 max-w-[520px] text-[14px] leading-[1.6] text-g-muted">
-          Scaffold it with the SDK, open a pull request against the hub manifest, and it lands
-          here — versioned and immutable, installable by anyone in one command.
+          Anyone can, with the same skills, evals and SDK that built the GAIA agent.
         </p>
       </div>
-      <a
-        href="https://amd-gaia.ai/docs/guides/hub-publishing"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="g-btn g-btn-secondary whitespace-nowrap"
-      >Publishing guide →</a>
+      <a href="/#build" class="g-btn g-btn-secondary whitespace-nowrap">Build with GAIA →</a>
     </div>
 
   </main>
@@ -173,8 +169,8 @@ const stats = [
         const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
         status.textContent =
           publishedVisible === 0
-            ? 'No agents match your search.'
-            : `${plural(publishedVisible, 'published agent')}.`;
+            ? 'Nothing matches your search.'
+            : `${plural(publishedVisible, 'published package')}.`;
       }, 350);
     };
 
