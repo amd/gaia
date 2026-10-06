@@ -73,7 +73,7 @@ correcting them abstractly.
 ## Where things live (for pointing users at the right place)
 
 **Code:**
-- In-core agent framework: `src/gaia/agents/` — `base/`, `tools/`, `builder/`, `code_index/`, `registry.py`
+- In-core agent framework: `src/gaia/agents/` — `base/`, `tools/`, `code_index/`, `registry.py`
 - Packaged agents: `hub/agents/<id>/python/` — `gaia` (the flagship), `chat` (its base
   class), `email`, plus the `hello-world` / `word-count` / `connectors-demo` templates.
   Per-task capabilities (coding, data exploration, document briefs, …) are skills under

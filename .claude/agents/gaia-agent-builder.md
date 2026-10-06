@@ -57,7 +57,7 @@ hub/agents/<id>/python/
 - Compose reusable mixins from `KNOWN_TOOLS` directly in the class declaration
 - For a user-authored agent under `~/.gaia/agents/<id>/`, an optional sidecar `agent.yaml` next to `agent.py` carries declarative `models:` only — anything else (legacy `manifest_version`, `tools`, `instructions`, `mcp_servers`, `id`) emits a `DeprecationWarning` and is ignored
 
-Fastest path for end users: `gaia chat --ui` → "+" → **BuilderAgent** (interactive scaffolding emits Python).
+Fastest path to a package: `gaia agent init <id> -o hub/agents/ --layout hub` scaffolds the layout; validate it with `gaia agent test --lint`.
 
 ## Checklist for a hub agent package
 
@@ -77,7 +77,7 @@ Fastest path for end users: `gaia chat --ui` → "+" → **BuilderAgent** (inter
 
 **Optional:**
 - `_create_console(self) -> AgentConsole` — only override if you need a custom console; the base class provides a default
-- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — required *only* for agents exposed through the registry/BuilderAgent flow (see `src/gaia/agents/builder/agent.py`). `ChatAgent` and `GaiaAgent` don't declare them — the registry falls back to the entry-point name when `AGENT_ID` is absent. `hub/agents/hello-world`, `hub/agents/word-count` and `hub/agents/email` do declare them.
+- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — read by the registry for Hub-card metadata (see `_registration_from_class` in `src/gaia/agents/registry.py`). `ChatAgent` and `GaiaAgent` don't declare them — the registry falls back to the entry-point name when `AGENT_ID` is absent. `hub/agents/hello-world`, `hub/agents/word-count` and `hub/agents/email` do declare them.
 
 ### 2. Tools
 - [ ] Every tool decorated with `@tool` inside `_register_tools` so `self` is in closure scope

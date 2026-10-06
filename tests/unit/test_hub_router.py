@@ -190,13 +190,6 @@ def test_uninstall_success(client, monkeypatch):
     assert resp.json()["status"] == "uninstalled"
 
 
-def test_uninstall_builtin_refused(client):
-    # Real uninstall refuses builtins -> 400 (no mock needed). ``builder`` is the
-    # only remaining framework builtin after the #1102 hub migrations.
-    resp = client.delete("/api/agents/builder", headers=UI)
-    assert resp.status_code == 400
-
-
 def test_uninstall_not_installed_404(client, monkeypatch):
     def boom(*a, **k):
         raise NotInstalledError("not installed")

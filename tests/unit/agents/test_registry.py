@@ -95,20 +95,6 @@ class TestBuiltinRegistration:
         with pytest.raises(ValueError, match="Unknown agent ID"):
             registry.create_agent("nonexistent-agent-xyz")
 
-    def test_builder_registered_as_hidden_builtin(self):
-        registry = AgentRegistry()
-        registry.discover()
-        reg = registry.get("builder")
-        assert reg is not None, "BuilderAgent should be registered"
-        assert reg.hidden is True
-        assert reg.source == "builtin"
-
-    def test_builder_not_in_visible_list(self):
-        registry = AgentRegistry()
-        registry.discover()
-        visible_ids = [r.id for r in registry.list() if not r.hidden]
-        assert "builder" not in visible_ids
-
     # ---- Consolidated model tiers (#1162) ----
     # The former per-agent "-lite" registrations (chat-lite, doc-lite, …) and
     # gaia-lite were collapsed into a "lite" model TIER of the single base
@@ -912,14 +898,11 @@ class TestAvailableModelsOutageLogging:
 
 
 # ---------------------------------------------------------------------------
-# Builder model-preference contract (#2243)
-#
-# BuilderAgent picks the first installed model from an ordered preference list
-# instead of failing on machines without Qwen3.5-35B-A3B-GGUF.
+# Preferred-model resolution (#2243)
 # ---------------------------------------------------------------------------
 
 
-class TestBuilderModelPreferences:
+class TestPreferredModelResolution:
     def test_resolve_preferred_model_returns_first_match_in_order(self):
         from gaia.agents.registry import resolve_preferred_model
 
@@ -945,18 +928,6 @@ class TestBuilderModelPreferences:
         )
         assert result is None
 
-    def test_builder_preferred_models_constant_order(self):
-        from gaia.agents.registry import BUILDER_PREFERRED_MODELS
-
-        # Gemma first: the builder must resolve to the same model as every
-        # other agent, or switching to it evicts and cold-reloads. The 35B is
-        # kept last so an existing install still has something to fall back to.
-        assert BUILDER_PREFERRED_MODELS == [
-            "Gemma-4-E4B-it-GGUF",
-            "gemma4-it-e2b-FLM",
-            "Qwen3.5-35B-A3B-GGUF",
-        ]
-
     def test_get_lemonade_models_unreachable_raises_not_empty(self):
         """[] (reachable, zero models) is a result; unreachable is an error —
         callers must be able to tell them apart."""
@@ -979,28 +950,6 @@ class TestBuilderModelPreferences:
             get_lemonade_models("http://localhost:13305/api/v1")
 
         assert reachable_empty == []
-
-    def test_builder_registration_models_is_builder_preferred_models(self):
-        """The real builtin 'builder' registration must carry the new
-        preference list, not the old empty models=[] placeholder."""
-        from gaia.agents.registry import BUILDER_PREFERRED_MODELS
-
-        registry = AgentRegistry()
-        registry.discover()
-        reg = registry.get("builder")
-        assert reg is not None
-        assert reg.models == BUILDER_PREFERRED_MODELS
-        assert reg.models != []
-
-    def test_builder_registration_resolves_to_installed_fallback_model(self):
-        """resolve_model('builder', ...) picks the FLM fallback when that's
-        the only preferred model actually installed."""
-        registry = AgentRegistry()
-        registry.discover()
-        resolved = registry.resolve_model(
-            "builder", available_models=["gemma4-it-e2b-FLM"]
-        )
-        assert resolved == "gemma4-it-e2b-FLM"
 
 
 # ---------------------------------------------------------------------------
@@ -1090,7 +1039,7 @@ class TestRegisterSidecar:
     def test_does_not_clobber_a_real_pre_existing_registration(self):
         """A legitimate custom agent (or a prior real registration) claiming
         the bare id 'email' must survive a register_sidecar call — 'email'
-        is not in _RESERVED_BUILTIN_IDS, so a custom agent CAN legally claim
+        is not reserved, so a custom agent CAN legally claim
         it, and this stub must never silently overwrite it."""
         registry = AgentRegistry()
 

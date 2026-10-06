@@ -261,27 +261,6 @@ def test_flagship_readiness_hint_pulls_with_the_resolved_client(mocker, tooling)
         _assert_parses(command)
 
 
-def test_builder_no_model_remedy_pulls_with_the_resolved_client(mocker):
-    from gaia.agents.builder import agent as builder_agent
-    from gaia.llm.providers.lemonade import LemonadeError
-
-    mocker.patch("platform.system", return_value="Linux")
-    mocker.patch(
-        "gaia.llm.lemonade_launcher.resolve_lemonade", return_value=MODERN_LINUX
-    )
-    mocker.patch.object(builder_agent, "get_lemonade_models", return_value=[])
-
-    with pytest.raises(LemonadeError) as excinfo:
-        builder_agent._select_builder_model("http://localhost:13305/api/v1")
-
-    message = excinfo.value.user_message
-    model = builder_agent.BUILDER_PREFERRED_MODELS[-1]
-    assert f"/usr/bin/lemonade pull {model}" in message
-    assert "gaia download" not in message
-    for command in _gaia_commands(message):
-        _assert_parses(command)
-
-
 # ---------------------------------------------------------------------------
 # Static guard: no NEW `gaia download <model>` may appear anywhere
 # ---------------------------------------------------------------------------

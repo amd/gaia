@@ -105,14 +105,6 @@ class TestBuiltinAgentHubMetadata:
         assert lite.models
         assert lite.min_memory_gb == 5.0
 
-    def test_builder_metadata(self, registry):
-        reg = registry.get("builder")
-        if reg is None:
-            pytest.skip("BuilderAgent not available")
-        assert reg.category == "infrastructure"
-        assert reg.icon == "wrench"
-        assert reg.tools_count == 1
-
 
 class TestNativeAgentDiscovery:
     """Verify native agent discovery from agent-manifest.json."""

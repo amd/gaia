@@ -4,10 +4,9 @@
 daemon path (not in-process) and assert the canonical SSE event *sequence*
 (V2-19, issue #2180).
 
-Why a separate harness
-----------------------
-``behavior_harness.py`` drives the in-process Agent UI server and asserts tool
-side-effects. It cannot see the v2 distributed seam at all: the sidecar's
+Why a dedicated harness
+-----------------------
+An in-process Agent UI test cannot see the v2 distributed seam at all: the sidecar's
 ``POST /v1/<agent>/query`` loop (V2-2 / #2016) and the frozen seven-event wire
 contract (§0.2) that every front-door — the daemon relay, ``gaia email``,
 ``gaia api`` — relays. This harness exercises exactly that surface over REST, so
@@ -46,8 +45,8 @@ an actionable message (what failed, what to do, where to look). The *test*
 decides whether that is a skip or a failure — the harness never turns an absent
 backend into a green pass.
 
-Pure-vs-live split (mirrors ``behavior_harness``)
--------------------------------------------------
+Pure-vs-live split
+------------------
 All classification logic (SSE parse, sequence match, baseline load, the lock)
 lives in module-level helpers so unit tests cover it WITHOUT a running server or
 Lemonade. :class:`SidecarEvalHarness` is the thin live driver.
