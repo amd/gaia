@@ -46,6 +46,7 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 - **A meeting or document summary is never cut off mid-sentence** — a thinking model used to spend the summary's output budget reasoning, so a long meeting lost its second half. (PR [#4827](https://github.com/amd/gaia/pull/4827))
 - **"What can you do?" gets an answer** instead of an attempt to generate an image of the question. (PR [#4809](https://github.com/amd/gaia/pull/4809))
 - **Writes and approved edits can't reach credential folders** (`~/.ssh`, `~/.aws`, `~/.kube` and others), and shell option values and script arguments get the same path check as plain paths. (PRs [#4848](https://github.com/amd/gaia/pull/4848), [#4847](https://github.com/amd/gaia/pull/4847))
+- **Qwen3.6 answers on a Strix Halo with an older AMD graphics driver** — it used to crash on its first token, failing `gaia init`; GAIA's own Lemonade now turns off the Vulkan path that crashes, only on those drivers. (PR [#4674](https://github.com/amd/gaia/pull/4674))
 - **`gaia connectors connect google --grant-agent installed:gaia` works** — it used to fail with no sign-in link for the shipped agent; it now asks for read-only Gmail and grants exactly that. (PR [#4859](https://github.com/amd/gaia/pull/4859))
 - **A "no" to creating a folder also covers writing into it** — GAIA no longer asks again to create the same folder a different way. (PR [#4857](https://github.com/amd/gaia/pull/4857))
 - **`gaia skill import` runs the same checks as a hub install** — https only, the audit, the permission ceiling, and an explicit opt-in for skills that ship code. (PR [#4849](https://github.com/amd/gaia/pull/4849))
@@ -71,11 +72,12 @@ Thanks to the community members who contributed to this release:
 
 ## Full Changelog
 
-**297 commits** since v0.24.1:
+**298 commits** since v0.24.1:
 
 <details>
-<summary>Expand full changelog (297 commits)</summary>
+<summary>Expand full changelog (298 commits)</summary>
 
+- `9ce659803` — fix(lemonade): turn off Vulkan coopmat on Strix Halo drivers that crash Qwen3.6 (#4674)
 - `1021f3b74` — fix(connectors): derive the flagship's mail scopes for --grant-agent installed:gaia (#4859)
 - `8a783b6eb` — ci(eval): make the code retrieval workflow valid so it can run (#4858)
 - `be1e0df20` — test(agent): give the prompt-timeout test room for a slow runner (#4861)
