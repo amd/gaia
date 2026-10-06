@@ -400,3 +400,52 @@ def test_a_wrapper_inside_a_wrapper_is_still_checked(command, layout):
     refusal, _ = _check(command.format(outside=outside), layout["work"], layout["home"])
 
     assert refusal is not None, command
+
+
+@pytest.fixture
+def home_layout(layout, monkeypatch):
+    """``layout`` with its allowed ``home/`` as the user's home directory."""
+    from gaia import security
+
+    home = layout["home"]
+    for name in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(name, str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(security, "SECRET_DIRECTORIES", security._secret_directories())
+    return layout
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat ~/.ssh/id_rsa",
+        "cat ../.ssh/id_rsa",
+        "echo x > ~/.aws/config",
+        'bash -c "cp x ~/.kube/config"',
+        'bash -c "cat $HOME/.docker/config.json"',
+        "env timeout 5 python -c \"open('../.azure/token')\"",
+        "sort -o../.gnupg/out data.txt",
+        "ls ~/.config/gcloud",
+    ],
+)
+def test_a_protected_folder_is_refused_inside_the_allowed_paths(command, home_layout):
+    refusal, _ = _check(command, home_layout["work"], home_layout["home"])
+
+    assert refusal is not None, command
+    assert refusal["executed"] is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat ~/Documents/stress/server.log",
+        "cat ../Documents/stress/server.log",
+        'bash -c "cp ~/Documents/stress/server.log ~/Documents/copy.log"',
+        "echo x > ~/Documents/notes.txt",
+        "ls ~/.config",
+    ],
+)
+def test_an_ordinary_home_folder_command_is_still_allowed(command, home_layout):
+    refusal, _ = _check(command, home_layout["work"], home_layout["home"])
+
+    assert refusal is None, refusal

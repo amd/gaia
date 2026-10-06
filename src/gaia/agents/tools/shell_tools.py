@@ -1286,6 +1286,16 @@ def _flag_path_values(arg: str) -> list:
     return values
 
 
+def _protected_folder(resolved_path: str) -> Optional[str]:
+    """The credential folder *resolved_path* sits in, whatever the allowed scope."""
+    from gaia import security
+
+    for folder in security.SECRET_DIRECTORIES:
+        if security._path_is_within(Path(resolved_path), Path(folder)):
+            return folder
+    return None
+
+
 def _grant_route(binary: str, skill_manager: Any) -> str:
     """How to actually get *binary* granted, naming the skill where one exists.
 
@@ -2593,6 +2603,9 @@ class ShellToolsMixin:
         operands really are remote — a granted 'git'/'python' still gets
         scanned.
 
+        A credential folder (``security.SECRET_DIRECTORIES``) is refused even
+        inside the allowed paths.
+
         An environment assignment's value is held to the same rule on EVERY
         segment, granted or not — it is never a remote id, and a value like
         ``PYTHONPATH`` decides which code the command imports.
@@ -2637,6 +2650,18 @@ class ShellToolsMixin:
             return None
         if candidate_path.startswith(("http://", "https://", "git://", "ssh://")):
             return None
+        # A shell or script may expand '~' and '$HOME'; check both readings.
+        expanded = os.path.expandvars(os.path.expanduser(candidate_path))
+        for path in dict.fromkeys((candidate_path, expanded)):
+            refusal = self._resolved_path_refusal(label, arg, path, cwd)
+            if refusal:
+                return refusal
+        return None
+
+    def _resolved_path_refusal(
+        self, label: str, arg: str, candidate_path: str, cwd: str
+    ) -> Optional[Dict[str, Any]]:
+        """Refuse *candidate_path* when it resolves outside the allowed paths."""
         try:
             resolved_path = str(Path(cwd).joinpath(candidate_path).resolve())
         except (OSError, ValueError) as exc:
@@ -2652,6 +2677,18 @@ class ShellToolsMixin:
                 ),
                 "has_errors": True,
                 "hint": "Pass a plain path inside an allowed folder.",
+            }
+        protected = _protected_folder(resolved_path)
+        if protected is not None:
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": (
+                    f"Access denied: {label} '{arg}' resolves to '{resolved_path}', "
+                    f"inside the protected folder '{protected}'. Shell commands "
+                    "may not read or write it, even inside the allowed paths."
+                ),
+                "has_errors": True,
             }
         if not self.path_validator.is_path_allowed(resolved_path):
             return {
