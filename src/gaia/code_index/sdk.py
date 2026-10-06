@@ -8,9 +8,9 @@ Reuses GAIA's Lemonade Server embedding infrastructure (AMD NPU/GPU accelerated)
 and FAISS for vector similarity search.
 """
 
+import fnmatch
 import hashlib
 import json
-import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -19,9 +19,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
+from gaia.logger import get_logger
+from gaia.security import PathValidator
 from gaia.tool_cancellation import raise_if_cancelled
-
-log = logging.getLogger(__name__)
 
 _MISSING_DEPS_MSG = (
     "code_index dependencies missing. Install with: pip install -e '.[rag]'"
@@ -57,6 +57,28 @@ def _is_sensitive_file(filename: str) -> bool:
         return True
     ext = os.path.splitext(name)[1]
     return ext in _SENSITIVE_EXTENSIONS
+
+
+def _gitignored(rel_path: str, is_dir: bool, patterns: List[str]) -> bool:
+    """Whether *rel_path* (POSIX, repo-relative) matches a ``.gitignore`` pattern.
+
+    Covers the common subset: ``dir/`` matches directories only, a leading or
+    inner ``/`` anchors the pattern to the repo root, anything else matches the
+    basename at any depth. Negation (``!``) is not supported and is skipped.
+    """
+    name = rel_path.rsplit("/", 1)[-1]
+    for pattern in patterns:
+        if pattern.startswith("!"):
+            continue
+        dir_only = pattern.endswith("/")
+        core = pattern.rstrip("/")
+        anchored = "/" in core
+        core = core.lstrip("/")
+        if not core or (dir_only and not is_dir):
+            continue
+        if fnmatch.fnmatch(rel_path if anchored else name, core):
+            return True
+    return False
 
 
 @dataclass
@@ -144,7 +166,7 @@ class CodeIndexSDK:
 
     def __init__(self, config: CodeIndexConfig):
         self.config = config
-        self.log = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.log = get_logger(f"{__name__}.{self.__class__.__name__}")
 
         # Validate repo path
         repo = Path(config.repo_path).resolve()
@@ -154,13 +176,7 @@ class CodeIndexSDK:
             raise ValueError(f"repo_path is not a directory: {config.repo_path}")
         self._repo_root = repo
 
-        # PathValidator scoped to repo root
-        try:
-            from gaia.security import PathValidator
-
-            self._path_validator = PathValidator(allowed_paths=[str(self._repo_root)])
-        except ImportError:
-            self._path_validator = None
+        self._path_validator = PathValidator(allowed_paths=[str(self._repo_root)])
 
         # Cache directory
         self._cache_dir = Path(config.cache_dir).expanduser() / self._repo_hash()
@@ -578,8 +594,6 @@ class CodeIndexSDK:
         Walk the repository, respecting .gitignore patterns and size/binary limits.
         Returns absolute file paths and whether a scan limit stopped the walk.
         """
-        import fnmatch
-
         # Read .gitignore patterns
         ignore_patterns = self._read_gitignore_patterns()
 
@@ -667,7 +681,7 @@ class CodeIndexSDK:
                 if d not in always_skip
                 and not d.endswith(".egg-info")
                 and not d.startswith(".")
-                and not any(fnmatch.fnmatch(d, p) for p in ignore_patterns)
+                and not _gitignored((rel_root / d).as_posix(), True, ignore_patterns)
             ]
 
             # Counted AFTER pruning, so node_modules/.git and gitignored
@@ -697,7 +711,7 @@ class CodeIndexSDK:
                     continue
 
                 # Check gitignore patterns
-                if any(fnmatch.fnmatch(rel_path, p) for p in ignore_patterns):
+                if _gitignored((rel_root / fname).as_posix(), False, ignore_patterns):
                     continue
 
                 # Check size
@@ -734,21 +748,25 @@ class CodeIndexSDK:
         patterns = []
         if gitignore.exists():
             try:
-                for line in gitignore.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        patterns.append(line)
-            except OSError:
-                pass
+                text = gitignore.read_text(encoding="utf-8", errors="replace")
+            except OSError as error:
+                # Indexing without it would embed files the repo marks ignored.
+                raise RuntimeError(
+                    f"Could not read {gitignore}: {error}. Fix its permissions "
+                    "and retry; the code index will not scan without it."
+                ) from error
+            for line in text.splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    patterns.append(line)
         return patterns
 
     def _read_file_safe(self, file_path: str) -> Optional[str]:
         """Read text; return None for absent/policy-skipped files, raise I/O errors."""
         # Validate the path is within the repo root
-        if self._path_validator is not None:
-            if not self._path_validator.is_path_allowed(file_path, prompt_user=False):
-                self.log.warning(f"Path outside allowed scope: {file_path}")
-                return None
+        if not self._path_validator.is_path_allowed(file_path, prompt_user=False):
+            self.log.warning(f"Path outside allowed scope: {file_path}")
+            return None
 
         try:
             with open(file_path, "rb") as f:

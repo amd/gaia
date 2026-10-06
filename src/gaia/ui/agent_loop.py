@@ -474,6 +474,7 @@ class AgentLoop:
 
                 _helpers._restore_model_history(agent, db, session_id, tick_prompt)
 
+                # A private chat stays private; a tick must not switch memory on.
                 _helpers._apply_memory_state(agent, session, db)
 
                 # Also replaces a prior streaming turn's fired cancel event.

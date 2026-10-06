@@ -36,7 +36,6 @@ _INTENTIONALLY_UNDOCUMENTED = {
     ("email", "autonomy", "resume"),
     ("email", "autonomy", "run"),
     ("email", "autonomy", "set-level"),
-    ("email", "autonomy", "status"),
     ("email", "autonomy", "trust"),
 }
 

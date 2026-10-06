@@ -658,8 +658,10 @@ async def preview_file(path: str, lines: int = 50):
                                 result["columns"] = header
                                 row_count = sum(1 for _ in reader)
                                 result["row_count"] = row_count
-                    except Exception:
-                        pass
+                    except (OSError, csv_mod.Error, UnicodeError) as exc:
+                        logger.warning(
+                            "CSV preview of %s has no column info: %s", resolved, exc
+                        )
                 break
             except (UnicodeDecodeError, UnicodeError):
                 continue

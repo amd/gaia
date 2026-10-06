@@ -394,14 +394,31 @@ def test_extract_non_pdf_image_with_schema(extractor, tmp_path):
     assert result["pages"][0]["fields"] == {"total_cost": 42.0}
 
 
-def test_extract_skips_page_with_no_image_bytes(extractor, tmp_path):
+def test_extract_reports_page_with_no_image_bytes_as_failed(extractor, tmp_path):
     image_path = tmp_path / "empty.png"
-    image_path.write_bytes(b"")  # doc_path.read_bytes() -> b"" -> falsy -> skipped
+    image_path.write_bytes(b"")
 
     result = extractor.extract(str(image_path))
 
-    assert result["metadata"]["pages_processed"] == 0
-    assert result["pages"] == []
+    assert result["metadata"]["pages_failed"] == [1]
+    assert result["pages"] == [
+        {"page": 1, "error": "page could not be rendered to an image"}
+    ]
+    extractor.vlm.extract_from_image.assert_not_called()
+
+
+@pytest.mark.parametrize("pages", ["0", "4", "2-5", "3-2", "0-1"])
+def test_parse_page_range_out_of_bounds_raises(extractor, pages):
+    with pytest.raises(ValueError, match="outside the document"):
+        extractor._parse_page_range(pages, 3)
+
+
+def test_extract_refuses_pages_beyond_the_document(extractor, tmp_path):
+    image_path = tmp_path / "page.png"
+    image_path.write_bytes(b"fake-png-bytes")
+
+    with pytest.raises(ValueError, match="1 page"):
+        extractor.extract(str(image_path), pages="2")
 
 
 def test_extract_pdf_multipage_aggregates_timeline(extractor, tmp_path, mocker):

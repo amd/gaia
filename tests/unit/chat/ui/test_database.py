@@ -842,3 +842,104 @@ class TestScheduledTaskStorage:
                 f"r-{i}", "t-1", f"2026-06-09T0{i}:00:00+00:00", str(i), None
             )
         assert len(db.get_schedule_results("t-1", limit=2)) == 2
+
+
+# The chat schema shipped in the first Agent UI release (#428).
+_V1_SCHEMA = """
+CREATE TABLE documents (
+    id TEXT PRIMARY KEY, filename TEXT NOT NULL, filepath TEXT NOT NULL,
+    file_hash TEXT UNIQUE NOT NULL, file_size INTEGER DEFAULT 0,
+    chunk_count INTEGER DEFAULT 0, indexed_at TEXT DEFAULT (datetime('now')),
+    last_accessed_at TEXT
+);
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'New Chat',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    model TEXT NOT NULL DEFAULT 'Qwen3-Coder-30B-A3B-Instruct-GGUF',
+    system_prompt TEXT
+);
+CREATE TABLE session_documents (
+    session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+    document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
+    attached_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (session_id, document_id)
+);
+CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+    role TEXT CHECK(role IN ('user', 'assistant', 'system')) NOT NULL,
+    content TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')),
+    rag_sources TEXT, agent_steps TEXT,
+    tokens_prompt INTEGER, tokens_completion INTEGER
+);
+CREATE INDEX idx_messages_session ON messages(session_id, created_at);
+"""
+
+
+class TestUpgradeFromFirstRelease:
+    """A database from the first release upgrades without losing anything."""
+
+    @pytest.fixture
+    def v1_path(self, tmp_path):
+        path = str(tmp_path / "v1.db")
+        conn = sqlite3.connect(path)
+        conn.executescript(_V1_SCHEMA)
+        conn.execute("INSERT INTO sessions (id, title) VALUES ('s1', 'Trip plan')")
+        conn.executemany(
+            "INSERT INTO messages (session_id, role, content) VALUES ('s1', ?, ?)",
+            [("user", "m1"), ("assistant", "m2"), ("user", "m3")],
+        )
+        conn.execute("DELETE FROM messages WHERE id = 3")
+        conn.execute(
+            "INSERT INTO documents (id, filename, filepath, file_hash) "
+            "VALUES ('d1', 'a.pdf', '/a.pdf', 'h1')"
+        )
+        conn.execute("INSERT INTO session_documents VALUES ('s1', 'd1', '2025-01-01')")
+        conn.commit()
+        conn.close()
+        return path
+
+    def test_rows_survive_and_reopening_is_a_no_op(self, v1_path):
+        ChatDatabase(v1_path).close()
+        database = ChatDatabase(v1_path)
+        try:
+            messages = database.get_messages("s1")
+            assert [(m["id"], m["content"]) for m in messages] == [
+                (1, "m1"),
+                (2, "m2"),
+            ]
+            session = database.get_session("s1")
+            assert session["document_ids"] == ["d1"]
+            assert session["title_is_custom"] == 1
+            assert database.get_document("d1")["indexing_status"] == "complete"
+            # AUTOINCREMENT survives the table rebuild: a deleted id is never reused.
+            assert database.add_message("s1", "autonomous", "tick") == 4
+        finally:
+            database.close()
+
+    def test_rebuilt_messages_table_keeps_cascade_and_index(self, v1_path):
+        database = ChatDatabase(v1_path)
+        try:
+            index = database._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name = 'idx_messages_session'"
+            ).fetchone()
+            assert index is not None
+            database.delete_session("s1")
+            count = database._conn.execute("SELECT COUNT(*) FROM messages")
+            assert count.fetchone()[0] == 0
+        finally:
+            database.close()
+
+
+def test_a_failed_migration_stops_startup(tmp_path):
+    """A column that cannot be added is a startup error, not a debug line."""
+    path = str(tmp_path / "clash.db")
+    conn = sqlite3.connect(path)
+    # SQLite column names are case-insensitive, so adding "private" collides.
+    conn.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, Private INTEGER)")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match=r"sessions\.private"):
+        ChatDatabase(path)

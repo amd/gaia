@@ -844,3 +844,43 @@ class TestAbandonedBuild:
                 set_tool_cancel_event(None)
 
         assert calls == [25]
+
+
+class TestGitignoreDirectoryPatterns:
+    """Directory entries written the usual way (``dir/``, ``/dir``) are honored."""
+
+    def test_trailing_and_leading_slash_patterns_skip_the_directory(self, tmp_path):
+        skip_if_unavailable()
+        (tmp_path / ".gitignore").write_text(
+            "secrets/\n/generated\nlogs/*.py\n!keep.py\n", encoding="utf-8"
+        )
+        for rel in (
+            "secrets/a.py",
+            "generated/b.py",
+            "logs/c.py",
+            "src/generated/d.py",
+            "src/ok.py",
+        ):
+            path = tmp_path / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("x = 1\n", encoding="utf-8")
+
+        sdk = CodeIndexSDK(
+            CodeIndexConfig(repo_path=str(tmp_path), cache_dir=str(tmp_path / "c"))
+        )
+        files, _ = sdk._discover_files()
+        found = sorted(Path(f).relative_to(tmp_path).as_posix() for f in files)
+
+        # '/generated' is anchored to the root, so src/generated stays indexed.
+        assert found == ["src/generated/d.py", "src/ok.py"]
+
+    def test_dir_only_pattern_does_not_hide_a_same_named_file(self, tmp_path):
+        skip_if_unavailable()
+        (tmp_path / ".gitignore").write_text("build.py/\n", encoding="utf-8")
+        (tmp_path / "build.py").write_text("x = 1\n", encoding="utf-8")
+
+        sdk = CodeIndexSDK(
+            CodeIndexConfig(repo_path=str(tmp_path), cache_dir=str(tmp_path / "c"))
+        )
+        files, _ = sdk._discover_files()
+        assert [Path(f).name for f in files] == ["build.py"]
