@@ -17,16 +17,6 @@ requires-python = ">=3.10"
 # gaia.agents.registry.get_embedding_model_for_device, imported at agent
 # start (#2112). tests/test_chat_dependency_floor.py guards this floor.
 #
-# NOTE: main also imports `gaia.config.gaia_home` (added in #4381), which
-# the last release (0.24.1) does NOT export. The floor cannot be bumped to
-# express that until the core containing #4381 is released -- a dependency
-# declaration may only name a released version, and bumping it early makes
-# the wheel uninstallable (see email's tests/test_dependency_floor.py note).
-# Until then a mismatched core surfaces as an ImportError at agent start;
-# gaia.agents.install_hints.agent_import_error_message reports that as a
-# version skew instead of a missing package. Bump this floor to the first
-# release containing #4381 once it ships.
-#
 # Intentionally bare `amd-gaia` (no `[rag]` extras marker): a plain
 # `pip install gaia-agent-chat` must not implicitly pull faiss/pymupdf/
 # sentence-transformers just to import ChatAgent. RAG's real dependencies
