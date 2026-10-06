@@ -267,6 +267,47 @@ def test_a_denied_host_is_denied_through_every_client(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "command, written",
+    [
+        ("mkdir zz-out", "zz-out/.keep"),
+        ("mkdir -p zz-out", "zz-out/.keep"),
+        ("md zz-out", "zz-out/.keep"),
+        ("New-Item -ItemType Directory -Path zz-out", "zz-out/.keep"),
+        ("touch zz-out/.keep", "zz-out/.keep"),
+        ("cp notes.txt zz-out/notes.txt", "zz-out/notes.txt"),
+        ("echo hi | tee zz-out/log.txt", "zz-out/log.txt"),
+    ],
+)
+def test_a_denied_create_blocks_writing_the_same_place(command, written, tmp_path):
+    assert _overlaps(
+        "run_shell_command",
+        _shell(command),
+        "write_file",
+        {"file_path": written, "content": "x", "create_dirs": True},
+        tmp_path,
+    )
+
+
+def test_a_denied_mkdir_with_a_quoted_windows_path_blocks_the_folder(tmp_path):
+    folder = tmp_path / "home" / "zz-release-check"
+    denied = _shell(f'mkdir "{folder}"')
+    assert _overlaps(
+        "run_shell_command",
+        denied,
+        "write_file",
+        {"file_path": str(folder / ".keep"), "content": "x", "create_dirs": True},
+        tmp_path,
+    )
+    assert not _overlaps(
+        "run_shell_command",
+        denied,
+        "write_file",
+        {"file_path": str(tmp_path / "elsewhere.txt"), "content": "x"},
+        tmp_path,
+    )
+
+
 def test_a_denied_file_is_denied_through_the_shell_too(tmp_path):
     denied = {"file_path": "notes/todo.txt", "content": "x"}
     assert _overlaps(
