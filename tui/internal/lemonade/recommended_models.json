@@ -63,6 +63,12 @@
       "provider": "fireworks",
       "label": "DeepSeek V4 Pro",
       "note": "most truthful"
+    },
+    {
+      "id": "amd.DeepSeek-V4.1-Flash",
+      "provider": "amd",
+      "label": "DeepSeek V4.1 Flash",
+      "note": "default · fastest, streams"
     }
   ]
 }
