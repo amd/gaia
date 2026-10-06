@@ -639,6 +639,16 @@ export function MemoryDashboard() {
 
     // ── Knowledge CRUD handlers ─────────────────────────────────────────
 
+    // Every panel that shows a memory: a changed due date or entity moves it
+    // in Upcoming and the entity filter, not just in the table.
+    const refreshKnowledgeViews = useCallback(() => {
+        loadKnowledge();
+        loadStats();
+        loadEmbeddingCoverage();
+        loadUpcoming();
+        loadEntities();
+    }, [loadKnowledge, loadStats, loadEmbeddingCoverage, loadUpcoming, loadEntities]);
+
     const handleCreateKnowledge = useCallback(async () => {
         if (!formData.content.trim()) return;
         try {
@@ -653,9 +663,7 @@ export function MemoryDashboard() {
             });
             setShowAddForm(false);
             setFormData({ content: '', category: 'fact', domain: '', context: 'global', entity: '', sensitive: false, due_at: '' });
-            loadKnowledge();
-            loadStats();
-            loadEmbeddingCoverage();
+            refreshKnowledgeViews();
             log.ui.info('Created new knowledge entry');
             if (created?.embedded === false) showToast(created.embed_error ?? 'Saved, but not embedded', 'error');
             else showToast('Memory created successfully', 'success');
@@ -663,7 +671,7 @@ export function MemoryDashboard() {
             log.system.error('Failed to create knowledge', err);
             showToast('Failed to create memory', 'error');
         }
-    }, [formData, loadKnowledge, loadStats, loadEmbeddingCoverage, showToast]);
+    }, [formData, refreshKnowledgeViews, showToast]);
 
     const handleEditKnowledge = useCallback(async () => {
         if (!editingId || !formData.content.trim()) return;
@@ -679,8 +687,7 @@ export function MemoryDashboard() {
             });
             setEditingId(null);
             setFormData({ content: '', category: 'fact', domain: '', context: 'global', entity: '', sensitive: false, due_at: '' });
-            loadKnowledge();
-            loadEmbeddingCoverage();
+            refreshKnowledgeViews();
             log.ui.info(`Updated knowledge ${editingId}`);
             if (updated?.embedded === false) showToast(updated.embed_error ?? 'Saved, but not embedded', 'error');
             else showToast('Memory updated', 'success');
@@ -688,7 +695,7 @@ export function MemoryDashboard() {
             log.system.error('Failed to update knowledge', err);
             showToast('Failed to update memory', 'error');
         }
-    }, [editingId, formData, loadKnowledge, loadEmbeddingCoverage, showToast]);
+    }, [editingId, formData, refreshKnowledgeViews, showToast]);
 
     const handleDeleteKnowledge = useCallback(async (id: string) => {
         if (confirmDeleteId !== id) {
@@ -698,16 +705,14 @@ export function MemoryDashboard() {
         setConfirmDeleteId(null);
         try {
             await memoryApi.deleteKnowledge(id);
-            loadKnowledge();
-            loadStats();
-            loadEmbeddingCoverage();
+            refreshKnowledgeViews();
             log.ui.info(`Deleted knowledge ${id}`);
             showToast('Memory deleted', 'info');
         } catch (err) {
             log.system.error('Failed to delete knowledge', err);
             showToast('Failed to delete memory', 'error');
         }
-    }, [confirmDeleteId, loadKnowledge, loadStats, loadEmbeddingCoverage, showToast]);
+    }, [confirmDeleteId, refreshKnowledgeViews, showToast]);
 
     useEffect(() => {
         if (!confirmDeleteId) return;

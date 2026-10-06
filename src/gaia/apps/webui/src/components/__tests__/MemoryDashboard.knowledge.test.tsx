@@ -72,6 +72,25 @@ describe('MemoryDashboard knowledge rows', () => {
         expect(mockedApi.deleteKnowledge).toHaveBeenCalledWith('k1');
     });
 
+    it('drops a deleted reminder from Upcoming and the entity filter', async () => {
+        const user = userEvent.setup();
+        const reminder = { ...ENTRY, id: 'k1', category: 'reminder', content: 'Dentist Thursday 3:30pm', entity: 'person:Dr. Okonkwo', due_at: '2026-10-08T15:30:00-07:00' };
+        mockedApi.getKnowledge.mockResolvedValue({ items: [{ ...ENTRY, content: 'Prefers dark mode' }], total: 1, offset: 0, limit: 25 });
+        mockedApi.getUpcomingItems.mockResolvedValueOnce([reminder]);
+        mockedApi.getEntities.mockResolvedValueOnce([{ entity: 'person:Dr. Okonkwo', count: 1 }]);
+        const row = await renderTable();
+        expect(await screen.findByText('Dentist Thursday 3:30pm')).toBeInTheDocument();
+        const upcomingCalls = mockedApi.getUpcomingItems.mock.calls.length;
+        const entityCalls = mockedApi.getEntities.mock.calls.length;
+
+        await user.click(within(row).getByRole('button', { name: 'Delete memory' }));
+        await user.click(within(row).getByRole('button', { name: 'Confirm delete memory' }));
+
+        await waitFor(() => expect(mockedApi.getUpcomingItems.mock.calls.length).toBeGreaterThan(upcomingCalls));
+        expect(mockedApi.getEntities.mock.calls.length).toBeGreaterThan(entityCalls);
+        await waitFor(() => expect(screen.queryByText('Dentist Thursday 3:30pm')).not.toBeInTheDocument());
+    });
+
     it('refreshes the embedded indicator after an edit', async () => {
         const user = userEvent.setup();
         mockedApi.editKnowledge.mockResolvedValue({ status: 'updated', knowledge_id: 'k1', embedded: true });
