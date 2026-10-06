@@ -6,16 +6,18 @@ import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { useAttachments } from '../hooks/useAttachments';
+import { useChatStore } from '../stores/chatStore';
+import { STARTING_REASON } from '../utils/constants';
 import './NewChat.css';
 
 interface NewChatProps {
     /** Creates the chat and sends the first message; rejects with the reason it could not. */
     onSend: (text: string) => Promise<void>;
-    disabledReason?: string | null;
 }
 
 /** An empty chat: just the composer. The chat is created on the first message. */
-export function NewChat({ onSend, disabledReason }: NewChatProps) {
+export function NewChat({ onSend }: NewChatProps) {
+    const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
     const [text, setText] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [sending, setSending] = useState(false);
@@ -45,7 +47,7 @@ export function NewChat({ onSend, disabledReason }: NewChatProps) {
                     onChange={setText}
                     onSubmit={submit}
                     attachments={attachments}
-                    disabledReason={disabledReason ?? (sending ? 'Starting the chat…' : null)}
+                    disabledReason={starting ? STARTING_REASON : sending ? 'Starting the chat…' : null}
                     autoFocus
                     leftControls={<PermissionModeChip sessionId={null} />}
                     rightControls={<ModelChip />}

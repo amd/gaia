@@ -100,7 +100,6 @@ interface ChatState {
     isStreaming: boolean;
     streamingContent: string;
     setStreaming: (streaming: boolean) => void;
-    appendStreamContent: (content: string) => void;
     setStreamContent: (content: string) => void;
     clearStreamContent: () => void;
     /** Atomically clear all streaming state (streaming flag, content, steps).
@@ -171,7 +170,6 @@ interface ChatState {
     setDraftPermissionMode: (mode: PermissionMode) => void;
     /** Adopt the configured default; an untouched draft follows it. */
     setDefaultPermissionMode: (mode: PermissionMode) => void;
-    toggleSidebar: () => void;
     setSidebarOpen: (open: boolean) => void;
     toggleSidebarCollapsed: () => void;
     setSidebarCollapsed: (collapsed: boolean) => void;
@@ -256,8 +254,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     isStreaming: false,
     streamingContent: '',
     setStreaming: (streaming) => set({ isStreaming: streaming }),
-    appendStreamContent: (content) =>
-        set((state) => ({ streamingContent: state.streamingContent + content })),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
     resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null }),
@@ -367,7 +363,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
             draftPermissionMode:
                 state.draftPermissionMode === state.defaultPermissionMode ? mode : state.draftPermissionMode,
         })),
-    toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     toggleSidebarCollapsed: () =>
         set((state) => {

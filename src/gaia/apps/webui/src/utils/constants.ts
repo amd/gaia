@@ -18,3 +18,6 @@ export const DOWNLOAD_SPINNER_TIMEOUT_MS = 1_800_000;
 
 /** Polling interval (ms) for checking model operation completion. */
 export const MODEL_POLL_INTERVAL_MS = 10_000;
+
+/** Composer text while the backend runs its boot tasks; sending waits until they finish. */
+export const STARTING_REASON = 'GAIA is starting…';
