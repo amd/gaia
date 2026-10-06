@@ -374,6 +374,38 @@ It reads `.env` (gitignored) or the environment, writes probes under
 still cannot prove the credential works **from GitHub's runners** — a token with
 Client IP Address Filtering passes locally and fails in CI.
 
+### Release candidates
+
+A release can go out as a candidate first, so testers get the exact build before
+it becomes what `pip install amd-gaia` and the website hand everyone. Tag
+`vX.Y.Z-rcN` on a commit whose `src/gaia/version.py` already says `X.Y.Z` (the
+release PR has landed); `publish.yml` runs the usual pipeline, behind the same
+approval, and keeps the result off every stable channel:
+
+- **GitHub** — a pre-release, never marked latest, with the desktop app
+  installers, the terminal binaries, and the wheel attached.
+- **PyPI** — `X.Y.ZrcN`. `pip install amd-gaia` skips it; `pip install --pre amd-gaia`
+  or `amd-gaia==X.Y.ZrcN` gets it.
+- **npm** — `@amd-gaia/agent-ui@X.Y.Z-rc.N` under the `next` dist-tag; `latest`
+  does not move.
+- **Website** — a collapsed "Try the release candidate" entry under the stable
+  downloads, shown only while the candidate is newer than the latest release.
+- **Not published** — Agent Hub components (the catalog has no pre-release
+  channel), the one-step Windows setup, and the terminal's `.pkg`/`.deb`/`.rpm`
+  packages. No Context7 refresh.
+
+The candidate reuses the final's release notes (`docs/releases/vX.Y.Z.mdx`), and
+the `-rcN` suffix is stamped from the tag at build time, so the final `vX.Y.Z`
+can be tagged on the same commit once testing passes. Check a tag before pushing
+it:
+
+```bash
+python util/release_tag.py classify v0.25.0-rc1
+```
+
+The full sequence (RC, test pass, `-rc2` if needed, final) is the RC phase of the
+`gaia-release` skill in `.claude/skills/gaia-release/SKILL.md`.
+
 ### Real-World Testing with Claude Code
 
 Unit and integration tests prove code paths; they don't prove a feature works

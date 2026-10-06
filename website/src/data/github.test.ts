@@ -11,7 +11,10 @@ import {
   formatCount,
   formatRelativeDate,
   isMainReleaseTag,
+  isReleaseCandidateTag,
+  pickReleaseCandidate,
   sumAssetDownloads,
+  type GithubRelease,
 } from './github';
 
 describe('isMainReleaseTag', () => {
@@ -138,5 +141,96 @@ describe('getReleaseStats — pagination and error handling', () => {
 
     const mod = await import('./github');
     await expect(mod.getReleaseStats()).rejects.toThrow(/\[github\].*releases.*HTTP 403/s);
+  });
+});
+
+describe('pickReleaseCandidate', () => {
+  const asset = (name: string) => ({
+    name,
+    browser_download_url: `https://github.com/amd/gaia/releases/download/x/${name}`,
+    size: 100_000_000,
+    download_count: 0,
+  });
+
+  function release(tag: string, prerelease: boolean, overrides: Partial<GithubRelease> = {}): GithubRelease {
+    return {
+      tag_name: tag,
+      draft: false,
+      prerelease,
+      published_at: '2026-10-01T00:00:00Z',
+      html_url: `https://github.com/amd/gaia/releases/tag/${tag}`,
+      assets: [],
+      ...overrides,
+    };
+  }
+
+  const STABLE = release('v0.24.1', false);
+  const RC1 = release('v0.25.0-rc1', true, {
+    assets: [
+      asset('gaia-agent-ui-0.25.0-rc.1-x64-setup.exe'),
+      asset('gaia-agent-ui-0.25.0-rc.1-arm64.dmg'),
+      asset('gaia-agent-ui-0.25.0-rc.1-arm64.dmg.blockmap'),
+      asset('gaia-agent-ui-0.25.0-rc.1-x86_64.AppImage'),
+      asset('gaia-agent-ui-0.25.0-rc.1-amd64.deb'),
+      asset('amd_gaia-0.25.0rc1-py3-none-any.whl'),
+      asset('gaia-linux-amd64'),
+    ],
+  });
+
+  it('recognises only the vX.Y.Z-rcN tag form', () => {
+    expect(isReleaseCandidateTag('v0.25.0-rc1')).toBe(true);
+    expect(isReleaseCandidateTag('v0.25.0-rc12')).toBe(true);
+    expect(isReleaseCandidateTag('v0.25.0')).toBe(false);
+    expect(isReleaseCandidateTag('v0.25.0-rc0')).toBe(false);
+    expect(isReleaseCandidateTag('v0.25.0-beta1')).toBe(false);
+    // The release stream counts main releases only; an RC is never one.
+    expect(isMainReleaseTag('v0.25.0-rc1')).toBe(false);
+  });
+
+  it('offers a candidate newer than the latest stable, with its desktop installers', () => {
+    const rc = pickReleaseCandidate([RC1, STABLE]);
+    expect(rc).not.toBeNull();
+    expect(rc!.tag).toBe('v0.25.0-rc1');
+    expect(rc!.version).toBe('0.25.0');
+    expect(rc!.htmlUrl).toBe('https://github.com/amd/gaia/releases/tag/v0.25.0-rc1');
+    // Installers in a fixed order; the blockmap, wheel and raw binary are left
+    // to the release page.
+    expect(rc!.downloads.map((d) => d.url.split('/').at(-1))).toEqual([
+      'gaia-agent-ui-0.25.0-rc.1-x64-setup.exe',
+      'gaia-agent-ui-0.25.0-rc.1-arm64.dmg',
+      'gaia-agent-ui-0.25.0-rc.1-x86_64.AppImage',
+      'gaia-agent-ui-0.25.0-rc.1-amd64.deb',
+    ]);
+  });
+
+  it('is hidden once the final for that version has shipped', () => {
+    expect(pickReleaseCandidate([release('v0.25.0', false), RC1, STABLE])).toBeNull();
+  });
+
+  it('is hidden when there is no release candidate at all', () => {
+    expect(pickReleaseCandidate([STABLE, release('v0.24.0', false)])).toBeNull();
+  });
+
+  it('picks the newest candidate by version, not by list order', () => {
+    const rc2 = release('v0.25.0-rc2', true);
+    const rc10 = release('v0.25.0-rc10', true);
+    expect(pickReleaseCandidate([RC1, rc10, rc2, STABLE])!.tag).toBe('v0.25.0-rc10');
+  });
+
+  it('ignores drafts, and RC-named releases not marked as pre-releases', () => {
+    expect(pickReleaseCandidate([{ ...RC1, draft: true }, STABLE])).toBeNull();
+    expect(pickReleaseCandidate([{ ...RC1, prerelease: false }, STABLE])).toBeNull();
+  });
+
+  it('compares against a four-part hotfix as a newer stable', () => {
+    const hotfix = release('v0.25.0.1', false);
+    expect(pickReleaseCandidate([hotfix, RC1])).toBeNull();
+  });
+
+  it('still offers a candidate with no installers attached, via its release page', () => {
+    const bare = release('v0.25.0-rc1', true);
+    const rc = pickReleaseCandidate([bare, STABLE]);
+    expect(rc!.downloads).toEqual([]);
+    expect(rc!.htmlUrl).toContain('v0.25.0-rc1');
   });
 });

@@ -1367,6 +1367,15 @@ function resolveBackendVersion(opts = {}) {
 }
 
 /**
+ * The PEP 440 spelling of the app's npm version: `0.25.0-rc.1` -> `0.25.0rc1`.
+ * pip pins and `gaia --version` use this form; a final version is unchanged.
+ */
+function toPep440(version) {
+  if (!version) return version;
+  return version.replace(/^(\d+\.\d+\.\d+)-rc\.(\d+)$/, "$1rc$2");
+}
+
+/**
  * Install the GAIA Python backend from scratch.
  *
  * opts:
@@ -1389,7 +1398,7 @@ async function installBackend(opts = {}) {
   const localWheel = process.env.GAIA_LOCAL_WHEEL || null;
   const pipPackage = localWheel
     ? `${localWheel}[ui]`
-    : `amd-gaia[ui]==${version}`;
+    : `amd-gaia[ui]==${toPep440(version)}`;
   const skipGaiaInit =
     Boolean(opts.skipGaiaInit) || isTruthyEnv(process.env.GAIA_SKIP_GAIA_INIT);
 
@@ -1668,7 +1677,9 @@ function getInstalledVersion(gaiaBin) {
       windowsHide: true,
     });
     if (result.status === 0 && result.stdout) {
-      const match = result.stdout.toString().trim().match(/(\d+\.\d+\.\d+)/);
+      // Keep an rcN suffix: truncating it would let a release candidate's
+      // backend pass for the final's and never be upgraded.
+      const match = result.stdout.toString().trim().match(/(\d+\.\d+\.\d+(?:rc\d+)?)/);
       return match ? match[1] : null;
     }
   } catch {
@@ -1768,7 +1779,7 @@ async function ensureBackend(opts = {}) {
     const existingBin = findGaiaBin();
     if (existingBin) {
       const installedVersion = getInstalledVersion(existingBin);
-      if (expectedVersion !== null && installedVersion === expectedVersion) {
+      if (expectedVersion !== null && installedVersion === toPep440(expectedVersion)) {
         log(
           `GAIA backend already installed at version ${installedVersion} — nothing to do`
         );
@@ -1835,6 +1846,7 @@ module.exports = {
   ensureBackend,
   getInstalledVersion,
   findGaiaBin,
+  toPep440,
 
   // Pre-checks
   runPreChecks,

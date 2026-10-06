@@ -1,0 +1,73 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// The release candidate, for people who want to try the next release before it
+// ships. Deliberately quiet: collapsed, label-sized, and below the stable
+// downloads, which stay the default. Renders nothing unless there is a
+// candidate newer than the latest stable release (pickReleaseCandidate).
+//
+// The links come from the GitHub pre-release, not the hub catalog: the catalog
+// has no pre-release channel, and release candidates are never published to it.
+
+import { formatBytes } from '../data/catalog';
+import type { ReleaseCandidate } from '../data/github';
+
+interface Props {
+  candidate: ReleaseCandidate | null;
+  class?: string;
+}
+
+const { candidate, class: className = '' } = Astro.props;
+
+const COMMANDS = ['pip install --pre amd-gaia', 'npm i -g @amd-gaia/agent-ui@next'];
+---
+
+{candidate && (
+  <details data-release-candidate class:list={['mx-auto w-full max-w-[720px] text-left', className]}>
+    <summary class="g-label cursor-pointer list-none transition-colors hover:text-g-text">
+      Try the release candidate · {candidate.tag}
+    </summary>
+
+    <div class="mt-3 space-y-3">
+      <p class="g-body text-[13px]">
+        A pre-release of v{candidate.version} for testing before it ships. Expect rough
+        edges — the downloads above are the stable release.
+      </p>
+
+      {candidate.downloads.length > 0 && (
+        <ul class="space-y-1">
+          {candidate.downloads.map((d) => (
+            <li>
+              <a
+                href={d.url}
+                class="inline-flex items-baseline gap-2 text-[13px] text-g-muted transition-colors hover:text-g-accent-text"
+              >
+                <span class="text-g-accent-text" aria-hidden="true">↓</span>
+                <span>{d.label} · {formatBytes(d.sizeBytes)}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div class="space-y-1.5">
+        {COMMANDS.map((cmd) => (
+          <div tabindex="0" class="g-cmd-plain overflow-x-auto text-[12px]">
+            <span class="text-g-code-accent" aria-hidden="true">$</span>
+            <code class="whitespace-nowrap bg-transparent p-0">{cmd}</code>
+          </div>
+        ))}
+      </div>
+
+      <a
+        href={candidate.htmlUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="g-label inline-block text-g-gold-text hover:underline"
+      >
+        Every file and the release notes on GitHub →
+      </a>
+    </div>
+  </details>
+)}
