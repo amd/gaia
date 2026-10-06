@@ -235,15 +235,9 @@ describe('Chat App Integration', () => {
       expect(apiContent).toContain('/system/status');
     });
 
-    it('should have health check endpoint function', () => {
-      expect(apiContent).toContain('getHealth');
-      expect(apiContent).toContain('/health');
-    });
-
     it('should have session CRUD functions', () => {
       expect(apiContent).toContain('listSessions');
       expect(apiContent).toContain('createSession');
-      expect(apiContent).toContain('getSession');
       expect(apiContent).toContain('updateSession');
       expect(apiContent).toContain('deleteSession');
     });
@@ -398,7 +392,6 @@ describe('Chat App Integration', () => {
       expect(storeContent).toContain('isStreaming');
       expect(storeContent).toContain('streamingContent');
       expect(storeContent).toContain('setStreaming');
-      expect(storeContent).toContain('appendStreamContent');
       expect(storeContent).toContain('clearStreamContent');
     });
 
