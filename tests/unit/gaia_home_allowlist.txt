@@ -50,7 +50,6 @@ src/gaia/messaging/slack/onboarding.py:home_join 1
 src/gaia/messaging/telegram.py:tilde_path 2
 src/gaia/rag/sdk.py:home_join 1
 src/gaia/schedule/store.py:tilde_path 1
-src/gaia/scratchpad/service.py:tilde_path 1
 src/gaia/security.py:home_join 1
 src/gaia/skills/manager.py:home_join 1
 src/gaia/ui/routers/mcp.py:home_join 1

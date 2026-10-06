@@ -176,6 +176,14 @@ class StructuredVLMExtractor:
                 image_bytes = doc_path.read_bytes()
 
             if not image_bytes:
+                # pdf_page_to_image logged why; the page must still count as failed.
+                pages_data.append(
+                    {
+                        "page": page_num,
+                        "error": "page could not be rendered to an image",
+                    }
+                )
+                failed_pages.append(page_num)
                 continue
 
             # Extract data from page. One page that cannot be read is a failed
@@ -248,13 +256,21 @@ class StructuredVLMExtractor:
         return result
 
     def _parse_page_range(self, range_str: str, total_pages: int) -> List[int]:
-        """Internal: Parse page range string."""
-        if range_str.lower() == "all":
+        """Internal: Parse a 1-based page range string, refusing out-of-range pages."""
+        if range_str.strip().lower() == "all":
             return list(range(1, total_pages + 1))
         if "-" in range_str:
-            start, end = range_str.split("-")
-            return list(range(int(start.strip()), int(end.strip()) + 1))
-        return [int(range_str)]
+            start_text, end_text = range_str.split("-")
+            start, end = int(start_text.strip()), int(end_text.strip())
+        else:
+            start = end = int(range_str)
+        if start < 1 or end < start or end > total_pages:
+            raise ValueError(
+                f"Page range {range_str!r} is outside the document's "
+                f"{total_pages} page(s). Use 'all', a page number from 1 to "
+                f"{total_pages}, or a range such as '1-{total_pages}'."
+            )
+        return list(range(start, end + 1))
 
     def extract_table(
         self,

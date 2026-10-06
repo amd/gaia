@@ -183,8 +183,8 @@ class MyImageAgent(Agent, SDToolsMixin):
         )
 
         # Initialize SD tools (auto-registers generate_image, list_sd_models, etc.)
+        # Images save to ~/.gaia/cache/sd/images unless you pass output_dir=.
         self.init_sd(
-            output_dir=".gaia/cache/sd/images",
             default_model="SDXL-Turbo",  # Fast, good quality
         )
 

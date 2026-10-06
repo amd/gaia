@@ -61,6 +61,8 @@ whose bytes no longer match.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -222,7 +224,7 @@ class SkillLock:
                 name: self.entries[name].to_dict() for name in sorted(self.entries)
             },
         }
-        target.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        write_text_atomic(target, json.dumps(document, indent=2) + "\n")
         self.path = target
         log.debug("Wrote skill lock %s (%d entry/entries)", target, len(self.entries))
         return target
@@ -242,6 +244,22 @@ class SkillLock:
 
     def __contains__(self, name: object) -> bool:
         return name in self.entries
+
+
+def write_text_atomic(target: Path, text: str) -> None:
+    """Replace *target* with *text* so a crash never leaves a truncated file.
+
+    A half-written lock fails every later load, so the old file stays until the
+    new one is complete.
+    """
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp, target)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def lock_path(skills_root: Path) -> Path:
