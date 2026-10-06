@@ -475,10 +475,7 @@ class AgentLoop:
                 _helpers._restore_model_history(agent, db, session_id, tick_prompt)
 
                 # A private chat stays private; a tick must not switch memory on.
-                if hasattr(agent, "_incognito"):
-                    private = bool(session.get("private", 0))
-                    agent._incognito = _helpers._memory_off(session, db)
-                    agent._incognito_reason = "private" if private else "memory_off"
+                _helpers._apply_memory_state(agent, session, db)
 
                 # Also replaces a prior streaming turn's fired cancel event.
                 agent._cancel_event = cancel_event
