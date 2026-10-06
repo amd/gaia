@@ -1416,8 +1416,8 @@ _CLOUD_PROVIDERS: frozenset = frozenset()
 _CLOUD_LOCK = threading.Lock()
 
 # Gateway models observed to answer a streaming request with no tokens at all.
-# The AMD gateway currently does this for every model except Gemma-4-31B: a
-# stream returns 200 and then nothing, while the same prompt non-streaming
+# The AMD gateway does this for some models (Gemma-4-31B and DeepSeek-V4.1-Flash
+# stream): a stream returns 200 and then nothing, while the same prompt non-streaming
 # works. Nothing in the catalogue advertises this, so it can only be learned by
 # trying. Remembered so the empty stream is paid once per model, not per turn.
 _CLOUD_NON_STREAMING: set = set()
