@@ -771,8 +771,8 @@ navigation — consult it rather than a hand-maintained copy here. Where things 
 
 The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://amd-gaia.ai/roadmap)).
 Plan documents live in [`docs/plans/`](docs/plans/) (run `ls docs/plans/` for the full
-set — Agent UI, setup-wizard, security-model, email/calendar, messaging, autonomy-engine,
-agent-hub, skill-format, OEM bundling, desktop-installer, MCP, CUA, Docker, and more).
+set — security-model, messaging, autonomy-engine, daemon-convergence, skill-format,
+adaptive memory/skills/recovery, desktop-installer, browser-use, eval-hillclimbing, and more).
 Browse the directory rather than a partial list here.
 
 **Key architectural decisions (April 2026):**

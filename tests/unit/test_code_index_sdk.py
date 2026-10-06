@@ -535,7 +535,7 @@ class TestFailLoudly:
 # exception (e.g. the embedding model is still warming up). Previously this
 # silently degraded to a ~25x-slower one-by-one fallback (or, for the
 # query-encode path used by search(), silently returned an empty result
-# indistinguishable from "no matches found"). See docs/plans/code-index-review.mdx.
+# indistinguishable from "no matches found").
 # ---------------------------------------------------------------------------
 
 
