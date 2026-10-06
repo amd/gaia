@@ -915,6 +915,10 @@ _COMMAND_WRAPPERS = frozenset(
 _ENV_SPLIT = "env-split"
 _ENV_SPLIT_ATTACHED = "env-split-attached"
 
+#: Suffix on a position that may not be script after all: it is checked both
+#: as one path and word by word.
+_MAYBE = "?"
+
 #: Marks a ``-EncodedCommand`` operand, which is base64 of UTF-16LE PowerShell.
 _PS_ENCODED = "powershell-encoded"
 
@@ -1078,7 +1082,7 @@ def _wrapped_script_positions(argv: list) -> Dict[int, str]:
         if name not in _SCRIPT_DIALECTS and name not in _COMMAND_WRAPPERS:
             continue
         for index, dialect in _inline_script_positions(argv[start:]).items():
-            if positions.get(start + index, _SWITCH) == _SWITCH:
+            if positions.get(start + index, _SWITCH).rstrip(_MAYBE) == _SWITCH:
                 positions[start + index] = dialect
     if _interpreter_name(argv[0]) == "env":
         for index in range(1, len(argv)):
@@ -1086,7 +1090,8 @@ def _wrapped_script_positions(argv: list) -> Dict[int, str]:
             if split is not None:
                 attached = split[0] == index
                 positions[split[0]] = _ENV_SPLIT_ATTACHED if attached else _ENV_SPLIT
-    return positions
+    # A guessed interpreter may be a plain operand ('timeout 5 cat cmd /root/x').
+    return {index: d.rstrip(_MAYBE) + _MAYBE for index, d in positions.items()}
 
 
 def _inline_script_positions(argv: list) -> Dict[int, str]:
@@ -1117,27 +1122,23 @@ def _inline_script_positions(argv: list) -> Dict[int, str]:
             if _CMD_OWN_SWITCH.fullmatch(token):
                 positions[index] = _SWITCH
         return positions
+    if dialect == "posix":
+        return _posix_script_positions(argv)
     positions = {}
     reads_script = False
-    options_ended = False
-    # Never stop at the first operand: it may be an option's value
-    # ('-o pipefail', '-X utf8'), and marking a later one is only stricter.
+    # Past the first operand that is not the script, a later one may be an
+    # argument rather than code ('-X utf8 -c …', 'x.py -c …'): check it both ways.
+    settled = False
     for index, token in enumerate(argv[1:], start=1):
-        if dialect == "posix":
-            if reads_script and (options_ended or not token.startswith(("-", "+"))):
-                positions[index] = dialect
-            elif token in ("-", "--"):
-                options_ended = True
-            elif token.startswith("-") and not token.startswith("--"):
-                reads_script = reads_script or "c" in token[1:]
-            continue
         # A code interpreter: its script flag takes the next operand, or
         # carries the code attached ('-cprint(1)', '--eval=...').
         if reads_script:
-            positions[index] = dialect
+            positions[index] = dialect + (_MAYBE if settled else "")
             reads_script = False
+            settled = True
             continue
         if not token.startswith("-"):
+            settled = True
             continue
         flags = _CODE_SCRIPT_FLAGS[program]
         if token in flags or any(
@@ -1150,8 +1151,33 @@ def _inline_script_positions(argv: list) -> Dict[int, str]:
             token.startswith(flag + "=") or (len(flag) == 2 and token.startswith(flag))
             for flag in flags
         ):
-            positions[index] = dialect
+            positions[index] = dialect + (_MAYBE if settled else "")
+            settled = True
     return positions
+
+
+def _posix_script_positions(argv: list) -> Dict[int, str]:
+    """The ``-c`` script of ``sh``/``bash``…, past option values like ``-o pipefail``.
+
+    Only the first operand is the script; the rest are its literal ``$0``,
+    ``$1``… and stay plain path candidates.
+    """
+    reads_script = False
+    takes_value = False
+    for index, token in enumerate(argv[1:], start=1):
+        if takes_value:
+            takes_value = False
+        elif token in ("-", "--"):
+            script = index + 1
+            return {script: "posix"} if reads_script and script < len(argv) else {}
+        elif token.startswith(("-", "+")) and len(token) > 1:
+            if token.startswith("--"):
+                continue
+            reads_script = reads_script or (token[0] == "-" and "c" in token[1:])
+            takes_value = token[-1] in "oO"
+        else:
+            return {index: "posix"} if reads_script else {}
+    return {}
 
 
 def _split_script(body: str, dialect: str) -> list:
@@ -1251,13 +1277,14 @@ def _path_operands(argv: list) -> list:
             operands.extend(_env_wrapper_assignments(argv[start:]))
     for index, token in enumerate(argv[1:], start=1):
         dialect = positions.get(index)
-        if dialect is None:
+        if dialect is None or dialect.endswith(_MAYBE):
             operands.append(("Argument", token))
+        if dialect is None:
             continue
+        dialect = dialect.rstrip(_MAYBE)
         if dialect == _SWITCH:
             continue
         if dialect in (_ENV_SPLIT, _ENV_SPLIT_ATTACHED):
-            operands.append(("Argument", token))
             if dialect == _ENV_SPLIT_ATTACHED:
                 token = _env_split_string(argv, index)[1]
             operands.extend(_path_operands(["env", *_script_words(token, "posix")]))
@@ -1281,7 +1308,8 @@ def _flag_path_values(arg: str) -> list:
     if not arg.startswith("--") and len(arg) > 2:
         values.append(arg[2:])
     _, colon, value = arg.partition(":")
-    if colon and value and not re.match(r"[A-Za-z]:", arg[2:]):
+    # '-ihttps://…' is a URL, not '-ihttps' bound to the path '//…'.
+    if colon and value and "://" not in arg and not re.match(r"[A-Za-z]:", arg[2:]):
         values.append(value)
     return values
 

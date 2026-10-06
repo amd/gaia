@@ -449,3 +449,32 @@ def test_an_ordinary_home_folder_command_is_still_allowed(command, home_layout):
     refusal, _ = _check(command, home_layout["work"], home_layout["home"])
 
     assert refusal is None, refusal
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "bash -c 'cat \"$1\"' _ '{secret}'",
+        "bash -c 'cat \"$1\"' _ '{home}/x y/../../outside/secret.txt'",
+        "python x.py -c '{home}/x y/../../outside/secret.txt'",
+        "python -X utf8 -c pass '{home}/x y/../../outside/secret.txt'",
+        "timeout 5 cat python -c '{home}/x y/../../outside/secret.txt'",
+        "timeout 5 cat bash -c '{home}/x y/../../outside/secret.txt'",
+    ],
+)
+def test_an_operand_that_may_not_be_script_is_still_checked_whole(template, layout):
+    (layout["home"] / "x y").mkdir()
+    command = template.format(
+        secret=layout["secret"].resolve(), home=layout["home"].resolve().as_posix()
+    )
+    refusal, _ = _check(command, layout["work"], layout["home"])
+
+    assert refusal is not None, command
+
+
+def test_a_url_attached_to_a_short_flag_is_not_read_as_a_path(layout):
+    refusal, _ = _check(
+        "pip download -ihttps://pypi.org/simple x", layout["work"], layout["home"]
+    )
+
+    assert refusal is None, refusal
