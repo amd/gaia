@@ -447,6 +447,17 @@ class TestLazyIndex:
         assert out["index_built_now"] == {"files_indexed": 3, "chunks_created": 7}
         assert out["results"] == []
 
+    def test_a_partial_build_reports_dropped_chunks(self, tmp_path):
+        from types import SimpleNamespace
+
+        sdk = _FakeSDK(indexed=False)
+        sdk.index_repository = lambda: SimpleNamespace(
+            files_indexed=3, chunks_created=7, chunks_dropped=2
+        )
+        out = self._search(tmp_path, sdk)
+        assert out["index_built_now"]["chunks_dropped"] == 2
+        assert "index_codebase again" in out["index_built_now"]["warning"]
+
     def test_an_existing_index_is_searched_as_is(self, tmp_path):
         sdk = _FakeSDK(indexed=True)
         assert self._search(tmp_path, sdk) == []
