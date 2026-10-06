@@ -33,6 +33,7 @@ description: "A larger local default model where the GPU holds it, a single-chat
 A selection of the user-visible fixes; the full list is in the changelog below.
 
 - **Local Qwen models no longer loop on repeated tool calls** — they run with their model card's sampling instead of near-greedy settings. (PR [#4655](https://github.com/amd/gaia/pull/4655))
+- **Qwen3.6 runs on a Strix Halo with an older AMD driver** — it used to crash on its first token, so `gaia init` failed; GAIA now turns off the Vulkan path that crashes on those drivers only, and newer drivers keep the faster path. (PR [#4674](https://github.com/amd/gaia/pull/4674))
 - **A long PDF no longer hangs or times out while indexing** — big documents index in the background, and PDFs that only carry owner-password restrictions now index. (PRs [#4754](https://github.com/amd/gaia/pull/4754), [#4679](https://github.com/amd/gaia/pull/4679), [#4734](https://github.com/amd/gaia/pull/4734))
 - **Document answers cite the right document and page**, and every chunk is embedded whole instead of its first 1,200 characters. (PRs [#4688](https://github.com/amd/gaia/pull/4688), [#4723](https://github.com/amd/gaia/pull/4723))
 - **`gaia init` fails when model verification fails**, shows downloads live, and no longer hangs while Lemonade hashes a large model. (PRs [#4620](https://github.com/amd/gaia/pull/4620), [#4564](https://github.com/amd/gaia/pull/4564), [#4673](https://github.com/amd/gaia/pull/4673))
@@ -69,13 +70,15 @@ Thanks to the community members who contributed to this release:
 - [@rradjabi](https://github.com/rradjabi) — moving self-hosted CI jobs to the xsj-dispatch runner pool (PR [#4534](https://github.com/amd/gaia/pull/4534))
 
 
+
 ## Full Changelog
 
-**297 commits** since v0.24.1:
+**298 commits** since v0.24.1:
 
 <details>
-<summary>Expand full changelog (297 commits)</summary>
+<summary>Expand full changelog (298 commits)</summary>
 
+- `9ce659803` — fix(lemonade): turn off Vulkan coopmat on Strix Halo drivers that crash Qwen3.6 (#4674)
 - `1021f3b74` — fix(connectors): derive the flagship's mail scopes for --grant-agent installed:gaia (#4859)
 - `8a783b6eb` — ci(eval): make the code retrieval workflow valid so it can run (#4858)
 - `be1e0df20` — test(agent): give the prompt-timeout test room for a slow runner (#4861)
