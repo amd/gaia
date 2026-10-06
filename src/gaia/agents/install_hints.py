@@ -68,6 +68,26 @@ def _installed_version(package: str) -> Optional[str]:
         return None
 
 
+_FINAL_VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
+_RC_VERSION_RE = re.compile(r"(\d+\.\d+\.\d+)rc([1-9]\d*)")
+
+
+def _core_release_tag(version: Optional[str]) -> Optional[str]:
+    """The git tag ``version`` was released from, or None for an untagged build.
+
+    A release candidate installs as ``X.Y.ZrcN`` but is tagged ``vX.Y.Z-rcN``
+    (util/release_tag.py). A dev build has no tag and tracks trunk.
+    """
+    if not version:
+        return None
+    if _FINAL_VERSION_RE.fullmatch(version):
+        return f"v{version}"
+    candidate = _RC_VERSION_RE.fullmatch(version)
+    if candidate:
+        return f"v{candidate.group(1)}-rc{candidate.group(2)}"
+    return None
+
+
 class PackageInstallerUnavailableError(RuntimeError):
     """Neither pip nor uv can install into the running interpreter."""
 
@@ -263,8 +283,8 @@ def source_install_command(wheel: str, *, force_reinstall: bool = False) -> str:
     # Pin the ref to the installed core: the wheels track this repo's trunk,
     # so pulling `main` against an older released core is exactly the version
     # skew that produced the misdiagnosed "not installed" ImportErrors.
-    core_version = _installed_version("amd-gaia")
-    ref = f"@v{core_version}" if core_version else ""
+    tag = _core_release_tag(_installed_version("amd-gaia"))
+    ref = f"@{tag}" if tag else ""
     spec = f"{wheel} @ git+{_REPO_URL}{ref}#subdirectory=hub/agents/{subdir}/python"
     if force_reinstall:
         return pip_install_hint(spec, "--force-reinstall", "--no-deps")
