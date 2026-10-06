@@ -44,6 +44,8 @@ A selection of the user-visible fixes; the full list is in the changelog below.
 - **The Agent UI stops claiming "100% local" while chat goes to a cloud model**, and the chat header names the session's real model. (PRs [#4711](https://github.com/amd/gaia/pull/4711), [#4550](https://github.com/amd/gaia/pull/4550))
 - **Enter can't approve a permission prompt**, and prompts wait 10 minutes before timing out. (PRs [#4700](https://github.com/amd/gaia/pull/4700), [#4699](https://github.com/amd/gaia/pull/4699))
 - **Stopping a run keeps the turn and its steps visible.** (PR [#4743](https://github.com/amd/gaia/pull/4743))
+- **A file edit keeps the file's line endings** — a one-line edit on Windows used to rewrite every line ending, so a small change showed up as the whole file changed. (PR [#4864](https://github.com/amd/gaia/pull/4864))
+- **A broken agent install is reported as broken, not as missing** — the error names both package versions and the real import error, and suggests a reinstall that works. (PR [#4588](https://github.com/amd/gaia/pull/4588))
 - **A meeting or document summary is never cut off mid-sentence** — a thinking model used to spend the summary's output budget reasoning, so a long meeting lost its second half. (PR [#4827](https://github.com/amd/gaia/pull/4827))
 - **"What can you do?" gets an answer** instead of an attempt to generate an image of the question. (PR [#4809](https://github.com/amd/gaia/pull/4809))
 - **Writes and approved edits can't reach credential folders** (`~/.ssh`, `~/.aws`, `~/.kube` and others), and shell option values and script arguments get the same path check as plain paths. (PRs [#4848](https://github.com/amd/gaia/pull/4848), [#4847](https://github.com/amd/gaia/pull/4847))
@@ -64,6 +66,7 @@ Thanks to the community members who contributed to this release:
 - [@mikemikimike](https://github.com/mikemikimike) — chained shell command timeouts, bundled skills in frozen builds, and sidecar cleanup reporting (PRs [#4463](https://github.com/amd/gaia/pull/4463), [#4467](https://github.com/amd/gaia/pull/4467), [#4419](https://github.com/amd/gaia/pull/4419))
 - [@Hashim1999164](https://github.com/Hashim1999164) — honoring `GAIA_HOME` for cache, chat and index paths (PR [#4381](https://github.com/amd/gaia/pull/4381))
 - [@krtadev](https://github.com/krtadev) — `~` expansion in file and document tool paths (PR [#4576](https://github.com/amd/gaia/pull/4576))
+- [@aksh8b](https://github.com/aksh8b) — telling a broken agent install apart from a missing one, with a reinstall hint that works (PR [#4588](https://github.com/amd/gaia/pull/4588))
 - [@Dev-next-gen](https://github.com/Dev-next-gen) — numeric prerelease ordering in the hub (PR [#4517](https://github.com/amd/gaia/pull/4517))
 - [@vianmangal](https://github.com/vianmangal) — recording denied tool calls as unsuccessful in memory (PR [#4412](https://github.com/amd/gaia/pull/4412))
 - [@GaetanVDB07](https://github.com/GaetanVDB07) — links to upstream credential setup guides for connectors (PR [#4669](https://github.com/amd/gaia/pull/4669))
@@ -71,13 +74,16 @@ Thanks to the community members who contributed to this release:
 
 
 
+
 ## Full Changelog
 
-**298 commits** since v0.24.1:
+**300 commits** since v0.24.1:
 
 <details>
-<summary>Expand full changelog (298 commits)</summary>
+<summary>Expand full changelog (300 commits)</summary>
 
+- `c5c9141ba` — fix(tools): stop file edits rewriting every line ending in the file (#4864)
+- `f2e55aff2` — fix(agents): stop saying a broken agent install is not installed (#4588)
 - `9ce659803` — fix(lemonade): turn off Vulkan coopmat on Strix Halo drivers that crash Qwen3.6 (#4674)
 - `1021f3b74` — fix(connectors): derive the flagship's mail scopes for --grant-agent installed:gaia (#4859)
 - `8a783b6eb` — ci(eval): make the code retrieval workflow valid so it can run (#4858)
