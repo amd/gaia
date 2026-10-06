@@ -88,6 +88,7 @@ from gaia.llm.lemonade_client import (
     resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_client_hint
+from gaia.log_rotation import SharedRotatingFileHandler
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
@@ -1038,7 +1039,8 @@ def _configure_logging(real_stdout, *, dev: bool) -> "Path":
         lg.propagate = True
 
     level = logging.DEBUG if dev else logging.ERROR
-    file_handler = logging.FileHandler(path, encoding="utf-8")
+    # Bounded like gaia.log; one user's unbounded log reached 1.7 GB (#4668).
+    file_handler = SharedRotatingFileHandler(path)
     file_handler.setLevel(level)
     # The pid is not decoration: agents share the default log file, and without
     # it two interleaved sessions are indistinguishable after the fact.
@@ -1062,7 +1064,7 @@ def _configure_logging(real_stdout, *, dev: bool) -> "Path":
     # Not merged into the shared handler at an INFO floor: gaia loggers built
     # after this call default to INFO, so that would put the whole tree back
     # into the user-mode log.
-    audit_handler = logging.FileHandler(path, encoding="utf-8")
+    audit_handler = SharedRotatingFileHandler(path)
     audit_handler.setLevel(AUDIT_LEVEL)
     audit_handler.setFormatter(
         logging.Formatter(

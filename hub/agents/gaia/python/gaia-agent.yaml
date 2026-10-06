@@ -31,19 +31,18 @@ icon: sparkles
 tools_count: 95
 
 language: python
-# 0.23.0's daemon has no `gaia` entry in builtin_specs(), so it cannot supervise
-# this sidecar at all; 0.24.0 was tagged but never got a completed release
-# (a CI gate bug blocked it — see #3915-#3917), so 0.24.1 is the first
-# actually-released core that can (#2932).
-min_gaia_version: "0.24.1"
+# The chat agent this one subclasses imports gaia.agents.tools.path_access, the
+# allowed-folders check every file tool uses (#4656); 0.25.0 is the first core
+# that ships it. (0.24.1 was the first whose daemon can supervise this, #2932.)
+min_gaia_version: "0.25.0"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:
   entry_module: gaia_agent
   entry_class: GaiaAgent
   dependencies:
-    - "amd-gaia>=0.24.1"
-    - "gaia-agent-chat>=0.1.0"
+    - "amd-gaia>=0.25.0"
+    - "gaia-agent-chat>=0.2.0"
 
 interfaces:
   tui: true

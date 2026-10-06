@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Requires `amd-gaia>=0.25.0` and `gaia-agent-chat>=0.2.0`.** Every file tool
+  now checks the allowed-folders rule, and that check ships in core 0.25.0; an
+  older core cannot import the chat agent this one builds on.
+- **`~/.gaia/logs/gaia-agent.log` stays bounded.** It rotates like `gaia.log`
+  (10 MB, three backups; `GAIA_LOG_MAX_MB`, `GAIA_LOG_BACKUPS`) instead of
+  growing without limit.
+
 - **Everyday questions get short, plain answers.** "Why is the sky blue?" got
   140 words with an equation, and a Wi-Fi question got diagnostic shell runs.
   The voice skill now caps an everyday answer at three plain sentences, goes
@@ -581,9 +588,9 @@ the terminal UI meant building it from source.
   building its own TUI. Each terminal-hub artifact is additionally cross-checked
   against the hub's own server-side SHA-256 before its hash enters the lock.
 - Requires Node.js 18+ (built-in `fetch`), a running Lemonade Server for
-  inference, and the `gaia` Python CLI 0.24.1+ on `PATH` for the daemon the TUI
-  starts. 0.24.1 is the first core whose daemon knows how to supervise this
-  agent; on an earlier core the UI starts with nothing behind it.
+  inference, and the `gaia` Python CLI 0.25.0+ on `PATH` for the daemon the TUI
+  starts. 0.25.0 is the first core that can run this agent; on an earlier core
+  the UI starts with nothing behind it.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.

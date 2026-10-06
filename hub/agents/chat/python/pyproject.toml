@@ -7,15 +7,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaia-agent-chat"
-version = "0.1.0"
+version = "0.2.0"
 description = "GAIA chat agent — conversation, document Q&A (RAG), and file-system profiles"
 authors = [{ name = "AMD" }]
 license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
-# Floor: 0.22.0 is the first core release shipping
-# gaia.agents.registry.get_embedding_model_for_device, imported at agent
-# start (#2112). tests/test_chat_dependency_floor.py guards this floor.
+# Floor: 0.25.0 is the first core release shipping
+# gaia.agents.tools.path_access (#4656), imported at agent start; 0.22.0 added
+# gaia.agents.registry.get_embedding_model_for_device (#2112).
+# tests/test_chat_dependency_floor.py guards this floor.
 #
 # Intentionally bare `amd-gaia` (no `[rag]` extras marker): a plain
 # `pip install gaia-agent-chat` must not implicitly pull faiss/pymupdf/
@@ -23,7 +24,7 @@ requires-python = ">=3.10"
 # come from `gaia init --profile chat`'s own `_install_pip_extras()` step
 # into the ACTIVE interpreter, not from this wheel's install -- do not "fix"
 # this by adding `[rag]` here (#2358).
-dependencies = ["amd-gaia>=0.22.0"]
+dependencies = ["amd-gaia>=0.25.0"]
 
 [project.entry-points."gaia.agent"]
 chat = "gaia_agent_chat:build_chat"

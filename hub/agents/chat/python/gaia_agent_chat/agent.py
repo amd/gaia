@@ -70,6 +70,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import documents_still_indexing
+from gaia.env import child_env
 from gaia.llm.inference_location import (
     InferenceLocation,
     resolve_inference_location,
@@ -144,7 +145,7 @@ def _python_script_run_context(
     needs ``src/`` on the path, which this does not add.
     """
     script = Path(script).resolve()
-    env = dict(os.environ)
+    env = child_env()
     if project_dir is None:
         return script.parent, env
     project = Path(project_dir).resolve()
@@ -1818,7 +1819,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "allowed project.",
                         "has_errors": True,
                     }
-                env = dict(os.environ)
+                env = child_env()
                 if project:
                     existing = env.get("PYTHONPATH")
                     env["PYTHONPATH"] = (
@@ -2106,11 +2107,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                                 "-Command",
                                 NOTIFY_DESKTOP_PS_SCRIPT,
                             ],
-                            env={
-                                **os.environ,
-                                NOTIFY_MESSAGE_ENV_VAR: message,
-                                NOTIFY_TITLE_ENV_VAR: title,
-                            },
+                            env=child_env(
+                                {
+                                    NOTIFY_MESSAGE_ENV_VAR: message,
+                                    NOTIFY_TITLE_ENV_VAR: title,
+                                }
+                            ),
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )

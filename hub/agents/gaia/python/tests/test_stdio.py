@@ -115,6 +115,25 @@ def test_a_library_logging_to_stdout_cannot_reach_the_wire(configure_logging):
     assert wire.getvalue() == "", "a log record reached the wire"
 
 
+def test_the_agent_log_rotates_at_its_cap(configure_logging, tmp_path, monkeypatch):
+    """gaia-agent.log is bounded like gaia.log, audit records included."""
+    monkeypatch.setenv("GAIA_LOG_MAX_MB", "1")
+    monkeypatch.setenv("GAIA_LOG_BACKUPS", "1")
+    configure_logging(io.StringIO(), dev=True)
+
+    chunk = "x" * 1024
+    for _ in range(1200):  # ~1.2 MB, past the 1 MB cap
+        logging.getLogger("gaia.test").error(chunk)
+    logging.getLogger(stdio.AUDIT_LOGGER_NAME).log(stdio.AUDIT_LEVEL, "audited")
+    _log_text(tmp_path / "agent.log")
+
+    log = tmp_path / "agent.log"
+    assert (tmp_path / "agent.log.1").exists(), "the log never rotated"
+    assert log.stat().st_size <= 1024 * 1024
+    assert not (tmp_path / "agent.log.2").exists(), "kept more than one backup"
+    assert "audited" in log.read_text(encoding="utf-8")
+
+
 def test_a_stray_print_cannot_reach_the_wire(configure_logging):
     """``print`` in code we do not control is the other way stdout gets dirty."""
     wire = io.StringIO()

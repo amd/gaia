@@ -3246,7 +3246,7 @@
         "title": "Tokens Per Second"
       },
       "version": {
-        "default": "0.24.1",
+        "default": "0.25.0",
         "title": "Version",
         "type": "string"
       }
