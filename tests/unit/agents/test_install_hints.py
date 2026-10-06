@@ -11,6 +11,7 @@ does recommend must reference a directory that actually exists on disk.
 """
 
 import importlib.metadata
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -31,7 +32,8 @@ AGENTS_DIR = REPO_ROOT / "hub" / "agents"
 
 CHAT_SPEC = (
     "gaia-agent-chat @ git+https://github.com/amd/gaia.git"
-    f"@v{importlib.metadata.version('amd-gaia')}#subdirectory=hub/agents/chat/python"
+    f"@{install_hints._core_release_tag(importlib.metadata.version('amd-gaia'))}"
+    "#subdirectory=hub/agents/chat/python"
 )
 
 
@@ -230,6 +232,39 @@ class TestAgentNotInstalledMessage:
             "The chat agent is not installed", "gaia-agent-chat"
         )
         assert not message.endswith(" ")
+
+
+class TestSourceInstallRef:
+    """The command must name a tag that exists for the installed core."""
+
+    @pytest.mark.parametrize(
+        "installed, ref",
+        [
+            ("0.25.0", "@v0.25.0"),
+            ("0.15.4.1", "@v0.15.4.1"),
+            ("0.25.0rc1", "@v0.25.0-rc1"),
+            ("0.25.0rc12", "@v0.25.0-rc12"),
+            ("0.25.0.dev3+g1a2b3c4", ""),
+            (None, ""),
+        ],
+    )
+    def test_ref_matches_the_release_tag(self, monkeypatch, installed, ref):
+        monkeypatch.setattr(install_hints, "_installed_version", lambda _pkg: installed)
+        command = source_install_command("gaia-agent-chat")
+        assert f"gaia.git{ref}#subdirectory=hub/agents/chat/python" in command
+
+    def test_rc_tag_agrees_with_the_release_tooling(self):
+        spec = importlib.util.spec_from_file_location(
+            "release_tag", REPO_ROOT / "util" / "release_tag.py"
+        )
+        release_tag = importlib.util.module_from_spec(spec)
+        sys.modules["release_tag"] = release_tag  # dataclasses resolve it by name
+        try:
+            spec.loader.exec_module(release_tag)
+            released = release_tag.parse_tag("v0.25.0-rc2").pep440_version
+        finally:
+            del sys.modules["release_tag"]
+        assert install_hints._core_release_tag(released) == "v0.25.0-rc2"
 
 
 class TestAgentImportErrorMessage:
