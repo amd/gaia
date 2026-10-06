@@ -87,7 +87,7 @@ Fastest path to a package: `gaia agent init <id> -o hub/agents/ --layout hub` sc
 
 ### 3. Registry wiring — entry point, not a code edit
 
-The registry discovers packaged agents by scanning the `gaia.agent` entry-point group (`gaia.agents` is the legacy alias; both are scanned). There is no `_register_builtin_agents` block to edit any more — adding one won't be picked up for a hub package.
+The registry discovers packaged agents by scanning the `gaia.agent` entry-point group (`gaia.agents` is the legacy alias; both are scanned). There is no in-code registration block to edit — the entry point is the only way a hub package gets picked up.
 
 - [ ] `pyproject.toml` declares the entry point:
   ```toml
