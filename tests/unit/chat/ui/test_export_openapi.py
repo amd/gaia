@@ -24,6 +24,7 @@ def test_snapshot_does_not_embed_the_package_version():
     rendered = export_openapi.render(export_openapi.build_schemas())
     assert f'"{__version__}"' not in rendered
 
+
 def test_check_fails_on_a_stale_snapshot(tmp_path, monkeypatch, capsys):
     stale = tmp_path / "api.schemas.json"
     stale.write_text("{}\n", encoding="utf-8")
