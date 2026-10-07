@@ -101,6 +101,18 @@ class _DummyAgent(Agent):
         return AgentConsole()
 
 
+@pytest.fixture(autouse=True)
+def _no_edit_verification(monkeypatch):
+    """Opt out of the post-edit read-back.
+
+    ``_register_edit_file`` below is a stub that records a path and writes
+    nothing, so the read-back would correctly report that file missing and
+    spend a repair step on it. These tests pin the loop's exact model-call
+    count for the cut-off guard, which that extra call would move.
+    """
+    monkeypatch.setenv("GAIA_AGENT_VERIFY_EDITS", "0")
+
+
 @pytest.fixture
 def agent():
     with patch("gaia.agents.base.agent.AgentSDK"):
