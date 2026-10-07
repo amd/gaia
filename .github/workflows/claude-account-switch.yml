@@ -6,8 +6,9 @@
 # Each Claude step reads CLAUDE_CODE_OAUTH_TOKEN_SECONDARY instead of
 # CLAUDE_CODE_OAUTH_TOKEN while the repo variable CLAUDE_ACCOUNT is "secondary".
 # This job probes the primary account every hour: out of quota -> switch to the
-# secondary (after proving it answers); answering again -> switch back. A bad credential never switches anything —
-# it fails here so a person fixes it. See docs/reference/claude-ci-workflows.md.
+# secondary (after proving it answers); answering again -> switch back. A bad
+# credential never switches anything — it fails here so a person fixes it.
+# See docs/reference/claude-ci-workflows.md.
 name: Claude Account Switch
 
 on:
@@ -27,7 +28,6 @@ permissions:
 concurrency:
   group: claude-account-switch
   cancel-in-progress: false
-
 
 jobs:
   switch:
@@ -122,7 +122,7 @@ jobs:
             echo "| Primary probe | ${PRIMARY_VERDICT:-not probed (forced)} |"
             echo "| Primary limit resets | ${PRIMARY_RESET:-n/a} |"
             echo "| Secondary configured | ${HAS_SECONDARY} |"
-            echo "| Decision | ${action} |"
+            echo "| Plan | ${action} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Never switch to an account that cannot answer either.
@@ -143,6 +143,7 @@ jobs:
             --allowedTools Read
 
       - name: Require the secondary account to answer
+        id: secondary_check
         if: steps.decide.outputs.desired == 'secondary' && env.CURRENT != 'secondary'
         env:
           CLAUDE_CONCLUSION: ${{ steps.secondary.outputs.conclusion }}
@@ -158,6 +159,7 @@ jobs:
             --text-file "$CLAUDE_LOG" --format stream-json --always-scan --expect ok
 
       - name: Set CLAUDE_ACCOUNT
+        id: set_account
         if: steps.decide.outputs.desired != env.CURRENT
         env:
           DESIRED: ${{ steps.decide.outputs.desired }}
@@ -171,3 +173,24 @@ jobs:
           fi
           gh variable set CLAUDE_ACCOUNT --body "$DESIRED" --repo "$GITHUB_REPOSITORY"
           echo "::warning::Claude CI switched from the $CURRENT account to the $DESIRED account."
+
+      - name: Report the result
+        if: always() && steps.decide.outputs.desired != ''
+        env:
+          DESIRED: ${{ steps.decide.outputs.desired }}
+          SECONDARY_CHECK: ${{ steps.secondary_check.outcome }}
+          SET_ACCOUNT: ${{ steps.set_account.outcome }}
+        run: |
+          if [ "$DESIRED" = "$CURRENT" ]; then
+            result="no change: staying on the $CURRENT account"
+          elif [ "$SET_ACCOUNT" = "success" ]; then
+            result="switched from the $CURRENT account to the $DESIRED account"
+          elif [ "$SECONDARY_CHECK" = "failure" ]; then
+            result="not switched: the secondary account did not answer its probe"
+          elif [ "$SET_ACCOUNT" = "failure" ]; then
+            result="not switched: CLAUDE_ACCOUNT could not be set (see the error above)"
+          else
+            result="not switched"
+          fi
+          echo "Result: $result"
+          echo "**Result:** $result" >> "$GITHUB_STEP_SUMMARY"

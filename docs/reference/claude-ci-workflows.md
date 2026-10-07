@@ -80,8 +80,10 @@ this probes the primary account with the canary's probe:
 - **Answering again** (the weekly limit reset): it sets `CLAUDE_ACCOUNT=primary`.
 - **Bad credential:** it fails and switches nothing — rotate the token instead.
 
-Each run's summary shows the primary probe's verdict, when its limit resets, and what the job
-decided. Every Claude job also posts a "Claude account" notice naming the account it ran on.
+Each run's summary shows the primary probe's verdict, when its limit resets, the plan, and
+what actually happened. Every Claude job also posts a "Claude account" notice naming the account
+it ran on — including when `CLAUDE_ACCOUNT` asks for the secondary but its secret is missing, so
+the job fell back to the primary.
 
 Setup, once:
 
