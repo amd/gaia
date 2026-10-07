@@ -6,8 +6,7 @@
 # Each Claude step reads CLAUDE_CODE_OAUTH_TOKEN_SECONDARY instead of
 # CLAUDE_CODE_OAUTH_TOKEN while the repo variable CLAUDE_ACCOUNT is "secondary".
 # This job probes the primary account every hour: out of quota -> switch to the
-# secondary (after proving it answers) and open a tracking issue; answering
-# again -> switch back and close it. A bad credential never switches anything —
+# secondary (after proving it answers); answering again -> switch back. A bad credential never switches anything —
 # it fails here so a person fixes it. See docs/reference/claude-ci-workflows.md.
 name: Claude Account Switch
 
@@ -24,14 +23,11 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: claude-account-switch
   cancel-in-progress: false
 
-env:
-  ISSUE_TITLE: "Claude CI is running on the secondary account"
 
 jobs:
   switch:
@@ -83,7 +79,7 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/primary-verdict.txt"
           code=${PIPESTATUS[0]}
           echo "code=$code" >> "$GITHUB_OUTPUT"
-          # One line for the summary and issue; the reset time when the rejection names one.
+          # One line for the summary; the reset time when the rejection names one.
           verdict=$(grep -m1 -E 'QUOTA EXHAUSTED|CREDENTIAL INVALID|could not be classified|::error::' "$RUNNER_TEMP/primary-verdict.txt" | sed -E 's/^::error:://; s/ \| .*//' | cut -c1-300 || true)
           [ -n "$verdict" ] || verdict="answered ok"
           reset=$(grep -oiE 'resets [^|·"]{1,60}' "$RUNNER_TEMP/primary-verdict.txt" | head -1 || true)
@@ -175,29 +171,3 @@ jobs:
           fi
           gh variable set CLAUDE_ACCOUNT --body "$DESIRED" --repo "$GITHUB_REPOSITORY"
           echo "::warning::Claude CI switched from the $CURRENT account to the $DESIRED account."
-
-      - name: Track the switch in an issue
-        if: steps.decide.outputs.desired != env.CURRENT
-        env:
-          DESIRED: ${{ steps.decide.outputs.desired }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PRIMARY_RESET: ${{ steps.primary_verdict.outputs.reset }}
-        run: |
-          set -euo pipefail
-          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number --jq '.[0].number // empty')
-          if [ "$DESIRED" = "secondary" ]; then
-            if [ -n "$open" ]; then
-              gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body "Switched to the secondary account again (primary limit ${PRIMARY_RESET:-reset time not reported}): $RUN_URL"
-            else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body "The primary Claude account ran out of quota, so every Claude workflow now uses the secondary account (CLAUDE_CODE_OAUTH_TOKEN_SECONDARY). This issue closes itself when the primary answers again.
-
-          - Primary limit: ${PRIMARY_RESET:-reset time not reported by the rejection}
-          - Switch run: $RUN_URL
-          - Force it back: \`gh workflow run claude-account-switch.yml -f account=primary --repo $GITHUB_REPOSITORY\`
-
-          cc @kovtcharov-amd"
-            fi
-          elif [ -n "$open" ]; then
-            gh issue close "$open" --repo "$GITHUB_REPOSITORY" --comment "Back on the primary account: $RUN_URL"
-          fi

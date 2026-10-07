@@ -76,10 +76,8 @@ Every Claude step reads `CLAUDE_CODE_OAUTH_TOKEN_SECONDARY` instead of
 `CLAUDE_CODE_OAUTH_TOKEN` while the repo variable `CLAUDE_ACCOUNT` is `secondary`. Hourly,
 this probes the primary account with the canary's probe:
 
-- **Out of quota:** it checks the secondary account answers, sets `CLAUDE_ACCOUNT=secondary`,
-  and opens "Claude CI is running on the secondary account".
-- **Answering again** (the weekly limit reset): it sets `CLAUDE_ACCOUNT=primary` and closes
-  that issue.
+- **Out of quota:** it checks the secondary account answers, then sets `CLAUDE_ACCOUNT=secondary`.
+- **Answering again** (the weekly limit reset): it sets `CLAUDE_ACCOUNT=primary`.
 - **Bad credential:** it fails and switches nothing — rotate the token instead.
 
 Each run's summary shows the primary probe's verdict, when its limit resets, and what the job
