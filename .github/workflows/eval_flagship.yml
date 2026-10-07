@@ -436,6 +436,8 @@ jobs:
       TASK_JUDGE_MODEL: claude-opus-5-5
       TASKS_OUT: eval-out\tasks
     steps:
+      - name: Show which Claude account this job uses
+        run: echo "::notice title=Claude account::This job uses the ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }} Claude account (repo variable CLAUDE_ACCOUNT)"
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -736,6 +738,8 @@ jobs:
       GAIA_MEMORY_MCP_ALWAYS: ${{ matrix.memory_mcp }}
       GAIA_FIXTURES: ${{ matrix.gaia_fixtures }}
     steps:
+      - name: Show which Claude account this job uses
+        run: echo "::notice title=Claude account::This job uses the ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }} Claude account (repo variable CLAUDE_ACCOUNT)"
       - name: Checkout
         uses: actions/checkout@v7
 

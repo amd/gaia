@@ -79,13 +79,22 @@ jobs:
           fi
           if [ "${CLAUDE_CONCLUSION:-}" = "success" ]; then PROBE_EXIT=0; else PROBE_EXIT=1; fi
           python3 util/classify_claude_probe.py --exit-code "$PROBE_EXIT" \
-            --text-file "$CLAUDE_LOG" --format stream-json --always-scan --expect ok
-          echo "code=$?" >> "$GITHUB_OUTPUT"
+            --text-file "$CLAUDE_LOG" --format stream-json --always-scan --expect ok \
+            2>&1 | tee "$RUNNER_TEMP/primary-verdict.txt"
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          # One line for the summary and issue; the reset time when the rejection names one.
+          verdict=$(grep -m1 -E 'QUOTA EXHAUSTED|CREDENTIAL INVALID|could not be classified|::error::' "$RUNNER_TEMP/primary-verdict.txt" | sed -E 's/^::error:://; s/ \| .*//' | cut -c1-300 || true)
+          [ -n "$verdict" ] || verdict="answered ok"
+          reset=$(grep -oiE 'resets [^|·"]{1,60}' "$RUNNER_TEMP/primary-verdict.txt" | head -1 || true)
+          { echo "verdict=$verdict"; echo "reset=$reset"; } >> "$GITHUB_OUTPUT"
 
       - name: Decide which account to use
         id: decide
         env:
           PRIMARY_CODE: ${{ steps.primary_verdict.outputs.code }}
+          PRIMARY_VERDICT: ${{ steps.primary_verdict.outputs.verdict }}
+          PRIMARY_RESET: ${{ steps.primary_verdict.outputs.reset }}
         run: |
           set -euo pipefail
           if [ "$MODE" != "auto" ]; then
@@ -106,6 +115,19 @@ jobs:
           fi
           echo "desired=$desired" >> "$GITHUB_OUTPUT"
           echo "Current account: $CURRENT. Desired: $desired."
+          if [ "$desired" = "$CURRENT" ]; then action="no change"; else action="switch $CURRENT -> $desired"; fi
+          {
+            echo "### Claude account"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Trigger | ${MODE} |"
+            echo "| Current account | ${CURRENT} |"
+            echo "| Primary probe | ${PRIMARY_VERDICT:-not probed (forced)} |"
+            echo "| Primary limit resets | ${PRIMARY_RESET:-n/a} |"
+            echo "| Secondary configured | ${HAS_SECONDARY} |"
+            echo "| Decision | ${action} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Never switch to an account that cannot answer either.
       - name: Probe the secondary account
@@ -160,15 +182,17 @@ jobs:
           DESIRED: ${{ steps.decide.outputs.desired }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PRIMARY_RESET: ${{ steps.primary_verdict.outputs.reset }}
         run: |
           set -euo pipefail
           open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number --jq '.[0].number // empty')
           if [ "$DESIRED" = "secondary" ]; then
             if [ -n "$open" ]; then
-              gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body "Switched to the secondary account again: $RUN_URL"
+              gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body "Switched to the secondary account again (primary limit ${PRIMARY_RESET:-reset time not reported}): $RUN_URL"
             else
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body "The primary Claude account ran out of quota, so every Claude workflow now uses the secondary account (CLAUDE_CODE_OAUTH_TOKEN_SECONDARY). This issue closes itself when the primary answers again.
 
+          - Primary limit: ${PRIMARY_RESET:-reset time not reported by the rejection}
           - Switch run: $RUN_URL
           - Force it back: \`gh workflow run claude-account-switch.yml -f account=primary --repo $GITHUB_REPOSITORY\`
 

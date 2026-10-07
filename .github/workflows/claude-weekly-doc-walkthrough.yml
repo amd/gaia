@@ -215,6 +215,8 @@ jobs:
     # must not eat the entire run silently.
     timeout-minutes: 90
     steps:
+      - name: Show which Claude account this job uses
+        run: echo "::notice title=Claude account::This job uses the ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }} Claude account (repo variable CLAUDE_ACCOUNT)"
       - uses: actions/checkout@v7
 
       # FOUND ON A LIVE RUN (2026-07-18, run 29663253865): claude-code-action's
@@ -742,6 +744,8 @@ jobs:
       contents: read
       issues: write
     steps:
+      - name: Show which Claude account this job uses
+        run: echo "::notice title=Claude account::This job uses the ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }} Claude account (repo variable CLAUDE_ACCOUNT)"
       - uses: actions/checkout@v7
 
       - name: Download all findings

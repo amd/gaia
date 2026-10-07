@@ -1043,6 +1043,8 @@ jobs:
       group: claude-auto-fix-${{ github.event.issue.number }}
       cancel-in-progress: true
     steps:
+      - name: Show which Claude account this job uses
+        run: echo "::notice title=Claude account::This job uses the ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }} Claude account (repo variable CLAUDE_ACCOUNT)"
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
@@ -1386,6 +1388,8 @@ jobs:
       group: claude-release-notes-${{ github.event.workflow_run.head_branch }}
       cancel-in-progress: false
     steps:
+      - name: Show which Claude account this job uses
+        run: echo "::notice title=Claude account::This job uses the ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }} Claude account (repo variable CLAUDE_ACCOUNT)"
       - name: Extract and validate tag name
         id: tag
         env:

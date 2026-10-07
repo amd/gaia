@@ -88,6 +88,8 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
+      - name: Show which Claude account this job uses
+        run: echo "::notice title=Claude account::This job uses the ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }} Claude account (repo variable CLAUDE_ACCOUNT)"
       # --- PR events (pull_request_target = review, pull_request_review_comment = reply):
       #     checkout the PR head and diff it against base. ---
       - name: Checkout PR head

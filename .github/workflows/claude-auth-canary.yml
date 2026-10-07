@@ -28,6 +28,8 @@ jobs:
     if: github.repository == 'amd/gaia'
     runs-on: ubuntu-latest
     steps:
+      - name: Show which Claude account this job uses
+        run: echo "::notice title=Claude account::This job uses the ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }} Claude account (repo variable CLAUDE_ACCOUNT)"
       # This job used to run with no checkout at all. It now needs
       # util/classify_claude_probe.py on disk to classify the probe response,
       # so check the repo out first. Still no untrusted input reaches any step.

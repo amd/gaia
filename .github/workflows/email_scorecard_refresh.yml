@@ -222,6 +222,8 @@ jobs:
     # derived from a measurement).
     timeout-minutes: ${{ fromJSON(inputs.limit || '250') >= 249 && 440 || 275 }}
     steps:
+      - name: Show which Claude account this job uses
+        run: echo "::notice title=Claude account::This job uses the ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }} Claude account (repo variable CLAUDE_ACCOUNT)"
       - name: Checkout (the pushed branch)
         uses: actions/checkout@v7
         with:

@@ -82,6 +82,9 @@ this probes the primary account with the canary's probe:
   that issue.
 - **Bad credential:** it fails and switches nothing — rotate the token instead.
 
+Each run's summary shows the primary probe's verdict, when its limit resets, and what the job
+decided. Every Claude job also posts a "Claude account" notice naming the account it ran on.
+
 Setup, once:
 
 ```bash
