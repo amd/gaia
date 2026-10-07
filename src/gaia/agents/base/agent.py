@@ -116,6 +116,7 @@ from gaia.llm.lemonade_client import (
     truncation_budget,
 )
 from gaia.llm.providers.lemonade import CONNECTION_FAILURE_RE
+from gaia.llm.retry import RetryState, describe_retry_state, retry_state_of
 from gaia.utils.power import stay_awake
 from gaia.utils.terminal import stdin_is_interactive
 
@@ -353,6 +354,64 @@ def tool_execution_timeout() -> float:
         raise ValueError(
             f"GAIA_AGENT_TOOL_TIMEOUT must be a positive number of seconds, "
             f"got {value}. Unset it to use the default ({DEFAULT_TOOL_TIMEOUT})."
+        )
+    return value
+
+
+# A model call that still fails after the client's own retries (see
+# ``gaia.llm.retry``) is tried again at the step level after a longer wait —
+# ``DEFAULT_MODEL_RETRY_COOLDOWN``, doubling each time — rather than ending a
+# run whose earlier steps all succeeded. Endpoint blips usually clear within
+# seconds; these waits cover the rarer outage that lasts a few minutes.
+DEFAULT_MODEL_STEP_RETRIES = 2
+DEFAULT_MODEL_RETRY_COOLDOWN = 30.0
+
+
+def model_step_retries() -> int:
+    """How many times a model step that failed transiently is tried again.
+
+    Reads ``GAIA_AGENT_MODEL_RETRIES`` at call time; ``0`` turns step-level
+    retry off. Raises on a present-but-invalid value, like the other
+    ``GAIA_AGENT_*`` settings.
+    """
+    raw = os.environ.get("GAIA_AGENT_MODEL_RETRIES")
+    if raw is None or raw.strip() == "":
+        return DEFAULT_MODEL_STEP_RETRIES
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"GAIA_AGENT_MODEL_RETRIES must be a whole number (0 or more), got "
+            f"{raw!r}. Unset it to use the default ({DEFAULT_MODEL_STEP_RETRIES})."
+        ) from e
+    if value < 0:
+        raise ValueError(
+            f"GAIA_AGENT_MODEL_RETRIES must be 0 or more, got {value}. Unset it "
+            f"to use the default ({DEFAULT_MODEL_STEP_RETRIES})."
+        )
+    return value
+
+
+def model_retry_cooldown() -> float:
+    """Seconds to wait before the first step-level retry; doubles after that.
+
+    Reads ``GAIA_AGENT_MODEL_RETRY_COOLDOWN`` at call time and raises on a
+    present-but-invalid value.
+    """
+    raw = os.environ.get("GAIA_AGENT_MODEL_RETRY_COOLDOWN")
+    if raw is None or raw.strip() == "":
+        return DEFAULT_MODEL_RETRY_COOLDOWN
+    try:
+        value = float(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"GAIA_AGENT_MODEL_RETRY_COOLDOWN must be a number of seconds, got "
+            f"{raw!r}. Unset it to use the default ({DEFAULT_MODEL_RETRY_COOLDOWN})."
+        ) from e
+    if value < 0:
+        raise ValueError(
+            f"GAIA_AGENT_MODEL_RETRY_COOLDOWN must be 0 or more, got {value}. "
+            f"Unset it to use the default ({DEFAULT_MODEL_RETRY_COOLDOWN})."
         )
     return value
 
@@ -1692,6 +1751,12 @@ Do NOT wrap conversational replies in JSON.
         self._has_tests_cache: Dict[Optional[str], bool] = {}
         # Same rationale for the per-turn record of edited files (#3733).
         self._turn_file_edits: List[Dict[str, Any]] = []
+        # Per-turn model-call retry tally; reset at the start of every turn.
+        self._turn_model_retries: Dict[str, Any] = {
+            "request_retries": 0,
+            "step_retries": 0,
+            "unreachable": False,
+        }
         # Earlier turns' user and tool text, for the grounding checks.
         self._grounding_history = ""
         # Grounding gaps that survived their correction, for the scope note.
@@ -6415,6 +6480,175 @@ Do NOT wrap conversational replies in JSON.
             return classified.user_message
         return None
 
+    #: The wait between step-level model retries. Replaced in tests.
+    _model_retry_sleep = staticmethod(time.sleep)
+
+    @staticmethod
+    def _transient_model_failure(exc: BaseException) -> Optional[RetryState]:
+        """The client's retry record when *exc* is a model call that failed
+        transiently and was already retried there; ``None`` for anything else.
+
+        Only failures the client classified as transient qualify (see
+        ``gaia.llm.retry``): an auth error, a context overflow, a content
+        filter or a request the server rejects outright never carries this
+        record, so those paths are untouched. A read timeout is excluded too —
+        the request already used its whole time budget, and sending it again
+        would most likely hang the same way (#1030).
+        """
+        state = retry_state_of(exc)
+        if state is None or state.last_reason == "read timeout":
+            return None
+        if is_context_overflow_error(str(exc).lower()):
+            # Overflow has its own trim-once / reload handling; never a wait.
+            return None
+        return state
+
+    def _model_step_retry_wait(
+        self, exc: BaseException, retries_used: int
+    ) -> Optional[float]:
+        """Seconds to wait before trying this model step again, or ``None``
+        when it should not be retried (not transient, or retries spent)."""
+        if self._transient_model_failure(exc) is None:
+            return None
+        if retries_used >= model_step_retries():
+            return None
+        return model_retry_cooldown() * (2**retries_used)
+
+    def _cool_down_for_model(self, seconds: float) -> bool:
+        """Wait *seconds* in short slices so Stop still works mid-wait.
+
+        Returns False when the user cancelled during the wait.
+        """
+        waited = 0.0
+        while waited < seconds:
+            if self._console_cancelled():
+                return False
+            pause = min(0.5, seconds - waited)
+            self._model_retry_sleep(pause)
+            waited += pause
+        return not self._console_cancelled()
+
+    def _last_request_retries(self) -> int:
+        """Client-level retries behind the most recent model call, when the
+        provider reports them (``LLMClient.get_last_retry_count``)."""
+        client = getattr(getattr(self, "chat", None), "llm_client", None)
+        getter = getattr(client, "get_last_retry_count", None)
+        if not callable(getter):
+            return 0
+        try:
+            count = getter()
+        except Exception:  # noqa: BLE001 - a diagnostic must not fail a step
+            return 0
+        if isinstance(count, int) and not isinstance(count, bool):
+            return count
+        return 0
+
+    def _model_failure_outcome(
+        self,
+        exc: BaseException,
+        retries_used: int,
+        steps_taken: int,
+        conversation: List[Dict[str, Any]],
+        partial_output: bool = False,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Decide what a failed model call means for this step.
+
+        Returns one of:
+
+        * ``("retry", None)`` — transient; waited out the cool-down, call again
+          with the conversation exactly as it was.
+        * ``("cancelled", None)`` — the user pressed Stop during the wait.
+        * ``("unreachable", answer)`` — transient, but every retry is spent;
+          *answer* is the final answer and the run is recorded as failed.
+        * ``(None, None)`` — not a transient model failure; the caller's
+          existing handling applies unchanged.
+        """
+        state = self._transient_model_failure(exc)
+        if state is None:
+            return None, None
+        tally = self._turn_model_retries
+        tally["request_retries"] += state.retries
+        wait = self._model_step_retry_wait(exc, retries_used)
+        if partial_output:
+            # Close the cut-off line before saying anything else.
+            self.console.print_streaming_text("", end_of_stream=True)
+        if wait is not None:
+            tally["step_retries"] += 1
+            logger.warning(
+                "Model call failed at step %d (%s); retrying the step in %.0fs "
+                "(step retry %d of %d)",
+                steps_taken,
+                describe_retry_state(state),
+                wait,
+                retries_used + 1,
+                model_step_retries(),
+            )
+            self.console.print_warning(
+                "The language model isn't responding "
+                f"({describe_retry_state(state)}). Waiting {wait:.0f}s, then "
+                "trying this step again — the work so far is kept."
+            )
+            if not self._cool_down_for_model(wait):
+                return "cancelled", None
+            return "retry", None
+        error_msg = (
+            f"Language model unreachable at step {steps_taken}: "
+            f"{describe_retry_state(state)}"
+        )
+        logger.error("%s; last error: %s", error_msg, exc)
+        self.console.print_error(error_msg)
+        self.error_history.append(
+            {"step": steps_taken, "error": str(exc), "type": "llm_unreachable"}
+        )
+        tally["unreachable"] = True
+        return "unreachable", self._model_unreachable_answer(
+            conversation, steps_taken, state, retries_used
+        )
+
+    def _model_unreachable_answer(
+        self,
+        conversation: List[Dict[str, Any]],
+        steps_taken: int,
+        state: RetryState,
+        step_retries: int,
+    ) -> str:
+        """The final answer when the model stayed unreachable through every
+        retry: says plainly that the task is unfinished and what was done.
+
+        Never phrased as a result — the run is also marked failed — so it
+        cannot be read as the task's answer.
+        """
+        tools_used = [
+            msg["name"]
+            for msg in conversation
+            if msg.get("role") == "tool" and msg.get("name")
+        ]
+        tries = (
+            f", then {step_retries} more attempt"
+            f"{'s' if step_retries != 1 else ''} after waiting"
+            if step_retries
+            else ""
+        )
+        message = (
+            "I couldn't finish this task: the language model stopped "
+            f"responding at step {steps_taken} and stayed unreachable "
+            f"({describe_retry_state(state)}{tries}). "
+            "The task is incomplete.\n\n"
+        )
+        if tools_used:
+            from collections import Counter
+
+            message += "Before that, I had run:\n"
+            for tool, count in Counter(tools_used).most_common(10):
+                message += f"  - {tool}: {count}x\n"
+            message += (
+                "\nAnything those steps changed is still in place. "
+                "Ask me to continue once the model is reachable again.\n"
+            )
+        else:
+            message += "No tools had run yet. Try again once the model is reachable.\n"
+        return message
+
     def _shrink_messages_for_overflow(
         self, messages: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -7471,6 +7705,14 @@ Do NOT wrap conversational replies in JSON.
         loop_break_answer_unprinted = False
         # A refused cloud account ends the turn with nothing to verify.
         account_refused = False
+        # Model-call retries this turn: client-level (inside one request) and
+        # step-level (the agent waiting and asking again), plus whether the
+        # model stayed unreachable. Reported on the result.
+        self._turn_model_retries = {
+            "request_retries": 0,
+            "step_retries": 0,
+            "unreachable": False,
+        }
         if self._context_evictor is not None:
             self._context_evictor.begin_turn()
         self._pending_eviction = None
@@ -7949,6 +8191,8 @@ Do NOT wrap conversational replies in JSON.
                 # behaviour as the non-streaming branch below — needed because
                 # multi-step ReAct loops accumulate tool results in `messages`.
                 _retried_after_trim_stream = False
+                _model_step_retries = 0
+                full_response = ""
                 self._announce_model_call(after_tools=bool(tool_call_history))
                 while True:
                     try:
@@ -7997,8 +8241,30 @@ Do NOT wrap conversational replies in JSON.
 
                         self.console.print_streaming_text("", end_of_stream=True)
                         response = full_response
+                        self._turn_model_retries[
+                            "request_retries"
+                        ] += self._last_request_retries()
                         break
                     except ConnectionError as e:
+                        # A transient endpoint failure the client already
+                        # retried: wait, then ask again with the conversation
+                        # intact, instead of ending a run that was going fine.
+                        outcome, unreachable = self._model_failure_outcome(
+                            e,
+                            _model_step_retries,
+                            steps_taken,
+                            conversation,
+                            partial_output=bool(full_response),
+                        )
+                        if outcome == "retry":
+                            _model_step_retries += 1
+                            continue
+                        if outcome == "cancelled":
+                            cancelled_by_console = True
+                            break
+                        if outcome == "unreachable":
+                            final_answer = unreachable
+                            break
                         error_msg = (
                             f"LLM Server Connection Failed (streaming): {str(e)}"
                         )
@@ -8064,6 +8330,26 @@ Do NOT wrap conversational replies in JSON.
                             )
                             _retried_after_trim_stream = True
                             continue
+
+                        # A transient endpoint failure the client already
+                        # retried: wait, then ask again with the conversation
+                        # intact, instead of ending a run that was going fine.
+                        outcome, unreachable = self._model_failure_outcome(
+                            e,
+                            _model_step_retries,
+                            steps_taken,
+                            conversation,
+                            partial_output=bool(full_response),
+                        )
+                        if outcome == "retry":
+                            _model_step_retries += 1
+                            continue
+                        if outcome == "cancelled":
+                            cancelled_by_console = True
+                            break
+                        if outcome == "unreachable":
+                            final_answer = unreachable
+                            break
 
                         self.error_history.append(
                             {
@@ -8133,6 +8419,7 @@ Do NOT wrap conversational replies in JSON.
                 # giving up. Keeps the conversation salvageable instead of
                 # failing the whole turn.
                 _retried_after_trim = False
+                _model_step_retries = 0
                 while True:
                     try:
                         chat_response = self.chat.send_messages(
@@ -8147,9 +8434,27 @@ Do NOT wrap conversational replies in JSON.
                             chat_response, "finish_reason", None
                         )
                         response_reasoning = _response_reasoning(chat_response)
+                        self._turn_model_retries[
+                            "request_retries"
+                        ] += self._last_request_retries()
                         break  # success → exit retry loop
                     except ConnectionError as e:
                         self.console.stop_progress()
+                        # A transient endpoint failure the client already
+                        # retried: wait, then ask again with the conversation
+                        # intact, instead of ending a run that was going fine.
+                        outcome, unreachable = self._model_failure_outcome(
+                            e, _model_step_retries, steps_taken, conversation
+                        )
+                        if outcome == "retry":
+                            _model_step_retries += 1
+                            continue
+                        if outcome == "cancelled":
+                            cancelled_by_console = True
+                            break
+                        if outcome == "unreachable":
+                            final_answer = unreachable
+                            break
                         error_msg = f"LLM Server Connection Failed: {str(e)}"
                         logger.error(error_msg)
                         self.console.print_error(error_msg)
@@ -8228,6 +8533,22 @@ Do NOT wrap conversational replies in JSON.
                             _retried_after_trim = True
                             continue  # retry with smaller payload
 
+                        # A transient endpoint failure the client already
+                        # retried: wait, then ask again with the conversation
+                        # intact, instead of ending a run that was going fine.
+                        outcome, unreachable = self._model_failure_outcome(
+                            e, _model_step_retries, steps_taken, conversation
+                        )
+                        if outcome == "retry":
+                            _model_step_retries += 1
+                            continue
+                        if outcome == "cancelled":
+                            cancelled_by_console = True
+                            break
+                        if outcome == "unreachable":
+                            final_answer = unreachable
+                            break
+
                         # Either context-overflow after trim, or unrelated.
                         # Give up gracefully.
                         self.error_history.append(
@@ -8268,7 +8589,7 @@ Do NOT wrap conversational replies in JSON.
                                     f"*Technical details: {str(e)}*"
                                 )
                         break
-                if final_answer is not None:
+                if final_answer is not None or cancelled_by_console:
                     break
 
                 # Stop the progress indicator
@@ -10098,6 +10419,13 @@ Do NOT wrap conversational replies in JSON.
             "error_history": self.error_history,  # Include the full error history
             "tool_schema": self._trace_tool_schema(),
             "completion_gaps": completion_gaps,
+            # Retries behind this turn's model calls, and whether the model
+            # stayed unreachable (the run is then "failed", never "success").
+            "model_retries": {
+                "request_retries": self._turn_model_retries["request_retries"],
+                "step_retries": self._turn_model_retries["step_retries"],
+            },
+            "model_unreachable": self._turn_model_retries["unreachable"],
             "extraction_sources": sorted(self._extraction_ledger.results),
             "verification": self.verification_state(),
         }
