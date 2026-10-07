@@ -1,0 +1,179 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Switches every Claude workflow between two subscription accounts.
+#
+# Each Claude step reads CLAUDE_CODE_OAUTH_TOKEN_SECONDARY instead of
+# CLAUDE_CODE_OAUTH_TOKEN while the repo variable CLAUDE_ACCOUNT is "secondary".
+# This job probes the primary account every hour: out of quota -> switch to the
+# secondary (after proving it answers) and open a tracking issue; answering
+# again -> switch back and close it. A bad credential never switches anything —
+# it fails here so a person fixes it. See docs/reference/claude-ci-workflows.md.
+name: Claude Account Switch
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      account:
+        description: "auto probes the primary account; primary or secondary forces that account"
+        type: choice
+        options: [auto, primary, secondary]
+        default: auto
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: claude-account-switch
+  cancel-in-progress: false
+
+env:
+  ISSUE_TITLE: "Claude CI is running on the secondary account"
+
+jobs:
+  switch:
+    if: github.repository == 'amd/gaia'
+    runs-on: ubuntu-latest
+    env:
+      CURRENT: ${{ vars.CLAUDE_ACCOUNT == 'secondary' && 'secondary' || 'primary' }}
+      MODE: ${{ github.event.inputs.account || 'auto' }}
+      HAS_SECONDARY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' }}
+    steps:
+      - name: Check out the repo for the probe classifier
+        uses: actions/checkout@v7
+
+      # Same probe as claude-auth-canary.yml: same pinned action, same model the
+      # real jobs use, and the same classifier, so "out of quota" means one thing.
+      - name: Probe the primary account
+        id: primary
+        if: env.MODE == 'auto'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # A schedule run's actor is whoever last touched the workflow, often a
+          # bot; the prompt is a fixed literal and the only tool is Read.
+          allowed_bots: "*"
+          prompt: |
+            Reply with exactly the word: ok
+          claude_args: |
+            --max-turns 1
+            --model claude-opus-5-5
+            --allowedTools Read
+
+      - name: Classify the primary probe
+        id: primary_verdict
+        if: env.MODE == 'auto'
+        env:
+          CLAUDE_CONCLUSION: ${{ steps.primary.outputs.conclusion }}
+          CLAUDE_LOG: ${{ steps.primary.outputs.execution_file }}
+        run: |
+          set -uo pipefail
+          if [ -z "${CLAUDE_LOG:-}" ] || [ ! -f "$CLAUDE_LOG" ]; then
+            echo "::error::The primary probe produced no execution log (conclusion='${CLAUDE_CONCLUSION:-}'), so this job cannot tell whether the primary account is out of quota. Nothing was switched. | WHAT TO DO: read the 'Probe the primary account' step log. | WHERE TO LOOK: .github/workflows/claude-account-switch.yml"
+            exit 1
+          fi
+          if [ "${CLAUDE_CONCLUSION:-}" = "success" ]; then PROBE_EXIT=0; else PROBE_EXIT=1; fi
+          python3 util/classify_claude_probe.py --exit-code "$PROBE_EXIT" \
+            --text-file "$CLAUDE_LOG" --format stream-json --always-scan --expect ok
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Decide which account to use
+        id: decide
+        env:
+          PRIMARY_CODE: ${{ steps.primary_verdict.outputs.code }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" != "auto" ]; then
+            desired="$MODE"
+            echo "Forced by workflow_dispatch: $desired"
+          else
+            case "${PRIMARY_CODE:-}" in
+              0) desired=primary ;;
+              2) desired=secondary ;;
+              *)
+                echo "::error::The primary account's probe was not a clean answer or a quota rejection (classifier exit ${PRIMARY_CODE:-none}), so the account was left as '$CURRENT'. A bad credential is fixed by rotating CLAUDE_CODE_OAUTH_TOKEN, never by switching. | WHAT TO DO: read the classifier line above. | WHERE TO LOOK: util/classify_claude_probe.py"
+                exit 1 ;;
+            esac
+          fi
+          if [ "$desired" = "secondary" ] && [ "$HAS_SECONDARY" != "true" ]; then
+            echo "::error::The primary Claude account is out of quota and no secondary is configured, so Claude CI stays down until the limit resets. | WHAT TO DO: run 'claude setup-token' while signed in to the second account, then: gh secret set CLAUDE_CODE_OAUTH_TOKEN_SECONDARY --repo $GITHUB_REPOSITORY | WHERE TO LOOK: docs/reference/claude-ci-workflows.md"
+            exit 1
+          fi
+          echo "desired=$desired" >> "$GITHUB_OUTPUT"
+          echo "Current account: $CURRENT. Desired: $desired."
+
+      # Never switch to an account that cannot answer either.
+      - name: Probe the secondary account
+        id: secondary
+        if: steps.decide.outputs.desired == 'secondary' && env.CURRENT != 'secondary'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64  # v1.0.240
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "*"
+          prompt: |
+            Reply with exactly the word: ok
+          claude_args: |
+            --max-turns 1
+            --model claude-opus-5-5
+            --allowedTools Read
+
+      - name: Require the secondary account to answer
+        if: steps.decide.outputs.desired == 'secondary' && env.CURRENT != 'secondary'
+        env:
+          CLAUDE_CONCLUSION: ${{ steps.secondary.outputs.conclusion }}
+          CLAUDE_LOG: ${{ steps.secondary.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLAUDE_LOG:-}" ] || [ ! -f "$CLAUDE_LOG" ]; then
+            echo "::error::The secondary probe produced no execution log, so CLAUDE_ACCOUNT was left as '$CURRENT'. | WHAT TO DO: read the 'Probe the secondary account' step log. | WHERE TO LOOK: CLAUDE_CODE_OAUTH_TOKEN_SECONDARY"
+            exit 1
+          fi
+          if [ "${CLAUDE_CONCLUSION:-}" = "success" ]; then PROBE_EXIT=0; else PROBE_EXIT=1; fi
+          python3 util/classify_claude_probe.py --exit-code "$PROBE_EXIT" \
+            --text-file "$CLAUDE_LOG" --format stream-json --always-scan --expect ok
+
+      - name: Set CLAUDE_ACCOUNT
+        if: steps.decide.outputs.desired != env.CURRENT
+        env:
+          DESIRED: ${{ steps.decide.outputs.desired }}
+          # GITHUB_TOKEN cannot write repo variables; this needs a token that can.
+          GH_TOKEN: ${{ secrets.CLAUDE_ACCOUNT_SWITCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Claude CI should move to the $DESIRED account, but CLAUDE_ACCOUNT_SWITCH_TOKEN is not set, so this job cannot change the variable. | WHAT TO DO: gh variable set CLAUDE_ACCOUNT --body $DESIRED --repo $GITHUB_REPOSITORY (or add a fine-grained token with Variables: write as CLAUDE_ACCOUNT_SWITCH_TOKEN) | WHERE TO LOOK: docs/reference/claude-ci-workflows.md"
+            exit 1
+          fi
+          gh variable set CLAUDE_ACCOUNT --body "$DESIRED" --repo "$GITHUB_REPOSITORY"
+          echo "::warning::Claude CI switched from the $CURRENT account to the $DESIRED account."
+
+      - name: Track the switch in an issue
+        if: steps.decide.outputs.desired != env.CURRENT
+        env:
+          DESIRED: ${{ steps.decide.outputs.desired }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number --jq '.[0].number // empty')
+          if [ "$DESIRED" = "secondary" ]; then
+            if [ -n "$open" ]; then
+              gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body "Switched to the secondary account again: $RUN_URL"
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body "The primary Claude account ran out of quota, so every Claude workflow now uses the secondary account (CLAUDE_CODE_OAUTH_TOKEN_SECONDARY). This issue closes itself when the primary answers again.
+
+          - Switch run: $RUN_URL
+          - Force it back: \`gh workflow run claude-account-switch.yml -f account=primary --repo $GITHUB_REPOSITORY\`
+
+          cc @kovtcharov-amd"
+            fi
+          elif [ -n "$open" ]; then
+            gh issue close "$open" --repo "$GITHUB_REPOSITORY" --comment "Back on the primary account: $RUN_URL"
+          fi
