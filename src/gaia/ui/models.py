@@ -7,10 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-try:
-    from gaia.version import __version__ as _gaia_version
-except ImportError:
-    _gaia_version = "0.1.0"
+from gaia.version import __version__ as _gaia_version
 
 # ── System ──────────────────────────────────────────────────────────────────
 
@@ -66,7 +63,8 @@ class SystemStatus(BaseModel):
     # any agent declaring ``min_memory_gb > 0`` would appear to be over budget.
     memory_available_gb: Optional[float] = None
     initialized: bool = False
-    version: str = _gaia_version
+    # A factory keeps the version out of the exported schema, which RC builds restamp.
+    version: str = Field(default_factory=lambda: _gaia_version)
     # How to start Lemonade ON THIS HOST, resolved server-side by
     # gaia.llm.lemonade_launcher.describe_start_hint. Served rather than
     # hardcoded in the UI so one rule decides it: the UI cannot know whether
