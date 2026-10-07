@@ -3935,6 +3935,8 @@ class ShellToolsMixin:
             Shell commands share one session, so a `cd` from an earlier command
             (when it was not a one-shot `working_directory` override) is still
             in effect. Call this to read that directory instead of guessing it.
+            When the user asks you to run a command, `pwd` included, run it with
+            `run_shell_command`; this only reads the session's state.
             """
             return {
                 "status": "success",
