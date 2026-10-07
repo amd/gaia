@@ -48,6 +48,13 @@ describe('ReleaseCandidate.astro', () => {
     expect(html).toContain('npm i -g @amd-gaia/agent-ui@next');
   });
 
+  it('keeps the summary small and muted, not a label like the stable downloads', async () => {
+    const summary = (await render(CANDIDATE)).match(/<summary[^>]*>/)?.[0] ?? '';
+    expect(summary).toContain('text-g-muted');
+    expect(summary).toContain('text-[12px]');
+    expect(summary).not.toContain('g-label');
+  });
+
   it('leaves out the download list when the release has no installers', async () => {
     const html = await render({ ...CANDIDATE, downloads: [] });
     expect(html).not.toContain('<ul');

@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 // The release candidate, for people who want to try the next release before it
-// ships. Deliberately quiet: collapsed, label-sized, and below the stable
-// downloads, which stay the default. Renders nothing unless there is a
+// ships. Deliberately quiet: collapsed, small, muted, and at the foot of the page,
+// so the stable downloads stay the default. Renders nothing unless there is a
 // candidate newer than the latest stable release (pickReleaseCandidate).
 //
 // The links come from the GitHub pre-release, not the hub catalog: the catalog
@@ -25,14 +25,14 @@ const COMMANDS = ['pip install --pre amd-gaia', 'npm i -g @amd-gaia/agent-ui@nex
 
 {candidate && (
   <details data-release-candidate class:list={['mx-auto w-full max-w-[720px] text-left', className]}>
-    <summary class="g-label cursor-pointer list-none transition-colors hover:text-g-text">
+    <summary class="cursor-pointer list-none text-[12px] text-g-muted transition-colors hover:text-g-text">
       Try the release candidate · {candidate.tag}
     </summary>
 
     <div class="mt-3 space-y-3">
       <p class="g-body text-[13px]">
         A pre-release of v{candidate.version} for testing before it ships. Expect rough
-        edges — the downloads above are the stable release.
+        edges — the downloads at the top of this page are the stable release.
       </p>
 
       {candidate.downloads.length > 0 && (

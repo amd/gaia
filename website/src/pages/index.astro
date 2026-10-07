@@ -201,7 +201,6 @@ const ARCHITECTURE = [
       </p>
 
       <Downloads class="animate-g-rise mt-10 [animation-delay:0.14s]" />
-      <ReleaseCandidate candidate={releaseCandidate} class="mt-6" />
 
       <!-- What the install does to the machine, said before anyone downloads. -->
       <ul class="mx-auto mt-10 grid w-full max-w-[720px] gap-x-8 gap-y-5 border-t border-g-border pt-8 text-left sm:grid-cols-3">
@@ -351,6 +350,12 @@ const ARCHITECTURE = [
         </div>
       </div>
     </section>
+    <!-- Release candidate, for testers only: below everything, so the stable downloads stay the one install. -->
+    {releaseCandidate && (
+      <section class="g-shell border-t border-g-border py-6">
+        <ReleaseCandidate candidate={releaseCandidate} />
+      </section>
+    )}
   </main>
   <Footer />
 </Layout>
