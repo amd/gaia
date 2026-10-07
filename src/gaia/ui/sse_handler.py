@@ -1232,12 +1232,12 @@ class SSEOutputHandler(OutputHandler):
                     self._confirm_id,
                 )
                 return False
+            if self._confirm_event is None:
+                # Nothing is waiting: the next prompt starts a fresh slot, so an
+                # answer recorded here would be reported delivered and then lost.
+                return False
             if always and self._confirm_tool:
                 self.grant_call_for_session(self._confirm_tool, self._confirm_args)
-            if self._confirm_event is None:
-                # No pending confirmation — initialise state anyway so callers can
-                # inspect _confirm_result and _confirm_event after the call.
-                self._confirm_event = threading.Event()
             self._confirm_result = (approved or always) and not timed_out
             self._confirm_timed_out = timed_out
             self._confirm_event.set()
