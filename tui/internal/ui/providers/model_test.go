@@ -595,3 +595,51 @@ func TestAnotherOrganizationsGatewayKeepsItsOwnHeader(t *testing.T) {
 			m.fields[0].Value(), m.fields[1].Value())
 	}
 }
+
+// A key Lemonade holds but that discovered nothing (the gateway rejected it)
+// must not read as configured on the list when the drill-in says otherwise.
+func TestAKeyThatFoundNoModelsIsNotShownAsConfigured(t *testing.T) {
+	none, some := 0, 12
+	m := New("", 100, 30)
+	m.providers = []lemonade.Provider{
+		{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true, ModelsDiscovered: &none},
+		{Name: "fireworks", RuntimeKey: true, ModelsDiscovered: &some},
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "key set, but it found no models") {
+		t.Fatalf("the AMD row hides that its key found no models:\n%s", view)
+	}
+	if strings.Count(view, "key configured") != 1 {
+		t.Fatalf("only the working Fireworks key may read as configured:\n%s", view)
+	}
+
+	m.selected = 2
+	m = m.setup()
+	setup := ansi.Strip(m.View())
+	if strings.Contains(setup, "already configured for") {
+		t.Fatalf("the drill-in vouches for a key that found no models:\n%s", setup)
+	}
+	if !strings.Contains(setup, "found no models") {
+		t.Fatalf("the drill-in does not say the key found no models:\n%s", setup)
+	}
+}
+
+// An older Lemonade that does not report a count keeps the plain status.
+func TestAnUnreportedModelCountKeepsKeyConfigured(t *testing.T) {
+	m := New("", 100, 30)
+	m.providers = []lemonade.Provider{{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "key configured") {
+		t.Fatalf("a key with no reported count lost its status:\n%s", view)
+	}
+}
+
+// A connect that discovers nothing re-reads provider state, so the list
+// reflects the key Lemonade now holds instead of the state before it.
+func TestAnEmptyConnectRereadsProviderState(t *testing.T) {
+	m := New("", 100, 30)
+	m.selected = 2
+	m = m.setup()
+	if _, cmd := m.Update(modelsMsg{}); cmd == nil {
+		t.Fatal("an empty connect left the provider list stale")
+	}
+}

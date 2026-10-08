@@ -133,7 +133,16 @@ type Provider struct {
 	Prefix     string `json:"auth_header_prefix"`
 	EnvKey     bool   `json:"env_var_set"`
 	RuntimeKey bool   `json:"runtime_key_set"`
+	// ModelsDiscovered is nil when this Lemonade does not report it.
+	ModelsDiscovered *int `json:"models_discovered"`
 }
+
+// KeyFindsNoModels is true when a key is held but discovered nothing, which is
+// how Lemonade reports a key the provider rejected: it stores keys unchecked.
+func (p Provider) KeyFindsNoModels() bool {
+	return (p.EnvKey || p.RuntimeKey) && p.ModelsDiscovered != nil && *p.ModelsDiscovered == 0
+}
+
 type Model struct {
 	ID            string   `json:"id"`
 	ContextLength int      `json:"context_length"`

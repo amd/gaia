@@ -165,6 +165,16 @@ func (m Model) keyStatus() (env, runtime bool) {
 	}
 	return false, false
 }
+
+// keyFindsNoModels reports whether the chosen provider's key discovered nothing.
+func (m Model) keyFindsNoModels() bool {
+	for _, p := range m.providers {
+		if p.Name == m.chosen() {
+			return p.KeyFindsNoModels()
+		}
+	}
+	return false
+}
 func (m Model) fetchModels() tea.Cmd {
 	c, p, ctx := m.client, m.chosen(), m.ctx
 	return func() tea.Msg { return loadCatalog(ctx, c, p) }
@@ -370,7 +380,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.chosen() == "local" {
 				m.note = "Lemonade lists no local chat models. Update Lemonade, then retry."
 			}
-			return m, nil
+			// Lemonade now holds the key just tried; the list must show that.
+			return m, m.Init()
 		}
 		m.entries = v.entries
 		m.stage = "models"
@@ -636,7 +647,11 @@ func (m Model) View() string {
 			} else if name != "local" {
 				desc = "Via Lemonade · key needed"
 				for _, p := range m.providers {
-					if p.Name == name && (p.EnvKey || p.RuntimeKey) {
+					switch {
+					case p.Name != name:
+					case p.KeyFindsNoModels():
+						desc = "Via Lemonade · key set, but it found no models — check the key"
+					case p.EnvKey || p.RuntimeKey:
 						desc = "Via Lemonade · key configured"
 					}
 				}
@@ -668,7 +683,13 @@ func (m Model) View() string {
 			lines = append(lines, "A pasted key is saved in this computer's credential store and handed back to Lemonade after it restarts.", "Provider settings are shared by clients of this Lemonade server.")
 		}
 		success := lipgloss.NewStyle().Foreground(theme.Success)
+		warn := lipgloss.NewStyle().Foreground(theme.Warning)
 		switch env, runtime := m.keyStatus(); {
+		case m.keyFindsNoModels() && m.height < 22:
+			lines = append(lines, warn.Render("The key set here found no models."))
+		case m.keyFindsNoModels():
+			lines = append(lines, warn.Render(
+				"The key set for "+lemonade.Label(m.chosen())+" found no models. Check the key, model access, and gateway URL, or paste a new key."))
 		case env && m.height < 22:
 			lines = append(lines, success.Render("Environment key active — blank keeps it."))
 		case runtime && m.height < 22:
