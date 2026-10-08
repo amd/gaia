@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -157,6 +158,13 @@ func Check(ctx context.Context, claudeMode bool) (ready bool, err error) {
 		ErrUnanswered, runErr, LastMeaningfulLine(out.String()))
 }
 
+// withEnv adds env to cmd's inherited environment; nothing to add leaves it inherited.
+func withEnv(cmd *exec.Cmd, env []string) {
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+}
+
 // Event is one line of `gaia init` output, or — once Done — the run's result.
 type Event struct {
 	Line string
@@ -169,7 +177,10 @@ type Event struct {
 // Start launches `gaia init` for the flagship profile and streams its
 // stdout/stderr, one Event per line, terminated by an Event{Done: true}. The
 // returned CancelFunc kills the child; safe to call from any goroutine.
-func Start(claudeMode bool) (<-chan Event, context.CancelFunc, error) {
+//
+// env is added to the child's environment, e.g. LEMONADE_BASE_URL to keep
+// setup on the server the caller is already using.
+func Start(claudeMode bool, env ...string) (<-chan Event, context.CancelFunc, error) {
 	bin, err := Binary()
 	if err != nil {
 		return nil, nil, err
@@ -177,6 +188,7 @@ func Start(claudeMode bool) (<-chan Event, context.CancelFunc, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, bin, RunArgs(claudeMode)...)
+	withEnv(cmd, env)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
