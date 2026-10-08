@@ -26,6 +26,8 @@ type loadedMsg struct {
 	source    *lemonade.Client
 	providers []lemonade.Provider
 	err       error
+	// restoreErr is why a saved key could not be handed back to Lemonade.
+	restoreErr error
 	// started is when the read was sent, so a slow one cannot undo a newer one.
 	started time.Time
 }
@@ -83,6 +85,9 @@ type Model struct {
 	down bool
 	// readAt is when the provider read now shown was sent.
 	readAt time.Time
+	// read is set once a provider read has landed; until then no row can say
+	// whether a key is saved.
+	read bool
 }
 
 var names = []string{"local", "fireworks", "amd"}
@@ -99,12 +104,15 @@ func (m Model) Init() tea.Cmd {
 	return func() tea.Msg {
 		// Lemonade forgets a pasted key when it restarts; give it back any key
 		// kept from an earlier session before reading which providers have one.
+		var restoreErr error
 		for _, name := range names[1:] {
-			restoreKey(name)
+			if err := restoreKey(name); err != nil && restoreErr == nil {
+				restoreErr = err
+			}
 		}
 		started := time.Now()
 		p, e := c.Providers(m.ctx)
-		return loadedMsg{source: c, providers: p, err: e, started: started}
+		return loadedMsg{source: c, providers: p, err: e, restoreErr: restoreErr, started: started}
 	}
 }
 
@@ -138,10 +146,10 @@ func (m Model) register() tea.Cmd {
 		if err := c.Configure(m.ctx, p, ""); err != nil {
 			return loadedMsg{source: c, err: err, started: time.Now()}
 		}
-		restoreKey(p.Name)
+		restoreErr := restoreKey(p.Name)
 		started := time.Now()
 		providers, err := c.Providers(m.ctx)
-		return loadedMsg{source: c, providers: providers, err: err, started: started}
+		return loadedMsg{source: c, providers: providers, err: err, restoreErr: restoreErr, started: started}
 	}
 }
 func (m Model) listed(name string) bool {
@@ -332,15 +340,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.readAt = v.started
+		m.read = true
 		// A failed read keeps what is known rather than forgetting every key.
 		if v.err == nil || v.providers != nil {
 			m.providers = v.providers
 		}
 		wasWaiting := m.waiting()
 		m.down = errors.Is(v.err, lemonade.ErrUnreachable)
-		if v.err != nil {
+		switch {
+		case v.err != nil:
 			m.note = m.explain(v.err)
-		} else if wasWaiting {
+		case v.restoreErr != nil:
+			m.note = "A saved key could not be restored, so a provider may show \"key needed\" " +
+				"while one is saved: " + v.restoreErr.Error() + ". Press r to retry."
+		case wasWaiting:
 			m.note = ""
 		}
 		if m.stage == "setup" {
@@ -633,6 +646,8 @@ func (m Model) View() string {
 			desc := "On this machine · models that fit this PC"
 			if m.waiting() {
 				desc = fmt.Sprintf("Available after setup step %d", m.setupStep)
+			} else if name != "local" && !m.read {
+				desc = "Via Lemonade · checking for a saved key"
 			} else if name != "local" {
 				desc = "Via Lemonade · key needed"
 				for _, p := range m.providers {

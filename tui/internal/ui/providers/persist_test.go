@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -25,11 +26,19 @@ type keyStoreCalls struct {
 	forgotten   []string
 	restored    []string
 	rememberErr error
+	restoreErr  error
 }
 
 var store keyStoreCalls
 
+// realRestoreKey is the shipped restoreKey, kept so its daemon call can be
+// checked against a stubbed callDaemon.
+var realRestoreKey = restoreKey
+
 func TestMain(m *testing.M) {
+	callDaemon = func(method, path string, body []byte, start bool, op, alternative string) ([]byte, error) {
+		return nil, errors.New("a test reached the daemon")
+	}
 	rememberKey = func(provider, key string) error {
 		store.remembered = append(store.remembered, provider+"="+key)
 		return store.rememberErr
@@ -38,8 +47,54 @@ func TestMain(m *testing.M) {
 		store.forgotten = append(store.forgotten, provider)
 		return nil
 	}
-	restoreKey = func(provider string) { store.restored = append(store.restored, provider) }
+	restoreKey = func(provider string) error {
+		store.restored = append(store.restored, provider)
+		return store.restoreErr
+	}
 	os.Exit(m.Run())
+}
+
+// A saved key lives in a credential store only the daemon can read, so
+// restoring it must start a daemon that is down rather than skip the restore.
+func TestRestoringAKeyStartsTheDaemon(t *testing.T) {
+	orig := callDaemon
+	t.Cleanup(func() { callDaemon = orig })
+	var started []bool
+	callDaemon = func(method, path string, body []byte, start bool, op, alternative string) ([]byte, error) {
+		started = append(started, start)
+		return []byte(`{"authenticated":true}`), nil
+	}
+	if err := realRestoreKey("amd"); err != nil {
+		t.Fatal(err)
+	}
+	if len(started) != 1 || !started[0] {
+		t.Fatalf("restore called the daemon with start=%v, want it started", started)
+	}
+}
+
+// Until the first read lands no row may claim a key is needed.
+func TestRowsDoNotSayKeyNeededBeforeTheFirstRead(t *testing.T) {
+	m := New("", 100, 30)
+	view := m.View()
+	if strings.Contains(view, "key needed") {
+		t.Fatalf("a row said key needed before anything was checked:\n%s", view)
+	}
+	next, _ := m.Update(loadedMsg{source: m.client, providers: []lemonade.Provider{
+		{Name: "amd", RuntimeKey: true}, {Name: "fireworks"}}, started: time.Now()})
+	view = next.(Model).View()
+	if !strings.Contains(view, "key configured") || !strings.Contains(view, "key needed") {
+		t.Fatalf("after the read the rows must report each key:\n%s", view)
+	}
+}
+
+// A restore that failed is said, not hidden behind a "key needed" row.
+func TestAFailedRestoreIsReported(t *testing.T) {
+	m := New("", 100, 30)
+	next, _ := m.Update(loadedMsg{source: m.client, providers: []lemonade.Provider{{Name: "amd"}},
+		restoreErr: errors.New("daemon-down-sentinel"), started: time.Now()})
+	if view := next.(Model).View(); !strings.Contains(view, "daemon-down-sentinel") {
+		t.Fatalf("the restore failure was not shown:\n%s", view)
+	}
 }
 
 func resetStore() { store = keyStoreCalls{} }
