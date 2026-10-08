@@ -1689,8 +1689,12 @@ def _cloud_error_status(error: openai.APIError) -> Optional[int]:
         envelope = body.get("error", body)
         if isinstance(envelope, dict):
             details = envelope.get("details")
+            # Lemonade's mid-stream error frame puts status_code on the
+            # envelope itself; its HTTP error body nests it under details.
+            candidates = [envelope.get("status_code")]
             if isinstance(details, dict):
-                status = details.get("status_code")
+                candidates.insert(0, details.get("status_code"))
+            for status in candidates:
                 if (
                     isinstance(status, int)
                     and not isinstance(status, bool)
