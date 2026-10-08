@@ -101,14 +101,14 @@ func TestSetupIsNotPinnedWhenItAlreadyResolvesTheServer(t *testing.T) {
 		probeLemonade = func(context.Context) (string, bool, string) {
 			return "http://localhost:13305/api/v1", false, "stub"
 		}
-		if env := pinnedLemonadeEnv(context.Background()); env != nil {
+		if env := PinnedLemonadeEnv(context.Background()); env != nil {
 			t.Fatalf("pinned %v with no server answering", env)
 		}
 	})
 	t.Run("configured URL", func(t *testing.T) {
 		systemLemonadeAnswering(t)
 		t.Setenv(lemonadeBaseURLEnv, "http://localhost:9999")
-		if env := pinnedLemonadeEnv(context.Background()); env != nil {
+		if env := PinnedLemonadeEnv(context.Background()); env != nil {
 			t.Fatalf("pinned %v over the user's own LEMONADE_BASE_URL", env)
 		}
 	})
@@ -122,7 +122,7 @@ func TestSetupIsNotPinnedWhenItAlreadyResolvesTheServer(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(state), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if env := pinnedLemonadeEnv(context.Background()); env != nil {
+		if env := PinnedLemonadeEnv(context.Background()); env != nil {
 			t.Fatalf("pinned %v while GAIA's own server is the one in use", env)
 		}
 	})

@@ -265,13 +265,24 @@ const installGaiaHint = "Install GAIA with `curl -fsSL https://amd-gaia.ai/insta
 	"into the Python environment on your PATH, then retry. " +
 	"From a clone of the repo, `pip install -e .` works too"
 
+// LaunchEnv, when set, adds environment to a daemon this process starts. The
+// TUI uses it to keep a new daemon on the Lemonade its gate is already using:
+// left alone, the daemon starts GAIA's own beside it.
+var LaunchEnv func(ctx context.Context) []string
+
 // gaiaDaemonStart builds the default launcher command.
 func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
 	bin, err := exec.LookPath("gaia")
 	if err != nil {
 		return nil, &StartError{Reason: unresolvableGaiaReason(findInstalledButUnresolvable())}
 	}
-	return exec.CommandContext(ctx, bin, "daemon", "start"), nil
+	cmd := exec.CommandContext(ctx, bin, "daemon", "start")
+	if LaunchEnv != nil {
+		if env := LaunchEnv(ctx); len(env) > 0 {
+			cmd.Env = append(os.Environ(), env...)
+		}
+	}
+	return cmd, nil
 }
 
 // installEvidence is what the filesystem says about a past GAIA install after

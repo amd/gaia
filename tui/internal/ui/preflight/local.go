@@ -481,11 +481,12 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 	return bases[len(bases)-1], false, strings.Join(traces, "\n")
 }
 
-// pinnedLemonadeEnv keeps `gaia init` on the server this gate is already using.
-// Left to itself, setup starts GAIA's own Lemonade beside a system one that is
-// answering, and every provider connected on the first is missing from the
-// server GAIA resolves next. The agent child is pinned the same way.
-func pinnedLemonadeEnv(ctx context.Context) []string {
+// PinnedLemonadeEnv keeps `gaia init` and a daemon the TUI starts on the server
+// this gate is already using. Left to themselves, both start GAIA's own Lemonade
+// beside a system one that is answering, and every provider connected on the
+// first is missing from the server GAIA resolves next. The agent child is
+// pinned the same way.
+func PinnedLemonadeEnv(ctx context.Context) []string {
 	if strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv)) != "" || readEmbeddedLemonade() != nil {
 		return nil
 	}
@@ -609,7 +610,7 @@ func (l localRunner) verifySkipsChatModel() bool {
 func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, string) {
 	row := Row{Key: KeyModel}
 
-	pin := pinnedLemonadeEnv(ctx)
+	pin := PinnedLemonadeEnv(ctx)
 	st, err := gaiainit.Verify(ctx, l.verifySkipsChatModel(), l.localChatModel(), pin...)
 	switch {
 	case errors.Is(err, gaiainit.ErrUnanswered):
@@ -842,7 +843,7 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 		return FixResult{Err: errNoFix}
 	}
 
-	ch, cancel, err := gaiainit.Start(l.skipChatModel(), pinnedLemonadeEnv(ctx)...)
+	ch, cancel, err := gaiainit.Start(l.skipChatModel(), PinnedLemonadeEnv(ctx)...)
 	if err != nil {
 		return FixResult{Err: err, Diagnosis: Diagnosis{
 			Cause:   err.Error(),
