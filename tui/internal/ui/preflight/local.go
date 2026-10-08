@@ -91,8 +91,10 @@ func (l localRunner) Rows(cfg Config) []Row {
 	if l.opts.ClaudeMode {
 		rows = append(rows, Row{Key: KeyClaudeCredential, Label: "Claude credential"})
 	}
+	// Only Claude leaves this row about embeddings alone: a cloud model is
+	// checked here too, and its failure must not sit under an "Embeddings" label.
 	modelLabel := modelRowLabel
-	if l.skipChatModel() && l.pickedLocalModel() == "" {
+	if l.opts.ClaudeMode {
 		modelLabel = "Embeddings"
 	}
 	rows = append(rows,
@@ -479,6 +481,21 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 	return bases[len(bases)-1], false, strings.Join(traces, "\n")
 }
 
+// pinnedLemonadeEnv keeps `gaia init` on the server this gate is already using.
+// Left to itself, setup starts GAIA's own Lemonade beside a system one that is
+// answering, and every provider connected on the first is missing from the
+// server GAIA resolves next. The agent child is pinned the same way.
+func pinnedLemonadeEnv(ctx context.Context) []string {
+	if strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv)) != "" || readEmbeddedLemonade() != nil {
+		return nil
+	}
+	base, reachable, _ := probeLemonade(ctx)
+	if !reachable {
+		return nil
+	}
+	return []string{lemonadeBaseURLEnv + "=" + base}
+}
+
 // --- 3. the models -----------------------------------------------------------
 
 // skipChatModel reports that setup must not pick and download the chat model:
@@ -564,7 +581,8 @@ func (l localRunner) checkCloudModelListed(ctx context.Context, row Row) (Row, b
 	row.State = StateFailed
 	row.Disposition = status.DispositionHalt
 	row.Line = chosen + " is not available on GAIA's model server"
-	row.Detail = lemonade.Label(provider) + " is not connected on the server GAIA uses, so it cannot answer."
+	row.Detail = "The embedding model loads, but " + lemonade.Label(provider) +
+		" is not connected on the server GAIA uses, so chat cannot answer."
 	row.Fix = FixNone
 	row.Remedy = Remedy{
 		Action: "Press p, choose " + lemonade.Label(provider) + ", and connect it.",
@@ -591,7 +609,7 @@ func (l localRunner) verifySkipsChatModel() bool {
 func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, string) {
 	row := Row{Key: KeyModel}
 
-	st, err := gaiainit.Verify(ctx, l.verifySkipsChatModel(), l.localChatModel())
+	st, err := gaiainit.Verify(ctx, l.verifySkipsChatModel(), l.localChatModel(), pinnedLemonadeEnv(ctx)...)
 	switch {
 	case errors.Is(err, gaiainit.ErrUnanswered):
 		// The question was never answered — an installed gaia older than
@@ -801,7 +819,7 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 		return FixResult{Err: errNoFix}
 	}
 
-	ch, cancel, err := gaiainit.Start(l.skipChatModel())
+	ch, cancel, err := gaiainit.Start(l.skipChatModel(), pinnedLemonadeEnv(ctx)...)
 	if err != nil {
 		return FixResult{Err: err, Diagnosis: Diagnosis{
 			Cause:   err.Error(),

@@ -171,6 +171,10 @@ before it: is `gaia-agent` on this machine, is the local model server (Lemonade)
 reachable, and do the models **load**. The gate stops at the first failure — a
 missing model server makes "do the models load" meaningless.
 
+When a Lemonade you installed yourself is already answering, the gate uses it
+for every step, setup included, so a provider you connect with **p** stays
+connected. GAIA installs its own private server only when none is answering.
+
 An all-green machine lands in chat without a keypress, naming the chat model on
 its way out. Because the last check loads the models, that takes a few seconds
 when they are already in memory and longer right after a reboot — time the first

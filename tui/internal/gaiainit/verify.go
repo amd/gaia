@@ -78,8 +78,9 @@ func VerifyArgs(claudeMode bool, chatModel string) []string {
 // load. "Downloaded" is not "works": an embedder llama-server cannot start
 // passes the presence check and fails on the first chat turn.
 //
-// A stopped GAIA Lemonade Server is started on the way, as Check does.
-func Verify(ctx context.Context, claudeMode bool, chatModel string) (Status, error) {
+// A stopped GAIA Lemonade Server is started on the way, as Check does, unless
+// env names another server with LEMONADE_BASE_URL.
+func Verify(ctx context.Context, claudeMode bool, chatModel string, env ...string) (Status, error) {
 	bin, err := Binary()
 	if err != nil {
 		return Status{}, fmt.Errorf("%w: %w", ErrUnanswered, err)
@@ -88,6 +89,7 @@ func Verify(ctx context.Context, claudeMode bool, chatModel string) (Status, err
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin, VerifyArgs(claudeMode, chatModel)...)
+	withEnv(cmd, env)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
