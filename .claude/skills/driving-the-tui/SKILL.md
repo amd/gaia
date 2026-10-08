@@ -114,7 +114,8 @@ screen to navigate, since `gaia-tui` boots straight into one agent's chat behind
 a readiness gate. On `preflight`, `blocker` names the row refusing the launch
 (`binary`, `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`); wait on
 `{"state": {"view": "chat"}}` rather than a screen substring. `esc` quits on
-`preflight` (no screen behind it) and clears the composer on an idle `chat`.
+`preflight` (no screen behind it) unless the `d` details pane is open, which it
+closes first, and clears the composer on an idle `chat`.
 
 ## Proof: screenshots and video
 
