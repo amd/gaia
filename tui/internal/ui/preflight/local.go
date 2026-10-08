@@ -323,6 +323,12 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 		return row
 	}
 
+	// A server on another machine is not GAIA's to start: a local one would not
+	// make it answer, and the wait would only delay this row.
+	if !isLoopback(base) {
+		return remoteLemonadeDownRow(row, base)
+	}
+
 	// Installed but stopped is the commonest way to land here, and it is the one
 	// case this screen can resolve by itself. Starting is not installing: an
 	// absent Lemonade still falls through to the `f` key below, because pulling
@@ -349,17 +355,12 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	// stops at the FIRST failure, so whenever this row is the blocker the model
 	// row below it is pending and unfocusable.
 	//
-	// Two states are excluded because `gaia init` provably cannot fix them:
-	//
-	//   - a bad LEMONADE_SERVER_PATH: setup would inherit the same bad value,
-	//     so the key would fail every time while the step that DOES fix it
-	//     (unset the variable) sat below as the optional alternative;
-	//   - a non-loopback LEMONADE_BASE_URL: `gaia init` auto-detects remote
-	//     mode from it and then refuses to install or start anything. The
-	//     daemon runner already special-cases this (check.go); matching it here
-	//     is what keeps the two screens from diverging.
+	// A bad LEMONADE_SERVER_PATH is excluded because `gaia init` provably cannot
+	// fix it: setup would inherit the same bad value, so the key would fail
+	// every time while the step that DOES fix it (unset the variable) sat below
+	// as the optional alternative. A remote LEMONADE_BASE_URL never gets here.
 	l0 := resolveLemonade()
-	if l0.BadOverride != "" || !isLoopback(base) {
+	if l0.BadOverride != "" {
 		return row
 	}
 	row.Fix = FixRunSetup
@@ -385,6 +386,24 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 		return row
 	}
 	row.Remedy.Action = "Press f and setup starts it. By hand instead: " + row.Remedy.Action
+	return row
+}
+
+// remoteLemonadeDownRow is the row for a LEMONADE_BASE_URL on another machine
+// that is not answering. It carries no command: how that server starts is up to
+// whoever runs it, and no one-key setup either — `gaia init` refuses remote mode.
+func remoteLemonadeDownRow(row Row, base string) Row {
+	row.State = StateFailed
+	row.Disposition = status.DispositionHalt
+	row.Line = "not answering at " + base
+	row.Detail = "LEMONADE_BASE_URL points at a Lemonade Server on another machine. " +
+		"GAIA does not start that server, so it cannot bring it up from here."
+	row.Remedy = Remedy{
+		Action: "Make sure the Lemonade Server at " + base + " is running and reachable " +
+			"from this machine, or fix LEMONADE_BASE_URL (unset it to use a local server). " +
+			"Then press r to re-check.",
+		Where: lemonadeDocs,
+	}
 	return row
 }
 
