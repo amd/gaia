@@ -26,6 +26,8 @@ type loadedMsg struct {
 	source    *lemonade.Client
 	providers []lemonade.Provider
 	err       error
+	// restoreErr is why a saved key could not be handed back to Lemonade.
+	restoreErr error
 	// started is when the read was sent, so a slow one cannot undo a newer one.
 	started time.Time
 }
@@ -83,6 +85,9 @@ type Model struct {
 	down bool
 	// readAt is when the provider read now shown was sent.
 	readAt time.Time
+	// read is set once a provider read has landed; until then no row can say
+	// whether a key is saved.
+	read bool
 }
 
 var names = []string{"local", "fireworks", "amd"}
@@ -99,12 +104,15 @@ func (m Model) Init() tea.Cmd {
 	return func() tea.Msg {
 		// Lemonade forgets a pasted key when it restarts; give it back any key
 		// kept from an earlier session before reading which providers have one.
+		var restoreErr error
 		for _, name := range names[1:] {
-			restoreKey(name)
+			if err := restoreKey(name); err != nil && restoreErr == nil {
+				restoreErr = err
+			}
 		}
 		started := time.Now()
 		p, e := c.Providers(m.ctx)
-		return loadedMsg{source: c, providers: p, err: e, started: started}
+		return loadedMsg{source: c, providers: p, err: e, restoreErr: restoreErr, started: started}
 	}
 }
 
@@ -127,21 +135,21 @@ func (m Model) explain(err error) string {
 	return err.Error()
 }
 
-// register lists Fireworks with Lemonade — the same fixed settings Connect
-// sends, without a key — because Lemonade reports an environment key only
-// for a provider it has registered, and a kept key can only be restored into
-// one.
+// register lists the chosen provider with Lemonade — the settings the form
+// shows, without a key — because Lemonade reports an environment key only for
+// a provider it has registered, and a kept key can only be restored into one.
+// A Lemonade that has never seen the provider otherwise reads "key needed" and
+// a blank connect finds no models, with a key saved.
 func (m Model) register() tea.Cmd {
-	c := m.client
-	p := lemonade.Provider{Name: "fireworks", BaseURL: lemonade.FireworksURL, Header: "Authorization", Prefix: "Bearer "}
+	c, p := m.client, m.formProvider()
 	return func() tea.Msg {
 		if err := c.Configure(m.ctx, p, ""); err != nil {
 			return loadedMsg{source: c, err: err, started: time.Now()}
 		}
-		restoreKey(p.Name)
+		restoreErr := restoreKey(p.Name)
 		started := time.Now()
 		providers, err := c.Providers(m.ctx)
-		return loadedMsg{source: c, providers: providers, err: err, started: started}
+		return loadedMsg{source: c, providers: providers, err: err, restoreErr: restoreErr, started: started}
 	}
 }
 func (m Model) listed(name string) bool {
@@ -302,6 +310,13 @@ func (m Model) setup() Model {
 	m.note = ""
 	return m
 }
+
+// formProvider is the provider the setup form describes, without its key.
+func (m Model) formProvider() lemonade.Provider {
+	return lemonade.Provider{Name: m.chosen(), BaseURL: strings.TrimSpace(m.fields[0].Value()),
+		Header: strings.TrimSpace(m.fields[1].Value()), Prefix: m.fields[2].Value()}
+}
+
 func (m Model) keyPlaceholder() string {
 	if env, runtime := m.keyStatus(); env || runtime {
 		return "A key is already set — Enter connects"
@@ -332,15 +347,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.readAt = v.started
+		m.read = true
 		// A failed read keeps what is known rather than forgetting every key.
 		if v.err == nil || v.providers != nil {
 			m.providers = v.providers
 		}
 		wasWaiting := m.waiting()
 		m.down = errors.Is(v.err, lemonade.ErrUnreachable)
-		if v.err != nil {
+		switch {
+		case v.err != nil:
 			m.note = m.explain(v.err)
-		} else if wasWaiting {
+		case v.restoreErr != nil:
+			m.note = "A saved key could not be restored, so a provider may show \"key needed\" " +
+				"while one is saved: " + v.restoreErr.Error() + ". Press r to retry."
+		case wasWaiting:
 			m.note = ""
 		}
 		if m.stage == "setup" {
@@ -482,7 +502,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(m.spin.Tick, m.fetchModels())
 				}
 				m = m.setup()
-				if m.chosen() == "fireworks" && !m.listed("fireworks") {
+				// Only once a read proves it absent: registering over a provider
+				// not yet read would replace another gateway's settings.
+				if m.read && !m.listed(m.chosen()) && m.formProvider().BaseURL != "" {
 					return m, tea.Batch(textinput.Blink, m.register())
 				}
 				return m, textinput.Blink
@@ -564,7 +586,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return clearedMsg{source: c}
 				})
 			case "enter":
-				p := lemonade.Provider{Name: m.chosen(), BaseURL: strings.TrimSpace(m.fields[0].Value()), Header: strings.TrimSpace(m.fields[1].Value()), Prefix: m.fields[2].Value()}
+				p := m.formProvider()
 				key := strings.TrimSpace(m.fields[3].Value())
 				m.fields[3].SetValue("")
 				m.busy = true
@@ -633,6 +655,8 @@ func (m Model) View() string {
 			desc := "On this machine · models that fit this PC"
 			if m.waiting() {
 				desc = fmt.Sprintf("Available after setup step %d", m.setupStep)
+			} else if name != "local" && !m.read {
+				desc = "Via Lemonade · checking for a saved key"
 			} else if name != "local" {
 				desc = "Via Lemonade · key needed"
 				for _, p := range m.providers {
