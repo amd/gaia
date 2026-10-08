@@ -80,10 +80,10 @@ _MACHINE_ALIASES = {
 # install() fail loudly; tests/integration/test_lemonade_embeddable_assets.py
 # checks them against the live release so CI catches the omission first.
 EMBEDDABLE_SHA256: Dict[str, str] = {
-    "lemonade-embeddable-2026.40.0-windows-x64.zip": "30acbcc8beea565f0ea69ea92b229c45c7e7c756a6b35573c45840765c599e8f",
-    "lemonade-embeddable-2026.40.0-ubuntu-x64.tar.gz": "7b7ff14dfe9aea312f5d88281e6499d98fa52ad09f0272dd7ef32e6b6ada3537",
-    "lemonade-embeddable-2026.40.0-ubuntu-arm64.tar.gz": "6ab4a80e51e80f8410b1b31aa7665717e0f78926d57ff55e2bf83995d19dbb32",
-    "lemonade-embeddable-2026.40.0-macos-arm64.tar.gz": "5301b1004e95454b4b4b2a0b09206764c52d387fe6fcd6ac5340bffe55779151",
+    "lemonade-embeddable-2026.41.1-windows-x64.zip": "055b582d6c64f3a7a60438edf371b1fc75bfdd481b4f104175ba521f57eadb08",
+    "lemonade-embeddable-2026.41.1-ubuntu-x64.tar.gz": "8029760a9c0ca4574783dcb8b9fbb1183b25de45cd347e4960c82342184fbea4",
+    "lemonade-embeddable-2026.41.1-ubuntu-arm64.tar.gz": "903392f17de9521df8e45528aafbdac7c7f596acbf925651a9406edc616fea3e",
+    "lemonade-embeddable-2026.41.1-macos-arm64.tar.gz": "c1d6166346bb74f091a8c69c5d70bef0270f3a43f0f859bc045d07e936b88094",
 }
 
 # lemond reads these from <config_dir>/config.json.
