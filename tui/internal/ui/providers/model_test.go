@@ -600,11 +600,10 @@ func TestAnotherOrganizationsGatewayKeepsItsOwnHeader(t *testing.T) {
 // must not read as configured on the list when the drill-in says otherwise.
 func TestAKeyThatFoundNoModelsIsNotShownAsConfigured(t *testing.T) {
 	none, some := 0, 12
-	m := New("", 100, 30)
-	m.providers = []lemonade.Provider{
-		{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true, ModelsDiscovered: &none},
-		{Name: "fireworks", RuntimeKey: true, ModelsDiscovered: &some},
-	}
+	m := readProviders(New("", 100, 30),
+		lemonade.Provider{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true, ModelsDiscovered: &none},
+		lemonade.Provider{Name: "fireworks", RuntimeKey: true, ModelsDiscovered: &some},
+	)
 	view := ansi.Strip(m.View())
 	if !strings.Contains(view, "key set, but it found no models") {
 		t.Fatalf("the AMD row hides that its key found no models:\n%s", view)
@@ -626,11 +625,18 @@ func TestAKeyThatFoundNoModelsIsNotShownAsConfigured(t *testing.T) {
 
 // An older Lemonade that does not report a count keeps the plain status.
 func TestAnUnreportedModelCountKeepsKeyConfigured(t *testing.T) {
-	m := New("", 100, 30)
-	m.providers = []lemonade.Provider{{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}
+	m := readProviders(New("", 100, 30),
+		lemonade.Provider{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true})
 	if view := ansi.Strip(m.View()); !strings.Contains(view, "key configured") {
 		t.Fatalf("a key with no reported count lost its status:\n%s", view)
 	}
+}
+
+// readProviders lands a provider read the way Lemonade's answer does, so the
+// list renders what it shows after a real read rather than before one.
+func readProviders(m Model, providers ...lemonade.Provider) Model {
+	next, _ := m.Update(loadedMsg{source: m.client, providers: providers})
+	return next.(Model)
 }
 
 // A connect that discovers nothing re-reads provider state, so the list
