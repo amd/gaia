@@ -23,11 +23,13 @@ from __future__ import annotations
 
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_LOAD_TIMEOUT,
+    LemonadeAuthError,
     LemonadeStatus,
     _cloud_request_error,
     resolve_ctx_size,
 )
 from gaia.llm.providers.lemonade import (
+    LemonadeAuthRejectedError,
     LemonadeCloudAccountError,
     LemonadeModelNotFoundError,
     LemonadeModelNotLoadedError,
@@ -268,6 +270,51 @@ def test_agent_says_billing_not_try_again_for_a_refused_account() -> None:
     assert msg is not None
     assert "spending limit" in msg
     assert "temporary" not in msg
+
+
+def test_rejected_key_is_not_retryable_and_keeps_its_remedy() -> None:
+    """A cloud 401/403 means a bad key or no model access; no retry fixes it."""
+    for status in (401, 403):
+        exc = RuntimeError(f"Error in send_messages: {_cloud_request_error(status)}")
+        err = _classify_chat_exception(exc)
+        assert isinstance(err, LemonadeAuthRejectedError)
+        assert err.retryable is False
+        assert err.user_message.startswith(
+            f"Cloud authentication or access was denied (HTTP {status})"
+        )
+        assert "Reconnect the provider" in err.user_message
+
+
+def test_agent_says_reconnect_not_try_again_for_a_rejected_key() -> None:
+    """Measured on the AMD gateway with a bad key: the 401 remedy arrived
+    prefixed with "This might be a temporary issue — try again in a moment"."""
+    from unittest.mock import MagicMock
+
+    from gaia.agents.base.agent import Agent
+
+    agent = MagicMock(spec=Agent)
+    agent._extract_lemonade_user_message = Agent._extract_lemonade_user_message.__get__(
+        agent
+    )
+
+    try:
+        raise RuntimeError("Error in send_messages") from _cloud_request_error(401)
+    except RuntimeError as outer:
+        msg = agent._extract_lemonade_user_message(outer)
+    assert msg is not None
+    assert "Reconnect the provider" in msg
+    assert "temporary" not in msg
+
+
+def test_local_lemonade_401_names_the_api_key() -> None:
+    err = _classify_chat_exception(
+        LemonadeAuthError(
+            "Lemonade returned 401 Unauthorized for /chat/completions. "
+            "Verify LEMONADE_API_KEY is correct (currently set)."
+        )
+    )
+    assert isinstance(err, LemonadeAuthRejectedError)
+    assert "LEMONADE_API_KEY" in err.user_message
 
 
 # ── Agent loop: typed-message surfacing (no generic "try again" wrapper) ─
