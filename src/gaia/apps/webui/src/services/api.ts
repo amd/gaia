@@ -624,6 +624,15 @@ async function consumeSSEResponse(
                         } else if (event.type === 'agent_created') {
                             log.stream.info(`Agent created: ${event.agent_id}`);
                             callbacks.onAgentCreated?.(event);
+                        } else if (event.type === 'mcp_status') {
+                            // Settings reads the same report from GET /mcp/status; here it is only logged.
+                            const servers = event.servers ?? [];
+                            log.stream.debug(`MCP status: ${servers.length} server(s)`, servers);
+                            for (const s of servers) {
+                                if (!s.connected) {
+                                    log.stream.warn(`MCP server "${s.name}" is not connected: ${s.error ?? 'no error reported'}`);
+                                }
+                            }
                         } else if (AGENT_EVENT_TYPES.has(event.type)) {
                             agentEventCount++;
                             log.stream.debug(`Agent event: ${event.type}`, event);
