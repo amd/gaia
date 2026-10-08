@@ -2200,6 +2200,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     # -- Cache hit --
                     agent = cached_agent
                     agent.console = sse_handler
+                    # A non-streaming turn may have built this agent.
+                    agent.streaming = True
 
                     # Re-register tools so _TOOL_REGISTRY points at this agent's self.
                     agent._register_tools()
