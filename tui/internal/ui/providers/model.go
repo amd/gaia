@@ -135,13 +135,13 @@ func (m Model) explain(err error) string {
 	return err.Error()
 }
 
-// register lists Fireworks with Lemonade — the same fixed settings Connect
-// sends, without a key — because Lemonade reports an environment key only
-// for a provider it has registered, and a kept key can only be restored into
-// one.
+// register lists the chosen provider with Lemonade — the settings the form
+// shows, without a key — because Lemonade reports an environment key only for
+// a provider it has registered, and a kept key can only be restored into one.
+// A Lemonade that has never seen the provider otherwise reads "key needed" and
+// a blank connect finds no models, with a key saved.
 func (m Model) register() tea.Cmd {
-	c := m.client
-	p := lemonade.Provider{Name: "fireworks", BaseURL: lemonade.FireworksURL, Header: "Authorization", Prefix: "Bearer "}
+	c, p := m.client, m.formProvider()
 	return func() tea.Msg {
 		if err := c.Configure(m.ctx, p, ""); err != nil {
 			return loadedMsg{source: c, err: err, started: time.Now()}
@@ -310,6 +310,13 @@ func (m Model) setup() Model {
 	m.note = ""
 	return m
 }
+
+// formProvider is the provider the setup form describes, without its key.
+func (m Model) formProvider() lemonade.Provider {
+	return lemonade.Provider{Name: m.chosen(), BaseURL: strings.TrimSpace(m.fields[0].Value()),
+		Header: strings.TrimSpace(m.fields[1].Value()), Prefix: m.fields[2].Value()}
+}
+
 func (m Model) keyPlaceholder() string {
 	if env, runtime := m.keyStatus(); env || runtime {
 		return "A key is already set — Enter connects"
@@ -495,7 +502,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(m.spin.Tick, m.fetchModels())
 				}
 				m = m.setup()
-				if m.chosen() == "fireworks" && !m.listed("fireworks") {
+				// Only once a read proves it absent: registering over a provider
+				// not yet read would replace another gateway's settings.
+				if m.read && !m.listed(m.chosen()) && m.formProvider().BaseURL != "" {
 					return m, tea.Batch(textinput.Blink, m.register())
 				}
 				return m, textinput.Blink
@@ -577,7 +586,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return clearedMsg{source: c}
 				})
 			case "enter":
-				p := lemonade.Provider{Name: m.chosen(), BaseURL: strings.TrimSpace(m.fields[0].Value()), Header: strings.TrimSpace(m.fields[1].Value()), Prefix: m.fields[2].Value()}
+				p := m.formProvider()
 				key := strings.TrimSpace(m.fields[3].Value())
 				m.fields[3].SetValue("")
 				m.busy = true

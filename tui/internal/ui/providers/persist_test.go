@@ -6,6 +6,7 @@ package providers
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -141,6 +142,58 @@ func TestOpeningThePanelRestoresKeptKeys(t *testing.T) {
 	m.Init()()
 	if strings.Join(store.restored, ",") != "fireworks,amd" {
 		t.Errorf("restored %v, want fireworks and amd", store.restored)
+	}
+}
+
+// A Lemonade that has never seen the AMD gateway cannot take back a saved key:
+// the row read "key needed" and a blank connect found no models. Opening the
+// row registers it with the form's settings, then restores the key.
+func TestOpeningAnUnregisteredGatewayRegistersItAndRestoresTheKey(t *testing.T) {
+	resetStore()
+	var installs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/install":
+			raw, _ := io.ReadAll(r.Body)
+			installs = append(installs, string(raw))
+			_, _ = w.Write([]byte(`{}`))
+		case "/api/v1/system-info":
+			_, _ = w.Write([]byte(`{"cloud":{"providers":[]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	m := New(srv.URL+"/api/v1", 100, 30)
+	next, _ := m.Update(loadedMsg{source: m.client, providers: nil, started: time.Now()})
+	m = next.(Model)
+	m.selected = 2
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	drain(cmd)
+
+	if len(installs) != 1 || !strings.Contains(installs[0], lemonade.AMDGatewayURL) ||
+		!strings.Contains(installs[0], lemonade.AMDGatewayAuthHeader) {
+		t.Fatalf("registered %v, want the AMD gateway with its own header", installs)
+	}
+	if strings.Join(store.restored, ",") != "amd" {
+		t.Fatalf("restored %v after registering, want amd", store.restored)
+	}
+	if next.(Model).stage != "setup" {
+		t.Fatalf("stage = %q, want the setup form", next.(Model).stage)
+	}
+}
+
+// Before the first read nothing is known to be missing, and registering then
+// would overwrite another gateway's stored settings with the defaults.
+func TestNothingIsRegisteredBeforeTheFirstRead(t *testing.T) {
+	resetStore()
+	m := New(fakeLemonade(t, nil), 100, 30)
+	m.selected = 2
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if msgs := drain(cmd); len(msgs) != 0 || len(store.restored) != 0 {
+		t.Fatalf("opening a row before the first read registered it: %v", msgs)
 	}
 }
 

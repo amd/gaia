@@ -147,7 +147,9 @@ func TestKeyFieldSaysAKeyIsSetWhenLemonadeHoldsOne(t *testing.T) {
 func TestFailedRegistrationKeepsKnownProviders(t *testing.T) {
 	resetStore()
 	m := New(deadLemonade(t), 100, 30)
-	m.providers = []lemonade.Provider{{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}
+	next, _ := m.Update(loadedMsg{source: m.client, providers: []lemonade.Provider{
+		{Name: "amd", BaseURL: "https://gw.example.com", RuntimeKey: true}}})
+	m = next.(Model)
 	m.selected = 1
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
