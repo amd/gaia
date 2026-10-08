@@ -2331,6 +2331,14 @@ class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
     (LemonadeServer.exe / lemond) and legacy (lemonade-server) tooling.
     """
 
+    def setUp(self):
+        # Otherwise a dev box with GAIA's own Lemonade installed asks the daemon to start it.
+        patcher = patch(
+            "gaia.llm.lemonade_client.gaia_runs_lemonade", return_value=False
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @patch(
         "gaia.llm.lemonade_client.LemonadeClient._classify_port_listeners",
         return_value=([], []),
