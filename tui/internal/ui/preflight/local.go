@@ -609,7 +609,8 @@ func (l localRunner) verifySkipsChatModel() bool {
 func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, string) {
 	row := Row{Key: KeyModel}
 
-	st, err := gaiainit.Verify(ctx, l.verifySkipsChatModel(), l.localChatModel(), pinnedLemonadeEnv(ctx)...)
+	pin := pinnedLemonadeEnv(ctx)
+	st, err := gaiainit.Verify(ctx, l.verifySkipsChatModel(), l.localChatModel(), pin...)
 	switch {
 	case errors.Is(err, gaiainit.ErrUnanswered):
 		// The question was never answered — an installed gaia older than
@@ -665,6 +666,9 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 	case gaiainit.StageLoad:
 		return l.loadFailedRow(st), "", ""
 	case gaiainit.StageServer:
+		if len(pin) > 0 {
+			return pinnedServerRow(row, st), "", ""
+		}
 		// Installed and not answering is a fault, not a step still to do.
 		row.State = StateFailed
 		row.Disposition = status.DispositionHalt
@@ -709,6 +713,25 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 	}
 	row.Raw = strings.Join(st.Reasons, "\n")
 	return row, "", ""
+}
+
+// pinnedServerRow is the system Lemonade the gate kept setup on refusing to
+// serve GAIA — too old, or gone since the probe. Setup cannot fix either: it
+// would fail the same way and tell the user to unset a LEMONADE_BASE_URL the
+// gate set, not them.
+func pinnedServerRow(row Row, st gaiainit.Status) Row {
+	row.State = StateFailed
+	row.Disposition = status.DispositionHalt
+	row.Line = "the Lemonade on this machine cannot serve GAIA"
+	row.Detail = strings.Join(st.Reasons, "\n")
+	row.Fix = FixNone
+	row.Remedy = Remedy{
+		Action: "GAIA uses the Lemonade already installed here rather than start a second one. " +
+			"Upgrade it (or start it again if it stopped), then press r.",
+		Where: "https://lemonade-server.ai",
+	}
+	row.Raw = row.Detail
+	return row
 }
 
 // loadFailedRow is a model that is downloaded and will not load — a real

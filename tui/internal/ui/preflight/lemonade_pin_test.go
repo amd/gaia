@@ -128,6 +128,36 @@ func TestSetupIsNotPinnedWhenItAlreadyResolvesTheServer(t *testing.T) {
 	})
 }
 
+// A system Lemonade too old for GAIA: setup cannot fix it, and running it ends in
+// "unset LEMONADE_BASE_URL", a variable the gate set and the user never did.
+func TestATooOldSystemLemonadeAsksForAnUpgradeNotSetup(t *testing.T) {
+	systemLemonadeAnswering(t)
+	const tooOld = `{"ready": false, "stage": "server", "reasons": ["Lemonade Server at ` +
+		`http://localhost:13305/api/v1 is v10.8.0; the 'gaia' profile needs v10.9.0 or newer"], "models": []}`
+	stubGaiaInit(t, func() (string, error) { return jsonStub(t, 1, tooOld), nil })
+
+	row := modelRow(localRunner{opts: LocalOptions{Model: "amd.deepseek-v4.1-flash"}})
+
+	if row.State != StateFailed || row.Fix != FixNone {
+		t.Fatalf("a too-old system server offers setup, which cannot fix it: %+v", row)
+	}
+	if strings.Contains(row.Line, "not answering") {
+		t.Errorf("line = %q for a server that answered", row.Line)
+	}
+	if !strings.Contains(row.Detail, "needs v10.9.0") || !strings.Contains(row.Remedy.Action, "Upgrade it") {
+		t.Errorf("the row does not say what is wrong and how to fix it: %+v", row)
+	}
+	if strings.Contains(row.Detail+row.Remedy.Action+row.Remedy.Command, "LEMONADE_BASE_URL") {
+		t.Errorf("the row names a variable the user never set: %+v", row)
+	}
+
+	// A server the user configured is not pinned and keeps the setup key.
+	t.Setenv(lemonadeBaseURLEnv, "http://localhost:9999")
+	if own := modelRow(localRunner{}); own.Fix != FixRunSetup {
+		t.Fatalf("an unpinned server fault lost its setup key: %+v", own)
+	}
+}
+
 // A cloud model the server cannot serve is a chat problem; the row it lands on
 // must not be labelled "Embeddings" beside an embedder that loaded.
 func TestACloudChatRowIsNotLabelledEmbeddings(t *testing.T) {
