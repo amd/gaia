@@ -78,7 +78,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
 1. **Survey commits since previous tag, then sanity-check the version request against scope.**
    ```bash
-   PREV=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+   PREV=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1)
    echo "Previous tag: $PREV"
    git log "$PREV..HEAD" --pretty=format:'%h  %s'
    echo
@@ -550,7 +550,7 @@ Do not bundle two phases into one user prompt. The gates exist for review.
 
 ## Notes
 
-- The argument-passing convention is the *target tag*, not the previous tag. If the user says "release v0.17.5", that is what gets created — the previous tag is derived via `git tag --sort=-v:refname | head -1`.
+- The argument-passing convention is the *target tag*, not the previous tag. If the user says "release v0.17.5", that is what gets created — the previous tag is the newest final tag (Phase 1 step 1's `PREV`) — never an `-rcN` tag, or the notes would cover only the changes since the candidate.
 - Hotfix releases (`v0.15.4.1`) follow the same flow; the `validate_release_notes.py` check accepts the four-part form.
 - Release candidates are `v<version>-rcN` only (Phase 3.5). There is no RC form of a four-part hotfix tag.
 - Minor/major releases (`v0.18.0`, `v1.0.0`) need a richer notes structure — a "Highlights" block, the `pip install` instructions, and migration notes if breaking. The skeleton above is patch-shaped; expand for non-patch releases by mirroring the prior minor/major release notes.

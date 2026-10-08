@@ -1443,8 +1443,8 @@ jobs:
           # Ensure docs/releases directory exists
           mkdir -p docs/releases
 
-          # Find previous tag using git describe (more reliable)
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 "$CURRENT_TAG^" 2>/dev/null || echo "")
+          # The previous FINAL: an RC or an agent-pkg-* tag would shrink the notes to a sliver.
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*-rc*' "$CURRENT_TAG^" 2>/dev/null || echo "")
           if [ -z "$PREVIOUS_TAG" ]; then
             # No previous tag found, use first commit
             PREVIOUS_TAG=$(git rev-list --max-parents=0 HEAD)

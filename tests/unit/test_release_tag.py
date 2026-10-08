@@ -14,7 +14,9 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
+import shlex
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -324,3 +326,44 @@ def test_only_an_rc_requests_the_website_redeploy_from_publish(publish):
     job = publish["redeploy-website-rc"]
     assert IS_RC in job["if"]
     assert "!cancelled()" in job["if"]
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def test_final_release_notes_diff_from_the_previous_final_not_an_rc(tmp_path):
+    # claude.yml's release-notes job rewrites the final's notes from the diff
+    # since PREVIOUS_TAG; an RC there would leave the final's notes nearly empty.
+    step = next(
+        s
+        for s in _workflow("claude.yml")["jobs"]["release-notes"]["steps"]
+        if s.get("name") == "Generate release context"
+    )
+    line = next(
+        ln for ln in step["run"].splitlines() if "PREVIOUS_TAG=$(git describe" in ln
+    )
+    describe = shlex.split(re.search(r"\$\((git describe[^)]*?)\s*2>", line)[1])
+
+    _git(tmp_path, "init", "-q")
+    for name in ("v0.24.1", "agent-pkg-gaia-v0.1.1", "v0.25.0-rc1", "v0.25.0"):
+        _git(
+            tmp_path,
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            name,
+        )
+        _git(tmp_path, "tag", name)
+
+    args = [a.replace("$CURRENT_TAG", "v0.25.0") for a in describe[1:]]
+    assert _git(tmp_path, *args) == "v0.24.1"
