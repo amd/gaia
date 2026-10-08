@@ -526,6 +526,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "esc", "q":
+		// The details pane is a view over the gate, so back closes it.
+		if m.details {
+			m.details = false
+			return m, nil
+		}
 		m.Cancel()
 		// Back to idle, not left in phaseProvisioning/phaseDone: Busy() would
 		// otherwise stay true forever and a re-shown gate would refuse every key.

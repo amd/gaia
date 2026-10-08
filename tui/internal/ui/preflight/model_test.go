@@ -155,6 +155,33 @@ func TestALateProvisionEventCannotDriveTheScreen(t *testing.T) {
 	}
 }
 
+func TestEscClosesTheDetailsPaneInsteadOfLeaving(t *testing.T) {
+	f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
+	m := newModel(t, f)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+
+	if m.details {
+		t.Error("esc left the details pane open")
+	}
+	if cmd != nil {
+		if _, left := cmd().(CancelMsg); left {
+			t.Error("esc on the details pane left the gate instead of closing the pane")
+		}
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("esc with the pane closed produced no command")
+	}
+	if _, left := cmd().(CancelMsg); !left {
+		t.Error("esc with the pane closed no longer leaves the gate")
+	}
+}
+
 func TestRecheckResetsTheScreen(t *testing.T) {
 	f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
 	m := newModel(t, f)
