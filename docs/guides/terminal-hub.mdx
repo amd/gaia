@@ -621,14 +621,19 @@ organisation's AMD LLM Gateway — press **p** at the readiness gate or type
 Some tools do things that are hard to undo. Those stop and ask:
 
 ```
-DESTRUCTIVE  Confirm: browser_login
+RUNS CODE  Run this command?
 
- Run 'browser_login' with url="https://github.com/login"?
+ <the command the agent wants to run>
 
- This is a destructive action and may not be reversible.
+ mode: … · expires in …
 
- y run once · n/esc deny · waits for you
+ y once · a always: <command> (this session) · n/esc deny
 ```
+
+The first line is a risk badge — `READ`, `WRITE`, `RUNS CODE` or
+`DESTRUCTIVE` — and the question. Tools GAIA knows get a plain question (`Run
+this command?`, `Write this file?`, `Install this skill?`); any other tool reads
+`Allow <tool>?`. A `DESTRUCTIVE` prompt adds a warning line under the call.
 
 **y** runs it once, **n** or **esc** denies. Denying is a normal outcome, not an
 error — the agent is told and carries on.

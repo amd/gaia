@@ -192,8 +192,11 @@ colour support, and the TUI then emits no escape sequences at all. It reads as
   second-to-last row.
 - **Check which screen you are on** before sending keys. Keys sent to the wrong
   screen do nothing and read as "the binding is broken".
-- **Grep for the right words.** The confirmation prompt says
-  `Confirm: <tool>` and `DESTRUCTIVE`, not "Allow".
+- **Grep for the right words.** The confirmation prompt's first line is a
+  risk badge (`READ`, `WRITE`, `RUNS CODE`, `DESTRUCTIVE`) and a question. A
+  tool the TUI knows gets a plain question — a shell command reads
+  `RUNS CODE Run this command?`, a file write `WRITE Write this file?` — and
+  any other tool reads `Allow <tool>?`. There is no `Confirm: <tool>` line.
 - **`format=plain` strips ANSI**, so it cannot answer a colour question.
 - `screencapture` is blocked on some machines; use the control API text.
 
