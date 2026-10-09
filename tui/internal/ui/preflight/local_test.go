@@ -773,6 +773,54 @@ func TestARemoteLemonadeOffersNoSetupKey(t *testing.T) {
 	}
 }
 
+// Starting a local server cannot make one on another machine answer, so a
+// remote LEMONADE_BASE_URL must never trigger the auto-start — while a loopback
+// one still must.
+func TestAutoStartOnlyTargetsThisMachine(t *testing.T) {
+	cases := []struct {
+		base      string
+		wantStart bool
+	}{
+		{"http://192.168.1.50:13305/api/v1", false},
+		{"http://lemonade.example.com:13305/api/v1", false},
+		{"http://localhost:13305/api/v1", true},
+		{"http://127.0.0.1:13305/api/v1", true},
+		{"http://[::1]:13305/api/v1", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.base, func(t *testing.T) {
+			downLemonadeOn(t, fakeHostFor("linux", nil, nil, map[string]string{}))
+			t.Setenv(lemonadeBaseURLEnv, tc.base)
+			probeLemonade = func(context.Context) (string, bool, string) {
+				return tc.base, false, "stub: nothing answering"
+			}
+			attempts := 0
+			tryAutoStartLemonade = func(context.Context) (bool, string, string) {
+				attempts++
+				return false, "", ""
+			}
+
+			row := localRunner{}.checkLemonade(context.Background(), localCfg())
+
+			if got := attempts > 0; got != tc.wantStart {
+				t.Fatalf("auto-start attempted = %v, want %v", got, tc.wantStart)
+			}
+			if row.State != StateFailed {
+				t.Fatalf("an unreachable server is %s, want failed", row.State.Word())
+			}
+			if tc.wantStart {
+				return
+			}
+			if !strings.Contains(row.Line, tc.base) || !strings.Contains(row.Remedy.Action, tc.base) {
+				t.Errorf("row does not name the remote server: line=%q action=%q", row.Line, row.Remedy.Action)
+			}
+			if row.Remedy.Command != "" || row.Fix != FixNone {
+				t.Errorf("a remote server got a local start: command=%q fix=%v", row.Remedy.Command, row.Fix)
+			}
+		})
+	}
+}
+
 // installEmbedded unpacks a fake GAIA-owned server under GAIA_HOME, stopped.
 func installEmbedded(t *testing.T) {
 	t.Helper()
