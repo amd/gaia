@@ -809,6 +809,8 @@ func TestAutoStartStartsAStoppedEmbeddedServer(t *testing.T) {
 	restore := tryAutoStartLemonade
 	t.Cleanup(func() { tryAutoStartLemonade = restore })
 	tryAutoStartLemonade = autoStartForTest
+	spawnAllowedInTest = true // the "server" is the exit-0 stub below
+	t.Cleanup(func() { spawnAllowedInTest = false })
 	stubGaiaInit(t, func() (string, error) { return exitStub(t, 0), nil })
 	started := false
 	probeLemonade = func(context.Context) (string, bool, string) {
