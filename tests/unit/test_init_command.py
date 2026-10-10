@@ -917,6 +917,30 @@ class TestSkipChatModel(unittest.TestCase):
             }
             self.assertEqual(checked, {"user.embeddinggemma-300m-GGUF"})
 
+    def test_skip_models_verify_never_loads_the_chat_model(self):
+        """--skip-models must not load the chat model to check its context:
+        Lemonade pulls a model it is asked to load, so on a fresh PC that load
+        silently downloaded the whole chat model (~21 GB for Qwen3.6)."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="gaia", yes=True, skip_models=True)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
+            mock_client.health_check.return_value = True
+            mock_client.check_model_available.return_value = False
+            mock_client_class.return_value = mock_client
+
+            with patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready",
+                return_value=True,
+            ) as ensure_ready:
+                result = cmd._verify_setup()
+            ensure_ready.assert_not_called()
+            mock_client.load_model.assert_not_called()
+            self.assertTrue(result)
+
 
 class TestCheckSetupStatus(unittest.TestCase):
     """gaia init --check: a read-only readiness probe the TUI polls on every
