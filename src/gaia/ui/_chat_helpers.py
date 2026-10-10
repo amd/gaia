@@ -2588,7 +2588,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         step_id = 0
         idle_cycles = 0
         _stream_start = _time.time()
-        _STREAM_TIMEOUT = 600  # 10 minutes — large system prompts need time
+
+        # Read streaming timeout from environment variable (default to 1200 seconds / 20 mins)
+        try:
+            _STREAM_TIMEOUT = float(os.getenv("GAIA_STREAM_TIMEOUT", os.getenv("STREAM_TIMEOUT", "600")))
+        except (ValueError, TypeError):
+            _STREAM_TIMEOUT = 600
+
         # Time spent waiting on a request_user_input answer is the user's, not
         # the turn's; that wait has its own deadline.
         _user_wait = _UserWaitClock()
