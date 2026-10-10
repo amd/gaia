@@ -478,20 +478,18 @@ When users ask about time or system details, use the get_system_info tool."""
                 "python": platform.python_version()
             }
 
-# Use the agent. model_id pins the ~4B model that `gaia init` already
-# downloaded; omit it and the agent base defaults to a much larger model
-# that won't fit on most machines.
+# model_id pins the ~4B model `gaia init --profile minimal` downloads.
 agent = MyAgent(model_id="Gemma-4-E4B-it-GGUF")
 result = agent.process_query("What time is it and what system am I on?")
 print(result.get("result"))
 ```
 
 <Note>
-  **Why `model_id`?** Without it, the `Agent` base class defaults to a large
-  ~20GB model that `gaia init --profile minimal` never downloaded — on a typical
-  16–32GB machine it fails to load with `failed to fit params to free device
-  memory`. `Gemma-4-E4B-it-GGUF` is the tool-calling model every `gaia init`
-  profile installs, so it's already on disk and runs comfortably.
+  **Why `model_id`?** Without it, the agent uses the chat model `gaia init`
+  picked for your hardware — the larger Qwen3.6-35B-A3B-GGUF on a PC whose GPU
+  can hold it, such as Ryzen AI Max. Pinning `Gemma-4-E4B-it-GGUF`, the
+  tool-calling model the install steps above downloaded, keeps this tutorial the
+  same on every machine.
 </Note>
 
 <sub>
