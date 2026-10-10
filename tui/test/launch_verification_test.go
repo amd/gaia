@@ -144,7 +144,6 @@ func isolateGaiaHome(t *testing.T) {
 	// shell out to the toolchain.
 	t.Setenv("GOMODCACHE", goEnv(t, "GOMODCACHE"))
 	t.Setenv("GOCACHE", goEnv(t, "GOCACHE"))
-	stubSlackStatus(t)
 }
 
 // goEnv reads one `go env` value, memoised.
@@ -193,16 +192,14 @@ func stubSetupCheck(t *testing.T, code int) {
 	t.Cleanup(func() { gaiainit.Binary = orig })
 }
 
-// stubSlackStatus stops the chat's launch-time Slack probe from running the real
-// `gaia` CLI. That interpreter outlives a short test and, on Windows, holds the
-// isolated home's gaia.log open while t.TempDir tries to remove it.
-func stubSlackStatus(t *testing.T) {
-	t.Helper()
-	orig := gaiaslack.Binary
+// The chat's launch-time Slack probe must not run the real `gaia` CLI: that
+// interpreter outlives a short test and, on Windows, holds the isolated home's
+// gaia.log open while t.TempDir tries to remove it. Stubbed once, before any
+// test: a probe from an earlier test's UI can still be reading the hook.
+func init() {
 	gaiaslack.Binary = func() (string, error) {
 		return "", errors.New("gaia CLI stubbed out by the test harness")
 	}
-	t.Cleanup(func() { gaiaslack.Binary = orig })
 }
 
 func writeStub(t *testing.T, path, body string) {
