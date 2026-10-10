@@ -33,8 +33,12 @@ icon: "hand-wave"
     ```python
     from gaia.agents.base.agent import Agent
 
-    agent = Agent()
-    response = agent.process_query("Summarize my meeting notes")
+    class MyAgent(Agent):
+        def _register_tools(self):
+            pass  # add @tool functions here
+
+    agent = MyAgent()
+    response = agent.process_query("What can you help me with?")
     ```
   </Tab>
   <Tab title="C++">
