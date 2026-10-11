@@ -2104,10 +2104,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             ": " + "x" * 512 + "\n\n"
         )
 
-        # Only the email relay consumes text pairs; other agents restore traces below.
+        # A relayed sidecar only sees the transcript it is sent; in-process
+        # agents restore traces below.
         history_pairs = (
             _build_history_pairs(db.get_context_messages(request.session_id))
-            if (request.agent_type or session.get("agent_type")) == "email"
+            if _should_relay_to_sidecar(
+                request.agent_type or session.get("agent_type") or "chat",
+                _agent_registry,
+            )
             else []
         )
 
