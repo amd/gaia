@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 
 _SUMMARY_CHAR_CAP = 300
 
+#: A tool result with one of these statuses did not do its job.
+FAILED_TOOL_STATUSES = ("error", "denied")
+
 #: Seconds the agent thread waits for a tool-confirm response before denying.
 #: Matches the TUI's ``DeliverableConfirmationTimeout`` so a prompt waits as
 #: long on every surface.
@@ -428,7 +431,11 @@ class SSEOutputHandler(OutputHandler):
 
         # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
-        success = data.get("status") != "error" if isinstance(data, dict) else True
+        success = (
+            data.get("status") not in FAILED_TOOL_STATUSES
+            if isinstance(data, dict)
+            else True
+        )
         self._last_tool_success = success
         event = {
             "type": "tool_result",

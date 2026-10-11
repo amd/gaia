@@ -499,6 +499,90 @@ class TestGaiaDispatch:
         assert "token rejected" in handler.events[0]["message"]
 
 
+# ── A relayed tool step reports what the tool actually did ───────────────────
+
+
+def _relayed_tool_result(tool, result):
+    """Run *result* through the sidecar's handler and translator, then the relay.
+
+    Returns the UI-side ``tool_result`` event the Agent UI renders as a step.
+    """
+    from gaia.ui.sse_handler import SSEOutputHandler
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    sidecar_events = []
+    sidecar = SSEOutputHandler()
+    sidecar._emit = sidecar_events.append
+    sidecar.print_tool_usage(tool)
+    sidecar.pretty_print_json({"file_path": "C:/x.txt"}, title="Arguments")
+    sidecar.pretty_print_json(result, title="Result")
+
+    translator = CanonicalTranslator("run-1", agent_id="gaia")
+    wire = [c for e in sidecar_events for c in translator.translate(e)]
+    ui = _FakeSSEHandler()
+    for event in wire:
+        relay_module._dispatch_one(ui, event, GAIA_PROFILE)
+    [step] = [e for e in ui.events if e["type"] == "tool_result"]
+    return step
+
+
+class TestRelayedToolResult:
+    def test_a_failed_tool_is_shown_as_failed_with_its_reason(self):
+        step = _relayed_tool_result(
+            "read_file", {"status": "error", "error": "File not found: C:/x.txt"}
+        )
+        assert step["success"] is False
+        assert "File not found: C:/x.txt" in step["summary"]
+
+    def test_a_denied_write_is_not_shown_as_written(self):
+        step = _relayed_tool_result(
+            "write_file",
+            # The shape Agent._execute_tool returns when the user says Deny.
+            {"status": "denied", "error": "Tool 'write_file' was denied by the user."},
+        )
+        assert step["success"] is False
+        assert step["summary"] == "denied: Tool 'write_file' was denied by the user."
+
+    def test_a_successful_tool_shows_the_sidecars_summary(self):
+        step = _relayed_tool_result(
+            "read_file",
+            {"status": "success", "message": "Read 3 lines from x.txt"},
+        )
+        assert step["success"] is True
+        assert step["summary"] == "success: Read 3 lines from x.txt"
+        assert "Result with keys" not in step["summary"]
+
+    def test_full_tool_data_is_still_summarized_from_its_fields(self):
+        ui = _FakeSSEHandler()
+        relay_module._dispatch_one(
+            ui,
+            {
+                "type": "tool_result",
+                "tool": "search_files",
+                "data": {"files": ["a.txt", "b.txt"], "count": 2},
+            },
+            GAIA_PROFILE,
+        )
+        [step] = ui.events
+        assert step["success"] is True
+        assert step["summary"].startswith("Found 2 file(s)")
+
+    def test_full_tool_data_with_an_error_status_is_a_failure(self):
+        ui = _FakeSSEHandler()
+        relay_module._dispatch_one(
+            ui,
+            {
+                "type": "tool_result",
+                "tool": "list_messages",
+                "data": {"status": "error", "error": "mailbox offline"},
+            },
+            EMAIL_PROFILE,
+        )
+        [step] = ui.events
+        assert step["success"] is False
+        assert step["summary"] == "error: mailbox offline"
+
+
 # ── session_id is gated per agent (both request models forbid extras) ────────
 
 

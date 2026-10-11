@@ -50,11 +50,13 @@ from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
 from gaia.ui.sse_handler import (
+    FAILED_TOOL_STATUSES,
     SSEOutputHandler,
     _format_tool_args,
     _strip_balanced_json_blobs,
     _summarize_tool_result,
 )
+from gaia.ui.sse_translation import SUMMARY_VIEW_KEYS
 
 logger = get_logger(__name__)
 
@@ -123,11 +125,29 @@ def _tool_label(tool: str, profile: RelayProfile = EMAIL_PROFILE) -> str:
     return profile.tool_labels.get(tool) or _humanize_tool(tool)
 
 
+def _is_summary_view(data: Any) -> bool:
+    return (
+        isinstance(data, dict)
+        and isinstance(data.get("summary"), str)
+        and set(data) <= set(SUMMARY_VIEW_KEYS)
+    )
+
+
 def _derive_summary(tool: str, data: Any, profile: RelayProfile = EMAIL_PROFILE) -> str:
     """Short, human summary for a ``tool_result`` — never a bare "Done"."""
+    if _is_summary_view(data) and data["summary"]:
+        # The sidecar already summarized it; re-summarizing names its keys.
+        return data["summary"]
     if isinstance(data, dict) and data:
         return _summarize_tool_result(data)
     return f"Ran {_tool_label(tool, profile).lower()}"
+
+
+def _derive_success(data: Any) -> bool:
+    """Whether the tool worked, by the same rule the in-process handler uses."""
+    if _is_summary_view(data) and isinstance(data.get("success"), bool):
+        return data["success"]
+    return not (isinstance(data, dict) and data.get("status") in FAILED_TOOL_STATUSES)
 
 
 def _kind_re() -> "re.Pattern":
@@ -208,7 +228,7 @@ def _dispatch_one(
             "type": "tool_result",
             "tool": tool,
             "summary": _derive_summary(tool, data, profile),
-            "success": True,
+            "success": _derive_success(data),
             "data": data if data is not None else {},
         }
         render = event.get("render")
