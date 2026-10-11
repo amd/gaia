@@ -370,7 +370,10 @@ selected. Neither affects the wire contract — they change what the agent
 knows, what tools it is offered, and what the first turn costs.
 
 A second `/query` for a `session_id` that already has a turn in flight gets
-`409 Conflict` — cancel the running turn or wait for it, then retry. A
+`409 Conflict` — cancel the running turn or wait for it, then retry. Once that
+turn has been cancelled, the new `/query` is held until it finishes its
+in-flight model call (up to **240 s**) and then runs, instead of getting `409`;
+only a cancelled turn that outlasts the wait still gets `409`. A
 `/query` that needs a **new** session while every retained slot is busy and
 none is idle enough to evict gets `503` with the reason in `detail` — a
 temporary, retryable condition, not a bug: wait for a turn to finish (or

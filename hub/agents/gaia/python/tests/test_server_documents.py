@@ -131,7 +131,9 @@ def _index_step(response):
 
 
 def test_the_contract_advertises_documents():
-    assert server_mod.API_VERSION == "2.16"
+    # Documents arrived in 2.16; later contracts keep them.
+    major, minor = (int(x) for x in server_mod.API_VERSION.split(".")[:2])
+    assert (major, minor) >= (2, 16)
     assert "documents" in server_mod.QueryRequest.model_fields
 
 

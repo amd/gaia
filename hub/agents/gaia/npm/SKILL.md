@@ -686,6 +686,10 @@ finish (or close an idle session) and retry the same `/query`.
   closed, so omitting the header is refused rather than served. Send
   `Host: 127.0.0.1:<port>`; every real HTTP client already does.
 
+**After cancelling a turn, send the next `/query` on that session straight
+away.** It is held until the stopped turn's model call returns (up to 240 s),
+then runs. A session whose running turn was NOT cancelled still answers `409`.
+
 For the full wire contract, lock schema, exit codes, and timeout table, see
 [`SPEC.md`](./SPEC.md). For the user-facing overview, see [`README.md`](./README.md)
 and <https://amd-gaia.ai/docs/guides/gaia>.

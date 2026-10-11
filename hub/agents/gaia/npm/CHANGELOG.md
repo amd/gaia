@@ -11,6 +11,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and to run `gaia init`, which changed nothing: the bundled skills live
   inside the binary, where the UI could not read them. `GET /v1/gaia/skills`
   (contract **2.17**) now returns them.
+- **A message sent right after Stop is answered instead of refused.** A stopped
+  turn holds its session until its model call returns, so the next `/query`
+  got `409 … is already running a turn` for as long as the stopped answer would
+  have taken — about 40 s for a long one. It now waits for the stopped turn to
+  finish (up to 240 s) and then runs. A turn that was not cancelled is still
+  refused at once.
 - **Documents attached to a chat now reach the agent.** In the Agent UI, a
   Hub-installed agent answered "no documents are indexed" about a file the user
   had attached, because the relayed turn never carried the chat's files.
