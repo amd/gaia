@@ -58,7 +58,7 @@ def test_warmup_skips_a_model_that_is_not_downloaded(monkeypatch, caplog):
 
     assert client.checked == ["Gemma-4-E4B-it-GGUF"]
     assert client.completions == [], "the warm-up asked Lemonade to load (download) it"
-    assert "not downloaded" in caplog.text
+    assert "warm-up skipped" in caplog.text
 
 
 def test_warmup_still_warms_a_downloaded_model(monkeypatch):

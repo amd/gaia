@@ -1351,8 +1351,8 @@ def _warmup_blocking() -> None:
         # cloud provider never agreed to that.
         if not client.check_model_available(model):
             logger.info(
-                "GAIA sidecar: warm-up skipped — %s is not downloaded, and "
-                "starting the agent does not download models",
+                "GAIA sidecar: warm-up skipped — Lemonade does not list %s as "
+                "downloaded, and starting the agent does not download models",
                 model,
             )
             return
