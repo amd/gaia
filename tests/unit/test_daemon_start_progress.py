@@ -78,3 +78,22 @@ def test_timeout_says_the_daemon_is_still_starting_and_shows_the_log(slow_start)
     assert "gaia daemon logs" in message
     assert str(slow_start) in message
     assert "importing gaia.daemon.app" in message
+
+
+@pytest.mark.parametrize(
+    "go_file, const",
+    [
+        ("tui/internal/daemon/client.go", "defaultStartTimeout"),
+        ("tui/internal/ui/preflight/model.go", "startTimeout"),
+    ],
+)
+def test_the_tui_waits_longer_than_a_python_daemon_start(go_file, const):
+    """The TUI runs `gaia daemon start` under its own deadline; one under the
+    Python wait kills a start that was about to succeed."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / go_file).read_text(encoding="utf-8")
+    match = re.search(rf"\b{const}\s*=\s*(\d+)\s*\*\s*time\.Second", source)
+    assert match, f"{go_file} no longer declares {const} in seconds"
+    assert int(match.group(1)) > client._START_TIMEOUT + 10

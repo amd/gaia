@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 
 PROFILE = "gaia"
 #: Covers a daemon start plus an embedded Lemonade start (see gaiainit.CheckTimeout).
-CHECK_TIMEOUT_S = 150
+CHECK_TIMEOUT_S = 180
 #: The check plus a cold model load on a slow disk.
 VERIFY_TIMEOUT_S = CHECK_TIMEOUT_S + 150
 _NOT_READY_EXIT = 1

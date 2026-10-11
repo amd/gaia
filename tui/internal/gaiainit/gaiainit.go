@@ -45,7 +45,7 @@ const Profile = "gaia"
 // Lemonade Server (up to 85s, _LEMONADE_ENSURE_TIMEOUT in
 // gaia/daemon/client.py). It must stay above that sum, or the TUI reports
 // "could not be checked" for a start that succeeded.
-const CheckTimeout = 150 * time.Second
+const CheckTimeout = 180 * time.Second
 
 // notReadyExitCode is the ONLY exit code that means "not set up yet".
 // Anything else — notably 2, which an installed gaia older than `--check`
