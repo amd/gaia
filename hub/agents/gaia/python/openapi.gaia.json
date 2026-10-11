@@ -225,13 +225,32 @@
             "type": "string"
           },
           "response": {
-            "title": "Response",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Deprecated spelling of 'value'. Send exactly one of the two.",
+            "title": "Response"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The answer: an option's 'value' (or its 'label'), or free text when the question set allow_free_text. The spec §5.1 name, shared with the email agent, the Agent UI and the TUI.",
+            "title": "Value"
           }
         },
         "required": [
-          "request_id",
-          "response"
+          "request_id"
         ],
         "title": "QueryRespondRequest",
         "type": "object"

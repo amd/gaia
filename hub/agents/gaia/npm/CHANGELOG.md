@@ -116,6 +116,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Answering the agent's question from the Agent UI or the TUI works.**
+  `POST /query/{run_id}/respond` only took the answer as `response`, while
+  both front-ends send `{ request_id, value }` as the contract specifies, so
+  every answer was refused and the run waited until the question timed out.
+  It now takes `value`. `response` is still accepted; sending both, or
+  neither, is a 422.
 - **A file you allow is usable by every tool, including document Q&A.** Indexing
   or querying a file outside the chat's scope was refused with no prompt, and
   approving it through another tool still left it unreadable to the document
