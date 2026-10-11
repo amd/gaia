@@ -420,3 +420,182 @@ def test_a_failed_key_replay_is_logged_and_the_turn_still_runs(
 
     assert "credential store is locked" in caplog.text
     assert _last_request(server)[0].startswith(f"http://localhost:{NEW_PORT}/")
+
+
+DEFAULT_PORT_URL = "http://localhost:13305/api/v1"
+NEW_URL = f"http://localhost:{NEW_PORT}/api/v1"
+
+
+class _CloudLemonade:
+    """Every cloud-provider call GAIA makes, wherever it goes.
+
+    Port 13305 stands for the user's own Lemonade: it answers like a real
+    server, so a request there would succeed and hand it the key.
+    """
+
+    def __init__(self, monkeypatch):
+        self.calls = []
+        monkeypatch.setattr("gaia.llm.gateway.recall_token", lambda: "kept-amd-key")
+        monkeypatch.setattr(
+            "gaia.llm.cloud_keys.recall_key", lambda provider: f"kept-{provider}-key"
+        )
+        monkeypatch.setattr("gaia.llm.gateway.requests.request", self.request)
+
+    def request(self, method, url, json=None, headers=None, **_):
+        self.calls.append((method, url, (headers or {}).get("Authorization"), json))
+        if url.endswith("/system-info"):
+            entries = [
+                {"name": name, "runtime_key_set": False, "models_discovered": 0}
+                for name in ("amd", "fireworks")
+            ]
+            return _JSONResponse({"cloud": {"providers": entries}})
+        return _JSONResponse({"models_discovered": 3})
+
+    def keys_sent(self):
+        return [(url, body["api_key"]) for _, url, _, body in self.calls if body]
+
+
+def _restart_in_progress(server, monkeypatch, *, comes_back=True):
+    """GAIA's server is gone; the daemon is bringing it back on a new port."""
+    _install_embedded(server)
+    server.live_pids = set()
+
+    def daemon_restarts(*args, **kwargs):
+        server.daemon_calls += 1
+        if comes_back:
+            server.live_pids = {2}
+            server.record(pid=2, port=NEW_PORT, key=NEW_KEY)
+        return {"base_url": NEW_URL, "started": True}
+
+    monkeypatch.setattr("gaia.daemon.client.ensure_lemonade", daemon_restarts)
+
+
+@pytest.mark.parametrize("provider", ["amd", "fireworks"])
+def test_a_cloud_key_replay_during_a_restart_waits_for_gaias_server(
+    server, monkeypatch, provider
+):
+    """The replay a relayed turn runs must never hand the key to port 13305."""
+    from gaia.llm.cloud_keys import ensure_authenticated
+
+    lemonade = _CloudLemonade(monkeypatch)
+    _restart_in_progress(server, monkeypatch)
+
+    assert ensure_authenticated(provider) is True
+
+    assert server.daemon_calls == 1
+    assert lemonade.calls, "the replay never reached GAIA's server"
+    assert all(url.startswith(NEW_URL) for _, url, _, _ in lemonade.calls)
+    assert {auth for _, _, auth, _ in lemonade.calls} == {f"Bearer {NEW_KEY}"}
+    assert lemonade.keys_sent() == [(f"{NEW_URL}/cloud/auth", f"kept-{provider}-key")]
+
+
+def test_a_relayed_cloud_turn_during_a_restart_never_targets_the_default_port(
+    server, monkeypatch
+):
+    pytest.importorskip("fastapi")
+    from gaia.ui._chat_helpers import _replay_cloud_key_for_relay
+
+    lemonade = _CloudLemonade(monkeypatch)
+    _restart_in_progress(server, monkeypatch)
+    emitted = []
+    sse = type("SSE", (), {"_emit": lambda self, event: emitted.append(event)})()
+
+    _replay_cloud_key_for_relay(sse, CLOUD_MODEL)
+
+    assert emitted == []
+    assert lemonade.keys_sent() == [(f"{NEW_URL}/cloud/auth", "kept-amd-key")]
+    assert not any(":13305" in url for _, url, _, _ in lemonade.calls)
+
+
+@pytest.mark.parametrize("provider", ["amd", "fireworks"])
+def test_a_restart_the_daemon_cannot_finish_sends_no_key_anywhere(
+    server, monkeypatch, provider
+):
+    from gaia.daemon.errors import DaemonError
+    from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
+    from gaia.llm.gateway import GatewayError
+
+    lemonade = _CloudLemonade(monkeypatch)
+    _restart_in_progress(server, monkeypatch)
+
+    def daemon_cannot(*args, **kwargs):
+        raise DaemonError("lemond exited during start; read lemond.log")
+
+    monkeypatch.setattr("gaia.daemon.client.ensure_lemonade", daemon_cannot)
+
+    with pytest.raises((CloudKeyError, GatewayError), match="read lemond.log"):
+        ensure_authenticated(provider)
+    assert lemonade.calls == []
+
+
+def test_a_server_that_dies_again_mid_restart_is_reported_not_guessed(
+    server, monkeypatch
+):
+    from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
+
+    lemonade = _CloudLemonade(monkeypatch)
+    _restart_in_progress(server, monkeypatch, comes_back=False)
+
+    with pytest.raises(CloudKeyError, match="restarting.*Try again in a moment"):
+        ensure_authenticated("fireworks")
+    assert lemonade.calls == []
+
+
+def test_a_client_aimed_elsewhere_never_gets_a_key_while_gaia_runs_lemonade(
+    server, monkeypatch
+):
+    """An explicit key opts a client out of following, not into the default port."""
+    from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
+
+    lemonade = _CloudLemonade(monkeypatch)
+    _install_embedded(server)
+    client = lc.LemonadeClient(base_url=DEFAULT_PORT_URL, api_key="user-key")
+
+    with pytest.raises(CloudKeyError, match="not GAIA's Lemonade Server"):
+        ensure_authenticated("fireworks", client=client)
+    assert lemonade.calls == []
+
+
+def test_the_users_configured_server_still_gets_its_key(server, monkeypatch):
+    from gaia.llm.cloud_keys import ensure_authenticated
+
+    lemonade = _CloudLemonade(monkeypatch)
+    _install_embedded(server)
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://localhost:13305")
+    server.live_pids = set()
+
+    assert ensure_authenticated("fireworks") is True
+    assert lemonade.keys_sent() == [
+        (f"{DEFAULT_PORT_URL}/cloud/auth", "kept-fireworks-key")
+    ]
+    assert server.daemon_calls == 0
+
+
+def test_a_url_resolved_mid_restart_still_follows_gaias_server(server):
+    """The server came back between resolving the URL and building the client."""
+    _install_embedded(server)
+    server.live_pids = set()
+    resolved_while_down = lc.resolve_lemonade_base_url()
+    assert resolved_while_down == DEFAULT_PORT_URL
+
+    server.live_pids = {2}
+    server.record(pid=2, port=NEW_PORT, key=NEW_KEY)
+    chat = LemonadeProvider(model=MODEL, base_url=resolved_while_down)
+    chat.chat([{"role": "user", "content": "hi"}])
+
+    assert _last_request(server) == (f"{NEW_URL}/chat/completions", f"Bearer {NEW_KEY}")
+
+
+def test_the_manager_never_settles_on_the_default_port_after_starting(
+    server, monkeypatch
+):
+    """The server stopped again between the daemon starting it and the re-read."""
+    _serve_status(monkeypatch)
+    monkeypatch.setattr("gaia.llm.lemonade_manager.gaia_runs_lemonade", lambda *a: True)
+    monkeypatch.setattr(
+        LemonadeManager, "start_embedded_if_stopped", staticmethod(lambda: True)
+    )
+    _restart_in_progress(server, monkeypatch)
+
+    assert LemonadeManager.ensure_ready(min_context_size=65536, model=MODEL)
+    assert LemonadeManager.get_base_url() == NEW_URL

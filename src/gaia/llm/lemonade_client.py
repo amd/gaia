@@ -2205,7 +2205,14 @@ class LemonadeClient:
             embedded_key = _embedded_lemonade_api_key(self.base_url)
             self.follows_gaia_lemonade = self.api_key == embedded_key
         else:
-            self.follows_gaia_lemonade = gaia_runs_lemonade(self.base_url)
+            # A resolved default URL dates from a restart; the server may be
+            # back on another port already, so it no longer compares equal.
+            self.follows_gaia_lemonade = gaia_runs_lemonade(self.base_url) or (
+                host is None
+                and port is None
+                and self.base_url == DEFAULT_LEMONADE_URL
+                and gaia_runs_lemonade()
+            )
         # Instance-scoped exact-pin ctx override (#1892). Never a class-level
         # default or MODELS mutation — chat/RAG clients sharing this process
         # must keep their own floor semantics.
@@ -2333,6 +2340,36 @@ class LemonadeClient:
         """
         self._follow_gaia_lemonade()
         return self.base_url
+
+    def credential_base_url(self) -> str:
+        """Where this client may send a cloud provider key.
+
+        While GAIA runs Lemonade itself, only its own running server qualifies:
+        a client resolved during a restart sits at the default port, where some
+        other Lemonade may be listening. Follows GAIA's server first, so a
+        restart in progress is waited out through the daemon.
+
+        Raises:
+            LemonadeClientError: GAIA's server is restarting and is not back
+                yet, or this client points at a server that is not GAIA's.
+        """
+        base_url = self.current_base_url()
+        if not gaia_runs_lemonade():
+            return base_url
+        own = running_embedded_lemonade_url()
+        if base_url == own:
+            return base_url
+        if own is None:
+            raise LemonadeClientError(
+                "GAIA's Lemonade Server is restarting and is not back yet. Try "
+                "again in a moment; if this persists, run `gaia daemon status` "
+                "and check the daemon log."
+            )
+        raise LemonadeClientError(
+            f"{base_url} is not GAIA's Lemonade Server (that runs at {own}), so "
+            "GAIA did not send it a cloud key. To use that server instead, set "
+            "LEMONADE_BASE_URL to it."
+        )
 
     def _start_gaia_lemonade(self) -> None:
         """Have the daemon start GAIA's own server, then point this client at it.
