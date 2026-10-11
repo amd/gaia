@@ -25,6 +25,8 @@ import {
     Check,
     File,
     ShieldAlert,
+    Brain,
+    MessageCircleQuestionMark,
     type LucideIcon,
 } from 'lucide-react';
 import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
@@ -72,7 +74,19 @@ const TOOL_META: Record<string, ToolMeta> = {
     add_watch_directory:   { label: 'Added watch dir',    activeLabel: 'Adding watch dir',    icon: FolderOpen },
     // Web
     web_search:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe },
+    search_web:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe },
+    fetch_page:            { label: 'Read web page',      activeLabel: 'Reading web page',    icon: Globe },
+    fetch_webpage:         { label: 'Read web page',      activeLabel: 'Reading web page',    icon: Globe },
     analyze_data:          { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3 },
+    // GAIA agent: files, memory, questions
+    find_files:            { label: 'Found files',        activeLabel: 'Finding files',       icon: Search },
+    edit_file:             { label: 'Edited file',        activeLabel: 'Editing file',        icon: FileEdit },
+    recall:                { label: 'Recalled memory',    activeLabel: 'Recalling memory',    icon: Brain },
+    remember:              { label: 'Saved to memory',    activeLabel: 'Saving to memory',    icon: Brain },
+    update_memory:         { label: 'Updated memory',     activeLabel: 'Updating memory',     icon: Brain },
+    forget:                { label: 'Deleted from memory', activeLabel: 'Deleting from memory', icon: Brain },
+    search_past_conversations: { label: 'Searched past chats', activeLabel: 'Searching past chats', icon: Brain },
+    request_user_input:    { label: 'Asked you',          activeLabel: 'Asking you',          icon: MessageCircleQuestionMark },
 };
 
 const DEFAULT_TOOL_META: ToolMeta = {
