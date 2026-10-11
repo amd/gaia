@@ -186,6 +186,9 @@ type Row struct {
 	Remedy Remedy
 	// Fix is what `f` does on this row, FixNone when nothing is safe.
 	Fix FixKind
+	// AutoFix marks a Fix the screen applies once on its own, without a
+	// keypress: starting a local daemon or agent that is simply not running.
+	AutoFix bool
 	// Provider is the mailbox provider a FixConnectMailbox targets.
 	Provider string
 	// Optional marks a row that gates a CAPABILITY rather than the launch: the
