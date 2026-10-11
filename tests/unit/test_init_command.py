@@ -941,6 +941,30 @@ class TestSkipChatModel(unittest.TestCase):
             mock_client.load_model.assert_not_called()
             self.assertTrue(result)
 
+    def test_skip_models_says_the_named_chat_model_was_not_downloaded(self):
+        """Naming the chat model with no caveat read as "this is installed"."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="gaia", yes=True, skip_models=True)
+        printed = []
+        cmd._print = lambda msg="", *a, **k: printed.append(str(msg))
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.get_system_info.return_value = SMALL_MACHINE
+            mock_client.health_check.return_value = True
+            mock_client.check_model_available.return_value = False
+            mock_client_class.return_value = mock_client
+            with patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready",
+                return_value=True,
+            ):
+                cmd._verify_setup()
+
+        out = "\n".join(printed)
+        self.assertIn("Chat model:", out)
+        self.assertIn("Not downloaded (--skip-models)", out)
+
 
 class TestCheckSetupStatus(unittest.TestCase):
     """gaia init --check: a read-only readiness probe the TUI polls on every
@@ -2488,6 +2512,25 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
         # The flagship's own next step -- `gaia chat` runs a different agent
         # through a wheel this profile never installs.
         self.assertIn("gaia-tui", out)
+
+    def test_flagship_profile_does_not_send_users_to_gaia_chat_wheels(self):
+        """The gaia profile never offers `gaia chat`, so a hint to source-install
+        its wheels right after "complete!" read as a failed step."""
+        cmd = self._make_cmd("gaia", chat_available=True)
+        cmd._chat_agent_missing_wheels = MagicMock(
+            return_value=["gaia-agent-chat", "gaia-agent-gaia"]
+        )
+
+        with (
+            patch("gaia.installer.init_command.RICH_AVAILABLE", False),
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            complete = cmd._print_completion()
+
+        out = mock_stdout.getvalue()
+        self.assertTrue(complete)
+        self.assertIn("GAIA initialization complete!", out)
+        self.assertNotIn("`gaia chat` agent not installed yet", out)
 
     # -- AC6: chat/npu profile, chat agent unavailable -> no headline --
 
