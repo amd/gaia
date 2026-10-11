@@ -8052,6 +8052,14 @@ def handle_agent_list(_args):
             aid = entry.get("id", "?")
             ver = entry.get("latest_version", "?")
             mark = "  [installed]" if aid in installed else ""
+            gate = catalog.core_gate(entry)
+            if gate.requires_gaia_version:
+                mark += f"  [needs GAIA {gate.requires_gaia_version}+"
+                mark += (
+                    f"; installs {gate.installable_version}]"
+                    if gate.installable_version
+                    else "]"
+                )
             print(f"  {aid:<24} {ver}{mark}")
 
     extra = [aid for aid in sorted(installed) if aid not in available_ids]
@@ -8064,6 +8072,11 @@ def handle_agent_list(_args):
         print("No agents installed, and the Agent Hub catalog is unavailable.")
     else:
         print("\nInstall one with: gaia agent install <id>")
+        if any(catalog.core_gate(e).requires_gaia_version for e in available):
+            print(
+                f"A version marked 'needs GAIA' installs after upgrading the core: "
+                f"{catalog.CORE_UPGRADE_COMMAND}"
+            )
 
 
 def handle_agent_install(args):
@@ -8765,6 +8778,17 @@ def _handle_hub_list(args):
             f"{state:<12} {_fmt_size(a.get('download_size_bytes')):<8} "
             f"{a.get('name') or ''}"
         )
+    from gaia.hub.catalog import CORE_UPGRADE_COMMAND
+
+    for a in agents:
+        if a.get("requires_gaia_version"):
+            usable = a.get("installable_version")
+            print(
+                f"\n{a.get('id')} {a.get('latest_version')} needs GAIA "
+                f"{a['requires_gaia_version']} or newer"
+                + (f"; this core installs {usable}" if usable else "")
+                + f". Upgrade: {CORE_UPGRADE_COMMAND}"
+            )
     hidden = body.get("unsupervised_filtered") or []
     if hidden:
         print(

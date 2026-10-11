@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from gaia.daemon.sidecars.errors import (
+    AgentNeedsNewerCoreError,
     AgentNotInstalledError,
     AgentTrustRequiredError,
     HubUnavailableError,
@@ -172,14 +173,18 @@ def _merge_entry(
     installed_version: Optional[str],
     can_supervise: bool,
 ) -> Dict[str, Any]:
-    latest = entry.get("latest_version") or ""
+    gate = catalog_mod.core_gate(entry)
+    installable = gate.installable_version
     item = dict(entry)
     item["installed"] = installed_version is not None
     item["installed_version"] = installed_version
+    item["installable_version"] = installable
+    item["requires_gaia_version"] = gate.requires_gaia_version
+    # Only an update this core can run counts as one.
     item["update_available"] = bool(
         installed_version
-        and latest
-        and catalog_mod.compare_versions(latest, installed_version) > 0
+        and installable
+        and catalog_mod.compare_versions(installable, installed_version) > 0
     )
     item["supervised"] = can_supervise
     return item
@@ -528,6 +533,15 @@ def start_install(
         raise AgentTrustRequiredError(
             f"{exc} From the CLI: `gaia hub install {agent_id} --trust`."
         ) from exc
+
+    # Checked before the sidecar is stopped: an update this core cannot run
+    # must not take the running agent down.
+    try:
+        installer_mod.ensure_core_can_install(agent_id, manifest, version)
+    except installer_mod.CoreTooOldError as exc:
+        raise AgentNeedsNewerCoreError(str(exc)) from exc
+    except installer_mod.InstallError as exc:
+        raise HubUnavailableError(str(exc)) from exc
 
     _claim_slot(agent_id)
     try:

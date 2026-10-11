@@ -133,6 +133,19 @@ class UnsupportedPlatformError(InstallError):
     """
 
 
+class CoreTooOldError(InstallError):
+    """The agent version needs a newer GAIA core than the one running.
+
+    Raised instead of installing an agent whose ``min_gaia_version`` this core
+    does not meet. ``required`` is the core version to upgrade to.
+    """
+
+    def __init__(self, message: str, *, required: str, core: str):
+        super().__init__(message)
+        self.required = required
+        self.core = core
+
+
 class InstallInProgressError(InstallError):
     """An install for this agent id is already running (maps to HTTP 409)."""
 
@@ -594,13 +607,118 @@ def _select_platform_artifact(
 # ---------------------------------------------------------------------------
 
 
+def installs_prerelease_flagship(agent_id: str, version: Optional[str]) -> bool:
+    """Whether :func:`install` takes *agent_id* from this release candidate's
+    own GitHub pre-release rather than the hub (see :mod:`gaia.hub.prerelease`).
+    """
+    return (
+        version is None
+        and agent_id == prerelease_mod.FLAGSHIP_AGENT_ID
+        and prerelease_mod.release_candidate_tag(prerelease_mod.CORE_VERSION)
+        is not None
+    )
+
+
+def ensure_core_can_install(
+    agent_id: str, manifest: Dict[str, Any], version: Optional[str]
+) -> None:
+    """Refuse up front an install this core is too old for.
+
+    For routes that stop a running sidecar before queuing an install: they call
+    this first, so an update the core cannot run never takes the agent down.
+    A manifest with no versions is left to :func:`install` to report.
+
+    Raises:
+        CoreTooOldError: as :func:`resolve_installable_version`.
+        InstallError: the hub published a malformed ``min_gaia_version``.
+    """
+    if installs_prerelease_flagship(agent_id, version):
+        return
+    if catalog_mod.version_floors(manifest):
+        resolve_installable_version(manifest, version)
+
+
+def resolve_installable_version(
+    manifest: Dict[str, Any],
+    version: Optional[str],
+    core_version: Optional[str] = None,
+) -> str:
+    """The version to install, never one this GAIA core is too old to run.
+
+    With no *version*, the newest published version whose ``min_gaia_version``
+    *core_version* (default: the running core) satisfies.
+
+    Raises:
+        CoreTooOldError: *version* (or, when unset, every published version)
+            needs a newer core.
+        InstallError: the manifest publishes no versions, or a malformed floor.
+    """
+    core = core_version or catalog_mod._running_core_version()
+    agent_id = manifest.get("id")
+    floors = catalog_mod.version_floors(manifest)
+    if not floors:
+        raise InstallError(f"Hub manifest for '{agent_id}' has no published versions.")
+    try:
+        gate = catalog_mod.core_gate(manifest, core)
+    except catalog_mod.CatalogError as exc:
+        raise InstallError(str(exc)) from exc
+
+    if version is None:
+        if gate.installable_version is not None:
+            if gate.requires_gaia_version:
+                logger.warning(
+                    "installer: '%s' %s needs GAIA %s or newer (this is %s); "
+                    "installing %s, the newest version this core runs",
+                    agent_id,
+                    manifest.get("latest_version"),
+                    gate.requires_gaia_version,
+                    core,
+                    gate.installable_version,
+                )
+            return gate.installable_version
+        # Every version is blocked, so every floor is set; name the lowest.
+        required = min(
+            (f for f in floors.values() if f), key=catalog_mod._parse_version
+        )
+        raise CoreTooOldError(
+            f"No published version of '{agent_id}' runs on GAIA {core}: the "
+            f"oldest needs GAIA {required} or newer. Upgrade with "
+            f"`{catalog_mod.CORE_UPGRADE_COMMAND}` (or re-run the installer from "
+            f"https://amd-gaia.ai), then install '{agent_id}' again.",
+            required=required,
+            core=core,
+        )
+
+    floor = floors.get(version)
+    if not catalog_mod.core_satisfies(floor, core):
+        hint = (
+            f" Version {gate.installable_version} runs on this core; install it "
+            f"by leaving the version unset."
+            if gate.installable_version
+            else ""
+        )
+        raise CoreTooOldError(
+            f"'{agent_id}' {version} needs GAIA {floor} or newer, and this is "
+            f"GAIA {core}. Upgrade with `{catalog_mod.CORE_UPGRADE_COMMAND}` (or "
+            f"re-run the installer from https://amd-gaia.ai), then retry.{hint}",
+            required=floor,
+            core=core,
+        )
+    return version
+
+
 def _resolve_version(
     manifest: Dict[str, Any],
     version: Optional[str],
     *,
     platform_key: Optional[str] = None,
+    core_version: Optional[str] = None,
 ):
     """Resolve *version* and select its artifact, honest about the artifact's kind.
+
+    With no *version*, resolves the newest published version whose
+    ``min_gaia_version`` this core (*core_version*, default the running one)
+    satisfies. An explicit *version* the core cannot run is refused too.
 
     Returns ``(resolved_version, artifact)`` — an unchanged 2-tuple so
     :func:`_artifact_size` (the setup executor's ordering helper) keeps
@@ -625,15 +743,12 @@ def _resolve_version(
         raise InstallError(
             f"Hub manifest for '{manifest.get('id')}' has no published versions."
         )
-    if version is None:
-        version = manifest.get("latest_version")
-        if not version or version not in versions:
-            version = max(versions, key=catalog_mod._parse_version)
-    if version not in versions:
+    if version is not None and version not in versions:
         raise InstallError(
             f"Version '{version}' of '{manifest.get('id')}' is not published. "
             f"Available: {', '.join(sorted(versions))}."
         )
+    version = resolve_installable_version(manifest, version, core_version)
     entry = versions[version]
     agent_id = manifest.get("id")
     language = manifest.get("language", "python")
