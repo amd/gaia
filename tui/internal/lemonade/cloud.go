@@ -292,12 +292,21 @@ func (c *Client) Configure(ctx context.Context, p Provider, key string) error {
 	if strings.TrimSpace(p.Header) == "" || strings.ContainsAny(p.Header+p.Prefix, "\r\n") {
 		return fmt.Errorf("Enter a valid authentication header and prefix")
 	}
+	target := c
+	if key != "" {
+		// Registration and key must land on the same server, and only one a key may reach.
+		base, err := CredentialBaseURL(ctx, c.BaseURL)
+		if err != nil {
+			return err
+		}
+		target = &Client{BaseURL: base, HTTP: c.HTTP}
+	}
 	data := map[string]any{"backend": "cloud", "provider": p.Name, "base_url": p.BaseURL, "auth_header_name": p.Header, "auth_header_prefix": p.Prefix, "wire_format": "openai"}
-	if err := c.request(ctx, "POST", "/install", data, nil); err != nil {
+	if err := target.request(ctx, "POST", "/install", data, nil); err != nil {
 		return err
 	}
 	if key != "" {
-		return c.request(ctx, "POST", "/cloud/auth", map[string]string{"provider": p.Name, "api_key": key}, nil)
+		return target.request(ctx, "POST", "/cloud/auth", map[string]string{"provider": p.Name, "api_key": key}, nil)
 	}
 	return nil
 }

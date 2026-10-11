@@ -137,6 +137,13 @@ still sends conversation history to Fireworks and incurs usage charges — see
   a cloud chat is open. A key that discovers no models is not
   kept. GAIA never writes a key to config files, transcripts, control logs,
   traces, or command-line arguments.
+- A key only goes to GAIA's own running Lemonade, to the server named in
+  `LEMONADE_BASE_URL`, or to the system Lemonade when GAIA's own isn't installed.
+  It never goes to whatever answers on port 13305 or 8000. If GAIA's Lemonade is
+  restarting, GAIA waits for the background service to bring it back. If it isn't
+  back in time, you see "GAIA's Lemonade Server is restarting and is not back
+  yet" and nothing is sent. To use another Lemonade server, set
+  `LEMONADE_BASE_URL` to it.
 - Where no credential store is available (a headless Linux session, for
   example), the panel says the key works for this session only. Set
   `LEMONADE_FIREWORKS_API_KEY` or `LEMONADE_AMD_API_KEY` in Lemonade's own

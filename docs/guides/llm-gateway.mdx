@@ -136,6 +136,7 @@ This is why the default is a model that streams: `DeepSeek-V4.1-Flash`, or
 |---|---|
 | `models` lists nothing | Lemonade only discovers models once it has a working token. Run `gaia gateway auth`. |
 | Setting a token returns a conflict | `LEMONADE_AMD_API_KEY` is set in Lemonade's environment and wins. Keep using it, or unset it and restart Lemonade. |
+| `GAIA's Lemonade Server is restarting and is not back yet` | GAIA's own Lemonade was stopped and the background service has not brought it back yet, so the token was sent nowhere. Try again in a moment; if it persists, run `gaia daemon status`. GAIA never sends the token to another server on the default port. Set `LEMONADE_BASE_URL` to use a different server. |
 | `has no cloud-provider API` | Lemonade is older than 11.8.0. Run `gaia init`. |
 | The probe returns 404 or redirects | Wrong host. `llm.amd.com` is the SSO portal; the API is `llm-api.amd.com/Unified/v1`. |
 | `auth` succeeds but discovers 0 models | The gateway rejected the key. Lemonade stores it without validating, so this is where a bad key first shows. Run `scripts/diagnose-gateway-auth.ps1`. |

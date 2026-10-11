@@ -184,3 +184,25 @@ func TestSubprocessLegacyDiscoveryAuthenticatesAndRefusesRedirects(t *testing.T)
 		t.Fatal("redirected discovery reported a usable server")
 	}
 }
+
+// Mid-restart, a probed port would reach the child as a chosen
+// LEMONADE_BASE_URL, and the child would hand it the cloud key.
+func TestSubprocessDoesNotProbeWhileGAIAsLemonadeRestarts(t *testing.T) {
+	dir := isolateSubprocessConnection(t)
+	dist := filepath.Join(dir, "lemonade", "dist", "2026.39.1")
+	if err := os.MkdirAll(dist, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dist, "lemond.exe"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("someone else's Lemonade was probed during the restart")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer foreign.Close()
+	replaceSubprocessPorts(t, foreign.URL)
+	if got := detectLemonadeURL(); got != "" {
+		t.Fatalf("the child would be pinned to %q", got)
+	}
+}

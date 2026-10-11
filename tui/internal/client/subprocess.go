@@ -41,6 +41,12 @@ func detectLemonadeURL() string {
 	if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) != "" || lemonade.ReadEmbedded() != nil {
 		return lemonade.ResolveBaseURL("")
 	}
+	// GAIA's own server is restarting. A probed port would reach the child as
+	// a chosen LEMONADE_BASE_URL and get the cloud key; the child waits on the
+	// daemon for GAIA's server instead.
+	if lemonade.GAIARunsLemonade() {
+		return ""
+	}
 	for _, port := range subprocessLemonadePorts {
 		url := "http://localhost:" + port + "/api/v1"
 		client := lemonade.New(url)
