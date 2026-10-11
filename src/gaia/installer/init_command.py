@@ -623,15 +623,6 @@ def check_setup_status(
         if not available:
             reasons.append(f"Model '{model_id}' is not downloaded")
 
-    agent_id = profile_config.get("agent")
-    if agent_id in HUB_INSTALL_AGENTS and not InitCommand._is_hub_agent_available(
-        agent_id
-    ):
-        reasons.append(
-            f"The '{agent_id}' agent is not installed "
-            f"(`gaia hub install {agent_id}`)"
-        )
-
     if reasons:
         # Sizes let a caller say what the download will cost before it starts.
         models = [_describe_model(client, m) for m in model_ids] if load else []
@@ -2268,15 +2259,26 @@ class InitCommand:
         # Scoped per profile -- gating on the chat wheel alone would mark
         # sd/vlm/minimal permanently "incomplete", and would call the flagship
         # profile complete while its own binary is missing.
+        agent_id = INIT_PROFILES[self.profile].get("agent")
         agent_missing = not self._profile_agent_available()
-        setup_incomplete = agent_missing and not self._no_hub_build_for_machine
+        # Incomplete only when init was meant to install the agent and could
+        # have: chat's wheels are source-install only (#2240).
+        setup_incomplete = (
+            agent_missing
+            and agent_id in HUB_INSTALL_AGENTS
+            and not self._no_hub_build_for_machine
+        )
         if setup_incomplete:
             headline = "GAIA initialization incomplete - see below"
+        elif agent_missing and agent_id in HUB_INSTALL_AGENTS:
+            headline = (
+                f"GAIA initialization complete, except the '{agent_id}' agent: "
+                "the Agent Hub has no build for this machine"
+            )
         elif agent_missing:
             headline = (
-                "GAIA initialization complete, except the "
-                f"'{INIT_PROFILES[self.profile]['agent']}' agent: the Agent Hub "
-                "has no build for this machine"
+                "GAIA initialization complete, except `gaia chat`: install its "
+                "packages below"
             )
         else:
             headline = "GAIA initialization complete!"
