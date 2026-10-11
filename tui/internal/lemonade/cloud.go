@@ -197,7 +197,8 @@ func validateURL(raw string, loopback bool) error {
 func (c *Client) request(ctx context.Context, method, path string, data any, result any) error {
 	// Configuration changes are local administrative operations. Never send a
 	// pasted key to an arbitrary remote Lemonade address or follow a redirect.
-	if err := validateURL(c.BaseURL, true); err != nil {
+	base := c.current()
+	if err := validateURL(base, true); err != nil {
 		return err
 	}
 	var body io.Reader
@@ -208,12 +209,12 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, base+path, body)
 	if err != nil {
 		return fmt.Errorf("Invalid Lemonade address")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := APIKeyFor(c.BaseURL); key != "" {
+	if key := APIKeyFor(base); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	resp, err := c.HTTP.Do(req)

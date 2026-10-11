@@ -95,6 +95,18 @@ func CredentialBaseURL(ctx context.Context, base string) (string, error) {
 	return fmt.Sprintf("http://localhost:%d/api/v1", state.Port), nil
 }
 
+// current is where c's requests go now. Like a credential, a loopback address
+// while GAIA runs its server is GAIA's, perhaps from before a restart, so it
+// follows that server to its current port. Mid-restart it stays put.
+func (c *Client) current() string {
+	if GAIARunsLemonade() && isLoopbackHTTP(c.BaseURL) {
+		if state := ReadEmbedded(); state != nil {
+			return fmt.Sprintf("http://localhost:%d/api/v1", state.Port)
+		}
+	}
+	return c.BaseURL
+}
+
 func isLoopbackHTTP(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "http" || u.User != nil {
