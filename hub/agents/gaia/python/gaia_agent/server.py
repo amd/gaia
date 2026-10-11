@@ -854,6 +854,30 @@ def _switch_target(session: Any, request: "QueryRequest") -> Optional[str]:
     return None
 
 
+#: How long a new turn waits for a stopped one to finish its in-flight model
+#: call. Under the Agent UI relay's 300 s read timeout, so the wait never
+#: outlives the caller.
+STOPPED_TURN_WAIT_S = 240.0
+
+
+async def _acquire_turn(session: Any) -> bool:
+    """Take *session*'s run lock; ``False`` when another turn is still live.
+
+    A turn the user already stopped still holds the lock until its model call
+    returns, which for a long answer is most of a minute. Refusing the next
+    message for all that time made Stop look broken, so a stopped turn is
+    waited out instead. A turn that is NOT stopped is still refused at once.
+    """
+    if session.run_lock.acquire(blocking=False):
+        return True
+    stopping = session.active_cancel
+    if stopping is None or not stopping.is_set():
+        return False
+    return await asyncio.to_thread(
+        session.run_lock.acquire, True, STOPPED_TURN_WAIT_S
+    )
+
+
 @router.post("/query")
 async def query(request: QueryRequest):
     """Run the flagship agent loop for one request, streaming canonical SSE."""
@@ -894,6 +918,7 @@ async def query(request: QueryRequest):
         if registered:
             _registry.remove(request.run_id)
         if session is not None:
+            session.active_cancel = None
             session.run_lock.release()
         if one_shot_agent is not None:
             close_agent(one_shot_agent)
@@ -919,7 +944,7 @@ async def query(request: QueryRequest):
             # visibly Agent.loaded_skills — vanishes next turn otherwise, while
             # the model goes on telling the user the skill is still loaded.
             session = session_registry.get_or_create(request.session_id, **kwargs)
-            if not session.run_lock.acquire(blocking=False):
+            if not await _acquire_turn(session):
                 session = None  # not ours to release
                 raise HTTPException(
                     status_code=409,
@@ -1003,6 +1028,8 @@ async def query(request: QueryRequest):
         run = _QueryRun(request.run_id, agent, handler)
         precancelled = _registry.add(run)
         registered = True
+        if session is not None:
+            session.active_cancel = run.cancel_event
         agent._cancel_event = run.cancel_event
         agent._followup_queue = run.followups
         if precancelled:
@@ -1064,6 +1091,7 @@ async def query(request: QueryRequest):
                 # Collect this turn's "always" grants into the session before
                 # the handler is dropped, or the next turn re-asks for them.
                 session.permissions.detach(handler)
+                session.active_cancel = None
                 session.run_lock.release()
             # This thread is the last thing to touch a one-shot agent — the
             # stream reads only run.result and the handler — so its RAG index,

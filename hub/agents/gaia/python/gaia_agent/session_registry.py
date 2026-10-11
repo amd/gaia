@@ -106,6 +106,9 @@ class _AgentSession:
         #: ``PROVIDER_CLAUDE`` — so a turn naming another one is a switch.
         self.provider = provider
         self.run_lock = threading.Lock()
+        #: The cancel flag of the turn holding ``run_lock``, so a new turn can
+        #: tell a stopped turn that is still winding down from a live one.
+        self.active_cancel: Optional[threading.Event] = None
         #: True exactly once, on the session built to replace one this
         #: registry involuntarily evicted (LRU cap or idle timeout) — never
         #: for a session_id used for the first time. The caller (server.py)
