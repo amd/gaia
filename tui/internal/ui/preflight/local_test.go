@@ -1006,3 +1006,83 @@ func TestAGateDoesNotPassACloudModelItsServerCannotServe(t *testing.T) {
 		t.Fatalf("an unanswered listing must be reported as unknown, not failed or passed: %+v", row)
 	}
 }
+
+// argsStub is a `gaia` that prints the arguments it was run with and exits
+// with code.
+func argsStub(t *testing.T, code int) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(dir, "gaia-args.bat")
+		script := fmt.Sprintf("@echo off\r\necho ARGS %%*\r\nexit /b %d\r\n", code)
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	path := filepath.Join(dir, "gaia-args.sh")
+	script := fmt.Sprintf("#!/bin/sh\necho ARGS \"$@\"\nexit %d\n", code)
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func stubLemonadeNotInstalled(t *testing.T, missing bool) {
+	t.Helper()
+	orig := lemonadeNotInstalled
+	lemonadeNotInstalled = func() bool { return missing }
+	t.Cleanup(func() { lemonadeNotInstalled = orig })
+}
+
+func setupArgs(t *testing.T, res FixResult) string {
+	t.Helper()
+	for _, line := range res.Log {
+		if strings.HasPrefix(line, "ARGS ") {
+			return line
+		}
+	}
+	t.Fatalf("setup never ran gaia; log: %v", res.Log)
+	return ""
+}
+
+// Pressing enter on "Step 1 — install the local model server" ran the whole of
+// setup, so a user who meant to pick the AMD gateway was already several GB into
+// a local chat model before the provider panel could be opened.
+func TestStepOneInstallsTheServerAndDownloadsNothing(t *testing.T) {
+	stubLemonadeNotInstalled(t, true)
+	stubGaiaInit(t, func() (string, error) { return argsStub(t, 0), nil })
+
+	res := localRunner{}.Fix(context.Background(), localCfg(), FixRunSetup, nil)
+	if !res.OK() {
+		t.Fatalf("step 1 failed: %+v", res)
+	}
+	if args := setupArgs(t, res); !strings.Contains(args, "--skip-models") {
+		t.Errorf("step 1 ran %q; it must skip every model download", args)
+	}
+
+	// A failure names the command for the step that was attempted.
+	stubGaiaInit(t, func() (string, error) { return argsStub(t, 1), nil })
+	res = localRunner{}.Fix(context.Background(), localCfg(), FixRunSetup, nil)
+	if res.OK() || !strings.Contains(res.Diagnosis.Command, "--skip-models") {
+		t.Errorf("a failed step 1 suggests %q, want the server-only command", res.Diagnosis.Command)
+	}
+}
+
+// Once the server is installed, the same key downloads the models — and still
+// leaves the chat model out for a cloud provider.
+func TestStepTwoDownloadsTheModelsTheProviderNeeds(t *testing.T) {
+	stubLemonadeNotInstalled(t, false)
+	stubGaiaInit(t, func() (string, error) { return argsStub(t, 0), nil })
+
+	args := setupArgs(t, localRunner{}.Fix(context.Background(), localCfg(), FixRunSetup, nil))
+	if strings.Contains(args, "--skip-models") || strings.Contains(args, "--skip-chat-model") {
+		t.Errorf("a local setup ran %q; it must download the models", args)
+	}
+
+	cloud := localRunner{opts: LocalOptions{Model: "amd.DeepSeek-V4.1-Flash"}}
+	args = setupArgs(t, cloud.Fix(context.Background(), localCfg(), FixRunSetup, nil))
+	if strings.Contains(args, "--skip-models") || !strings.Contains(args, "--skip-chat-model") {
+		t.Errorf("a cloud setup ran %q; it must fetch embeddings only", args)
+	}
+}

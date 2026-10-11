@@ -277,6 +277,9 @@ type Report struct {
 	// ChatModel is the local chat model id the check loaded, when chat runs
 	// on this machine. Empty for Claude, a cloud model, or an unproven row.
 	ChatModel string
+	// StepsDone counts first-run steps finished earlier this session, so the
+	// step left after them still reads "step 2 of 2", not "step 1 of 1".
+	StepsDone int
 }
 
 // Ready reports whether every precondition proved OK. An indeterminate row is
@@ -399,7 +402,7 @@ func (r Report) Summary() string {
 		return "ready"
 	}
 	if steps := r.Steps(); len(steps) > 0 {
-		return fmt.Sprintf("step 1 of %d", len(steps))
+		return fmt.Sprintf("step %d of %d", r.StepsDone+1, r.StepCount())
 	}
 	return fmt.Sprintf("%d of %d ready", r.OKCount(), len(r.Rows))
 }
@@ -421,14 +424,20 @@ func (r Report) Steps() []int {
 	return steps
 }
 
-// StepNumber is the 1-based position of row i among Steps, or 0.
+// StepNumber is the 1-based position of row i among Steps, after any steps
+// already done, or 0.
 func (r Report) StepNumber(i int) int {
 	for n, idx := range r.Steps() {
 		if idx == i {
-			return n + 1
+			return r.StepsDone + n + 1
 		}
 	}
 	return 0
+}
+
+// StepCount is how many first-run steps this setup has, done ones included.
+func (r Report) StepCount() int {
+	return r.StepsDone + len(r.Steps())
 }
 
 // LemonadeStep is the first-run step number that sets up Lemonade, or 0 when

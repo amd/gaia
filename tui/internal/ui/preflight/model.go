@@ -130,6 +130,10 @@ type Model struct {
 	// moved on from reads as done rather than still broken.
 	provisionDone map[string]bool
 	cancel        *cancelBox
+	// stepsDone is how many first-run steps finished this session;
+	// stepsBefore is the step total when the last setup run succeeded, read
+	// against the re-check that follows it.
+	stepsDone, stepsBefore int
 
 	// fixApplied is true once a fix has changed something on this machine —
 	// setup ran, a daemon or sidecar started, a model downloaded.
@@ -409,6 +413,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case reportMsg:
 		m.rep = msg.rep
+		if left := len(m.rep.Steps()); m.stepsBefore > 0 && left > 0 && left < m.stepsBefore {
+			m.stepsDone = m.stepsBefore - left
+		}
+		m.stepsBefore = 0
+		if len(m.rep.Steps()) > 0 {
+			m.rep.StepsDone = m.stepsDone
+		}
 		m.phase = phaseIdle
 		// The rows now say everything the "…re-checking" note did.
 		m.note = ""
@@ -489,6 +500,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		res := msg.event.result
 		if res.OK {
 			m.fixApplied = true
+			m.stepsBefore = m.rep.StepCount()
 			m.note = "Setup finished. Checking that everything loads…"
 			if m.focusFix() == FixPullModel {
 				m.note = "Download complete. Re-checking…"
