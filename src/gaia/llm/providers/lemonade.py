@@ -539,6 +539,10 @@ class LemonadeProvider(LLMClient):
             model or self._last_model or self._model or DEFAULT_MODEL_NAME
         )
 
+    def current_base_url(self) -> str:
+        """The Lemonade URL this client talks to now (see ``LemonadeClient``)."""
+        return self._backend.current_base_url()
+
     def refresh_model_catalog(self, show_all: bool = True) -> None:
         """Read the Lemonade catalog once so ``cloud_model_provider`` can
         recognise a runtime-discovered provider right away.

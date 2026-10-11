@@ -702,12 +702,30 @@ def _replayed_cloud_key(base_url: Optional[str], target: str) -> bool:
         return False
 
 
+def _lemonade_url(agent: Any) -> Optional[str]:
+    """The Lemonade URL the live client talks to now.
+
+    ``chat.config.base_url`` keeps the address the agent started with, which is
+    dead once the daemon restarts GAIA's Lemonade on a new port; the live
+    client follows it there. A Claude client has no such URL.
+    """
+    chat = agent.chat
+    current = getattr(getattr(chat, "llm_client", None), "current_base_url", None)
+    if not callable(current):
+        return chat.config.base_url
+    try:
+        return current()
+    except LemonadeClientError as exc:
+        raise RuntimeError(f"{str(exc).rstrip('.')}. {start_advice()}") from exc
+
+
 def _apply_local_switch(agent: Any, target: str) -> str:
     """Swap the live client to a local or cloud Lemonade model."""
     chat = agent.chat
-    available = _lemonade_models(chat.config.base_url)  # raises if unreachable
-    if target not in available and _replayed_cloud_key(chat.config.base_url, target):
-        available = _lemonade_models(chat.config.base_url)
+    base_url = _lemonade_url(agent)
+    available = _lemonade_models(base_url)  # raises if unreachable
+    if target not in available and _replayed_cloud_key(base_url, target):
+        available = _lemonade_models(base_url)
     if target not in available:
         raise RuntimeError(
             f"Unknown Lemonade model '{target}'. Downloaded local or discovered cloud "
@@ -723,7 +741,7 @@ def _apply_local_switch(agent: Any, target: str) -> str:
         new_client = create_client(
             use_claude=False,
             model=target,
-            base_url=chat.config.base_url,
+            base_url=base_url,
             system_prompt=chat.config.system_prompt,
         )
         # Warm the catalog metadata now, before this client answers anything.
@@ -793,7 +811,7 @@ def _format_model_list(agent: Any) -> str:
 
     lines.append("")
     try:
-        models = _lemonade_models(chat.config.base_url)
+        models = _lemonade_models(_lemonade_url(agent))
     except RuntimeError as exc:
         lines.append("**Local (Lemonade — downloaded, chat-capable models):**")
         lines.append(f"- {exc}")

@@ -2321,6 +2321,19 @@ class LemonadeClient:
         self._stop_listeners(stoppable)
         return foreign
 
+    def current_base_url(self) -> str:
+        """Where this client sends requests now.
+
+        Follows GAIA's own server to the port the daemon last started it on,
+        as every request does; any other server is returned as configured.
+
+        Raises:
+            LemonadeClientError: GAIA's server is gone and the daemon could not
+                start it.
+        """
+        self._follow_gaia_lemonade()
+        return self.base_url
+
     def _start_gaia_lemonade(self) -> None:
         """Have the daemon start GAIA's own server, then point this client at it.
 
