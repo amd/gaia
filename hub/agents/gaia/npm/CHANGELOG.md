@@ -10,6 +10,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   trusts the operating system's certificate store, as pip does, instead of only
   Python's bundled list, so a proxy root such as Zscaler's no longer fails every
   fetch with `CERTIFICATE_VERIFY_FAILED`.
+- **Starting the agent no longer downloads a model you skipped.** The HTTP
+  sidecar's start-up warm-up skips the default local model when it is not
+  downloaded, so someone using a cloud model is not handed a multi-GB download
+  they never asked for.
 
 ## [0.3.0]
 
