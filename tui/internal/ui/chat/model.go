@@ -402,6 +402,12 @@ type ChatModel struct {
 	// only when the two match and the turn ends in a final.
 	switchTarget string
 	switchedTo   savedChoice
+	// relayedSwitching is true while a daemon-relay `/model` is being checked
+	// (relayedmodel.go); queued messages wait for it like they wait for a turn.
+	relayedSwitching bool
+	// relayedPending is a relayed switch the next turn carries, saved only once
+	// a turn completes on it and undone if the agent refuses it.
+	relayedPending *relayedPending
 
 	// startup is the one `/model` turn sent when the chat opens — see
 	// startupmodel.go. saveModel persists a confirmed switch; nil saves nothing.
@@ -791,7 +797,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = tea.Batch(cmd, capCmd)
 	}
 
-	if len(next.queued) == 0 || next.streaming || next.startup.pending ||
+	if len(next.queued) == 0 || next.streaming || next.startup.pending || next.relayedSwitching ||
 		next.setupChecking || next.setupRunning ||
 		next.providerPanel != nil || next.agentsPanel != nil {
 		return next, cmd
@@ -901,7 +907,7 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sendQueryMsg:
 		// Behind the opening /model turn, like anything typed before it.
-		if m.startup.pending || m.streaming {
+		if m.startup.pending || m.streaming || m.relayedSwitching {
 			m.queued = append(m.queued, msg.query)
 			m.updateViewport()
 			return m, nil
@@ -910,6 +916,9 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case startupModelMsg:
 		return m.runStartupModel()
+
+	case relayedSwitchMsg:
+		return m.handleRelayedSwitch(msg)
 
 	case startWarmUpMsg:
 		// A turn already running (a queued launch query, /clear) needs no
@@ -1054,6 +1063,12 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role:    RoleError,
 			Content: sanitizeErrorText(msg.err.Error()),
 		})
+		if m.revertRelayedSwitch(msg.err) {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: "Nothing was switched — this session is still on " + m.currentModelName() + ".",
+			})
+		}
 		m.drainPendingPreScan()
 		m.updateViewport()
 		return m, nil
@@ -1436,7 +1451,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// The opening /model turn goes first: a question sent before it would
 		// run on whatever model the agent happened to start on.
-		if m.streaming || m.setupChecking || m.setupRunning || m.startup.pending {
+		if m.streaming || m.setupChecking || m.setupRunning || m.startup.pending || m.relayedSwitching {
 			m.queued = append(m.queued, query)
 			m.updateViewport()
 			return m, nil
@@ -1696,6 +1711,13 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			})
 			m.updateViewport()
 			return m, nil
+		}
+		// The relay has no `/model` turn: sent as one it is a question.
+		if sw, ok := m.relayedSwitcher(); ok {
+			if m.relayedSwitching {
+				return m.statusNote("A model switch is already being checked."), nil
+			}
+			return m.switchRelayedModel(sw, modelCommandArg(query))
 		}
 		// Refused here when the round-trip could only end in the same
 		// refusal — a bad Claude id, or a local id with the local server

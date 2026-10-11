@@ -361,6 +361,14 @@ actually runs. The model you last picked is restored on the next launch; if it
 can't be, the chat says so in one line and opens the provider picker. See
 [Your model is remembered](/guides/ai-providers#your-model-is-remembered).
 
+Once setup has installed the flagship as a hub package, the TUI reaches it through
+the background service. `/model` and `/provider` work the same there: the switch
+is checked against the models Lemonade serves, the header names the new model, and
+your next message runs on it. It is remembered once that message completes; if the
+agent refuses the model, the previous one comes back. Neither command is ever sent
+to the agent as a question. An agent too old to switch models mid-chat says so and
+names the update command.
+
 | Key | What it does |
 |---|---|
 | `Enter` | Send message. Mid-answer it goes to the turn already running — see below |
@@ -445,7 +453,7 @@ links and double-click copy.
 | `/clear` | Clear the conversation |
 | `/setup` | Re-run first-time setup (`gaia init`) for the flagship agent |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
-| `/model` | Switch the flagship agent's live model |
+| `/model` | Switch the flagship agent's live model. Bare `/model` lists what you can switch to |
 | `/full-access` | Explain full access; `/full-access confirm` then turns it on for this session (off by default) |
 | `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |

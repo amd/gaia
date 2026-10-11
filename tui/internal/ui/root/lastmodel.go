@@ -148,8 +148,7 @@ func (m *FlagshipModel) withStartupModel(agent catalog.Agent, c chat.ChatModel, 
 	switch {
 	case kind != 0 && agent.Transport == catalog.TransportDaemon &&
 		model == launched && lemonade.IsCloudID(model):
-		// The sidecar answers `/model` as a question, so the opening turn
-		// could only fail — and the client already runs on this model.
+		// The client already runs on this model, and the gate checked it.
 		return c.WithRelayedModel(kind, provider, model)
 	case kind != 0:
 		c = c.WithStartupModel(kind, provider, model)
