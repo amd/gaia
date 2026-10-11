@@ -275,7 +275,7 @@ func TestARelayedSwitchToAnIDTheProviderLacksBlamesTheName(t *testing.T) {
 		t.Fatalf("a refused switch changed something: turn %q, sent %q", c.turnModel, c.sent)
 	}
 	errs := errorsIn(m)
-	if len(errs) != 1 || !strings.Contains(errs[0], "has no model by that name") ||
+	if len(errs) != 1 || !strings.Contains(errs[0], "does not offer a model with that id") ||
 		strings.Contains(errs[0], "key may be missing") {
 		t.Fatalf("the refusal = %q", errs)
 	}

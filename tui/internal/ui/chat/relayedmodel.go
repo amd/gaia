@@ -109,7 +109,7 @@ func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, 
 	if len(models) > 0 {
 		// The provider answers, so the key works: blaming it misleads.
 		return "", errors.New(lemonade.Label(provider) +
-			" has no model by that name — check the spelling, or pick one with a bare /model")
+			" does not offer a model with that id — pick one from its list with a bare /model")
 	}
 	return "", errors.New(lemonade.Label(provider) +
 		" does not list it — the key may be missing or the provider is not connected")
