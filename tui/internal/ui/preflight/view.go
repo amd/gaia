@@ -349,7 +349,7 @@ func (m Model) trailerLines(w int) []string {
 	switch {
 	case m.phase == phaseProvisioning:
 		leaving := "Leaving this screen cancels the download."
-		if m.focusFix() == FixRunSetup {
+		if runsSetup(m.focusFix()) {
 			leaving = "Leaving this screen stops setup."
 		}
 		return []string{

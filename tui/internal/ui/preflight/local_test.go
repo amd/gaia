@@ -288,7 +288,7 @@ func TestANewMachineGetsAStepNotAFailure(t *testing.T) {
 	if !row.FirstRun || row.Step != installServerStep {
 		t.Fatalf("an uninstalled server is not a first-run step: %+v", row)
 	}
-	if row.State != StateFailed || row.Fix != FixRunSetup {
+	if row.State != StateFailed || row.Fix != FixInstallServer {
 		t.Fatalf("the step must still block and carry setup: %+v", row)
 	}
 	if strings.Contains(row.Detail+row.Remedy.Action, "Already have it") {
@@ -698,8 +698,8 @@ func TestADownLemonadeOffersTheOneKeySetup(t *testing.T) {
 	if row.State != StateFailed {
 		t.Fatalf("an unreachable Lemonade is %s, want failed", row.State.Word())
 	}
-	if row.Fix != FixRunSetup {
-		t.Errorf("fix = %v, want FixRunSetup — `gaia init` installs and starts "+
+	if row.Fix != FixInstallServer {
+		t.Errorf("fix = %v, want FixInstallServer — `gaia init` installs and starts "+
 			"Lemonade, so this row is fixable from the screen", row.Fix)
 	}
 }
@@ -1133,7 +1133,7 @@ func TestStepOneInstallsTheServerAndDownloadsNothing(t *testing.T) {
 	stubLemonadeNotInstalled(t, true)
 	stubGaiaInit(t, func() (string, error) { return argsStub(t, 0), nil })
 
-	res := localRunner{}.Fix(context.Background(), localCfg(), FixRunSetup, nil)
+	res := localRunner{}.Fix(context.Background(), localCfg(), FixInstallServer, nil)
 	if !res.OK() {
 		t.Fatalf("step 1 failed: %+v", res)
 	}
@@ -1143,9 +1143,22 @@ func TestStepOneInstallsTheServerAndDownloadsNothing(t *testing.T) {
 
 	// A failure names the command for the step that was attempted.
 	stubGaiaInit(t, func() (string, error) { return argsStub(t, 1), nil })
-	res = localRunner{}.Fix(context.Background(), localCfg(), FixRunSetup, nil)
+	res = localRunner{}.Fix(context.Background(), localCfg(), FixInstallServer, nil)
 	if res.OK() || !strings.Contains(res.Diagnosis.Command, "--skip-models") {
 		t.Errorf("a failed step 1 suggests %q, want the server-only command", res.Diagnosis.Command)
+	}
+}
+
+// A step 1 that failed after unpacking Lemonade left the row reading "install
+// the local model server", and its retry ran all of setup: ~29 GB of local
+// models for a user who had not picked a provider yet.
+func TestARetriedStepOneStillDownloadsNothing(t *testing.T) {
+	stubLemonadeNotInstalled(t, false)
+	stubGaiaInit(t, func() (string, error) { return argsStub(t, 0), nil })
+
+	args := setupArgs(t, localRunner{}.Fix(context.Background(), localCfg(), FixInstallServer, nil))
+	if !strings.Contains(args, "--skip-models") {
+		t.Errorf("a retried step 1 ran %q; it must still skip every model download", args)
 	}
 }
 

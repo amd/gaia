@@ -198,8 +198,9 @@ there. The gate shows that as numbered steps, not failures:
 Press `Enter` and the step runs right there. The row it is working on shows it,
 and the line underneath says what is happening in words — never a log line.
 
-Step 1 installs Lemonade and stops, downloading nothing. Which models step 2
-fetches depends on where chat runs, so this is the moment to press `p` and pick
+Step 1 installs Lemonade and stops, downloading nothing — and so does every
+retry of it, and the key on a Lemonade row that is installed but not running.
+Which models step 2 fetches depends on where chat runs, so this is the moment to press `p` and pick
 Fireworks AI or the AMD LLM Gateway: step 2 then downloads only the embedding
 models, not a local chat model. Press `Enter` again to start step 2:
 

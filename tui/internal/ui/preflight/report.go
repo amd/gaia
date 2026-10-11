@@ -134,6 +134,9 @@ const (
 	// FixRestartSidecar — stop the sidecar running in the wrong mode, then
 	// ensure it again in the one this launch asked for.
 	FixRestartSidecar
+	// FixInstallServer — setup's first step alone: install and start GAIA's
+	// Lemonade and download nothing, so the models are a step the user sees sized.
+	FixInstallServer
 )
 
 // Label is the key hint shown next to `f`.
@@ -147,7 +150,7 @@ func (k FixKind) Label() string {
 		return "download it now"
 	case FixConnectMailbox:
 		return "connect a mailbox"
-	case FixRunSetup:
+	case FixRunSetup, FixInstallServer:
 		return "set it up now"
 	case FixRestartSidecar:
 		return "restart it in this mode"

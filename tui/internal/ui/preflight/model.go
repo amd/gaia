@@ -420,7 +420,7 @@ func (m Model) focusFix() FixKind {
 // it runs. `gaia init` is a local child whose pipes are read live, so that one
 // really does narrate.
 func provisionOpeningLine(kind FixKind) string {
-	if kind == FixRunSetup {
+	if runsSetup(kind) {
 		return "Starting setup"
 	}
 	return "Downloading the model — the first pull takes several minutes"
@@ -713,7 +713,7 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 		m.phase = phaseFixing
 		m.note = "Restarting the " + m.cfg.AgentName + " agent in the requested mode…"
 		return m, tea.Batch(m.quickFixCmd(KeySidecar, FixRestartSidecar, ensureTimeout), m.spin.Tick)
-	case FixPullModel, FixRunSetup:
+	case FixPullModel, FixRunSetup, FixInstallServer:
 		return m.startProvision()
 	case FixConnectMailbox:
 		agentID, provider := m.cfg.AgentID, row.Provider
