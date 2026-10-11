@@ -141,11 +141,13 @@ function openBrowser(url) {
   });
 }
 
+let shuttingDown = false;
+
 /**
  * Start the Python backend.
  * Uses "chat --ui" for compatibility with all gaia versions.
  */
-function startBackend(gaiaBin, port) {
+function startBackend(gaiaBin, port, exit = process.exit) {
   console.log(`Starting GAIA backend on port ${port}...`);
 
   const child = spawn(
@@ -176,13 +178,16 @@ function startBackend(gaiaBin, port) {
 
   child.on("error", (err) => {
     console.error(`Failed to start backend: ${err.message}`);
-    process.exit(1);
+    exit(1);
   });
 
-  child.on("exit", (code) => {
-    if (code !== 0 && code !== null) {
-      console.error(`Backend exited with code ${code}`);
-    }
+  // The backend serves the UI, so once it is gone there is nothing to open.
+  child.on("exit", (code, signal) => {
+    if (shuttingDown) return;
+    console.error(
+      `Backend exited with ${code !== null ? `code ${code}` : signal} — see the [backend] lines above.`
+    );
+    exit(code ?? 1);
   });
 
   return child;
@@ -358,6 +363,7 @@ async function main() {
 
   // Graceful shutdown
   function cleanup() {
+    shuttingDown = true;
     if (backendProcess) {
       console.log("\nShutting down GAIA...");
       backendProcess.kill("SIGTERM");
@@ -385,4 +391,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { npmDistTag, helpText };
+module.exports = { npmDistTag, helpText, startBackend };

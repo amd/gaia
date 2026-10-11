@@ -73,18 +73,29 @@ class TestBareInitTargetsTheFlagship:
         assert profile["agent"] == FLAGSHIP_AGENT_ID
         assert profile["agent"] in HUB_INSTALL_AGENTS
 
-    def test_flagship_profile_carries_the_chat_models_and_rag_extras(self):
+    def test_flagship_profile_carries_the_chat_models_and_ui_extras(self):
         """A flagship session needs the chat LLM, the RAG/memory embedder and
-        the [rag] extras — dropping any of them makes documents fail at first
-        index rather than at setup."""
+        the [ui] extras — [rag] for documents plus the daemon that gaia-tui,
+        `gaia hub install` and `gaia chat --ui` run on. With only [rag], a
+        `pip install amd-gaia` user finished init and every next step it
+        printed failed with "needs packages not in the base install"."""
         profile = INIT_PROFILES[FLAGSHIP_AGENT_ID]
         assert profile["models"] == [
             "Gemma-4-E4B-it-GGUF",
             "user.embeddinggemma-300m-GGUF",
         ]
-        assert profile["pip_extras"] == ["rag"]
+        assert profile["pip_extras"] == ["ui"]
         # EmbeddingGemma only loads on 10.9.0+ (same floor as chat/rag).
         assert profile["min_lemonade_version"] == "10.9.0"
+
+    def test_ui_extras_cover_rag_and_the_daemon(self):
+        """Swapping [rag] for [ui] must not drop a document dependency."""
+        from gaia.agents.install_hints import gaia_extra_requirements
+
+        ui = set(gaia_extra_requirements(["ui"]))
+        assert set(gaia_extra_requirements(["rag"])) <= ui
+        assert any(r.startswith("fastapi") for r in ui)
+        assert any(r.startswith("uvicorn") for r in ui)
 
     def test_availability_probe_uses_the_flagships_real_module_name(self, monkeypatch):
         """`gaia_agent_gaia` does not exist and never will, so probing for it

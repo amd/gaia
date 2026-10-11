@@ -41,6 +41,14 @@ logger = get_logger(__name__)
 
 _START_TIMEOUT = 30.0
 
+# (module, distribution) the daemon process imports that a base install lacks.
+# The [api] extra declares every one (tests/unit/test_api_extras.py).
+DAEMON_DEPS = (
+    ("fastapi", "fastapi"),
+    ("uvicorn", "uvicorn"),
+    ("psutil", "psutil"),
+)
+
 # The daemon MINOR that introduced the /daemon/v1/agents control plane + the
 # /v1/<agent>/* relay (#2142 / #2150). A pre-#2142 daemon passes the MAJOR gate
 # but would 404 every agents/relay route — fail loudly instead. A stale daemon
@@ -119,7 +127,22 @@ def start_or_attach(timeout: float = _START_TIMEOUT) -> DaemonInstance:
                 inst.pid,
             )
             terminate_instance(inst)
+        missing = missing_daemon_deps()
+        if missing:
+            raise DaemonStartError(
+                f"the GAIA daemon needs {', '.join(missing)}, which this Python "
+                f"({sys.executable}) does not have. Install the daemon extras "
+                'into that environment with pip install "amd-gaia[api]" '
+                "(or uv pip install), then retry."
+            )
         return _spawn_and_wait(timeout)
+
+
+def missing_daemon_deps() -> list:
+    """Distributions the daemon needs that this interpreter cannot import."""
+    import importlib.util
+
+    return [pkg for mod, pkg in DAEMON_DEPS if importlib.util.find_spec(mod) is None]
 
 
 def _daemon_env() -> dict:
@@ -134,6 +157,22 @@ def _daemon_env() -> dict:
         for name, value in os.environ.items()
         if not is_internal_secret(name) and name != CUSTODY_URL_ENV_VAR
     }
+
+
+def _is_spawned_daemon(registered_pid: int, spawned_pid: int) -> bool:
+    """True when the registered pid is the process we spawned, or its child.
+
+    A Windows venv's ``python.exe`` is a launcher that runs the base interpreter
+    as a child, so the daemon registers that child's pid, never the launcher's.
+    """
+    if registered_pid == spawned_pid:
+        return True
+    import psutil
+
+    try:
+        return psutil.Process(registered_pid).ppid() == spawned_pid
+    except psutil.Error:
+        return False
 
 
 def _spawn_and_wait(timeout: float) -> DaemonInstance:
@@ -190,7 +229,11 @@ def _spawn_and_wait(timeout: float) -> DaemonInstance:
             )
         inst = read_instance()
         # Trust only OUR child's registration (pid match), and only once live.
-        if inst is not None and inst.pid == proc.pid and is_live(inst):
+        if (
+            inst is not None
+            and _is_spawned_daemon(inst.pid, proc.pid)
+            and is_live(inst)
+        ):
             _check_version(inst)
             logger.info("daemon: started pid=%s port=%s", inst.pid, inst.port)
             return inst

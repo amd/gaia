@@ -8,7 +8,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 
 const CLI = path.join(__dirname, "../../src/gaia/apps/webui/bin/gaia-ui.cjs");
-const { npmDistTag, helpText } = require(CLI);
+const { npmDistTag, helpText, startBackend } = require(CLI);
 
 describe("gaia-ui help for release candidates", () => {
   test("a prerelease points at the next dist-tag, a final at latest", () => {
@@ -35,5 +35,27 @@ describe("gaia-ui help for release candidates", () => {
       encoding: "utf8",
     });
     expect(out).toContain("Usage: gaia-ui [options]");
+  });
+});
+
+// A backend that dies at startup (e.g. a PATH `gaia` without the [ui] extras)
+// used to leave gaia-ui waiting 30 s, then suggest a dead URL and exit 0.
+describe("gaia-ui when the backend dies", () => {
+  test("exits with the backend's code instead of waiting on a dead server", async () => {
+    const err = jest.spyOn(console, "error").mockImplementation(() => {});
+    const log = jest.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      // node finds no module named "chat", so the child exits with 1.
+      const code = await new Promise((resolve) => {
+        startBackend(process.execPath, 0, resolve);
+      });
+      expect(code).toBe(1);
+      expect(err.mock.calls.flat().join(" ")).toContain(
+        "Backend exited with code 1"
+      );
+    } finally {
+      err.mockRestore();
+      log.mockRestore();
+    }
   });
 });

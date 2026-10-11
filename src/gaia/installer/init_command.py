@@ -109,7 +109,9 @@ INIT_PROFILES = {
         # EmbeddingGemma loads only on Lemonade v10.9.0+ (see the chat profile).
         "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
-        "pip_extras": ["rag"],
+        # [ui] is [rag] plus the daemon, which gaia-tui, `gaia hub install`
+        # and `gaia chat --ui` all need.
+        "pip_extras": ["ui"],
     },
     "minimal": {
         "description": "Fast setup with Gemma 4 E4B multimodal model",
@@ -360,6 +362,36 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
         )
         if not supported.fits:
             raise ModelFitError(f"default_model {model_id} {supported.reason}.")
+
+
+def pending_download_sizes(client, model_ids) -> dict:
+    """GB each model still costs to download: 0.0 when already on disk, None
+    when neither Lemonade's catalog nor GAIA's registry knows its size."""
+    from gaia.llm.lemonade_client import _model_ids_match, find_model_requirement
+
+    catalog = client.list_models(show_all=True).get("data", [])
+    sizes = {}
+    for model_id in model_ids:
+        entry = next(
+            (e for e in catalog if _model_ids_match(e.get("id"), model_id)), None
+        )
+        if entry and entry.get("downloaded"):
+            sizes[model_id] = 0.0
+            continue
+        size = entry.get("size") if entry else None
+        if not isinstance(size, (int, float)):
+            mr = find_model_requirement(model_id)
+            size = mr.size_gb if mr else None
+        sizes[model_id] = float(size) if isinstance(size, (int, float)) else None
+    return sizes
+
+
+def _size_note(size_gb) -> str:
+    if size_gb is None:
+        return ""
+    if size_gb == 0:
+        return " (already downloaded)"
+    return f" ({size_gb:.1f} GB)"
 
 
 # Profiles whose chat model follows the hardware. ``minimal`` promises a small
@@ -966,7 +998,7 @@ class InitCommand:
             tail = "\n".join(output.splitlines()[-20:]) or "(no output)"
             self._print_error(
                 f"Installing [{extras_str}] extras failed (exit "
-                f"{result.returncode}). Document Q&A needs them.\n"
+                f"{result.returncode}). The '{self.profile}' profile needs them.\n"
                 f"{tail}\n"
                 f"Fix the error above, then run `{retry}` and re-run `gaia init`."
             )
@@ -1489,17 +1521,24 @@ class InitCommand:
                 self._print_success("No models required for this profile")
                 return True
 
-            # Show which models will be ensured
+            # Show which models will be ensured, and what they cost to download
+            sizes = pending_download_sizes(client, model_ids)
+            notes = {m: _size_note(sizes.get(m)) for m in model_ids}
+            total_gb = sum(s for s in sizes.values() if s)
             if RICH_AVAILABLE and self.console:
                 self.console.print(
                     f"   [bold]Ensuring {len(model_ids)} model(s) are downloaded:[/bold]"
                 )
                 for model_id in model_ids:
-                    self.console.print(f"   [cyan]•[/cyan] {model_id}")
+                    self.console.print(
+                        f"   [cyan]•[/cyan] {model_id}[dim]{notes[model_id]}[/dim]"
+                    )
             else:
                 self._print(f"   Ensuring {len(model_ids)} model(s) are downloaded:")
                 for model_id in model_ids:
-                    self._print(f"   • {model_id}")
+                    self._print(f"   • {model_id}{notes[model_id]}")
+            if total_gb:
+                self._print(f"   Total download: about {total_gb:.1f} GB")
             self._print("")
 
             if not self._prompt_yes_no("Continue?", default=True):
@@ -1749,7 +1788,8 @@ class InitCommand:
             # Ensure proper context size for this profile
             profile_config = INIT_PROFILES[self.profile]
             min_ctx = profile_config.get("min_context_size")
-            if min_ctx and not self.skip_chat_model:
+            # Loading an undownloaded model makes Lemonade pull it, unannounced.
+            if min_ctx and not self.skip_chat_model and not self.skip_models:
                 from gaia.llm.lemonade_client import resolve_ctx_size
                 from gaia.llm.lemonade_manager import LemonadeManager
 

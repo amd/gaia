@@ -167,6 +167,20 @@ def test_every_core_install_requests_the_daemon_extras(sh_text, ps1_text, script
     )
 
 
+def test_every_ps1_uv_call_trusts_the_windows_certificate_store(ps1_text):
+    """Behind a TLS-inspecting proxy, uv's bundled roots reject the proxy's
+    certificate, so the Python download in `uv venv` failed on a fresh PC with
+    `invalid peer certificate: UnknownIssuer` and the install stopped there."""
+    uv_calls = [
+        line.strip()
+        for line in ps1_text.splitlines()
+        if re.match(r"\s*& uv (venv|pip)\b", line)
+    ]
+    assert len(uv_calls) == 3, uv_calls
+    missing = [line for line in uv_calls if "--native-tls" not in line]
+    assert not missing, f"uv call(s) without --native-tls: {missing}"
+
+
 # ── macOS is no longer gated out ───────────────────────────────────────────
 
 
