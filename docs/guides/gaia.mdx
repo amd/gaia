@@ -188,6 +188,8 @@ The browser's acting tools are gated by *situation* rather than by name: clickin
   declined, rather than running it.
 </Warning>
 
+In the Agent UI, a Hub-installed GAIA asks with **Allow once** or **Deny** above the message box, and the answer goes back to that same run. It doesn't offer **Always allow**: that grant would live in the agent's own process, where the chat could neither list nor revoke it. An unanswered prompt is denied when the agent's wait runs out. This needs an agent build with contract 2.14 or later. An older build can't wait for an answer, so it ends the turn and names the action it skipped.
+
 ### The agent reads a file before it changes it
 
 `edit_file`, and `write_file` on a file that already exists, refuse a file the agent hasn't read with `read_file` in this session, or one that changed on disk since it did. That stops edits patched together from a search snippet or a guess. The check runs before any approval prompt, so you aren't asked to approve an edit that is going to be refused, and it still applies with confirmations bypassed. A partial read counts, and creating a new file needs no read. See [Read before edit](/spec/file-io-tools-mixin#read-before-edit) for the exact rule.

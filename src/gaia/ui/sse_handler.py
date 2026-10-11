@@ -220,6 +220,9 @@ class SSEOutputHandler(OutputHandler):
     #: Set when the client denied the live prompt because nobody answered.
     _confirm_timed_out: bool = False
 
+    #: The sidecar prompt a relayed run is parked on (see __init__).
+    _relay_confirm_id: Optional[str] = None
+
     #: Outcome of the last ``tool_result``, echoed by the ``tool_end`` after it.
     _last_tool_success: bool = True
 
@@ -269,6 +272,8 @@ class SSEOutputHandler(OutputHandler):
         # email-relay turn, in lockstep with active_relay_response.
         self.active_relay_proxy: Optional[Any] = None
         self.active_relay_run_id: Optional[str] = None
+        # Only this id may be answered, so a late click cannot approve a newer one.
+        self._relay_confirm_id = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
@@ -1287,7 +1292,7 @@ class SSEOutputHandler(OutputHandler):
 
     def awaiting_user_input(self) -> bool:
         """True while a question or a tool confirmation is waiting on the user."""
-        if self._confirm_id is not None:
+        if self._confirm_id is not None or self._relay_confirm_id is not None:
             return True
         with self._user_input_lock:
             return bool(self._user_input_queue)
@@ -1438,6 +1443,36 @@ class SSEOutputHandler(OutputHandler):
         if proxy is None or run_id is None:
             return False
         proxy.respond_query(run_id, request_id, value)
+        return True
+
+    def set_relay_confirmation(self, confirm_id: Optional[str]) -> None:
+        """Record (or clear, with ``None``) the sidecar prompt now pending."""
+        with self._confirm_lock:
+            self._relay_confirm_id = confirm_id
+
+    def relay_confirmation_pending(self) -> bool:
+        with self._confirm_lock:
+            return self._relay_confirm_id is not None
+
+    def resolve_relay_confirmation(self, approved: bool, confirm_id: str) -> bool:
+        """Hand the user's allow-once/deny to the sidecar run parked on it.
+
+        Returns ``False`` when *confirm_id* is not the prompt pending on a live
+        relayed run. Claimed under the lock before the POST, so a double click
+        cannot send two answers; a sidecar rejection raises ``SidecarError``.
+        """
+        with self._confirm_lock:
+            proxy = self.active_relay_proxy
+            run_id = self.active_relay_run_id
+            if (
+                not confirm_id
+                or confirm_id != self._relay_confirm_id
+                or proxy is None
+                or run_id is None
+            ):
+                return False
+            self._relay_confirm_id = None
+        proxy.tool_decision(run_id, "allow" if approved else "deny", confirm_id)
         return True
 
     def signal_done(self):

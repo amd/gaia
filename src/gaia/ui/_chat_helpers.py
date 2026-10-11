@@ -43,6 +43,7 @@ from gaia.ui.email_sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
     api_version_supported,
+    confirmations_supported,
     profile_for,
 )
 from gaia.ui.memory_settings import memory_enabled
@@ -1463,6 +1464,7 @@ def _dispatch_sidecar_query(
         model_id=model_id,
         profile=profile,
         session_id=session_id,
+        answers_confirmations=confirmations_supported(profile, handle.api_version),
     )
 
 

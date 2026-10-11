@@ -87,6 +87,11 @@ class RelayProfile:
     #: because the request model is ``extra="forbid"`` on both sidecars: an
     #: unexpected field is a 422, not a shrug.
     sends_session_id: bool = False
+    #: Contract version from which this agent waits on a ``needs_confirmation``
+    #: and takes the answer over ``/query/{run_id}/tool_decision``. ``None``
+    #: means it never does: the confirmation ends the run, and the relay shows
+    #: it as an informational card with nothing to approve.
+    min_confirm_api_version: Optional[Tuple[int, int]] = None
 
 
 # --- email ------------------------------------------------------------------
@@ -383,6 +388,8 @@ GAIA_PROFILE = RelayProfile(
     ),
     readiness_is_blocking=False,
     sends_session_id=True,
+    # 2.14 added /tool_decision. Older binaries refuse a gated tool outright.
+    min_confirm_api_version=(2, 14),
 )
 
 
@@ -420,6 +427,19 @@ def api_version_supported(profile: RelayProfile, api_version: Optional[str]) -> 
     reports it from the sidecar's own ``/version``, so its absence means the
     handshake did not complete and the relay has no evidence the routes exist.
     """
+    return _meets(api_version, profile.min_api_version)
+
+
+def confirmations_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar can be handed the user's answer to a confirmation.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_confirm_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def _meets(api_version: Optional[str], floor: Tuple[int, int]) -> bool:
     if not api_version:
         return False
     parts = str(api_version).split(".")
@@ -428,7 +448,7 @@ def api_version_supported(profile: RelayProfile, api_version: Optional[str]) -> 
         minor = int(parts[1]) if len(parts) > 1 else 0
     except (ValueError, IndexError):
         return False
-    return (major, minor) >= profile.min_api_version
+    return (major, minor) >= floor
 
 
 __all__ = [
@@ -439,4 +459,5 @@ __all__ = [
     "SIDECAR_AGENT_IDS",
     "profile_for",
     "api_version_supported",
+    "confirmations_supported",
 ]
