@@ -424,6 +424,30 @@ def test_forward_all_skips_granted_but_unconnected_provider():
     assert http.posts == []
 
 
+def test_forward_all_is_a_no_op_for_an_agent_that_forwards_nothing():
+    """The flagship names no forward_providers and no grant id. The re-forward
+    timer still visits it, and raising here logged a full traceback into the
+    daemon log every five minutes."""
+    spec = AgentSidecarSpec(
+        agent_id="email",
+        service_id="gaia-agent-gaia",
+        display_name="GAIA",
+        expected_api_major="2",
+        token_env_var="GAIA_GAIA_SIDECAR_TOKEN",
+        mode_env_var="GAIA_GAIA_AGENT_MODE",
+        cache_dir_name="gaia",
+    )
+    fwd, http = _forwarder(spec=spec)
+    summary = fwd.forward_all("email", base_url="http://127.0.0.1:9", bearer="b")
+    assert summary == {
+        "agent_id": "email",
+        "forwarded": [],
+        "skipped": [],
+        "errors": [],
+    }
+    assert http.posts == []
+
+
 # --- withdraw ---------------------------------------------------------------
 
 

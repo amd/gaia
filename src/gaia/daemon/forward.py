@@ -341,6 +341,10 @@ class ConnectionForwarder:
         raises loudly at use time if a needed token never arrived.
         """
         spec = self._spec(agent_id)
+        if not spec.forward_providers:
+            # Nothing to forward: the flagship consumes no daemon-forwarded
+            # connectors, and its spec rightly names no grant id.
+            return {"agent_id": agent_id, "forwarded": [], "skipped": [], "errors": []}
         grant_agent_id = self._grant_agent_id(spec)
         connected = set(self._connected_providers())
         forwarded: List[dict] = []
