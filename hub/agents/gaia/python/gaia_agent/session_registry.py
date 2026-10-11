@@ -39,6 +39,11 @@ PROVIDER_CLAUDE = "claude"
 #: default can't do that since the dict's values are always None already.
 _SENTINEL = object()
 
+#: Held while an agent is built. A build fills the process-wide tool registry
+#: and then snapshots it, so two at once can leave one agent running the other's
+#: tools — e.g. the start-up warm-up racing the first session's build.
+AGENT_BUILD_LOCK = threading.Lock()
+
 
 def build_session_agent(**config_kwargs: Any):
     """Construct a live ``GaiaAgent`` for a new session.
@@ -48,7 +53,8 @@ def build_session_agent(**config_kwargs: Any):
     """
     from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
-    return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
+    with AGENT_BUILD_LOCK:
+        return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
 
 
 def _permission_state():

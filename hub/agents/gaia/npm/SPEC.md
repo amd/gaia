@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.15"`                  |
+| Contract version   | `API_VERSION = "2.16"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -284,8 +284,17 @@ checked for drift in CI — the same pattern as the email agent's own
 **`context`** — `additionalProperties: false`, so an unrecognized field or a
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
-(`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`) is
-optional.
+(`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
+`documents`) is optional.
+
+`documents` (contract ≥ 2.16) carries the absolute paths of the files the user
+attached to the conversation. Send the whole set on every turn. Before the turn
+runs, the agent indexes the ones it has not indexed yet, so a file attached
+mid-conversation is read on the next turn. Each path is granted as that exact
+file, never its folder. A relative path is a `422`. A missing file, a folder, or
+a secret the path policy refuses is reported as not indexed in the turn's
+`index_documents` step, and the turn still runs. Pre-2.16 binaries `422` the
+field, so probe `/version` before sending it.
 
 ```json
 {

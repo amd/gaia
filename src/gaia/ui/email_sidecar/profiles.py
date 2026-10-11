@@ -97,6 +97,14 @@ class RelayProfile:
     #: means it never does: the confirmation ends the run, and the relay shows
     #: it as an informational card with nothing to approve.
     min_confirm_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes the chat's attached
+    #: ``documents``. ``None`` means the agent never reads them, and the relay
+    #: leaves them out of the body.
+    min_documents_api_version: Optional[Tuple[int, int]] = None
+    #: Shown instead of running a turn on a chat with attached documents when
+    #: the installed agent is below :attr:`min_documents_api_version` — it
+    #: would answer as if the files were not there.
+    documents_upgrade_message: str = ""
 
 
 # --- email ------------------------------------------------------------------
@@ -397,6 +405,13 @@ GAIA_PROFILE = RelayProfile(
     sends_session_id=True,
     # 2.14 added /tool_decision. Older binaries refuse a gated tool outright.
     min_confirm_api_version=(2, 14),
+    # 2.16 added /query's documents field.
+    min_documents_api_version=(2, 16),
+    documents_upgrade_message=(
+        "This chat has attached documents, but the installed GAIA agent can't "
+        "read them (needs contract 2.16+). Update the GAIA agent from the Hub, "
+        "or remove the documents from this chat, then retry."
+    ),
 )
 
 
@@ -457,6 +472,15 @@ def confirmations_supported(profile: RelayProfile, api_version: Optional[str]) -
     return floor is not None and _meets(api_version, floor)
 
 
+def documents_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar takes the chat's attached documents on ``/query``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_documents_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def _meets(api_version: Optional[str], floor: Tuple[int, int]) -> bool:
     if not api_version:
         return False
@@ -479,4 +503,5 @@ __all__ = [
     "full_access_supported",
     "api_version_supported",
     "confirmations_supported",
+    "documents_supported",
 ]

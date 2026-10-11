@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Documents attached to a chat now reach the agent.** In the Agent UI, a
+  Hub-installed agent answered "no documents are indexed" about a file the user
+  had attached, because the relayed turn never carried the chat's files.
+  `/query` now takes a `documents` field (contract **2.16**): the agent indexes
+  them before the turn, granting each exact file and not its folder, including
+  a file attached partway through a conversation.
+- **The first chat after the agent starts uses its own tools.** A session built
+  while the start-up warm-up was still building could end up running the
+  warm-up agent's tools, so a file it had just indexed read as access denied.
+  Agents are now built one at a time.
 - **Web requests work behind a corporate TLS-inspecting proxy.** HTTPS now
   trusts the operating system's certificate store, as pip does, instead of only
   Python's bundled list, so a proxy root such as Zscaler's no longer fails every
