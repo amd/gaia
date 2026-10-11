@@ -6,6 +6,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The Agent UI's Skills settings list this agent's skills.** With the agent
+  installed from the Hub, the page said the agent package was not installed
+  and to run `gaia init`, which changed nothing: the bundled skills live
+  inside the binary, where the UI could not read them. `GET /v1/gaia/skills`
+  (contract **2.17**) now returns them.
 - **A message sent right after Stop is answered instead of refused.** A stopped
   turn holds its session until its model call returns, so the next `/query`
   got `409 … is already running a turn` for as long as the stopped answer would

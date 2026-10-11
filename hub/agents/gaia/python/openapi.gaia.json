@@ -397,7 +397,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.16"
+    "version": "2.17"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -810,6 +810,36 @@
           {}
         ],
         "summary": "Set Bypass",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/skills": {
+      "get": {
+        "description": "The skills this agent can load, for the Agent UI's Skills settings.\n\nThe bundled skills live inside the frozen binary, so a UI that does not\nhave the agent package installed beside it can only list them from here.",
+        "operationId": "skills_v1_gaia_skills_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Skills V1 Gaia Skills Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Skills",
         "tags": [
           "gaia-query"
         ]
