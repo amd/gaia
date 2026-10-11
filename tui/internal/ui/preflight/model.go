@@ -258,8 +258,10 @@ type fixDoneMsg struct {
 	key  string
 	err  error
 	note string
-	// auto marks a fix the screen applied on its own (Row.AutoFix).
+	// auto marks a fix the screen applied on its own (Row.AutoFix); gate is
+	// the screen that started it, so a late answer cannot land on another.
 	auto bool
+	gate *cancelBox
 }
 type provisionEvent struct {
 	progress Progress
@@ -336,10 +338,10 @@ func (m Model) autoStart() (Model, tea.Cmd, bool) {
 	m.opts.Logf("preflight: auto-starting %s (%s)", blocker.Key, blocker.Fix.Label())
 
 	ctx := m.begin(timeout)
-	r, cfg, key, kind := m.r, m.cfg, blocker.Key, blocker.Fix
+	r, cfg, key, kind, gate := m.r, m.cfg, blocker.Key, blocker.Fix, m.cancel
 	return m, tea.Batch(func() tea.Msg {
 		res := r.Fix(ctx, cfg, kind, nil)
-		return fixDoneMsg{key: key, err: res.Err, note: res.Note, auto: true}
+		return fixDoneMsg{key: key, err: res.Err, note: res.Note, auto: true, gate: gate}
 	}, m.spin.Tick), true
 }
 
@@ -595,6 +597,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // fixApplied: nothing was asked of the user, so nothing holds the screen for
 // enter. Failure puts the row back as the check left it, with why.
 func (m Model) autoStartDone(msg fixDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.gate != m.cancel || m.phase != phaseFixing {
+		// From a screen that was left, or a start this one already moved past.
+		return m, nil
+	}
 	if msg.err == nil {
 		m.note = msg.note + " Re-checking…"
 		m.phase = phaseChecking

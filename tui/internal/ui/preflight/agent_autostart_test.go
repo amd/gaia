@@ -147,11 +147,37 @@ func TestAForeignDaemonRecordIsNotReclaimedAutomatically(t *testing.T) {
 	}
 }
 
-func TestADeadDaemonRecordIsStartedAutomatically(t *testing.T) {
+func TestADeadOrCorruptDaemonRecordIsStartedAutomatically(t *testing.T) {
+	for name, kind := range map[string]daemon.StaleKind{"dead pid": daemon.StalePIDDead, "corrupt": daemon.StaleCorrupt} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake()
+			f.attachErr = &daemon.StaleError{Kind: kind, Path: "/tmp/i.json", Reason: "left by a shutdown"}
+			if m, _ := newAutoModel(t, f); !m.Busy() {
+				t.Error("a record left by a daemon that died at shutdown was not started over")
+			}
+		})
+	}
+}
+
+// esc during a start cancels it, and its late answer changes nothing — on this
+// screen or on the next gate the user opens.
+func TestALateAnswerFromAnAbandonedStartIsIgnored(t *testing.T) {
 	f := newFake()
-	f.attachErr = &daemon.StaleError{Kind: daemon.StalePIDDead, Path: "/tmp/i.json", Reason: "its pid 1 is not running"}
-	if m, _ := newAutoModel(t, f); !m.Busy() {
-		t.Error("a record left by a daemon that died at shutdown was not started over")
+	f.attachErr = &daemon.NotRunningError{Path: "/tmp/instance.json"}
+	m, _ := newAutoModel(t, f)
+
+	late := fixDoneMsg{key: KeyDaemon, err: context.Canceled, auto: true, gate: m.cancel}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	left := updated.(Model)
+	if updated, next := left.Update(late); next != nil ||
+		strings.Contains(ansi.Strip(updated.(Model).View()), "Could not start") {
+		t.Error("a start the user backed out of reported its cancellation")
+	}
+
+	next, _ := newAutoModel(t, f) // another gate, starting the same row
+	updated, _ = next.Update(late)
+	if got := updated.(Model); !got.Busy() || strings.Contains(ansi.Strip(got.View()), "Could not start") {
+		t.Error("the abandoned start's answer landed on the next gate")
 	}
 }
 
