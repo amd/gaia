@@ -518,8 +518,9 @@ class ChatAgent(
             incognito=config.memory_incognito,
         )
 
-        # Store base URL for use in _register_tools() (VLM, etc.)
-        self._base_url = effective_base_url
+        # Store base URL for use in _register_tools() (VLM, etc.). Unset stays
+        # None: GAIA's own server can change port, so its users resolve per use.
+        self._base_url = config.base_url
 
         # MCP client manager — set up before super().__init__() because Agent.__init__()
         # calls _register_tools() internally, and MCP tools are loaded there.
@@ -537,7 +538,8 @@ class ChatAgent(
             use_claude=config.use_claude,
             use_chatgpt=config.use_chatgpt,
             claude_model=config.claude_model,
-            base_url=effective_base_url,
+            # Unset lets the base resolve the port only after starting the server.
+            base_url=config.base_url,
             model_id=effective_model_id,  # Pass the effective model to parent
             max_steps=config.max_steps,
             debug_prompts=config.debug_prompts,

@@ -311,6 +311,11 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 	// endpoint, even when a second server answers on a legacy port.
 	if url := detectLemonadeURL(); url != "" {
 		cmd.Env = append(os.Environ(), "LEMONADE_BASE_URL="+url)
+		// GAIA's own server moves port and key when the daemon restarts it; the
+		// marker tells the child this URL is that server's, so it follows it.
+		if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) == "" && lemonade.ReadEmbedded() != nil {
+			cmd.Env = append(cmd.Env, "GAIA_LEMONADE_EMBEDDED=1")
+		}
 		if s.debug {
 			fmt.Fprintf(os.Stderr, "[DEBUG] Lemonade endpoint: %s\n", url)
 		}
