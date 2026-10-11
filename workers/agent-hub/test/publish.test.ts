@@ -530,6 +530,90 @@ describe("POST /publish — catalog enrichment (website contract)", () => {
   });
 });
 
+describe("POST /publish — per-version min_gaia_version", () => {
+  const wheel = (v: string) => `gaia_agent_chat-${v}-py3-none-any.whl`;
+
+  it("records each version's own core floor in the manifest and the index", async () => {
+    const env = makeEnv();
+    for (const [version, min] of [
+      ["0.1.0", "0.24.1"],
+      ["0.2.0", "0.25.0"],
+    ]) {
+      const res = await publish(env, {
+        token: "tok_amd",
+        manifestYaml: sampleManifest({ version, min_gaia_version: min }),
+        artifact: `wheel-${version}`,
+        filename: wheel(version),
+      });
+      expect(res.status).toBe(201);
+    }
+
+    const manifest = (await (await env.bucket.get("agents/chat/manifest.json"))!.json()) as AgentManifest;
+    expect(manifest.min_gaia_version).toBe("0.25.0");
+    expect(manifest.versions["0.1.0"].min_gaia_version).toBe("0.24.1");
+    expect(manifest.versions["0.2.0"].min_gaia_version).toBe("0.25.0");
+
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    const chat = index.agents.find((a) => a.id === "chat")!;
+    expect(chat.min_gaia_versions).toEqual({ "0.1.0": "0.24.1", "0.2.0": "0.25.0" });
+  });
+
+  it("keeps an older version's floor when a newer core requirement is published", async () => {
+    // A manifest stored before per-version records: only the top-level field,
+    // which belongs to the latest version.
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ version: "0.1.0", min_gaia_version: "0.24.1" }),
+      artifact: "wheel-0.1.0",
+      filename: wheel("0.1.0"),
+    });
+    const stored = (await (await env.bucket.get("agents/chat/manifest.json"))!.json()) as AgentManifest;
+    delete stored.versions["0.1.0"].min_gaia_version;
+    await env.bucket.put("agents/chat/manifest.json", JSON.stringify(stored));
+
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ version: "0.2.0", min_gaia_version: "0.25.0" }),
+      artifact: "wheel-0.2.0",
+      filename: wheel("0.2.0"),
+    });
+
+    const manifest = (await (await env.bucket.get("agents/chat/manifest.json"))!.json()) as AgentManifest;
+    expect(manifest.versions["0.1.0"].min_gaia_version).toBe("0.24.1");
+    expect(manifest.versions["0.2.0"].min_gaia_version).toBe("0.25.0");
+  });
+
+  it("reports an unrecorded floor as an empty string in the index", async () => {
+    const env = makeEnv();
+    for (const version of ["0.1.0", "0.2.0"]) {
+      await publish(env, {
+        token: "tok_amd",
+        manifestYaml: sampleManifest({ version }),
+        artifact: `wheel-${version}`,
+        filename: wheel(version),
+      });
+    }
+    const stored = (await (await env.bucket.get("agents/chat/manifest.json"))!.json()) as AgentManifest;
+    delete stored.versions["0.1.0"].min_gaia_version;
+    delete stored.versions["0.2.0"].min_gaia_version;
+    await env.bucket.put("agents/chat/manifest.json", JSON.stringify(stored));
+
+    // Any publish rebuilds the index from what is stored.
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "other", version: "0.1.0" }),
+      artifact: "wheel-other",
+      filename: "gaia_agent_other-0.1.0-py3-none-any.whl",
+    });
+
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    const chat = index.agents.find((a) => a.id === "chat")!;
+    // The latest version's floor is the top-level one; the older is unknown.
+    expect(chat.min_gaia_versions).toEqual({ "0.1.0": "", "0.2.0": "0.18.0" });
+  });
+});
+
 describe("POST /publish — README", () => {
   it("stores the readme, serves it on the download route, and includes it in index.json", async () => {
     const env = makeEnv();
