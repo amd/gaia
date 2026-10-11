@@ -49,7 +49,7 @@ import (
 const lemonadeProbeTimeout = 3 * time.Second
 
 // lemonadePorts are the ports a local Lemonade listens on, newest first.
-// Mirrors client.DetectLemonadeURL — a probe that looked elsewhere would report
+// Mirrors client.detectLemonadeURL — a probe that looked elsewhere would report
 // a running server as down.
 var lemonadePorts = []string{"13305", "8000"}
 

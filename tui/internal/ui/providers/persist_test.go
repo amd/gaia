@@ -4,6 +4,7 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -39,7 +40,19 @@ func TestMain(m *testing.M) {
 		return nil
 	}
 	restoreKey = func(provider string) { store.restored = append(store.restored, provider) }
-	os.Exit(m.Run())
+	// The user's own GAIA Lemonade would otherwise be where a pasted key goes.
+	home, err := os.MkdirTemp("", "gaia-providers-test-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("GAIA_HOME", home)
+	os.Setenv("LEMONADE_BASE_URL", "")
+	lemonade.StubEnsureEmbeddedForTest(func(context.Context) error {
+		return errors.New("test: no daemon")
+	})
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
 }
 
 func resetStore() { store = keyStoreCalls{} }
