@@ -352,7 +352,8 @@ def test_an_rc_builds_the_windows_setup_for_its_own_prerelease_only(publish):
     setup = publish["rc-windows-setup"]
     assert IS_RC in setup["if"] and "!cancelled()" in setup["if"]
     assert setup["uses"] == "./.github/workflows/windows_setup.yml"
-    assert setup["with"]["sidecar"] == "pinned"
+    # The flagship this RC run froze, not the lock's published build.
+    assert setup["with"]["sidecar"] == "artifact"
     # This run's own desktop app build, never a published release.
     assert setup["with"]["agent_ui_publish_run_sha"] == "${{ github.sha }}"
     assert "agent_ui_release" not in setup["with"]
