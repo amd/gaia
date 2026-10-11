@@ -105,6 +105,12 @@ class RelayProfile:
     #: the installed agent is below :attr:`min_documents_api_version` — it
     #: would answer as if the files were not there.
     documents_upgrade_message: str = ""
+    #: Contract version from which ``GET /v1/<agent>/skills`` lists the skills
+    #: the agent can load. ``None`` means the agent has no such route.
+    min_skills_api_version: Optional[Tuple[int, int]] = None
+    #: Shown in the Skills settings when the installed agent is below
+    #: :attr:`min_skills_api_version`.
+    skills_upgrade_message: str = ""
 
 
 # --- email ------------------------------------------------------------------
@@ -412,6 +418,13 @@ GAIA_PROFILE = RelayProfile(
         "read them (needs contract 2.16+). Update the GAIA agent from the Hub, "
         "or remove the documents from this chat, then retry."
     ),
+    # 2.17 added GET /skills.
+    min_skills_api_version=(2, 17),
+    skills_upgrade_message=(
+        "The installed GAIA agent is too old to list its skills here (needs "
+        "contract 2.17+). Update the GAIA agent from the Hub, then reopen this "
+        "page. Its skills still work in chat."
+    ),
 )
 
 
@@ -481,6 +494,15 @@ def documents_supported(profile: RelayProfile, api_version: Optional[str]) -> bo
     return floor is not None and _meets(api_version, floor)
 
 
+def skills_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar lists its skills on ``GET /v1/<agent>/skills``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_skills_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def _meets(api_version: Optional[str], floor: Tuple[int, int]) -> bool:
     if not api_version:
         return False
@@ -504,4 +526,5 @@ __all__ = [
     "api_version_supported",
     "confirmations_supported",
     "documents_supported",
+    "skills_supported",
 ]

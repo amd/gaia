@@ -76,7 +76,8 @@ AGENT_ID = "gaia"
 #: and the ``claude`` provider value.
 #: 2.15 (#3620) added ``POST /query/{run_id}/followup`` for mid-turn messages.
 #: 2.16 (#4166) added ``/query``'s ``documents`` field.
-API_VERSION = "2.16"
+#: 2.17 added ``GET /skills`` for the Agent UI's Skills settings.
+API_VERSION = "2.17"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -774,6 +775,27 @@ async def memory() -> Dict[str, Any]:
     finally:
         if agent is not None:
             close_agent(agent)
+
+
+@router.get("/skills")
+async def skills() -> Dict[str, Any]:
+    """The skills this agent can load, for the Agent UI's Skills settings.
+
+    The bundled skills live inside the frozen binary, so a UI that does not
+    have the agent package installed beside it can only list them from here.
+    """
+    from gaia_agent.agent import ENGINEERING_SKILL, GaiaAgent
+
+    from gaia.skills.errors import SkillError
+    from gaia.skills.listing import skills_listing
+
+    try:
+        # Off the event loop: discovery reads every skill folder.
+        return await asyncio.to_thread(
+            skills_listing, GaiaAgent.SKILL_DIRS, (ENGINEERING_SKILL,)
+        )
+    except SkillError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 def _require_valid_session_id(session_id: str) -> None:

@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.16"`                  |
+| Contract version   | `API_VERSION = "2.17"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -266,6 +266,7 @@ the header.
 | `GET`  | `/v1/gaia/version`               | The TUI's negotiation probe                    |
 | `GET`  | `/v1/gaia/init`                  | Readiness detail (Lemonade, model, connectors) |
 | `GET`  | `/v1/gaia/memory`                | The `/memory` snapshot (contract ≥ 2.13)       |
+| `GET`  | `/v1/gaia/skills`                | The skills the agent can load (contract ≥ 2.17) |
 | `POST` | `/v1/gaia/query`                 | The streaming surface (`text/event-stream`)    |
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
@@ -316,6 +317,14 @@ store (Lemonade down, embedding model not pulled, disabled via env) — `reason`
 names why, so an outage never renders as "you have no memories". This is the
 daemon-transport counterpart of the stdio `MEMORY_DUMP_QUERY` sentinel; both
 paths call the same `build_memory_dump()` and return the identical shape.
+
+`GET /v1/gaia/skills` (contract ≥ 2.17) lists the skills the agent can load:
+`{ "skills": [{ "name", "description", "version", "tier", "tools", "path" }],
+"invalid": { "<folder>": "<why it failed to parse>" } }`. It reads the same
+roots the agent does — its bundled skills, `~/.gaia/skills`, Claude Code skill
+folders — so a host without the Python package (the bundled skills live inside
+the binary) can still show them. A skill root that cannot be read is a `500`
+naming it.
 
 ### 5.2 `session_id` and agent retention
 

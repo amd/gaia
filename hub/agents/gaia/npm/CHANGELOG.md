@@ -6,6 +6,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The Agent UI's Skills settings list this agent's skills.** With the agent
+  installed from the Hub, the page said the agent package was not installed
+  and to run `gaia init`, which changed nothing: the bundled skills live
+  inside the binary, where the UI could not read them. `GET /v1/gaia/skills`
+  (contract **2.17**) now returns them.
 - **Documents attached to a chat now reach the agent.** In the Agent UI, a
   Hub-installed agent answered "no documents are indexed" about a file the user
   had attached, because the relayed turn never carried the chat's files.
