@@ -373,7 +373,14 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    python util/validate_release_notes.py docs/releases/v<version>.mdx --tag v<version>
    ```
 
-4. **Trigger Build Installers via `workflow_dispatch` against the merged SHA.** This builds the same artifacts the tag push will build, on the same code, *before* the tag exists.
+4. **For a final: check the flagship agent was released from this commit.** `gaia init`, `gaia hub install gaia` and the Windows setup install the flagship from the Agent Hub and `hub/agents/gaia/npm/binaries.lock.json`, which only `release_agent_gaia.yml` (tag `agent-pkg-gaia-vX.Y.Z`) fills. `publish.yml` and `release_components.yml` run this same check on a final tag and fail it; run it first so a missing flagship release is found before the tag exists. (An RC skips it: it freezes its own flagship.)
+   ```bash
+   git fetch --tags origin
+   python util/check_flagship_release.py --ref "$MERGED_SHA"
+   ```
+   If it fails: bump the flagship (edit `__version__` in `hub/agents/gaia/python/gaia_agent/__init__.py`, run `python hub/agents/gaia/python/packaging/stamp_version.py`, add a `hub/agents/gaia/npm/CHANGELOG.md` entry) in a PR, tag `agent-pkg-gaia-v<flagship-version>` on the merged commit, approve `release_agent_gaia.yml`, then land the `binaries.lock.json` it regenerated (its log prints it) and re-run Phase 3 on that commit. Code the binary is frozen from must not change between the agent tag and the core tag.
+
+5. **Trigger Build Installers via `workflow_dispatch` against the merged SHA.** This builds the same artifacts the tag push will build, on the same code, *before* the tag exists.
    ```bash
    gh workflow run "Build Installers" --repo amd/gaia --ref main
    sleep 5
@@ -389,6 +396,7 @@ Required before continuing:
 
 - `__version__` matches the target.
 - `validate_release_notes.py` passes.
+- For a final, `check_flagship_release.py` passes.
 - Build Installers run on the merged commit is **green** (not yellow, not "mostly green except smoke tests").
 
 Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the **merged SHA** (`$MERGED_SHA`). Ask: **"Pre-tag verification green on `<sha>` (release PR #N). Push tag `v<version>`?"** — the SHA and PR number being in the question text means Phase 4 can re-derive them even if the user resumes in a fresh shell.

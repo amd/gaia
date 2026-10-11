@@ -130,6 +130,13 @@ jobs:
           fi
           echo "All versions match: v$TAG_VERSION"
 
+      # The flagship agent reaches users from the hub and the committed lock,
+      # both filled by a separate release (release_agent_gaia.yml). A final must
+      # not ship with one frozen from older code. An RC builds its own instead.
+      - name: Verify the flagship agent is built from this release
+        if: steps.tag.outputs.IS_RC != 'true'
+        run: python3 util/check_flagship_release.py --ref "${GITHUB_SHA}"
+
       # NOTES_TAG is the tag itself for a final, and the final's vX.Y.Z for an RC.
       - name: Validate release notes exist
         env:
