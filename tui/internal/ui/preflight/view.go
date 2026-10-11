@@ -473,8 +473,13 @@ func (m Model) detailLines(w, budget int) []string {
 		return []string{pad(dimStyle.Render("no row selected"))}
 	}
 	row := m.rep.Rows[m.focus]
+	word := row.State.Word()
+	if row.FirstRun {
+		// A step setup has not done yet is not a failure, here or on the list.
+		word = "not set up yet"
+	}
 	out := []string{
-		pad(labelStyle.Render(fmt.Sprintf("%s — %s", row.Label, row.State.Word()))),
+		pad(labelStyle.Render(fmt.Sprintf("%s — %s", row.Label, word))),
 		"",
 	}
 	raw := row.Raw

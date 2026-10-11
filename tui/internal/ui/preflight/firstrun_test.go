@@ -89,6 +89,20 @@ func TestFirstRunIsNumberedStepsNotFailures(t *testing.T) {
 	}
 }
 
+// `d` on a step setup has not done titled it "Lemonade — failed".
+func TestFirstRunDetailsDoNotCallTheStepFailed(t *testing.T) {
+	m, _ := settledOn(t, firstRunReport(), 100, 24)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	screen := plain(updated.(Model))
+
+	if !strings.Contains(screen, "Lemonade — not set up yet") {
+		t.Errorf("details pane does not name the step as not set up yet:\n%s", screen)
+	}
+	if strings.Contains(screen, "— failed") {
+		t.Errorf("details pane calls a first-run step failed:\n%s", screen)
+	}
+}
+
 func TestAFirstRunStepIsNeverPaintedRed(t *testing.T) {
 	prev := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
