@@ -391,7 +391,8 @@ function Show-NextSteps {
     Write-Host "  1. Open a new terminal window, so the gaia command is on your PATH" -ForegroundColor White
     Write-Host "  2. Run: " -ForegroundColor White -NoNewline
     Write-Host "gaia init" -ForegroundColor $COLOR_GREEN -NoNewline
-    Write-Host " to set up the local model runtime and download the model (~6 GB)" -ForegroundColor White
+    Write-Host " to set up the local model runtime and download the models" -ForegroundColor White
+    Write-Host "     (~6 GB; ~28 GB on PCs whose GPU can run the larger model)" -ForegroundColor White
     if ($FlagshipInstalled) {
         Write-Host "  3. Talk to the agent: " -ForegroundColor White -NoNewline
         Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
