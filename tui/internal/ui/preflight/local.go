@@ -367,7 +367,7 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 		return row
 	}
 	row.Fix = FixRunSetup
-	if !l0.Found && !lemonade.EmbeddedInstalled() && readEmbeddedLemonade() == nil {
+	if lemonadeNotInstalled() {
 		// Nothing installed is how every new machine starts — a step, not a fault.
 		row.FirstRun = true
 		row.Line = "not installed yet"
@@ -871,17 +871,32 @@ const installDocs = "https://amd-gaia.ai/docs/guides/install"
 // maxSetupLog bounds the setup transcript kept for `d details`.
 const maxSetupLog = 200
 
+// lemonadeNotInstalled is the first-run test: no Lemonade on this machine at
+// all, neither a system install nor GAIA's own. A var so tests need no machine.
+var lemonadeNotInstalled = func() bool {
+	return !resolveLemonade().Found && !lemonade.EmbeddedInstalled() && readEmbeddedLemonade() == nil
+}
+
 func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress func(Progress)) FixResult {
 	if kind != FixRunSetup {
 		return FixResult{Err: errNoFix}
 	}
 
-	ch, cancel, err := gaiainit.Start(l.skipChatModel())
+	// Step 1 stops after the server, so a provider can be picked before step 2 picks models.
+	start := func() (<-chan gaiainit.Event, context.CancelFunc, error) {
+		return gaiainit.Start(l.skipChatModel())
+	}
+	command := gaiainit.RunCommand(l.skipChatModel())
+	if lemonadeNotInstalled() {
+		start, command = gaiainit.StartServerOnly, gaiainit.ServerOnlyCommand()
+	}
+
+	ch, cancel, err := start()
 	if err != nil {
 		return FixResult{Err: err, Diagnosis: Diagnosis{
 			Cause:   err.Error(),
 			Remedy:  "Run setup in a terminal instead, then press r to re-check.",
-			Command: gaiainit.RunCommand(l.skipChatModel()),
+			Command: command,
 			Where:   installDocs,
 		}}
 	}
@@ -905,7 +920,7 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 			return FixResult{Err: ctx.Err(), Final: current.Text, Log: log, Diagnosis: Diagnosis{
 				Cause:   "Setup was cancelled, or ran past the time limit.",
 				Remedy:  "Run it in a terminal instead, then press r to re-check.",
-				Command: gaiainit.RunCommand(l.skipChatModel()),
+				Command: command,
 				Where:   installDocs,
 			}}
 		case evt, ok := <-ch:
@@ -913,7 +928,7 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 				return FixResult{Err: errFixFailed, Final: current.Text, Log: log, Diagnosis: Diagnosis{
 					Cause:   stopped("Setup ended without saying whether it worked."),
 					Remedy:  "Press r to re-check whether the models landed, then retry.",
-					Command: gaiainit.RunCommand(l.skipChatModel()),
+					Command: command,
 					Where:   installDocs,
 				}}
 			}
@@ -935,7 +950,7 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 					Cause: stopped(fmt.Sprintf("Setup stopped while %s (%v).",
 						lowerFirst(current.Text), evt.Err)),
 					Remedy:  "Press d for the setup log, fix what it names, then retry.",
-					Command: gaiainit.RunCommand(l.skipChatModel()),
+					Command: command,
 					Where:   installDocs,
 				}}
 			}

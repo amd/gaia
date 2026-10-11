@@ -214,6 +214,44 @@ func TestRevisitingAnEarlierRowDoesNotFinishALaterOne(t *testing.T) {
 	}
 }
 
+// Step 1 now stops after the server, and the re-check that follows has one step
+// left. It must read as the second of two, not as a fresh "step 1 of 1".
+func TestTheStepLeftAfterStepOneKeepsItsNumber(t *testing.T) {
+	m, _ := settledOn(t, firstRunReport(), 100, 24)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	ch := m.provisionCh
+	drainUntilDone(t, m)
+	updated, _ = m.Update(provisionMsg{ch: ch, event: provisionEvent{done: true,
+		result: ProvisionResult{OK: true}}})
+	m = updated.(Model)
+
+	after := firstRunReport()
+	after.Rows[1] = Row{Key: KeyLemonade, Label: lemonadeRowLabel, State: StateOK, Line: "running"}
+	after.Rows[2] = Row{Key: KeyModel, Label: modelRowLabel, State: StateFailed, FirstRun: true,
+		Disposition: status.DispositionHalt, Fix: FixRunSetup, Line: "not downloaded yet",
+		Step: "download the models (~6 GB)"}
+	updated, _ = m.Update(reportMsg{rep: after})
+	m = updated.(Model)
+	screen := plain(m)
+	t.Logf("\n%s", screen)
+	if !strings.Contains(lineWith(screen, modelRowLabel), "Step 2 of 2") {
+		t.Errorf("the model step lost its number: %q", lineWith(screen, modelRowLabel))
+	}
+	if header := strings.SplitN(screen, "\n", 2)[0]; !strings.Contains(header, "step 2 of 2") {
+		t.Errorf("header = %q, want step 2 of 2", header)
+	}
+	if !strings.Contains(screen, "start step 2") {
+		t.Error("the enter hint does not name step 2")
+	}
+
+	// A plain re-check keeps the count.
+	updated, _ = m.Update(reportMsg{rep: after})
+	if got := lineWith(plain(updated.(Model)), modelRowLabel); !strings.Contains(got, "Step 2 of 2") {
+		t.Errorf("a re-check renumbered the step: %q", got)
+	}
+}
+
 func lineWith(screen, label string) string {
 	for _, l := range strings.Split(screen, "\n") {
 		if strings.Contains(l, label) {
