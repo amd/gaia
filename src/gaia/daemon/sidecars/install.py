@@ -173,9 +173,11 @@ def _merge_entry(
     installed_version: Optional[str],
     can_supervise: bool,
 ) -> Dict[str, Any]:
-    gate = catalog_mod.core_gate(entry)
+    gate, gate_error = catalog_mod.listing_core_gate(entry)
     installable = gate.installable_version
     item = dict(entry)
+    if gate_error:
+        item["core_gate_error"] = gate_error
     item["installed"] = installed_version is not None
     item["installed_version"] = installed_version
     item["installable_version"] = installable

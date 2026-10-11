@@ -271,6 +271,29 @@ def test_merge_offers_the_newest_runnable_update():
     assert row["installable_version"] == "0.2.0"
 
 
+def test_one_unreadable_floor_does_not_break_the_listing():
+    bad = {"id": "broken", "latest_version": "1.0.0", "min_gaia_version": "soon"}
+    rows = merge_with_registry(
+        [bad, INDEX_ENTRY], None, {"broken": "0.9.0"}, core_version="0.25.0"
+    )
+    by_id = {r["id"]: r for r in rows}
+    assert "not a SemVer" in by_id["broken"]["core_gate_error"]
+    assert by_id["broken"]["status"] == catalog.STATUS_INSTALLED
+    assert by_id["broken"]["installable_version"] is None
+    assert by_id["gaia"]["installable_version"] == "0.3.0"
+    assert "core_gate_error" not in by_id["gaia"]
+
+
+def test_a_release_candidate_is_not_told_to_upgrade_for_its_own_flagship():
+    """An RC installs the flagship from its pre-release, not the hub."""
+    [row] = merge_with_registry([INDEX_ENTRY], None, {}, core_version="0.25.0rc3")
+    assert row["requires_gaia_version"] is None
+    # Any other agent is still gated on an RC.
+    other = dict(INDEX_ENTRY, id="email")
+    [row] = merge_with_registry([other], None, {}, core_version="0.25.0rc3")
+    assert row["requires_gaia_version"] == "0.25.0"
+
+
 def test_merge_offers_the_latest_to_a_current_core():
     [row] = merge_with_registry(
         [INDEX_ENTRY], None, {"gaia": "0.2.0"}, core_version="0.25.0"

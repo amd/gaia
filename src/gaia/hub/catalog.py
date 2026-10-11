@@ -38,7 +38,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.logger import get_logger
 
@@ -620,6 +620,32 @@ def core_gate(document: Dict[str, Any], core_version: Optional[str] = None) -> C
     return CoreGate(installable_version=installable, requires_gaia_version=requires)
 
 
+def listing_core_gate(
+    entry: Dict[str, Any], core_version: Optional[str] = None
+) -> Tuple[CoreGate, Optional[str]]:
+    """:func:`core_gate` for one row of a listing, plus the error that row hit.
+
+    One malformed entry is reported on its own row (logged, and returned as the
+    error) and offers nothing to install, instead of failing the whole listing.
+    A release candidate's flagship installs from its own pre-release, so the
+    hub's floor does not apply to it (see :mod:`gaia.hub.prerelease`).
+    """
+    from gaia.hub import prerelease
+
+    core = core_version or _running_core_version()
+    if entry.get("id") == prerelease.FLAGSHIP_AGENT_ID and (
+        prerelease.release_candidate_tag(core) is not None
+    ):
+        return CoreGate(entry.get("latest_version"), None), None
+    try:
+        return core_gate(entry, core), None
+    except (CatalogError, ValueError) as exc:
+        logger.error(
+            "catalog: cannot check '%s' against this core: %s", entry.get("id"), exc
+        )
+        return CoreGate(None, None), str(exc)
+
+
 # ---------------------------------------------------------------------------
 # Merge with local registry
 # ---------------------------------------------------------------------------
@@ -708,7 +734,8 @@ def merge_with_registry(
         ``status``, ``installed_version`` / ``latest_version``, and a
         ``requires_trust`` flag, plus ``installable_version`` and
         ``requires_gaia_version`` (see :class:`CoreGate`; both ``None`` for an
-        agent the hub does not list). ``update_available`` means an update
+        agent the hub does not list), and ``core_gate_error`` on a row whose
+        published floor is unreadable. ``update_available`` means an update
         this core can run, never one whose ``min_gaia_version`` it does not
         meet. Skills-lane entries (#2467) are excluded — they are not agent
         packages and install through ``gaia skill install``; read
@@ -732,7 +759,7 @@ def merge_with_registry(
         latest = entry.get("latest_version")
         reg = registered.get(agent_id)
         installed_ver = installed_versions.get(agent_id)
-        gate = core_gate(entry, core_version)
+        gate, gate_error = listing_core_gate(entry, core_version)
         installable = gate.installable_version
 
         if installed_ver:
@@ -777,6 +804,8 @@ def merge_with_registry(
             "status": status,
             "source": (reg.source if reg is not None else "hub"),
         }
+        if gate_error:
+            merged["core_gate_error"] = gate_error
         # Optional eval scorecard fields — absent from older catalog entries and
         # from builtin/custom agents that haven't run a benchmark yet.
         if "eval_score" in entry:

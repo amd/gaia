@@ -660,7 +660,7 @@ def resolve_installable_version(
         raise InstallError(f"Hub manifest for '{agent_id}' has no published versions.")
     try:
         gate = catalog_mod.core_gate(manifest, core)
-    except catalog_mod.CatalogError as exc:
+    except (catalog_mod.CatalogError, ValueError) as exc:
         raise InstallError(str(exc)) from exc
 
     if version is None:

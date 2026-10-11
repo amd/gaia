@@ -3147,7 +3147,7 @@ contract; every route needs `Authorization: Bearer <token>` from
 | `GET /daemon/v1/agents` | registered sidecars — never the bearer token |
 | `POST /daemon/v1/agents/{id}/ensure` | spawn-or-attach; the body carries the sidecar token |
 | `POST /daemon/v1/agents/{id}/stop` | tree-kill + verify the pid is gone |
-| `GET /daemon/v1/catalog` | Agent Hub catalog merged with local install state (`?refresh` / `?installed_only` / `?include_unsupervised`). Each entry carries `installable_version` (the newest version whose `min_gaia_version` this core meets) and `requires_gaia_version` (set when the latest needs a newer core); `update_available` only counts an installable version |
+| `GET /daemon/v1/catalog` | Agent Hub catalog merged with local install state (`?refresh` / `?installed_only` / `?include_unsupervised`). Each entry carries `installable_version` (the newest version whose `min_gaia_version` this core meets) and `requires_gaia_version` (set when the latest needs a newer core); `update_available` only counts an installable version. An entry whose published floor is unreadable carries `core_gate_error` and offers nothing to install |
 | `POST /daemon/v1/agents/{id}/install` | 202, queue an install (`{"version": "...", "trusted": true}`, both optional; `version` defaults to the newest version this core meets; `trusted` defaults to **false** → 403 for a non-verified agent; 409 when the version needs a newer core) |
 | `GET /daemon/v1/agents/{id}/install-status` | poll `queued\|running\|completed\|failed` + `error` |
 | `DELETE /daemon/v1/agents/{id}` | stop the sidecar, verify, then remove the install dir |
