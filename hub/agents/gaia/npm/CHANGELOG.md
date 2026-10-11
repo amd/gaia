@@ -6,6 +6,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Starting the agent no longer downloads a model.** When the background
+  service started the agent, its warm-up loaded the default local chat model,
+  and Lemonade downloads a model it does not have — about 5 GB of Gemma for a
+  user who had chosen the AMD LLM Gateway or Fireworks. The warm-up now skips a
+  model that is not downloaded and says so in the agent's log.
 - **Web requests work behind a corporate TLS-inspecting proxy.** HTTPS now
   trusts the operating system's certificate store, as pip does, instead of only
   Python's bundled list, so a proxy root such as Zscaler's no longer fails every

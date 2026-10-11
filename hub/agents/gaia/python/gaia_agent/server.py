@@ -1347,6 +1347,15 @@ def _warmup_blocking() -> None:
             return
 
         client = create_lemonade_client(auto_start=False, verbose=False)
+        # Loading a model Lemonade does not have downloads it, and a user on a
+        # cloud provider never agreed to that.
+        if not client.check_model_available(model):
+            logger.info(
+                "GAIA sidecar: warm-up skipped — %s is not downloaded, and "
+                "starting the agent does not download models",
+                model,
+            )
+            return
         response = client.chat_completions(
             model=model,
             messages=[
