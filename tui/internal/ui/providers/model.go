@@ -112,6 +112,17 @@ func (m Model) Init() tea.Cmd {
 // absence reads as a step not reached rather than a fault.
 func (m Model) WithSetupStep(n int) Model { m.setupStep = n; return m }
 
+// WithCurrent opens the panel on the provider chat runs on now, so enter
+// continues with it; an unknown name leaves Local first.
+func (m Model) WithCurrent(provider string) Model {
+	for i, name := range names {
+		if name == provider {
+			m.selected = i
+		}
+	}
+	return m
+}
+
 func (m Model) chosen() string { return names[m.selected] }
 
 // waiting is true when Lemonade is absent only because setup has not

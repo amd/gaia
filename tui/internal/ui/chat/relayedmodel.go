@@ -60,7 +60,7 @@ func (m ChatModel) relayedSwitcher() (client.TurnModelSwitcher, bool) {
 // opens the picker, which lists what Lemonade serves.
 func (m ChatModel) switchRelayedModel(sw client.TurnModelSwitcher, target string) (tea.Model, tea.Cmd) {
 	if target == "" {
-		panel := providers.New(m.lemonadeBaseURL, m.width, m.height)
+		panel := providers.New(m.lemonadeBaseURL, m.width, m.height).WithCurrent(providerOfBackend(m.modelBackend))
 		m.providerPanel = &panel
 		m.palette.open = false
 		return m, panel.Init()
