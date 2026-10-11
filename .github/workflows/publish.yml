@@ -20,6 +20,8 @@
 #   • the GitHub Release is a pre-release and never "latest"
 #   • release notes are the final's (docs/releases/vX.Y.Z.mdx)
 #   • no Context7 refresh; release_components.yml (Agent Hub R2) does not run
+#   • so the combined Windows setup, which a final gets from release_components.yml,
+#     is built here instead (rc-windows-setup) and attached to the pre-release only
 #
 # Environment setup (one-time, in GitHub repo settings):
 #   1. Create a "publish" environment with required reviewers.
@@ -636,9 +638,66 @@ jobs:
           path: release-assets/gaia-*
           if-no-files-found: error
 
+  # ── Release candidate: the combined Windows setup ──────────────────
+  # A final's setup comes from release_components.yml, which never runs for an
+  # RC because the Agent Hub catalog has no pre-release channel. An RC builds it
+  # with the same two reusable workflows and attaches it to its GitHub
+  # pre-release -- never to R2. Only the terminal binaries are built here: the
+  # macOS and Linux packages cannot carry an -rc.N version (rpm forbids '-').
+  rc-tui-binaries:
+    name: Terminal binaries (release candidate)
+    needs: validate
+    if: >-
+      !cancelled() &&
+      needs.validate.result == 'success' &&
+      needs.validate.outputs.is_rc == 'true'
+    uses: ./.github/workflows/tui_installers.yml
+    with:
+      version: ${{ needs.validate.outputs.npm_version }}
+      installers: false
+
+  # Embeds THIS run's desktop app setup (same commit, same tag), never a
+  # published one; the sidecar is the committed pin, exactly as on a final.
+  rc-windows-setup:
+    name: Windows setup (release candidate)
+    needs: [validate, build-desktop-installers, rc-tui-binaries]
+    if: >-
+      !cancelled() &&
+      needs.validate.outputs.is_rc == 'true' &&
+      needs.build-desktop-installers.result == 'success' &&
+      needs.rc-tui-binaries.outputs.binaries_ok == 'true'
+    permissions:
+      contents: read
+      actions: read   # this run's windows-installer artifact
+    uses: ./.github/workflows/windows_setup.yml
+    with:
+      version: ${{ needs.validate.outputs.npm_version }}
+      sidecar: pinned
+      agent_ui_publish_run_sha: ${{ github.sha }}
+
+  # The pre-release still ships without the setup, says so in its notes, and
+  # this job turns the run red so it is never mistaken for a complete candidate.
+  rc-windows-setup-missing:
+    name: Windows setup missing (release candidate)
+    needs: [validate, rc-windows-setup]
+    if: >-
+      !cancelled() &&
+      needs.validate.outputs.is_rc == 'true' &&
+      needs.rc-windows-setup.outputs.ok != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          NPM_VERSION: ${{ needs.validate.outputs.npm_version }}
+        run: |
+          echo "::error::gaia-${NPM_VERSION}-win-x64-setup.exe did not build and pass its clean-runner smoke test, so the pre-release does not carry it. Fix the 'Windows setup (release candidate)' failure, then 'Re-run failed jobs': that rebuilds the setup and re-runs GitHub Release, which attaches it."
+          exit 1
+
   github-release:
     name: GitHub Release
-    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers, build-tui]
+    # rc-windows-setup is waited for, not required: its own timeouts bound the
+    # wait, it is skipped on a final, and a failure is reported by
+    # rc-windows-setup-missing rather than by holding back the pre-release.
+    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers, build-tui, rc-windows-setup]
     if: >-
       !cancelled() &&
       needs.post-publish-smoke.result == 'success' &&
@@ -718,6 +777,7 @@ jobs:
           NOTES_TAG: ${{ needs.validate.outputs.notes_tag }}
           PEP440_VERSION: ${{ needs.validate.outputs.pep440_version }}
           NPM_VERSION: ${{ needs.validate.outputs.npm_version }}
+          WINDOWS_SETUP_OK: ${{ needs.rc-windows-setup.outputs.ok }}
         run: |
           NOTES_FILE="docs/releases/${NOTES_TAG}.mdx"
           cat > RELEASE_BODY.md << 'EOF'
@@ -733,15 +793,24 @@ jobs:
 
           ## Installing this release candidate
 
-          ### Desktop app
+          ### Desktop app and terminal
 
           Download the installer for your platform from the assets below:
 
-          - **Windows** — `gaia-agent-ui-@NPM_VERSION@-x64-setup.exe`
+          EOF
+          # Only what is attached: the setup is listed when it passed its smoke
+          # test, and its absence is stated rather than left for testers to find.
+          if [ "${WINDOWS_SETUP_OK}" = "true" ]; then
+            echo '- **Windows** — `gaia-@NPM_VERSION@-win-x64-setup.exe`: one installer for the desktop app, the terminal, or both. `gaia-agent-ui-@NPM_VERSION@-x64-setup.exe` is the desktop app on its own' >> RELEASE_BODY.md
+          else
+            echo '- **Windows** — `gaia-agent-ui-@NPM_VERSION@-x64-setup.exe` (desktop app). **The one-step Windows setup failed to build for this candidate and is not attached.**' >> RELEASE_BODY.md
+          fi
+
+          cat >> RELEASE_BODY.md << 'EOF'
           - **macOS** — `gaia-agent-ui-@NPM_VERSION@-arm64.dmg` (Apple Silicon only)
           - **Linux** — `gaia-agent-ui-@NPM_VERSION@-amd64.deb` (Debian/Ubuntu) or `gaia-agent-ui-@NPM_VERSION@-x86_64.AppImage` (any distro)
 
-          The terminal hub is attached as standalone binaries (`gaia-<os>-<arch>`, checksums in `gaia-tui-SHA256SUMS.txt`). The one-step Windows setup and the terminal's .pkg/.deb/.rpm packages ship with the final release.
+          The terminal hub is also attached as standalone binaries (`gaia-<os>-<arch>`, checksums in `gaia-tui-SHA256SUMS.txt`). The terminal's .pkg/.deb/.rpm packages ship with the final release.
 
           ### Python CLI
 
@@ -770,10 +839,12 @@ jobs:
       # only as a CI artifact that expires in 14 days, so nothing can install it
       # — install.sh has no URL to fetch and the docs describe a command users
       # cannot obtain.
+      # build-tui's six artifacts only. An RC run also holds rc-tui-binaries'
+      # `tui-binaries`, which is the setup's input, not a release asset.
       - name: Download TUI binaries
         uses: actions/download-artifact@v8
         with:
-          pattern: tui-*
+          pattern: tui-{linux,darwin,windows}-*
           merge-multiple: true
           path: release-assets
 
@@ -784,6 +855,27 @@ jobs:
           cd release-assets
           sha256sum gaia-* > gaia-tui-SHA256SUMS.txt
           cat gaia-tui-SHA256SUMS.txt
+
+      # After the checksum step, which covers the terminal binaries only.
+      - name: Download the combined Windows setup (release candidate)
+        if: needs.validate.outputs.is_rc == 'true' && needs.rc-windows-setup.outputs.ok == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-setup
+          path: release-assets
+
+      - name: Check the combined Windows setup is this candidate's
+        if: needs.validate.outputs.is_rc == 'true' && needs.rc-windows-setup.outputs.ok == 'true'
+        env:
+          NPM_VERSION: ${{ needs.validate.outputs.npm_version }}
+        run: |
+          set -euo pipefail
+          name="$(python3 installer/tui/artifacts.py names --version "${NPM_VERSION}" --platform win-x64)"
+          if [ ! -s "release-assets/${name}" ]; then
+            echo "::error::the windows-setup artifact has no ${name}; it holds: $(ls release-assets | tr '\n' ' ')"
+            exit 1
+          fi
+          ls -l "release-assets/${name}"
 
       - name: Download Desktop Installer (Windows NSIS)
         uses: actions/download-artifact@v8

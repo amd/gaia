@@ -13,9 +13,11 @@
 # Callers name exactly one desktop app source -- never "whatever is latest":
 #
 #   agent_ui_release           a published vX.Y.Z release (PR gate, manual runs)
-#   agent_ui_publish_run_sha   publish.yml's push run for this commit (tags),
-#                              which builds the installers before its approval
-#                              gate, so a release does not wait on a human.
+#   agent_ui_publish_run_sha   publish.yml's push run for this commit and
+#                              version's tag, which builds the installers before
+#                              its approval gate, so a release does not wait on a
+#                              human. A release candidate's own publish.yml run
+#                              passes its own SHA and embeds its own build.
 #
 # `sidecar` works as it does in tui_installers.yml: pinned fetches the real
 # gaia-agent against the committed digest; stub stands gaia-tui in for it on
@@ -30,7 +32,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Version stamped into the setup and its filename (x.y.z).'
+        description: 'Version stamped into the setup and its filename (x.y.z, or x.y.z-rc.N for a release candidate).'
         required: true
         type: string
       sidecar:
@@ -39,7 +41,7 @@ on:
         default: pinned
         type: string
       agent_ui_release:
-        description: 'Take the desktop app setup from this published release tag (vX.Y.Z).'
+        description: 'Take the desktop app setup from this published release tag (vX.Y.Z or vX.Y.Z-rcN).'
         required: false
         default: ''
         type: string

@@ -409,7 +409,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 | Context7 refresh, `release` branch, release-notes bot | run | skipped |
 | Release notes | `docs/releases/v<version>.mdx` | the same file — no RC-specific notes |
 
-`version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. The one-step Windows setup and the terminal's `.pkg`/`.deb`/`.rpm` packages are not built for an RC (they come from `release_components.yml` and need a numeric-only version); the RC carries the desktop app installers, the raw terminal binaries, and the wheel/sdist.
+`version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. The terminal's `.pkg`/`.deb`/`.rpm` packages are not built for an RC (they need a numeric-only version); the RC carries the one-step Windows setup (`gaia-X.Y.Z-rc.N-win-x64-setup.exe`, built by `publish.yml`'s `rc-windows-setup` around that run's own desktop app build — never published to R2), the desktop app installers, the raw terminal binaries, and the wheel/sdist. A failed setup leaves it off the pre-release and turns the run red via `rc-windows-setup-missing`.
 
 ### Steps
 
