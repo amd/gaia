@@ -362,6 +362,36 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
             raise ModelFitError(f"default_model {model_id} {supported.reason}.")
 
 
+def pending_download_sizes(client, model_ids) -> dict:
+    """GB each model still costs to download: 0.0 when already on disk, None
+    when neither Lemonade's catalog nor GAIA's registry knows its size."""
+    from gaia.llm.lemonade_client import _model_ids_match, find_model_requirement
+
+    catalog = client.list_models(show_all=True).get("data", [])
+    sizes = {}
+    for model_id in model_ids:
+        entry = next(
+            (e for e in catalog if _model_ids_match(e.get("id"), model_id)), None
+        )
+        if entry and entry.get("downloaded"):
+            sizes[model_id] = 0.0
+            continue
+        size = entry.get("size") if entry else None
+        if not isinstance(size, (int, float)):
+            mr = find_model_requirement(model_id)
+            size = mr.size_gb if mr else None
+        sizes[model_id] = float(size) if isinstance(size, (int, float)) else None
+    return sizes
+
+
+def _size_note(size_gb) -> str:
+    if size_gb is None:
+        return ""
+    if size_gb == 0:
+        return " (already downloaded)"
+    return f" ({size_gb:.1f} GB)"
+
+
 # Profiles whose chat model follows the hardware. ``minimal`` promises a small
 # setup, and the vlm, email and sd agents pin Gemma themselves.
 HARDWARE_CHAT_PROFILES = frozenset({"gaia", "chat", "rag", "all"})
@@ -1489,17 +1519,24 @@ class InitCommand:
                 self._print_success("No models required for this profile")
                 return True
 
-            # Show which models will be ensured
+            # Show which models will be ensured, and what they cost to download
+            sizes = pending_download_sizes(client, model_ids)
+            notes = {m: _size_note(sizes.get(m)) for m in model_ids}
+            total_gb = sum(s for s in sizes.values() if s)
             if RICH_AVAILABLE and self.console:
                 self.console.print(
                     f"   [bold]Ensuring {len(model_ids)} model(s) are downloaded:[/bold]"
                 )
                 for model_id in model_ids:
-                    self.console.print(f"   [cyan]•[/cyan] {model_id}")
+                    self.console.print(
+                        f"   [cyan]•[/cyan] {model_id}[dim]{notes[model_id]}[/dim]"
+                    )
             else:
                 self._print(f"   Ensuring {len(model_ids)} model(s) are downloaded:")
                 for model_id in model_ids:
-                    self._print(f"   • {model_id}")
+                    self._print(f"   • {model_id}{notes[model_id]}")
+            if total_gb:
+                self._print(f"   Total download: about {total_gb:.1f} GB")
             self._print("")
 
             if not self._prompt_yes_no("Continue?", default=True):
