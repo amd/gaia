@@ -8301,12 +8301,21 @@ def _fmt_uptime(seconds: float) -> str:
     return f"{s}s"
 
 
+def _print_daemon_start_progress(elapsed: float) -> None:
+    print(
+        f"⏳ Starting the GAIA daemon ({elapsed:.0f}s). The first start after "
+        "installing or upgrading GAIA takes longer.",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _handle_daemon_start():
     from gaia.daemon import client
     from gaia.daemon.errors import DaemonError
 
     try:
-        inst = client.start_or_attach()
+        inst = client.start_or_attach(on_progress=_print_daemon_start_progress)
     except DaemonError as e:
         print(f"❌ {e}")
         sys.exit(1)
@@ -8437,7 +8446,7 @@ def _handle_daemon_start_agent(args):
             sys.exit(1)
 
     try:
-        inst = client.start_or_attach()
+        inst = client.start_or_attach(on_progress=_print_daemon_start_progress)
     except DaemonError as e:
         print(f"❌ {e}")
         sys.exit(1)
@@ -8707,7 +8716,7 @@ def _hub_daemon():
     from gaia.daemon.errors import DaemonError
 
     try:
-        return client.start_or_attach()
+        return client.start_or_attach(on_progress=_print_daemon_start_progress)
     except DaemonError as e:
         print(f"❌ {e}")
         sys.exit(1)

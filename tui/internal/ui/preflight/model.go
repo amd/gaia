@@ -39,7 +39,7 @@ const (
 	// wrong cause. It also covers the model row, which LOADS the models
 	// (gaiainit.VerifyTimeout). A deadline is a ceiling, not a cost.
 	CheckTimeout     = 120*time.Second + gaiainit.VerifyTimeout + 30*time.Second
-	startTimeout     = 60 * time.Second
+	startTimeout     = 90 * time.Second // above client.py's 60s daemon start
 	ensureTimeout    = 15 * time.Minute
 	provisionTimeout = 5 * time.Hour // the 82 GB Strix Halo default at ~5 MB/s; esc cancels
 	// defaultReadyHold is how long an all-green screen is held so the user sees
