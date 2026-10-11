@@ -117,6 +117,10 @@ func (m ChatModel) runStartupModel() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.startup.inFlight = true
+	if sw, ok := m.relayedSwitcher(); ok {
+		// Answered by relayedSwitchMsg, not a turn.
+		return m.switchRelayedModel(sw, m.startup.model)
+	}
 	updated, cmd := m.submit(modelCommandPrefix + " " + m.startup.model)
 	next := updated.(ChatModel)
 	if next.streaming {

@@ -69,6 +69,15 @@ Starting a dev sidecar separately while the TUI still defaults to `user` creates
 a mode conflict. `GET /daemon/v1/agents` shows the `api_version` actually in
 use.
 
+### Switching models on the relayed route
+
+On the subprocess route `/model <id>` is a turn: the agent's stdio loop
+intercepts it and confirms with a model-state ping. The relay has no such turn,
+so `/model`, `/provider` and the startup restore go through
+`client.TurnModelSwitcher` instead: the TUI checks the flagship's contract
+(2.14 or newer moves a retained session in place), checks that Lemonade lists
+the id, then sends it as `model` on every following `/query`.
+
 ### Know which branch you built
 
 Stacked branches are siblings; no single branch has everything. A leaf build

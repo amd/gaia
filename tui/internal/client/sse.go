@@ -100,6 +100,8 @@ type SSEClient struct {
 	// on next Send". /clear clears it here so the NEXT turn starts a new
 	// conversation server-side too, not just in the visible transcript.
 	sessionID string
+	// model is what every turn is sent with; SetTurnModel changes it.
+	model string
 }
 
 // runHandle is the cancel side of the currently streaming run.
@@ -132,6 +134,7 @@ func NewSSEClient(agentID string, dc *daemon.Client, opts SSEOptions) *SSEClient
 		agentID:    agentID,
 		daemon:     dc,
 		opts:       opts,
+		model:      opts.Model,
 		done:       make(chan struct{}),
 		stream:     daemon.StreamHTTPClient(opts.ConnectTimeout, opts.ReadTimeout),
 		cancelHTTP: &http.Client{Timeout: cancelTimeout},
@@ -189,6 +192,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	// schema, and a nil slice would marshal to `null` and fail validation.
 	history := make([]Turn, 0, len(s.transcript))
 	history = append(history, s.transcript...)
+	model := s.model
 	s.mu.Unlock()
 
 	// Ask what the peer speaks BEFORE sending it an optional field (negotiate.go).
@@ -212,7 +216,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		Query:              query,
 		RunID:              runID,
 		Context:            history,
-		Model:              s.opts.Model,
+		Model:              model,
 		MaxSteps:           s.opts.MaxSteps,
 		CanAnswerQuestions: canAnswer,
 		SessionID:          sessionID,
@@ -228,7 +232,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 
 	relayPath := fmt.Sprintf("/v1/%s/query", url.PathEscape(s.agentID))
 	s.opts.Logf("sse: POST %s%s run_id=%s model=%q max_steps=%d context_turns=%d",
-		inst.BaseURL(), relayPath, runID, s.opts.Model, s.opts.MaxSteps, len(history))
+		inst.BaseURL(), relayPath, runID, model, s.opts.MaxSteps, len(history))
 
 	resp, inst, err := s.daemon.Do(runCtx, inst, daemon.Request{
 		Method: http.MethodPost,

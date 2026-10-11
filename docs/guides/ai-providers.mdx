@@ -194,7 +194,9 @@ model to continue, now or later with /provider.
 A remembered cloud model is what GAIA starts on, so the startup check skips
 loading a local chat model. A remembered local or Claude model is switched to as
 the chat opens, so a deleted model or a missing `ANTHROPIC_API_KEY` gets the same
-one line and picker.
+one line and picker. When the TUI reaches GAIA through the background service, a
+remembered local model is checked against what Lemonade has downloaded and then
+used from the first message; Claude is not available on that route.
 
 The choice is stored in `~/.gaia/config.json` as `last_provider` and `last_model`
 (`GAIA_CONFIG_DIR` relocates it). A one-shot `gaia-tui run gaia --query "…"` runs
