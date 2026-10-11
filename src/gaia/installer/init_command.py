@@ -1504,6 +1504,11 @@ class InitCommand:
                 self._print(f"   Chat model: {choice.model_id}{where}")
                 for skipped_id, reason in choice.skipped:
                     self._print(f"   Not using {skipped_id}: {reason}")
+            if self.skip_models:
+                self._print(
+                    "   Not downloaded (--skip-models). Run `gaia init` without it "
+                    "to download, or pick a cloud model in the Agent UI."
+                )
         return self._chat_choice.model_id
 
     def _download_models(self) -> bool:
@@ -2316,8 +2321,6 @@ class InitCommand:
                     )
                 if not self._profile_agent_available():
                     self.console.print(f"    [yellow]{flagship_install_note}[/yellow]")
-                if not chat_agent_available:
-                    self.console.print(f"    [yellow]{chat_install_note}[/yellow]")
             elif self.profile == "chat":
                 self.console.print(
                     "    [cyan]gaia chat[/cyan]                            Start interactive chat with RAG"
@@ -2406,8 +2409,6 @@ class InitCommand:
                     self._print(f"    {tui_install_note}")
                 if not self._profile_agent_available():
                     self._print(f"    {flagship_install_note}")
-                if not chat_agent_available:
-                    self._print(f"    {chat_install_note}")
             elif self.profile == "chat":
                 self._print(
                     "    gaia chat                            # Start interactive chat with RAG"
