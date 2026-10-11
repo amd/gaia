@@ -42,6 +42,7 @@ from gaia.mcp.ports import (
 )
 from gaia.perf_analysis import run_perf_visualization
 from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
+from gaia.tls import use_os_trust_store
 from gaia.version import version
 
 # Load environment variables from .env file
@@ -4323,6 +4324,7 @@ def _handle_schedule(args):
 
 
 def main():
+    use_os_trust_store()
     parser = build_parser()
     log = get_logger(__name__)
 

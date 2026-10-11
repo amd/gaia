@@ -43,6 +43,23 @@ icon: "bug"
     Then retry the activation command.
   </Accordion>
 
+  <Accordion title="CERTIFICATE_VERIFY_FAILED on a corporate network" icon="shield-halved">
+    GAIA verifies HTTPS against your operating system's certificate store, the same one
+    your browser and pip use, so a TLS-inspecting proxy (Zscaler and similar) works
+    without extra setup as long as its root certificate is installed in the OS store.
+
+    If GAIA still fails with `CERTIFICATE_VERIFY_FAILED`:
+
+    - **A warning says GAIA "could not switch HTTPS verification to the system
+      certificate store"** — the `truststore` package is missing or broken. Run
+      `pip install --upgrade "truststore>=0.10.0"` in GAIA's environment. The warning
+      appears in the terminal, or in `gaia daemon logs` (add `--agent <id>` for an
+      agent's own requests).
+    - **No such warning in either place** — the proxy's root certificate is not in the OS
+      store. Ask IT to install it there; opening the failing URL in a browser on the same
+      machine tells you whether the OS trusts it.
+  </Accordion>
+
   <Accordion title="Python version issues" icon="python">
     GAIA requires Python 3.10-3.12. If `uv venv` fails:
     ```bash

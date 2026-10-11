@@ -934,6 +934,10 @@ def main():
     """Run the Agent UI server."""
     import argparse
 
+    from gaia.tls import use_os_trust_store
+
+    use_os_trust_store()
+
     import uvicorn
 
     parser = argparse.ArgumentParser(description="GAIA Agent UI Server")

@@ -6,6 +6,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Web requests work behind a corporate TLS-inspecting proxy.** HTTPS now
+  trusts the operating system's certificate store, as pip does, instead of only
+  Python's bundled list, so a proxy root such as Zscaler's no longer fails every
+  fetch with `CERTIFICATE_VERIFY_FAILED`.
+
 ## [0.3.0]
 
 Released with GAIA 0.25.0, and requires it.
