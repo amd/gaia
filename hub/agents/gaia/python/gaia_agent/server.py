@@ -1317,6 +1317,32 @@ def build_app() -> FastAPI:
     return app
 
 
+def _default_model_is_servable() -> bool:
+    """Whether warming the default model would load it rather than download it.
+
+    Building the warm-up agent preloads its model, and Lemonade downloads a
+    missing one on load — gigabytes the user never asked for when they chose
+    a cloud model and skipped the local one.
+    """
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        cloud_model_provider,
+        resolve_default_chat_model,
+    )
+
+    model = resolve_default_chat_model()
+    if cloud_model_provider(model):
+        return True
+    if not LemonadeClient(verbose=False).get_model_info(model)["downloaded"]:
+        logger.info(
+            "GAIA sidecar: warm-up skipped (%s is not downloaded; a turn that "
+            "uses it downloads it)",
+            model,
+        )
+        return False
+    return True
+
+
 def _warmup_blocking() -> None:
     """Make the first real question cheap.
 
@@ -1335,6 +1361,8 @@ def _warmup_blocking() -> None:
 
         from gaia.llm.lemonade_client import create_lemonade_client
 
+        if not _default_model_is_servable():
+            return
         agent = build_session_agent()
         try:
             system_prompt = agent._get_system_prompt()  # noqa: SLF001

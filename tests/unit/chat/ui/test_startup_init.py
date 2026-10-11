@@ -190,7 +190,7 @@ def test_boot_check_never_loads_a_model(app, selected):
     client.pull_model.assert_not_called()
 
 
-def _run_boot_model_load(app, downloaded):
+def _run_boot_model_load(app, downloaded, model="Gemma-4-E4B-it-GGUF", lease=None):
     """Run the "Loading AI model" boot job against an idle, mocked Lemonade."""
     import contextlib
     import time
@@ -198,7 +198,7 @@ def _run_boot_model_load(app, downloaded):
 
     from gaia.ui.dispatch import JobStatus
 
-    app.state.db.set_setting("custom_model", "Gemma-4-E4B-it-GGUF")
+    app.state.db.set_setting("custom_model", model)
     lemonade = MagicMock()
     lemonade.get_model_info.return_value = {
         "id": "Gemma-4-E4B-it-GGUF",
@@ -213,7 +213,7 @@ def _run_boot_model_load(app, downloaded):
         patch("httpx.get", return_value=idle),
         patch(
             "gaia.daemon.broker_client.model_lease",
-            lambda *a, **k: contextlib.nullcontext(),
+            lease or (lambda *a, **k: contextlib.nullcontext()),
         ),
         patch("gaia.llm.lemonade_client.LemonadeClient", return_value=lemonade),
     ):
@@ -248,3 +248,24 @@ def test_boot_preload_loads_a_downloaded_model(app):
     assert job.status == JobStatus.DONE
     lemonade.load_model.assert_called_once()
     assert lemonade.load_model.call_args.args[0] == "Gemma-4-E4B-it-GGUF"
+
+
+def test_boot_preload_never_waits_on_the_broker_for_a_cloud_model(app):
+    """A sidecar loading a local model holds the broker lease. A cloud
+    selection has nothing to load, so waiting behind it held the UI at
+    "starting" for the length of someone else's download."""
+    from gaia.ui.dispatch import JobStatus
+
+    leases = []
+
+    def lease(*args, **kwargs):
+        leases.append(args)
+        raise AssertionError("a cloud selection must not take the model lease")
+
+    job, lemonade = _run_boot_model_load(
+        app, downloaded=False, model="amd.DeepSeek-V4.1-Flash", lease=lease
+    )
+
+    assert job.status == JobStatus.DONE
+    assert leases == []
+    lemonade.load_model.assert_not_called()

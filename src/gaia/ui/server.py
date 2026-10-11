@@ -407,6 +407,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             from gaia.ui.routers.system import _default_model_name
 
             model_id = db.get_setting("custom_model") or _default_model_name()
+            # Before the lease: waiting on a sidecar's local load for a cloud
+            # model held the whole UI at "starting" for nothing.
+            if cloud_model_provider(model_id, None):
+                return
 
             # model_load_lock guards other threads in THIS process; the broker
             # lease guards other processes sharing Lemonade's single slot
@@ -433,8 +437,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                         model_id,
                     )
 
-                if cloud_model_provider(model_id, None):
-                    return  # cloud models are never loaded locally
                 client = LemonadeClient(verbose=False)
                 # A boot preload must never start a multi-GB download the
                 # user did not ask for (setup may be about to pick a cloud model).
