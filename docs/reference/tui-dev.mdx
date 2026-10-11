@@ -76,7 +76,9 @@ intercepts it and confirms with a model-state ping. The relay has no such turn,
 so `/model`, `/provider` and the startup restore go through
 `client.TurnModelSwitcher` instead: the TUI checks the flagship's contract
 (2.14 or newer moves a retained session in place), checks that Lemonade lists
-the id, then sends it as `model` on every following `/query`.
+the id, then sends it as `model` on every following `/query`. The first `final`
+on it saves the choice; a 409 `could not switch session` puts the previous model
+back (`client.ModelSwitchRefusedError`).
 
 ### Know which branch you built
 

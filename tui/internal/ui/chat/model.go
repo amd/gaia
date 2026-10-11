@@ -405,6 +405,9 @@ type ChatModel struct {
 	// relayedSwitching is true while a daemon-relay `/model` is being checked
 	// (relayedmodel.go); queued messages wait for it like they wait for a turn.
 	relayedSwitching bool
+	// relayedPending is a relayed switch the next turn carries, saved only once
+	// a turn completes on it and undone if the agent refuses it.
+	relayedPending *relayedPending
 
 	// startup is the one `/model` turn sent when the chat opens — see
 	// startupmodel.go. saveModel persists a confirmed switch; nil saves nothing.
@@ -1060,6 +1063,12 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role:    RoleError,
 			Content: sanitizeErrorText(msg.err.Error()),
 		})
+		if m.revertRelayedSwitch(msg.err) {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: "Nothing was switched — this session is still on " + m.currentModelName() + ".",
+			})
+		}
 		m.drainPendingPreScan()
 		m.updateViewport()
 		return m, nil

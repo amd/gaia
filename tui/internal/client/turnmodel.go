@@ -6,6 +6,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // modelSwitchContract is the flagship contract from which a turn's `model`
@@ -30,6 +31,25 @@ type TurnModelSwitcher interface {
 	CheckModelSwitch(ctx context.Context) error
 	// SetTurnModel names the model every following turn runs on.
 	SetTurnModel(model string)
+	// TurnModel is the model turns are sent with now; "" means the agent's own.
+	TurnModel() string
+}
+
+// ModelSwitchRefusedError is the agent refusing to move the conversation onto
+// the turn's model. The session is still on the model it had.
+type ModelSwitchRefusedError struct {
+	Model  string
+	Detail string
+}
+
+func (e *ModelSwitchRefusedError) Error() string {
+	return fmt.Sprintf("the agent could not switch to %s (%s)", e.Model, e.Detail)
+}
+
+// switchRefused reports whether a /query 409 is a refused model switch rather
+// than a session still busy with the previous turn. Keyed on server.py's detail.
+func switchRefused(detail string) bool {
+	return strings.Contains(detail, "could not switch session")
 }
 
 var _ TurnModelSwitcher = (*SSEClient)(nil)
@@ -58,6 +78,13 @@ func (s *SSEClient) CheckModelSwitch(ctx context.Context) error {
 			updateCommand("uninstall", s.agentID), updateCommand("install", s.agentID))
 	}
 	return nil
+}
+
+// TurnModel implements TurnModelSwitcher.
+func (s *SSEClient) TurnModel() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.model
 }
 
 // SetTurnModel implements TurnModelSwitcher.

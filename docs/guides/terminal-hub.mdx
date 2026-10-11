@@ -356,8 +356,10 @@ can't be, the chat says so in one line and opens the provider picker. See
 Once setup has installed the flagship as a hub package, the TUI reaches it through
 the background service. `/model` and `/provider` work the same there: the switch
 is checked against the models Lemonade serves, the header names the new model, and
-your next message runs on it. Neither is ever sent to the agent as a question. An
-agent too old to switch models mid-chat says so and names the update command.
+your next message runs on it. It is remembered once that message completes; if the
+agent refuses the model, the previous one comes back. Neither command is ever sent
+to the agent as a question. An agent too old to switch models mid-chat says so and
+names the update command.
 
 | Key | What it does |
 |---|---|

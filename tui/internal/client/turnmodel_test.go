@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -31,6 +32,28 @@ func TestSetTurnModelIsWhatTheNextTurnCarries(t *testing.T) {
 	collect(t, ch)
 	if got := f.lastQuery().Model; got != "Qwen3-4B-GGUF" {
 		t.Fatalf("the turn was sent with model %q, want the switched one", got)
+	}
+}
+
+// A switch the agent cannot make is a 409 that is not a busy session; the chat
+// needs to tell the two apart to put the old model back.
+func TestARefusedSwitchIsNotReportedAsABusySession(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.15"
+	f.queryStatus = http.StatusConflict
+	// Verbatim shape of server.py's refusal.
+	f.queryBody = `{"detail":"could not switch session s1 to 'Qwen3-4B-GGUF': model failed ` +
+		`to load. The session is still running Gemma-4-E4B-it-GGUF."}`
+	c := f.clientFor(t, "gaia")
+	c.SetTurnModel("Qwen3-4B-GGUF")
+
+	_, err := c.Send(context.Background(), "hi")
+	var refused *ModelSwitchRefusedError
+	if !errors.As(err, &refused) || refused.Model != "Qwen3-4B-GGUF" {
+		t.Fatalf("Send = %v, want a ModelSwitchRefusedError for the turn's model", err)
+	}
+	if strings.Contains(err.Error(), "still finishing the previous turn") {
+		t.Errorf("a refused switch was described as a busy session: %v", err)
 	}
 }
 

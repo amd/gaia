@@ -21,17 +21,33 @@ import (
 // The relay sends the model with every turn, so the agent has no `/model` turn
 // to answer — sent as one, it is a question. Here the switch is checked before
 // it is made: the agent must be new enough to move a conversation onto another
-// model, and Lemonade must serve the id. Only then does the next turn carry it.
+// model, and Lemonade must serve the id. The next turn then carries it, and only
+// a turn the agent completes on it confirms it; a refusal puts the old model back.
 
 // relayedSwitchTimeout bounds the check: a daemon attach, a contract read, and
 // one Lemonade model listing.
 const relayedSwitchTimeout = 30 * time.Second
 
-// relayedSwitchMsg is the answer to a relayed switch check.
+// relayedSwitchMsg is the answer to a relayed switch check. target is
+// Lemonade's own spelling of the id once the check has passed.
 type relayedSwitchMsg struct {
 	provider string
 	target   string
 	err      error
+}
+
+// relayedHeader is what the header showed, so a refused switch can restore it.
+type relayedHeader struct {
+	modelID, modelDisplay, modelBackend string
+	modelRemote                         bool
+}
+
+// relayedPending is a switch the next turn carries but the agent has not
+// confirmed yet.
+type relayedPending struct {
+	choice   savedChoice
+	prevTurn string
+	prev     relayedHeader
 }
 
 // relayedSwitcher is the connection's turn-model setter, when it has one.
@@ -58,34 +74,39 @@ func (m ChatModel) switchRelayedModel(sw client.TurnModelSwitcher, target string
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), relayedSwitchTimeout)
 		defer cancel()
-		return relayedSwitchMsg{provider: provider, target: target, err: checkRelayedSwitch(ctx, sw, base, provider, target)}
+		id, err := checkRelayedSwitch(ctx, sw, base, provider, target)
+		if err != nil {
+			return relayedSwitchMsg{provider: provider, target: target, err: err}
+		}
+		return relayedSwitchMsg{provider: provider, target: id}
 	}
 }
 
-// checkRelayedSwitch returns why target cannot be switched to, or nil.
-func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, provider, target string) error {
+// checkRelayedSwitch returns Lemonade's id for target, or why it cannot be
+// switched to.
+func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, provider, target string) (string, error) {
 	if client.IsClaudeModelID(target) {
-		return errors.New("Claude is not available when GAIA runs through the background service")
+		return "", errors.New("Claude is not available when GAIA runs through the background service")
 	}
 	if err := sw.CheckModelSwitch(ctx); err != nil {
-		return err
+		return "", err
 	}
 	models, err := lemonade.New(base).Models(ctx, provider)
 	if err != nil {
 		if errors.Is(err, lemonade.ErrUnreachable) {
-			return errors.New("the Lemonade server is not answering")
+			return "", errors.New("the Lemonade server is not answering")
 		}
-		return err
+		return "", err
 	}
 	for _, mdl := range models {
 		if strings.EqualFold(mdl.ID, target) {
-			return nil
+			return mdl.ID, nil
 		}
 	}
 	if provider == "local" {
-		return errors.New("it is not downloaded — download it with /provider")
+		return "", errors.New("it is not downloaded — download it with /provider")
 	}
-	return errors.New(lemonade.Label(provider) +
+	return "", errors.New(lemonade.Label(provider) +
 		" does not list it — the key may be missing or the provider is not connected")
 }
 
@@ -94,7 +115,7 @@ func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, 
 // failure there opens the picker the same way it does on the direct route.
 func (m ChatModel) handleRelayedSwitch(msg relayedSwitchMsg) (tea.Model, tea.Cmd) {
 	m.relayedSwitching = false
-	startup := m.startup.inFlight && msg.target == m.startup.model
+	startup := m.startup.inFlight && strings.EqualFold(msg.target, m.startup.model)
 	if startup {
 		m.startup.inFlight = false
 	}
@@ -117,6 +138,11 @@ func (m ChatModel) handleRelayedSwitch(msg relayedSwitchMsg) (tea.Model, tea.Cmd
 	if !ok {
 		return m, nil
 	}
+	m.relayedPending = &relayedPending{
+		choice:   savedChoice{provider: msg.provider, model: msg.target},
+		prevTurn: sw.TurnModel(),
+		prev:     relayedHeader{m.modelID, m.modelDisplay, m.modelBackend, m.modelRemote},
+	}
 	sw.SetTurnModel(msg.target)
 	m.modelID = msg.target
 	m.modelDisplay = msg.target
@@ -126,7 +152,6 @@ func (m ChatModel) handleRelayedSwitch(msg relayedSwitchMsg) (tea.Model, tea.Cmd
 		m.modelBackend = msg.provider
 	}
 	m.claudeMode = false
-	m.rememberModel(savedChoice{provider: msg.provider, model: msg.target})
 	if !startup {
 		m.messages = append(m.messages, Message{
 			Role:    RoleStatus,
@@ -135,4 +160,30 @@ func (m ChatModel) handleRelayedSwitch(msg relayedSwitchMsg) (tea.Model, tea.Cmd
 	}
 	m.updateViewport()
 	return m, nil
+}
+
+// confirmRelayedSwitch remembers a pending switch once a turn has completed on it.
+func (m *ChatModel) confirmRelayedSwitch() {
+	if m.relayedPending == nil {
+		return
+	}
+	m.rememberModel(m.relayedPending.choice)
+	m.relayedPending = nil
+}
+
+// revertRelayedSwitch puts the model back when the agent refused to move onto
+// it. Reports whether err was that refusal.
+func (m *ChatModel) revertRelayedSwitch(err error) bool {
+	var refused *client.ModelSwitchRefusedError
+	if m.relayedPending == nil || !errors.As(err, &refused) {
+		return false
+	}
+	if sw, ok := m.relayedSwitcher(); ok {
+		sw.SetTurnModel(m.relayedPending.prevTurn)
+	}
+	prev := m.relayedPending.prev
+	m.modelID, m.modelDisplay, m.modelBackend, m.modelRemote =
+		prev.modelID, prev.modelDisplay, prev.modelBackend, prev.modelRemote
+	m.relayedPending = nil
+	return true
 }

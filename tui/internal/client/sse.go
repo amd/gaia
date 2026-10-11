@@ -267,6 +267,9 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 					"that id is registered with the daemon",
 				s.agentID, detail)
 		case http.StatusConflict:
+			if switchRefused(detail) {
+				return nil, &ModelSwitchRefusedError{Model: model, Detail: detail}
+			}
 			// The session's run_lock is still held by a previous turn (#2901) —
 			// most often the tail of a just-cancelled one the daemon has not
 			// finished unwinding yet. Name the busy resource, like Respond and

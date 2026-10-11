@@ -15,6 +15,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/providers"
 )
 
@@ -28,6 +30,13 @@ type relayClient struct {
 
 func (c *relayClient) CheckModelSwitch(context.Context) error { return c.checkErr }
 func (c *relayClient) SetTurnModel(model string)              { c.turnModel = model }
+func (c *relayClient) TurnModel() string                      { return c.turnModel }
+
+// finishTurn completes a turn the way the relay does, with a final.
+func finishTurn(t *testing.T, m ChatModel) ChatModel {
+	t.Helper()
+	return deliver(t, m, event.CanonicalFinalEvent{Type: "final", Answer: "ok"})
+}
 
 const (
 	localModel  = "Qwen3-4B-Instruct-GGUF"
@@ -106,11 +115,54 @@ func TestRelayedModelSwitchIsNeverSentAsAQuestion(t *testing.T) {
 	if h := ansi.Strip(m.renderModelChip()); !strings.Contains(h, localModel) {
 		t.Errorf("the header does not name the new model: %q", h)
 	}
-	if len(*saves) != 1 || (*saves)[0] != (savedCall{"local", localModel}) {
-		t.Errorf("the switch was not remembered: %+v", *saves)
-	}
 	if errs := errorsIn(m); len(errs) != 0 {
 		t.Errorf("a good switch reported errors: %q", errs)
+	}
+	// Remembered only once a turn has completed on it, as on the direct route.
+	if len(*saves) != 0 {
+		t.Fatalf("the switch was saved before the agent ran a turn on it: %+v", *saves)
+	}
+	m = finishTurn(t, m)
+	if len(*saves) != 1 || (*saves)[0] != (savedCall{"local", localModel}) {
+		t.Errorf("the switch was not remembered after a turn completed on it: %+v", *saves)
+	}
+}
+
+// The agent is the authority: a switch it refuses puts the old model back,
+// rather than sending every later turn to the same refusal.
+func TestASwitchTheAgentRefusesIsUndone(t *testing.T) {
+	m, c, saves := relayedChat(t)
+	m = submitRelayed(t, m, "/model "+gatewayMdl)
+	m = finishTurn(t, m)
+	*saves = nil
+	m = submitRelayed(t, m, "/model "+localModel)
+
+	m.turnSeq = 7
+	updated, _ := m.Update(errMsg{turnSeq: 7, err: &client.ModelSwitchRefusedError{
+		Model: localModel, Detail: "could not switch session s to '" + localModel + "': out of memory",
+	}})
+	m = updated.(ChatModel)
+
+	if c.turnModel != gatewayMdl {
+		t.Fatalf("after the refusal the turns run on %q, want the previous %q", c.turnModel, gatewayMdl)
+	}
+	if h := ansi.Strip(m.renderModelChip()); !strings.Contains(h, "DeepSeek-V4.1-Flash") {
+		t.Errorf("the header still names the refused model: %q", h)
+	}
+	if len(*saves) != 0 {
+		t.Errorf("a refused switch was remembered: %+v", *saves)
+	}
+	if !strings.Contains(m.messages[len(m.messages)-1].Content, "still on "+gatewayMdl) {
+		t.Errorf("the transcript does not say what the session is still on: %+v", m.messages[len(m.messages)-1])
+	}
+}
+
+// The id goes out spelled the way Lemonade lists it.
+func TestASwitchUsesLemonadesSpellingOfTheID(t *testing.T) {
+	m, c, _ := relayedChat(t)
+	submitRelayed(t, m, "/model "+strings.ToLower(localModel))
+	if c.turnModel != localModel {
+		t.Fatalf("turn model = %q, want Lemonade's %q", c.turnModel, localModel)
 	}
 }
 
@@ -123,7 +175,8 @@ func TestRelayedSwitchToACloudModelNamesTheProvider(t *testing.T) {
 	if h := ansi.Strip(m.renderModelChip()); !strings.Contains(h, "AMD LLM Gateway · DeepSeek-V4.1-Flash (remote)") {
 		t.Errorf("header = %q", h)
 	}
-	if (*saves)[0] != (savedCall{"amd", gatewayMdl}) {
+	m = finishTurn(t, m)
+	if len(*saves) != 1 || (*saves)[0] != (savedCall{"amd", gatewayMdl}) {
 		t.Errorf("saved %+v", *saves)
 	}
 }
