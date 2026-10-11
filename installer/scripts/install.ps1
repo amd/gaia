@@ -95,7 +95,7 @@ function Install-Gaia {
         # so the pip form fails on every re-run.
         # --upgrade exits 0 when there is nothing to do, so non-zero is a real
         # failure, not "already current".
-        & uv pip install --python "$GAIA_VENV\Scripts\python.exe" --upgrade "amd-gaia[api]" --quiet
+        & uv pip install --native-tls --python "$GAIA_VENV\Scripts\python.exe" --upgrade "amd-gaia[api]" --quiet
         if ($LASTEXITCODE -ne 0) {
             Write-GaiaError "Failed to update the GAIA package in $GAIA_VENV (exit $LASTEXITCODE)."
             Write-Host "  Fix:  re-run this installer, or delete $GAIA_HOME to start clean." -ForegroundColor $COLOR_YELLOW
@@ -120,7 +120,9 @@ function Install-Gaia {
     Write-Step "Creating virtual environment with Python $PYTHON_VERSION..."
     Write-Host "  (uv will automatically download Python $PYTHON_VERSION if not installed)" -ForegroundColor $COLOR_YELLOW
     # A non-zero native exit does not throw, so $LASTEXITCODE is the only signal.
-    & uv venv $GAIA_VENV --python $PYTHON_VERSION
+    # --native-tls on every uv call: the Windows certificate store is where IT
+    # installs a TLS-inspecting proxy's CA, and uv's bundled roots lack it.
+    & uv venv $GAIA_VENV --python $PYTHON_VERSION --native-tls
     if ($LASTEXITCODE -ne 0) {
         Write-GaiaError "Failed to create the virtual environment at $GAIA_VENV (uv exit $LASTEXITCODE)."
         throw "GAIA install failed - see the error above."
@@ -132,7 +134,7 @@ function Install-Gaia {
     # Target the venv python rather than running Activate.ps1: that is a script
     # on disk, so a Restricted execution policy blocks it even though the
     # piped-in installer itself is exempt.
-    & uv pip install --python "$GAIA_VENV\Scripts\python.exe" "amd-gaia[api]" --quiet
+    & uv pip install --native-tls --python "$GAIA_VENV\Scripts\python.exe" "amd-gaia[api]" --quiet
     if ($LASTEXITCODE -ne 0) {
         Write-GaiaError "Failed to install the GAIA package (uv exit $LASTEXITCODE)."
         Write-Host "  Fix:  re-run this installer; if it persists report it at" -ForegroundColor $COLOR_YELLOW
