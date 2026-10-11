@@ -15,6 +15,10 @@ Released with GAIA 0.25.0, and requires it.
 - **Requires `amd-gaia>=0.25.0` and `gaia-agent-chat>=0.2.0`.** Every file tool
   now checks the allowed-folders rule, and that check ships in core 0.25.0; an
   older core cannot import the chat agent this one builds on.
+- **Web requests work behind a corporate TLS-inspecting proxy.** HTTPS now
+  trusts the operating system's certificate store, as pip does, instead of only
+  Python's bundled list, so a proxy root such as Zscaler's no longer fails every
+  fetch with `CERTIFICATE_VERIFY_FAILED`.
 - **`~/.gaia/logs/gaia-agent.log` stays bounded.** It rotates like `gaia.log`
   (10 MB, three backups; `GAIA_LOG_MAX_MB`, `GAIA_LOG_BACKUPS`) instead of
   growing without limit.

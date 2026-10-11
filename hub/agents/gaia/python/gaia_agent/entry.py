@@ -64,6 +64,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     A flag belonging to the other transport is an argparse error from the one
     that was selected — never a quiet switch to the other.
     """
+    from gaia.tls import use_os_trust_store
+
+    use_os_trust_store()
     args = list(sys.argv[1:] if argv is None else argv)
 
     if selects_http(args):

@@ -700,6 +700,9 @@ def build_parser():
 
 
 def main():
+    from gaia.tls import use_os_trust_store
+
+    use_os_trust_store()
     parser = build_parser()
     args = parser.parse_args()
     start_server(

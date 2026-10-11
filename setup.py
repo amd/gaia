@@ -147,6 +147,10 @@ setup(
         # <1.0: openai checks any imported httpx for httpx.Timeout, which the
         # 1.0 pre-releases removed, so `pip install --pre` broke every chat turn.
         "httpx>=0.27.0,<1.0",
+        # HTTPS trusts the OS certificate store (gaia.tls), so a corporate
+        # TLS-inspecting proxy's root works as it does for pip. 0.10 also
+        # honours CA files loaded on top (certifi), so nothing stops verifying.
+        "truststore>=0.10.0",
         "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
