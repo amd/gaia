@@ -910,6 +910,8 @@ class LemonadeManager:
                     # Its port is chosen at start, so re-resolve instead of
                     # keeping the stopped-state default the caller passed.
                     client = LemonadeClient(keep_alive=True, verbose=not quiet)
+                    # Stopped again since: wait on the daemon, not the default port.
+                    client.current_base_url()
 
                 # Just check server status - no agent profile required
                 status = client.get_status()
