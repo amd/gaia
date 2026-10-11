@@ -598,12 +598,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return modelsMsg{source: c, err: err}
 					}
 					msg := loadCatalog(m.ctx, c, p.Name)
-					if key != "" && (msg.err != nil || len(msg.entries) == 0) {
-						// Lemonade now holds the key that failed; put the kept one
-						// back so a mistyped key does not break a working provider.
+					if key != "" && msg.err == nil && len(msg.entries) == 0 {
+						// Lemonade now holds the key that found nothing; put the kept
+						// one back so a mistyped key does not break a working provider.
+						// A failed listing says nothing about the key, so it stays.
 						if err := c.Clear(m.ctx, p.Name); err != nil {
 							return modelsMsg{source: c, err: fmt.Errorf(
-								"That key found no models, and the key set before it could not be put back: %w", err)}
+								"That key found no models, and Lemonade would not drop it, so it is still in use: %w", err)}
 						}
 						restoreKey(p.Name)
 						return msg
