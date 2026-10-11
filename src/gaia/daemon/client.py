@@ -41,6 +41,14 @@ logger = get_logger(__name__)
 
 _START_TIMEOUT = 30.0
 
+# (module, distribution) the daemon process imports that a base install lacks.
+# The [api] extra declares every one (tests/unit/test_api_extras.py).
+DAEMON_DEPS = (
+    ("fastapi", "fastapi"),
+    ("uvicorn", "uvicorn"),
+    ("psutil", "psutil"),
+)
+
 # The daemon MINOR that introduced the /daemon/v1/agents control plane + the
 # /v1/<agent>/* relay (#2142 / #2150). A pre-#2142 daemon passes the MAJOR gate
 # but would 404 every agents/relay route — fail loudly instead. A stale daemon
@@ -119,7 +127,22 @@ def start_or_attach(timeout: float = _START_TIMEOUT) -> DaemonInstance:
                 inst.pid,
             )
             terminate_instance(inst)
+        missing = missing_daemon_deps()
+        if missing:
+            raise DaemonStartError(
+                f"the GAIA daemon needs {', '.join(missing)}, which this Python "
+                f"({sys.executable}) does not have. Install the daemon extras "
+                'into that environment with pip install "amd-gaia[api]" '
+                "(or uv pip install), then retry."
+            )
         return _spawn_and_wait(timeout)
+
+
+def missing_daemon_deps() -> list:
+    """Distributions the daemon needs that this interpreter cannot import."""
+    import importlib.util
+
+    return [pkg for mod, pkg in DAEMON_DEPS if importlib.util.find_spec(mod) is None]
 
 
 def _daemon_env() -> dict:

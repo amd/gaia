@@ -8229,17 +8229,9 @@ def _check_daemon_deps():
     ``ModuleNotFoundError`` and surface a cryptic "process exited early"; name
     the real cause and the fix instead.
     """
-    import importlib.util
+    from gaia.daemon.client import missing_daemon_deps
 
-    missing = [
-        pkg
-        for mod, pkg in (
-            ("fastapi", "fastapi"),
-            ("uvicorn", "uvicorn"),
-            ("psutil", "psutil"),
-        )
-        if importlib.util.find_spec(mod) is None
-    ]
+    missing = missing_daemon_deps()
     if missing:
         print(
             "❌ `gaia daemon` needs packages not in the base install: "
