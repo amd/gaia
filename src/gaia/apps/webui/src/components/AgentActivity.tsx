@@ -178,9 +178,10 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     const errorSteps = displaySteps.filter((s) => s.type === 'error');
     const hasErrors = errorSteps.length > 0;
 
+    // A turn-level error is often the turn's only output; never hide it behind a click.
     useEffect(() => {
-        if (hasPolicyAlerts) setExpanded(true);
-    }, [hasPolicyAlerts]);
+        if (hasPolicyAlerts || hasErrors) setExpanded(true);
+    }, [hasPolicyAlerts, hasErrors]);
 
     // Auto-expand native tools for visibility. MCP tools start collapsed
     // by default (users expand on demand) to reduce noise in busy sessions.
