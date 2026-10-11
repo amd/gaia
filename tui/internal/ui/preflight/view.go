@@ -306,7 +306,7 @@ func (m Model) checklistLines(labelW, lineW, w int) (checklist, remedy []string,
 			if row.FirstRun {
 				bodyStyle = labelStyle
 			}
-			line = stepText(n, len(m.rep.Steps()), row.Step)
+			line = stepText(n, m.rep.StepCount(), row.Step)
 		}
 		switch {
 		case provisioning && row.Key == m.provision.Row:
@@ -405,7 +405,7 @@ func (m Model) provisionStep() (n, of int) {
 	}
 	for i, row := range m.rep.Rows {
 		if row.Key == m.provision.Row {
-			return m.rep.StepNumber(i), len(m.rep.Steps())
+			return m.rep.StepNumber(i), m.rep.StepCount()
 		}
 	}
 	return 0, 0
