@@ -43,17 +43,16 @@ DEFAULT_HUB_URL = "https://hub.amd-gaia.ai"
 TAG_PREFIX = "agent-pkg-gaia-v"
 REQUIRED_PLATFORMS = ("win32-x64", "darwin-arm64", "linux-x64")
 
-# What release_agent_gaia.yml freezes into the binary. Tests, eval data, docs
-# and the frontends are not in it, so changes there need no rebuild.
+# What the flagship freeze bundles. Tests, eval data and the web frontend are
+# not in it; bundled skill prompts (*.md) and gaia.apps.llm are, so they stay.
 FROZEN_INPUTS = (
     "src/gaia",
-    ":(exclude)src/gaia/apps",
+    ":(exclude)src/gaia/apps/webui",
     "hub/agents/gaia/python",
     ":(exclude)hub/agents/gaia/python/tests",
     ":(exclude)hub/agents/gaia/python/eval_baselines",
     "hub/agents/chat/python",
     ":(exclude)hub/agents/chat/python/tests",
-    ":(exclude,glob)**/*.md",
     "setup.py",
 )
 
@@ -101,8 +100,14 @@ def check_lock(lock: dict, version: str) -> list[str]:
             f"flagship is {version}. The Windows setup and npm package would ship "
             "a different build than the hub."
         )
-    if not str(sidecar.get("baseUrl", "")).rstrip("/").endswith(f"agents/gaia/{version}"):
-        problems.append(f"{LOCK} sidecar baseUrl does not point at agents/gaia/{version}.")
+    if (
+        not str(sidecar.get("baseUrl", ""))
+        .rstrip("/")
+        .endswith(f"agents/gaia/{version}")
+    ):
+        problems.append(
+            f"{LOCK} sidecar baseUrl does not point at agents/gaia/{version}."
+        )
     platforms = sidecar.get("platforms") or {}
     for p in REQUIRED_PLATFORMS:
         sha = str((platforms.get(p) or {}).get("sha256", ""))
@@ -128,8 +133,12 @@ def check_hub(hub: dict, version: str, lock: dict) -> list[str]:
             f"the Agent Hub's latest gaia is {hub.get('latest_version')}, not {version}; "
             "`gaia init` would install that one."
         )
-    published = {a.get("filename"): a.get("sha256") for a in entry.get("artifacts") or []}
-    pinned = ((lock.get("components") or {}).get("sidecar") or {}).get("platforms") or {}
+    published = {
+        a.get("filename"): a.get("sha256") for a in entry.get("artifacts") or []
+    }
+    pinned = ((lock.get("components") or {}).get("sidecar") or {}).get(
+        "platforms"
+    ) or {}
     for p in REQUIRED_PLATFORMS:
         rec = pinned.get(p) or {}
         name = rec.get("filename")
@@ -169,7 +178,9 @@ def fetch_hub_manifest(hub_url: str) -> dict:
     url = f"{hub_url.rstrip('/')}/agents/gaia/manifest.json"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:  # noqa: S310 - fixed https host
+        with urllib.request.urlopen(
+            req, timeout=60
+        ) as r:  # noqa: S310 - fixed https host
             return json.loads(r.read())
     except (urllib.error.URLError, ValueError, TimeoutError) as e:
         raise SystemExit(f"could not read the Agent Hub manifest at {url}: {e}") from e
@@ -189,7 +200,9 @@ def run(
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    ap.add_argument("--ref", default="HEAD", help="release commit or tag (default HEAD)")
+    ap.add_argument(
+        "--ref", default="HEAD", help="release commit or tag (default HEAD)"
+    )
     ap.add_argument("--hub-url", default=DEFAULT_HUB_URL)
     args = ap.parse_args(argv)
 

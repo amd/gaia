@@ -117,6 +117,18 @@ def test_the_frozen_inputs_cover_the_agent_code():
         assert path in gate.FROZEN_INPUTS
 
 
+def test_the_frozen_inputs_include_bundled_prompts_and_apps():
+    # freeze.py bundles skill prompts and gaia.agents imports gaia.apps.llm.
+    tracked = gate._git("ls-files", "--", *gate.FROZEN_INPUTS).split()
+    assert any(
+        p.startswith("hub/agents/gaia/python/gaia_agent/skills/")
+        and p.endswith("SKILL.md")
+        for p in tracked
+    )
+    assert "src/gaia/apps/llm/app.py" in tracked
+    assert not any(p.startswith("src/gaia/apps/webui/") for p in tracked)
+
+
 def test_the_committed_manifest_version_is_readable():
     text = (REPO_ROOT / gate.MANIFEST).read_text(encoding="utf-8")
     assert gate.flagship_version(text) == yaml.safe_load(text)["version"]
