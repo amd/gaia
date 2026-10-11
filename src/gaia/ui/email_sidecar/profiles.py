@@ -81,7 +81,9 @@ class RelayProfile:
     #: Narrow by design: only the UNREACHABLE cause is treated this way (see
     #: ``_chat_helpers._probe_is_only_unreachable``). A 503 that says the
     #: model is missing, or that Lemonade is below the required version, is
-    #: the server answering accurately and still blocks.
+    #: the server answering accurately and still blocks — unless the missing
+    #: model is not the one the turn uses (a cloud turn never loads the
+    #: sidecar's local default; ``_probe_misses_only_another_model``).
     readiness_is_blocking: bool = True
     #: Contract version from which ``/sessions/{id}/bypass`` exists, so the
     #: chat's Full access mode can reach the agent. ``None`` means it never does.

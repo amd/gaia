@@ -1310,6 +1310,27 @@ def _probe_is_only_unreachable(init_body: dict | None) -> bool:
     return True
 
 
+def _probe_misses_only_another_model(
+    init_body: dict | None, model_id: str | None
+) -> bool:
+    """True when ``/init``'s only complaint is a model this turn does not use.
+
+    The sidecar probes its *default* chat model, not the one the turn sends.
+    A user who picked a cloud model never downloads the local default, so
+    without this every cloud turn is refused for a model it would not touch.
+    """
+    body = init_body or {}
+    lemonade = body.get("lemonade") or {}
+    if lemonade.get("reachable") is not True or lemonade.get("compatible") is False:
+        return False
+    probed = (body.get("model") or {}).get("id")
+    if not probed or not model_id:
+        return False
+    from gaia.llm.lemonade_client import _model_ids_match
+
+    return not _model_ids_match(probed, model_id)
+
+
 def _host_corrected_hint(hint: str | None) -> str | None:
     """Replace a sidecar hint that names a command this host does not have.
 
@@ -1422,7 +1443,18 @@ def _dispatch_sidecar_query(
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
         return
-    if status_code != 200:
+    if (
+        status_code != 200
+        and not profile.readiness_is_blocking
+        and _probe_misses_only_another_model(init_body, model_id)
+    ):
+        logger.info(
+            "chat: %s sidecar's default model is not downloaded; this turn uses "
+            "%s, so continuing",
+            agent_type,
+            model_id,
+        )
+    elif status_code != 200:
         hint = _host_corrected_hint((init_body or {}).get("hint"))
         if profile.readiness_is_blocking or not _probe_is_only_unreachable(init_body):
             msg = (

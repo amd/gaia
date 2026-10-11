@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+import gaia.ui._chat_helpers as chat_helpers_module
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
 from gaia.ui._chat_helpers import _dispatch_sidecar_query, _query_context_from_history
@@ -250,6 +251,13 @@ class TestGaiaDispatch:
         )
         return acquired, calls
 
+    def _patch_cloud(self, monkeypatch, handle):
+        """``_patch`` for a cloud model id, whose key replay is not under test."""
+        monkeypatch.setattr(
+            chat_helpers_module, "_replay_cloud_key_for_relay", lambda *a: None
+        )
+        return self._patch(monkeypatch, handle)
+
     def test_relays_to_the_gaia_sidecar_with_its_profile(self, monkeypatch):
         handle = _FakeHandle()
         acquired, calls = self._patch(monkeypatch, handle)
@@ -321,6 +329,63 @@ class TestGaiaDispatch:
         assert calls == []
         assert handler.events[0]["type"] == "agent_error"
         assert "The model is not downloaded" in handler.events[0]["content"]
+
+    def test_a_missing_default_model_does_not_block_a_cloud_turn(self, monkeypatch):
+        """The probe checks the sidecar's default local model. A turn on a
+        gateway model never touches it, so a user who skipped the local
+        download must still get an answer — silently, with no status line."""
+        body = self._init_body(reachable=True, present=False, hint="not downloaded")
+        body["model"]["id"] = "Gemma-4-E4B-it-GGUF"
+        _, calls = self._patch_cloud(monkeypatch, _FakeHandle(init_result=(503, body)))
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(
+            handler, request, [], "amd.DeepSeek-V4.1-Flash", "gaia", "sess-1"
+        )
+
+        assert len(calls) == 1
+        assert handler.events == []
+
+    def test_a_missing_model_the_turn_uses_still_blocks(self, monkeypatch):
+        body = self._init_body(reachable=True, present=False, hint="not downloaded")
+        body["model"]["id"] = "Gemma-4-E4B-it-GGUF"
+        _, calls = self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(handler, request, [], "Gemma-4-E4B-it-GGUF", "gaia")
+
+        assert calls == []
+        assert handler.events[0]["type"] == "agent_error"
+
+    def test_an_old_lemonade_blocks_even_a_cloud_turn(self, monkeypatch):
+        body = self._init_body(reachable=True, present=False, compatible=False)
+        body["model"]["id"] = "Gemma-4-E4B-it-GGUF"
+        _, calls = self._patch_cloud(monkeypatch, _FakeHandle(init_result=(503, body)))
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(handler, request, [], "amd.DeepSeek-V4.1-Flash", "gaia")
+
+        assert calls == []
+        assert handler.events[0]["type"] == "agent_error"
+
+    def test_email_missing_model_still_blocks_a_cloud_turn(self, monkeypatch):
+        """Email's readiness gate stays a gate whatever model the turn uses."""
+        body = self._init_body(reachable=True, present=False, hint="no inbox")
+        body["model"]["id"] = "Gemma-4-E4B-it-GGUF"
+        handle = _FakeHandle(api_version="2.4", init_result=(503, body))
+        _, calls = self._patch_cloud(monkeypatch, handle)
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="email")
+
+        _dispatch_sidecar_query(
+            handler, request, [], "amd.DeepSeek-V4.1-Flash", "email"
+        )
+
+        assert calls == []
+        assert handler.events[0]["type"] == "agent_error"
 
     def test_an_incompatible_lemonade_still_blocks(self, monkeypatch):
         body = self._init_body(
