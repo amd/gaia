@@ -86,6 +86,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     cloud_model_provider,
     resolve_lemonade_base_url,
+    running_embedded_lemonade_url,
 )
 from gaia.llm.lemonade_launcher import describe_client_hint
 from gaia.log_rotation import SharedRotatingFileHandler
@@ -470,8 +471,26 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
     }
     # Reported even on the Claude path: embeddings (RAG, memory) still run on
     # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
-    event.update(_lemonade_health(getattr(chat.config, "base_url", None)))
+    event.update(_lemonade_health(_status_lemonade_url(agent)))
     return event
+
+
+def _status_lemonade_url(agent: Any) -> Optional[str]:
+    """The Lemonade URL a status ping reports: where the live client talks now.
+
+    The started-with address goes stale once GAIA's server restarts on a new
+    port, and the TUI builds its provider picker from this field. A ping never
+    starts a server, so with none running the configured address is reported
+    and the probe says it is down.
+    """
+    configured = getattr(agent.chat.config, "base_url", None)
+    if running_embedded_lemonade_url() is None:
+        return configured
+    try:
+        return _lemonade_url(agent)
+    except RuntimeError as exc:
+        logger.warning("[lemonade] could not follow GAIA's server for status: %s", exc)
+        return configured
 
 
 def _lemonade_health(base_url: Optional[str]) -> Dict[str, Any]:
