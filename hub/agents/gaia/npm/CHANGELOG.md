@@ -6,6 +6,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The TUI's provider picker works after GAIA's Lemonade restarts.** When the
+  agent ran as the TUI's own child, its model-state ping kept naming the port
+  Lemonade started on, so after a restart the picker said "Lemonade did not
+  respond" while chat worked. The ping now reports the port the agent talks to,
+  and still never starts a stopped server.
 - **The Agent UI's Skills settings list this agent's skills.** With the agent
   installed from the Hub, the page said the agent package was not installed
   and to run `gaia init`, which changed nothing: the bundled skills live

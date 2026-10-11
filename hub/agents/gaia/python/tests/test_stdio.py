@@ -1085,6 +1085,53 @@ def test_model_state_event_names_the_resolved_model_not_a_launch_flag(stub_lemon
     assert banner["lemonade_version"] == "8.1.2"
 
 
+def _probed_url(monkeypatch, agent, running):
+    """The URL ``_model_state_event`` hands its health probe."""
+    probed = []
+    monkeypatch.setattr(stdio, "running_embedded_lemonade_url", lambda: running)
+    monkeypatch.setattr(
+        stdio,
+        "_lemonade_health",
+        lambda base_url: probed.append(base_url) or {"lemonade_base_url": base_url},
+    )
+    event = stdio._model_state_event(agent)
+    assert probed == [event["lemonade_base_url"]]
+    return probed[0]
+
+
+def test_status_after_a_lemonade_restart_reports_the_new_port(monkeypatch):
+    """The TUI opens its provider picker on this URL; the started-with port
+    made it say "Lemonade did not respond" while chat worked."""
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient()
+
+    assert _probed_url(monkeypatch, agent, _RESTARTED_URL) == _RESTARTED_URL
+
+
+def test_status_never_starts_a_stopped_lemonade(monkeypatch):
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient(error=AssertionError("started a server"))
+
+    url = _probed_url(monkeypatch, agent, None)
+
+    assert url == agent.chat.config.base_url
+
+
+def test_status_reports_the_configured_url_when_following_fails(monkeypatch, caplog):
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient(
+        error=LemonadeClientError("Could not start GAIA's Lemonade Server: boom")
+    )
+
+    with caplog.at_level(logging.WARNING, logger=stdio.logger.name):
+        url = _probed_url(monkeypatch, agent, _RESTARTED_URL)
+
+    assert url == agent.chat.config.base_url
+    assert "boom" in caplog.text
+
+
 def test_a_bad_base_url_is_reported_as_such_not_as_a_dead_server(monkeypatch, caplog):
     """A malformed LEMONADE_BASE_URL read to the user as "Lemonade isn't
     running", so they restarted a server that was never the problem."""
