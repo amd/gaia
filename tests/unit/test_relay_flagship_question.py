@@ -144,6 +144,8 @@ def test_the_ui_answer_reaches_the_flagship_question(live_gaia_sidecar):
 
 def test_both_relayed_agents_take_the_same_answer_body():
     """One relay body for both sidecars: the spec §5.1 ``value``."""
+    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaia_agent_email")
     from gaia_agent.server import QueryRespondRequest as GaiaRespond
     from gaia_agent_email.query_routes import QueryRespondRequest as EmailRespond
 
