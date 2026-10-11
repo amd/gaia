@@ -119,7 +119,9 @@ export function upsertVersion(
     tags: base?.tags ?? existing?.tags ?? manifest.tags,
     icon: base?.icon ?? existing?.icon ?? manifest.icon,
     security_tier: base?.security_tier ?? existing?.security_tier ?? manifest.security_tier,
-    min_gaia_version: base?.min_gaia_version ?? existing?.min_gaia_version,
+    // Exactly the latest version's own floor: clients read it as that
+    // version's, so an older version's must not carry over.
+    min_gaia_version: useNew ? manifest.min_gaia_version : existing?.min_gaia_version,
     models: base?.models ?? existing?.models ?? manifest.models,
     tools_count: base?.tools_count ?? existing?.tools_count ?? manifest.tools_count,
     permissions: base?.permissions ?? existing?.permissions ?? manifest.permissions,

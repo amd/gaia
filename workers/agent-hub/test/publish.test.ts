@@ -584,6 +584,33 @@ describe("POST /publish — per-version min_gaia_version", () => {
     expect(manifest.versions["0.2.0"].min_gaia_version).toBe("0.25.0");
   });
 
+  it("does not carry an older version's floor onto a latest that declares none", async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ version: "0.1.0", min_gaia_version: "0.25.0" }),
+      artifact: "wheel-0.1.0",
+      filename: wheel("0.1.0"),
+    });
+    const noFloor = sampleManifest({ version: "0.2.0" })
+      .split("\n")
+      .filter((l) => !l.startsWith("min_gaia_version:"))
+      .join("\n");
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: noFloor,
+      artifact: "wheel-0.2.0",
+      filename: wheel("0.2.0"),
+    });
+
+    const manifest = (await (await env.bucket.get("agents/chat/manifest.json"))!.json()) as AgentManifest;
+    expect(manifest.min_gaia_version).toBeUndefined();
+    expect(manifest.versions["0.2.0"].min_gaia_version).toBeUndefined();
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    const chat = index.agents.find((a) => a.id === "chat")!;
+    expect(chat.min_gaia_versions).toEqual({ "0.1.0": "0.25.0", "0.2.0": "" });
+  });
+
   it("reports an unrecorded floor as an empty string in the index", async () => {
     const env = makeEnv();
     for (const version of ["0.1.0", "0.2.0"]) {
