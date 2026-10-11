@@ -377,6 +377,62 @@ class TestGaiaDispatch:
                 _FakeSSEHandler(), request, [], "m", "not-a-sidecar"
             )
 
+    def _record_replays(self, monkeypatch, order, raises=None):
+        import gaia.llm.cloud_keys as cloud_keys
+
+        def _ensure(provider, client=None):
+            order.append(("replay", provider))
+            if raises:
+                raise raises
+            return True
+
+        monkeypatch.setattr(cloud_keys, "ensure_authenticated", _ensure)
+
+    def test_a_cloud_model_gets_its_key_back_before_init(self, monkeypatch):
+        """After Lemonade restarts it has forgotten the key, and /init would
+        report the cloud model as missing."""
+        order = []
+        self._record_replays(monkeypatch, order)
+        handle = _FakeHandle()
+        real_init = handle._proxy.init
+        handle._proxy.init = lambda: (order.append(("init",)), real_init())[1]
+        _, calls = self._patch(monkeypatch, handle)
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(
+            _FakeSSEHandler(), request, [], "amd.DeepSeek-V4.1-Flash", "gaia"
+        )
+
+        assert order == [("replay", "amd"), ("init",)]
+        assert len(calls) == 1
+
+    @pytest.mark.parametrize("model_id", ["Gemma-4-E4B-it-GGUF", None, "foo.bar"])
+    def test_a_local_model_is_left_alone(self, monkeypatch, model_id):
+        order = []
+        self._record_replays(monkeypatch, order)
+        _, calls = self._patch(monkeypatch, _FakeHandle())
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(_FakeSSEHandler(), request, [], model_id, "gaia")
+
+        assert order == []
+        assert len(calls) == 1
+
+    def test_a_failed_replay_is_shown_and_the_turn_still_runs(self, monkeypatch):
+        from gaia.llm.gateway import GatewayError
+
+        order = []
+        self._record_replays(monkeypatch, order, raises=GatewayError("token rejected"))
+        _, calls = self._patch(monkeypatch, _FakeHandle())
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(handler, request, [], "amd.GLM-5.3-Flash", "gaia")
+
+        assert len(calls) == 1
+        assert handler.events[0]["type"] == "status"
+        assert "token rejected" in handler.events[0]["message"]
+
 
 # ── session_id is gated per agent (both request models forbid extras) ────────
 
