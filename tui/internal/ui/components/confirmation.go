@@ -154,6 +154,7 @@ var actionTitles = map[string]string{
 	"update_gaia_md":      "Update GAIA.md?",
 	"install_skill":       "Install this skill?",
 	"remove_skill":        "Remove this skill?",
+	"allow_path_access":   "Allow access to this location?",
 }
 
 // ActionTitle is the prompt's question for a gated action.
