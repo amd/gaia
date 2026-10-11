@@ -48,10 +48,14 @@ type installedMsg struct {
 	err    error
 }
 
-// authedMsg carries the result of handing Lemonade a token.
+// authedMsg carries the result of handing Lemonade a token. rejected means the
+// token discovered no models and was dropped again; restored says whether the
+// saved token took its place.
 type authedMsg struct {
-	result installResult
-	err    error
+	result   installResult
+	err      error
+	rejected bool
+	restored bool
 }
 
 // persistedMsg reports whether the accepted token reached the credential
@@ -171,7 +175,16 @@ func (m GatewayModel) authenticate(token string) tea.Cmd {
 	baseURL := m.state.BaseURL
 	return func() tea.Msg {
 		result, err := client.SetToken(token, baseURL)
-		return authedMsg{result: result, err: err}
+		if err != nil || result.ModelsDiscovered > 0 {
+			return authedMsg{result: result, err: err}
+		}
+		// Lemonade now holds a token that found nothing; put the kept one back so
+		// a mistyped token does not break a working gateway.
+		if err := client.ClearToken(); err != nil {
+			return authedMsg{err: fmt.Errorf(
+				"That token found no gateway models, and Lemonade would not drop it, so it is still in use: %w", err)}
+		}
+		return authedMsg{result: result, rejected: true, restored: restoreToken()}
 	}
 }
 
@@ -266,6 +279,18 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
 			return m, nil
+		}
+		if msg.rejected {
+			// Saving it would replay the bad token into every later session.
+			m.pendingPersist = nil
+			m.errMsg = "That token found no gateway models, so it was not saved. "
+			if msg.restored {
+				m.errMsg += "Your saved token is back in use."
+			} else {
+				m.errMsg += "Check the token and the gateway URL, then try again."
+			}
+			m.tokenInput.Focus()
+			return m, textinput.Blink
 		}
 		m.errMsg = ""
 		m.notice = fmt.Sprintf(
