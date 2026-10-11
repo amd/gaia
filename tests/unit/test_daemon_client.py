@@ -4,6 +4,12 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import time
+
+import psutil
 import pytest
 
 from gaia.daemon import client
@@ -33,3 +39,34 @@ def test_daemon_version_errors_guide_users_to_upgrade_the_installed_core(
     assert "pip install --upgrade amd-gaia" in message
     assert "https://amd-gaia.ai" in message
     assert "gaia daemon restart` brings the same one back" in message
+
+
+def test_a_daemon_started_through_a_venv_launcher_is_recognised():
+    """A Windows venv's python.exe runs the real interpreter as its child."""
+    launcher = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import subprocess, sys; "
+            "subprocess.run([sys.executable, '-c', 'import time; time.sleep(30)'])",
+        ]
+    )
+    try:
+        deadline = time.monotonic() + 15
+        children = []
+        while not children and time.monotonic() < deadline:
+            children = psutil.Process(launcher.pid).children(recursive=True)
+            time.sleep(0.05)
+        assert children, "launcher never started its child"
+        assert client._spawned_by(children[-1].pid, launcher.pid)
+    finally:
+        for child in psutil.Process(launcher.pid).children(recursive=True):
+            child.kill()
+        launcher.kill()
+        launcher.wait()
+
+
+def test_a_daemon_that_is_not_our_child_is_not_trusted():
+    assert client._spawned_by(os.getpid(), os.getpid())
+    assert not client._spawned_by(os.getppid(), os.getpid())
+    assert not client._spawned_by(2**22 + 12345, os.getpid())

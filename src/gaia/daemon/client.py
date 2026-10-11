@@ -136,6 +136,22 @@ def _daemon_env() -> dict:
     }
 
 
+def _spawned_by(pid: int, launcher_pid: int) -> bool:
+    """True when *pid* is *launcher_pid* or one of its descendants.
+
+    A Windows venv's ``python.exe`` is a launcher that runs the real
+    interpreter as its child, so the daemon registers the child's pid.
+    """
+    if pid == launcher_pid:
+        return True
+    import psutil
+
+    try:
+        return any(p.pid == launcher_pid for p in psutil.Process(pid).parents())
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
+
+
 def _spawn_and_wait(timeout: float) -> DaemonInstance:
     """Spawn the daemon detached, wait until it registers a live instance.json."""
     paths.ensure_host_dir()
@@ -189,8 +205,8 @@ def _spawn_and_wait(timeout: float) -> DaemonInstance:
                 f"See the daemon log at {paths.log_path()}."
             )
         inst = read_instance()
-        # Trust only OUR child's registration (pid match), and only once live.
-        if inst is not None and inst.pid == proc.pid and is_live(inst):
+        # Trust only OUR child's registration, and only once live.
+        if inst is not None and _spawned_by(inst.pid, proc.pid) and is_live(inst):
             _check_version(inst)
             logger.info("daemon: started pid=%s port=%s", inst.pid, inst.port)
             return inst
