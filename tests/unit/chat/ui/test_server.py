@@ -92,6 +92,18 @@ class TestSystemStatus:
         mock_httpx_cls.side_effect = httpx.ConnectError("down")
         data = client.get("/api/system/status").json()
         assert data["default_model_name"] == "user.Qwen3.8-Flash-Next-GGUF"
+        assert data["default_model_is_cloud"] is False
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_flags_a_cloud_model(self, mock_httpx_cls, client, db):
+        """Settings hides download/load/context controls for a cloud model."""
+        import httpx
+
+        db.set_setting("custom_model", "amd.DeepSeek-V4.1-Flash")
+        mock_httpx_cls.side_effect = httpx.ConnectError("down")
+        data = client.get("/api/system/status").json()
+        assert data["default_model_name"] == "amd.DeepSeek-V4.1-Flash"
+        assert data["default_model_is_cloud"] is True
 
     def test_system_status_returns_200(self, client):
         resp = client.get("/api/system/status")

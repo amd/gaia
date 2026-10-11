@@ -2978,6 +2978,11 @@
         "title": "Context Size Sufficient",
         "type": "boolean"
       },
+      "default_model_is_cloud": {
+        "default": false,
+        "title": "Default Model Is Cloud",
+        "type": "boolean"
+      },
       "default_model_name": {
         "anyOf": [
           {
