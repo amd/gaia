@@ -63,8 +63,7 @@ def test_hub_package_imports_in_unit_tests_are_guarded():
     assert not unguarded, (
         "These unit tests import a hub agent package unguarded (no importorskip, "
         "find_spec skipif or ImportError handler), so they fail in CI where it "
-        "isn't installed:\n  "
-        + "\n  ".join(unguarded)
+        "isn't installed:\n  " + "\n  ".join(unguarded)
     )
 
 
