@@ -40,6 +40,7 @@ import sys
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
@@ -47,6 +48,7 @@ from gaia_agent import caller_auth
 from gaia_agent.entry import main as _entry_main
 from gaia_agent.memory_dump import build_memory_dump
 from gaia_agent.session_registry import (
+    AGENT_BUILD_LOCK,
     PROVIDER_CLAUDE,
     PROVIDER_LOCAL,
     SessionCapacityError,
@@ -73,7 +75,8 @@ AGENT_ID = "gaia"
 #: 2.14 added ``/query/{run_id}/tool_decision`` and ``/sessions/{id}/bypass``,
 #: and the ``claude`` provider value.
 #: 2.15 (#3620) added ``POST /query/{run_id}/followup`` for mid-turn messages.
-API_VERSION = "2.15"
+#: 2.16 (#4166) added ``/query``'s ``documents`` field.
+API_VERSION = "2.16"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -164,6 +167,30 @@ class QueryRequest(_Strict):
             "with nobody there to answer, which reads as a hang."
         ),
     )
+    documents: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Absolute paths of the files the user attached to this conversation "
+            "(contract >= 2.16). Each is granted as that exact file, never its "
+            "folder, and indexed before the turn runs. Send the full set every "
+            "turn: files already indexed in a retained session are skipped, so "
+            "one attached mid-conversation is picked up on the next turn."
+        ),
+    )
+
+    @field_validator("documents")
+    @classmethod
+    def _documents_absolute(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        relative = [p for p in v if not p or not Path(p).is_absolute()]
+        if relative:
+            raise ValueError(
+                f"documents must be absolute file paths; got {relative!r}. The "
+                "agent's working directory is not the caller's, so a relative "
+                "path would name a different file."
+            )
+        return list(dict.fromkeys(v))
 
     @field_validator("run_id")
     @classmethod
@@ -480,6 +507,82 @@ def _confirmation_refusal(action: str) -> Dict[str, Any]:
     }
 
 
+#: Step name the attached-document indexing is reported under — the same one
+#: the in-process Agent UI path uses, so both read alike.
+_ATTACH_TOOL = "index_documents"
+
+
+def _attach_refusal(agent: Any, path: str) -> str:
+    """Why an attached *path* cannot be indexed, or ``""`` when it can."""
+    target = Path(path)
+    if not target.exists():
+        return "file not found"
+    if not target.is_file():
+        return "not a file; only individual files can be attached"
+    blocked, reason = agent.path_validator.is_read_blocked(path)
+    return reason if blocked else ""
+
+
+def _index_attached_documents(agent: Any, documents: List[str], handler: Any) -> None:
+    """Index the documents the caller attached to this conversation (>= 2.16).
+
+    Grants each as that exact file, never its folder: the scope an in-process
+    Agent UI agent gets. Files already indexed are skipped, so a retained
+    session pays only for documents attached since its last turn.
+    """
+    indexed = agent.indexed_files
+    pending = [d for d in documents if d not in indexed]
+    if not pending:
+        return
+    handler.print_tool_usage(_ATTACH_TOOL)
+    handler.pretty_print_json(
+        {"documents": [Path(d).name for d in pending]}, title="Arguments"
+    )
+    rag = agent.rag
+    lines: List[str] = []
+    for doc in pending:
+        name = Path(doc).name
+        reason = (
+            "document search is not available in this session"
+            if rag is None
+            else _attach_refusal(agent, doc)
+        )
+        if reason:
+            lines.append(f"{name}: not indexed: {reason}")
+            continue
+        agent.path_validator.add_allowed_path(doc)
+        try:
+            result = rag.index_document(doc)
+        except Exception as exc:  # reported in the visible step below
+            logger.exception("Indexing attached document %s failed", doc)
+            lines.append(f"{name}: not indexed: {exc}")
+            continue
+        if result.get("success") and not result.get("error"):
+            indexed.add(doc)
+            lines.append(f"{name}: {result.get('num_chunks', 0)} chunks")
+        else:
+            error = result.get("error") or "the indexer gave no reason"
+            lines.append(f"{name}: not indexed: {error}")
+    succeeded = sum(1 for d in pending if d in indexed)
+    if succeeded:
+        agent.rebuild_system_prompt()
+    all_indexed = succeeded == len(pending)
+    handler._emit(
+        {
+            "type": "tool_result",
+            "title": "Index Documents",
+            "summary": "\n".join(lines),
+            "success": all_indexed,
+            # The status/message shape is what a relaying host summarizes from.
+            "result_data": {
+                "status": "indexed" if all_indexed else "not all indexed",
+                "message": "; ".join(lines),
+                "success": all_indexed,
+            },
+        }
+    )
+
+
 def build_query_agent(**config_kwargs: Any):
     """Construct the flagship agent for one run.
 
@@ -487,7 +590,8 @@ def build_query_agent(**config_kwargs: Any):
     """
     from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
-    return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
+    with AGENT_BUILD_LOCK:
+        return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
 
 
 def _probe_lemonade() -> Dict[str, Any]:
@@ -928,6 +1032,8 @@ async def query(request: QueryRequest):
 
     def _run_agent() -> None:
         try:
+            if request.documents:
+                _index_attached_documents(agent, request.documents, handler)
             if request.max_steps is not None:
                 run.result = agent.process_query(
                     request.query, max_steps=request.max_steps

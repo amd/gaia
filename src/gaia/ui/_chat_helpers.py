@@ -44,6 +44,7 @@ from gaia.ui.email_sidecar.profiles import (
     SIDECAR_AGENT_IDS,
     api_version_supported,
     confirmations_supported,
+    documents_supported,
     profile_for,
 )
 from gaia.ui.memory_settings import memory_enabled
@@ -1387,8 +1388,13 @@ def _dispatch_sidecar_query(
     model_id: str | None,
     agent_type: str,
     session_id: str | None = None,
+    documents: list | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
+
+    *documents* are the session's attached file paths. A sidecar that takes
+    them gets them on every turn; one that should but is too old to stops
+    the turn with an upgrade message rather than answer without them.
 
     Self-contained: every path here either relays the sidecar's ``/query``
     loop to completion or emits a terminal SSE error and returns. The CALLER
@@ -1430,6 +1436,15 @@ def _dispatch_sidecar_query(
             {"type": "agent_error", "content": profile.version_upgrade_message}
         )
         return
+
+    relayed_documents = None
+    if documents and profile.min_documents_api_version is not None:
+        if not documents_supported(profile, handle.api_version):
+            sse_handler._emit(
+                {"type": "agent_error", "content": profile.documents_upgrade_message}
+            )
+            return
+        relayed_documents = [str(Path(p).resolve()) for p in documents]
 
     proxy = handle.proxy()
 
@@ -1485,9 +1500,6 @@ def _dispatch_sidecar_query(
         return
 
     context = _query_context_from_history(history_pairs)
-    # Known gap: session-attached documents do not cross this hop. The body
-    # carries the transcript, not rag_file_paths, so a relayed agent cannot
-    # see a file the user attached in this session (#4166).
     from gaia.ui.email_sidecar.profiles import full_access_supported
 
     relay_query(
@@ -1507,6 +1519,7 @@ def _dispatch_sidecar_query(
         profile=profile,
         session_id=session_id,
         answers_confirmations=confirmations_supported(profile, handle.api_version),
+        documents=relayed_documents,
     )
 
 
@@ -2459,6 +2472,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         model_id,
                         agent_type,
                         session_id=session_id,
+                        documents=rag_file_paths,
                     )
                     return
 
