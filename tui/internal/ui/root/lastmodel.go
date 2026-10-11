@@ -125,20 +125,34 @@ func (m FlagshipModel) pickedAtGate(id string) FlagshipModel {
 // pick is consumed by the launch that uses it.
 func (m *FlagshipModel) withStartupModel(agent catalog.Agent, c chat.ChatModel, expected string) chat.ChatModel {
 	c = c.WithModelMemory(m.saveModel)
+	launched := m.launchModel(agent)
+	var (
+		kind            chat.StartupModelKind
+		provider, model string
+	)
 	switch {
 	case m.startupKind == chat.StartupPicked && agent.ID == catalog.FlagshipID:
-		c = c.WithStartupModel(chat.StartupPicked, m.startupProvider, m.startupModel)
+		kind, provider, model = chat.StartupPicked, m.startupProvider, m.startupModel
 		// The pick did its job; from here the remembered choice (which the
 		// pick becomes once confirmed) decides, and no other agent gets it.
 		if m.model == m.startupModel {
 			m.model = ""
 		}
 	default:
-		if provider, model, ok := m.restoring(agent); ok {
-			c = c.WithStartupModel(chat.StartupRestore, provider, model)
+		if p, id, ok := m.restoring(agent); ok {
+			kind, provider, model = chat.StartupRestore, p, id
 		}
 	}
 	m.startupKind = 0
 	m.startupProvider, m.startupModel = "", ""
+	switch {
+	case kind != 0 && agent.Transport == catalog.TransportDaemon &&
+		model == launched && lemonade.IsCloudID(model):
+		// The sidecar answers `/model` as a question, so the opening turn
+		// could only fail — and the client already runs on this model.
+		return c.WithRelayedModel(kind, provider, model)
+	case kind != 0:
+		c = c.WithStartupModel(kind, provider, model)
+	}
 	return c.WithExpectedModel(expected)
 }
