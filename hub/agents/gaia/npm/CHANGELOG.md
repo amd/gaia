@@ -6,6 +6,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0]
+
+Released with GAIA 0.25.0, and requires it.
+
 ### Changed
 
 - **Requires `amd-gaia>=0.25.0` and `gaia-agent-chat>=0.2.0`.** Every file tool
