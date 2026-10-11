@@ -1749,7 +1749,8 @@ class InitCommand:
             # Ensure proper context size for this profile
             profile_config = INIT_PROFILES[self.profile]
             min_ctx = profile_config.get("min_context_size")
-            if min_ctx and not self.skip_chat_model:
+            # Loading an undownloaded model makes Lemonade pull it, unannounced.
+            if min_ctx and not self.skip_chat_model and not self.skip_models:
                 from gaia.llm.lemonade_client import resolve_ctx_size
                 from gaia.llm.lemonade_manager import LemonadeManager
 
