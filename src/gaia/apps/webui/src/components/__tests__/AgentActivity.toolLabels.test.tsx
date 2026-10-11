@@ -8,8 +8,8 @@ import type { AgentStep } from '../../types';
 
 vi.mock('../../services/api');
 
-function step(tool: string, active = false): AgentStep {
-    return { id: 1, type: 'tool', label: `Using ${tool}`, tool, active, success: true, timestamp: 1 };
+function step(tool: string, active = false, success = true): AgentStep {
+    return { id: 1, type: 'tool', label: `Using ${tool}`, tool, active, success, timestamp: 1 };
 }
 
 it.each([
@@ -24,6 +24,17 @@ it.each([
 
     expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.queryByText('Used tool')).toBeNull();
+});
+
+it.each([
+    ['write_file', 'Writing file failed', 'Wrote file'],
+    ['read_file', 'Reading file failed', 'Read file'],
+    ['some_unknown_tool', 'Using tool failed', 'Used tool'],
+])('does not give a failed or denied %s step the done label', (tool, label, doneLabel) => {
+    render(<AgentActivity steps={[step(tool, false, false)]} isActive={false} variant="inline" />);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.queryByText(doneLabel)).toBeNull();
 });
 
 it('names a running GAIA agent step in the present tense', () => {
