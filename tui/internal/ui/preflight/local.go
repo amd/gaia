@@ -562,12 +562,14 @@ var listedCloudModels = func(ctx context.Context, provider string) ([]lemonade.M
 	return lemonade.New("").Models(ctx, provider)
 }
 
-// checkCloudModelListed confirms the Lemonade GAIA talks to can serve the chosen
+// runsInCloud reports that this launch chats on a cloud model.
+func (c Config) runsInCloud() bool { return lemonade.IsCloudID(c.Model) }
+
+// checkCloudModel confirms the Lemonade GAIA talks to can serve the chosen
 // cloud model. Provider settings live in each server, so a provider connected on
 // another one — the system server, before setup installed GAIA's own — is unknown
 // here, and the first turn would fail.
-func (l localRunner) checkCloudModelListed(ctx context.Context, row Row) (Row, bool) {
-	chosen := l.opts.Model
+func checkCloudModel(ctx context.Context, chosen string, row Row) (Row, bool) {
 	provider, _, _ := strings.Cut(chosen, ".")
 	listed, err := cloudModelListed(ctx, provider, chosen)
 	var (
@@ -703,7 +705,7 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 			row.Line = "embedder loads — chat runs on Claude"
 			return row, "Claude", ""
 		case lemonade.IsCloudID(l.opts.Model):
-			if missing, ok := l.checkCloudModelListed(ctx, row); !ok {
+			if missing, ok := checkCloudModel(ctx, l.opts.Model, row); !ok {
 				return missing, "", ""
 			}
 			row.Line = "embedder loads — chat uses " + l.opts.Model
