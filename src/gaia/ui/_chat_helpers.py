@@ -206,7 +206,11 @@ def _agent_type_unknown(agent_type: str, registry) -> bool:
     profile = profile_for(agent_type)
     if profile is not None and profile.always_relay:
         return False
-    return bool(registry) and not registry.get(agent_type)
+    if not registry or registry.get(agent_type):
+        return False
+    # Setup or `gaia hub install` may have added it after startup.
+    registry.refresh_installed()
+    return not registry.get(agent_type)
 
 
 # ── Per-session agent cache ───────────────────────────────────────────────────

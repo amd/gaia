@@ -1121,6 +1121,8 @@ class TestSessionEndpoints:
                 models=[],
             )
         )
+        # Only gaia is "installed": the rescan must not pull in the dev env's wheels.
+        registry.refresh_installed = lambda: None
         with patch("gaia.ui._chat_helpers._agent_registry", registry):
             yield registry
 
