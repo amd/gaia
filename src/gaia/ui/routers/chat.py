@@ -361,7 +361,51 @@ async def set_permission_mode(
         session_permissions.for_session(session_id).set_mode(body.mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _sync_relayed_mode(
+        session_id, body.mode == session_permissions.MODE_FULL_ACCESS
+    )
     return _permissions_view(session_id)
+
+
+async def _sync_relayed_mode(session_id: str, enabled: bool) -> None:
+    """Carry a mode switch to the sidecar session of a relayed run in flight.
+
+    The next turn sets the mode before it starts either way. If this switch
+    can't reach the sidecar and was to Ask, the run is stopped: it can't be
+    left running with full access the user just turned off.
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    from gaia.ui.email_sidecar.errors import SidecarError
+
+    from .._chat_helpers import _active_sse_handlers
+
+    handler = _active_sse_handlers.get(session_id)
+    proxy = getattr(handler, "active_relay_proxy", None)
+    sidecar_session = getattr(handler, "active_relay_mode_session", None)
+    if proxy is None or sidecar_session is None:
+        return
+    try:
+        await run_in_threadpool(proxy.set_bypass, sidecar_session, enabled)
+    except SidecarError as exc:
+        if not enabled:
+            handler.cancelled.set()
+            handler.close_active_relay_response()
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Ask is saved, but the running agent couldn't be told ({exc}), "
+                    "so its turn was stopped. Send the message again."
+                ),
+            ) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Full access is saved, but the running agent couldn't be told "
+                f"({exc}), so this turn keeps asking. It applies from the next "
+                "message."
+            ),
+        ) from exc
 
 
 @router.delete("/api/chat/permissions/{session_id}/grants")

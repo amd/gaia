@@ -278,6 +278,11 @@ asking (you confirm once). **Settings → Permissions** lists every chat with fu
 access or "always allow" answers and lets you revoke them. Grants end when GAIA
 restarts.
 
+A Hub-installed GAIA, which runs as its own process, follows the chat's mode
+too, from agent contract 2.14. It stops asking, but its shell guardrails stay
+on. If the mode can't be passed on when a turn starts, that turn stops with an
+error, so it never runs with full access you turned off.
+
 ## Settings
 
 One window with General (appearance: Light, Dark, Match system; shortcuts),

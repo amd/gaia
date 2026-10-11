@@ -223,6 +223,10 @@ class SSEOutputHandler(OutputHandler):
     #: Outcome of the last ``tool_result``, echoed by the ``tool_end`` after it.
     _last_tool_success: bool = True
 
+    #: The sidecar session a relayed run keeps in step with the chat's
+    #: permission mode; ``None`` when no relayed run is doing so.
+    active_relay_mode_session: Optional[str] = None
+
     def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
