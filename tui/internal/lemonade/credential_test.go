@@ -167,6 +167,69 @@ func TestCloudKeyFollowsGAIAsLemonadeOnceTheDaemonBringsItBack(t *testing.T) {
 	}
 }
 
+// providerServer answers /system-info with one provider holding a key, and
+// records each request's path and bearer.
+func providerServer(t *testing.T) (*httptest.Server, *[]string) {
+	t.Helper()
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path+" "+r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte(`{"cloud":{"providers":[{"name":"amd","runtime_key_set":true}]}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &seen
+}
+
+func portOf(t *testing.T, srv *httptest.Server) int {
+	t.Helper()
+	u, _ := url.Parse(srv.URL)
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+// The /provider panel opens on the address the agent last reported. Once
+// GAIA's server restarted on a new port, reading from the old one said
+// "Lemonade did not respond" and showed every key as missing.
+func TestReadsFollowGAIAsLemonadeToItsNewPort(t *testing.T) {
+	dir := gaiaHomeWithEmbedded(t)
+	own, seen := providerServer(t)
+	writeEmbeddedState(t, dir, portOf(t, own), "restarted-key")
+
+	got, err := New("http://localhost:1/api/v1").Providers(context.Background())
+	if err != nil {
+		t.Fatalf("err = %v, want the providers of GAIA's restarted server", err)
+	}
+	if len(got) != 1 || !got[0].RuntimeKey {
+		t.Fatalf("providers = %+v", got)
+	}
+	if want := "/api/v1/system-info Bearer restarted-key"; strings.Join(*seen, ",") != want {
+		t.Fatalf("GAIA's server got %v, want %s", *seen, want)
+	}
+}
+
+func TestReadsStayPutWhenGAIAsLemonadeIsNotTheTarget(t *testing.T) {
+	t.Run("mid-restart", func(t *testing.T) {
+		gaiaHomeWithEmbedded(t)
+		srv, seen := providerServer(t)
+		if _, err := New(srv.URL + "/api/v1").Providers(context.Background()); err != nil || len(*seen) != 1 {
+			t.Fatalf("err = %v, requests %v", err, *seen)
+		}
+	})
+	t.Run("LEMONADE_BASE_URL chosen", func(t *testing.T) {
+		dir := gaiaHomeWithEmbedded(t)
+		own, ownSeen := providerServer(t)
+		writeEmbeddedState(t, dir, portOf(t, own), "k")
+		chosen, seen := providerServer(t)
+		t.Setenv("LEMONADE_BASE_URL", chosen.URL)
+		if _, err := New(chosen.URL).Providers(context.Background()); err != nil || len(*seen) != 1 || len(*ownSeen) != 0 {
+			t.Fatalf("err = %v, chosen got %v, GAIA's got %v", err, *seen, *ownSeen)
+		}
+	})
+}
+
 func TestExplicitLemonadeBaseURLStillGetsTheKey(t *testing.T) {
 	gaiaHomeWithEmbedded(t)
 	calls := stubDaemon(t, func(context.Context) error { return errors.New("must not be asked") })
