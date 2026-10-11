@@ -261,6 +261,11 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	}
 
 	if query != "" {
+		var notice string
+		model, notice = oneShotModel(agent.ID, model, useClaude, preflight.ReadLastModel)
+		if notice != "" {
+			fmt.Fprintln(os.Stderr, notice)
+		}
 		logf("one-shot: agent=%s transport=%s model=%q timeout=%s",
 			agent.ID, agent.Transport, orDefault(model, "the agent's default"), timeout)
 
@@ -278,7 +283,7 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 			rep = ReportReadiness(context.Background(), t, cfg, os.Stderr)
 		} else {
 			rep = ReportLocalReadiness(context.Background(),
-				preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: useClaude},
+				preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: useClaude, Model: model},
 				cfg, os.Stderr)
 		}
 		// Every row, not just the blocker: a turn that answers nothing is
@@ -376,6 +381,28 @@ func launchFullAccess(agent catalog.Agent, fullAccess, saved bool) (bool, string
 		return false, "", err
 	}
 	return fullAccess, "", nil
+}
+
+// oneShotModel is the model a --query run uses: an explicit --model, else the
+// flagship's remembered Lemonade model, so a one-shot answers on the provider
+// the chat runs on instead of loading (or downloading) a local default.
+func oneShotModel(agentID, model string, useClaude bool, read func() (preflight.LastModel, error)) (string, string) {
+	if model != "" || useClaude || agentID != catalog.FlagshipID {
+		return model, ""
+	}
+	saved, err := read()
+	if err != nil {
+		return "", "[!] Your last model was not restored: " + err.Error() + "."
+	}
+	if !saved.Set() {
+		return "", ""
+	}
+	if client.IsClaudeModelID(saved.Model) {
+		return "", "[!] Your last model, " + saved.Model + ", runs on Claude; add " +
+			"--use-claude --claude-model " + saved.Model + " to use it for --query. " +
+			"Using the agent's default model."
+	}
+	return saved.Model, ""
 }
 
 // withLastModel restores the model the user last chose and remembers the next
