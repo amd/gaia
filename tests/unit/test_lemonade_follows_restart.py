@@ -287,3 +287,122 @@ def test_a_system_lemonade_on_the_default_port_is_left_alone(server):
         "http://localhost:13305/api/v1/chat/completions",
         None,
     )
+
+
+CLOUD_MODEL = "amd.DeepSeek-V4.1-Flash"
+
+
+class _JSONResponse:
+    status_code = 200
+    content = b"{}"
+
+    def __init__(self, body):
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+class _Gateway:
+    """Lemonade's cloud-provider API: it knows the AMD provider, not its key."""
+
+    def __init__(self, server, monkeypatch):
+        self.server = server
+        self.calls = []
+        self.holds_key = False
+        monkeypatch.setattr("gaia.llm.gateway.recall_token", lambda: "kept-key")
+        monkeypatch.setattr("gaia.llm.gateway.requests.request", self.request)
+
+    def request(self, method, url, json=None, headers=None, timeout=None, **_):
+        auth = (headers or {}).get("Authorization")
+        self.calls.append((method, url, auth))
+        # Shares the chat request log, so the replay-then-turn order is checked.
+        self.server.requests.append((url, auth))
+        if url.endswith("/system-info"):
+            entry = {
+                "name": "amd",
+                "runtime_key_set": self.holds_key,
+                "models_discovered": 3 if self.holds_key else 0,
+            }
+            return _JSONResponse({"cloud": {"providers": [entry]}})
+        assert json == {"provider": "amd", "api_key": "kept-key"}
+        self.holds_key = True
+        return _JSONResponse({"models_discovered": 3})
+
+
+def _cloud_session():
+    return LemonadeProvider(model=CLOUD_MODEL, base_url=lc.resolve_lemonade_base_url())
+
+
+def test_a_restarted_server_gets_the_cloud_key_back_before_the_turn(
+    server, monkeypatch
+):
+    """Lemonade forgets cloud keys on restart; every cloud turn 404ed after one."""
+    gateway = _Gateway(server, monkeypatch)
+    chat = _cloud_session()
+    chat.chat([{"role": "user", "content": "first"}])
+    assert gateway.calls == []  # nothing moved, so no per-turn cost
+
+    server.live_pids = {2}
+    server.record(pid=2, port=NEW_PORT, key=NEW_KEY)
+    chat.chat([{"role": "user", "content": "second"}])
+
+    new = f"http://localhost:{NEW_PORT}/api/v1"
+    assert gateway.calls == [
+        ("GET", f"{new}/system-info", f"Bearer {NEW_KEY}"),
+        ("POST", f"{new}/cloud/auth", f"Bearer {NEW_KEY}"),
+    ]
+    assert _last_request(server) == (f"{new}/chat/completions", f"Bearer {NEW_KEY}")
+
+
+def test_a_server_the_daemon_restarts_mid_chat_gets_the_cloud_key_back(
+    server, monkeypatch
+):
+    gateway = _Gateway(server, monkeypatch)
+
+    def daemon_restarts(*args, **kwargs):
+        server.live_pids = {2}
+        server.record(pid=2, port=NEW_PORT, key=NEW_KEY)
+        return {"base_url": f"http://localhost:{NEW_PORT}/api/v1", "started": True}
+
+    monkeypatch.setattr("gaia.daemon.client.ensure_lemonade", daemon_restarts)
+    chat = _cloud_session()
+    server.live_pids = set()
+
+    chat.chat([{"role": "user", "content": "after the crash"}])
+
+    assert [call[:2] for call in gateway.calls] == [
+        ("GET", f"http://localhost:{NEW_PORT}/api/v1/system-info"),
+        ("POST", f"http://localhost:{NEW_PORT}/api/v1/cloud/auth"),
+    ]
+
+
+def test_a_local_model_never_touches_cloud_keys(server, monkeypatch):
+    gateway = _Gateway(server, monkeypatch)
+    chat = _chat_session()
+    server.live_pids = {2}
+    server.record(pid=2, port=NEW_PORT, key=NEW_KEY)
+
+    chat.chat([{"role": "user", "content": "hi"}])
+
+    assert gateway.calls == []
+
+
+def test_a_failed_key_replay_is_logged_and_the_turn_still_runs(
+    server, monkeypatch, caplog
+):
+    from gaia.llm.cloud_keys import CloudKeyError
+
+    def store_unreadable(provider, client=None):
+        raise CloudKeyError("the credential store is locked")
+
+    monkeypatch.setattr("gaia.llm.cloud_keys.ensure_authenticated", store_unreadable)
+    chat = _cloud_session()
+    server.live_pids = {2}
+    server.record(pid=2, port=NEW_PORT, key=NEW_KEY)
+
+    with caplog.at_level("WARNING"):
+        chat.chat([{"role": "user", "content": "hi"}])
+
+    assert "credential store is locked" in caplog.text
+    assert _last_request(server)[0].startswith(f"http://localhost:{NEW_PORT}/")

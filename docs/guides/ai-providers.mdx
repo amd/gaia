@@ -133,7 +133,8 @@ still sends conversation history to Fireworks and incurs usage charges — see
   Credential Manager, macOS Keychain, or Secret Service on Linux), so every later
   TUI and every restarted Lemonade gets it back without asking. Lemonade itself
   holds the key in memory only; GAIA hands it over again when a chat starts on a
-  cloud model or you open `/provider`. A key that discovers no models is not
+  cloud model, when you open `/provider`, and when GAIA's Lemonade restarts while
+  a cloud chat is open. A key that discovers no models is not
   kept. GAIA never writes a key to config files, transcripts, control logs,
   traces, or command-line arguments.
 - Where no credential store is available (a headless Linux session, for
