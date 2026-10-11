@@ -201,7 +201,7 @@ func TestLemonadeRowSaysNothingAboutStartingWhenItDidNotTry(t *testing.T) {
 	if strings.Contains(row.Raw, "auto-start") {
 		t.Fatalf("no attempt was made, so the details must not mention one: %q", row.Raw)
 	}
-	if row.Fix != FixRunSetup {
+	if row.Fix != FixInstallServer {
 		t.Fatalf("an uninstalled Lemonade must keep its one-key setup, got Fix=%v", row.Fix)
 	}
 }

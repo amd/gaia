@@ -353,10 +353,9 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	row.Line = "not running"
 	row.Detail = "GAIA needs Lemonade to run local models or route chat to your chosen provider."
 	row.Remedy = lemonadeStartRemedy()
-	// Installing and starting Lemonade is `gaia init`'s job, so this row gets
-	// the same one-key setup the model row does. It cannot run twice: Check
-	// stops at the FIRST failure, so whenever this row is the blocker the model
-	// row below it is pending and unfocusable.
+	// Installing and starting Lemonade is `gaia init`'s job, so this row gets a
+	// one-key setup — the server step only. The models wait for the model row,
+	// which shows their real size once a provider can be picked.
 	//
 	// A bad LEMONADE_SERVER_PATH is excluded because `gaia init` provably cannot
 	// fix it: setup would inherit the same bad value, so the key would fail
@@ -366,7 +365,7 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	if l0.BadOverride != "" {
 		return row
 	}
-	row.Fix = FixRunSetup
+	row.Fix = FixInstallServer
 	if lemonadeNotInstalled() {
 		// Nothing installed is how every new machine starts — a step, not a fault.
 		row.FirstRun = true
@@ -880,16 +879,18 @@ var lemonadeNotInstalled = func() bool {
 }
 
 func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress func(Progress)) FixResult {
-	if kind != FixRunSetup {
+	if !runsSetup(kind) {
 		return FixResult{Err: errNoFix}
 	}
 
-	// Step 1 stops after the server, so a provider can be picked before step 2 picks models.
+	// Step 1 stops after the server, so a provider can be picked before step 2
+	// picks models. Decided by the row, not by what is on disk: a step 1 that
+	// failed after installing Lemonade must not turn its retry into step 2.
 	start := func() (<-chan gaiainit.Event, context.CancelFunc, error) {
 		return gaiainit.Start(l.skipChatModel())
 	}
 	command := gaiainit.RunCommand(l.skipChatModel())
-	if lemonadeNotInstalled() {
+	if kind == FixInstallServer {
 		start, command = gaiainit.StartServerOnly, gaiainit.ServerOnlyCommand()
 	}
 
