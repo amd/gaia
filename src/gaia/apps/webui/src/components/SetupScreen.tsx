@@ -16,11 +16,13 @@ const CHOICES: Array<{ id: ProviderId; title: string; note: string }> = [
 
 const POLL_MS = 1000;
 const CHOICE_KEY = 'gaia-setup-choice';
+// The check ran for a local install, so a missing chat model is not a cloud user's problem.
+const CHAT_MODEL_MISSING = /^Model '(?![^']*embed)[^']*' is not downloaded$/i;
 
-/** The provider picked for this setup, so a reload mid-run keeps it. */
+/** The provider picked for this setup, kept across reloads, new tabs and restarts. */
 function readChoice(): ProviderId | null {
     try {
-        const v = sessionStorage.getItem(CHOICE_KEY);
+        const v = localStorage.getItem(CHOICE_KEY);
         return v === 'local' || v === 'fireworks' || v === 'amd' ? v : null;
     } catch (err) {
         console.warn('[SetupScreen] could not read the saved provider choice', err);
@@ -30,7 +32,7 @@ function readChoice(): ProviderId | null {
 
 function saveChoice(choice: ProviderId): void {
     try {
-        sessionStorage.setItem(CHOICE_KEY, choice);
+        localStorage.setItem(CHOICE_KEY, choice);
     } catch (err) {
         console.warn('[SetupScreen] could not save the provider choice; a reload will ask again', err);
     }
@@ -68,7 +70,8 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const cloud = choice !== 'local';
-    const steps: SetupStep[] = run?.steps ?? initial.steps;
+    const steps: SetupStep[] = run?.steps ?? (cloud ? initial.cloud_steps ?? initial.steps : initial.steps);
+    const reason = initial.reasons?.find((r) => !(cloud && CHAT_MODEL_MISSING.test(r)));
     const running = run?.state === 'running' || run?.state === 'verifying';
     const installed = run?.state === 'ready';
 
@@ -81,7 +84,8 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
             .then((s) => {
                 if (s.state === 'idle') return;
                 setRun(s);
-                // A cloud run with no saved choice can't say which provider; ask again.
+                // A cloud run with no saved choice can't say which provider; the
+                // Connect step lets the user switch if this guess is wrong.
                 if (s.skip_chat_model && !readChoice()) setChoice('fireworks');
             })
             .catch((err) => setStartError(`Could not read setup progress: ${err instanceof Error ? err.message : err}`));
@@ -127,6 +131,12 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
         }
     }, [choice, key, selectModel]);
 
+    const switchCloud = useCallback((id: ProviderId) => {
+        saveChoice(id);
+        setChoice(id);
+        setKeyState({ busy: false, error: null, done: false });
+    }, []);
+
     const finish = useCallback(async () => {
         await refreshModel();
         onReady();
@@ -140,7 +150,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
             <div className="setup-inner">
                 <h1 id="setup-title" className="setup-title">Set up GAIA</h1>
                 <p className="setup-lede">
-                    {initial.reasons?.[0] ? `${initial.reasons[0]}.` : 'A few things are needed before the first chat.'}
+                    {reason ? `${reason}.` : 'A few things are needed before the first chat.'}
                 </p>
 
                 <ol className="setup-steps">
@@ -236,6 +246,21 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                             </div>
                             {installed && !keyState.done && (
                                 <form className="setup-step-body" onSubmit={(e) => { e.preventDefault(); void connect(); }}>
+                                    <div className="setup-row" role="radiogroup" aria-label="Cloud provider">
+                                        {CHOICES.filter((c) => c.id !== 'local').map((c) => (
+                                            <button
+                                                key={c.id}
+                                                type="button"
+                                                role="radio"
+                                                aria-checked={choice === c.id}
+                                                className={choice === c.id ? 'btn-primary' : 'btn-secondary'}
+                                                onClick={() => switchCloud(c.id)}
+                                                disabled={keyState.busy}
+                                            >
+                                                {c.title}
+                                            </button>
+                                        ))}
+                                    </div>
                                     <p className="setup-hint">The key goes to GAIA&rsquo;s local model server and your OS credential store, nowhere else.</p>
                                     <div className="setup-row">
                                         <input
