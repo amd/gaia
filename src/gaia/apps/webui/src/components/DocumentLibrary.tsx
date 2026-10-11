@@ -446,7 +446,7 @@ export function DocumentLibrary() {
             default:
                 return (
                     <span className="doc-meta">
-                        {formatSize(doc.file_size)} &middot; {doc.chunk_count} chunks
+                        {formatSize(doc.file_size)} &middot; {doc.chunk_count} chunk{doc.chunk_count !== 1 ? 's' : ''}
                         {indexedTime && (
                             <span className="doc-timestamp" title={`Indexed: ${indexedTimeFull}`}>
                                 <Clock size={10} />
@@ -529,7 +529,7 @@ export function DocumentLibrary() {
                         <div className="doc-stats">
                             <span>{documents.length} document{documents.length !== 1 ? 's' : ''}</span>
                             <span>&middot;</span>
-                            <span>{totalChunks} chunks</span>
+                            <span>{totalChunks} chunk{totalChunks !== 1 ? 's' : ''}</span>
                             <span>&middot;</span>
                             <span>{formatSize(totalSize)}</span>
                         </div>
