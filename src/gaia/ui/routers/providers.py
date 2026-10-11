@@ -262,8 +262,27 @@ def _list_models(provider: str) -> List[Dict[str, Any]]:
                 "evidence": ranked[1].evidence if ranked else None,
             }
         )
+    if provider == AMD:
+        _rank_gateway_models(out)
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _rank_gateway_models(models: List[Dict[str, Any]]) -> None:
+    """Rank AMD gateway models by ``gateway.PREFERRED_MODEL_HINTS``.
+
+    The recommendation table covers Fireworks only, so without this every
+    gateway model is unranked and setup auto-picks whichever sorts first.
+    """
+    from gaia.llm.gateway import PREFERRED_MODEL_HINTS, preference_rank
+
+    preferred = sorted(
+        (m for m in models if preference_rank(m["id"]) < len(PREFERRED_MODEL_HINTS)),
+        key=lambda m: (preference_rank(m["id"]), m["id"].lower()),
+    )
+    for i, m in enumerate(preferred, start=1):
+        m["rank"] = i
+        m["note"] = "recommended"
 
 
 def provider_of(model_id: str) -> str:
