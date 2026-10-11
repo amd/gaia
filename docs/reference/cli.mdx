@@ -224,6 +224,11 @@ A bare `gaia init` runs the `gaia` profile: Lemonade, the chat model, the RAG/me
 embedder, and the flagship [GAIA agent](/guides/gaia) itself from the Agent Hub. It does
 **not** install the terminal UI (`gaia-tui`) — get that with `npx @amd-gaia/gaia`, which
 fetches and verifies both binaries with no Python required.
+
+If the Agent Hub cannot be reached, `gaia init` still finishes the other steps, then
+reports the setup incomplete and exits `1`, naming the hub URL and the error. Fix the
+network or proxy, then run `gaia hub install gaia`. `gaia init --check` reports the
+setup not ready while the agent is missing.
 </Note>
 
 <Note>

@@ -1312,6 +1312,43 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertFalse(status.models[0].loaded)
         client.embeddings.assert_not_called()
 
+    def test_missing_flagship_agent_is_not_ready(self):
+        """The Agent UI wizard reads this check; with the models on disk but no
+        agent it used to say "GAIA is ready"."""
+        from gaia.installer.init_command import InitCommand, check_setup_status
+
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+            patch.object(InitCommand, "_is_hub_agent_available", return_value=False),
+        ):
+            client = self._loading_client(mock_client_class)
+            status = check_setup_status(profile="gaia", load=True)
+
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "setup")
+        self.assertEqual(
+            status.reasons,
+            ["The 'gaia' agent is not installed (`gaia hub install gaia`)"],
+        )
+        client._ensure_model_loaded.assert_not_called()
+
+    def test_profiles_without_a_hub_agent_ignore_it(self):
+        from gaia.installer.init_command import InitCommand, check_setup_status
+
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+            patch.object(
+                InitCommand, "_is_hub_agent_available", return_value=False
+            ) as probe,
+        ):
+            self._loading_client(mock_client_class)
+            status = check_setup_status(profile="minimal")
+
+        self.assertTrue(status.ready)
+        probe.assert_not_called()
+
 
 class TestInstallPipExtras(unittest.TestCase):
     """Profiles without extras never shell out."""
@@ -1799,9 +1836,27 @@ class TestHubInstallWiringFlagshipProfile(_HubInstallWiringTestBase):
     source-install only, so `gaia` is now the only id `gaia init` can fetch.
     """
 
+    def _sentinel_after_install(self, install_side_effect=None):
+        """A hub install writes the agent's sentinel; the completion check reads
+        it back, so a stubbed install has to leave one behind too."""
+        installed = []
+
+        def _install(*args, **kwargs):
+            installed.append(args[0])
+            if install_side_effect is not None:
+                install_side_effect(*args, **kwargs)
+            return MagicMock(hot_registered=True)
+
+        sentinel = patch(
+            "gaia.hub.installer.read_sentinel",
+            side_effect=lambda agent_id: {"id": agent_id} if installed else None,
+        )
+        return _install, sentinel
+
     def test_installs_flagship_agent_when_not_available_and_published(self):
         cmd = self._make_cmd("gaia")
         self._patch_common_steps(cmd)
+        install, sentinel = self._sentinel_after_install()
         with (
             patch(
                 "gaia.installer.init_command.importlib.util.find_spec",
@@ -1813,9 +1868,9 @@ class TestHubInstallWiringFlagshipProfile(_HubInstallWiringTestBase):
                     [{"id": "gaia", "latest_version": "0.1.0"}]
                 ),
             ),
-            patch("gaia.hub.installer.install") as mock_install,
+            patch("gaia.hub.installer.install", side_effect=install) as mock_install,
+            sentinel,
         ):
-            mock_install.return_value = MagicMock(hot_registered=True)
             rc = cmd.run()
 
         self.assertEqual(rc, 0)
@@ -1848,10 +1903,9 @@ class TestHubInstallWiringFlagshipProfile(_HubInstallWiringTestBase):
         order = []
         self._patch_common_steps(cmd, order)
 
-        def _track_install(*_a, **_k):
-            order.append("hub_install")
-            return MagicMock(hot_registered=True)
-
+        install, sentinel = self._sentinel_after_install(
+            lambda *_a, **_k: order.append("hub_install")
+        )
         with (
             patch(
                 "gaia.installer.init_command.importlib.util.find_spec",
@@ -1861,7 +1915,8 @@ class TestHubInstallWiringFlagshipProfile(_HubInstallWiringTestBase):
                 "gaia.hub.catalog.load_index",
                 return_value=_fake_catalog_result([{"id": "gaia"}]),
             ),
-            patch("gaia.hub.installer.install", side_effect=_track_install),
+            patch("gaia.hub.installer.install", side_effect=install),
+            sentinel,
         ):
             rc = cmd.run()
 
@@ -1877,12 +1932,11 @@ class TestHubInstallWiringFlagshipProfile(_HubInstallWiringTestBase):
 
 
 class TestHubInstallWiringFailsLoudly(_HubInstallWiringTestBase):
-    """AC: unlike `_install_pip_extras` (warn-but-continue), a genuine hub
-    install failure for a PUBLISHED agent must hard-fail `init` -- silently
-    continuing would recreate the exact "agent isn't installed" state this
-    issue closes. An agent that simply isn't in the catalog yet must NOT
-    hard-fail; init only fails loud once it IS published and the install
-    itself genuinely fails.
+    """AC: `gaia init` never reports success without the profile's hub agent.
+
+    A failed install, an unreachable catalog and a catalog that does not list
+    the agent all leave it missing, so all three exit non-zero. The last two
+    still finish the other steps, so the models are not downloaded twice.
     """
 
     def test_returns_nonzero_when_published_install_genuinely_fails(self):
@@ -1916,11 +1970,78 @@ class TestHubInstallWiringFailsLoudly(_HubInstallWiringTestBase):
             "step does",
         )
 
-    def test_returns_zero_when_agent_not_yet_published_in_catalog(self):
-        """Regression guard: an agent absent from the live catalog must still
-        exit 0, not hard-fail on every user's `gaia init` before the publish
-        lands.
-        """
+    def _run_with_catalog(self, **load_index):
+        cmd = self._make_cmd("gaia")
+        order = []
+        self._patch_common_steps(cmd, order)
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                return_value=None,
+            ),
+            patch("gaia.hub.catalog.load_index", **load_index),
+            patch("gaia.hub.installer.install") as mock_install,
+            patch.object(cmd, "_print_error") as error,
+            patch("gaia.installer.init_command.RICH_AVAILABLE", False),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            rc = cmd.run()
+        mock_install.assert_not_called()
+        errors = " ".join(str(c.args[0]) for c in error.call_args_list)
+        return rc, errors, order, stdout.getvalue()
+
+    def test_agent_missing_from_catalog_fails(self):
+        rc, errors, _, out = self._run_with_catalog(
+            return_value=_fake_catalog_result([])
+        )
+
+        self.assertEqual(rc, 1)
+        self.assertIn("does not list the 'gaia' agent", errors)
+        self.assertIn("gaia hub install gaia", errors)
+        self.assertIn("incomplete", out)
+
+    def test_unreachable_catalog_fails_with_an_actionable_error(self):
+        """Before: "Setup continues without it" and exit 0, so the Agent UI
+        wizard said "GAIA is ready" with no agent to run."""
+        from gaia.hub.catalog import DEFAULT_HUB_URL
+
+        rc, errors, order, out = self._run_with_catalog(
+            side_effect=ConnectionError("hub unreachable")
+        )
+
+        self.assertEqual(rc, 1)
+        self.assertIn(f"the Agent Hub at {DEFAULT_HUB_URL}", errors)
+        self.assertIn("hub unreachable", errors)
+        self.assertIn("gaia hub install gaia", errors)
+        self.assertIn("incomplete", out)
+        self.assertNotIn("initialization complete", out)
+        # The remaining steps still ran; only the agent is missing.
+        self.assertIn("verify", order)
+
+    def test_untrusted_proxy_certificate_names_the_fix(self):
+        from gaia.hub.catalog import CatalogError
+
+        ssl_error = OSError(
+            "HTTPSConnectionPool(host='hub.amd-gaia.ai', port=443): Max retries "
+            "exceeded (Caused by SSLError(SSLCertVerificationError(1, '[SSL: "
+            "CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get "
+            "local issuer certificate')))"
+        )
+        wrapped = CatalogError("Could not reach the GAIA Agent Hub")
+        wrapped.__cause__ = ssl_error
+
+        rc, errors, _, _ = self._run_with_catalog(side_effect=wrapped)
+
+        self.assertEqual(rc, 1)
+        self.assertIn("CERTIFICATE_VERIFY_FAILED", errors)
+        self.assertIn("root certificate in the system certificate store", errors)
+        self.assertIn("https://amd-gaia.ai/docs/reference/troubleshooting", errors)
+
+    def test_no_build_for_this_machine_still_exits_zero(self):
+        """Nothing the user can run would add the agent, so this is not a
+        failure -- but the headline must not claim the agent is there."""
+        from gaia.hub.installer import UnsupportedPlatformError
+
         cmd = self._make_cmd("gaia")
         self._patch_common_steps(cmd)
         with (
@@ -1930,40 +2051,20 @@ class TestHubInstallWiringFailsLoudly(_HubInstallWiringTestBase):
             ),
             patch(
                 "gaia.hub.catalog.load_index",
-                return_value=_fake_catalog_result([]),  # not yet published
+                return_value=_fake_catalog_result([{"id": "gaia"}]),
             ),
-            patch("gaia.hub.installer.install") as mock_install,
+            patch(
+                "gaia.hub.installer.install",
+                side_effect=UnsupportedPlatformError("no artifact for win-arm64"),
+            ),
+            patch("gaia.installer.init_command.RICH_AVAILABLE", False),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
         ):
             rc = cmd.run()
 
         self.assertEqual(rc, 0)
-        mock_install.assert_not_called()
-
-    def test_unreachable_catalog_warns_the_user_and_continues(self):
-        """A catalog outage must not fail `init`, but the user must see that
-        the agent was skipped and how to get it -- not a log-only line."""
-        cmd = self._make_cmd("gaia")
-        self._patch_common_steps(cmd)
-        with (
-            patch(
-                "gaia.installer.init_command.importlib.util.find_spec",
-                return_value=None,
-            ),
-            patch(
-                "gaia.hub.catalog.load_index",
-                side_effect=ConnectionError("hub unreachable"),
-            ),
-            patch("gaia.hub.installer.install") as mock_install,
-            patch.object(cmd, "_print_warning") as warn,
-        ):
-            rc = cmd.run()
-
-        self.assertEqual(rc, 0)
-        mock_install.assert_not_called()
-        warnings = " ".join(str(c.args[0]) for c in warn.call_args_list)
-        self.assertIn("Agent Hub catalog", warnings)
-        self.assertIn("hub unreachable", warnings)
-        self.assertIn("gaia init", warnings)
+        self.assertIn("has no build for this machine", stdout.getvalue())
+        self.assertNotIn("GAIA initialization complete!", stdout.getvalue())
 
 
 class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
@@ -1980,7 +2081,10 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
 
     NON_HUB_PROFILES = ("sd", "rag", "vlm", "minimal", "all", "chat", "npu")
 
-    def test_non_hub_profiles_never_call_hub_install_and_still_exit_zero(self):
+    def test_non_hub_profiles_never_call_hub_install(self):
+        """None of these ask the Hub. Those that need no agent still exit 0;
+        `chat`/`npu` lead with `gaia chat`, so with its wheels missing they
+        report setup incomplete and exit 1."""
         for profile in self.NON_HUB_PROFILES:
             with self.subTest(profile=profile):
                 cmd = self._make_cmd(profile)
@@ -1993,7 +2097,8 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
                     patch("gaia.hub.installer.install") as mock_install,
                 ):
                     rc = cmd.run()
-                self.assertEqual(rc, 0, f"profile={profile}")
+                expected = 1 if profile in ("chat", "npu") else 0
+                self.assertEqual(rc, expected, f"profile={profile}")
                 mock_install.assert_not_called()
 
     def test_chat_is_not_a_hub_install_target(self):
