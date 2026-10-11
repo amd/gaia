@@ -174,6 +174,29 @@ class SidecarProxy:
             {"request_id": request_id, "value": value},
         )
 
+    def tool_decision(self, run_id: str, decision: str, confirm_id: str) -> dict:
+        """Answer the ``needs_confirmation`` run *run_id* is parked on.
+
+        *confirm_id* is required: without it the sidecar resolves whichever
+        prompt is live, so a late click could approve one the user never saw.
+        A 404/409 (run over, prompt expired or replaced) raises, never passes.
+        """
+        import requests
+
+        if not confirm_id:
+            raise SidecarError(
+                f"{self.agent_id} sidecar: a tool decision needs the confirm_id "
+                "of the prompt it answers; none was given."
+            )
+        path = f"{self.prefix}/query/{run_id}/tool_decision"
+        try:
+            return self._post(path, {"decision": decision, "confirm_id": confirm_id})
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to deliver the "
+                f"decision: {exc}"
+            ) from exc
+
     def set_bypass(self, session_id: str, enabled: bool) -> dict:
         """Turn the sidecar session's unattended tool approval on or off.
 

@@ -139,10 +139,38 @@ def _kind_re() -> "re.Pattern":
 
 
 def _dispatch_one(
-    handler: Any, event: Dict[str, Any], profile: RelayProfile = EMAIL_PROFILE
+    handler: Any,
+    event: Dict[str, Any],
+    profile: RelayProfile = EMAIL_PROFILE,
+    answers_confirmations: bool = False,
 ) -> bool:
-    """Emit one canonical event as a UI event. Returns True if terminal."""
+    """Emit one canonical event as a UI event. Returns True if terminal.
+
+    *answers_confirmations* says the sidecar waits on a ``needs_confirmation``
+    for an answer over ``tool_decision``; otherwise the prompt is a card only.
+    """
     etype = event.get("type")
+    if answers_confirmations:
+        # Any event after a prompt means the sidecar has stopped waiting on it.
+        handler.set_relay_confirmation(None)
+
+    if etype == "needs_confirmation" and answers_confirmations:
+        confirm_id = str(event.get("confirm_id") or "")
+        if confirm_id:
+            handler.set_relay_confirmation(confirm_id)
+            # The UI's own approval prompt. No always_scope: an "always" grant
+            # would live in the sidecar, where this chat can neither list nor
+            # revoke it, so only allow-once and deny are offered.
+            request: Dict[str, Any] = {
+                "type": "permission_request",
+                "tool": str(event.get("action", "")),
+                "confirm_id": confirm_id,
+                "summary": str(event.get("summary", "")),
+            }
+            if event.get("risk"):
+                request["risk"] = str(event["risk"])
+            handler._emit(request)
+            return False
 
     if etype == "status":
         handler._emit({"type": "status", "message": str(event.get("message", ""))})
@@ -293,8 +321,13 @@ def relay_query(
     full_access: Optional[bool] = None,
     profile: RelayProfile = EMAIL_PROFILE,
     session_id: Optional[str] = None,
+    answers_confirmations: bool = False,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
+
+    *answers_confirmations* — the caller has established that this sidecar
+    takes ``tool_decision`` answers (``profiles.confirmations_supported``), so
+    a ``needs_confirmation`` becomes an Allow once / Deny prompt.
 
     Runs synchronously on the caller's thread — the UI backend already runs
     the whole per-turn producer off the event loop in a worker/daemon thread
@@ -411,7 +444,7 @@ def relay_query(
         for event in events:
             if handler.cancelled.is_set():
                 break
-            if _dispatch_one(handler, event, profile):
+            if _dispatch_one(handler, event, profile, answers_confirmations):
                 terminated = True
                 break
     except _FullAccessNotSet as exc:
@@ -466,6 +499,8 @@ def relay_query(
                 exc,
             )
     finally:
+        if answers_confirmations:
+            handler.set_relay_confirmation(None)
         handler.active_relay_response = None
         handler.active_relay_proxy = None
         handler.active_relay_run_id = None

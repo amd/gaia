@@ -274,6 +274,8 @@ async def confirm_tool(request: ToolConfirmRequest):
         status_code=409,
         detail="That permission prompt is no longer waiting for an answer.",
     )
+    if handler.relay_confirmation_pending():
+        return await _confirm_relayed_tool(handler, request, stale)
     always = request.always and request.approved
     pending_tool, pending_args = None, {}
     if always:
@@ -304,6 +306,36 @@ async def confirm_tool(request: ToolConfirmRequest):
             pending_tool, pending_args
         )
     return {"status": "ok", "approved": request.approved, "granted": granted}
+
+
+async def _confirm_relayed_tool(
+    handler, request: ToolConfirmRequest, stale: HTTPException
+):
+    """Deliver allow-once or deny to the sidecar a relayed run is parked on."""
+    from starlette.concurrency import run_in_threadpool
+
+    from gaia.ui.email_sidecar.errors import SidecarError
+
+    if request.always and request.approved:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This agent runs as a separate process, so it can't be allowed "
+                "always from here; answer with allow once or deny."
+            ),
+        )
+    try:
+        # Off the event loop: this is an HTTP round trip to the sidecar.
+        delivered = await run_in_threadpool(
+            handler.resolve_relay_confirmation, request.approved, request.confirm_id
+        )
+    except SidecarError as exc:
+        raise HTTPException(
+            status_code=409, detail=f"Could not deliver the decision: {exc}"
+        ) from exc
+    if not delivered:
+        raise stale
+    return {"status": "ok", "approved": request.approved, "granted": None}
 
 
 class PermissionModeRequest(BaseModel):
