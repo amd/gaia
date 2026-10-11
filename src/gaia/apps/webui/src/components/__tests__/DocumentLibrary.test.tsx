@@ -56,6 +56,15 @@ beforeEach(() => {
     });
 });
 
+it('closes on Escape', async () => {
+    render(<DocumentLibrary />);
+    await screen.findByText('broken.pdf');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(useChatStore.getState().showDocLibrary).toBe(false);
+});
+
 describe('DocumentLibrary with no chat open', () => {
     it('holds a newly indexed document for the next chat instead of dropping it', async () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });

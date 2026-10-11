@@ -48,6 +48,15 @@ beforeEach(() => {
     });
 });
 
+it('closes on Escape', async () => {
+    render(<FileBrowser />);
+    await screen.findByText('report.pdf');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(useChatStore.getState().showFileBrowser).toBe(false);
+});
+
 describe('FileBrowser row selection', () => {
     it('clicking a file row selects it and enables Index Selected and Ask Agent', async () => {
         render(<FileBrowser />);
