@@ -258,7 +258,9 @@ function App() {
             title: 'New Task',
             agent_type: FLAGSHIP_AGENT_ID,
             device: store.activeDevice,
+            document_ids: store.draftDocumentIds,
         });
+        store.clearDraftDocuments();
         addSession(session);
         setCurrentSession(session.id);
         setMessages([]);
