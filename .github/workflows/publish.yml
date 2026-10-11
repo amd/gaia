@@ -22,6 +22,9 @@
 #   • no Context7 refresh; release_components.yml (Agent Hub R2) does not run
 #   • so the combined Windows setup, which a final gets from release_components.yml,
 #     is built here instead (rc-windows-setup) and attached to the pre-release only
+#   • the flagship agent (gaia-agent) is frozen from the RC's own commit
+#     (rc-flagship) and attached to the pre-release with gaia-agent-release.json,
+#     which an RC core installs it from; the hub's flagship is never used by an RC
 #
 # Environment setup (one-time, in GitHub repo settings):
 #   1. Create a "publish" environment with required reviewers.
@@ -358,6 +361,20 @@ jobs:
       tag: ${{ needs.validate.outputs.tag_name }}
       publish_to_release: false
 
+  # ── Release candidate: the flagship agent from this commit ──────────
+  # The hub's flagship is whatever release_agent_gaia.yml last published, which
+  # can be many commits older than the candidate. An RC core installs this
+  # build from the pre-release instead (gaia.hub.prerelease), so the pre-release
+  # must not ship without it: approve-publish requires it.
+  rc-flagship:
+    name: Flagship agent (release candidate)
+    needs: validate
+    if: >-
+      !cancelled() &&
+      needs.validate.result == 'success' &&
+      needs.validate.outputs.is_rc == 'true'
+    uses: ./.github/workflows/build_flagship_sidecar.yml
+
   # ── Email eval suite (release gate, self-hosted) ────────────────────
   # Runs the triage + drafting + action-item eval suite (test_email_agent_eval.yml)
   # on the [self-hosted, lemonade-eval] AMD runner, so the core release
@@ -388,12 +405,13 @@ jobs:
     # into the core flagship agent (#3329), so its eval suite no longer blocks
     # a core release. (The job is also disabled at its source in
     # test_email_agent_eval.yml — if: false — so this isn't the only guard.)
-    needs: [build-pypi, build-npm, build-desktop-installers, email-eval]
+    needs: [validate, build-pypi, build-npm, build-desktop-installers, email-eval, rc-flagship]
     if: >-
       !cancelled() &&
       needs.build-pypi.result == 'success' &&
       needs.build-npm.result == 'success' &&
-      needs.build-desktop-installers.result == 'success'
+      needs.build-desktop-installers.result == 'success' &&
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     runs-on: ubuntu-latest
     environment: publish
     steps:
@@ -402,6 +420,7 @@ jobs:
           echo "  PyPI:               ${{ needs.build-pypi.result }}"
           echo "  npm:                ${{ needs.build-npm.result }}"
           echo "  Desktop Installers: ${{ needs.build-desktop-installers.result }}"
+          echo "  RC flagship agent:  ${{ needs.rc-flagship.result }}"
           echo ""
           echo "All builds passed. Publishing approved."
 
@@ -656,23 +675,24 @@ jobs:
       version: ${{ needs.validate.outputs.npm_version }}
       installers: false
 
-  # Embeds THIS run's desktop app setup (same commit, same tag), never a
-  # published one; the sidecar is the committed pin, exactly as on a final.
+  # Embeds THIS run's desktop app setup and flagship agent (same commit, same
+  # tag), never published ones.
   rc-windows-setup:
     name: Windows setup (release candidate)
-    needs: [validate, build-desktop-installers, rc-tui-binaries]
+    needs: [validate, build-desktop-installers, rc-tui-binaries, rc-flagship]
     if: >-
       !cancelled() &&
       needs.validate.outputs.is_rc == 'true' &&
       needs.build-desktop-installers.result == 'success' &&
-      needs.rc-tui-binaries.outputs.binaries_ok == 'true'
+      needs.rc-tui-binaries.outputs.binaries_ok == 'true' &&
+      needs.rc-flagship.result == 'success'
     permissions:
       contents: read
       actions: read   # this run's windows-installer artifact
     uses: ./.github/workflows/windows_setup.yml
     with:
       version: ${{ needs.validate.outputs.npm_version }}
-      sidecar: pinned
+      sidecar: artifact
       agent_ui_publish_run_sha: ${{ github.sha }}
 
   # The pre-release still ships without the setup, says so in its notes, and
@@ -697,12 +717,13 @@ jobs:
     # rc-windows-setup is waited for, not required: its own timeouts bound the
     # wait, it is skipped on a final, and a failure is reported by
     # rc-windows-setup-missing rather than by holding back the pre-release.
-    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers, build-tui, rc-windows-setup]
+    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers, build-tui, rc-windows-setup, rc-flagship]
     if: >-
       !cancelled() &&
       needs.post-publish-smoke.result == 'success' &&
       needs.publish-npm.result == 'success' &&
-      needs.build-desktop-installers.result == 'success'
+      needs.build-desktop-installers.result == 'success' &&
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -812,6 +833,8 @@ jobs:
 
           The terminal hub is also attached as standalone binaries (`gaia-<os>-<arch>`, checksums in `gaia-tui-SHA256SUMS.txt`). The terminal's .pkg/.deb/.rpm packages ship with the final release.
 
+          The GAIA agent itself is attached as `gaia-agent-<os>-<arch>`, built from this candidate's commit. This candidate's `gaia init` and `gaia hub install gaia` install it from here rather than from the Agent Hub, and say so if it is missing.
+
           ### Python CLI
 
           ```bash
@@ -876,6 +899,24 @@ jobs:
             exit 1
           fi
           ls -l "release-assets/${name}"
+
+      # The RC core installs its flagship from these (gaia.hub.prerelease), so a
+      # pre-release without them would leave every tester with no agent.
+      - name: Download the flagship agent builds (release candidate)
+        if: needs.validate.outputs.is_rc == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: gaia-agent-*
+          path: flagship
+
+      - name: Attach the flagship agent (release candidate)
+        if: needs.validate.outputs.is_rc == 'true'
+        env:
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+        run: |
+          python3 util/flagship_rc_assets.py release \
+            --artifacts flagship --tag "${TAG_NAME}" --commit "${GITHUB_SHA}" \
+            --out release-assets
 
       - name: Download Desktop Installer (Windows NSIS)
         uses: actions/download-artifact@v8
