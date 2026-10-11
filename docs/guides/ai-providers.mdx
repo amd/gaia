@@ -197,7 +197,8 @@ the chat opens, so a deleted model or a missing `ANTHROPIC_API_KEY` gets the sam
 one line and picker.
 
 The choice is stored in `~/.gaia/config.json` as `last_provider` and `last_model`
-(`GAIA_CONFIG_DIR` relocates it). `--use-claude` overrides it for one launch;
+(`GAIA_CONFIG_DIR` relocates it). A one-shot `gaia-tui run gaia --query "…"` runs
+on it too. `--use-claude` overrides it for one launch;
 `gaia config set last_model ""` forgets it.
 
 For development, build `tui/bin/gaia-tui` and launch the checkout with:
