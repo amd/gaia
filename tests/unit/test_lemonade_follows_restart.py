@@ -196,6 +196,20 @@ def test_manager_base_url_follows_the_restart(server, monkeypatch):
     assert LemonadeManager.get_base_url() == f"http://localhost:{NEW_PORT}/api/v1"
 
 
+def test_current_base_url_follows_the_restart(server, monkeypatch):
+    """A caller that builds its own client from it (a model switch) must not
+    get the dead port."""
+    chat = _chat_session()
+    assert chat.current_base_url() == f"http://localhost:{OLD_PORT}/api/v1"
+
+    server.live_pids = {2}
+    server.record(pid=2, port=NEW_PORT, key=NEW_KEY)
+
+    assert chat.current_base_url() == f"http://localhost:{NEW_PORT}/api/v1"
+    monkeypatch.setenv("LEMONADE_BASE_URL", f"http://localhost:{OLD_PORT}")
+    assert _chat_session().current_base_url() == f"http://localhost:{OLD_PORT}/api/v1"
+
+
 def test_a_new_chat_after_a_crash_has_the_daemon_start_the_server(server, monkeypatch):
     """A warm manager must not keep vouching for a server that has exited."""
     _serve_status(monkeypatch)
