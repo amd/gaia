@@ -1486,6 +1486,8 @@ async function installBackend(opts = {}) {
     "install",
     pipPackage,
     "--refresh",
+    // uv skips this by default, leaving the first daemon start to compile GAIA.
+    "--compile-bytecode",
     "--python",
     GAIA_PYTHON_BIN,
   ];

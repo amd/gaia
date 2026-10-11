@@ -41,7 +41,9 @@ def test_missing_extras_names_the_packages_and_the_install(
 def test_complete_install_still_spawns(monkeypatch, no_daemon_running):
     spawned = []
     monkeypatch.setattr(client, "missing_daemon_deps", lambda: [])
-    monkeypatch.setattr(client, "_spawn_and_wait", lambda t: spawned.append(t))
+    monkeypatch.setattr(
+        client, "_spawn_and_wait", lambda t, on_progress=None: spawned.append(t)
+    )
 
     client.start_or_attach(timeout=1)
 

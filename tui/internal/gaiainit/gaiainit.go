@@ -41,7 +41,7 @@ const Profile = "gaia"
 
 // CheckTimeout bounds the readiness probe. It runs a fresh Python interpreter
 // plus one Lemonade health check, so a few seconds is normal -- but after a
-// reboot it also starts the daemon (up to 30s) and has it start GAIA's
+// reboot it also starts the daemon (up to 60s) and has it start GAIA's
 // Lemonade Server (up to 85s, _LEMONADE_ENSURE_TIMEOUT in
 // gaia/daemon/client.py). It must stay above that sum, or the TUI reports
 // "could not be checked" for a start that succeeded.
