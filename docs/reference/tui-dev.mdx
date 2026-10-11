@@ -144,6 +144,13 @@ On `preflight`, `blocker` names the row refusing the launch: `binary`,
 `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`. Wait on
 `{"state": {"view": "chat"}}` rather than a screen substring.
 
+A `daemon` or `sidecar` row that is simply not running is started by the gate
+itself, once per launch (`Row.AutoFix` in `internal/ui/preflight`). While that
+runs the row is `[..] starting…` and there is no `blocker`; only a start that
+failed, a foreign daemon record, or a remote `LEMONADE_BASE_URL` leaves it
+waiting on `f`. To reproduce a reboot, stop the daemon you started for the
+drive (`GAIA_DAEMON_HOME` set) and relaunch.
+
 `esc` quits on `preflight` (there is no screen behind it) and clears the
 composer on an idle `chat`. With the `d` details pane open, it closes the pane
 first.

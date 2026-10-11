@@ -268,7 +268,15 @@ This row has no `f`: the TUI cannot install its own agent binary, so it names
 the installer instead of offering a key that would not work.
 
 A daemon-supervised sidecar agent goes through the same three screens, but its
-gate has more rows: background service, sidecar, Lemonade, and model.
+gate has more rows: background service, sidecar, Lemonade, and model. The
+flagship is one of these once setup has installed it as a hub package.
+
+When the background service or the agent is simply not running — the usual
+state after a reboot — the gate starts it itself and shows `starting…` on that
+row, so the launch needs no keypress. A start that fails keeps the row's error
+and remedy, and `f` tries again. The gate starts nothing on its own when the
+service's port answers as something else, or when `LEMONADE_BASE_URL` points at
+another machine; those rows wait for `f`.
 
 #### Markers
 
