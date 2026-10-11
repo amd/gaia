@@ -636,6 +636,20 @@ def test_amd_models_only(client, lemonade):
     assert [m["id"] for m in models] == ["amd.gpt-oss"]
 
 
+def test_amd_models_rank_the_gateway_preference_first(client, lemonade):
+    lemonade.models = [
+        {"id": f"amd.{name}", "recipe": "cloud", "labels": ["cloud", "chat"]}
+        for name in ("Claude-Haiku-4.5", "Gemma-4-31B", "DeepSeek-V4.1-Flash")
+    ]
+    models = client.get("/api/providers/amd/models").json()["models"]
+    assert [(m["id"], m["rank"]) for m in models] == [
+        ("amd.DeepSeek-V4.1-Flash", 1),
+        ("amd.Gemma-4-31B", 2),
+        ("amd.Claude-Haiku-4.5", None),
+    ]
+    assert models[0]["note"] == "recommended" and models[2]["note"] is None
+
+
 def test_models_lemonade_error_is_502(client, lemonade):
     lemonade.answers[("GET", "models?show_all=true")] = (500, {})
     resp = client.get("/api/providers/fireworks/models")
