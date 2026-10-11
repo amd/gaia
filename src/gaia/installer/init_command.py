@@ -109,7 +109,9 @@ INIT_PROFILES = {
         # EmbeddingGemma loads only on Lemonade v10.9.0+ (see the chat profile).
         "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
-        "pip_extras": ["rag"],
+        # [ui] is [rag] plus the daemon, which gaia-tui, `gaia hub install`
+        # and `gaia chat --ui` all need.
+        "pip_extras": ["ui"],
     },
     "minimal": {
         "description": "Fast setup with Gemma 4 E4B multimodal model",
@@ -966,7 +968,7 @@ class InitCommand:
             tail = "\n".join(output.splitlines()[-20:]) or "(no output)"
             self._print_error(
                 f"Installing [{extras_str}] extras failed (exit "
-                f"{result.returncode}). Document Q&A needs them.\n"
+                f"{result.returncode}). The '{self.profile}' profile needs them.\n"
                 f"{tail}\n"
                 f"Fix the error above, then run `{retry}` and re-run `gaia init`."
             )
