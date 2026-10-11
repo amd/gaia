@@ -991,6 +991,13 @@ class AgentRegistry:
             )
             return
 
+        from gaia.hub.installer import SENTINEL_NAME
+
+        if (agent_dir / SENTINEL_NAME).exists():
+            # Hub-installed: registered from its sentinel or entry point, not here.
+            logger.debug("registry: %s is a hub install, not a source agent", agent_dir)
+            return
+
         logger.warning("registry: No agent.py in %s, skipping", agent_dir)
 
     # ------------------------------------------------------------------
