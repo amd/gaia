@@ -36,6 +36,7 @@ from ..sse_handler import (
     _clean_answer_json,
     _fix_double_escaped,
 )
+from ..utils import resolve_upload_links
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,11 @@ async def send_message(
     # that patch("gaia.ui.server._stream_chat_response") work correctly.
     srv = _server_mod()
 
+    # The transcript keeps the browser link; the agent gets the file's path.
+    agent_request = request.model_copy(
+        update={"message": resolve_upload_links(request.message)}
+    )
+
     try:
         if request.stream:
             stream_resources_released = False
@@ -167,7 +173,9 @@ async def send_message(
                     db.add_message(request.session_id, "user", request.message)
                     # The detached lifecycle owns producer + persistence;
                     # this subscriber only relays buffered and live events.
-                    async for chunk in srv._stream_chat_response(db, session, request):
+                    async for chunk in srv._stream_chat_response(
+                        db, session, agent_request
+                    ):
                         yield chunk
                 finally:
                     await _release_stream_resources()
@@ -188,7 +196,7 @@ async def send_message(
                 db.add_message(request.session_id, "user", request.message)
                 model_messages = []
                 response_text = await srv._get_chat_response(
-                    db, session, request, model_messages=model_messages
+                    db, session, agent_request, model_messages=model_messages
                 )
                 # Clean LLM output artifacts (same pipeline as streaming path)
                 if response_text:
