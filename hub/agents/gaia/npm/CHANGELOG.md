@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Answers stream over `/query`, and gateway models that need streaming
+  work.** The HTTP sidecar ran its agent with streaming off, so a relayed turn
+  (the Agent UI, and the TUI's later sessions) got its whole answer at once,
+  Stop could not cut a model call short, and gateway models that refuse
+  unstreamed requests (gemini-3.x, GLM) failed every turn. Every `/query` turn
+  now streams its model calls and sends the answer as `token` events before
+  `final`, the same as the stdio transport. A run cancelled mid-answer now
+  stops within a token and ends with an empty `final`, as stdio does.
 - **The TUI's provider picker works after GAIA's Lemonade restarts.** When the
   agent ran as the TUI's own child, its model-state ping kept naming the port
   Lemonade started on, so after a restart the picker said "Lemonade did not
