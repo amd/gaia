@@ -144,6 +144,9 @@ setup(
         # get_connection_with_tls_context but has no such hook, so the SNI
         # would silently revert to the pinned IP.
         "requests>=2.32.3",
+        # <1.0: openai checks any imported httpx for httpx.Timeout, which the
+        # 1.0 pre-releases removed, so `pip install --pre` broke every chat turn.
+        "httpx>=0.27.0,<1.0",
         "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
