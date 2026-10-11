@@ -105,3 +105,36 @@ describe('DocumentLibrary failed doc', () => {
         });
     });
 });
+
+describe('DocumentLibrary chunk counts', () => {
+    it('says "1 chunk", not "1 chunks"', async () => {
+        mockedApi.listDocuments.mockResolvedValue({
+            documents: [{ ...COMPLETE_DOC, chunk_count: 1 }],
+            total: 1,
+            total_size_bytes: 2048,
+            total_chunks: 1,
+        });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('good.pdf');
+
+        expect(screen.getByText('1 chunk')).toBeTruthy();
+        expect(screen.getByText(/· 1 chunk$/)).toBeTruthy();
+        expect(screen.queryByText(/1 chunks/)).toBeNull();
+    });
+
+    it('keeps the plural for other counts', async () => {
+        mockedApi.listDocuments.mockResolvedValue({
+            documents: [COMPLETE_DOC],
+            total: 1,
+            total_size_bytes: 2048,
+            total_chunks: 5,
+        });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('good.pdf');
+
+        expect(screen.getByText('5 chunks')).toBeTruthy();
+        expect(screen.getByText(/· 5 chunks$/)).toBeTruthy();
+    });
+});
