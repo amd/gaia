@@ -245,6 +245,29 @@ def _dispatch_one(
     return False
 
 
+def _full_access_error(
+    profile: RelayProfile, enabled: bool, exc: Exception
+) -> Dict[str, Any]:
+    """The terminal event for a turn stopped because its mode could not be set."""
+    action = "turn on" if enabled else "turn off"
+    return {
+        "type": "agent_error",
+        "content": (
+            f"Couldn't {action} Full access for the {profile.display_name} "
+            f"agent, so this turn was stopped: {exc}. Send the message again; "
+            "if it keeps failing, restart the agent from its card."
+        ),
+    }
+
+
+class _FullAccessNotSet(SidecarError):
+    """The chat's mode could not be set once ``/query`` created the session."""
+
+    def __init__(self, event: Dict[str, Any]):
+        super().__init__(event["content"])
+        self.event = event
+
+
 def _best_effort_cancel(proxy: Any, rid: str) -> None:
     try:
         proxy.cancel_query(rid)
@@ -267,6 +290,7 @@ def relay_query(
     run_id: Optional[str] = None,
     max_steps: Optional[int] = None,
     read_timeout: float = 300.0,
+    full_access: Optional[bool] = None,
     profile: RelayProfile = EMAIL_PROFILE,
     session_id: Optional[str] = None,
 ) -> None:
@@ -289,6 +313,12 @@ def relay_query(
     owned by the caller (``_run_agent``'s outer ``finally``), exactly as for
     every other agent branch. Relay-level signalling would push a second
     ``None`` sentinel per turn, violating the queue's exactly-once contract.
+
+    *full_access* is the chat's permission mode, for a sidecar that takes it
+    (``profiles.full_access_supported``); ``None`` leaves the sidecar alone.
+    It is set on the sidecar session before the run starts, and a turn whose
+    mode could not be set is stopped rather than run on a mode the user did
+    not pick.
     """
     # A proxy pointed at one agent driven with another's profile would send
     # that agent's body shape to the wrong /v1/<agent> prefix and label its
@@ -325,10 +355,28 @@ def relay_query(
         # profile because both request models are extra="forbid".
         body["session_id"] = session_id
 
+    syncs_mode = full_access is not None and bool(session_id)
+    enable_after_start = False
+    if syncs_mode:
+        try:
+            proxy.set_bypass(session_id, full_access)
+        except SidecarHTTPError as exc:
+            if exc.status_code != 404:
+                handler._emit(_full_access_error(profile, full_access, exc))
+                return
+            # No sidecar session yet. /query creates it in ask, so only
+            # "on" has anything left to do.
+            enable_after_start = full_access
+        except SidecarError as exc:
+            handler._emit(_full_access_error(profile, full_access, exc))
+            return
+
     # So a later POST /api/chat/user-input can find where to deliver the
     # answer (#2595) — mirrors active_relay_response's lifetime exactly.
     handler.active_relay_proxy = proxy
     handler.active_relay_run_id = rid
+    # Lets a mid-run switch of the chat's mode reach this sidecar session too.
+    handler.active_relay_mode_session = session_id if syncs_mode else None
 
     def _register_response(resp: Any) -> None:
         handler.active_relay_response = resp
@@ -351,14 +399,27 @@ def relay_query(
     crashed = False
     crash_message = profile.stream_ended_message
     try:
-        for event in proxy.query_stream(
+        events = proxy.query_stream(
             body, read_timeout=read_timeout, on_response=_register_response
-        ):
+        )
+        if enable_after_start:
+            # /query has created the sidecar session, so it can take the mode.
+            try:
+                proxy.set_bypass(session_id, True)
+            except SidecarError as exc:
+                raise _FullAccessNotSet(_full_access_error(profile, True, exc)) from exc
+        for event in events:
             if handler.cancelled.is_set():
                 break
             if _dispatch_one(handler, event, profile):
                 terminated = True
                 break
+    except _FullAccessNotSet as exc:
+        crashed = True
+        crash_message = exc.event["content"]
+        resp = handler.active_relay_response
+        if resp is not None:
+            resp.close()
     except SidecarHTTPError as exc:
         if handler.cancelled.is_set():
             logger.info(
@@ -408,6 +469,7 @@ def relay_query(
         handler.active_relay_response = None
         handler.active_relay_proxy = None
         handler.active_relay_run_id = None
+        handler.active_relay_mode_session = None
 
     if handler.cancelled.is_set():
         _best_effort_cancel(proxy, rid)
