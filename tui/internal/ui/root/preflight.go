@@ -33,7 +33,10 @@ func (m FlagshipModel) beginPreflight(agent catalog.Agent) (tea.Model, tea.Cmd) 
 	cfg := preflight.ConfigFor(agent.ID, agent.Name)
 	var gate preflight.Model
 	if agent.Transport == catalog.TransportDaemon {
-		cfg.Model = m.launchModel(agent)
+		// Only the flagship's sidecar takes a per-turn model; email ignores one.
+		if agent.ID == catalog.FlagshipID {
+			cfg.Model = m.launchModel(agent)
+		}
 		gate = preflight.New(m.preflightTransport(), cfg, m.preflightOptions())
 	} else {
 		gate = preflight.NewLocal(m.localOptions(agent), cfg, m.preflightOptions())

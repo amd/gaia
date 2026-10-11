@@ -219,6 +219,10 @@ func (m Model) FocusKey() string {
 // AgentID is the agent this gate is guarding.
 func (m Model) AgentID() string { return m.cfg.AgentID }
 
+// LaunchModel is the chat model the gate checks this launch against; empty
+// means the agent's own default.
+func (m Model) LaunchModel() string { return m.cfg.Model }
+
 // Cancel stops any in-flight probe or fix — the first check included. The host
 // calls it when tearing the screen down so a model pull, or a `gaia init` child,
 // does not outlive the screen that started it.

@@ -12,7 +12,19 @@ import (
 // whose readiness answer names the agent's default LOCAL chat model. A launch on
 // a cloud model was blocked behind that ~4 GB download it never uses.
 func cloudDaemonCfg(model string) Config {
-	return Config{AgentID: "email", AgentName: "Email", Model: model}
+	return Config{AgentID: "gaia", AgentName: "GAIA", Model: model}
+}
+
+// gaiaFake is newFake's daemon answering for the flagship instead of email.
+func gaiaFake(initStatus int, initBody string) *fakeTransport {
+	f := newFake()
+	f.bodies = map[string]Response{
+		"GET /daemon/v1/agents": {Status: 200, Body: []byte(strings.ReplaceAll(
+			agentsRunning, `"agent_id":"email"`, `"agent_id":"gaia"`))},
+		"GET /v1/gaia/health": {Status: 200, Body: []byte(healthOK)},
+		"GET /v1/gaia/init":   {Status: initStatus, Body: []byte(initBody)},
+	}
+	return f
 }
 
 func TestDaemonGatePassesACloudModelWithoutTheLocalChatModel(t *testing.T) {
@@ -22,9 +34,9 @@ func TestDaemonGatePassesACloudModelWithoutTheLocalChatModel(t *testing.T) {
 		}
 		return []lemonade.Model{{ID: "amd.deepseek-v4.1-flash", Recipe: "cloud"}}, nil
 	})
-	f := newFake().with("GET /v1/email/init", 503, initModelMissing)
 
-	rep := Check(context.Background(), f, cloudDaemonCfg("amd.DeepSeek-V4.1-Flash"))
+	rep := Check(context.Background(), gaiaFake(503, initModelMissing),
+		cloudDaemonCfg("amd.DeepSeek-V4.1-Flash"))
 
 	row, _ := rep.Find(KeyModel)
 	if row.State != StateOK {
@@ -42,9 +54,9 @@ func TestDaemonGateStopsACloudModelItsServerCannotServe(t *testing.T) {
 	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
 		return nil, nil
 	})
-	f := newFake().with("GET /v1/email/init", 200, initReady)
 
-	rep := Check(context.Background(), f, cloudDaemonCfg("amd.DeepSeek-V4.1-Flash"))
+	rep := Check(context.Background(), gaiaFake(200, initReady),
+		cloudDaemonCfg("amd.DeepSeek-V4.1-Flash"))
 
 	blocker, blocked := rep.Blocker()
 	if !blocked || blocker.Key != KeyModel {
@@ -67,9 +79,9 @@ func TestDaemonGateReplaysTheKeptKeyForACloudModel(t *testing.T) {
 		}
 		return []lemonade.Model{{ID: "amd.Gemma-4-31B", Recipe: "cloud"}}, nil
 	})
-	f := newFake().with("GET /v1/email/init", 503, initModelMissing)
 
-	rep := Check(context.Background(), f, cloudDaemonCfg("amd.Gemma-4-31B"))
+	rep := Check(context.Background(), gaiaFake(503, initModelMissing),
+		cloudDaemonCfg("amd.Gemma-4-31B"))
 
 	if row, _ := rep.Find(KeyModel); row.State != StateOK || !replayed {
 		t.Fatalf("the kept key was not handed back before refusing: replayed=%v row=%+v", replayed, row)
@@ -81,9 +93,8 @@ func TestDaemonGateStillRequiresTheLocalModelForALocalLaunch(t *testing.T) {
 		t.Error("a local launch must not ask a cloud provider anything")
 		return nil, nil
 	})
-	f := newFake().with("GET /v1/email/init", 503, initModelMissing)
 
-	rep := Check(context.Background(), f, cloudDaemonCfg(""))
+	rep := Check(context.Background(), gaiaFake(503, initModelMissing), cloudDaemonCfg(""))
 
 	blocker, blocked := rep.Blocker()
 	if !blocked || blocker.Key != KeyModel || blocker.Fix != FixPullModel {
