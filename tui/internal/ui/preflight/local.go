@@ -3,9 +3,11 @@ package preflight
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/status"
@@ -566,7 +569,20 @@ var listedCloudModels = func(ctx context.Context, provider string) ([]lemonade.M
 func (l localRunner) checkCloudModelListed(ctx context.Context, row Row) (Row, bool) {
 	chosen := l.opts.Model
 	provider, _, _ := strings.Cut(chosen, ".")
-	models, err := listedCloudModels(ctx, provider)
+	listed, err := cloudModelListed(ctx, provider, chosen)
+	var (
+		replayed  bool
+		replayErr error
+	)
+	if err == nil && !listed {
+		// Lemonade forgets a pasted key when it restarts and discovers nothing
+		// until it has one again, so give back the kept key before calling the
+		// provider disconnected.
+		replayed, replayErr = replayKeptKey(ctx, provider)
+		if replayed {
+			listed, err = cloudModelListed(ctx, provider, chosen)
+		}
+	}
 	if err != nil {
 		row.State = StateUnknown
 		row.Disposition = status.DispositionNotify
@@ -575,10 +591,8 @@ func (l localRunner) checkCloudModelListed(ctx context.Context, row Row) (Row, b
 		row.Raw = err.Error()
 		return row, false
 	}
-	for _, m := range models {
-		if lemonade.SameCloudModel(m.ID, chosen) {
-			return row, true
-		}
+	if listed {
+		return row, true
 	}
 	row.State = StateFailed
 	row.Disposition = status.DispositionHalt
@@ -588,7 +602,49 @@ func (l localRunner) checkCloudModelListed(ctx context.Context, row Row) (Row, b
 	row.Remedy = Remedy{
 		Action: "Press p, choose " + lemonade.Label(provider) + ", and connect it.",
 	}
+	if replayed {
+		row.Detail = lemonade.Label(provider) + " is connected, but it does not offer " + chosen + "."
+		row.Remedy.Action = "Press p, choose " + lemonade.Label(provider) + ", and pick a model it lists."
+	}
+	if replayErr != nil {
+		row.Raw = "Could not give Lemonade back the kept " + lemonade.Label(provider) +
+			" key: " + replayErr.Error()
+	}
 	return row, false
+}
+
+func cloudModelListed(ctx context.Context, provider, chosen string) (bool, error) {
+	models, err := listedCloudModels(ctx, provider)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range models {
+		if lemonade.SameCloudModel(m.ID, chosen) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// replayKeptKey asks the daemon to hand Lemonade the key the provider panel
+// kept in the OS credential store — only Python can read that store. It
+// reports whether Lemonade is now authenticated. Starting the daemon is
+// warranted: the user chose this provider, and without the key it cannot
+// answer. A var so tests need no daemon.
+var replayKeptKey = func(ctx context.Context, provider string) (bool, error) {
+	raw, err := daemon.CallContext(ctx, http.MethodPost,
+		"/daemon/v1/providers/"+url.PathEscape(provider)+"/authenticate", nil, true,
+		"restore the "+provider+" key", "Press p and paste the key again")
+	if err != nil {
+		return false, err
+	}
+	var body struct {
+		Authenticated bool `json:"authenticated"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return false, fmt.Errorf("the daemon's answer could not be read: %w", err)
+	}
+	return body.Authenticated, nil
 }
 
 // localChatModel is the local chat model to load when the user picked one other
