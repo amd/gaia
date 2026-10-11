@@ -406,6 +406,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 | npm `@amd-gaia/agent-ui` | dist-tag `latest` | `<version>-rc.N` under dist-tag `next` |
 | Agent Hub R2 (`release_components.yml`) | publishes | does not run — the catalog has no pre-release channel |
 | Website | stable downloads | a collapsed "Try the release candidate" entry, hidden once the final ships |
+| Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub |
 | Context7 refresh, `release` branch, release-notes bot | run | skipped |
 | Release notes | `docs/releases/v<version>.mdx` | the same file — no RC-specific notes |
 
@@ -433,7 +434,8 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    ```bash
    pip install amd-gaia==<version>rc1 && gaia -v      # must print <version>rc1
    npm view @amd-gaia/agent-ui dist-tags                # latest unchanged, next = <version>-rc.1
-   gh release view v<version>-rc1 --repo amd/gaia       # Pre-release, installers attached
+   gh release view v<version>-rc1 --repo amd/gaia       # Pre-release, installers + gaia-agent-* attached
+   gaia init && gaia hub list                           # gaia agent version ends in +v<version>-rc1
    ```
    Then install the desktop app from the pre-release and walk the golden paths the release notes advertise.
 

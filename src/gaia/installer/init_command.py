@@ -2088,11 +2088,22 @@ class InitCommand:
         """
         agent_id = INIT_PROFILES[self.profile]["agent"]
 
+        from gaia.hub import catalog as hub_catalog
+        from gaia.hub import prerelease
+
+        # A release candidate's flagship comes from its own pre-release. A
+        # broken pre-release raises here: init must not finish "successfully"
+        # with an agent that predates the candidate.
+        rc_source = prerelease.flagship_source(
+            agent_id, fetcher=hub_catalog.fetch_bytes
+        )
+        if rc_source is not None:
+            self._ensure_release_candidate_flagship(agent_id, rc_source)
+            return
+
         if self._is_hub_agent_available(agent_id):
             self._print_success(f"{agent_id} agent is installed")
             return
-
-        from gaia.hub import catalog as hub_catalog
 
         try:
             catalog_result = hub_catalog.load_index()
@@ -2166,6 +2177,48 @@ class InitCommand:
                 if sp not in sys.path:
                     sys.path.append(sp)
                     importlib.invalidate_caches()
+
+    def _ensure_release_candidate_flagship(self, agent_id: str, rc_source) -> None:
+        """Install the release candidate's own flagship unless it already is.
+
+        "Already installed" means the same bytes, not the same id: an agent
+        installed from the hub, or by an earlier candidate, is replaced.
+        """
+        from gaia.hub import installer as hub_installer
+        from gaia.hub.compatibility import current_platform_key
+
+        want = rc_source.sha256_for(current_platform_key())
+        installed = hub_installer.read_sentinel(agent_id)
+        if installed is not None and want and installed.artifact_sha256 == want:
+            self._print_success(f"{agent_id} agent from {rc_source.tag} is installed")
+            return
+        if installed is not None:
+            self._print(
+                f"   Replacing the installed '{agent_id}' agent ({installed.version}) "
+                f"with the one built for {rc_source.tag}..."
+            )
+        else:
+            self._print(
+                f"   Installing '{agent_id}' from release candidate {rc_source.tag}..."
+            )
+        try:
+            hub_installer.install(agent_id, trusted=True)
+        except (
+            hub_installer.UnsupportedPlatformError,
+            hub_installer.CompatibilityError,
+        ) as exc:
+            self._print_warning(
+                f"Release candidate {rc_source.tag} has no '{agent_id}' agent build "
+                f"for this machine: {exc}"
+            )
+            if installed is not None:
+                self._print_warning(
+                    f"The installed '{agent_id}' agent ({installed.version}) is not "
+                    f"this candidate's; results from it do not reflect "
+                    f"{rc_source.tag}."
+                )
+            return
+        self._print_success(f"Installed '{agent_id}' from {rc_source.tag}")
 
     def _print_completion(self):
         """Print completion message with next steps."""
