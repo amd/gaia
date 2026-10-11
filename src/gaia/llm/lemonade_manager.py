@@ -624,6 +624,7 @@ class LemonadeManager:
         required_min_device: Optional[str] = None,
         device: Optional[str] = None,
         model: Optional[str] = None,
+        preload: bool = True,
     ) -> bool:
         """Ensure Lemonade server is running with sufficient context size.
 
@@ -654,6 +655,9 @@ class LemonadeManager:
                 machine's default (``resolve_default_chat_model``). An idle
                 server is seeded with it. A cloud model is never preloaded and
                 skips the context check — it has no local window to size.
+            preload: False makes an idle server a reachability check only:
+                nothing is loaded or downloaded, and the manager stays
+                uninitialised so the next caller seeds the model itself.
 
         Returns:
             True if Lemonade server is ready, False otherwise.
@@ -945,6 +949,16 @@ class LemonadeManager:
                     is_llm_model_entry(model) and not _is_cloud_entry(model)
                     for model in status.loaded_models
                 )
+
+                if not preload and context_size_value == 0 and not llm_models_loaded:
+                    cls._base_url = client.base_url
+                    cls._log.info(
+                        "Lemonade reachable at %s with no chat model loaded; "
+                        "not loading %s (preload disabled by the caller)",
+                        client.base_url,
+                        chat_model,
+                    )
+                    return True
 
                 # Idle server (no model loaded, no ctx reported): proactively
                 # load the default model with the required ctx_size.  Without
