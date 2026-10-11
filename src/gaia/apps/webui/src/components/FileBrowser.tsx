@@ -155,6 +155,9 @@ async function indexAndAttachFiles(
         if (toAdd.length > 0) {
             updateSessionInList(sessionId, { document_ids: [...existing, ...toAdd] });
         }
+    } else if (docIds.length > 0) {
+        // No chat is open: the agent only sees attached documents, so hold them for the next one.
+        useChatStore.getState().addDraftDocuments(docIds);
     }
     // The chat's document bar lists only documents the store knows about.
     if (docIds.length > 0) {
