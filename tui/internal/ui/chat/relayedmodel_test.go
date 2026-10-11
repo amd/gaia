@@ -266,6 +266,21 @@ func TestARememberedLocalModelIsRestoredOnTheRelay(t *testing.T) {
 	}
 }
 
+// A provider that lists models has a working key, so a mistyped id must not be
+// blamed on the key.
+func TestARelayedSwitchToAnIDTheProviderLacksBlamesTheName(t *testing.T) {
+	m, c, _ := relayedChat(t)
+	m = submitRelayed(t, m, "/model amd.not-a-real-model")
+	if c.turnModel != "" || len(c.sent) != 0 {
+		t.Fatalf("a refused switch changed something: turn %q, sent %q", c.turnModel, c.sent)
+	}
+	errs := errorsIn(m)
+	if len(errs) != 1 || !strings.Contains(errs[0], "does not offer a model with that id") ||
+		strings.Contains(errs[0], "key may be missing") {
+		t.Fatalf("the refusal = %q", errs)
+	}
+}
+
 func TestARelayedRestoreThatCannotTakeHandsBackTheChoice(t *testing.T) {
 	m, c, _ := relayedChat(t)
 	m = m.WithStartupModel(StartupRestore, "local", missingMdl)

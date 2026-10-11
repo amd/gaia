@@ -106,6 +106,11 @@ func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, 
 	if provider == "local" {
 		return "", errors.New("it is not downloaded — download it with /provider")
 	}
+	if len(models) > 0 {
+		// The provider answers, so the key works: blaming it misleads.
+		return "", errors.New(lemonade.Label(provider) +
+			" does not offer a model with that id — pick one from its list with a bare /model")
+	}
 	return "", errors.New(lemonade.Label(provider) +
 		" does not list it — the key may be missing or the provider is not connected")
 }
