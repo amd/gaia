@@ -334,7 +334,7 @@ Rules a client must respect:
   guarantees one; a close without one means something broke on your side.
 - **Answer `needs_input`, don't restart.** The run is parked on the *same*
   stream. `POST /v1/gaia/query/{run_id}/respond` with
-  `{ request_id, response }` and keep reading the existing stream — a fresh
+  `{ request_id, value }` and keep reading the existing stream — a fresh
   `/query` POST abandons the paused run. Unknown run → **404**; a `request_id` that
   is no longer pending → **409** (both loud, never a silent drop). Render each
   option's `description`, and mask the input when `sensitive` is set.

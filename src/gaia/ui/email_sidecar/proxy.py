@@ -197,6 +197,23 @@ class SidecarProxy:
                 f"decision: {exc}"
             ) from exc
 
+    def set_bypass(self, session_id: str, enabled: bool) -> dict:
+        """Turn the sidecar session's unattended tool approval on or off.
+
+        Raises on any failure, including the 404 for a session the sidecar has
+        not created yet — the caller decides what that means.
+        """
+        import requests
+
+        path = f"{self.prefix}/sessions/{session_id}/bypass"
+        try:
+            return self._post(path, {"enabled": bool(enabled)})
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to set full "
+                f"access: {exc}"
+            ) from exc
+
     def query_stream(
         self,
         body: dict,

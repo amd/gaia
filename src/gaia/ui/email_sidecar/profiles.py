@@ -16,7 +16,7 @@ scopes). This is presentation — what the Agent UI shows while relaying one.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Dict, FrozenSet, Mapping, Optional, Tuple
 
@@ -83,6 +83,9 @@ class RelayProfile:
     #: model is missing, or that Lemonade is below the required version, is
     #: the server answering accurately and still blocks.
     readiness_is_blocking: bool = True
+    #: Contract version from which ``/sessions/{id}/bypass`` exists, so the
+    #: chat's Full access mode can reach the agent. ``None`` means it never does.
+    min_full_access_api_version: Optional[Tuple[int, int]] = None
     #: Whether to send ``session_id`` on the ``/query`` body. Gated per agent
     #: because the request model is ``extra="forbid"`` on both sidecars: an
     #: unexpected field is a 422, not a shrug.
@@ -386,6 +389,8 @@ GAIA_PROFILE = RelayProfile(
         "\n\nThis usually means the local LLM backend (Lemonade Server) is "
         "not running or unreachable from the GAIA agent."
     ),
+    # 2.14 added /sessions/{id}/bypass.
+    min_full_access_api_version=(2, 14),
     readiness_is_blocking=False,
     sends_session_id=True,
     # 2.14 added /tool_decision. Older binaries refuse a gated tool outright.
@@ -418,6 +423,17 @@ _NO_PROFILE = RelayProfile(
 def profile_for(agent_id: str) -> Optional[RelayProfile]:
     """The relay profile for *agent_id*, or ``None`` if it is not a sidecar."""
     return _PROFILES.get(agent_id)
+
+
+def full_access_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar can be told the chat's Full access mode.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_full_access_api_version
+    return floor is not None and api_version_supported(
+        replace(profile, min_api_version=floor), api_version
+    )
 
 
 def api_version_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
@@ -458,6 +474,7 @@ __all__ = [
     "GAIA_PROFILE",
     "SIDECAR_AGENT_IDS",
     "profile_for",
+    "full_access_supported",
     "api_version_supported",
     "confirmations_supported",
 ]

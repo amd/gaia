@@ -1456,12 +1456,22 @@ def _dispatch_sidecar_query(
     # Known gap: session-attached documents do not cross this hop. The body
     # carries the transcript, not rag_file_paths, so a relayed agent cannot
     # see a file the user attached in this session (#4166).
+    from gaia.ui.email_sidecar.profiles import full_access_supported
+
     relay_query(
         sse_handler,
         proxy,
         query=request.message,
         context=context,
         model_id=model_id,
+        # The chat's own mode, read per turn: the in-process path applies it
+        # to its handler, the relayed one to the sidecar session.
+        full_access=(
+            session_permissions.for_session(session_id).mode
+            == session_permissions.MODE_FULL_ACCESS
+            if session_id and full_access_supported(profile, handle.api_version)
+            else None
+        ),
         profile=profile,
         session_id=session_id,
         answers_confirmations=confirmations_supported(profile, handle.api_version),

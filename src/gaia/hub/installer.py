@@ -49,6 +49,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.daemon.sidecars.spec import builtin_specs
 from gaia.hub import catalog as catalog_mod
+from gaia.hub import prerelease as prerelease_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
@@ -986,6 +987,10 @@ def install(
 ) -> InstallResult:
     """Download, verify, and install an agent from the hub.
 
+    A release-candidate core installs the flagship (``gaia``) from its own
+    GitHub pre-release instead of the hub whenever *version* is not given --
+    including when a hub *manifest* was passed in. See :mod:`gaia.hub.prerelease`.
+
     Args:
         agent_id: Hub agent id to install.
         version: Specific version to install; defaults to the manifest's latest.
@@ -1020,7 +1025,17 @@ def install(
             agent_id, status="running", phase="resolving", percent=5, version=version
         )
         try:
-            if manifest is None:
+            rc_source = None
+            if version is None:
+                try:
+                    rc_source = prerelease_mod.flagship_source(
+                        agent_id, fetcher=fetcher
+                    )
+                except prerelease_mod.PrereleaseFlagshipError as exc:
+                    raise InstallError(str(exc)) from exc
+            if rc_source is not None:
+                manifest, base_url = rc_source.manifest, rc_source.base_url
+            elif manifest is None:
                 manifest = catalog_mod.fetch_manifest(
                     agent_id, base_url=base_url, fetcher=fetcher
                 )
@@ -1113,7 +1128,12 @@ def install(
                         artifact_bytes, artifact["filename"], install_dir
                     )
                 _write_agent_yaml(
-                    agent_id, resolved_version, install_dir, base_url, fetcher
+                    agent_id,
+                    resolved_version,
+                    install_dir,
+                    base_url,
+                    fetcher,
+                    url=rc_source.agent_yaml_url if rc_source else None,
                 )
                 # Prime the ACTIVE environment (not just this process) so a
                 # later, unrelated `gaia` invocation using the same
@@ -1237,13 +1257,16 @@ def _write_agent_yaml(
     install_dir: Path,
     base_url: str,
     fetcher: catalog_mod.Fetcher,
+    *,
+    url: Optional[str] = None,
 ) -> None:
     """Fetch the version's ``gaia-agent.yaml`` into the install dir.
 
     Best-effort: the manifest already carries identity, so a missing yaml does
     not fail the install — but we log it so a broken hub object is visible.
+    *url* overrides the hub path (a release candidate's pre-release asset).
     """
-    url = f"{base_url}/agents/{agent_id}/{version}/gaia-agent.yaml"
+    url = url or f"{base_url}/agents/{agent_id}/{version}/gaia-agent.yaml"
     try:
         data = fetcher(url)
     except Exception as exc:  # noqa: BLE001 - optional asset

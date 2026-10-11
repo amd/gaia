@@ -54,7 +54,7 @@ from gaia_agent.session_registry import (
 )
 from gaia_agent.session_registry import registry as session_registry
 from gaia_agent_chat.session import validate_session_id
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import StreamingResponse
 
 from gaia.agents.base.readiness import start_advice, version_meets_min
@@ -190,7 +190,31 @@ class QueryRespondRequest(_Strict):
             "than silently dropped."
         )
     )
-    response: str
+    value: Optional[str] = Field(
+        default=None,
+        description=(
+            "The answer: an option's 'value' (or its 'label'), or free text "
+            "when the question set allow_free_text. The spec §5.1 name, shared "
+            "with the email agent, the Agent UI and the TUI."
+        ),
+    )
+    response: Optional[str] = Field(
+        default=None,
+        description="Deprecated spelling of 'value'. Send exactly one of the two.",
+    )
+
+    @model_validator(mode="after")
+    def _exactly_one_answer(self) -> "QueryRespondRequest":
+        if (self.value is None) == (self.response is None):
+            raise ValueError(
+                "send the answer in exactly one field: 'value' (preferred) or "
+                "the deprecated 'response'"
+            )
+        return self
+
+    @property
+    def answer(self) -> str:
+        return self.value if self.value is not None else self.response
 
 
 class QueryRespondResponse(_Strict):
@@ -1074,7 +1098,7 @@ async def respond_to_query(
                 "been cancelled; the answer was not delivered."
             ),
         )
-    if not run.handler.resolve_user_input(body.request_id, body.response):
+    if not run.handler.resolve_user_input(body.request_id, body.answer):
         raise HTTPException(
             status_code=409,
             detail=(
