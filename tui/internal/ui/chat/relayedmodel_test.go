@@ -214,6 +214,22 @@ func TestBareModelOnTheRelayOpensThePicker(t *testing.T) {
 	}
 }
 
+// A gateway user's enter used to land on Local and its 165-model download list.
+func TestTheModelPickerOpensOnTheProviderChatUses(t *testing.T) {
+	for _, query := range []string{"/model", "/provider"} {
+		m, _, _ := relayedChat(t)
+		m.modelBackend = "amd"
+		updated, _ := m.submit(query)
+		m = updated.(ChatModel)
+		if m.providerPanel == nil {
+			t.Fatalf("%s did not open the panel", query)
+		}
+		if view := m.providerPanel.View(); !strings.Contains(view, "› AMD LLM Gateway") {
+			t.Fatalf("%s opened on another provider:\n%s", query, view)
+		}
+	}
+}
+
 // /provider ends in a pick, and the pick used to be sent on as `/model <id>`.
 func TestAPickFromTheProviderPanelSwitchesWithoutATurn(t *testing.T) {
 	m, c, _ := relayedChat(t)
