@@ -152,7 +152,8 @@ setup(
         "pillow>=9.0.0",
         # Cron-based scheduler (issue #892): apscheduler drives the daemon;
         # tomli/tomli-w read+write ~/.gaia/schedules.toml (tomllib is stdlib on 3.11+).
-        "apscheduler>=3.10.0",
+        # <4: APScheduler 4 drops apscheduler.schedulers/.events, which gaia.schedule imports.
+        "apscheduler>=3.10.0,<4.0",
         "tomli-w>=1.0.0",
         "tomli>=2.0.0; python_version < '3.11'",
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
@@ -190,7 +191,8 @@ setup(
             # the sole path to agent surfaces now — no agent is mounted
             # in-process (#2176), so [api] carries no per-agent deps (keyring is
             # already a core install_requires dep for `gaia connectors`, #1621).
-            "httpx>=0.27.0",
+            # <1.0: httpx 1.0 drops the top-level get()/HTTPError/ConnectError GAIA calls.
+            "httpx>=0.27.0,<1.0",
             # The daemon relies on psutil for every liveness check and
             # _check_daemon_deps refuses to start without it. Also core; kept
             # here so [api] alone still names every daemon dep.
@@ -200,7 +202,7 @@ setup(
             "fastapi>=0.115.0",
             "uvicorn>=0.32.0",
             "python-multipart>=0.0.9",
-            "httpx>=0.27.0",
+            "httpx>=0.27.0,<1.0",
             "psutil>=5.9.0",
             # OAuth connections (issue #915): keyring stores refresh tokens in
             # the OS credential store (macOS Keychain, Windows DPAPI, Linux
