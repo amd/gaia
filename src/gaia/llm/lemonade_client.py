@@ -2351,12 +2351,13 @@ class LemonadeClient:
         self.api_key = _embedded_lemonade_api_key(self.base_url)
         self.follows_gaia_lemonade = True
 
-    def _follow_gaia_lemonade(self) -> None:
+    def _follow_gaia_lemonade(self, model: Optional[str] = None) -> None:
         """Re-point at GAIA's own server if the daemon restarted it elsewhere.
 
         A long-lived client (a cached chat agent, a sidecar) otherwise keeps
         calling the port and key of a server that no longer exists. Clients
-        configured for any other server are left alone.
+        configured for any other server are left alone. When *model* is a
+        cloud model, the restarted server also gets the kept provider key back.
 
         Raises:
             LemonadeClientError: the server is gone and the daemon could not
@@ -2372,6 +2373,7 @@ class LemonadeClient:
             )
             self._start_gaia_lemonade()
             self.log.info(f"Now using GAIA's Lemonade Server at {self.base_url}")
+            self._replay_cloud_key(model)
             return
         recorded_key = state.get("api_key")
         if isinstance(recorded_key, str):
@@ -2384,6 +2386,35 @@ class LemonadeClient:
             f"GAIA's Lemonade Server moved from {previous} to {self.base_url} "
             "(the daemon restarted it); following it."
         )
+        self._replay_cloud_key(model)
+
+    def _replay_cloud_key(self, model: Optional[str]) -> None:
+        """Give a restarted server the kept key for *model*'s cloud provider.
+
+        Lemonade holds cloud keys in memory only, so without this every cloud
+        model 404s until the user relaunches. A failed replay is logged and the
+        turn goes ahead: its own error then names the unavailable model.
+        """
+        from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+        from gaia.llm.gateway import GatewayError
+
+        provider = self.cloud_model_provider(model or self.model or "")
+        if provider not in PROVIDERS:
+            return
+        try:
+            usable = ensure_authenticated(provider, client=self)
+        except (CloudKeyError, GatewayError, requests.RequestException) as e:
+            self.log.warning(
+                f"Could not give the restarted Lemonade Server the kept {provider} "
+                f"key: {e}"
+            )
+            return
+        if not usable:
+            self.log.warning(
+                f"The restarted Lemonade Server still lists no {provider} models; "
+                f"reconnect {provider} in the TUI's /provider panel or the Agent "
+                "UI's Settings > Model."
+            )
 
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
@@ -3172,7 +3203,7 @@ class LemonadeClient:
           }]
         }
         """
-        self._follow_gaia_lemonade()
+        self._follow_gaia_lemonade(model)
         if timeout is None:
             # Resolved per call, not as a default argument: GAIA_CTX_SIZE and the
             # device profile can change between calls, and the budget follows them.
