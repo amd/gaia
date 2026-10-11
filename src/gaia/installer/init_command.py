@@ -69,6 +69,34 @@ def is_embedding_model_id(model_id: str) -> bool:
     return "embed" in model_id.lower()
 
 
+_TROUBLESHOOTING_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
+
+
+def hub_unreachable_message(agent_id: str, hub_url: str, exc: BaseException) -> str:
+    """One self-contained line: what failed, what to do, and where to look.
+
+    One line because the Agent UI setup wizard shows the last error line as
+    the reason setup failed.
+    """
+    from gaia.logger import log_manager
+
+    cause = exc.__cause__ or exc
+    if "CERTIFICATE_VERIFY_FAILED" in str(cause):
+        remedy = (
+            "Your network inspects HTTPS and Python does not trust its "
+            "certificate: install your proxy's root certificate in the system "
+            "certificate store, or ask IT to."
+        )
+    else:
+        remedy = "Check your internet connection, proxy settings, or GAIA_HUB_URL."
+    return (
+        f"Could not install the '{agent_id}' agent: the Agent Hub at {hub_url} "
+        f"could not be reached ({cause}). {remedy} Then run "
+        f"`gaia hub install {agent_id}`. Log: {log_manager.log_file}; help: "
+        f"{_TROUBLESHOOTING_URL}"
+    )
+
+
 # Hub agent ids `gaia init` installs for its profile. Everything else
 # (sd/vlm/email/...) owns its own install lifecycle; a generic "install the
 # profile's agent" would hard-fail on agents the hub index doesn't carry.
@@ -812,6 +840,9 @@ class InitCommand:
         # verification (only for LLM models with a min context size); its
         # absence means verification was not attempted for that model.
         self._ctx_warning = None
+        # Set when the hub has no build of the profile's agent for this machine:
+        # setup is otherwise done, and nothing the user runs can change that.
+        self._no_hub_build_for_machine = False
 
     def _print(self, message: str, end: str = "\n"):
         """Print message to stdout."""
@@ -1198,9 +1229,7 @@ class InitCommand:
                 self._print_error("Agent UI frontend build failed -- see above.")
                 return 1
 
-            # Success!
-            self._print_completion()
-            return 0
+            return 0 if self._print_completion() else 1
 
         except KeyboardInterrupt:
             self._print("")
@@ -2060,31 +2089,20 @@ class InitCommand:
 
     def _ensure_hub_agent_installed(self) -> None:
         """Install this profile's hub agent from the Agent Hub catalog if it
-        isn't already available and the live catalog confirms it's published.
+        isn't already available.
 
         Scoped by ``run()``'s ``has_hub_agent_check`` (profiles whose declared
         ``"agent"`` is in ``HUB_INSTALL_AGENTS``).
 
-        Distinguishes two catalog states (#2358):
-
-        * Not yet published: NOT an error. A blind "call install() and fail
-          loud" would turn today's soft success (``init`` completes, prints a
-          source-install hint) into a hard failure for every profile whose
-          agent is still awaiting a publish — a real regression this method
-          must not introduce. Silently returns; the existing
-          ``_print_completion()`` hint already tells the user how to
-          source-install it in the meantime.
-        * Published but the install itself genuinely fails: this method
-          does NOT catch that exception — it propagates into ``run()``'s
-          own top-level ``except Exception`` handler, which already turns
-          any unexpected exception into an actionable non-zero exit. A real
-          hub-install failure must fail loudly, not warn-and-continue (that
-          would just recreate the "agent isn't installed" state this issue
-          exists to close).
-
-        A catalog-fetch failure (network down, no offline cache) is treated
-        the same as "not yet published" — `gaia init` must not hard-fail
-        merely because the Hub catalog service is briefly unreachable.
+        * Catalog unreachable, or the agent not listed in it: prints an error
+          naming the hub URL, the cause and the retry command, and returns.
+          The rest of setup still runs so the model downloads are not wasted,
+          but the agent stays missing, so ``_print_completion()`` reports the
+          setup incomplete and ``run()`` exits non-zero.
+        * Published but the install itself genuinely fails: the exception
+          propagates into ``run()``'s top-level handler and exits non-zero.
+        * No build for this machine: a warning, and setup still succeeds --
+          see ``_no_hub_build_for_machine``.
         """
         agent_id = INIT_PROFILES[self.profile]["agent"]
 
@@ -2105,25 +2123,19 @@ class InitCommand:
             self._print_success(f"{agent_id} agent is installed")
             return
 
+        hub_url = hub_catalog.get_hub_base_url()
         try:
             catalog_result = hub_catalog.load_index()
-            published = any(
-                agent.get("id") == agent_id for agent in catalog_result.agents
-            )
-        except Exception as exc:  # noqa: BLE001 - catalog reachability, not install
-            log.debug("Agent Hub catalog check failed", exc_info=True)
-            self._print_warning(
-                f"Could not reach the Agent Hub catalog to install the "
-                f"'{agent_id}' agent ({exc}). Setup continues without it; "
-                f"re-run `gaia init` once you are online."
-            )
-            published = False
+        except Exception as exc:  # noqa: BLE001 - reported below, never swallowed
+            log.debug("Agent Hub catalog fetch failed", exc_info=True)
+            self._print_error(hub_unreachable_message(agent_id, hub_url, exc))
+            return
 
-        if not published:
-            log.debug(
-                "'%s' is not yet published to the Agent Hub catalog; "
-                "skipping the hub install for this run.",
-                agent_id,
+        if not any(agent.get("id") == agent_id for agent in catalog_result.agents):
+            self._print_error(
+                f"The Agent Hub at {hub_url} does not list the '{agent_id}' "
+                f"agent, so it was not installed. Check GAIA_HUB_URL, then run "
+                f"`gaia hub install {agent_id}`."
             )
             return
 
@@ -2150,6 +2162,7 @@ class InitCommand:
             # Deliberately narrow. Every OTHER InstallError still propagates
             # into run()'s handler and exits non-zero (#2358): an install that
             # was attempted and failed must stay loud.
+            self._no_hub_build_for_machine = True
             self._print_warning(
                 f"'{agent_id}' has no Agent Hub build for this machine: {exc}"
             )
@@ -2207,6 +2220,8 @@ class InitCommand:
             hub_installer.UnsupportedPlatformError,
             hub_installer.CompatibilityError,
         ) as exc:
+            if installed is None:
+                self._no_hub_build_for_machine = True
             self._print_warning(
                 f"Release candidate {rc_source.tag} has no '{agent_id}' agent build "
                 f"for this machine: {exc}"
@@ -2220,8 +2235,12 @@ class InitCommand:
             return
         self._print_success(f"Installed '{agent_id}' from {rc_source.tag}")
 
-    def _print_completion(self):
-        """Print completion message with next steps."""
+    def _print_completion(self) -> bool:
+        """Print completion message with next steps.
+
+        Returns False when the headline says setup is incomplete, which
+        ``run()`` turns into a non-zero exit.
+        """
         missing_chat_wheels = self._chat_agent_missing_wheels()
         chat_agent_available = not missing_chat_wheels
         chat_install_note = "`gaia chat` agent not installed yet -- run: " + (
@@ -2240,18 +2259,36 @@ class InitCommand:
         # Scoped per profile -- gating on the chat wheel alone would mark
         # sd/vlm/minimal permanently "incomplete", and would call the flagship
         # profile complete while its own binary is missing.
-        setup_incomplete = not self._profile_agent_available()
-        headline = (
-            "GAIA initialization incomplete - see below"
-            if setup_incomplete
-            else "GAIA initialization complete!"
+        agent_id = INIT_PROFILES[self.profile].get("agent")
+        agent_missing = not self._profile_agent_available()
+        # Incomplete only when init was meant to install the agent and could
+        # have: chat's wheels are source-install only (#2240).
+        setup_incomplete = (
+            agent_missing
+            and agent_id in HUB_INSTALL_AGENTS
+            and not self._no_hub_build_for_machine
         )
+        if setup_incomplete:
+            headline = "GAIA initialization incomplete - see below"
+        elif agent_missing and agent_id in HUB_INSTALL_AGENTS:
+            headline = (
+                f"GAIA initialization complete, except the '{agent_id}' agent: "
+                "the Agent Hub has no build for this machine"
+            )
+        elif agent_missing:
+            headline = (
+                "GAIA initialization complete, except `gaia chat`: install its "
+                "packages below"
+            )
+        else:
+            headline = "GAIA initialization complete!"
+        color = "red" if setup_incomplete else "green"
         if RICH_AVAILABLE and self.console:
             self.console.print()
             self.console.print(
                 Panel(
-                    f"[bold green]{headline}[/bold green]",
-                    border_style="green",
+                    f"[bold {color}]{headline}[/bold {color}]",
+                    border_style=color,
                     padding=(0, 2),
                 )
             )
@@ -2426,6 +2463,7 @@ class InitCommand:
                 if not chat_agent_available:
                     self._print(f"    {chat_install_note}")
             self._print("")
+        return not setup_incomplete
 
 
 def run_init(
