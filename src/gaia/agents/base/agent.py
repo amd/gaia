@@ -116,6 +116,7 @@ from gaia.llm.lemonade_client import (
     truncation_budget,
 )
 from gaia.llm.providers.lemonade import CONNECTION_FAILURE_RE
+from gaia.utils.json_string import extract_json_string_field
 from gaia.utils.power import stay_awake
 from gaia.utils.terminal import stdin_is_interactive
 
@@ -616,6 +617,9 @@ _MUTATION_TOOLS: Tuple[str, ...] = (
     "remove_star_batch",
     "trash_message",
 )
+
+
+TRUNCATED_ANSWER_NOTE = "\n\n*(This answer was cut off before the model finished.)*"
 
 
 def _repair_invalid_json_escapes(s: str) -> str:
@@ -4683,6 +4687,18 @@ Do NOT wrap conversational replies in JSON.
             # JSON parsing failed - continue to extraction methods
             logger.debug("[PARSE] Malformed JSON, trying extraction")
 
+        # Models routinely put raw newlines inside a long answer string, which
+        # strict JSON rejects; the object is otherwise well-formed.
+        try:
+            result = json.loads(response, strict=False)
+            if isinstance(result, dict):
+                if "tool" in result and "tool_args" not in result:
+                    result["tool_args"] = {}
+                logger.debug("[PARSE] Valid JSON with raw control characters")
+                return result
+        except json.JSONDecodeError as exc:
+            logger.debug("[PARSE] Lenient JSON parse failed too: %s", exc)
+
         # STEP 3: Try JSON extraction methods (handles code blocks, mixed text, etc.)
         extracted_json = self._extract_json_from_response(response)
         if extracted_json:
@@ -4692,9 +4708,12 @@ Do NOT wrap conversational replies in JSON.
         # STEP 4: JSON was expected (starts with '{') but all parsing failed
         # Log error ONLY for JSON that couldn't be parsed
         logger.debug("Attempting to extract fields using regex")
-        thought_match = re.search(r'"thought":\s*"([^"]*)"', response)
+        # Decode string values with escapes honoured: a `[^"]*` regex stops at
+        # the first escaped quote and silently truncates long answers.
+        thought_field = extract_json_string_field(response, "thought")
+        thought = thought_field[0] if thought_field else ""
         tool_match = re.search(r'"tool":\s*"([^"]*)"', response)
-        answer_match = re.search(r'"answer":\s*"([^"]*)"', response)
+        answer_field = extract_json_string_field(response, "answer")
         plan_match = re.search(r'"plan":\s*(\[.*?\])', response, re.DOTALL)
 
         # Check for tool calls FIRST — if a response has both "tool" and
@@ -4740,7 +4759,7 @@ Do NOT wrap conversational replies in JSON.
                                     break
 
             result = {
-                "thought": thought_match.group(1) if thought_match else "",
+                "thought": thought,
                 "goal": "clear statement of what you're trying to achieve",
                 "tool": tool_match.group(1),
                 "tool_args": tool_args,
@@ -4760,13 +4779,21 @@ Do NOT wrap conversational replies in JSON.
             return result
 
         # Fall back to answer extraction (only reached if no tool was found)
-        if answer_match:
+        if answer_field:
+            answer, complete = answer_field
+            if not complete:
+                logger.warning(
+                    "[PARSE] Answer JSON ended before its closing quote "
+                    "(%d chars kept) — output was likely cut off",
+                    len(answer),
+                )
+                answer = answer.rstrip() + TRUNCATED_ANSWER_NOTE
             result = {
-                "thought": thought_match.group(1) if thought_match else "",
+                "thought": thought,
                 "goal": "what was achieved",
-                "answer": answer_match.group(1),
+                "answer": answer,
             }
-            logger.debug(f"Extracted answer using regex: {result}")
+            logger.debug(f"Extracted answer from malformed JSON: {result}")
             return result
 
         # Try to match simple key-value patterns for object names (like ': "my_cube"')
