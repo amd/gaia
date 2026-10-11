@@ -144,13 +144,21 @@ func TestPendingCloudSelectionLaunchesAgainstEmbeddedEndpoint(t *testing.T) {
 		t.Fatalf("actual child launch had incorrect model arguments: %v", st.proc.cmd.Args[1:])
 	}
 	var selectedURL string
+	embeddedMarker := false
 	for _, env := range st.proc.cmd.Env {
 		if strings.HasPrefix(env, "LEMONADE_BASE_URL=") {
 			selectedURL = strings.TrimPrefix(env, "LEMONADE_BASE_URL=")
 		}
+		if env == "GAIA_LEMONADE_EMBEDDED=1" {
+			embeddedMarker = true
+		}
 	}
 	if selectedURL != "http://localhost:"+u.Port()+"/api/v1" {
 		t.Fatalf("child did not receive the selected embedded endpoint: %q", selectedURL)
+	}
+	// Without the marker the child pins this port and cannot follow a restart.
+	if !embeddedMarker {
+		t.Fatal("child was not told the endpoint is GAIA's own restartable server")
 	}
 	if c.SetModelBeforeStart("amd.gpt-4.1") {
 		t.Fatal("already-started child accepted a startup-only change")
