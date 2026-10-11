@@ -729,6 +729,8 @@ export interface SetupCheck {
     reasons?: string[];
     models?: Array<{ id: string; role: string; size_gb: number | null; loaded: boolean; error: string | null }>;
     steps: SetupStep[];
+    /** The steps for a cloud provider, which downloads only the embedding model. */
+    cloud_steps?: SetupStep[];
 }
 
 export interface SetupRunStatus {

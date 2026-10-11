@@ -500,6 +500,18 @@ def test_check_route_adds_the_steps(client, monkeypatch):
     assert seen == {"skip_chat_model": True, "load": True}
 
 
+def test_check_route_also_returns_the_cloud_steps(client, monkeypatch):
+    """A local check still tells the UI what a cloud choice would download."""
+    test_client, _ = client
+    monkeypatch.setattr(
+        setup_router, "check", lambda **_k: {"ready": False, "reasons": ["x"]}
+    )
+    body = test_client.get("/api/setup/check").json()
+    assert body["steps"] == sr.step_labels(False)
+    assert body["cloud_steps"] == sr.step_labels(True)
+    assert body["cloud_steps"] != body["steps"]
+
+
 def test_check_route_needs_the_ui_header(client, monkeypatch):
     """A cross-site GET carries no X-Gaia-UI, so it must not start a check."""
     test_client, _ = client

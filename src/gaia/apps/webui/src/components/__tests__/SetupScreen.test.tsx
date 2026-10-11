@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SetupScreen } from '../SetupScreen';
 import { useModelStore } from '../../stores/modelStore';
@@ -37,6 +37,7 @@ const FAILED: SetupRunStatus = {
 
 beforeEach(() => {
     sessionStorage.clear();
+    localStorage.clear();
     vi.clearAllMocks();
     useModelStore.setState({ active: null, error: null, restoreNotice: null });
     mockedApi.getOnboardingPreflight.mockRejectedValue(new Error('no probe'));
@@ -122,6 +123,42 @@ describe('SetupScreen', () => {
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.m1'));
         expect(mockedApi.connectProvider).toHaveBeenCalledWith('fireworks', { api_key: 'fw-key' });
         expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
+    });
+
+    it('shows the cloud download size and drops the local chat-model reason for a cloud choice', async () => {
+        const check: SetupCheck = {
+            ...CHECK,
+            reasons: ["Model 'Gemma-4-E4B-it-GGUF' is not downloaded", "Model 'user.embeddinggemma-300m-GGUF' is not downloaded"],
+            steps: [{ key: 'models', label: 'Download the models', detail: 'about 6 GB', status: 'pending' }],
+            cloud_steps: [{ key: 'models', label: 'Download the models', detail: 'the embedding model, under 1 GB', status: 'pending' }],
+        };
+        render(<SetupScreen initial={check} onReady={vi.fn()} />);
+        await waitFor(() => expect(mockedApi.getSetupStatus).toHaveBeenCalled());
+        expect(screen.getByText(/about 6 GB/)).toBeInTheDocument();
+        expect(screen.getByText("Model 'Gemma-4-E4B-it-GGUF' is not downloaded.")).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('radio', { name: /AMD LLM Gateway/ }));
+        expect(screen.getByText(/under 1 GB/)).toBeInTheDocument();
+        expect(screen.queryByText(/about 6 GB/)).not.toBeInTheDocument();
+        expect(screen.getByText("Model 'user.embeddinggemma-300m-GGUF' is not downloaded.")).toBeInTheDocument();
+    });
+
+    it('keeps the gateway choice after a reload and lets the user switch provider', async () => {
+        await start(/AMD LLM Gateway/);
+        await screen.findByLabelText('API key');
+        expect(screen.getByText('Connect AMD LLM Gateway')).toBeInTheDocument();
+        cleanup();
+
+        // A new tab: sessionStorage is empty, but the run is a finished cloud run.
+        sessionStorage.clear();
+        mockedApi.getSetupStatus.mockResolvedValue({ ...READY, skip_chat_model: true });
+        render(<SetupScreen initial={CHECK} onReady={vi.fn()} />);
+        expect(await screen.findByText('Connect AMD LLM Gateway')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('radio', { name: 'Fireworks AI' }));
+        expect(screen.getByText('Connect Fireworks AI')).toBeInTheDocument();
+        expect(screen.getByRole('radio', { name: 'Fireworks AI' })).toHaveAttribute('aria-checked', 'true');
+        expect(localStorage.getItem('gaia-setup-choice')).toBe('fireworks');
     });
 
     it('calls onReady from Start chatting', async () => {
