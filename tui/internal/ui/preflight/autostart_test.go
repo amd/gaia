@@ -305,6 +305,6 @@ func TestMain(m *testing.M) {
 	// autoStartForTest.
 	tryAutoStartLemonade = func(context.Context) (bool, string, string) { return false, "", "" }
 	// Nor may a test start the developer's real daemon to replay a key.
-	replayKeptKey = func(string) (bool, error) { return false, nil }
+	replayKeptKey = func(context.Context, string) (bool, error) { return false, nil }
 	os.Exit(m.Run())
 }

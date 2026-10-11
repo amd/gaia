@@ -1007,7 +1007,7 @@ func TestAGateDoesNotPassACloudModelItsServerCannotServe(t *testing.T) {
 	}
 }
 
-func stubReplayKeptKey(t *testing.T, fn func(string) (bool, error)) {
+func stubReplayKeptKey(t *testing.T, fn func(context.Context, string) (bool, error)) {
 	t.Helper()
 	orig := replayKeptKey
 	replayKeptKey = fn
@@ -1029,7 +1029,7 @@ func TestAGateReplaysTheKeptKeyAfterLemonadeRestarts(t *testing.T) {
 		return []lemonade.Model{{ID: "amd.DeepSeek-V4.1-Flash", Recipe: "cloud"}}, nil
 	})
 	var replayedFor []string
-	stubReplayKeptKey(t, func(provider string) (bool, error) {
+	stubReplayKeptKey(t, func(_ context.Context, provider string) (bool, error) {
 		replayedFor = append(replayedFor, provider)
 		authenticated = true
 		return true, nil
@@ -1043,19 +1043,31 @@ func TestAGateReplaysTheKeptKeyAfterLemonadeRestarts(t *testing.T) {
 
 	// Nothing kept: still the reconnect remedy, with no second listing pass.
 	authenticated = false
-	stubReplayKeptKey(t, func(string) (bool, error) { return false, nil })
+	stubReplayKeptKey(t, func(context.Context, string) (bool, error) { return false, nil })
 	if row, _, _ := r.verifyModels(context.Background(), localCfg()); row.State != StateFailed ||
 		!strings.Contains(row.Remedy.Action, "Press p") {
 		t.Fatalf("with no kept key the gate must ask to reconnect: %+v", row)
 	}
 
 	// A replay that fails is kept for the details pane, not swallowed.
-	stubReplayKeptKey(t, func(string) (bool, error) {
+	stubReplayKeptKey(t, func(context.Context, string) (bool, error) {
 		return false, errors.New("the GAIA daemon needs fastapi, uvicorn")
 	})
 	row, _, _ := r.verifyModels(context.Background(), localCfg())
 	if row.State != StateFailed || !strings.Contains(row.Raw, "fastapi, uvicorn") {
 		t.Fatalf("a failed replay was swallowed: %+v", row)
+	}
+
+	// Connected, but the provider does not offer this model: reconnecting
+	// would not help, so the gate must not tell the user to.
+	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+		return []lemonade.Model{{ID: "amd.Gemma-4-31B", Recipe: "cloud"}}, nil
+	})
+	stubReplayKeptKey(t, func(context.Context, string) (bool, error) { return true, nil })
+	row, _, _ = r.verifyModels(context.Background(), localCfg())
+	if row.State != StateFailed || !strings.Contains(row.Detail, "does not offer") ||
+		strings.Contains(row.Remedy.Action, "connect it") {
+		t.Fatalf("an unoffered model was blamed on the connection: %+v", row)
 	}
 }
 
@@ -1066,7 +1078,7 @@ func TestAGateDoesNotReplayAKeyForAListedModel(t *testing.T) {
 	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
 		return []lemonade.Model{{ID: "amd.DeepSeek-V4.1-Flash", Recipe: "cloud"}}, nil
 	})
-	stubReplayKeptKey(t, func(string) (bool, error) {
+	stubReplayKeptKey(t, func(context.Context, string) (bool, error) {
 		t.Error("replayed a key for a model Lemonade already lists")
 		return false, nil
 	})
