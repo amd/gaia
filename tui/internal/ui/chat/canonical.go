@@ -282,7 +282,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				}
 			}
 		}
-		duration := time.Since(m.queryStart)
+		duration := m.turnElapsed(time.Now())
 		if m.startup.warmNext && !m.dev {
 			// The opening switch's time belongs to the ready line, not its own.
 			duration = 0

@@ -423,6 +423,10 @@ type ChatModel struct {
 	initialQuery string
 	err          error
 	queryStart   time.Time // tracks when the current query started
+	// userWait is how long this turn sat on a question or permission prompt;
+	// the answer's timing excludes it so the user's pause isn't read as slowness.
+	userWait      time.Duration
+	userWaitStart time.Time
 
 	// logPeakRows is the tallest the work log has been THIS turn. The region's
 	// height is held there (see liveRegionView) so it never shrinks mid-turn and
@@ -784,6 +788,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// mousecapture.go's doc comment on overlayOpen.
 	// Here, like the queue drain below: the opening /model turn can end down
 	// any terminal path, and this is the one place that sees them all.
+	next.trackUserWait(time.Now())
 	if next.startup.unresolved {
 		var refusedCmd tea.Cmd
 		next, refusedCmd = next.startupRefused()
@@ -1896,6 +1901,7 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	// scroll happened to be left.
 	m.followTail = true
 	m.queryStart = time.Now()
+	m.userWait, m.userWaitStart = 0, time.Time{}
 	// Per-turn, like ttft above it. Left standing, a turn whose `final` carries
 	// no usage.steps reported the PREVIOUS turn's count as its own.
 	m.totalSteps = 0
@@ -2118,7 +2124,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 	case event.AnswerEvent:
 		m.commitAnsweredWork()
 		m.flushBuffer()
-		duration := time.Since(m.queryStart)
+		duration := m.turnElapsed(time.Now())
 		content := StripVerificationScope(e.Content)
 		rendered := components.RenderMarkdown(content)
 		// Off the event, not off m.ttft: nothing on this side measures these
@@ -2592,6 +2598,28 @@ func (m ChatModel) costModelName() string {
 		return m.modelID
 	}
 	return "-"
+}
+
+// trackUserWait opens or closes the user-wait clock as a question or
+// permission prompt appears or goes away.
+func (m *ChatModel) trackUserWait(now time.Time) {
+	waiting := m.confirmation != nil || m.question != nil
+	switch {
+	case waiting && m.userWaitStart.IsZero():
+		m.userWaitStart = now
+	case !waiting && !m.userWaitStart.IsZero():
+		m.userWait += now.Sub(m.userWaitStart)
+		m.userWaitStart = time.Time{}
+	}
+}
+
+// turnElapsed is the turn's wall clock minus the time spent waiting on the user.
+func (m ChatModel) turnElapsed(now time.Time) time.Duration {
+	d := now.Sub(m.queryStart) - m.userWait
+	if !m.userWaitStart.IsZero() {
+		d -= now.Sub(m.userWaitStart)
+	}
+	return d
 }
 
 // answerStats is the footnote under a finished answer.

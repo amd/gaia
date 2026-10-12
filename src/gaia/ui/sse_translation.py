@@ -544,7 +544,10 @@ class CanonicalTranslator:
         detail = render_invocation(args)
         if not detail:
             return f"{label}?"
-        return f"{label} with {detail}?"
+        inline, newline, blocks = detail.partition("\n")
+        if not inline:
+            return f"{label}?\n{blocks}"
+        return f"{label} with {inline}?{newline}{blocks}"
 
     # Dispatch table: every top-level source type sse_handler.py emits.
     _DISPATCH = {
@@ -792,6 +795,11 @@ INVOCATION_VALUE_CHARS = 600
 #: Longest the whole rendered argument clause may be.
 INVOCATION_TOTAL_CHARS = 1200
 
+#: A multi-line value (file content, an edit's old/new text) keeps its line
+#: breaks; flattened, "line 1 line 2" hides the structure being approved.
+INVOCATION_BLOCK_LINES = 12
+INVOCATION_BLOCK_LINE_CHARS = 200
+
 
 def _quote_value(text: str) -> str:
     """Quote a value so its own quotes cannot be read as the value's end."""
@@ -813,8 +821,12 @@ def render_invocation(args: Dict[str, Any]) -> str:
     if not isinstance(args, dict) or not args:
         return ""
     parts = []
+    blocks = []
     for key in sorted(args):
         value = args[key]
+        if isinstance(value, str) and "\n" in value.strip():
+            blocks.append(_render_block(key, value))
+            continue
         text = value if isinstance(value, str) else json.dumps(value, default=str)
         text = " ".join(text.split())
         if len(text) > INVOCATION_VALUE_CHARS:
@@ -830,7 +842,22 @@ def render_invocation(args: Dict[str, Any]) -> str:
             clause[:INVOCATION_TOTAL_CHARS]
             + f"… [+{hidden:,} more characters not shown]"
         )
-    return clause
+    return clause + "".join(blocks)
+
+
+def _render_block(key: str, value: str) -> str:
+    """Render a multi-line value as an indented block, so its lines stay lines."""
+    lines = value.strip("\n").splitlines()
+    shown = []
+    for line in lines[:INVOCATION_BLOCK_LINES]:
+        if len(line) > INVOCATION_BLOCK_LINE_CHARS:
+            hidden = len(line) - INVOCATION_BLOCK_LINE_CHARS
+            line = f"{line[:INVOCATION_BLOCK_LINE_CHARS]}… [+{hidden:,} more characters not shown]"
+        shown.append(f"    {line}")
+    if len(lines) > INVOCATION_BLOCK_LINES:
+        hidden = len(lines) - INVOCATION_BLOCK_LINES
+        shown.append(f"    … [+{hidden:,} more lines not shown]")
+    return f"\n{key}:\n" + "\n".join(shown)
 
 
 __all__ = [
