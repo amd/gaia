@@ -460,10 +460,12 @@ interface FlowToolCardProps {
 function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
     const meta = getToolMeta(step.tool);
     const Icon = meta.icon;
-    // The done-label ("Wrote file") would claim a failed or denied call succeeded.
+    // The done-label ("Wrote file") would claim a failed, denied or stopped call succeeded.
+    const unfinished = step.success == null && !step.result;
     const friendlyLabel = step.active
         ? meta.activeLabel
-        : step.success === false ? `${meta.activeLabel} failed` : meta.label;
+        : step.success === false ? `${meta.activeLabel} failed`
+        : unfinished ? `${meta.activeLabel} didn't finish` : meta.label;
     const hasDetail = !!(step.detail || step.result || step.commandOutput || step.fileList?.files?.length);
 
     return (
