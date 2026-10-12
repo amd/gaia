@@ -58,3 +58,47 @@ def test_chat_agent_keeps_its_default_and_the_flagship_can_opt_out(env):
     )
     agent.conversation_history = [dict(m) for m in PRIOR_TURN]
     assert all("reasoning_content" not in m for m in agent._history_for_request())
+
+
+class _ReasonerClient:
+    """A Lemonade-proxied reasoner: forwarded reasoning, yet its API refuses
+    another model's reasoning in input."""
+
+    accepts_reasoning_history = True
+
+
+def _switch_to_cloud_reasoner(monkeypatch, agent, target):
+    from gaia_agent import stdio
+
+    monkeypatch.setattr(stdio, "_lemonade_url", lambda agent: "http://x/api/v1")
+    monkeypatch.setattr(stdio, "_lemonade_models", lambda base_url: [target])
+    monkeypatch.setattr(stdio, "create_client", lambda **kw: _ReasonerClient())
+    return stdio.switch_model(agent, target)
+
+
+def test_model_switch_stops_sending_the_old_models_reasoning(env):
+    agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+    agent.conversation_history = [dict(m) for m in PRIOR_TURN]
+
+    _switch_to_cloud_reasoner(env, agent, "fireworks.deepseek-reasoner")
+
+    assert agent.chat.llm_client.accepts_reasoning_history is True
+    wire = [
+        agent.chat._structure_history_message(m) for m in agent._history_for_request()
+    ]
+    assert all("reasoning_content" not in m for m in wire)
+    # The conversation itself survives the switch untouched.
+    assert agent.conversation_history == PRIOR_TURN
+
+
+def test_failed_model_switch_keeps_resending_reasoning(env):
+    agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+
+    def broken_rebuild():
+        raise ValueError("prompt composition failed")
+
+    env.setattr(agent, "rebuild_system_prompt", broken_rebuild)
+    with pytest.raises(RuntimeError, match="rolled back"):
+        _switch_to_cloud_reasoner(env, agent, "fireworks.deepseek-reasoner")
+
+    assert agent.resend_reasoning_across_requests is True

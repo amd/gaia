@@ -601,6 +601,7 @@ def _snapshot_switch_state(agent: Any) -> _SwitchState:
         "cfg_claude_model": (
             getattr(cfg, "claude_model", None) if cfg is not None else None
         ),
+        "resend_reasoning": getattr(agent, "resend_reasoning_across_requests", None),
     }
 
 
@@ -617,6 +618,8 @@ def _restore_switch_state(agent: Any, snapshot: _SwitchState) -> None:
         cfg.use_claude = snapshot["cfg_use_claude"]
         cfg.model_id = snapshot["cfg_model_id"]
         cfg.claude_model = snapshot["cfg_claude_model"]
+    if snapshot["resend_reasoning"] is not None:
+        agent.resend_reasoning_across_requests = snapshot["resend_reasoning"]
 
 
 def _apply_switch(
@@ -653,6 +656,13 @@ def _apply_switch(
                 cfg.model_id = model_id
             if claude_model is not None:
                 cfg.claude_model = claude_model
+        # Earlier turns' reasoning belongs to the old model: it can't hit the new
+        # model's cache, and some reasoner APIs reject it in input.
+        if (
+            getattr(agent, "resend_reasoning_across_requests", False)
+            and agent.model_id != snapshot["model_id"]
+        ):
+            agent.resend_reasoning_across_requests = False
         # Gemma-family prompts carry an embedded-JSON tool-call envelope
         # Claude doesn't need (it speaks native tool_calls) — the cached
         # system prompt must be recomposed under the new backend or the next
