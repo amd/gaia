@@ -111,6 +111,8 @@ class SystemStatus(BaseModel):
     # Boot-time initialization tracking (populated from DispatchQueue)
     init_state: str = "ready"  # "initializing" | "ready" | "degraded"
     init_tasks: List["InitTaskInfo"] = Field(default_factory=list)
+    # Priming of a new chat's prompt prefix; never blocks sending.
+    warm_up: Optional["WarmUpStatus"] = None
     # Multi-device support (issue #1220): hardware devices detected on this host.
     # Populated from Lemonade ``/system-info``. The frontend uses this to filter
     # which device options to show in the per-agent device dropdown.
@@ -126,6 +128,16 @@ class SystemStatus(BaseModel):
 
 
 # ── Tasks ──────────────────────────────────────────────────────────────────
+
+
+class WarmUpStatus(BaseModel):
+    """Whether a new chat's first turn will find its prompt already read."""
+
+    state: str  # idle | warming | ready | failed | skipped
+    elapsed_seconds: Optional[float] = None
+    prompt_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    error: Optional[str] = None
 
 
 class InitTaskInfo(BaseModel):
