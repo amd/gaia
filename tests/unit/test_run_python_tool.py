@@ -213,6 +213,7 @@ def test_without_a_project_it_runs_from_the_current_directory(
 
     assert result["status"] == "success", result
     assert result["stdout"].strip() == "payload"
+    assert "note" not in result
 
 
 def test_without_a_project_a_disallowed_cwd_runs_in_the_scratch_dir(
@@ -233,6 +234,7 @@ def test_without_a_project_a_disallowed_cwd_runs_in_the_scratch_dir(
 
     assert result["status"] == "success", result
     assert Path(result["stdout"].strip()).resolve() == agent.scratch_dir.resolve()
+    assert str(agent.scratch_dir) in result["note"]
 
 
 def test_an_unusable_project_root_is_a_tool_error(
