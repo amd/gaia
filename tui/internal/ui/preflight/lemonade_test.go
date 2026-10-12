@@ -414,6 +414,47 @@ func TestAStaleOverrideIsReportedRatherThanObeyedOrIgnored(t *testing.T) {
 	}
 }
 
+// `unset` exists in neither cmd.exe nor PowerShell, so on Windows the stale
+// override remedy gives each shell its own clearing command, labelled.
+func TestAStaleOverrideIsClearedWithThisShellsCommand(t *testing.T) {
+	cases := []struct {
+		goos string
+		want []ShellCommand
+	}{
+		{"windows", []ShellCommand{
+			{Shell: "Command Prompt", Line: "set LEMONADE_SERVER_PATH="},
+			{Shell: "PowerShell", Line: "Remove-Item Env:LEMONADE_SERVER_PATH"},
+		}},
+		{"linux", []ShellCommand{{Line: "unset LEMONADE_SERVER_PATH"}}},
+		{"darwin", []ShellCommand{{Line: "unset LEMONADE_SERVER_PATH"}}},
+	}
+	for _, tc := range cases {
+		probe := fakeHostFor(tc.goos, nil, nil, map[string]string{serverPathEnv: "/gone/lemond"})
+		for name, build := range map[string]func() Remedy{
+			"start": lemonadeStartRemedy, "restart": lemonadeRestartRemedy,
+		} {
+			r := withProbe(probe, build)
+			got := r.Commands()
+			if len(got) != len(tc.want) {
+				t.Fatalf("%s/%s: commands = %+v, want %+v", tc.goos, name, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("%s/%s: command %d = %+v, want %+v", tc.goos, name, i, got[i], tc.want[i])
+				}
+			}
+			// This process keeps its environment, so re-checking cannot see the fix.
+			if strings.Contains(r.Action, "press r") || !strings.Contains(r.Action, "relaunch") {
+				t.Errorf("%s/%s: remedy must say relaunch, not press r: %q", tc.goos, name, r.Action)
+			}
+			if mentions := strings.Contains(r.Action, "Environment Variables"); mentions != (tc.goos == "windows") {
+				t.Errorf("%s/%s: persistent-variable advice = %v, want it only on Windows: %q",
+					tc.goos, name, mentions, r.Action)
+			}
+		}
+	}
+}
+
 // The property every assertion in this package now leans on: the remedy always
 // names something. resolveLemonade().Start is "" on a machine with no Lemonade —
 // every CI runner — and an empty expectation is either skipped by the table or

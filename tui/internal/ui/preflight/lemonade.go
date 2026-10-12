@@ -101,6 +101,9 @@ type launcher struct {
 	// BadOverride is a LEMONADE_SERVER_PATH that names something absent. It is
 	// its own state: the fix is to correct the variable, not to install anything.
 	BadOverride string
+	// Windows is true when the host shell is cmd.exe or PowerShell, whose
+	// commands for clearing a variable differ from POSIX `unset`.
+	Windows bool
 	// Found is false when no Lemonade tooling could be located, in which case the
 	// honest remedy is to install it, not to start it.
 	Found bool
@@ -199,7 +202,7 @@ func resolveLauncherWith(p hostProbe) launcher {
 	// reports itself rather than silently falling through to a different answer.
 	if override := strings.TrimSpace(p.getenv(serverPathEnv)); override != "" {
 		if !p.exists(override) {
-			return launcher{BadOverride: override}
+			return launcher{BadOverride: override, Windows: p.goos == "windows"}
 		}
 		cmd := quoteCommand(override)
 		return launcher{Start: cmd, Restart: cmd, Argv: []string{override}, Found: true}
@@ -570,12 +573,23 @@ func lemonadeRestartRemedy() Remedy {
 }
 
 // badOverrideRemedy names the variable, because nothing else on the machine is
-// wrong and installing something would not help.
+// wrong and installing something would not help. It says relaunch, not press r:
+// this process keeps the environment it started with.
 func badOverrideRemedy(l launcher) Remedy {
+	lead := fmt.Sprintf("%s points at %q, which is not on this machine. ", serverPathEnv, l.BadOverride)
+	if l.Windows {
+		return Remedy{
+			Action: lead + "Clear it (or correct it) in the terminal you start GAIA from, " +
+				"then relaunch GAIA from there. If it is saved as a user or system variable, " +
+				"also remove it under System Properties → Environment Variables and open a new terminal.",
+			Command:    "set " + serverPathEnv + "=",
+			PowerShell: "Remove-Item Env:" + serverPathEnv,
+			Where:      lemonadeDocs,
+		}
+	}
 	return Remedy{
-		Action: fmt.Sprintf(
-			"%s points at %q, which is not on this machine. Unset it (or correct it) so "+
-				"GAIA can find the installed server, then press r.", serverPathEnv, l.BadOverride),
+		Action: lead + "Unset it (or correct it) in the shell you start GAIA from, then " +
+			"relaunch GAIA from there. If your shell profile sets it, remove it there too.",
 		Command: "unset " + serverPathEnv,
 		Where:   lemonadeDocs,
 	}
