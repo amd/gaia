@@ -793,6 +793,15 @@ INVOCATION_VALUE_CHARS = 600
 INVOCATION_TOTAL_CHARS = 1200
 
 
+def _quote_value(text: str) -> str:
+    """Quote a value so its own quotes cannot be read as the value's end."""
+    if '"' not in text:
+        return f'"{text}"'
+    if "'" not in text:
+        return f"'{text}'"
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def render_invocation(args: Dict[str, Any]) -> str:
     """Render a tool call's arguments as one compact, readable clause.
 
@@ -813,7 +822,7 @@ def render_invocation(args: Dict[str, Any]) -> str:
             # Never a bare "…". A silent cut reads as the whole value, so the
             # user approves text they were never shown and does not know it.
             text = f"{text[:INVOCATION_VALUE_CHARS]}… [+{hidden:,} more characters not shown]"
-        parts.append(f'{key}="{text}"')
+        parts.append(f"{key}={_quote_value(text)}")
     clause = ", ".join(parts)
     if len(clause) > INVOCATION_TOTAL_CHARS:
         hidden = len(clause) - INVOCATION_TOTAL_CHARS

@@ -19,3 +19,13 @@ def test_combined_arguments_disclose_hidden_characters():
 
 def test_short_arguments_are_shown_in_full():
     assert render_invocation({"command": "git status"}) == 'command="git status"'
+
+
+def test_a_value_with_quotes_stays_unambiguous():
+    assert render_invocation({"content": 'print("hello")'}) == (
+        "content='print(\"hello\")'"
+    )
+    assert render_invocation({"content": 'say "it\'s"'}) == (
+        'content="say \\"it\'s\\""'
+    )
+    assert render_invocation({"content": "a\\\"b'c"}) == ('content="a\\\\\\"b\'c"')
