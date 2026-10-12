@@ -510,6 +510,69 @@ func TestAStartCommandCarriesTheContextWindow(t *testing.T) {
 	}
 }
 
+// PowerShell 5.1 rejects cmd.exe's `set "VAR=..." && …` outright, and runs a
+// leading quoted path as a string rather than a program. A Windows user may be
+// in either shell, so the start command is given in both.
+func TestAWindowsStartCommandIsGivenForPowerShellToo(t *testing.T) {
+	local := `C:\Users\Jane Doe\AppData\Local`
+	exe := filepath.Join(local, "lemonade_server", "bin", "LemonadeServer.exe")
+	l := resolveLemonadeWith(fakeHostFor("windows", nil, []string{exe},
+		map[string]string{"LOCALAPPDATA": local}))
+
+	want := "$env:LEMONADE_CTX_SIZE=65536; & '" + exe + "' --silent"
+	if l.StartPS != want || l.RestartPS != want {
+		t.Errorf("powershell start/restart = %q / %q, want %q", l.StartPS, l.RestartPS, want)
+	}
+	if !strings.HasPrefix(l.Start, `set "LEMONADE_CTX_SIZE=65536" && `) {
+		t.Errorf("start = %q, want the Command Prompt form", l.Start)
+	}
+
+	if l := resolveLemonadeWith(overrideProbe()); l.StartPS != "" {
+		t.Errorf("a POSIX host got a PowerShell form: %q", l.StartPS)
+	}
+}
+
+func TestPowerShellQuotingKeepsPathsLiteral(t *testing.T) {
+	for in, want := range map[string]string{
+		`C:\x\lemond`:         `C:\x\lemond`,
+		`C:\a b\Lemonade.exe`: `'C:\a b\Lemonade.exe'`,
+		`C:\O'Neil $x\lemond`: `'C:\O''Neil $x\lemond'`,
+		"--silent":            "--silent",
+	} {
+		if got := psQuote(in); got != want {
+			t.Errorf("psQuote(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := powerShellCommand(32768, []string{`C:\x\lemond`}); got != `$env:LEMONADE_CTX_SIZE=32768; C:\x\lemond` {
+		t.Errorf("unquoted program got %q; `&` is only needed before a quoted one", got)
+	}
+}
+
+func TestARemedyLabelsEachShellOnlyWhenTheyDiffer(t *testing.T) {
+	both := Report{AgentName: "gaia", Rows: []Row{{
+		Label: "Local AI", State: StateFailed,
+		Remedy: Remedy{Command: `set "A=1" && x`, PowerShell: "$env:A=1; x"},
+	}}}
+	out := both.String()
+	for _, want := range []string{
+		`run in Command Prompt: set "A=1" && x`,
+		"run in PowerShell: $env:A=1; x",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report missing %q:\n%s", want, out)
+		}
+	}
+	d := withRemedy("down", both.Rows[0].Remedy)
+	if !strings.Contains(d.String(), "run in PowerShell: $env:A=1; x") {
+		t.Errorf("diagnosis lost the PowerShell form: %s", d)
+	}
+
+	one := Remedy{Command: "gaia init"}.Commands()
+	if len(one) != 1 || one[0].Label() != "run:" {
+		t.Errorf("a single command must stay unlabelled, got %+v", one)
+	}
+}
+
 func windowsProbe() hostProbe {
 	exe := filepath.Join(`C:\Users\jane\AppData\Local`, "lemonade_server", "bin", "LemonadeServer.exe")
 	return fakeHostFor("windows", nil, []string{exe},
