@@ -27,11 +27,16 @@ var (
 	_ CapabilityReporter      = (*SubprocessClient)(nil)
 )
 
-// closeGrace bounds each wait in Close(): the in-flight turn's reader, that
-// reader again after a kill, the child's own exit once stdin is closed, and
-// the reap after the kill that follows. A wedged child can therefore hold
-// quit for up to four of these before Close() gives up and reports why.
+// closeGrace bounds the waits in Close() that are not the child's own exit:
+// the in-flight turn's reader, that reader again after a kill, and the reap
+// after a kill.
 const closeGrace = 2 * time.Second
+
+// agentExitGrace is how long Close() lets the child exit on its own once stdin
+// is closed. The agent spends up to 15 s (EXTRACTION_EXIT_WAIT_S) saving the
+// last turns' memories first; killing it sooner drops them. A child with
+// nothing to save exits at once, so this only costs time when it is needed.
+const agentExitGrace = 20 * time.Second
 
 var subprocessLemonadePorts = []string{"13305", "8000"}
 
@@ -193,6 +198,8 @@ type SubprocessClient struct {
 	// turnCtx is the running turn's context. Once the caller has cancelled it
 	// the turn is being torn down, and the next Send waits for that to finish.
 	turnCtx context.Context
+	// exitGrace is agentExitGrace; a field so tests need not wait it out.
+	exitGrace time.Duration
 }
 
 // NewSubprocessClient creates a client for an agent binary and its arguments.
@@ -203,9 +210,10 @@ type SubprocessClient struct {
 // SplitCommandLine, which honours quoting.
 func NewSubprocessClient(path string, args []string, debug bool) *SubprocessClient {
 	c := &SubprocessClient{
-		path:  path,
-		args:  args,
-		debug: debug,
+		path:      path,
+		args:      args,
+		debug:     debug,
+		exitGrace: agentExitGrace,
 	}
 	c.fullAccess = c.FullAccessAtLaunch()
 	return c
@@ -913,7 +921,7 @@ func (s *SubprocessClient) Close() error {
 		s.mu.Unlock()
 		return nil
 	}
-	proc, stdin, turnDone := s.proc, s.stdin, s.turnDone
+	proc, stdin, turnDone, exitGrace := s.proc, s.stdin, s.turnDone, s.exitGrace
 	s.proc = nil
 	s.stdin = nil
 	s.stdout = nil
@@ -955,7 +963,7 @@ func (s *SubprocessClient) Close() error {
 	select {
 	case <-reaped:
 		return killErr
-	case <-time.After(closeGrace):
+	case <-time.After(exitGrace):
 		killErr = errors.Join(killErr, proc.kill())
 	}
 	select {
