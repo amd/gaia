@@ -95,9 +95,34 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 	}
 
 	c := client.NewSubprocessClient(bin, argv[1:], dev).WithTrace(trace)
-	defer c.Close()
+	defer func() {
+		if err := closeSession(c, os.Stderr, slowCloseNotice); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+		}
+	}()
 
 	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, dev), dev, ctrl)
+}
+
+// slowCloseNotice is how long quit runs before it says what it is waiting on.
+const slowCloseNotice = time.Second
+
+// savingMemoriesNotice explains a quit that lingers: the agent saves the last
+// turns' memories before it exits, bounded by the client's exit grace.
+const savingMemoriesNotice = "Saving memories before exit…"
+
+// closeSession closes what the session opened, printing savingMemoriesNotice
+// to w if that takes longer than after, so a slow quit never looks hung.
+func closeSession(c io.Closer, w io.Writer, after time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- c.Close() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(after):
+		fmt.Fprintln(w, savingMemoriesNotice)
+	}
+	return <-done
 }
 
 // DECSET/DECRST 1007, alternate scroll mode.
@@ -136,7 +161,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	// event loop has stopped, rather than left to the OS.
 	if closer, ok := model.(io.Closer); ok {
 		defer func() {
-			if err := closer.Close(); err != nil {
+			if err := closeSession(closer, os.Stderr, slowCloseNotice); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 			}
 		}()

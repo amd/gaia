@@ -1309,6 +1309,13 @@ def _session_mail_provider(session: dict) -> str | None:
 # before the first POST.
 
 
+_RELAY_CONTEXT_PAIRS = 5
+
+# Last history view per in-process chat session, so a model switch that hides
+# more turns is announced too.
+_history_cuts: dict = {}
+
+
 def _query_context_from_history(history_pairs: list) -> list[dict]:
     """Flatten (user, assistant) history pairs into ``QueryContextItem``-shaped
     dicts for the sidecar's ``/query`` request body (#2109).
@@ -1317,10 +1324,9 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     email session's context window stays comparable: last 5 pairs, 2000 chars
     per turn.
     """
-    _MAX_PAIRS = 5
     _MAX_CHARS = 2000
     context: list[dict] = []
-    for user_msg, assistant_msg in history_pairs[-_MAX_PAIRS:]:
+    for user_msg, assistant_msg in history_pairs[-_RELAY_CONTEXT_PAIRS:]:
         u = user_msg[:_MAX_CHARS]
         a = assistant_msg[:_MAX_CHARS]
         if len(assistant_msg) > _MAX_CHARS:
@@ -1330,9 +1336,16 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     return context
 
 
-def _restore_model_history(agent, db, session_id: str, query: str) -> None:
-    """Reserve the current prompt and output before admitting completed turns."""
+def _restore_model_history(
+    agent, db, session_id: str, query: str, sse_handler=None
+) -> None:
+    """Reserve the current prompt and output before admitting completed turns.
+
+    With *sse_handler*, a turn that pushes older turns out of the model's view
+    streams a ``history_cut`` status so the chat can say so.
+    """
     from gaia.agents.base.history import (
+        CutReporter,
         history_budget,
         select_history,
         text_tool_history,
@@ -1345,7 +1358,30 @@ def _restore_model_history(agent, db, session_id: str, query: str) -> None:
         and not agent._uses_native_tool_calls()
     ):
         turns = text_tool_history(turns)
-    agent.conversation_history = select_history(turns, history_budget(agent, query))
+
+    def on_cut(cut):
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": cut.notice,
+                "turns": cut.turns,
+                "tokens": cut.tokens,
+            }
+        )
+
+    agent.conversation_history = select_history(
+        turns,
+        history_budget(agent, query),
+        on_cut if sse_handler is not None else None,
+        # Only streamed turns move the baseline, so a cut made while nobody
+        # could be told is announced on the next streamed turn.
+        (
+            _history_cuts.setdefault(session_id, CutReporter())
+            if sse_handler is not None
+            else None
+        ),
+    )
 
 
 def _probe_is_only_unreachable(init_body: dict | None) -> bool:
@@ -1554,6 +1590,24 @@ def _dispatch_sidecar_query(
         return
 
     context = _query_context_from_history(history_pairs)
+    if len(history_pairs) == _RELAY_CONTEXT_PAIRS + 1:
+        from gaia.agents.base.turn_metrics import count_tokens
+
+        # The window slides from here on; say so once, when it first does.
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": (
+                    "Older messages are now out of the model's view: this agent "
+                    f"sees the last {_RELAY_CONTEXT_PAIRS} exchanges of the chat."
+                ),
+                "turns": 1,
+                "tokens": count_tokens(
+                    json.dumps(list(history_pairs[0]), ensure_ascii=False)
+                ),
+            }
+        )
     from gaia.ui.email_sidecar.profiles import full_access_supported
 
     relay_query(
@@ -2659,7 +2713,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
 
-                _restore_model_history(agent, db, session_id, request.message)
+                _restore_model_history(
+                    agent, db, session_id, request.message, sse_handler
+                )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():

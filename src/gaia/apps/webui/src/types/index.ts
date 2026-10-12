@@ -262,6 +262,8 @@ export interface Message {
     stopState?: 'stopped' | 'unconfirmed';
     /** Error the server reported while a stopped turn was closing. */
     stopError?: string;
+    /** Set when this turn pushed older turns out of the model's view. */
+    historyNotice?: string;
 }
 
 /** One card instance transferred onto a finalized Message (issue #2108). */

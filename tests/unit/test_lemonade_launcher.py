@@ -645,11 +645,12 @@ def test_start_hint_legacy_windows_path_is_joined_for_cmd_not_posix(mocker):
 
     hint = describe_start_hint(ctx_size=None)
 
-    assert hint.command is not None
-    assert "'" not in hint.command
-    assert (
-        hint.command
-        == '"C:\\Program Files\\lemonade\\lemonade-server.exe" serve --no-tray'
+    # A quoted path needs `&` in PowerShell, so no one line serves both shells.
+    assert hint.command is None
+    assert hint.instruction == (
+        'Run in Command Prompt: "C:\\Program Files\\lemonade\\lemonade-server.exe" '
+        "serve --no-tray — or in PowerShell: "
+        "& 'C:\\Program Files\\lemonade\\lemonade-server.exe' serve --no-tray"
     )
 
 
@@ -674,11 +675,54 @@ def test_start_hint_windows_renders_env_the_cmd_way_never_drops_it(mocker):
 
     hint = describe_start_hint(ctx_size=32768)
 
-    assert hint.command is not None
-    assert "LEMONADE_CTX_SIZE=32768" in hint.command
-    assert not hint.command.startswith("LEMONADE_CTX_SIZE")
-    assert hint.command == 'set "LEMONADE_CTX_SIZE=32768" && C:\\lemonade\\lemond'
-    assert "32768 &&" not in hint.command
+    assert hint.command is None
+    assert hint.instruction == (
+        'Run in Command Prompt: set "LEMONADE_CTX_SIZE=32768" && C:\\lemonade\\lemond'
+        " — or in PowerShell: $env:LEMONADE_CTX_SIZE=32768; C:\\lemonade\\lemond"
+    )
+    assert "32768 &&" not in hint.instruction
+
+
+def test_start_hint_windows_keeps_one_command_when_both_shells_agree(mocker):
+    """An unquoted path with no env runs as-is in cmd.exe and PowerShell, so
+    the hint stays a single command the Agent UI can show as code."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    mocker.patch("platform.system", return_value="Windows")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(
+            found=True,
+            kind="legacy",
+            client_path=r"C:\lemonade\lemonade-server.exe",
+            server_launcher=r"C:\lemonade\lemonade-server.exe",
+        ),
+    )
+
+    hint = describe_start_hint(ctx_size=None)
+
+    assert hint.command == r"C:\lemonade\lemonade-server.exe serve --no-tray"
+    assert hint.instruction == f"Run: {hint.command}"
+
+
+@pytest.mark.parametrize(
+    "argv, env, expected",
+    [
+        ([r"C:\x\lemond"], {}, r"C:\x\lemond"),
+        (
+            [r"C:\Users\Jane Doe\LemonadeServer.exe", "--silent"],
+            {"LEMONADE_CTX_SIZE": "65536"},
+            r"$env:LEMONADE_CTX_SIZE=65536; & 'C:\Users\Jane Doe\LemonadeServer.exe' --silent",
+        ),
+        # `$` and backtick stay literal only inside single quotes; `'` doubles.
+        ([r"C:\O'Neil $x\lemond"], {}, r"& 'C:\O''Neil $x\lemond'"),
+        (["lemond"], {"B": "2", "A": "1"}, "$env:A=1; $env:B=2; lemond"),
+    ],
+)
+def test_render_powershell_quotes_for_powershell(argv, env, expected):
+    from gaia.llm.lemonade_launcher import _render_powershell
+
+    assert _render_powershell(argv, env) == expected
 
 
 def test_start_hint_macos_names_the_daemon_via_real_detection(mocker):
