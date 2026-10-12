@@ -120,6 +120,22 @@ func TestRenderMarkdownRendersWithAResolvedStyle(t *testing.T) {
 	}
 }
 
+// A Windows path keeps every backslash; a deliberate escape still works.
+func TestRenderMarkdownKeepsWindowsPathBackslashes(t *testing.T) {
+	resetRenderer(t)
+	t.Setenv(EnvStyle, "dark")
+	if err := PrimeRenderer(); err != nil {
+		t.Fatalf("PrimeRenderer: %v", err)
+	}
+	out := ansi.Strip(RenderMarkdown(`Saved to C:\Users\Kalin\Work\gaia\.claude\worktrees and \*not bold\*, ` +
+		"`C:\\in\\code`"))
+	for _, want := range []string{`C:\Users\Kalin\Work\gaia\.claude\worktrees`, "*not bold*", `C:\in\code`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered %q, want it to contain %q", out, want)
+		}
+	}
+}
+
 // Every hyphen in a paragraph used to make its line one column too long for
 // the wrapper (muesli/reflow, patched in tui/third_party), and glamour then
 // re-wrapped the overflow — stranding "m" on a row of its own after "python -"

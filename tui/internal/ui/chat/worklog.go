@@ -121,7 +121,12 @@ func (m *ChatModel) commitWork() {
 	if len(copyText) == 0 {
 		return
 	}
-	kept := append([]ActivityItem(nil), work...)
+	// Narration after the last step only leads into the answer that follows it.
+	last := len(work)
+	for last > 0 && isNarration(work[last-1]) {
+		last--
+	}
+	kept := append([]ActivityItem(nil), work[:last]...)
 	for i := range kept {
 		if kept[i].Approval == approvalWaiting {
 			kept[i].Approval = "not answered"
