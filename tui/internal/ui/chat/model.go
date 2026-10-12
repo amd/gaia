@@ -402,6 +402,12 @@ type ChatModel struct {
 	// only when the two match and the turn ends in a final.
 	switchTarget string
 	switchedTo   savedChoice
+	// relayedSwitching is true while a daemon-relay `/model` is being checked
+	// (relayedmodel.go); queued messages wait for it like they wait for a turn.
+	relayedSwitching bool
+	// relayedPending is a relayed switch the next turn carries, saved only once
+	// a turn completes on it and undone if the agent refuses it.
+	relayedPending *relayedPending
 
 	// startup is the one `/model` turn sent when the chat opens — see
 	// startupmodel.go. saveModel persists a confirmed switch; nil saves nothing.
@@ -417,6 +423,10 @@ type ChatModel struct {
 	initialQuery string
 	err          error
 	queryStart   time.Time // tracks when the current query started
+	// userWait is how long this turn sat on a question or permission prompt;
+	// the answer's timing excludes it so the user's pause isn't read as slowness.
+	userWait      time.Duration
+	userWaitStart time.Time
 
 	// logPeakRows is the tallest the work log has been THIS turn. The region's
 	// height is held there (see liveRegionView) so it never shrinks mid-turn and
@@ -502,6 +512,8 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 	ti.CharLimit = 4096
 	ti.SetHeight(1)
 	ti.ShowLineNumbers = false
+	// The default "┃ " prompt sits beside the block cursor and reads as a second one.
+	ti.Prompt = "› "
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -770,6 +782,9 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return updated, cmd
 	}
 
+	// Once per Update, so every path that opens or closes a prompt is timed.
+	next.trackUserWait(time.Now())
+
 	// Reconciled once per Update, here rather than at every call site that
 	// can open or close an overlay (a keystroke, a canonical needs_input
 	// event, the turn settling and clearing m.question) — see
@@ -791,7 +806,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = tea.Batch(cmd, capCmd)
 	}
 
-	if len(next.queued) == 0 || next.streaming || next.startup.pending ||
+	if len(next.queued) == 0 || next.streaming || next.startup.pending || next.relayedSwitching ||
 		next.setupChecking || next.setupRunning ||
 		next.providerPanel != nil || next.agentsPanel != nil {
 		return next, cmd
@@ -901,7 +916,7 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sendQueryMsg:
 		// Behind the opening /model turn, like anything typed before it.
-		if m.startup.pending || m.streaming {
+		if m.startup.pending || m.streaming || m.relayedSwitching {
 			m.queued = append(m.queued, msg.query)
 			m.updateViewport()
 			return m, nil
@@ -910,6 +925,9 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case startupModelMsg:
 		return m.runStartupModel()
+
+	case relayedSwitchMsg:
+		return m.handleRelayedSwitch(msg)
 
 	case startWarmUpMsg:
 		// A turn already running (a queued launch query, /clear) needs no
@@ -1054,6 +1072,12 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role:    RoleError,
 			Content: sanitizeErrorText(msg.err.Error()),
 		})
+		if m.revertRelayedSwitch(msg.err) {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: "Nothing was switched — this session is still on " + m.currentModelName() + ".",
+			})
+		}
 		m.drainPendingPreScan()
 		m.updateViewport()
 		return m, nil
@@ -1436,7 +1460,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// The opening /model turn goes first: a question sent before it would
 		// run on whatever model the agent happened to start on.
-		if m.streaming || m.setupChecking || m.setupRunning || m.startup.pending {
+		if m.streaming || m.setupChecking || m.setupRunning || m.startup.pending || m.relayedSwitching {
 			m.queued = append(m.queued, query)
 			m.updateViewport()
 			return m, nil
@@ -1697,6 +1721,13 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, nil
 		}
+		// The relay has no `/model` turn: sent as one it is a question.
+		if sw, ok := m.relayedSwitcher(); ok {
+			if m.relayedSwitching {
+				return m.statusNote("A model switch is already being checked."), nil
+			}
+			return m.switchRelayedModel(sw, modelCommandArg(query))
+		}
 		// Refused here when the round-trip could only end in the same
 		// refusal — a bad Claude id, or a local id with the local server
 		// known-down. See refuseModelSwitch: the agent still validates, this
@@ -1728,7 +1759,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, nil
 		}
-		panel := providers.New(m.lemonadeBaseURL, m.width, m.height)
+		panel := providers.New(m.lemonadeBaseURL, m.width, m.height).WithCurrent(providerOfBackend(m.modelBackend))
 		m.providerPanel = &panel
 		m.palette.open = false
 		return m, panel.Init()
@@ -1872,6 +1903,7 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	// scroll happened to be left.
 	m.followTail = true
 	m.queryStart = time.Now()
+	m.userWait, m.userWaitStart = 0, time.Time{}
 	// Per-turn, like ttft above it. Left standing, a turn whose `final` carries
 	// no usage.steps reported the PREVIOUS turn's count as its own.
 	m.totalSteps = 0
@@ -2092,9 +2124,9 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		}
 
 	case event.AnswerEvent:
-		m.commitWork()
+		m.commitAnsweredWork()
 		m.flushBuffer()
-		duration := time.Since(m.queryStart)
+		duration := m.turnElapsed(time.Now())
 		content := StripVerificationScope(e.Content)
 		rendered := components.RenderMarkdown(content)
 		// Off the event, not off m.ttft: nothing on this side measures these
@@ -2570,6 +2602,28 @@ func (m ChatModel) costModelName() string {
 	return "-"
 }
 
+// trackUserWait opens or closes the user-wait clock as a question or
+// permission prompt appears or goes away.
+func (m *ChatModel) trackUserWait(now time.Time) {
+	waiting := m.awaitingUser()
+	switch {
+	case waiting && m.userWaitStart.IsZero():
+		m.userWaitStart = now
+	case !waiting && !m.userWaitStart.IsZero():
+		m.userWait += now.Sub(m.userWaitStart)
+		m.userWaitStart = time.Time{}
+	}
+}
+
+// turnElapsed is the turn's wall clock minus the time spent waiting on the user.
+func (m ChatModel) turnElapsed(now time.Time) time.Duration {
+	d := now.Sub(m.queryStart) - m.userWait
+	if !m.userWaitStart.IsZero() {
+		d -= now.Sub(m.userWaitStart)
+	}
+	return d
+}
+
 // answerStats is the footnote under a finished answer.
 //
 // By default it is one number: how long that took. Everything else —
@@ -2848,7 +2902,8 @@ func (m ChatModel) awaitingUser() bool {
 // replaced: it proves the process is alive and says nothing about what it is
 // doing (#2804).
 func (m ChatModel) renderLiveRegion() string {
-	elapsed := time.Since(m.queryStart)
+	// Paused while a prompt waits on the user, so it never jumps back on answering.
+	elapsed := m.turnElapsed(time.Now())
 
 	log := collapseActivity(m.visibleWork(m.activity))
 	if len(log) > workLogLines {
@@ -3480,7 +3535,7 @@ func (m ChatModel) View() string {
 		Connected:        m.connected,
 		Streaming:        m.streaming,
 		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
-		Preparing:        m.warming,
+		Preparing:        m.warming || m.startup.inFlight,
 	}
 	barState.Hint = fitHints(m.statusHints(), m.hintBudget())
 	statusBar := components.RenderStatusBar(barState, m.width)
@@ -3518,6 +3573,8 @@ func (m ChatModel) View() string {
 	return m.help.Render(base, m.width, m.height)
 }
 
+var confirmClipStyle = lipgloss.NewStyle().Foreground(theme.Warning)
+
 // clipConfirmation trims the modal to *rows*, keeping the head and the last
 // line.
 //
@@ -3535,8 +3592,16 @@ func clipConfirmation(view string, rows int) string {
 	if rows == 1 {
 		return lines[0]
 	}
-	kept := append([]string{}, lines[:rows-1]...)
-	return strings.Join(append(kept, lines[len(lines)-1]), "\n")
+	if rows == 2 {
+		return lines[0] + "\n" + lines[len(lines)-1]
+	}
+	// Say what was cut: a multi-line edit clipped silently reads as the whole edit.
+	hidden := len(lines) - (rows - 1)
+	notice := ansi.Truncate(confirmClipStyle.Render(
+		fmt.Sprintf(" … %d more lines hidden: enlarge the terminal to see them", hidden)),
+		lipgloss.Width(view), "…")
+	kept := append([]string{}, lines[:rows-2]...)
+	return strings.Join(append(kept, notice, lines[len(lines)-1]), "\n")
 }
 
 // extractCommandFromArgs pulls the one argument worth showing out of a legacy

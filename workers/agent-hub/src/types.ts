@@ -141,6 +141,12 @@ export interface VersionEntry {
   published_at: string;
   publisher: string;
   deprecated: boolean;
+  /**
+   * Oldest GAIA core this version runs on, from its own gaia-agent.yaml. Clients
+   * install the newest version whose value their core satisfies. Absent on
+   * versions published before it was recorded.
+   */
+  min_gaia_version?: string;
   /** Primary artifact (first published for this version). */
   artifact: ArtifactInfo;
   /** All artifacts published under this version (one per platform). */
@@ -365,6 +371,12 @@ export interface IndexEntry {
   models: string[];
   /** Empty string when the manifest does not declare one. */
   min_gaia_version: string;
+  /**
+   * Every published version -> the oldest GAIA core it runs on ("" when not
+   * recorded). Lets a client offer only an update its core can run without
+   * fetching the per-agent manifest. Absent on skill entries.
+   */
+  min_gaia_versions?: Record<string, string>;
   permissions: string[];
   deprecated: boolean;
   deprecation_message?: string;

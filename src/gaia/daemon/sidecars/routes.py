@@ -43,6 +43,7 @@ from starlette.concurrency import run_in_threadpool
 from gaia.daemon.constants import API_PREFIX
 from gaia.daemon.sidecars import install as install_svc
 from gaia.daemon.sidecars.errors import (
+    AgentNeedsNewerCoreError,
     AgentNotInstalledError,
     AgentTrustRequiredError,
     CapacityError,
@@ -179,8 +180,11 @@ def build_agents_router(token: str, registry):
         """Queue an install of *agent_id*; poll ``install-status`` for progress.
 
         Body (all optional): ``{"version": "0.5.0", "trusted": true}`` —
-        ``version`` defaults to the hub's latest, ``trusted`` defaults to
+        ``version`` defaults to the newest hub version whose
+        ``min_gaia_version`` this core meets, ``trusted`` defaults to
         **false**. Returns 202 ``{"agent_id", "status": "queued", "version"}``.
+        **409** when no such version exists (or the requested one needs a newer
+        core); the detail names the core version to upgrade to.
 
         A non-verified agent (anything outside the ``verified`` security tier,
         which includes ``email``) is refused with **403** until the caller
@@ -204,7 +208,7 @@ def build_agents_router(token: str, registry):
             raise HTTPException(status_code=404, detail=str(e)) from e
         except AgentTrustRequiredError as e:
             raise HTTPException(status_code=403, detail=str(e)) from e
-        except InstallBusyError as e:
+        except (InstallBusyError, AgentNeedsNewerCoreError) as e:
             raise HTTPException(status_code=409, detail=str(e)) from e
         except HubUnavailableError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e

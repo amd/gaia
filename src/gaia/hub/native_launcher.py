@@ -47,6 +47,7 @@ from typing import Any, Deque, Dict, Mapping, Optional, Union
 
 from gaia.env import child_env
 from gaia.logger import get_logger
+from gaia.utils.terminal import windows_hidden_popen_kwargs
 
 logger = get_logger(__name__)
 
@@ -417,6 +418,7 @@ class NativeAgentLauncher:
                 # threads can SIGSEGV the child on macOS (see mcp stdio
                 # transport for the same rationale).
                 close_fds=False,
+                **windows_hidden_popen_kwargs(),
             )
         except OSError as e:
             raise NativeAgentError(

@@ -74,10 +74,13 @@ jobs:
             exit 1
           fi
           if [ "${CLAUDE_CONCLUSION:-}" = "success" ]; then PROBE_EXIT=0; else PROBE_EXIT=1; fi
+          # Actions runs bash with -e; a quota verdict (exit 2) must reach the decide step.
+          set +e
           python3 util/classify_claude_probe.py --exit-code "$PROBE_EXIT" \
             --text-file "$CLAUDE_LOG" --format stream-json --always-scan --expect ok \
             2>&1 | tee "$RUNNER_TEMP/primary-verdict.txt"
           code=${PIPESTATUS[0]}
+          set -e
           echo "code=$code" >> "$GITHUB_OUTPUT"
           # One line for the summary; the reset time when the rejection names one.
           verdict=$(grep -m1 -E 'QUOTA EXHAUSTED|CREDENTIAL INVALID|could not be classified|::error::' "$RUNNER_TEMP/primary-verdict.txt" | sed -E 's/^::error:://; s/ \| .*//' | cut -c1-300 || true)

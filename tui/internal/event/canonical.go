@@ -71,6 +71,15 @@ type CanonicalStatusEvent struct {
 	Phase string `json:"phase,omitempty"`
 	Words int    `json:"words,omitempty"`
 	Chars int    `json:"chars,omitempty"`
+	// HistoryCut is set when older turns just left the model's view; Message
+	// then carries the line to keep in the transcript.
+	HistoryCut *HistoryCut `json:"history_cut,omitempty"`
+}
+
+// HistoryCut sizes the turns no longer replayed to the model.
+type HistoryCut struct {
+	Turns  int `json:"turns"`
+	Tokens int `json:"tokens"`
 }
 
 // CanonicalTokenEvent — one incremental chunk of assistant answer text.

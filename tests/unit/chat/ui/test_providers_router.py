@@ -636,6 +636,20 @@ def test_amd_models_only(client, lemonade):
     assert [m["id"] for m in models] == ["amd.gpt-oss"]
 
 
+def test_amd_models_rank_the_gateway_preference_first(client, lemonade):
+    lemonade.models = [
+        {"id": f"amd.{name}", "recipe": "cloud", "labels": ["cloud", "chat"]}
+        for name in ("Claude-Haiku-4.5", "Gemma-4-31B", "DeepSeek-V4.1-Flash")
+    ]
+    models = client.get("/api/providers/amd/models").json()["models"]
+    assert [(m["id"], m["rank"]) for m in models] == [
+        ("amd.DeepSeek-V4.1-Flash", 1),
+        ("amd.Gemma-4-31B", 2),
+        ("amd.Claude-Haiku-4.5", None),
+    ]
+    assert models[0]["note"] == "recommended" and models[2]["note"] is None
+
+
 def test_models_lemonade_error_is_502(client, lemonade):
     lemonade.answers[("GET", "models?show_all=true")] = (500, {})
     resp = client.get("/api/providers/fireworks/models")
@@ -800,6 +814,19 @@ def test_restore_waits_for_a_starting_server_instead_of_failing(
     second = client.get("/api/providers/active").json()
     assert second["restore"]["status"] == "restored"
     assert db.get_setting("custom_model") == DEFAULT_MODEL_NAME
+    # The default was going to run anyway, so there is nothing to announce.
+    assert second["restore"]["message"] is None
+
+
+def test_restoring_a_different_model_says_so(client, lemonade, keys, db):
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+    body = client.get("/api/providers/active").json()
+    assert body["restore"] == {
+        "status": "restored",
+        "message": "Restored your last model.",
+    }
 
 
 def test_restore_of_a_cloud_model_never_goes_to_a_remote_lemonade(

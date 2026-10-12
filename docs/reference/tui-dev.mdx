@@ -69,6 +69,17 @@ Starting a dev sidecar separately while the TUI still defaults to `user` creates
 a mode conflict. `GET /daemon/v1/agents` shows the `api_version` actually in
 use.
 
+### Switching models on the relayed route
+
+On the subprocess route `/model <id>` is a turn: the agent's stdio loop
+intercepts it and confirms with a model-state ping. The relay has no such turn,
+so `/model`, `/provider` and the startup restore go through
+`client.TurnModelSwitcher` instead: the TUI checks the flagship's contract
+(2.14 or newer moves a retained session in place), checks that Lemonade lists
+the id, then sends it as `model` on every following `/query`. The first `final`
+on it saves the choice; a 409 `could not switch session` puts the previous model
+back (`client.ModelSwitchRefusedError`).
+
 ### Know which branch you built
 
 Stacked branches are siblings; no single branch has everything. A leaf build
@@ -144,6 +155,13 @@ On `preflight`, `blocker` names the row refusing the launch: `binary`,
 `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`. Wait on
 `{"state": {"view": "chat"}}` rather than a screen substring.
 
+A `daemon` or `sidecar` row that is simply not running is started by the gate
+itself, once per launch (`Row.AutoFix` in `internal/ui/preflight`). While that
+runs the row is `[..] starting…` and there is no `blocker`; only a start that
+failed, a foreign daemon record, or a remote `LEMONADE_BASE_URL` leaves it
+waiting on `f`. To reproduce a reboot, stop the daemon you started for the
+drive (`GAIA_DAEMON_HOME` set) and relaunch.
+
 `esc` quits on `preflight` (there is no screen behind it) and clears the
 composer on an idle `chat`. With the `d` details pane open, it closes the pane
 first.
@@ -192,8 +210,11 @@ colour support, and the TUI then emits no escape sequences at all. It reads as
   second-to-last row.
 - **Check which screen you are on** before sending keys. Keys sent to the wrong
   screen do nothing and read as "the binding is broken".
-- **Grep for the right words.** The confirmation prompt says
-  `Confirm: <tool>` and `DESTRUCTIVE`, not "Allow".
+- **Grep for the right words.** The confirmation prompt's first line is a
+  risk badge (`READ`, `WRITE`, `RUNS CODE`, `DESTRUCTIVE`) and a question. A
+  tool the TUI knows gets a plain question — a shell command reads
+  `RUNS CODE Run this command?`, a file write `WRITE Write this file?` — and
+  any other tool reads `Allow <tool>?`. There is no `Confirm: <tool>` line.
 - **`format=plain` strips ANSI**, so it cannot answer a colour question.
 - `screencapture` is blocked on some machines; use the control API text.
 

@@ -54,6 +54,12 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
             setOpen(false);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
+            // The mode can be saved even though a running relayed agent couldn't be told.
+            if (sessionId) {
+                api.getPermissions(sessionId)
+                    .then((p) => setMode(p.mode))
+                    .catch((e) => setError((prev) => `${prev ?? ''} Couldn't re-read the saved mode: ${e instanceof Error ? e.message : String(e)}`.trim()));
+            }
         } finally {
             setConfirming(false);
         }

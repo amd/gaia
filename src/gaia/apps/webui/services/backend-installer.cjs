@@ -1433,18 +1433,42 @@ async function installBackend(opts = {}) {
       }
     }
 
-    const venvResult = await runCommand(
-      "uv",
-      ["venv", GAIA_VENV, "--python", "3.12"],
-      { stageLabel: "venv" }
-    );
+    const venvArgs = ["venv", GAIA_VENV, "--python", "3.12"];
+    let venvResult = await runCommand("uv", venvArgs, { stageLabel: "venv" });
+    // uv downloads Python 3.12 when none is installed; behind a corporate
+    // proxy that fails on uv's bundled roots exactly like the pip step below.
+    let venvNativeTls = false;
+    if (
+      venvResult.code !== 0 &&
+      isTlsCertError(`${venvResult.stdout || ""}\n${venvResult.stderr || ""}`)
+    ) {
+      venvNativeTls = true;
+      log(
+        "TLS trust failure downloading Python — retrying with --native-tls " +
+          "to use the OS certificate store"
+      );
+      report(
+        STAGES.CREATE_VENV,
+        0,
+        "Certificate trust issue — retrying with the system certificate store"
+      );
+      if (fs.existsSync(GAIA_VENV)) {
+        fs.rmSync(GAIA_VENV, { recursive: true, force: true });
+      }
+      venvResult = await runCommand("uv", [...venvArgs, "--native-tls"], {
+        stageLabel: "venv",
+      });
+    }
     if (venvResult.code !== 0) {
+      const manual = `uv venv ${GAIA_VENV_DISPLAY} --python 3.12${
+        venvNativeTls ? " --native-tls" : ""
+      }`;
       throw new InstallError(
         `Failed to create Python environment (uv venv exit ${venvResult.code}).`,
         {
           stage: STAGES.CREATE_VENV,
           code: venvResult.code,
-          suggestion: `Try creating it manually:\n  uv venv ${GAIA_VENV_DISPLAY} --python 3.12\nThen restart GAIA.`,
+          suggestion: `Try creating it manually:\n  ${manual}\nThen restart GAIA.`,
         }
       );
     }
@@ -1462,6 +1486,8 @@ async function installBackend(opts = {}) {
     "install",
     pipPackage,
     "--refresh",
+    // uv skips this by default, leaving the first daemon start to compile GAIA.
+    "--compile-bytecode",
     "--python",
     GAIA_PYTHON_BIN,
   ];

@@ -135,6 +135,17 @@ func (m *ChatModel) commitWork() {
 	})
 }
 
+// commitAnsweredWork commits a turn that ends in an answer. A closing status
+// ("Done.") only leads into that answer, so it is not kept beside it.
+func (m *ChatModel) commitAnsweredWork() {
+	last := len(m.activity)
+	for last > 0 && m.activity[last-1].Kind == "status" {
+		last--
+	}
+	m.activity = m.activity[:last]
+	m.commitWork()
+}
+
 // stepText is one step as plain text.
 func stepText(item ActivityItem) string {
 	line := clean(item.Content)

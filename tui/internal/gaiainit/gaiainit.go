@@ -41,11 +41,11 @@ const Profile = "gaia"
 
 // CheckTimeout bounds the readiness probe. It runs a fresh Python interpreter
 // plus one Lemonade health check, so a few seconds is normal -- but after a
-// reboot it also starts the daemon (up to 30s) and has it start GAIA's
+// reboot it also starts the daemon (up to 60s) and has it start GAIA's
 // Lemonade Server (up to 85s, _LEMONADE_ENSURE_TIMEOUT in
 // gaia/daemon/client.py). It must stay above that sum, or the TUI reports
 // "could not be checked" for a start that succeeded.
-const CheckTimeout = 150 * time.Second
+const CheckTimeout = 180 * time.Second
 
 // notReadyExitCode is the ONLY exit code that means "not set up yet".
 // Anything else — notably 2, which an installed gaia older than `--check`
@@ -170,13 +170,34 @@ type Event struct {
 // stdout/stderr, one Event per line, terminated by an Event{Done: true}. The
 // returned CancelFunc kills the child; safe to call from any goroutine.
 func Start(claudeMode bool) (<-chan Event, context.CancelFunc, error) {
+	return start(RunArgs(claudeMode))
+}
+
+// StartServerOnly runs setup's first step alone: install and start GAIA's
+// Lemonade, download nothing. Which models to fetch depends on the provider,
+// and the provider can only be chosen once Lemonade is there.
+func StartServerOnly() (<-chan Event, context.CancelFunc, error) {
+	return start(ServerOnlyArgs())
+}
+
+// ServerOnlyArgs is RunArgs for setup's first step: no model downloads.
+func ServerOnlyArgs() []string {
+	return append(RunArgs(false), "--skip-models")
+}
+
+// ServerOnlyCommand is the command a user should type to run that step.
+func ServerOnlyCommand() string {
+	return "gaia init --profile " + Profile + " --skip-models"
+}
+
+func start(args []string) (<-chan Event, context.CancelFunc, error) {
 	bin, err := Binary()
 	if err != nil {
 		return nil, nil, err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, bin, RunArgs(claudeMode)...)
+	cmd := exec.CommandContext(ctx, bin, args...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
