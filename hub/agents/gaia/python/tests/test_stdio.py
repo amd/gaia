@@ -1974,6 +1974,40 @@ def test_context_eviction_does_not_delete_tui_archive(tmp_path, monkeypatch):
     agent.conversation_history.close()
 
 
+def test_a_history_cut_shows_one_transcript_notice(tmp_path, monkeypatch):
+    from gaia.agents.base import history
+
+    agent = _HistoryAgent()
+    agent.conversation_history = history.SessionHistory(tmp_path / "session.db")
+    monkeypatch.setattr(history, "history_budget", lambda *args: 100)
+    monkeypatch.setattr(history, "count_tokens", lambda *args: 10)
+    notices = []
+    for i in range(13):
+        out = _run(agent, f"q{i}")
+        notices += [e for e in map(json.loads, _lines(out)) if e.get("history_cut")]
+    assert len(notices) == 1
+    assert notices[0]["history_cut"] == {"turns": 6, "tokens": 60}
+    assert notices[0]["message"].startswith("Older messages are now out")
+    agent.conversation_history.close()
+
+
+def test_a_smaller_model_that_hides_turns_shows_a_notice(tmp_path, monkeypatch):
+    from gaia.agents.base import history
+
+    agent = _HistoryAgent()
+    agent.conversation_history = history.SessionHistory(tmp_path / "session.db")
+    budget = {"value": 1000}
+    monkeypatch.setattr(history, "history_budget", lambda *args: budget["value"])
+    monkeypatch.setattr(history, "count_tokens", lambda *args: 10)
+    for i in range(10):
+        _run(agent, f"q{i}")
+    budget["value"] = 60
+    out = _run(agent, "after the switch")
+    notices = [e for e in map(json.loads, _lines(out)) if e.get("history_cut")]
+    assert [n["history_cut"] for n in notices] == [{"turns": 4, "tokens": 40}]
+    agent.conversation_history.close()
+
+
 def test_persistence_failure_emits_one_error_and_no_premature_final(monkeypatch):
     agent = _HistoryAgent()
     agent._script = [{"type": "final_answer", "content": "done"}]

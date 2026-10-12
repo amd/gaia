@@ -1193,7 +1193,9 @@ def run_turn(
     from gaia.ui.sse_handler import SSEOutputHandler
 
     if isinstance(getattr(agent, "conversation_history", None), SessionHistory):
-        agent.conversation_history.prepare(agent, query)
+        agent.conversation_history.prepare(
+            agent, query, on_cut=lambda cut: _write(_history_cut_event(cut), out)
+        )
 
     handler = SSEOutputHandler()
     # stdin carries tool decisions, not answers to free-form questions.
@@ -1336,6 +1338,15 @@ CLEAR_CONVERSATION_QUERY = "\x00gaia:clear_conversation\x00"
 WARM_UP_QUERY = "\x00gaia:warm_up\x00"
 WARMED_UP = "warmed_up"
 WARM_UP_SKIPPED = "warm_up_skipped"
+
+
+def _history_cut_event(cut: Any) -> Dict[str, Any]:
+    """A transcript line saying older turns left the model's view."""
+    return {
+        "type": "status",
+        "message": cut.notice,
+        "history_cut": {"turns": cut.turns, "tokens": cut.tokens},
+    }
 
 
 def run_warm_up(agent: Any, out) -> None:

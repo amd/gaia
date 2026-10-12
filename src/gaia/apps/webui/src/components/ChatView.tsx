@@ -86,6 +86,14 @@ export function isEchoOfFailedTool(event: StreamEvent, steps: AgentStep[]): bool
     return last.success === false || (!!last.active && last.success == null);
 }
 
+/** Notices by server message id: a refetch replaces messages, so they cannot live on them alone. */
+const historyNotices = new Map<number, string>();
+
+/** One quiet line saying older turns left the model's view. */
+function HistoryNotice({ text }: { text: string }) {
+    return <div className="history-notice" role="note">{text}</div>;
+}
+
 /** Map an SSE agent event to an AgentStep for the UI. */
 function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<number>): AgentStep | null {
     const id = ++stepIdRef.current;
@@ -213,6 +221,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Smooth streaming exit — snapshot last content so fade-out shows real text
     const [streamEnding, setStreamEnding] = useState(false);
+    const [liveHistoryNotice, setLiveHistoryNotice] = useState<string | null>(null);
     const lastStreamContentRef = useRef('');
     const lastAgentStepsRef = useRef<AgentStep[]>([]);
     const lastCardsRef = useRef<RenderCardData[]>([]);
@@ -550,6 +559,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const streamStart = log.stream.time();
 
         let fullContent = '';
+        let historyNotice: string | undefined;
+        setLiveHistoryNotice(null);
         let doneHandled = false;
         streamBufferRef.current = '';
         stopRequestedRef.current = false;
@@ -853,6 +864,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (event.type === 'status') {
                     const status = event.status;
                     const msg = (event.message || '').trim();
+                    if (status === 'history_cut') {
+                        historyNotice = msg || undefined;
+                        setLiveHistoryNotice(historyNotice ?? null);
+                        return;
+                    }
                     if (event.phase && msg) useChatStore.getState().setLiveStatus(msg);
                     // Skip "Executing <tool>" messages - redundant with tool_start
                     if (msg.toLowerCase().startsWith('executing ')) return;
@@ -947,7 +963,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         stats: event.stats || undefined,
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
                         stopState,
+                        historyNotice,
                     };
+                    if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     addMessage(assistantMsg);
                 }
 
@@ -1471,8 +1489,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             && msg.role === 'assistant'
                             && idx === messages.length - 1;
                         if (isStreamEndingMsg) return null;
+                        const notice = msg.role === 'assistant'
+                            ? msg.historyNotice ?? historyNotices.get(msg.id)
+                            : undefined;
                         return (
                             <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}>
+                                {notice && <HistoryNotice text={notice} />}
                                 <MessageBubble
                                     message={msg}
                                     agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
@@ -1484,6 +1506,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         );
                     })}
 
+                    {(isStreaming || streamEnding) && liveHistoryNotice && <HistoryNotice text={liveHistoryNotice} />}
                     {(isStreaming || streamEnding) && (
                         <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
                             <MessageBubble
