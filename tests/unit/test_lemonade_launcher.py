@@ -655,8 +655,9 @@ def test_start_hint_legacy_windows_path_is_joined_for_cmd_not_posix(mocker):
 
 def test_start_hint_windows_renders_env_the_cmd_way_never_drops_it(mocker):
     """A ctx-carrying env var must survive into the rendered command on
-    Windows too — as `set VAR=...`, not the POSIX `VAR=... cmd` form (which
-    cmd.exe would treat as the program name)."""
+    Windows too — as `set "VAR=..."`, not the POSIX `VAR=... cmd` form (which
+    cmd.exe would treat as the program name). The quotes bound the value:
+    unquoted, cmd.exe keeps the space before `&&` in it."""
     from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
 
     mocker.patch("platform.system", return_value="Windows")
@@ -676,7 +677,8 @@ def test_start_hint_windows_renders_env_the_cmd_way_never_drops_it(mocker):
     assert hint.command is not None
     assert "LEMONADE_CTX_SIZE=32768" in hint.command
     assert not hint.command.startswith("LEMONADE_CTX_SIZE")
-    assert hint.command == "set LEMONADE_CTX_SIZE=32768 && C:\\lemonade\\lemond"
+    assert hint.command == 'set "LEMONADE_CTX_SIZE=32768" && C:\\lemonade\\lemond'
+    assert "32768 &&" not in hint.command
 
 
 def test_start_hint_macos_names_the_daemon_via_real_detection(mocker):
