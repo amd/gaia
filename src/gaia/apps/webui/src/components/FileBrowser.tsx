@@ -8,6 +8,7 @@ import {
     Table, Code, Eye
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
@@ -174,6 +175,8 @@ async function indexAndAttachFiles(
 
 export function FileBrowser() {
     const { setShowFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
+    const closeBrowser = useCallback(() => setShowFileBrowser(false), [setShowFileBrowser]);
+    useEscapeToClose(true, closeBrowser);
 
     // Browse state
     const [currentPath, setCurrentPath] = useState<string>('');
