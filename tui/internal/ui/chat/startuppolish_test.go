@@ -32,6 +32,17 @@ func TestHeaderNamesTheRestoringModelNotTheGateDefault(t *testing.T) {
 	}
 }
 
+func TestRefusedRestoreHandsTheHeaderBackToTheGateModel(t *testing.T) {
+	m, c, _ := startupChat(t, StartupRestore, "local", restoredID)
+	m = m.WithExpectedModel("Gemma-4-E4B-it-GGUF")
+	m = openChat(t, m, c)
+	m = deliver(t, m, event.CanonicalErrorEvent{Type: "error", Detail: "Unknown Lemonade model: " + restoredID})
+	header := ansi.Strip(m.renderHeader())
+	if strings.Contains(header, restoredID) || !strings.Contains(header, "Gemma-4-E4B-it-GGUF") {
+		t.Fatalf("a refused restore must not leave its target in the header: %q", header)
+	}
+}
+
 func TestRestoreTurnReadsAsGettingReadyNotStreaming(t *testing.T) {
 	m, c, _ := startupChat(t, StartupRestore, "local", restoredID)
 	m = openChat(t, m, c)
