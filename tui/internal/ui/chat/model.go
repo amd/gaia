@@ -2116,7 +2116,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		}
 
 	case event.AnswerEvent:
-		m.commitWork()
+		m.commitAnsweredWork()
 		m.flushBuffer()
 		duration := time.Since(m.queryStart)
 		content := StripVerificationScope(e.Content)

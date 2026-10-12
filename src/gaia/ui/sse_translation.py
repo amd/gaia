@@ -799,7 +799,7 @@ def _quote_value(text: str) -> str:
         return f'"{text}"'
     if "'" not in text:
         return f"'{text}'"
-    return '"' + text.replace('"', '\\"') + '"'
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def render_invocation(args: Dict[str, Any]) -> str:

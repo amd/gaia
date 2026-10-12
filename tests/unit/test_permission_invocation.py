@@ -28,3 +28,4 @@ def test_a_value_with_quotes_stays_unambiguous():
     assert render_invocation({"content": 'say "it\'s"'}) == (
         'content="say \\"it\'s\\""'
     )
+    assert render_invocation({"content": "a\\\"b'c"}) == ('content="a\\\\\\"b\'c"')

@@ -121,12 +121,7 @@ func (m *ChatModel) commitWork() {
 	if len(copyText) == 0 {
 		return
 	}
-	// Narration after the last step only leads into the answer that follows it.
-	last := len(work)
-	for last > 0 && isNarration(work[last-1]) {
-		last--
-	}
-	kept := append([]ActivityItem(nil), work[:last]...)
+	kept := append([]ActivityItem(nil), work...)
 	for i := range kept {
 		if kept[i].Approval == approvalWaiting {
 			kept[i].Approval = "not answered"
@@ -138,6 +133,17 @@ func (m *ChatModel) commitWork() {
 		Content: strings.Join(copyText, "\n"),
 		Work:    kept,
 	})
+}
+
+// commitAnsweredWork commits a turn that ends in an answer. A closing status
+// ("Done.") only leads into that answer, so it is not kept beside it.
+func (m *ChatModel) commitAnsweredWork() {
+	last := len(m.activity)
+	for last > 0 && m.activity[last-1].Kind == "status" {
+		last--
+	}
+	m.activity = m.activity[:last]
+	m.commitWork()
 }
 
 // stepText is one step as plain text.

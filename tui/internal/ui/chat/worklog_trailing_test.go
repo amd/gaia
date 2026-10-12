@@ -41,3 +41,28 @@ func TestCommitWorkDropsNarrationThatLeadsIntoAnswer(t *testing.T) {
 	}
 	t.Fatal("expected a work record for the tool step")
 }
+
+// With no answer to lead into, the last status before a failure stays on record.
+func TestCommitWorkKeepsTheLastStatusWhenTheTurnFails(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.dev = true
+	m.streaming = true
+	m = feed(t, m,
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "write_file", Args: json.RawMessage(`{"path":"notes.md"}`)},
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "write_file", Data: json.RawMessage(`{"status":"success"}`)},
+		event.CanonicalStatusEvent{Type: "status", Message: "Verifying the write"},
+		event.CanonicalErrorEvent{Type: "error", Detail: "model unloaded"},
+	)
+	for _, msg := range m.messages {
+		if msg.Role != RoleWork {
+			continue
+		}
+		for _, item := range msg.Work {
+			if item.Content == "Verifying the write" {
+				return
+			}
+		}
+		t.Fatalf("last status before the failure was dropped: %+v", msg.Work)
+	}
+	t.Fatal("expected a work record for the tool step")
+}

@@ -162,6 +162,9 @@ func RenderMarkdown(content string) string {
 // windowsPath matches a drive-letter or UNC path up to whitespace or markup.
 var windowsPath = regexp.MustCompile(`(?:\b[A-Za-z]:\\|\\\\[A-Za-z0-9])[^\s` + "`" + `*<>\[\]()]*`)
 
+// listItem matches a line that opens a list item.
+var listItem = regexp.MustCompile(`^ {0,3}(?:[-*+]|\d+[.)])(?:\s|$)`)
+
 // protectWindowsPaths doubles the backslashes in Windows paths outside code, so
 // markdown does not read `C:\Work\.claude` as escapes and drop them.
 func protectWindowsPaths(content string) string {
@@ -170,12 +173,24 @@ func protectWindowsPaths(content string) string {
 	}
 	lines := strings.Split(content, "\n")
 	fence := ""
+	inList, inIndentedCode, prevBlank := false, false, true
 	for i, line := range lines {
 		trimmed := strings.TrimLeft(line, " ")
 		if fence != "" {
 			if strings.HasPrefix(trimmed, fence) {
 				fence = ""
 			}
+			continue
+		}
+		blank := strings.TrimSpace(line) == ""
+		indented := strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t")
+		// An indented block after a blank line is code, unless it continues a list.
+		inIndentedCode = indented && !inList && (prevBlank || inIndentedCode)
+		if !blank && !indented {
+			inList = listItem.MatchString(line)
+		}
+		prevBlank = blank
+		if inIndentedCode {
 			continue
 		}
 		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
