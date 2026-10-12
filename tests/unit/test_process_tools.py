@@ -267,7 +267,12 @@ class TestPolicyParity:
         scope = grant_scope("start_process", {"command": "npm run dev"})
         assert scope is not None
         assert scope.key.startswith("start_process:")
-        assert grant_scope("start_process", {"command": "a | b"}) is None
+        pipeline = {"command": "a | b"}
+        foreground = grant_scope("run_shell_command", pipeline)
+        background = grant_scope("start_process", pipeline)
+        assert background.label == foreground.label
+        assert all(key.startswith("start_process:") for key in background.keys)
+        assert grant_scope("start_process", {"command": "rm -rf build"}) is None
 
     def test_rate_limit_is_shared_with_run_shell_command(self, gated):
         gated.max_rate_limit_wait_seconds = 0
@@ -398,13 +403,17 @@ class TestLifecycle:
 
     def test_a_finished_test_run_is_a_check(self, host, tmp_path):
         _script(tmp_path, "test_ok.py", "def test_ok():\n    assert True\n")
+        # Rooted at tmp_path: otherwise the child's collection walks the
+        # shared temp dir, where other runs' folders vanish mid-scan.
+        ini = _script(tmp_path, "pytest.ini", "[pytest]\n")
         started = _tool("start_process")(
-            f'{PY} -m pytest -q -p no:cacheprovider "{tmp_path / "test_ok.py"}"'
+            f'{PY} -m pytest -q -p no:cacheprovider -c "{ini}" '
+            f'"{tmp_path / "test_ok.py"}"'
         )
         done = _tool("wait_for_process")(started["process_id"], timeout=120)
         if "No module named pytest" in done["new_output"]:
             pytest.skip(f"{PY} on PATH has no pytest")
-        assert done["exit_code"] == 0
+        assert done["exit_code"] == 0, done["new_output"]
         assert done["check_result"]["label"] == "pytest"
         assert done["check_result"]["passed"] is True
         # Grouped with the same command run in the foreground.
