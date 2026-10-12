@@ -100,8 +100,7 @@ degraded — relaunch under `wt.exe`.
 | Endpoint | What it is for |
 |---|---|
 | `GET status` | Where the session is, plus `state.chat` diagnostics (below) |
-| `GET screen?format=plain\|ansi\|svg` | The frame as text, as styled text, or as a picture |
-|  | JSON forms also carry `cursors`: every cell drawn as a block cursor, with the two cells left of it |
+| `GET screen?format=plain\|ansi\|svg` | The frame as text, as styled text, or as a picture. The `plain` and `ansi` JSON also carry `cursors`: every 1-cell reverse-video run (a block cursor, or a one-character highlight), with the two cells left of it |
 | `POST keys` | `{"keys": ["ctrl+t", "enter"]}` |
 | `POST mouse` | `{"events": [{"action": "click", "x": 24, "y": 16}]}` |
 | `POST text` | Type into the composer |
@@ -301,8 +300,10 @@ where `ask` types, submits, and blocks on `gone streaming`.
 - **`resize` FIRST** or cols/rows are 0 and everything wraps wrongly.
 - **Look at the picture, not just the text.** Render `screen?format=svg` in a
   browser and screenshot it; a doubled cursor, a leaked label, or a repeated line
-  is invisible in a grep. A focused input must report exactly one entry in
-  `cursors`, with no bar glyph (`┃`, `│`) in its `left`.
+  is invisible in a grep. Filter `cursors` to the focused input's row: it must
+  never hold more than one entry, and that entry must have no bar glyph (`┃`,
+  `│`) in its `left`. Zero entries is the cursor's blink-off phase, so re-sample
+  before calling it missing.
 - **`format=plain` strips ANSI** — but `format=ansi` does not, and it is the
   fastest way to settle a colour question. Count `\x1b` in the result: a styled
   frame returns dozens (a healthy header is
