@@ -190,6 +190,9 @@ class ChatAgentConfig:
     context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS
     context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS
 
+    # Send earlier requests' reasoning back with their messages (see Agent).
+    resend_reasoning_across_requests: bool = False
+
     # Debug/output settings
     debug: bool = False
     debug_prompts: bool = False  # Backward compatibility
@@ -557,6 +560,7 @@ class ChatAgent(
             context_eviction_threshold_tokens=config.context_eviction_threshold_tokens,
             context_eviction_keep_steps=config.context_eviction_keep_steps,
             context_eviction_min_batch_tokens=config.context_eviction_min_batch_tokens,
+            resend_reasoning_across_requests=config.resend_reasoning_across_requests,
         )
 
         # Without this, throwaway scripts land in the user's project. One path

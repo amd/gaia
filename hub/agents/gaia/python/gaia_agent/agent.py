@@ -188,6 +188,10 @@ class GaiaAgentConfig(ChatAgentConfig):
     enable_scratchpad: bool = True
     enable_browser: bool = True
 
+    # Qwen3.6's template re-renders earlier steps with their reasoning; dropping
+    # it at the next request re-reads the whole previous tool turn uncached.
+    resend_reasoning_across_requests: bool = True
+
     # Which declared skill set to load. None = load nothing (the #2848 default);
     # resolution order is explicit arg -> env -> manifest default.
     skill_set: Optional[str] = None
