@@ -175,7 +175,7 @@ func (m GatewayModel) authenticate(token string) tea.Cmd {
 	baseURL := m.state.BaseURL
 	return func() tea.Msg {
 		result, err := client.SetToken(token, baseURL)
-		if err != nil || result.ModelsDiscovered > 0 {
+		if err != nil || !result.foundNone() {
 			return authedMsg{result: result, err: err}
 		}
 		// Lemonade now holds a token that found nothing; put the kept one back so
@@ -263,7 +263,7 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.result.AuthState.EnvVarSet || msg.result.AuthState.RuntimeKeySet {
-			m.notice = fmt.Sprintf("Registered. %d model(s) discovered.", msg.result.ModelsDiscovered)
+			m.notice = fmt.Sprintf("Registered. %d model(s) discovered.", msg.result.discovered())
 			m.stage = stageModels
 			m.busy = "Loading models..."
 			return m, m.fetchModels()
@@ -277,6 +277,7 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case authedMsg:
 		m.busy = ""
 		if msg.err != nil {
+			m.pendingPersist = nil
 			m.errMsg = msg.err.Error()
 			return m, nil
 		}
@@ -295,7 +296,7 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.errMsg = ""
 		m.notice = fmt.Sprintf(
 			"Token accepted — %d model(s) discovered. %s",
-			msg.result.ModelsDiscovered, savingNotice)
+			msg.result.discovered(), savingNotice)
 		m.stage = stageModels
 		m.tokenInput.Blur()
 		m.busy = "Loading models..."

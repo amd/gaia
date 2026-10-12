@@ -16,7 +16,9 @@ import (
 type fakeLemonade struct {
 	mu         sync.Mutex
 	discovered int
-	seen       []string
+	// omitCount leaves models_discovered out, as a Lemonade that does not report it.
+	omitCount bool
+	seen      []string
 }
 
 func (f *fakeLemonade) start(t *testing.T) string {
@@ -27,10 +29,11 @@ func (f *fakeLemonade) start(t *testing.T) string {
 		f.mu.Unlock()
 		switch r.URL.Path {
 		case "/api/v1/cloud/auth":
-			writeJSON(w, map[string]any{
-				"models_discovered": f.discovered,
-				"auth_state":        map[string]any{"runtime_key_set": true},
-			})
+			body := map[string]any{"auth_state": map[string]any{"runtime_key_set": true}}
+			if !f.omitCount {
+				body["models_discovered"] = f.discovered
+			}
+			writeJSON(w, body)
 		case "/api/v1/models":
 			writeJSON(w, map[string]any{"data": []any{}})
 		default:
@@ -119,6 +122,25 @@ func TestATokenThatFindsModelsIsKeptAndSaved(t *testing.T) {
 
 	if lem.saw("DELETE /api/v1/cloud/auth/" + Provider) {
 		t.Fatalf("a working token was dropped: %v", lem.seen)
+	}
+	if want := "POST " + gatewayTokenPath; d.seenPath != want {
+		t.Fatalf("daemon got %q, want the token saved (%q)", d.seenPath, want)
+	}
+	if g.stage != stageModels || g.errMsg != "" {
+		t.Fatalf("stage = %d, errMsg = %q; want the model list and no error", g.stage, g.errMsg)
+	}
+}
+
+// A Lemonade that does not report a count says nothing about the token, so it
+// must not be read as a rejection.
+func TestATokenWithNoReportedCountIsKeptAndSaved(t *testing.T) {
+	d := newFakeDaemon(t)
+	lem := &fakeLemonade{omitCount: true}
+	g, cmd := submitToken(t, lem.start(t), "good")
+	runAll(cmd)
+
+	if lem.saw("DELETE /api/v1/cloud/auth/" + Provider) {
+		t.Fatalf("a token with no reported count was dropped: %v", lem.seen)
 	}
 	if want := "POST " + gatewayTokenPath; d.seenPath != want {
 		t.Fatalf("daemon got %q, want the token saved (%q)", d.seenPath, want)
