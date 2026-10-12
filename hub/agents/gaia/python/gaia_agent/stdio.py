@@ -960,12 +960,28 @@ def _write_if_wire_alive(event: Dict[str, Any], out) -> bool:
         return False
 
 
+def _drain_memory(agent) -> None:
+    """Let the last turns' memory extraction finish before ``os._exit`` drops it.
+
+    Bounded by ``EXTRACTION_EXIT_WAIT_S``, which the TUI's exit grace is sized
+    to cover; a drain that runs out logs how many jobs it dropped.
+    """
+    from gaia.agents.base import memory
+
+    pending = getattr(agent, "pending_memory_extractions", None)
+    count = pending() if callable(pending) else 0
+    if count:
+        logger.info("Saving memories before exit (%d pending)", count)
+    memory.drain_memory_extraction(agent, memory.EXTRACTION_EXIT_WAIT_S)
+
+
 def _exit_cleanly(out) -> None:
     """Leave without waiting on the agent's non-daemon threads.
 
     The agent leaves memory extraction and the filesystem watcher behind, so a
     plain return hangs the interpreter at shutdown — a one-shot `run --query`
-    sat for 400s until its caller killed it. Nothing here owns unflushed state:
+    sat for 400s until its caller killed it. Memory is drained by the caller
+    first (``_drain_memory``); otherwise nothing here owns unflushed state:
     events are flushed per line and the DBs commit per write. Both flushes are
     guarded because the usual way of arriving here is the parent — which owns
     both pipes — having already gone.
@@ -1612,6 +1628,7 @@ def main(argv: Optional[list] = None) -> int:
                 break
 
     # stdin closed: the parent is done with us.
+    _drain_memory(agent)
     _exit_cleanly(out)
 
 
