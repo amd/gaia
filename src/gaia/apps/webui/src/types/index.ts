@@ -345,6 +345,15 @@ export interface DownloadProgress {
     message: string | null;
 }
 
+/** Whether a new chat's first turn will find its prompt already read. */
+export interface WarmUpStatus {
+    state: 'idle' | 'warming' | 'ready' | 'failed' | 'skipped';
+    elapsed_seconds?: number | null;
+    prompt_tokens?: number | null;
+    cached_tokens?: number | null;
+    error?: string | null;
+}
+
 export interface SystemStatus {
     lemonade_running: boolean;
     /** Present when the Lemonade health/catalog query failed. */
@@ -389,6 +398,8 @@ export interface SystemStatus {
     // Boot-time initialization tracking
     init_state?: 'initializing' | 'ready' | 'degraded';
     init_tasks?: Array<{ name: string; status: string }>;
+    /** Priming of a new chat's prompt; never blocks sending. */
+    warm_up?: WarmUpStatus | null;
     /** Devices detected on this system (e.g. ['cpu', 'gpu', 'npu']). */
     detected_devices?: string[];
     /** Active profile from ``~/.gaia/config.json`` (e.g. "chat", "npu"). */

@@ -258,3 +258,31 @@ def test_each_request_extends_the_previous_one(flagship):
     turn_three = [m for m in model.requests[4][0] if m["role"] == "user"][-1]
     assert "[Indexed documents: handbook.md]" in turn_three["content"]
     assert "Sam works on the safety team" not in model.requests[-1][0][0]["content"]
+
+
+def _prefix(request) -> str:
+    """System message and tool schemas: what a warm-up leaves in the cache."""
+    messages, tools = request
+    dump = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False)
+    return dump(messages[:1]) + dump(tools)
+
+
+def _assert_same_prefix(warm, first):
+    before, after = _prefix(warm), _prefix(first)
+    at = _first_difference(before, after)
+    assert before == after, (
+        f"warm-up prefix diverges from the first turn's at char {at} of "
+        f"{len(after)}:\n  warm: {before[max(0, at - 60): at + 120]!r}\n"
+        f"  turn: {after[max(0, at - 60): at + 120]!r}"
+    )
+
+
+def test_warm_up_primes_the_first_turns_exact_prefix(flagship):
+    agent, model, _doc = flagship
+    model.script[:] = ["OK"]
+    agent.warm_up()
+    warm = model.requests[-1]
+    assert warm[0][0]["role"] == "system" and warm[1], "warm-up sent no prefix"
+
+    _turn(agent, model, "hello", ["Hi."])
+    _assert_same_prefix(warm, model.requests[-1])
