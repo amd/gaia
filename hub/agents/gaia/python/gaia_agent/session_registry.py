@@ -39,6 +39,11 @@ PROVIDER_CLAUDE = "claude"
 #: default can't do that since the dict's values are always None already.
 _SENTINEL = object()
 
+#: Held while an agent is built. A build fills the process-wide tool registry
+#: and then snapshots it, so two at once can leave one agent running the other's
+#: tools — e.g. the start-up warm-up racing the first session's build.
+AGENT_BUILD_LOCK = threading.Lock()
+
 
 def build_session_agent(**config_kwargs: Any):
     """Construct a live ``GaiaAgent`` for a new session.
@@ -48,7 +53,8 @@ def build_session_agent(**config_kwargs: Any):
     """
     from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
-    return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
+    with AGENT_BUILD_LOCK:
+        return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
 
 
 def _permission_state():
@@ -100,6 +106,9 @@ class _AgentSession:
         #: ``PROVIDER_CLAUDE`` — so a turn naming another one is a switch.
         self.provider = provider
         self.run_lock = threading.Lock()
+        #: The cancel flag of the turn holding ``run_lock``, so a new turn can
+        #: tell a stopped turn that is still winding down from a live one.
+        self.active_cancel: Optional[threading.Event] = None
         #: True exactly once, on the session built to replace one this
         #: registry involuntarily evicted (LRU cap or idle timeout) — never
         #: for a session_id used for the first time. The caller (server.py)

@@ -480,16 +480,23 @@ const requirementRows = [
       });
     });
 
-    // Cross-links elsewhere on the page (the score card, the Package card) that
-    // jump to a specific doc tab and scroll it into view.
+    // Cross-links elsewhere on the page (the score card, the Package card) and
+    // links between the docs themselves (`./SPEC.md#…`) that jump to a specific
+    // doc tab and scroll it into view.
     const docsCard = document.getElementById('docs') ?? tabRoot;
     document.querySelectorAll<HTMLElement>('[data-doc-goto]').forEach((btn) => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', (e) => {
         const key = btn.getAttribute('data-doc-goto');
+        const panel = panels.find((p) => p.getAttribute('data-doc-panel') === key);
+        // A doc this package did not publish has no tab; the #docs href still lands on the docs.
+        if (!panel) return;
+        e.preventDefault();
         select(key);
+        const anchor = btn.getAttribute('data-doc-anchor');
+        const target = (anchor && panel.querySelector<HTMLElement>(`#${CSS.escape(anchor)}`)) || docsCard;
         const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-        docsCard.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
-        tabs.find((t) => t.getAttribute('data-doc-tab') === key)?.focus();
+        target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+        tabs.find((t) => t.getAttribute('data-doc-tab') === key)?.focus({ preventScroll: target !== docsCard });
       });
     });
   }
@@ -694,6 +701,8 @@ const requirementRows = [
   .doc h3 { @apply mt-10 mb-4 border-b border-g-border pb-2 font-display text-[20px] font-semibold tracking-[-0.015em] text-g-text; }
   .doc h4 { @apply mt-8 mb-3 font-display text-[16px] font-semibold text-g-text; }
   .doc h5 { @apply mt-6 mb-2 font-display text-[15px] font-semibold text-g-text; }
+  /* An anchor jump lands below the fixed header, like #docs does. */
+  .doc :is(h2, h3, h4, h5) { @apply scroll-mt-[86px]; }
 
   .doc p { @apply my-4 leading-[1.75] text-g-text/90; }
   .doc strong { @apply font-semibold text-g-text; }

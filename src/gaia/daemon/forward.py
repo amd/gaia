@@ -341,11 +341,16 @@ class ConnectionForwarder:
         raises loudly at use time if a needed token never arrived.
         """
         spec = self._spec(agent_id)
+        result = {"agent_id": agent_id, "forwarded": [], "skipped": [], "errors": []}
+        # An agent that takes no forwarded connectors (the flagship) has nothing
+        # to push; refusing it raised a traceback on every refresh tick.
+        if not spec.forward_providers:
+            return result
         grant_agent_id = self._grant_agent_id(spec)
         connected = set(self._connected_providers())
-        forwarded: List[dict] = []
-        skipped: List[dict] = []
-        errors: List[dict] = []
+        forwarded: List[dict] = result["forwarded"]
+        skipped: List[dict] = result["skipped"]
+        errors: List[dict] = result["errors"]
         for provider in spec.forward_providers:
             granted = self._granted_scopes(provider, grant_agent_id)
             if granted is None:
@@ -368,12 +373,7 @@ class ConnectionForwarder:
                     e,
                 )
                 errors.append({"provider": provider, "error": str(e)})
-        return {
-            "agent_id": agent_id,
-            "forwarded": forwarded,
-            "skipped": skipped,
-            "errors": errors,
-        }
+        return result
 
     def withdraw(
         self, agent_id: str, provider: str, *, base_url: str, bearer: str

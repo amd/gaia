@@ -88,6 +88,9 @@ type Model struct {
 	// read is set once a provider read has landed; until then no row can say
 	// whether a key is saved.
 	read bool
+	// listRead is set once a read returned the provider list. A failed read
+	// proves nothing absent, so registering waits for this, not for read.
+	listRead bool
 }
 
 var names = []string{"local", "fireworks", "amd"}
@@ -106,8 +109,14 @@ func (m Model) Init() tea.Cmd {
 		// kept from an earlier session before reading which providers have one.
 		var restoreErr error
 		for _, name := range names[1:] {
-			if err := restoreKey(name); err != nil && restoreErr == nil {
+			err := restoreKey(name)
+			if err != nil && restoreErr == nil {
 				restoreErr = err
+			}
+			// A daemon that would not start fails the same way for every
+			// provider; trying again only doubles the wait.
+			if daemonUnreachable(err) {
+				break
 			}
 		}
 		started := time.Now()
@@ -119,6 +128,17 @@ func (m Model) Init() tea.Cmd {
 // WithSetupStep tells the panel Lemonade is still first-run step n, so its
 // absence reads as a step not reached rather than a fault.
 func (m Model) WithSetupStep(n int) Model { m.setupStep = n; return m }
+
+// WithCurrent opens the panel on the provider chat runs on now, so enter
+// continues with it; an unknown name leaves Local first.
+func (m Model) WithCurrent(provider string) Model {
+	for i, name := range names {
+		if name == provider {
+			m.selected = i
+		}
+	}
+	return m
+}
 
 func (m Model) chosen() string { return names[m.selected] }
 
@@ -172,6 +192,16 @@ func (m Model) keyStatus() (env, runtime bool) {
 		}
 	}
 	return false, false
+}
+
+// keyFindsNoModels reports whether the chosen provider's key discovered nothing.
+func (m Model) keyFindsNoModels() bool {
+	for _, p := range m.providers {
+		if p.Name == m.chosen() {
+			return p.KeyFindsNoModels()
+		}
+	}
+	return false
 }
 func (m Model) fetchModels() tea.Cmd {
 	c, p, ctx := m.client, m.chosen(), m.ctx
@@ -351,6 +381,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A failed read keeps what is known rather than forgetting every key.
 		if v.err == nil || v.providers != nil {
 			m.providers = v.providers
+			m.listRead = true
 		}
 		wasWaiting := m.waiting()
 		m.down = errors.Is(v.err, lemonade.ErrUnreachable)
@@ -358,8 +389,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case v.err != nil:
 			m.note = m.explain(v.err)
 		case v.restoreErr != nil:
-			m.note = "A saved key could not be restored, so a provider may show \"key needed\" " +
-				"while one is saved: " + v.restoreErr.Error() + ". Press r to retry."
+			m.note = "Could not check for a saved key: " + v.restoreErr.Error() +
+				". A provider may show \"key needed\" while one is saved. Press r to retry."
 		case wasWaiting:
 			m.note = ""
 		}
@@ -390,7 +421,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.chosen() == "local" {
 				m.note = "Lemonade lists no local chat models. Update Lemonade, then retry."
 			}
-			return m, nil
+			// The key Lemonade holds may have changed; the list must show that.
+			return m, m.Init()
 		}
 		m.entries = v.entries
 		m.stage = "models"
@@ -504,7 +536,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m = m.setup()
 				// Only once a read proves it absent: registering over a provider
 				// not yet read would replace another gateway's settings.
-				if m.read && !m.listed(m.chosen()) && m.formProvider().BaseURL != "" {
+				if m.listRead && !m.listed(m.chosen()) && m.formProvider().BaseURL != "" {
 					return m, tea.Batch(textinput.Blink, m.register())
 				}
 				return m, textinput.Blink
@@ -598,6 +630,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return modelsMsg{source: c, err: err}
 					}
 					msg := loadCatalog(m.ctx, c, p.Name)
+					if key != "" && msg.err == nil && len(msg.entries) == 0 {
+						// Lemonade now holds the key that found nothing; put the kept
+						// one back so a mistyped key does not break a working provider.
+						// A failed listing says nothing about the key, so it stays.
+						if err := c.Clear(m.ctx, p.Name); err != nil {
+							return modelsMsg{source: c, err: fmt.Errorf(
+								"That key found no models, and Lemonade would not drop it, so it is still in use: %w", err)}
+						}
+						restoreKey(p.Name)
+						return msg
+					}
 					// Kept only once it has proven to work: a key that discovers
 					// nothing would be replayed into every later session.
 					if msg.err != nil || key == "" || len(msg.entries) == 0 {
@@ -660,7 +703,11 @@ func (m Model) View() string {
 			} else if name != "local" {
 				desc = "Via Lemonade · key needed"
 				for _, p := range m.providers {
-					if p.Name == name && (p.EnvKey || p.RuntimeKey) {
+					switch {
+					case p.Name != name:
+					case p.KeyFindsNoModels():
+						desc = "Via Lemonade · key set, but it found no models — check the key"
+					case p.EnvKey || p.RuntimeKey:
 						desc = "Via Lemonade · key configured"
 					}
 				}
@@ -692,7 +739,13 @@ func (m Model) View() string {
 			lines = append(lines, "A pasted key is saved in this computer's credential store and handed back to Lemonade after it restarts.", "Provider settings are shared by clients of this Lemonade server.")
 		}
 		success := lipgloss.NewStyle().Foreground(theme.Success)
+		warn := lipgloss.NewStyle().Foreground(theme.Warning)
 		switch env, runtime := m.keyStatus(); {
+		case m.keyFindsNoModels() && m.height < 22:
+			lines = append(lines, warn.Render("The key set here found no models."))
+		case m.keyFindsNoModels():
+			lines = append(lines, warn.Render(
+				"The key set for "+lemonade.Label(m.chosen())+" found no models. Check the key, model access, and gateway URL, or paste a new key."))
 		case env && m.height < 22:
 			lines = append(lines, success.Render("Environment key active — blank keeps it."))
 		case runtime && m.height < 22:

@@ -92,6 +92,18 @@ class TestSystemStatus:
         mock_httpx_cls.side_effect = httpx.ConnectError("down")
         data = client.get("/api/system/status").json()
         assert data["default_model_name"] == "user.Qwen3.8-Flash-Next-GGUF"
+        assert data["default_model_is_cloud"] is False
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_flags_a_cloud_model(self, mock_httpx_cls, client, db):
+        """Settings hides download/load/context controls for a cloud model."""
+        import httpx
+
+        db.set_setting("custom_model", "amd.DeepSeek-V4.1-Flash")
+        mock_httpx_cls.side_effect = httpx.ConnectError("down")
+        data = client.get("/api/system/status").json()
+        assert data["default_model_name"] == "amd.DeepSeek-V4.1-Flash"
+        assert data["default_model_is_cloud"] is True
 
     def test_system_status_returns_200(self, client):
         resp = client.get("/api/system/status")
@@ -871,6 +883,88 @@ class TestSystemStatus:
             data["default_model_name"] == "huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated"
         )
 
+    @staticmethod
+    def _serve_health(mock_httpx_cls, health_data, catalog=None):
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            return make_response(200, {"data": catalog or []})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+    _EMBEDDER = {
+        "model_name": "nomic-embed-text-v2-moe-GGUF",
+        "type": "embedding",
+        "device": "cpu",
+        "recipe_options": {"ctx_size": 4096},
+    }
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_embedder_in_root_field_is_not_the_chat_model(
+        self, mock_httpx_cls, client
+    ):
+        """Lemonade's root model_loaded names the last load — often the
+        embedder. The chat model running beside it must be the one reported,
+        not a 'wrong model' warning."""
+        client.put("/api/settings", json={"custom_model": "amd.DeepSeek-V4.1-Flash"})
+        self._serve_health(
+            mock_httpx_cls,
+            {
+                "status": "ok",
+                "model_loaded": "nomic-embed-text-v2-moe-GGUF",
+                "version": "2026.40.0",
+                "all_models_loaded": [
+                    self._EMBEDDER,
+                    {
+                        "model_name": "amd.DeepSeek-V4.1-Flash",
+                        "type": "llm",
+                        "recipe": "cloud",
+                        "device": "none",
+                        "recipe_options": {"ctx_size": 4096},
+                    },
+                ],
+            },
+        )
+
+        data = client.get("/api/system/status").json()
+        assert data["model_loaded"] == "amd.DeepSeek-V4.1-Flash"
+        assert data["expected_model_loaded"] is True
+        assert data["embedding_model_loaded"] is True
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_only_embedder_loaded_reports_no_chat_model(
+        self, mock_httpx_cls, client
+    ):
+        """With only the embedder resident there is no chat model, so there is
+        no 'wrong model loaded' verdict to give."""
+        client.put("/api/settings", json={"custom_model": "amd.DeepSeek-V4.1-Flash"})
+        self._serve_health(
+            mock_httpx_cls,
+            {
+                "status": "ok",
+                "model_loaded": "nomic-embed-text-v2-moe-GGUF",
+                "version": "2026.40.0",
+                "all_models_loaded": [self._EMBEDDER],
+            },
+            catalog=[{"id": "amd.DeepSeek-V4.1-Flash", "downloaded": True}],
+        )
+
+        data = client.get("/api/system/status").json()
+        assert data["model_loaded"] is None
+        assert data["expected_model_loaded"] is not False
+        assert data["embedding_model_loaded"] is True
+
 
 class TestDynamicToolsSetting:
     """/api/settings round-trip + env lock for the Beta dynamic tool loader (#1798)."""
@@ -1121,6 +1215,8 @@ class TestSessionEndpoints:
                 models=[],
             )
         )
+        # Only gaia is "installed": the rescan must not pull in the dev env's wheels.
+        registry.refresh_installed = lambda: None
         with patch("gaia.ui._chat_helpers._agent_registry", registry):
             yield registry
 

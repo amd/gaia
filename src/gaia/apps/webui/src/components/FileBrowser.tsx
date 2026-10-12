@@ -8,6 +8,7 @@ import {
     Table, Code, Eye
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
@@ -155,6 +156,9 @@ async function indexAndAttachFiles(
         if (toAdd.length > 0) {
             updateSessionInList(sessionId, { document_ids: [...existing, ...toAdd] });
         }
+    } else if (docIds.length > 0) {
+        // No chat is open: the agent only sees attached documents, so hold them for the next one.
+        useChatStore.getState().addDraftDocuments(docIds);
     }
     // The chat's document bar lists only documents the store knows about.
     if (docIds.length > 0) {
@@ -171,6 +175,8 @@ async function indexAndAttachFiles(
 
 export function FileBrowser() {
     const { setShowFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
+    const closeBrowser = useCallback(() => setShowFileBrowser(false), [setShowFileBrowser]);
+    useEscapeToClose(true, closeBrowser);
 
     // Browse state
     const [currentPath, setCurrentPath] = useState<string>('');

@@ -34,8 +34,10 @@ type fakeRelay struct {
 
 	// stream writes the SSE body for one run. Set per test.
 	stream func(w http.ResponseWriter, flush func(), body queryRequest)
-	// queryStatus, when non-zero, is returned instead of a stream.
+	// queryStatus, when non-zero, is returned instead of a stream, with
+	// queryBody when that is set.
 	queryStatus int
+	queryBody   string
 	// contractVersion is what GET /v1/<agent>/version reports. Empty means the
 	// route 404s, like a sidecar predating it.
 	contractVersion string
@@ -429,7 +431,11 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 
 		if f.queryStatus != 0 {
 			w.WriteHeader(f.queryStatus)
-			_, _ = w.Write([]byte(`{"detail":"the email sidecar is not running"}`))
+			body := f.queryBody
+			if body == "" {
+				body = `{"detail":"the email sidecar is not running"}`
+			}
+			_, _ = w.Write([]byte(body))
 			return
 		}
 		if f.lockSession {

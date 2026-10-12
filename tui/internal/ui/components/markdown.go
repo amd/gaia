@@ -3,6 +3,8 @@ package components
 import (
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/charmbracelet/glamour"
@@ -150,9 +152,59 @@ func RenderMarkdown(content string) string {
 	if err := buildLocked(); err != nil || renderer == nil || content == "" {
 		return content
 	}
-	out, err := renderer.Render(content)
+	out, err := renderer.Render(protectWindowsPaths(content))
 	if err != nil {
 		return content
 	}
 	return out
+}
+
+// windowsPath matches a drive-letter or UNC path up to whitespace or markup.
+var windowsPath = regexp.MustCompile(`(?:\b[A-Za-z]:\\|\\\\[A-Za-z0-9])[^\s` + "`" + `*<>\[\]()]*`)
+
+// listItem matches a line that opens a list item.
+var listItem = regexp.MustCompile(`^ {0,3}(?:[-*+]|\d+[.)])(?:\s|$)`)
+
+// protectWindowsPaths doubles the backslashes in Windows paths outside code, so
+// markdown does not read `C:\Work\.claude` as escapes and drop them.
+func protectWindowsPaths(content string) string {
+	if !strings.Contains(content, `\`) {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	fence := ""
+	inList, inIndentedCode, prevBlank := false, false, true
+	for i, line := range lines {
+		trimmed := strings.TrimLeft(line, " ")
+		if fence != "" {
+			if strings.HasPrefix(trimmed, fence) {
+				fence = ""
+			}
+			continue
+		}
+		blank := strings.TrimSpace(line) == ""
+		indented := strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t")
+		// An indented block after a blank line is code, unless it continues a list.
+		inIndentedCode = indented && !inList && (prevBlank || inIndentedCode)
+		if !blank && !indented {
+			inList = listItem.MatchString(line)
+		}
+		prevBlank = blank
+		if inIndentedCode {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			fence = trimmed[:3]
+			continue
+		}
+		// Even segments lie outside inline code spans.
+		parts := strings.Split(line, "`")
+		for j := 0; j < len(parts); j += 2 {
+			parts[j] = windowsPath.ReplaceAllStringFunc(parts[j], func(p string) string {
+				return strings.ReplaceAll(p, `\`, `\\`)
+			})
+		}
+		lines[i] = strings.Join(parts, "`")
+	}
+	return strings.Join(lines, "\n")
 }

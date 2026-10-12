@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.15"`                  |
+| Contract version   | `API_VERSION = "2.17"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -266,6 +266,7 @@ the header.
 | `GET`  | `/v1/gaia/version`               | The TUI's negotiation probe                    |
 | `GET`  | `/v1/gaia/init`                  | Readiness detail (Lemonade, model, connectors) |
 | `GET`  | `/v1/gaia/memory`                | The `/memory` snapshot (contract ≥ 2.13)       |
+| `GET`  | `/v1/gaia/skills`                | The skills the agent can load (contract ≥ 2.17) |
 | `POST` | `/v1/gaia/query`                 | The streaming surface (`text/event-stream`)    |
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
@@ -284,8 +285,17 @@ checked for drift in CI — the same pattern as the email agent's own
 **`context`** — `additionalProperties: false`, so an unrecognized field or a
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
-(`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`) is
-optional.
+(`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
+`documents`) is optional.
+
+`documents` (contract ≥ 2.16) carries the absolute paths of the files the user
+attached to the conversation. Send the whole set on every turn. Before the turn
+runs, the agent indexes the ones it has not indexed yet, so a file attached
+mid-conversation is read on the next turn. Each path is granted as that exact
+file, never its folder. A relative path is a `422`. A missing file, a folder, or
+a secret the path policy refuses is reported as not indexed in the turn's
+`index_documents` step, and the turn still runs. Pre-2.16 binaries `422` the
+field, so probe `/version` before sending it.
 
 ```json
 {
@@ -307,6 +317,14 @@ store (Lemonade down, embedding model not pulled, disabled via env) — `reason`
 names why, so an outage never renders as "you have no memories". This is the
 daemon-transport counterpart of the stdio `MEMORY_DUMP_QUERY` sentinel; both
 paths call the same `build_memory_dump()` and return the identical shape.
+
+`GET /v1/gaia/skills` (contract ≥ 2.17) lists the skills the agent can load:
+`{ "skills": [{ "name", "description", "version", "tier", "tools", "path" }],
+"invalid": { "<folder>": "<why it failed to parse>" } }`. It reads the same
+roots the agent does — its bundled skills, `~/.gaia/skills`, Claude Code skill
+folders — so a host without the Python package (the bundled skills live inside
+the binary) can still show them. A skill root that cannot be read is a `500`
+naming it.
 
 ### 5.2 `session_id` and agent retention
 
@@ -352,7 +370,10 @@ selected. Neither affects the wire contract — they change what the agent
 knows, what tools it is offered, and what the first turn costs.
 
 A second `/query` for a `session_id` that already has a turn in flight gets
-`409 Conflict` — cancel the running turn or wait for it, then retry. A
+`409 Conflict` — cancel the running turn or wait for it, then retry. Once that
+turn has been cancelled, the new `/query` is held until it finishes its
+in-flight model call (up to **240 s**) and then runs, instead of getting `409`;
+only a cancelled turn that outlasts the wait still gets `409`. A
 `/query` that needs a **new** session while every retained slot is busy and
 none is idle enough to evict gets `503` with the reason in `detail` — a
 temporary, retryable condition, not a bug: wait for a turn to finish (or

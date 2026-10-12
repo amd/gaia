@@ -8,7 +8,7 @@
 [![OS - Linux](https://img.shields.io/badge/OS-Linux-green)](https://amd-gaia.ai/docs/quickstart "Linux installation")
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Discord](https://img.shields.io/badge/Discord-Join%20Community-7289DA?logo=discord&logoColor=white)](https://discord.com/channels/1392562559122407535/1402013282495102997)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Community-7289DA?logo=discord&logoColor=white)](https://discord.com/invite/5xXzkMu8Zk)
 
 **GAIA** is AMD's open-source agent factory. It uses coding-agent skills, evals and an auto-fix loop to improve and build agent harnesses that run **locally by default** on AMD Ryzen AI hardware. Local inference keeps your data private, avoids cloud usage fees, and supports air-gapped deployment with hardware-accelerated performance.
 
@@ -177,7 +177,7 @@ We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) for deta
 ## Contact
 
 - **Email**: [gaia@amd.com](mailto:gaia@amd.com)
-- **Discord**: [Join our community](https://discord.com/channels/1392562559122407535/1402013282495102997)
+- **Discord**: [Join our community](https://discord.com/invite/5xXzkMu8Zk)
 - **Issues**: [GitHub Issues](https://github.com/amd/gaia/issues)
 
 ---

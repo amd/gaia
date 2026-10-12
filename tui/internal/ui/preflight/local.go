@@ -3,9 +3,11 @@ package preflight
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/status"
@@ -46,7 +49,7 @@ import (
 const lemonadeProbeTimeout = 3 * time.Second
 
 // lemonadePorts are the ports a local Lemonade listens on, newest first.
-// Mirrors client.DetectLemonadeURL — a probe that looked elsewhere would report
+// Mirrors client.detectLemonadeURL — a probe that looked elsewhere would report
 // a running server as down.
 var lemonadePorts = []string{"13305", "8000"}
 
@@ -323,6 +326,12 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 		return row
 	}
 
+	// A server on another machine is not GAIA's to start: a local one would not
+	// make it answer, and the wait would only delay this row.
+	if !isLoopback(base) {
+		return remoteLemonadeDownRow(row, base)
+	}
+
 	// Installed but stopped is the commonest way to land here, and it is the one
 	// case this screen can resolve by itself. Starting is not installing: an
 	// absent Lemonade still falls through to the `f` key below, because pulling
@@ -344,26 +353,20 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	row.Line = "not running"
 	row.Detail = "GAIA needs Lemonade to run local models or route chat to your chosen provider."
 	row.Remedy = lemonadeStartRemedy()
-	// Installing and starting Lemonade is `gaia init`'s job, so this row gets
-	// the same one-key setup the model row does. It cannot run twice: Check
-	// stops at the FIRST failure, so whenever this row is the blocker the model
-	// row below it is pending and unfocusable.
+	// Installing and starting Lemonade is `gaia init`'s job, so this row gets a
+	// one-key setup — the server step only. The models wait for the model row,
+	// which shows their real size once a provider can be picked.
 	//
-	// Two states are excluded because `gaia init` provably cannot fix them:
-	//
-	//   - a bad LEMONADE_SERVER_PATH: setup would inherit the same bad value,
-	//     so the key would fail every time while the step that DOES fix it
-	//     (unset the variable) sat below as the optional alternative;
-	//   - a non-loopback LEMONADE_BASE_URL: `gaia init` auto-detects remote
-	//     mode from it and then refuses to install or start anything. The
-	//     daemon runner already special-cases this (check.go); matching it here
-	//     is what keeps the two screens from diverging.
+	// A bad LEMONADE_SERVER_PATH is excluded because `gaia init` provably cannot
+	// fix it: setup would inherit the same bad value, so the key would fail
+	// every time while the step that DOES fix it (unset the variable) sat below
+	// as the optional alternative. A remote LEMONADE_BASE_URL never gets here.
 	l0 := resolveLemonade()
-	if l0.BadOverride != "" || !isLoopback(base) {
+	if l0.BadOverride != "" {
 		return row
 	}
-	row.Fix = FixRunSetup
-	if !l0.Found && !lemonade.EmbeddedInstalled() && readEmbeddedLemonade() == nil {
+	row.Fix = FixInstallServer
+	if lemonadeNotInstalled() {
 		// Nothing installed is how every new machine starts — a step, not a fault.
 		row.FirstRun = true
 		row.Line = "not installed yet"
@@ -385,6 +388,24 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 		return row
 	}
 	row.Remedy.Action = "Press f and setup starts it. By hand instead: " + row.Remedy.Action
+	return row
+}
+
+// remoteLemonadeDownRow is the row for a LEMONADE_BASE_URL on another machine
+// that is not answering. It carries no command: how that server starts is up to
+// whoever runs it, and no one-key setup either — `gaia init` refuses remote mode.
+func remoteLemonadeDownRow(row Row, base string) Row {
+	row.State = StateFailed
+	row.Disposition = status.DispositionHalt
+	row.Line = "not answering at " + base
+	row.Detail = "LEMONADE_BASE_URL points at a Lemonade Server on another machine. " +
+		"GAIA does not start that server, so it cannot bring it up from here."
+	row.Remedy = Remedy{
+		Action: "Make sure the Lemonade Server at " + base + " is running and reachable " +
+			"from this machine, or fix LEMONADE_BASE_URL (unset it to use a local server). " +
+			"Then press r to re-check.",
+		Where: lemonadeDocs,
+	}
 	return row
 }
 
@@ -540,14 +561,29 @@ var listedCloudModels = func(ctx context.Context, provider string) ([]lemonade.M
 	return lemonade.New("").Models(ctx, provider)
 }
 
-// checkCloudModelListed confirms the Lemonade GAIA talks to can serve the chosen
+// runsInCloud reports that this launch chats on a cloud model.
+func (c Config) runsInCloud() bool { return lemonade.IsCloudID(c.Model) }
+
+// checkCloudModel confirms the Lemonade GAIA talks to can serve the chosen
 // cloud model. Provider settings live in each server, so a provider connected on
 // another one — the system server, before setup installed GAIA's own — is unknown
 // here, and the first turn would fail.
-func (l localRunner) checkCloudModelListed(ctx context.Context, row Row) (Row, bool) {
-	chosen := l.opts.Model
+func checkCloudModel(ctx context.Context, chosen string, row Row) (Row, bool) {
 	provider, _, _ := strings.Cut(chosen, ".")
-	models, err := listedCloudModels(ctx, provider)
+	listed, err := cloudModelListed(ctx, provider, chosen)
+	var (
+		replayed  bool
+		replayErr error
+	)
+	if err == nil && !listed {
+		// Lemonade forgets a pasted key when it restarts and discovers nothing
+		// until it has one again, so give back the kept key before calling the
+		// provider disconnected.
+		replayed, replayErr = replayKeptKey(ctx, provider)
+		if replayed {
+			listed, err = cloudModelListed(ctx, provider, chosen)
+		}
+	}
 	if err != nil {
 		row.State = StateUnknown
 		row.Disposition = status.DispositionNotify
@@ -556,10 +592,8 @@ func (l localRunner) checkCloudModelListed(ctx context.Context, row Row) (Row, b
 		row.Raw = err.Error()
 		return row, false
 	}
-	for _, m := range models {
-		if lemonade.SameCloudModel(m.ID, chosen) {
-			return row, true
-		}
+	if listed {
+		return row, true
 	}
 	row.State = StateFailed
 	row.Disposition = status.DispositionHalt
@@ -569,7 +603,49 @@ func (l localRunner) checkCloudModelListed(ctx context.Context, row Row) (Row, b
 	row.Remedy = Remedy{
 		Action: "Press p, choose " + lemonade.Label(provider) + ", and connect it.",
 	}
+	if replayed {
+		row.Detail = lemonade.Label(provider) + " is connected, but it does not offer " + chosen + "."
+		row.Remedy.Action = "Press p, choose " + lemonade.Label(provider) + ", and pick a model it lists."
+	}
+	if replayErr != nil {
+		row.Raw = "Could not give Lemonade back the kept " + lemonade.Label(provider) +
+			" key: " + replayErr.Error()
+	}
 	return row, false
+}
+
+func cloudModelListed(ctx context.Context, provider, chosen string) (bool, error) {
+	models, err := listedCloudModels(ctx, provider)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range models {
+		if lemonade.SameCloudModel(m.ID, chosen) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// replayKeptKey asks the daemon to hand Lemonade the key the provider panel
+// kept in the OS credential store — only Python can read that store. It
+// reports whether Lemonade is now authenticated. Starting the daemon is
+// warranted: the user chose this provider, and without the key it cannot
+// answer. A var so tests need no daemon.
+var replayKeptKey = func(ctx context.Context, provider string) (bool, error) {
+	raw, err := daemon.CallContext(ctx, http.MethodPost,
+		"/daemon/v1/providers/"+url.PathEscape(provider)+"/authenticate", nil, true,
+		"restore the "+provider+" key", "Press p and paste the key again")
+	if err != nil {
+		return false, err
+	}
+	var body struct {
+		Authenticated bool `json:"authenticated"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return false, fmt.Errorf("the daemon's answer could not be read: %w", err)
+	}
+	return body.Authenticated, nil
 }
 
 // localChatModel is the local chat model to load when the user picked one other
@@ -628,7 +704,7 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 			row.Line = "embedder loads — chat runs on Claude"
 			return row, "Claude", ""
 		case lemonade.IsCloudID(l.opts.Model):
-			if missing, ok := l.checkCloudModelListed(ctx, row); !ok {
+			if missing, ok := checkCloudModel(ctx, l.opts.Model, row); !ok {
 				return missing, "", ""
 			}
 			row.Line = "embedder loads — chat uses " + l.opts.Model
@@ -796,17 +872,34 @@ const installDocs = "https://amd-gaia.ai/docs/guides/install"
 // maxSetupLog bounds the setup transcript kept for `d details`.
 const maxSetupLog = 200
 
+// lemonadeNotInstalled is the first-run test: no Lemonade on this machine at
+// all, neither a system install nor GAIA's own. A var so tests need no machine.
+var lemonadeNotInstalled = func() bool {
+	return !resolveLemonade().Found && !lemonade.EmbeddedInstalled() && readEmbeddedLemonade() == nil
+}
+
 func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress func(Progress)) FixResult {
-	if kind != FixRunSetup {
+	if !runsSetup(kind) {
 		return FixResult{Err: errNoFix}
 	}
 
-	ch, cancel, err := gaiainit.Start(l.skipChatModel())
+	// Step 1 stops after the server, so a provider can be picked before step 2
+	// picks models. Decided by the row, not by what is on disk: a step 1 that
+	// failed after installing Lemonade must not turn its retry into step 2.
+	start := func() (<-chan gaiainit.Event, context.CancelFunc, error) {
+		return gaiainit.Start(l.skipChatModel())
+	}
+	command := gaiainit.RunCommand(l.skipChatModel())
+	if kind == FixInstallServer {
+		start, command = gaiainit.StartServerOnly, gaiainit.ServerOnlyCommand()
+	}
+
+	ch, cancel, err := start()
 	if err != nil {
 		return FixResult{Err: err, Diagnosis: Diagnosis{
 			Cause:   err.Error(),
 			Remedy:  "Run setup in a terminal instead, then press r to re-check.",
-			Command: gaiainit.RunCommand(l.skipChatModel()),
+			Command: command,
 			Where:   installDocs,
 		}}
 	}
@@ -830,7 +923,7 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 			return FixResult{Err: ctx.Err(), Final: current.Text, Log: log, Diagnosis: Diagnosis{
 				Cause:   "Setup was cancelled, or ran past the time limit.",
 				Remedy:  "Run it in a terminal instead, then press r to re-check.",
-				Command: gaiainit.RunCommand(l.skipChatModel()),
+				Command: command,
 				Where:   installDocs,
 			}}
 		case evt, ok := <-ch:
@@ -838,7 +931,7 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 				return FixResult{Err: errFixFailed, Final: current.Text, Log: log, Diagnosis: Diagnosis{
 					Cause:   stopped("Setup ended without saying whether it worked."),
 					Remedy:  "Press r to re-check whether the models landed, then retry.",
-					Command: gaiainit.RunCommand(l.skipChatModel()),
+					Command: command,
 					Where:   installDocs,
 				}}
 			}
@@ -860,7 +953,7 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 					Cause: stopped(fmt.Sprintf("Setup stopped while %s (%v).",
 						lowerFirst(current.Text), evt.Err)),
 					Remedy:  "Press d for the setup log, fix what it names, then retry.",
-					Command: gaiainit.RunCommand(l.skipChatModel()),
+					Command: command,
 					Where:   installDocs,
 				}}
 			}

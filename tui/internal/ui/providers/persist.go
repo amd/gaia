@@ -5,6 +5,7 @@ package providers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -52,4 +53,17 @@ var restoreKey = func(provider string) error {
 	_, err := callDaemon(http.MethodPost, keyPath(provider, "authenticate"), nil, true,
 		"restore the "+provider+" key", keyAlternative)
 	return err
+}
+
+// daemonUnreachable reports that err is the daemon itself failing to come up
+// or answer, not one provider's restore being refused.
+func daemonUnreachable(err error) bool {
+	var (
+		notRunning *daemon.NotRunningError
+		stale      *daemon.StaleError
+		version    *daemon.VersionError
+		start      *daemon.StartError
+	)
+	return errors.As(err, &notRunning) || errors.As(err, &stale) ||
+		errors.As(err, &version) || errors.As(err, &start)
 }

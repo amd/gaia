@@ -120,6 +120,32 @@ func TestRenderMarkdownRendersWithAResolvedStyle(t *testing.T) {
 	}
 }
 
+// A Windows path keeps every backslash; a deliberate escape still works.
+func TestRenderMarkdownKeepsWindowsPathBackslashes(t *testing.T) {
+	resetRenderer(t)
+	t.Setenv(EnvStyle, "dark")
+	if err := PrimeRenderer(); err != nil {
+		t.Fatalf("PrimeRenderer: %v", err)
+	}
+	out := ansi.Strip(RenderMarkdown(`Saved to C:\Users\Kalin\Work\gaia\.claude\worktrees and \*not bold\*, ` +
+		"`C:\\in\\code`"))
+	for _, want := range []string{`C:\Users\Kalin\Work\gaia\.claude\worktrees`, "*not bold*", `C:\in\code`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered %q, want it to contain %q", out, want)
+		}
+	}
+}
+
+// Indented code is already literal, so its paths are left alone; a path in an
+// indented list continuation is still protected.
+func TestProtectWindowsPathsSkipsIndentedCode(t *testing.T) {
+	in := "Run this:\n\n    dir C:\\Users\\me\n\n- item\n    C:\\Users\\you"
+	want := "Run this:\n\n    dir C:\\Users\\me\n\n- item\n    C:\\\\Users\\\\you"
+	if got := protectWindowsPaths(in); got != want {
+		t.Errorf("protectWindowsPaths(%q) = %q, want %q", in, got, want)
+	}
+}
+
 // Every hyphen in a paragraph used to make its line one column too long for
 // the wrapper (muesli/reflow, patched in tui/third_party), and glamour then
 // re-wrapped the overflow — stranding "m" on a row of its own after "python -"
