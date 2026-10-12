@@ -517,11 +517,12 @@ def machine_capacity(base_url: Optional[str] = None):
 CO_RESIDENT_MODELS = (DEFAULT_EMBEDDING_MODEL,)
 
 
-def co_resident_reserve_gb(capacity) -> float:
+def co_resident_reserve_gb(_capacity) -> float:
     """Memory the ``CO_RESIDENT_MODELS`` take from *capacity*'s pool.
 
     They load on the GPU (or system RAM on a CPU-only PC), the same pool the
     chat model's window is sized from.
+    Every pool pays it, so the capacity itself does not change the amount.
     """
     from gaia.llm.model_fit import required_memory_gb
 
