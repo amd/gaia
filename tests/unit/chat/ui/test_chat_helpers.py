@@ -1103,6 +1103,87 @@ class TestSessionTitleRequest:
         assert "chat_template_kwargs" not in self._sent_body("Gemma-4-E4B-it-GGUF")
 
 
+class TestGuardModelTitles:
+    """A safety classifier must never name a chat "safe" (the name now sticks)."""
+
+    def _title_reply(self, content, user_msg="How do I reset my router password?"):
+        from gaia.ui import _chat_helpers as ch
+
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"choices": [{"message": {"content": content}}]}
+        client = MagicMock()
+        client.post = AsyncMock(return_value=resp)
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        with patch("httpx.AsyncClient", return_value=client):
+            return asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1", "some-model", user_msg, "ok"
+                )
+            )
+
+    @pytest.mark.parametrize("verdict", ["safe", "unsafe\nS1", "unsafe S1,S10", "Yes"])
+    def test_classifier_verdict_falls_back_to_the_question(self, verdict):
+        assert self._title_reply(verdict) == "How do I reset my router password"
+
+    def test_empty_reply_falls_back_to_the_question(self):
+        assert self._title_reply("   ") == "How do I reset my router password"
+
+    def test_long_question_is_cut_at_a_word(self):
+        title = self._title_reply("safe", user_msg="word " * 40)
+        assert title.endswith("…") and len(title) <= 64
+        assert "wor…" not in title
+
+    def test_normal_title_is_unchanged(self):
+        assert self._title_reply('"Safe Router Setup."') == "Safe Router Setup"
+
+    def _titling_model(self, session_model):
+        from gaia.ui import _chat_helpers as ch
+
+        db = MagicMock()
+        sid = f"guard-{session_model}"  # unique: the 30 s throttle is per session
+        db.get_session.return_value = {"id": sid, "title": "New Chat"}
+        db.get_messages.return_value = []
+        gen = AsyncMock(return_value="Router Password Reset")
+        with (
+            patch.object(ch, "_generate_session_title", gen),
+            patch(
+                "gaia.llm.lemonade_client.resolve_default_chat_model",
+                return_value="Gemma-4-E4B-it-GGUF",
+            ),
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+                return_value="http://localhost:13305/api/v1",
+            ),
+        ):
+            asyncio.run(
+                ch._maybe_update_session_title(
+                    db, sid, "reset my router", "ok", session_model
+                )
+            )
+        db.update_session.assert_called_once_with(sid, title="Router Password Reset")
+        return gen.await_args.kwargs["model_id"]
+
+    @pytest.mark.parametrize(
+        "guard",
+        [
+            "Llama-Guard-3-8B-GGUF",
+            "user.llama_guard_4_12b",
+            "ShieldGemma-2B-GGUF",
+            "granite-guardian-3.2-5b",
+            "Qwen3Guard-Gen-4B-GGUF",
+        ],
+    )
+    def test_guard_session_model_titles_with_the_default_model(self, guard):
+        assert self._titling_model(guard) == "Gemma-4-E4B-it-GGUF"
+
+    @pytest.mark.parametrize(
+        "model", ["Qwen3.6-35B-A3B-GGUF", "openai.gpt-5", "anthropic.claude-opus-5"]
+    )
+    def test_chat_and_cloud_models_title_themselves(self, model):
+        assert self._titling_model(model) == model
+
+
 async def test_spawn_background_keeps_the_task_alive_until_done():
     """asyncio holds tasks weakly; a fire-and-forget title task must be pinned."""
     import gaia.ui._chat_helpers as ch
