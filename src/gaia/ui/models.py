@@ -71,7 +71,8 @@ class SystemStatus(BaseModel):
     # this machine has a modern daemon, a legacy CLI, or a tray app, and a
     # second copy of the answer is how `lemonade-server serve` survived in the
     # banner long after it stopped existing. ``start_command`` is None on hosts
-    # requiring GUI/manual configuration, including service context changes.
+    # requiring GUI/manual configuration, including service context changes,
+    # and on Windows when Command Prompt and PowerShell need different lines.
     # In those cases start_instruction carries the necessary steps.
     start_instruction: Optional[str] = None
     start_command: Optional[str] = None

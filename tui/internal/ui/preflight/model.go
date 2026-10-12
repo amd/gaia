@@ -721,8 +721,12 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 			return ConnectMailboxMsg{AgentID: agentID, Provider: provider}
 		}
 	default:
-		if row.Remedy.Command != "" {
-			m.note = "Nothing here can be fixed safely from the TUI — run: " + row.Remedy.Command
+		if cmds := row.Remedy.Commands(); len(cmds) > 0 {
+			runs := make([]string, len(cmds))
+			for i, c := range cmds {
+				runs[i] = c.Label() + " " + c.Line
+			}
+			m.note = "Nothing here can be fixed safely from the TUI — " + strings.Join(runs, " — or ")
 		}
 		return m, nil
 	}
