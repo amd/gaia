@@ -976,6 +976,86 @@ def test_model_switch_lemonade_unreachable_is_actionable_and_leaves_model_runnin
     assert agent.rebuild_count == 0
 
 
+_RESTARTED_URL = "http://localhost:50751/api/v1"
+
+
+class _FollowingClient:
+    """A live Lemonade client that has followed GAIA's server to a new port."""
+
+    def __init__(self, url=_RESTARTED_URL, error=None):
+        self.url, self.error = url, error
+
+    def current_base_url(self):
+        if self.error:
+            raise self.error
+        return self.url
+
+
+def test_model_switch_after_a_lemonade_restart_uses_the_new_port(
+    monkeypatch, stub_lemonade
+):
+    """The agent's config keeps the port it started on; every switch hit it."""
+    from gaia_agent import stdio as stdio_mod
+
+    listed, built = [], []
+    monkeypatch.setattr(
+        stdio_mod,
+        "_lemonade_models",
+        lambda base_url: listed.append(base_url) or ["amd.DeepSeek-V4.1-Flash"],
+    )
+    monkeypatch.setattr(
+        stdio_mod, "create_client", lambda **kwargs: built.append(kwargs) or object()
+    )
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient()
+
+    out = _model_run(agent, "/model amd.DeepSeek-V4.1-Flash")
+
+    assert [e["type"] for e in _events(out)] == ["status", "final"]
+    assert listed == [_RESTARTED_URL]
+    assert built[0]["base_url"] == _RESTARTED_URL
+
+
+def test_model_list_after_a_lemonade_restart_reads_the_new_port(monkeypatch):
+    from gaia_agent import stdio as stdio_mod
+
+    listed = []
+    monkeypatch.setattr(
+        stdio_mod,
+        "_lemonade_models",
+        lambda base_url: listed.append(base_url) or ["Gemma-4-E4B-it-GGUF"],
+    )
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient()
+
+    _model_run(agent, "/model")
+
+    assert listed == [_RESTARTED_URL]
+
+
+def test_model_switch_when_lemonade_cannot_be_restarted_keeps_the_model(monkeypatch):
+    from gaia_agent import stdio as stdio_mod
+
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    monkeypatch.setattr(
+        stdio_mod, "_lemonade_models", lambda base_url: pytest.fail("not reached")
+    )
+    agent = _ModelSwitchAgent()
+    previous_client = agent.chat.llm_client = _FollowingClient(
+        error=LemonadeClientError(
+            "Could not start GAIA's Lemonade Server: lemond exited; read lemond.log"
+        )
+    )
+
+    out = _model_run(agent, "/model amd.DeepSeek-V4.1-Flash")
+
+    events = _events(out)
+    assert len(events) == 1 and events[0]["type"] == "error"
+    assert "read lemond.log" in events[0]["detail"]
+    assert agent.chat.llm_client is previous_client
+
+
 def test_model_switch_survives_alongside_history_and_skills(monkeypatch, stub_lemonade):
     """The whole point: switching models must not disturb what makes the
     flagship agent stateful (see test_the_agent_survives_between_turns)."""
@@ -1003,6 +1083,53 @@ def test_model_state_event_names_the_resolved_model_not_a_launch_flag(stub_lemon
     assert banner["model_remote"] is False
     assert banner["lemonade_reachable"] is True
     assert banner["lemonade_version"] == "8.1.2"
+
+
+def _probed_url(monkeypatch, agent, running):
+    """The URL ``_model_state_event`` hands its health probe."""
+    probed = []
+    monkeypatch.setattr(stdio, "running_embedded_lemonade_url", lambda: running)
+    monkeypatch.setattr(
+        stdio,
+        "_lemonade_health",
+        lambda base_url: probed.append(base_url) or {"lemonade_base_url": base_url},
+    )
+    event = stdio._model_state_event(agent)
+    assert probed == [event["lemonade_base_url"]]
+    return probed[0]
+
+
+def test_status_after_a_lemonade_restart_reports_the_new_port(monkeypatch):
+    """The TUI opens its provider picker on this URL; the started-with port
+    made it say "Lemonade did not respond" while chat worked."""
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient()
+
+    assert _probed_url(monkeypatch, agent, _RESTARTED_URL) == _RESTARTED_URL
+
+
+def test_status_never_starts_a_stopped_lemonade(monkeypatch):
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient(error=AssertionError("started a server"))
+
+    url = _probed_url(monkeypatch, agent, None)
+
+    assert url == agent.chat.config.base_url
+
+
+def test_status_reports_the_configured_url_when_following_fails(monkeypatch, caplog):
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient(
+        error=LemonadeClientError("Could not start GAIA's Lemonade Server: boom")
+    )
+
+    with caplog.at_level(logging.WARNING, logger=stdio.logger.name):
+        url = _probed_url(monkeypatch, agent, _RESTARTED_URL)
+
+    assert url == agent.chat.config.base_url
+    assert "boom" in caplog.text
 
 
 def test_a_bad_base_url_is_reported_as_such_not_as_a_dead_server(monkeypatch, caplog):

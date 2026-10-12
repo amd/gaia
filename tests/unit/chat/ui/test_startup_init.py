@@ -159,12 +159,11 @@ def _run_boot_check(app):
 
 
 @pytest.mark.parametrize(
-    "selected,expect_load",
-    [("fireworks.deepseek-v4p1-flash", False), ("Gemma-4-E4B-it-GGUF", True)],
+    "selected", ["fireworks.deepseek-v4p1-flash", "Gemma-4-E4B-it-GGUF"]
 )
-def test_boot_check_preloads_only_a_local_selection(app, selected, expect_load):
-    """A UI whose selected model is cloud must not load a local model on an idle
-    Lemonade at boot; a local selection still gets the idle-server preload."""
+def test_boot_check_never_loads_a_model(app, selected):
+    """The boot reachability check loads nothing on an idle Lemonade, local or
+    cloud selection: seeding there downloaded the model before setup ran."""
     from unittest.mock import MagicMock, patch
 
     from gaia.llm.lemonade_client import LemonadeStatus
@@ -187,9 +186,86 @@ def test_boot_check_preloads_only_a_local_selection(app, selected, expect_load):
         LemonadeManager.reset()
 
     assert job.status == JobStatus.DONE
-    if expect_load:
-        client.load_model.assert_called_once()
-        assert client.load_model.call_args.args[0] == selected
-        assert client.load_model.call_args.kwargs["ctx_size"] > 0
-    else:
-        client.load_model.assert_not_called()
+    client.load_model.assert_not_called()
+    client.pull_model.assert_not_called()
+
+
+def _run_boot_model_load(app, downloaded, model="Gemma-4-E4B-it-GGUF", lease=None):
+    """Run the "Loading AI model" boot job against an idle, mocked Lemonade."""
+    import contextlib
+    import time
+    from unittest.mock import MagicMock, patch
+
+    from gaia.ui.dispatch import JobStatus
+
+    app.state.db.set_setting("custom_model", model)
+    lemonade = MagicMock()
+    lemonade.get_model_info.return_value = {
+        "id": "Gemma-4-E4B-it-GGUF",
+        "downloaded": downloaded,
+        "size_gb": 5.0,
+    }
+    idle = MagicMock(status_code=200)
+    idle.json.return_value = {"all_models_loaded": []}
+
+    with (
+        patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        patch("httpx.get", return_value=idle),
+        patch(
+            "gaia.daemon.broker_client.model_lease",
+            lease or (lambda *a, **k: contextlib.nullcontext()),
+        ),
+        patch("gaia.llm.lemonade_client.LemonadeClient", return_value=lemonade),
+    ):
+        with TestClient(app):
+            queue = app.state.dispatch_queue
+            job = next(j for j in queue.get_all_jobs() if j.name == "Loading AI model")
+            deadline = time.monotonic() + 10
+            while job.status not in (JobStatus.DONE, JobStatus.FAILED):
+                assert time.monotonic() < deadline, "boot model load never finished"
+                time.sleep(0.05)
+    return job, lemonade
+
+
+def test_boot_preload_skips_an_undownloaded_model(app, caplog):
+    """`gaia init --skip-models` then opening the UI must not start a download."""
+    from gaia.ui.dispatch import JobStatus
+
+    with caplog.at_level(logging.INFO, logger="gaia.ui.server"):
+        job, lemonade = _run_boot_model_load(app, downloaded=False)
+
+    assert job.status == JobStatus.DONE
+    lemonade.load_model.assert_not_called()
+    lemonade.pull_model.assert_not_called()
+    assert any("not downloaded" in r.getMessage() for r in caplog.records)
+
+
+def test_boot_preload_loads_a_downloaded_model(app):
+    from gaia.ui.dispatch import JobStatus
+
+    job, lemonade = _run_boot_model_load(app, downloaded=True)
+
+    assert job.status == JobStatus.DONE
+    lemonade.load_model.assert_called_once()
+    assert lemonade.load_model.call_args.args[0] == "Gemma-4-E4B-it-GGUF"
+
+
+def test_boot_preload_never_waits_on_the_broker_for_a_cloud_model(app):
+    """A sidecar loading a local model holds the broker lease. A cloud
+    selection has nothing to load, so waiting behind it held the UI at
+    "starting" for the length of someone else's download."""
+    from gaia.ui.dispatch import JobStatus
+
+    leases = []
+
+    def lease(*args, **kwargs):
+        leases.append(args)
+        raise AssertionError("a cloud selection must not take the model lease")
+
+    job, lemonade = _run_boot_model_load(
+        app, downloaded=False, model="amd.DeepSeek-V4.1-Flash", lease=lease
+    )
+
+    assert job.status == JobStatus.DONE
+    assert leases == []
+    lemonade.load_model.assert_not_called()

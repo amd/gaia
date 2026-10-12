@@ -716,6 +716,20 @@ class AgentRegistry:
     # Installed Python agent discovery
     # ------------------------------------------------------------------
 
+    def refresh_installed(self) -> None:
+        """Register agents installed since :meth:`discover` ran, without a restart.
+
+        Covers both install kinds: a hub wheel (entry points under its own
+        site-packages) and a hub binary sidecar such as the flagship, which
+        ``gaia init`` installs while the Agent UI is already running.
+        Idempotent — already-registered ids are left alone.
+        """
+        from gaia.hub.installer import register_installed_sidecars
+
+        self._prime_installed_wheel_agents_path()
+        self._discover_installed_agents()
+        register_installed_sidecars(self)
+
     def discover_installed_agents(self) -> None:
         """Re-scan entry points for installed agent wheels (public hot-reload hook).
 
@@ -975,6 +989,13 @@ class AgentRegistry:
             logger.warning(
                 "registry: skipping YAML-only agent at %s (deprecated)", agent_dir
             )
+            return
+
+        from gaia.hub.installer import SENTINEL_NAME
+
+        if (agent_dir / SENTINEL_NAME).exists():
+            # Hub-installed: registered from its sentinel or entry point, not here.
+            logger.debug("registry: %s is a hub install, not a source agent", agent_dir)
             return
 
         logger.warning("registry: No agent.py in %s, skipping", agent_dir)

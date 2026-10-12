@@ -52,6 +52,70 @@ beforeEach(() => {
         currentSessionId: null,
         sessions: [],
         showDocLibrary: true,
+        draftDocumentIds: [],
+    });
+});
+
+it('closes on Escape', async () => {
+    render(<DocumentLibrary />);
+    await screen.findByText('broken.pdf');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(useChatStore.getState().showDocLibrary).toBe(false);
+});
+
+describe('DocumentLibrary with no chat open', () => {
+    it('holds a newly indexed document for the next chat instead of dropping it', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        mockedApi.uploadDocumentByPath.mockResolvedValue(COMPLETE_DOC);
+        render(<DocumentLibrary />);
+
+        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: '/tmp/good.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+
+        await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']));
+        expect(mockedApi.attachDocument).not.toHaveBeenCalled();
+    });
+
+    it('offers an existing document for the next chat, once', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
+        render(<DocumentLibrary />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Attach good.pdf to your next chat' }));
+
+        expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']);
+        expect(screen.queryByRole('button', { name: 'Attach good.pdf to your next chat' })).toBeNull();
+        expect(mockedApi.attachDocument).not.toHaveBeenCalled();
+    });
+
+    it('forgets a held document that is removed from the library', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
+        mockedApi.deleteDocument.mockResolvedValue(undefined as never);
+        useChatStore.setState({ draftDocumentIds: ['doc-ok-1'] });
+        render(<DocumentLibrary />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Remove good.pdf' }));
+
+        await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual([]));
+    });
+
+    it('still attaches straight to the open chat when there is one', async () => {
+        const chat = {
+            id: 'sess-1', title: 'Chat', created_at: '', updated_at: '', model: '',
+            system_prompt: null, message_count: 1, document_ids: [],
+        };
+        useChatStore.setState({ currentSessionId: 'sess-1', sessions: [chat] });
+        mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        mockedApi.uploadDocumentByPath.mockResolvedValue(COMPLETE_DOC);
+        mockedApi.attachDocument.mockResolvedValue(undefined);
+        render(<DocumentLibrary />);
+
+        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: '/tmp/good.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+
+        await waitFor(() => expect(mockedApi.attachDocument).toHaveBeenCalledWith('sess-1', 'doc-ok-1'));
+        expect(useChatStore.getState().draftDocumentIds).toEqual([]);
     });
 });
 
@@ -103,5 +167,38 @@ describe('DocumentLibrary failed doc', () => {
         await waitFor(() => {
             expect(mockedApi.listDocuments).toHaveBeenCalledTimes(2);
         });
+    });
+});
+
+describe('DocumentLibrary chunk counts', () => {
+    it('says "1 chunk", not "1 chunks"', async () => {
+        mockedApi.listDocuments.mockResolvedValue({
+            documents: [{ ...COMPLETE_DOC, chunk_count: 1 }],
+            total: 1,
+            total_size_bytes: 2048,
+            total_chunks: 1,
+        });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('good.pdf');
+
+        expect(screen.getByText('1 chunk')).toBeTruthy();
+        expect(screen.getByText(/· 1 chunk$/)).toBeTruthy();
+        expect(screen.queryByText(/1 chunks/)).toBeNull();
+    });
+
+    it('keeps the plural for other counts', async () => {
+        mockedApi.listDocuments.mockResolvedValue({
+            documents: [COMPLETE_DOC],
+            total: 1,
+            total_size_bytes: 2048,
+            total_chunks: 5,
+        });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('good.pdf');
+
+        expect(screen.getByText('5 chunks')).toBeTruthy();
+        expect(screen.getByText(/· 5 chunks$/)).toBeTruthy();
     });
 });

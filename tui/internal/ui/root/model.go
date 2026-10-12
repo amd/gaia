@@ -470,11 +470,10 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // openGateway switches to the AMD LLM gateway screen. A Lemonade that cannot
-// be reached is passed into the screen rather than swallowed here, so the user
-// sees why on the screen they asked for.
+// be reached surfaces on the screen's first request, so the user sees why on
+// the screen they asked for.
 func (m FlagshipModel) openGateway() (tea.Model, tea.Cmd) {
-	c, err := gateway.NewClient()
-	gw := gateway.New(c, err)
+	gw := gateway.New(gateway.NewClient(), nil)
 	m.gw = &gw
 	m.activeView = viewGateway
 

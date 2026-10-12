@@ -22,7 +22,7 @@ It also guards the daemon's dependency contract (#3056): the one-line installer
 installs exactly ``amd-gaia[api]``, and ``gaia daemon`` — which the terminal hub
 cannot run without — hard-exits when fastapi/uvicorn/psutil are absent. Both the
 extra's contents and the error message's suggested remedy are checked against the
-module list in ``cli.py::_check_daemon_deps`` so neither can drift from it.
+module list in ``gaia/daemon/client.py::DAEMON_DEPS`` so neither can drift from it.
 
 These are static packaging/source assertions (no runtime import), so they work
 in the CI unit-tests venv that does not actually install [api]. Same framing as
@@ -40,6 +40,7 @@ SETUP_PY = REPO_ROOT / "setup.py"
 OPENAI_SERVER = REPO_ROOT / "src" / "gaia" / "api" / "openai_server.py"
 EMAIL_PYPROJECT = REPO_ROOT / "hub" / "agents" / "email" / "python" / "pyproject.toml"
 CLI_PY = REPO_ROOT / "src" / "gaia" / "cli.py"
+DAEMON_CLIENT_PY = REPO_ROOT / "src" / "gaia" / "daemon" / "client.py"
 
 
 def _parse_extra(name: str) -> list[str]:
@@ -87,20 +88,19 @@ def _parse_install_requires() -> list[str]:
 
 
 def _daemon_required_packages() -> list[str]:
-    """The distributions ``_check_daemon_deps`` refuses to start the daemon without.
+    """The distributions the daemon refuses to start without.
 
-    Read out of cli.py rather than hardcoded, so adding a module to the check
-    without declaring it in [api] fails here instead of at a user's first
-    ``gaia daemon start``.
+    Read out of daemon/client.py rather than hardcoded, so adding a module to
+    the check without declaring it in [api] fails here instead of at a user's
+    first ``gaia daemon start``.
     """
-    tree = ast.parse(CLI_PY.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "_check_daemon_deps":
-            for inner in ast.walk(node):
-                if isinstance(inner, ast.ListComp):
-                    pairs = ast.literal_eval(inner.generators[0].iter)
-                    return [pkg for _mod, pkg in pairs]
-    raise AssertionError("Could not find the dep list in cli.py::_check_daemon_deps")
+    tree = ast.parse(DAEMON_CLIENT_PY.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "DAEMON_DEPS" for t in node.targets
+        ):
+            return [pkg for _mod, pkg in ast.literal_eval(node.value)]
+    raise AssertionError("Could not find DAEMON_DEPS in gaia/daemon/client.py")
 
 
 def test_api_server_does_not_mount_email_in_process() -> None:

@@ -70,6 +70,21 @@ func (m ChatModel) WithStartupModel(kind StartupModelKind, provider, model strin
 	return m
 }
 
+// WithRelayedModel opens a daemon-relayed session on a cloud model. That
+// transport sends the model with every turn and has no `/model` turn to confirm
+// it with, so the header names it now and a gate pick is remembered here.
+// Call after WithModelMemory.
+func (m ChatModel) WithRelayedModel(kind StartupModelKind, provider, model string) ChatModel {
+	m.startup = startupModel{}
+	m.modelDisplay = model
+	m.modelBackend = provider
+	m.modelRemote = true
+	if kind == StartupPicked {
+		m.rememberModel(savedChoice{provider: provider, model: model})
+	}
+	return m
+}
+
 // WithModelMemory sets where a confirmed model switch is saved.
 func (m ChatModel) WithModelMemory(save func(provider, model string) error) ChatModel {
 	m.saveModel = save
@@ -102,6 +117,10 @@ func (m ChatModel) runStartupModel() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.startup.inFlight = true
+	if sw, ok := m.relayedSwitcher(); ok {
+		// Answered by relayedSwitchMsg, not a turn.
+		return m.switchRelayedModel(sw, m.startup.model)
+	}
 	updated, cmd := m.submit(modelCommandPrefix + " " + m.startup.model)
 	next := updated.(ChatModel)
 	if next.streaming {

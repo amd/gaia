@@ -90,8 +90,12 @@ def find_free_port(host: str = _HOST) -> int:
 
 
 def _version_tuple(version: str) -> tuple:
-    """Parse a dotted version into a comparable int tuple; loud on garbage."""
-    parts = str(version).strip().lstrip("v").split(".")
+    """Parse a dotted version into a comparable int tuple; loud on garbage.
+
+    SemVer build metadata is dropped: a release candidate's flagship installs
+    as ``0.3.0+v0.25.0-rc3`` and has the precedence of ``0.3.0``.
+    """
+    parts = str(version).strip().lstrip("v").partition("+")[0].split(".")
     try:
         return tuple(int(p) for p in parts)
     except ValueError as e:

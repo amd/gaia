@@ -16,7 +16,7 @@ scopes). This is presentation — what the Agent UI shows while relaying one.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Dict, FrozenSet, Mapping, Optional, Tuple
 
@@ -81,12 +81,36 @@ class RelayProfile:
     #: Narrow by design: only the UNREACHABLE cause is treated this way (see
     #: ``_chat_helpers._probe_is_only_unreachable``). A 503 that says the
     #: model is missing, or that Lemonade is below the required version, is
-    #: the server answering accurately and still blocks.
+    #: the server answering accurately and still blocks — unless the missing
+    #: model is not the one the turn uses (a cloud turn never loads the
+    #: sidecar's local default; ``_probe_misses_only_another_model``).
     readiness_is_blocking: bool = True
+    #: Contract version from which ``/sessions/{id}/bypass`` exists, so the
+    #: chat's Full access mode can reach the agent. ``None`` means it never does.
+    min_full_access_api_version: Optional[Tuple[int, int]] = None
     #: Whether to send ``session_id`` on the ``/query`` body. Gated per agent
     #: because the request model is ``extra="forbid"`` on both sidecars: an
     #: unexpected field is a 422, not a shrug.
     sends_session_id: bool = False
+    #: Contract version from which this agent waits on a ``needs_confirmation``
+    #: and takes the answer over ``/query/{run_id}/tool_decision``. ``None``
+    #: means it never does: the confirmation ends the run, and the relay shows
+    #: it as an informational card with nothing to approve.
+    min_confirm_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes the chat's attached
+    #: ``documents``. ``None`` means the agent never reads them, and the relay
+    #: leaves them out of the body.
+    min_documents_api_version: Optional[Tuple[int, int]] = None
+    #: Shown instead of running a turn on a chat with attached documents when
+    #: the installed agent is below :attr:`min_documents_api_version` — it
+    #: would answer as if the files were not there.
+    documents_upgrade_message: str = ""
+    #: Contract version from which ``GET /v1/<agent>/skills`` lists the skills
+    #: the agent can load. ``None`` means the agent has no such route.
+    min_skills_api_version: Optional[Tuple[int, int]] = None
+    #: Shown in the Skills settings when the installed agent is below
+    #: :attr:`min_skills_api_version`.
+    skills_upgrade_message: str = ""
 
 
 # --- email ------------------------------------------------------------------
@@ -381,8 +405,26 @@ GAIA_PROFILE = RelayProfile(
         "\n\nThis usually means the local LLM backend (Lemonade Server) is "
         "not running or unreachable from the GAIA agent."
     ),
+    # 2.14 added /sessions/{id}/bypass.
+    min_full_access_api_version=(2, 14),
     readiness_is_blocking=False,
     sends_session_id=True,
+    # 2.14 added /tool_decision. Older binaries refuse a gated tool outright.
+    min_confirm_api_version=(2, 14),
+    # 2.16 added /query's documents field.
+    min_documents_api_version=(2, 16),
+    documents_upgrade_message=(
+        "This chat has attached documents, but the installed GAIA agent can't "
+        "read them (needs contract 2.16+). Update the GAIA agent from the Hub, "
+        "or remove the documents from this chat, then retry."
+    ),
+    # 2.17 added GET /skills.
+    min_skills_api_version=(2, 17),
+    skills_upgrade_message=(
+        "The installed GAIA agent is too old to list its skills here (needs "
+        "contract 2.17+). Update the GAIA agent from the Hub, then reopen this "
+        "page. Its skills still work in chat."
+    ),
 )
 
 
@@ -413,6 +455,17 @@ def profile_for(agent_id: str) -> Optional[RelayProfile]:
     return _PROFILES.get(agent_id)
 
 
+def full_access_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar can be told the chat's Full access mode.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_full_access_api_version
+    return floor is not None and api_version_supported(
+        replace(profile, min_api_version=floor), api_version
+    )
+
+
 def api_version_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when *api_version* meets *profile*'s contract floor.
 
@@ -420,6 +473,37 @@ def api_version_supported(profile: RelayProfile, api_version: Optional[str]) -> 
     reports it from the sidecar's own ``/version``, so its absence means the
     handshake did not complete and the relay has no evidence the routes exist.
     """
+    return _meets(api_version, profile.min_api_version)
+
+
+def confirmations_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar can be handed the user's answer to a confirmation.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_confirm_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def documents_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar takes the chat's attached documents on ``/query``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_documents_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def skills_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar lists its skills on ``GET /v1/<agent>/skills``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_skills_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def _meets(api_version: Optional[str], floor: Tuple[int, int]) -> bool:
     if not api_version:
         return False
     parts = str(api_version).split(".")
@@ -428,7 +512,7 @@ def api_version_supported(profile: RelayProfile, api_version: Optional[str]) -> 
         minor = int(parts[1]) if len(parts) > 1 else 0
     except (ValueError, IndexError):
         return False
-    return (major, minor) >= profile.min_api_version
+    return (major, minor) >= floor
 
 
 __all__ = [
@@ -438,5 +522,9 @@ __all__ = [
     "GAIA_PROFILE",
     "SIDECAR_AGENT_IDS",
     "profile_for",
+    "full_access_supported",
     "api_version_supported",
+    "confirmations_supported",
+    "documents_supported",
+    "skills_supported",
 ]

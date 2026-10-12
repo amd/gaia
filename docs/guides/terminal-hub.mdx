@@ -195,14 +195,20 @@ there. The gate shows that as numbered steps, not failures:
   enter start step 1 · p AI provider · r re-check · d details · esc back
 ```
 
-Press `Enter` and setup runs right there. The row it is working on shows it, and
-the line underneath says what is happening in words — never a log line:
+Press `Enter` and the step runs right there. The row it is working on shows it,
+and the line underneath says what is happening in words — never a log line.
+
+Step 1 installs Lemonade and stops, downloading nothing — and so does every
+retry of it, and the key on a Lemonade row that is installed but not running.
+Which models step 2 fetches depends on where chat runs, so this is the moment to press `p` and pick
+Fireworks AI or the AMD LLM Gateway: step 2 then downloads only the embedding
+models, not a local chat model. Press `Enter` again to start step 2:
 
 ```
   Setting up GAIA                                                    step 2 of 2
   ──────────────────────────────────────────────────────────────────────────────
     [ok]  GAIA agent          C:\Users\you\.gaia\bin\gaia-agent.exe
-    [ok]  Lemonade            done
+    [ok]  Lemonade            running at http://localhost:13305/api/v1
     [..]  Language model      ⣟  downloading Gemma-4-E4B-it-GGUF…
 
   ⣟  Step 2 of 2 — downloading Gemma-4-E4B-it-GGUF · 0:05
@@ -263,7 +269,15 @@ This row has no `f`: the TUI cannot install its own agent binary, so it names
 the installer instead of offering a key that would not work.
 
 A daemon-supervised sidecar agent goes through the same three screens, but its
-gate has more rows: background service, sidecar, Lemonade, and model.
+gate has more rows: background service, sidecar, Lemonade, and model. The
+flagship is one of these once setup has installed it as a hub package.
+
+When the background service or the agent is simply not running — the usual
+state after a reboot — the gate starts it itself and shows `starting…` on that
+row, so the launch needs no keypress. A start that fails keeps the row's error
+and remedy, and `f` tries again. The gate starts nothing on its own when the
+service's port answers as something else, or when `LEMONADE_BASE_URL` points at
+another machine; those rows wait for `f`.
 
 #### Markers
 
@@ -347,6 +361,14 @@ included: the one the startup check loaded, until the agent reports the model it
 actually runs. The model you last picked is restored on the next launch; if it
 can't be, the chat says so in one line and opens the provider picker. See
 [Your model is remembered](/guides/ai-providers#your-model-is-remembered).
+
+Once setup has installed the flagship as a hub package, the TUI reaches it through
+the background service. `/model` and `/provider` work the same there: the switch
+is checked against the models Lemonade serves, the header names the new model, and
+your next message runs on it. It is remembered once that message completes; if the
+agent refuses the model, the previous one comes back. Neither command is ever sent
+to the agent as a question. An agent too old to switch models mid-chat says so and
+names the update command.
 
 | Key | What it does |
 |---|---|
@@ -432,7 +454,10 @@ links and double-click copy.
 | `/clear` | Clear the conversation |
 | `/setup` | Re-run first-time setup (`gaia init`) for the flagship agent |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
-| `/model` | Switch the flagship agent's live model |
+| `/model` | Switch the flagship agent's live model. Bare `/model` lists what you can switch to |
+| `/provider` | Choose where chat runs — Local, Fireworks AI, or the AMD LLM Gateway — and set its key. See [AI providers](/guides/ai-providers) |
+| `/gateway` | Connect the AMD LLM Gateway and pick which of its models GAIA uses. See [LLM gateway](/guides/llm-gateway) |
+| `/slack` | Connect this agent to Slack, or show the connection's status. See [Slack](/guides/slack) |
 | `/full-access` | Explain full access; `/full-access confirm` then turns it on for this session (off by default) |
 | `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |

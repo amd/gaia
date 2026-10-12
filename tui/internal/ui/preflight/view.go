@@ -306,7 +306,7 @@ func (m Model) checklistLines(labelW, lineW, w int) (checklist, remedy []string,
 			if row.FirstRun {
 				bodyStyle = labelStyle
 			}
-			line = stepText(n, len(m.rep.Steps()), row.Step)
+			line = stepText(n, m.rep.StepCount(), row.Step)
 		}
 		switch {
 		case provisioning && row.Key == m.provision.Row:
@@ -349,7 +349,7 @@ func (m Model) trailerLines(w int) []string {
 	switch {
 	case m.phase == phaseProvisioning:
 		leaving := "Leaving this screen cancels the download."
-		if m.focusFix() == FixRunSetup {
+		if runsSetup(m.focusFix()) {
 			leaving = "Leaving this screen stops setup."
 		}
 		return []string{
@@ -405,7 +405,7 @@ func (m Model) provisionStep() (n, of int) {
 	}
 	for i, row := range m.rep.Rows {
 		if row.Key == m.provision.Row {
-			return m.rep.StepNumber(i), len(m.rep.Steps())
+			return m.rep.StepNumber(i), m.rep.StepCount()
 		}
 	}
 	return 0, 0
@@ -473,8 +473,13 @@ func (m Model) detailLines(w, budget int) []string {
 		return []string{pad(dimStyle.Render("no row selected"))}
 	}
 	row := m.rep.Rows[m.focus]
+	word := row.State.Word()
+	if row.FirstRun {
+		// A step setup has not done yet is not a failure, here or on the list.
+		word = "not set up yet"
+	}
 	out := []string{
-		pad(labelStyle.Render(fmt.Sprintf("%s — %s", row.Label, row.State.Word()))),
+		pad(labelStyle.Render(fmt.Sprintf("%s — %s", row.Label, word))),
 		"",
 	}
 	raw := row.Raw

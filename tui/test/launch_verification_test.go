@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -187,9 +188,21 @@ func stubSetupCheck(t *testing.T, code int) {
 		path = filepath.Join(dir, "gaia-stub.sh")
 		writeStub(t, path, fmt.Sprintf("#!/bin/sh\nexit %d\n", code))
 	}
-	orig := gaiainit.Binary
-	gaiainit.Binary = func() (string, error) { return path, nil }
-	t.Cleanup(func() { gaiainit.Binary = orig })
+	setupCheckPath.Store(&path)
+	t.Cleanup(func() { setupCheckPath.Store(nil) })
+}
+
+// setupCheckPath is what the hook runs. The hook itself is installed once: a
+// check started by an earlier test's UI can still be reading it.
+var setupCheckPath atomic.Pointer[string]
+
+func init() {
+	gaiainit.Binary = func() (string, error) {
+		if p := setupCheckPath.Load(); p != nil {
+			return *p, nil
+		}
+		return "", errors.New("gaia CLI stubbed out by the test harness")
+	}
 }
 
 // The chat's launch-time Slack probe must not run the real `gaia` CLI: that

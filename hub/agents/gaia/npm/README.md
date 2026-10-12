@@ -189,6 +189,11 @@ characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a 400. See
 [`SPEC.md` §5.2](./SPEC.md#52-session_id-and-agent-retention) for the retry
 and eviction behavior.
 
+**Attaching files to a conversation? Send them in `documents`** (contract ≥
+2.16): the absolute paths, the whole set on every turn. The agent indexes any it
+has not read yet before answering, and can read those exact files and nothing
+else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.

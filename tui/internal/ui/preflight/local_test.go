@@ -288,7 +288,7 @@ func TestANewMachineGetsAStepNotAFailure(t *testing.T) {
 	if !row.FirstRun || row.Step != installServerStep {
 		t.Fatalf("an uninstalled server is not a first-run step: %+v", row)
 	}
-	if row.State != StateFailed || row.Fix != FixRunSetup {
+	if row.State != StateFailed || row.Fix != FixInstallServer {
 		t.Fatalf("the step must still block and carry setup: %+v", row)
 	}
 	if strings.Contains(row.Detail+row.Remedy.Action, "Already have it") {
@@ -698,8 +698,8 @@ func TestADownLemonadeOffersTheOneKeySetup(t *testing.T) {
 	if row.State != StateFailed {
 		t.Fatalf("an unreachable Lemonade is %s, want failed", row.State.Word())
 	}
-	if row.Fix != FixRunSetup {
-		t.Errorf("fix = %v, want FixRunSetup — `gaia init` installs and starts "+
+	if row.Fix != FixInstallServer {
+		t.Errorf("fix = %v, want FixInstallServer — `gaia init` installs and starts "+
 			"Lemonade, so this row is fixable from the screen", row.Fix)
 	}
 }
@@ -773,6 +773,54 @@ func TestARemoteLemonadeOffersNoSetupKey(t *testing.T) {
 	}
 }
 
+// Starting a local server cannot make one on another machine answer, so a
+// remote LEMONADE_BASE_URL must never trigger the auto-start — while a loopback
+// one still must.
+func TestAutoStartOnlyTargetsThisMachine(t *testing.T) {
+	cases := []struct {
+		base      string
+		wantStart bool
+	}{
+		{"http://192.168.1.50:13305/api/v1", false},
+		{"http://lemonade.example.com:13305/api/v1", false},
+		{"http://localhost:13305/api/v1", true},
+		{"http://127.0.0.1:13305/api/v1", true},
+		{"http://[::1]:13305/api/v1", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.base, func(t *testing.T) {
+			downLemonadeOn(t, fakeHostFor("linux", nil, nil, map[string]string{}))
+			t.Setenv(lemonadeBaseURLEnv, tc.base)
+			probeLemonade = func(context.Context) (string, bool, string) {
+				return tc.base, false, "stub: nothing answering"
+			}
+			attempts := 0
+			tryAutoStartLemonade = func(context.Context) (bool, string, string) {
+				attempts++
+				return false, "", ""
+			}
+
+			row := localRunner{}.checkLemonade(context.Background(), localCfg())
+
+			if got := attempts > 0; got != tc.wantStart {
+				t.Fatalf("auto-start attempted = %v, want %v", got, tc.wantStart)
+			}
+			if row.State != StateFailed {
+				t.Fatalf("an unreachable server is %s, want failed", row.State.Word())
+			}
+			if tc.wantStart {
+				return
+			}
+			if !strings.Contains(row.Line, tc.base) || !strings.Contains(row.Remedy.Action, tc.base) {
+				t.Errorf("row does not name the remote server: line=%q action=%q", row.Line, row.Remedy.Action)
+			}
+			if row.Remedy.Command != "" || row.Fix != FixNone {
+				t.Errorf("a remote server got a local start: command=%q fix=%v", row.Remedy.Command, row.Fix)
+			}
+		})
+	}
+}
+
 // installEmbedded unpacks a fake GAIA-owned server under GAIA_HOME, stopped.
 func installEmbedded(t *testing.T) {
 	t.Helper()
@@ -809,6 +857,8 @@ func TestAutoStartStartsAStoppedEmbeddedServer(t *testing.T) {
 	restore := tryAutoStartLemonade
 	t.Cleanup(func() { tryAutoStartLemonade = restore })
 	tryAutoStartLemonade = autoStartForTest
+	spawnAllowedInTest = true // the "server" is the exit-0 stub below
+	t.Cleanup(func() { spawnAllowedInTest = false })
 	stubGaiaInit(t, func() (string, error) { return exitStub(t, 0), nil })
 	started := false
 	probeLemonade = func(context.Context) (string, bool, string) {
@@ -954,5 +1004,178 @@ func TestAGateDoesNotPassACloudModelItsServerCannotServe(t *testing.T) {
 	})
 	if row := modelRow(r); row.State != StateUnknown || row.Disposition != status.DispositionNotify {
 		t.Fatalf("an unanswered listing must be reported as unknown, not failed or passed: %+v", row)
+	}
+}
+
+func stubReplayKeptKey(t *testing.T, fn func(context.Context, string) (bool, error)) {
+	t.Helper()
+	orig := replayKeptKey
+	replayKeptKey = fn
+	t.Cleanup(func() { replayKeptKey = orig })
+}
+
+// Lemonade forgets a pasted key when it restarts, so after a reboot a gateway
+// user was stopped at the gate and told to reconnect, though the key was kept.
+// The gate must hand the kept key back and pass once the model is listed.
+func TestAGateReplaysTheKeptKeyAfterLemonadeRestarts(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return jsonStub(t, 0, embedderLoadsJSON), nil })
+	r := localRunner{opts: LocalOptions{Model: "amd.DeepSeek-V4.1-Flash"}}
+
+	authenticated := false
+	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+		if !authenticated {
+			return nil, nil
+		}
+		return []lemonade.Model{{ID: "amd.DeepSeek-V4.1-Flash", Recipe: "cloud"}}, nil
+	})
+	var replayedFor []string
+	stubReplayKeptKey(t, func(_ context.Context, provider string) (bool, error) {
+		replayedFor = append(replayedFor, provider)
+		authenticated = true
+		return true, nil
+	})
+	if row, chat, _ := r.verifyModels(context.Background(), localCfg()); row.State != StateOK || chat == "" {
+		t.Fatalf("the kept key was not replayed: %+v chat=%q", row, chat)
+	}
+	if len(replayedFor) != 1 || replayedFor[0] != "amd" {
+		t.Fatalf("replayed for %v, want exactly [amd]", replayedFor)
+	}
+
+	// Nothing kept: still the reconnect remedy, with no second listing pass.
+	authenticated = false
+	stubReplayKeptKey(t, func(context.Context, string) (bool, error) { return false, nil })
+	if row, _, _ := r.verifyModels(context.Background(), localCfg()); row.State != StateFailed ||
+		!strings.Contains(row.Remedy.Action, "Press p") {
+		t.Fatalf("with no kept key the gate must ask to reconnect: %+v", row)
+	}
+
+	// A replay that fails is kept for the details pane, not swallowed.
+	stubReplayKeptKey(t, func(context.Context, string) (bool, error) {
+		return false, errors.New("the GAIA daemon needs fastapi, uvicorn")
+	})
+	row, _, _ := r.verifyModels(context.Background(), localCfg())
+	if row.State != StateFailed || !strings.Contains(row.Raw, "fastapi, uvicorn") {
+		t.Fatalf("a failed replay was swallowed: %+v", row)
+	}
+
+	// Connected, but the provider does not offer this model: reconnecting
+	// would not help, so the gate must not tell the user to.
+	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+		return []lemonade.Model{{ID: "amd.Gemma-4-31B", Recipe: "cloud"}}, nil
+	})
+	stubReplayKeptKey(t, func(context.Context, string) (bool, error) { return true, nil })
+	row, _, _ = r.verifyModels(context.Background(), localCfg())
+	if row.State != StateFailed || !strings.Contains(row.Detail, "does not offer") ||
+		strings.Contains(row.Remedy.Action, "connect it") {
+		t.Fatalf("an unoffered model was blamed on the connection: %+v", row)
+	}
+}
+
+// A model already listed must not cost a daemon start.
+func TestAGateDoesNotReplayAKeyForAListedModel(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return jsonStub(t, 0, embedderLoadsJSON), nil })
+	r := localRunner{opts: LocalOptions{Model: "amd.DeepSeek-V4.1-Flash"}}
+	stubListedCloudModels(t, func(context.Context, string) ([]lemonade.Model, error) {
+		return []lemonade.Model{{ID: "amd.DeepSeek-V4.1-Flash", Recipe: "cloud"}}, nil
+	})
+	stubReplayKeptKey(t, func(context.Context, string) (bool, error) {
+		t.Error("replayed a key for a model Lemonade already lists")
+		return false, nil
+	})
+	if row, _, _ := r.verifyModels(context.Background(), localCfg()); row.State != StateOK {
+		t.Fatalf("a listed cloud model was refused: %+v", row)
+	}
+}
+
+// argsStub is a `gaia` that prints the arguments it was run with and exits
+// with code.
+func argsStub(t *testing.T, code int) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(dir, "gaia-args.bat")
+		script := fmt.Sprintf("@echo off\r\necho ARGS %%*\r\nexit /b %d\r\n", code)
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	path := filepath.Join(dir, "gaia-args.sh")
+	script := fmt.Sprintf("#!/bin/sh\necho ARGS \"$@\"\nexit %d\n", code)
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func stubLemonadeNotInstalled(t *testing.T, missing bool) {
+	t.Helper()
+	orig := lemonadeNotInstalled
+	lemonadeNotInstalled = func() bool { return missing }
+	t.Cleanup(func() { lemonadeNotInstalled = orig })
+}
+
+func setupArgs(t *testing.T, res FixResult) string {
+	t.Helper()
+	for _, line := range res.Log {
+		if strings.HasPrefix(line, "ARGS ") {
+			return line
+		}
+	}
+	t.Fatalf("setup never ran gaia; log: %v", res.Log)
+	return ""
+}
+
+// Pressing enter on "Step 1 — install the local model server" ran the whole of
+// setup, so a user who meant to pick the AMD gateway was already several GB into
+// a local chat model before the provider panel could be opened.
+func TestStepOneInstallsTheServerAndDownloadsNothing(t *testing.T) {
+	stubLemonadeNotInstalled(t, true)
+	stubGaiaInit(t, func() (string, error) { return argsStub(t, 0), nil })
+
+	res := localRunner{}.Fix(context.Background(), localCfg(), FixInstallServer, nil)
+	if !res.OK() {
+		t.Fatalf("step 1 failed: %+v", res)
+	}
+	if args := setupArgs(t, res); !strings.Contains(args, "--skip-models") {
+		t.Errorf("step 1 ran %q; it must skip every model download", args)
+	}
+
+	// A failure names the command for the step that was attempted.
+	stubGaiaInit(t, func() (string, error) { return argsStub(t, 1), nil })
+	res = localRunner{}.Fix(context.Background(), localCfg(), FixInstallServer, nil)
+	if res.OK() || !strings.Contains(res.Diagnosis.Command, "--skip-models") {
+		t.Errorf("a failed step 1 suggests %q, want the server-only command", res.Diagnosis.Command)
+	}
+}
+
+// A step 1 that failed after unpacking Lemonade left the row reading "install
+// the local model server", and its retry ran all of setup: ~29 GB of local
+// models for a user who had not picked a provider yet.
+func TestARetriedStepOneStillDownloadsNothing(t *testing.T) {
+	stubLemonadeNotInstalled(t, false)
+	stubGaiaInit(t, func() (string, error) { return argsStub(t, 0), nil })
+
+	args := setupArgs(t, localRunner{}.Fix(context.Background(), localCfg(), FixInstallServer, nil))
+	if !strings.Contains(args, "--skip-models") {
+		t.Errorf("a retried step 1 ran %q; it must still skip every model download", args)
+	}
+}
+
+// Once the server is installed, the same key downloads the models — and still
+// leaves the chat model out for a cloud provider.
+func TestStepTwoDownloadsTheModelsTheProviderNeeds(t *testing.T) {
+	stubLemonadeNotInstalled(t, false)
+	stubGaiaInit(t, func() (string, error) { return argsStub(t, 0), nil })
+
+	args := setupArgs(t, localRunner{}.Fix(context.Background(), localCfg(), FixRunSetup, nil))
+	if strings.Contains(args, "--skip-models") || strings.Contains(args, "--skip-chat-model") {
+		t.Errorf("a local setup ran %q; it must download the models", args)
+	}
+
+	cloud := localRunner{opts: LocalOptions{Model: "amd.DeepSeek-V4.1-Flash"}}
+	args = setupArgs(t, cloud.Fix(context.Background(), localCfg(), FixRunSetup, nil))
+	if strings.Contains(args, "--skip-models") || !strings.Contains(args, "--skip-chat-model") {
+		t.Errorf("a cloud setup ran %q; it must fetch embeddings only", args)
 	}
 }

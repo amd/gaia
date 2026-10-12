@@ -281,6 +281,23 @@ describe('permission requests wait for the user', () => {
         expect(screen.getByRole('button', { name: /Always allow git status in this chat/ })).toBeInTheDocument();
     });
 
+    it("turns a relayed agent's prompt into Allow once / Deny with its summary", async () => {
+        await driveSend();
+        const summary = `Run 'write_file' with file_path="notes.md"?`;
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'permission_request', tool: 'write_file', confirm_id: 'sidecar-c1', summary,
+            } as unknown as StreamEvent);
+        });
+        expect(mockedApi.confirmTool).not.toHaveBeenCalled();
+        const prompt = selectSessionPermissionPrompt(SESSION.id)(useNotificationStore.getState());
+        expect(prompt).toMatchObject({ confirmId: 'sidecar-c1', summary, alwaysScope: undefined });
+        expect(screen.getByRole('alertdialog')).toHaveTextContent(summary);
+        expect(screen.getByRole('button', { name: 'Allow once' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Always allow/ })).not.toBeInTheDocument();
+    });
+
     it.each(['share_engineering_context', 'append_engineering_context', 'approve_engineering_code'])(
         'offers no always option for %s', async (tool) => {
             await driveSend();

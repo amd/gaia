@@ -79,6 +79,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null,
         draftPermissionMode: 'ask', defaultPermissionMode: 'ask', showMemoryDashboard: false, showSchedules: false, settingsSection: null,
+        draftDocumentIds: [],
     });
 });
 
@@ -128,6 +129,16 @@ describe('a new chat', () => {
 
         await waitFor(() => expect(mocked.setPermissionMode).toHaveBeenCalledWith('sess-new-0001', 'full_access'));
         expect(useChatStore.getState().draftPermissionMode).toBe('ask');
+    });
+
+    it('starts with the documents indexed while no chat was open, then forgets them', async () => {
+        useChatStore.setState({ draftDocumentIds: ['doc-lark-1'] });
+        render(<App />);
+        await sendFirstMessage('what is the dock code?');
+
+        await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ document_ids: ['doc-lark-1'] });
+        expect(useChatStore.getState().draftDocumentIds).toEqual([]);
     });
 
     it('sends "ask" too, so a full-access default in config cannot hide behind the chip', async () => {

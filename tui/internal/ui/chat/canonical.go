@@ -267,6 +267,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		content = StripVerificationScope(content)
 		m.buffer = ""
+		m.confirmRelayedSwitch()
 		if m.awaitingModelSwitch && m.switchTarget != "" && m.switchedTo.model == m.switchTarget {
 			m.rememberModel(m.switchedTo)
 			if m.startup.inFlight && m.switchTarget == m.startup.model {

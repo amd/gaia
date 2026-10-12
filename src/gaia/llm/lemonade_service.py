@@ -147,7 +147,7 @@ def ensure_daemon_owns_lemonade() -> None:
     user-facing command bring up the machine's background service —
     :func:`ensure_lemonade_running` deliberately will not, because a readiness
     check that boots a daemon behind the caller's back surprises every library
-    and test caller, and costs them 30 seconds to do it.
+    and test caller, and costs them up to a minute to do it.
 
     Cheap when a daemon is already running (one status probe). A failure is
     logged, not raised: the ``ensure_lemonade_running`` call that follows

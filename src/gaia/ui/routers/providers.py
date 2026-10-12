@@ -80,9 +80,12 @@ class ProviderError(Exception):
 
 
 def _base_url() -> str:
-    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
-    return resolve_lemonade_base_url().rstrip("/")
+    try:
+        return LemonadeClient(verbose=False).credential_base_url().rstrip("/")
+    except LemonadeClientError as e:
+        raise ProviderError(str(e), status=503) from e
 
 
 def _require_loopback(base_url: str) -> None:
@@ -109,7 +112,7 @@ def _lemonade(
             json=payload,
             headers={
                 "Content-Type": "application/json",
-                **lemonade_auth_headers(resolve_lemonade_api_key()),
+                **lemonade_auth_headers(resolve_lemonade_api_key(base_url=base)),
             },
             timeout=_TIMEOUT,
             allow_redirects=False,
@@ -262,8 +265,27 @@ def _list_models(provider: str) -> List[Dict[str, Any]]:
                 "evidence": ranked[1].evidence if ranked else None,
             }
         )
+    if provider == AMD:
+        _rank_gateway_models(out)
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _rank_gateway_models(models: List[Dict[str, Any]]) -> None:
+    """Rank AMD gateway models by ``gateway.PREFERRED_MODEL_HINTS``.
+
+    The recommendation table covers Fireworks only, so without this every
+    gateway model is unranked and setup auto-picks whichever sorts first.
+    """
+    from gaia.llm.gateway import PREFERRED_MODEL_HINTS, preference_rank
+
+    preferred = sorted(
+        (m for m in models if preference_rank(m["id"]) < len(PREFERRED_MODEL_HINTS)),
+        key=lambda m: (preference_rank(m["id"]), m["id"].lower()),
+    )
+    for i, m in enumerate(preferred, start=1):
+        m["rank"] = i
+        m["note"] = "recommended"
 
 
 def provider_of(model_id: str) -> str:
