@@ -145,7 +145,6 @@ func isolateGaiaHome(t *testing.T) {
 	// shell out to the toolchain.
 	t.Setenv("GOMODCACHE", goEnv(t, "GOMODCACHE"))
 	t.Setenv("GOCACHE", goEnv(t, "GOCACHE"))
-	stubSlackStatus(t)
 }
 
 // goEnv reads one `go env` value, memoised.
@@ -193,10 +192,13 @@ func stubSetupCheck(t *testing.T, code int) {
 	t.Cleanup(func() { setupCheckPath.Store(nil) })
 }
 
-// setupCheckPath is what the hook runs. The hook itself is installed once: a
-// check started by an earlier test's UI can still be reading it.
+// setupCheckPath is what the setup-check hook runs.
 var setupCheckPath atomic.Pointer[string]
 
+// Both hooks are installed once, before any test: a check or probe started by
+// an earlier test's UI can still be reading them. The Slack probe must not run
+// the real `gaia` CLI either: that interpreter outlives a short test and, on
+// Windows, holds the isolated home's gaia.log open while t.TempDir removes it.
 func init() {
 	gaiainit.Binary = func() (string, error) {
 		if p := setupCheckPath.Load(); p != nil {
@@ -204,18 +206,9 @@ func init() {
 		}
 		return "", errors.New("gaia CLI stubbed out by the test harness")
 	}
-}
-
-// stubSlackStatus stops the chat's launch-time Slack probe from running the real
-// `gaia` CLI. That interpreter outlives a short test and, on Windows, holds the
-// isolated home's gaia.log open while t.TempDir tries to remove it.
-func stubSlackStatus(t *testing.T) {
-	t.Helper()
-	orig := gaiaslack.Binary
 	gaiaslack.Binary = func() (string, error) {
 		return "", errors.New("gaia CLI stubbed out by the test harness")
 	}
-	t.Cleanup(func() { gaiaslack.Binary = orig })
 }
 
 func writeStub(t *testing.T, path, body string) {

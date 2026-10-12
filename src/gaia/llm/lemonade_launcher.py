@@ -313,7 +313,8 @@ def _render_command(argv: List[str], env: Dict[str, str]) -> str:
     if platform.system() == "Windows":
         rendered = subprocess.list2cmdline(argv)
         if items:
-            prefix = " && ".join(f"set {k}={v}" for k, v in items)
+            # Quoted: `set K=V && cmd` would assign "V " (trailing space).
+            prefix = " && ".join(f'set "{k}={v}"' for k, v in items)
             rendered = f"{prefix} && {rendered}"
         return rendered
 

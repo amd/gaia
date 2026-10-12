@@ -93,7 +93,8 @@ EMBEDDABLE_SHA256: Dict[str, str] = {
 #
 # Deliberately absent: no_fetch_executables. Setting it true collapses the
 # advertised catalogue from 204 models to the 4 runnable by built-in backends,
-# which would break `gaia download` for everything else.
+# which would break `gaia download` for everything else. write_config() merges
+# over the existing file, so it strips this key rather than merely not adding it.
 # auto_evict=false is pinned rather than inherited. Lemonade v2026.39.1 added
 # VRAM auto-eviction and defaults it off today, but it is a new knob and GAIA's
 # residency model rests on which way it points.
@@ -115,6 +116,7 @@ _LEMOND_CONFIG = {
     "broadcast": False,
     "auto_evict": False,
 }
+_LEMOND_STRIPPED_KEYS = ("no_fetch_executables",)
 
 
 def _lemond_config(ctx_size: Optional[int] = None) -> Dict[str, object]:
@@ -667,28 +669,43 @@ class EmbeddedLemonade:
         # the keys GAIA owns are overwritten; the rest must survive a restart.
         existing: Dict[str, object] = {}
         if path.is_file():
+            problem = None
             try:
                 loaded = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError) as e:
-                log.warning(
-                    "Replacing unreadable %s (%s); any cloud providers Lemonade "
-                    "saved there must be reinstalled",
-                    path,
-                    e,
-                )
+                problem = str(e)
             else:
                 if isinstance(loaded, dict):
                     existing = loaded
                 else:
-                    log.warning(
-                        "Replacing %s: expected a JSON object, found %s",
-                        path,
-                        type(loaded).__name__,
-                    )
+                    problem = f"expected a JSON object, found {type(loaded).__name__}"
+            if problem:
+                log.warning(
+                    "Replacing unusable %s (%s); reinstall any cloud provider "
+                    "that was connected to embedded Lemonade",
+                    path,
+                    problem,
+                )
         # Rewritten on every start(), so a device-profile or GAIA_CTX_SIZE change
         # moves the request budget with it rather than leaving a stale number.
         merged = {**existing, **_lemond_config()}
-        path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+        for key in _LEMOND_STRIPPED_KEYS:
+            if key in merged:
+                log.warning(
+                    "Removing %s=%r from %s: GAIA's embedded Lemonade needs it "
+                    "unset to list its full model catalogue and install backends",
+                    key,
+                    merged.pop(key),
+                    path,
+                )
+        # Atomic: a torn write would lose settings only Lemonade can recreate.
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            tmp.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
         self._pin_llamacpp_backends()
         return path
 
