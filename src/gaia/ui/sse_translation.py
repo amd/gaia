@@ -799,6 +799,7 @@ INVOCATION_TOTAL_CHARS = 1200
 #: breaks; flattened, "line 1 line 2" hides the structure being approved.
 INVOCATION_BLOCK_LINES = 12
 INVOCATION_BLOCK_LINE_CHARS = 200
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
 def _quote_value(text: str) -> str:
@@ -850,6 +851,10 @@ def _render_block(key: str, value: str) -> str:
     lines = value.strip("\n").splitlines()
     shown = []
     for line in lines[:INVOCATION_BLOCK_LINES]:
+        # Tabs as spaces so indentation survives; other controls shown, not obeyed.
+        line = _CONTROL_CHARS.sub(
+            lambda c: f"\\x{ord(c.group()):02x}", line.expandtabs(4)
+        )
         if len(line) > INVOCATION_BLOCK_LINE_CHARS:
             hidden = len(line) - INVOCATION_BLOCK_LINE_CHARS
             line = f"{line[:INVOCATION_BLOCK_LINE_CHARS]}… [+{hidden:,} more characters not shown]"

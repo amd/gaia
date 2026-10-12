@@ -782,13 +782,15 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return updated, cmd
 	}
 
+	// Once per Update, so every path that opens or closes a prompt is timed.
+	next.trackUserWait(time.Now())
+
 	// Reconciled once per Update, here rather than at every call site that
 	// can open or close an overlay (a keystroke, a canonical needs_input
 	// event, the turn settling and clearing m.question) — see
 	// mousecapture.go's doc comment on overlayOpen.
 	// Here, like the queue drain below: the opening /model turn can end down
 	// any terminal path, and this is the one place that sees them all.
-	next.trackUserWait(time.Now())
 	if next.startup.unresolved {
 		var refusedCmd tea.Cmd
 		next, refusedCmd = next.startupRefused()
@@ -2603,7 +2605,7 @@ func (m ChatModel) costModelName() string {
 // trackUserWait opens or closes the user-wait clock as a question or
 // permission prompt appears or goes away.
 func (m *ChatModel) trackUserWait(now time.Time) {
-	waiting := m.confirmation != nil || m.question != nil
+	waiting := m.awaitingUser()
 	switch {
 	case waiting && m.userWaitStart.IsZero():
 		m.userWaitStart = now
@@ -2900,7 +2902,8 @@ func (m ChatModel) awaitingUser() bool {
 // replaced: it proves the process is alive and says nothing about what it is
 // doing (#2804).
 func (m ChatModel) renderLiveRegion() string {
-	elapsed := time.Since(m.queryStart)
+	// Paused while a prompt waits on the user, so it never jumps back on answering.
+	elapsed := m.turnElapsed(time.Now())
 
 	log := collapseActivity(m.visibleWork(m.activity))
 	if len(log) > workLogLines {
@@ -3570,6 +3573,8 @@ func (m ChatModel) View() string {
 	return m.help.Render(base, m.width, m.height)
 }
 
+var confirmClipStyle = lipgloss.NewStyle().Foreground(theme.Warning)
+
 // clipConfirmation trims the modal to *rows*, keeping the head and the last
 // line.
 //
@@ -3587,8 +3592,16 @@ func clipConfirmation(view string, rows int) string {
 	if rows == 1 {
 		return lines[0]
 	}
-	kept := append([]string{}, lines[:rows-1]...)
-	return strings.Join(append(kept, lines[len(lines)-1]), "\n")
+	if rows == 2 {
+		return lines[0] + "\n" + lines[len(lines)-1]
+	}
+	// Say what was cut: a multi-line edit clipped silently reads as the whole edit.
+	hidden := len(lines) - (rows - 1)
+	notice := ansi.Truncate(confirmClipStyle.Render(
+		fmt.Sprintf(" … %d more lines hidden: enlarge the terminal to see them", hidden)),
+		lipgloss.Width(view), "…")
+	kept := append([]string{}, lines[:rows-2]...)
+	return strings.Join(append(kept, notice, lines[len(lines)-1]), "\n")
 }
 
 // extractCommandFromArgs pulls the one argument worth showing out of a legacy
