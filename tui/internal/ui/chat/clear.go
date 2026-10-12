@@ -25,6 +25,7 @@ func (m ChatModel) clearConversation() (tea.Model, tea.Cmd) {
 		m.phase = modelPhase{}
 		m.followTail = true
 		m.queryStart = time.Now()
+		m.userWait, m.userWaitStart = 0, time.Time{}
 		// Same per-turn reset as startTurn: a stale step count or a card
 		// already drawn would be attributed to the cleared turn.
 		m.totalSteps = 0

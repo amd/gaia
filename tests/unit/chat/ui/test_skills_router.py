@@ -87,11 +87,131 @@ def test_lists_with_the_agents_roots_and_excludes_engineering(client, monkeypatc
     ]
 
 
-def test_missing_agent_package_is_503(client, monkeypatch):
+class _FakeHandle:
+    """What ``acquire_handle`` returns for a running Hub-binary flagship."""
+
+    def __init__(self, api_version, payload=None, error=None):
+        self.api_version = api_version
+        self._payload = payload
+        self._error = error
+
+    def proxy(self):
+        handle = self
+
+        class _Proxy:
+            def skills(self):
+                if handle._error is not None:
+                    raise handle._error
+                return handle._payload
+
+        return _Proxy()
+
+
+def _no_agent_package(monkeypatch, handle=None, acquire_error=None):
+    """The Hub-binary install: no ``gaia_agent`` package beside the UI."""
+    from gaia.ui.email_sidecar import daemon_client
+
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+    calls = []
+
+    def acquire(agent_id):
+        calls.append(agent_id)
+        if acquire_error is not None:
+            raise acquire_error
+        return handle
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", acquire)
+    return calls
+
+
+def test_a_hub_binary_agent_lists_its_skills_through_the_daemon(client, monkeypatch):
+    """The bundled skills live inside the binary; the page used to say the agent
+    was not installed and to run ``gaia init``, which changed nothing."""
+    payload = {
+        "skills": [
+            {
+                "name": "web-research",
+                "description": "Research",
+                "version": "1.0",
+                "tier": "verified",
+                "tools": [],
+                "path": "",
+            }
+        ],
+        "invalid": {},
+    }
+    calls = _no_agent_package(monkeypatch, handle=_FakeHandle("2.17", payload))
+
     resp = client.get("/api/skills")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == payload
+    assert calls == ["gaia"]
+
+
+def test_an_agent_too_old_to_list_skills_says_to_update_it(client, monkeypatch):
+    _no_agent_package(monkeypatch, handle=_FakeHandle("2.16", {"skills": []}))
+
+    resp = client.get("/api/skills")
+
     assert resp.status_code == 503
-    assert "gaia init" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "2.17" in detail and "Update the GAIA agent" in detail
+    assert "gaia init" not in detail
+
+
+def test_an_agent_that_cannot_start_is_reported_not_hidden(client, monkeypatch):
+    from gaia.ui.email_sidecar.errors import SidecarError
+
+    _no_agent_package(
+        monkeypatch, acquire_error=SidecarError("daemon not reachable at :59171")
+    )
+
+    resp = client.get("/api/skills")
+
+    assert resp.status_code == 503
+    assert "daemon not reachable at :59171" in resp.json()["detail"]
+
+
+def test_an_agent_that_fails_to_list_is_a_502_with_its_reason(client, monkeypatch):
+    from gaia.ui.email_sidecar.errors import SidecarError
+
+    _no_agent_package(
+        monkeypatch,
+        handle=_FakeHandle("2.17", error=SidecarError("skills root unreadable")),
+    )
+
+    resp = client.get("/api/skills")
+
+    assert resp.status_code == 502
+    assert "skills root unreadable" in resp.json()["detail"]
+
+
+def test_the_proxy_asks_the_flagships_skills_route():
+    """Pin the outgoing call, not just that one was made."""
+    from gaia.ui.email_sidecar.proxy import SidecarProxy
+
+    seen = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"skills": [], "invalid": {}}
+
+    class _Session:
+        headers: dict = {}
+
+        def get(self, url, params=None, timeout=None):
+            seen["url"] = url
+            return _Resp()
+
+    proxy = SidecarProxy(
+        "http://127.0.0.1:51709", agent_id="gaia", session=_Session(), timeout=5
+    )
+
+    assert proxy.skills() == {"skills": [], "invalid": {}}
+    assert seen["url"] == "http://127.0.0.1:51709/v1/gaia/skills"
 
 
 def test_discovery_failure_is_500(client, monkeypatch):

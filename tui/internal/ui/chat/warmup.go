@@ -41,6 +41,10 @@ func (m ChatModel) warmUpApplies() bool {
 func (m ChatModel) startWarmUp() (tea.Model, tea.Cmd) {
 	m.warming = true
 	m.warmStart = time.Now()
+	if m.startup.confirmed && !m.startup.began.IsZero() {
+		// The ready line counts the restore turn that loaded the model too.
+		m.warmStart = m.startup.began
+	}
 	m.warmStep = warmUpStartedStep
 	m.warmDone = nil
 	next, cmd := m.startTurn(client.WarmUpQuery)

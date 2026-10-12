@@ -2928,6 +2928,64 @@ class TestLLMExtraction:
             store._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0] == count
         )
 
+    def test_list_valued_tags_are_unwrapped_or_rejected_per_fact(
+        self, extract_host, caplog
+    ):
+        """A model that returns ``domain`` as a list must not lose the batch.
+
+        A one-item list is unwrapped and stored; an ambiguous list rejects only
+        that fact, with a warning naming the field.
+        """
+        extract_host._memory_context = "global"
+        ops = [
+            {
+                "op": "add",
+                "category": "fact",
+                "content": "User's standup is at 9:30 every weekday",
+                "domain": ["meeting:standup"],
+                "entity": ["project:gaia"],
+                "grounded": "user",
+            },
+            {
+                "op": "add",
+                "category": "fact",
+                "content": "User reviews deploys on Thursdays",
+                "domain": ["work", "deployment"],
+                "grounded": "user",
+            },
+            {
+                "op": "add",
+                "category": "preference",
+                "content": "User prefers dark mode in every editor",
+                "domain": [],
+                "grounded": "user",
+            },
+        ]
+        mock_chat = MagicMock()
+        mock_chat.send_messages.return_value = MagicMock(text=json.dumps(ops))
+        extract_host.chat = mock_chat
+
+        with caplog.at_level("WARNING", logger="gaia.agents.base.memory"):
+            valid = extract_host._extract_via_llm("user text", "assistant reply", [])
+        applied = extract_host._execute_extraction_operations(valid, [])
+
+        assert applied == 2
+        rows = extract_host._memory_store._conn.execute(
+            "SELECT content, domain, entity FROM knowledge"
+        ).fetchall()
+        by_content = {r[0]: (r[1], r[2]) for r in rows}
+        assert by_content["User's standup is at 9:30 every weekday"] == (
+            "meeting:standup",
+            "project:gaia",
+        )
+        assert by_content["User prefers dark mode in every editor"][0] is None
+        assert "User reviews deploys on Thursdays" not in by_content
+        assert any(
+            "'domain' must be a single string" in r.getMessage()
+            and "Thursdays" in r.getMessage()
+            for r in caplog.records
+        )
+
     def test_update_dedup_does_not_self_supersede(self, extract_host):
         """Update-consolidation over near-identical content stays recallable.
 

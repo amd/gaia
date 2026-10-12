@@ -607,8 +607,8 @@ func writeReadiness(errW io.Writer, rep preflight.Report) {
 			}
 			fmt.Fprintf(errW, "  ⚠️  %s: %s (%s — continuing)\n",
 				row.Label, row.Line, verdict)
-			if row.Remedy.Command != "" {
-				fmt.Fprintf(errW, "      run: %s\n", row.Remedy.Command)
+			for _, c := range row.Remedy.Commands() {
+				fmt.Fprintf(errW, "      %s %s\n", c.Label(), c.Line)
 			}
 		}
 		return

@@ -27,7 +27,7 @@ RELEASE_WORKFLOW = (
     Path(__file__).resolve().parents[5]
     / ".github"
     / "workflows"
-    / "release_agent_gaia.yml"
+    / "build_flagship_sidecar.yml"
 )
 
 

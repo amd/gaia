@@ -2037,6 +2037,91 @@ _UNIX_TO_WIN = {
 }
 
 
+#: cmd.exe tools that Git-for-Windows shadows with a GNU tool of the same name.
+_SHADOWED_WIN_TOOLS = frozenset({"find", "sort"})
+
+#: A cmd-style switch: /c, /i, /+3, /off — one segment, so never a path.
+_CMD_SWITCH_RE = re.compile(r"/[a-z+?][^/\\]*", re.IGNORECASE)
+
+
+def _wants_windows_tool(segment: list) -> bool:
+    """Whether *segment* is find/sort spelled with cmd-style ``/x`` switches."""
+    return segment[0].lower().removesuffix(".exe") in _SHADOWED_WIN_TOOLS and any(
+        _CMD_SWITCH_RE.fullmatch(arg) for arg in segment[1:]
+    )
+
+
+def _split_cmd_pipes(text: str) -> list:
+    """*text* split on the ``|`` cmd.exe reads as a pipe: not quoted, not ``^|``."""
+    honour_quotes = text.count('"') % 2 == 0
+    pieces: list = []
+    start = 0
+    quoted = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if honour_quotes and char == '"':
+            quoted = not quoted
+        elif not quoted and char == "^":
+            index += 2
+            continue
+        elif not quoted and char == "|":
+            pieces.append(text[start:index])
+            start = index + 1
+        index += 1
+    pieces.append(text[start:])
+    return pieces
+
+
+def _system32_tool(name: str) -> str:
+    """The absolute path of the Windows *name* tool in System32."""
+    root = os.environ.get("SystemRoot")
+    if not root:
+        raise RuntimeError(
+            f"SystemRoot is not set, so Windows {name}.exe cannot be located. "
+            "Run the command from a normal Windows session, or use the GNU "
+            f"spelling of {name} (e.g. '{name} -...')."
+        )
+    path = os.path.join(root, "System32", f"{name}.exe")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Windows {name} not found at {path}")
+    return path
+
+
+def _pin_windows_tools(shell_text: str, segments: list) -> str:
+    """*shell_text* with each ``/x``-switch find/sort pinned to System32 by path.
+
+    By path, not PATH order: Git-for-Windows' GNU find reads ``/c`` as the C:
+    drive and walks all of it, and cmd.exe would also prefer a ``find.bat`` in
+    the working directory.
+    """
+    if not any(_wants_windows_tool(segment) for segment in segments):
+        return shell_text
+    pieces = _split_cmd_pipes(shell_text)
+    if len(pieces) != len(segments):
+        raise ValueError(
+            f"Cannot tell which command is find/sort in: {shell_text}. "
+            "Put spaces around each '|' and run it again."
+        )
+    pinned = []
+    for piece, segment in zip(pieces, segments):
+        if _wants_windows_tool(segment):
+            body = piece.lstrip()
+            word = segment[0]
+            rest = body[len(word) :]
+            if body[: len(word)].lower() != word.lower() or (
+                rest and not rest[0].isspace()
+            ):
+                raise ValueError(
+                    f"Cannot pin '{word}' to Windows {word} in: {piece.strip()}. "
+                    "Write it unquoted at the start of its pipe segment."
+                )
+            name = word.lower().removesuffix(".exe")
+            piece = f'{piece[: len(piece) - len(body)]}"{_system32_tool(name)}"{rest}'
+        pinned.append(piece)
+    return "|".join(pinned)
+
+
 def _run_step(
     step: _Step,
     cwd: str,
@@ -2096,6 +2181,8 @@ def _run_step(
         # there creates a file called NUL — so it gets the lifted text and the
         # redirection is applied below.
         exec_cmd = (step.shell_text or step.text) if os.name == "nt" else step.text
+        if os.name == "nt":
+            exec_cmd = _pin_windows_tools(exec_cmd, segments)
         cmd_base = segments[0][0].lower()
         if cmd_base in _UNIX_TO_WIN:
             if not shutil.which(cmd_base):
@@ -3183,7 +3270,10 @@ class ShellToolsMixin:
                 part_lower = part.lower()
                 flag = part_lower.split("=", 1)[0]
                 is_output = False
-                if flag.startswith("--"):
+                if len(flag) > 1 and "/output".startswith(flag):
+                    # Windows sort: /o, /out, /output.
+                    is_output = True
+                elif flag.startswith("--"):
                     # --output and any unambiguous abbreviation (--o, --out, ...).
                     if len(flag) > 2 and "--output".startswith(flag):
                         is_output = True
@@ -3197,7 +3287,7 @@ class ShellToolsMixin:
                     return {
                         "status": "error",
                         "tier": TIER_CONFIRM,
-                        "error": "sort -o/--output writes to a file, which is not allowed under the read-only command policy.",
+                        "error": "sort -o/--output (or /o) writes to a file, which is not allowed under the read-only command policy.",
                         "has_errors": True,
                         "hint": "Drop -o/--output and read sort's result from stdout (e.g. 'sort file' or 'sort file | head').",
                     }

@@ -1404,3 +1404,78 @@ def test_cli_list_never_prints_a_token_even_if_one_appears_in_the_body(
     out = capsys.readouterr().out
     assert "email" in out and "0.5.0" in out
     assert secret not in out
+
+
+# ===========================================================================
+# min_gaia_version — never offer or install a version this core cannot run
+# ===========================================================================
+
+
+def _two_version_hub(newest_floor: str) -> dict:
+    """email 0.5.0 runs on any recent core; 0.6.0 needs *newest_floor*."""
+    files = _hub_files()
+    manifest = _manifest()
+    manifest["versions"]["0.5.0"]["min_gaia_version"] = "0.22.0"
+    newest = json.loads(json.dumps(manifest["versions"]["0.5.0"]))
+    newest["version"] = "0.6.0"
+    newest["min_gaia_version"] = newest_floor
+    for art in [newest["artifact"], *newest["artifacts"]]:
+        art["path"] = art["path"].replace("/0.5.0/", "/0.6.0/")
+    manifest["versions"]["0.6.0"] = newest
+    manifest["latest_version"] = "0.6.0"
+    manifest["min_gaia_version"] = newest_floor
+    files["/agents/email/manifest.json"] = json.dumps(manifest).encode()
+
+    index = _index(("email",))
+    index["agents"][0].update(
+        latest_version="0.6.0",
+        min_gaia_version=newest_floor,
+        min_gaia_versions={"0.5.0": "0.22.0", "0.6.0": newest_floor},
+    )
+    files["/index.json"] = json.dumps(index).encode()
+    return files
+
+
+def test_catalog_does_not_offer_an_update_this_core_cannot_run(
+    monkeypatch, install_root
+):
+    _write_sentinel(install_root, "email", "0.5.0")
+    _patch_hub(monkeypatch, _RecordingFetcher(_two_version_hub("99.0.0")))
+    client = _client(_FakeRegistry())
+
+    entry = client.get("/daemon/v1/catalog", headers=_auth()).json()["agents"][0]
+    assert entry["latest_version"] == "0.6.0"
+    assert entry["update_available"] is False
+    assert entry["installable_version"] == "0.5.0"
+    assert entry["requires_gaia_version"] == "99.0.0"
+
+
+def test_install_takes_the_newest_version_this_core_runs(monkeypatch, install_root):
+    fetcher = _RecordingFetcher(_two_version_hub("99.0.0"))
+    _patch_hub(monkeypatch, fetcher)
+    client = _client(_FakeRegistry())
+
+    assert _post_install(client).status_code == 202
+    status = client.get(
+        "/daemon/v1/agents/email/install-status", headers=_auth()
+    ).json()
+    assert status["status"] == "completed"
+    assert status["version"] == "0.5.0"
+    assert not any("/0.6.0/" in url for url in fetcher.calls)
+
+
+def test_install_of_a_version_needing_a_newer_core_is_409_before_any_stop(
+    monkeypatch, install_root
+):
+    fetcher = _RecordingFetcher(_two_version_hub("99.0.0"))
+    _patch_hub(monkeypatch, fetcher)
+    registry = _FakeRegistry()
+    client = _client(registry)
+
+    r = _post_install(client, version="0.6.0")
+    assert r.status_code == 409
+    assert "GAIA 99.0.0" in r.json()["detail"]
+    assert "pip install --upgrade amd-gaia" in r.json()["detail"]
+    # The running sidecar was never stopped and nothing was downloaded.
+    assert registry.stop_calls == []
+    assert not any(ARTIFACT_NAME in c for c in fetcher.calls)

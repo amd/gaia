@@ -50,11 +50,13 @@ from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
 from gaia.ui.sse_handler import (
+    FAILED_TOOL_STATUSES,
     SSEOutputHandler,
     _format_tool_args,
     _strip_balanced_json_blobs,
     _summarize_tool_result,
 )
+from gaia.ui.sse_translation import SUMMARY_VIEW_KEYS
 
 logger = get_logger(__name__)
 
@@ -123,11 +125,29 @@ def _tool_label(tool: str, profile: RelayProfile = EMAIL_PROFILE) -> str:
     return profile.tool_labels.get(tool) or _humanize_tool(tool)
 
 
+def _is_summary_view(data: Any) -> bool:
+    return (
+        isinstance(data, dict)
+        and isinstance(data.get("summary"), str)
+        and set(data) <= set(SUMMARY_VIEW_KEYS)
+    )
+
+
 def _derive_summary(tool: str, data: Any, profile: RelayProfile = EMAIL_PROFILE) -> str:
     """Short, human summary for a ``tool_result`` — never a bare "Done"."""
+    if _is_summary_view(data) and data["summary"]:
+        # The sidecar already summarized it; re-summarizing names its keys.
+        return data["summary"]
     if isinstance(data, dict) and data:
         return _summarize_tool_result(data)
     return f"Ran {_tool_label(tool, profile).lower()}"
+
+
+def _derive_success(data: Any) -> bool:
+    """Whether the tool worked, by the same rule the in-process handler uses."""
+    if _is_summary_view(data) and isinstance(data.get("success"), bool):
+        return data["success"]
+    return not (isinstance(data, dict) and data.get("status") in FAILED_TOOL_STATUSES)
 
 
 def _kind_re() -> "re.Pattern":
@@ -139,10 +159,38 @@ def _kind_re() -> "re.Pattern":
 
 
 def _dispatch_one(
-    handler: Any, event: Dict[str, Any], profile: RelayProfile = EMAIL_PROFILE
+    handler: Any,
+    event: Dict[str, Any],
+    profile: RelayProfile = EMAIL_PROFILE,
+    answers_confirmations: bool = False,
 ) -> bool:
-    """Emit one canonical event as a UI event. Returns True if terminal."""
+    """Emit one canonical event as a UI event. Returns True if terminal.
+
+    *answers_confirmations* says the sidecar waits on a ``needs_confirmation``
+    for an answer over ``tool_decision``; otherwise the prompt is a card only.
+    """
     etype = event.get("type")
+    if answers_confirmations:
+        # Any event after a prompt means the sidecar has stopped waiting on it.
+        handler.set_relay_confirmation(None)
+
+    if etype == "needs_confirmation" and answers_confirmations:
+        confirm_id = str(event.get("confirm_id") or "")
+        if confirm_id:
+            handler.set_relay_confirmation(confirm_id)
+            # The UI's own approval prompt. No always_scope: an "always" grant
+            # would live in the sidecar, where this chat can neither list nor
+            # revoke it, so only allow-once and deny are offered.
+            request: Dict[str, Any] = {
+                "type": "permission_request",
+                "tool": str(event.get("action", "")),
+                "confirm_id": confirm_id,
+                "summary": str(event.get("summary", "")),
+            }
+            if event.get("risk"):
+                request["risk"] = str(event["risk"])
+            handler._emit(request)
+            return False
 
     if etype == "status":
         handler._emit({"type": "status", "message": str(event.get("message", ""))})
@@ -180,7 +228,7 @@ def _dispatch_one(
             "type": "tool_result",
             "tool": tool,
             "summary": _derive_summary(tool, data, profile),
-            "success": True,
+            "success": _derive_success(data),
             "data": data if data is not None else {},
         }
         render = event.get("render")
@@ -245,6 +293,29 @@ def _dispatch_one(
     return False
 
 
+def _full_access_error(
+    profile: RelayProfile, enabled: bool, exc: Exception
+) -> Dict[str, Any]:
+    """The terminal event for a turn stopped because its mode could not be set."""
+    action = "turn on" if enabled else "turn off"
+    return {
+        "type": "agent_error",
+        "content": (
+            f"Couldn't {action} Full access for the {profile.display_name} "
+            f"agent, so this turn was stopped: {exc}. Send the message again; "
+            "if it keeps failing, restart the agent from its card."
+        ),
+    }
+
+
+class _FullAccessNotSet(SidecarError):
+    """The chat's mode could not be set once ``/query`` created the session."""
+
+    def __init__(self, event: Dict[str, Any]):
+        super().__init__(event["content"])
+        self.event = event
+
+
 def _best_effort_cancel(proxy: Any, rid: str) -> None:
     try:
         proxy.cancel_query(rid)
@@ -267,10 +338,20 @@ def relay_query(
     run_id: Optional[str] = None,
     max_steps: Optional[int] = None,
     read_timeout: float = 300.0,
+    full_access: Optional[bool] = None,
     profile: RelayProfile = EMAIL_PROFILE,
     session_id: Optional[str] = None,
+    answers_confirmations: bool = False,
+    documents: Optional[List[str]] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
+
+    *documents* — absolute paths of the chat's attached files, for a sidecar
+    the caller has established takes them (``profiles.documents_supported``).
+
+    *answers_confirmations* — the caller has established that this sidecar
+    takes ``tool_decision`` answers (``profiles.confirmations_supported``), so
+    a ``needs_confirmation`` becomes an Allow once / Deny prompt.
 
     Runs synchronously on the caller's thread — the UI backend already runs
     the whole per-turn producer off the event loop in a worker/daemon thread
@@ -289,6 +370,12 @@ def relay_query(
     owned by the caller (``_run_agent``'s outer ``finally``), exactly as for
     every other agent branch. Relay-level signalling would push a second
     ``None`` sentinel per turn, violating the queue's exactly-once contract.
+
+    *full_access* is the chat's permission mode, for a sidecar that takes it
+    (``profiles.full_access_supported``); ``None`` leaves the sidecar alone.
+    It is set on the sidecar session before the run starts, and a turn whose
+    mode could not be set is stopped rather than run on a mode the user did
+    not pick.
     """
     # A proxy pointed at one agent driven with another's profile would send
     # that agent's body shape to the wrong /v1/<agent> prefix and label its
@@ -324,11 +411,31 @@ def relay_query(
         # turn, so a document indexed on turn 1 is gone by turn 2. Gated by
         # profile because both request models are extra="forbid".
         body["session_id"] = session_id
+    if documents:
+        body["documents"] = list(documents)
+
+    syncs_mode = full_access is not None and bool(session_id)
+    enable_after_start = False
+    if syncs_mode:
+        try:
+            proxy.set_bypass(session_id, full_access)
+        except SidecarHTTPError as exc:
+            if exc.status_code != 404:
+                handler._emit(_full_access_error(profile, full_access, exc))
+                return
+            # No sidecar session yet. /query creates it in ask, so only
+            # "on" has anything left to do.
+            enable_after_start = full_access
+        except SidecarError as exc:
+            handler._emit(_full_access_error(profile, full_access, exc))
+            return
 
     # So a later POST /api/chat/user-input can find where to deliver the
     # answer (#2595) — mirrors active_relay_response's lifetime exactly.
     handler.active_relay_proxy = proxy
     handler.active_relay_run_id = rid
+    # Lets a mid-run switch of the chat's mode reach this sidecar session too.
+    handler.active_relay_mode_session = session_id if syncs_mode else None
 
     def _register_response(resp: Any) -> None:
         handler.active_relay_response = resp
@@ -351,14 +458,27 @@ def relay_query(
     crashed = False
     crash_message = profile.stream_ended_message
     try:
-        for event in proxy.query_stream(
+        events = proxy.query_stream(
             body, read_timeout=read_timeout, on_response=_register_response
-        ):
+        )
+        if enable_after_start:
+            # /query has created the sidecar session, so it can take the mode.
+            try:
+                proxy.set_bypass(session_id, True)
+            except SidecarError as exc:
+                raise _FullAccessNotSet(_full_access_error(profile, True, exc)) from exc
+        for event in events:
             if handler.cancelled.is_set():
                 break
-            if _dispatch_one(handler, event, profile):
+            if _dispatch_one(handler, event, profile, answers_confirmations):
                 terminated = True
                 break
+    except _FullAccessNotSet as exc:
+        crashed = True
+        crash_message = exc.event["content"]
+        resp = handler.active_relay_response
+        if resp is not None:
+            resp.close()
     except SidecarHTTPError as exc:
         if handler.cancelled.is_set():
             logger.info(
@@ -405,9 +525,12 @@ def relay_query(
                 exc,
             )
     finally:
+        if answers_confirmations:
+            handler.set_relay_confirmation(None)
         handler.active_relay_response = None
         handler.active_relay_proxy = None
         handler.active_relay_run_id = None
+        handler.active_relay_mode_session = None
 
     if handler.cancelled.is_set():
         _best_effort_cancel(proxy, rid)

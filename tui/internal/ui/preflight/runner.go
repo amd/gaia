@@ -64,7 +64,12 @@ func (r FixResult) OK() bool { return r.Err == nil }
 // streamsProgress reports whether kind's fix narrates while it runs, so the
 // screen shows the streaming panel rather than a spinner and a note.
 func streamsProgress(kind FixKind) bool {
-	return kind == FixPullModel || kind == FixRunSetup
+	return kind == FixPullModel || runsSetup(kind)
+}
+
+// runsSetup reports whether kind's fix is a `gaia init` run.
+func runsSetup(kind FixKind) bool {
+	return kind == FixRunSetup || kind == FixInstallServer
 }
 
 // --- the daemon runner ------------------------------------------------------

@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+import gaia.ui._chat_helpers as chat_helpers_module
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
 from gaia.ui._chat_helpers import _dispatch_sidecar_query, _query_context_from_history
@@ -250,6 +251,13 @@ class TestGaiaDispatch:
         )
         return acquired, calls
 
+    def _patch_cloud(self, monkeypatch, handle):
+        """``_patch`` for a cloud model id, whose key replay is not under test."""
+        monkeypatch.setattr(
+            chat_helpers_module, "_replay_cloud_key_for_relay", lambda *a: None
+        )
+        return self._patch(monkeypatch, handle)
+
     def test_relays_to_the_gaia_sidecar_with_its_profile(self, monkeypatch):
         handle = _FakeHandle()
         acquired, calls = self._patch(monkeypatch, handle)
@@ -322,6 +330,63 @@ class TestGaiaDispatch:
         assert handler.events[0]["type"] == "agent_error"
         assert "The model is not downloaded" in handler.events[0]["content"]
 
+    def test_a_missing_default_model_does_not_block_a_cloud_turn(self, monkeypatch):
+        """The probe checks the sidecar's default local model. A turn on a
+        gateway model never touches it, so a user who skipped the local
+        download must still get an answer — silently, with no status line."""
+        body = self._init_body(reachable=True, present=False, hint="not downloaded")
+        body["model"]["id"] = "Gemma-4-E4B-it-GGUF"
+        _, calls = self._patch_cloud(monkeypatch, _FakeHandle(init_result=(503, body)))
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(
+            handler, request, [], "amd.DeepSeek-V4.1-Flash", "gaia", "sess-1"
+        )
+
+        assert len(calls) == 1
+        assert handler.events == []
+
+    def test_a_missing_model_the_turn_uses_still_blocks(self, monkeypatch):
+        body = self._init_body(reachable=True, present=False, hint="not downloaded")
+        body["model"]["id"] = "Gemma-4-E4B-it-GGUF"
+        _, calls = self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(handler, request, [], "Gemma-4-E4B-it-GGUF", "gaia")
+
+        assert calls == []
+        assert handler.events[0]["type"] == "agent_error"
+
+    def test_an_old_lemonade_blocks_even_a_cloud_turn(self, monkeypatch):
+        body = self._init_body(reachable=True, present=False, compatible=False)
+        body["model"]["id"] = "Gemma-4-E4B-it-GGUF"
+        _, calls = self._patch_cloud(monkeypatch, _FakeHandle(init_result=(503, body)))
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(handler, request, [], "amd.DeepSeek-V4.1-Flash", "gaia")
+
+        assert calls == []
+        assert handler.events[0]["type"] == "agent_error"
+
+    def test_email_missing_model_still_blocks_a_cloud_turn(self, monkeypatch):
+        """Email's readiness gate stays a gate whatever model the turn uses."""
+        body = self._init_body(reachable=True, present=False, hint="no inbox")
+        body["model"]["id"] = "Gemma-4-E4B-it-GGUF"
+        handle = _FakeHandle(api_version="2.4", init_result=(503, body))
+        _, calls = self._patch_cloud(monkeypatch, handle)
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="email")
+
+        _dispatch_sidecar_query(
+            handler, request, [], "amd.DeepSeek-V4.1-Flash", "email"
+        )
+
+        assert calls == []
+        assert handler.events[0]["type"] == "agent_error"
+
     def test_an_incompatible_lemonade_still_blocks(self, monkeypatch):
         body = self._init_body(
             reachable=True, compatible=False, hint="Lemonade 10.1 is too old"
@@ -376,6 +441,146 @@ class TestGaiaDispatch:
             _dispatch_sidecar_query(
                 _FakeSSEHandler(), request, [], "m", "not-a-sidecar"
             )
+
+    def _record_replays(self, monkeypatch, order, raises=None):
+        import gaia.llm.cloud_keys as cloud_keys
+
+        def _ensure(provider, client=None):
+            order.append(("replay", provider))
+            if raises:
+                raise raises
+            return True
+
+        monkeypatch.setattr(cloud_keys, "ensure_authenticated", _ensure)
+
+    def test_a_cloud_model_gets_its_key_back_before_init(self, monkeypatch):
+        """After Lemonade restarts it has forgotten the key, and /init would
+        report the cloud model as missing."""
+        order = []
+        self._record_replays(monkeypatch, order)
+        handle = _FakeHandle()
+        real_init = handle._proxy.init
+        handle._proxy.init = lambda: (order.append(("init",)), real_init())[1]
+        _, calls = self._patch(monkeypatch, handle)
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(
+            _FakeSSEHandler(), request, [], "amd.DeepSeek-V4.1-Flash", "gaia"
+        )
+
+        assert order == [("replay", "amd"), ("init",)]
+        assert len(calls) == 1
+
+    @pytest.mark.parametrize("model_id", ["Gemma-4-E4B-it-GGUF", None, "foo.bar"])
+    def test_a_local_model_is_left_alone(self, monkeypatch, model_id):
+        order = []
+        self._record_replays(monkeypatch, order)
+        _, calls = self._patch(monkeypatch, _FakeHandle())
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(_FakeSSEHandler(), request, [], model_id, "gaia")
+
+        assert order == []
+        assert len(calls) == 1
+
+    def test_a_failed_replay_is_shown_and_the_turn_still_runs(self, monkeypatch):
+        from gaia.llm.gateway import GatewayError
+
+        order = []
+        self._record_replays(monkeypatch, order, raises=GatewayError("token rejected"))
+        _, calls = self._patch(monkeypatch, _FakeHandle())
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(handler, request, [], "amd.GLM-5.3-Flash", "gaia")
+
+        assert len(calls) == 1
+        assert handler.events[0]["type"] == "status"
+        assert "token rejected" in handler.events[0]["message"]
+
+
+# ── A relayed tool step reports what the tool actually did ───────────────────
+
+
+def _relayed_tool_result(tool, result):
+    """Run *result* through the sidecar's handler and translator, then the relay.
+
+    Returns the UI-side ``tool_result`` event the Agent UI renders as a step.
+    """
+    from gaia.ui.sse_handler import SSEOutputHandler
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    sidecar_events = []
+    sidecar = SSEOutputHandler()
+    sidecar._emit = sidecar_events.append
+    sidecar.print_tool_usage(tool)
+    sidecar.pretty_print_json({"file_path": "C:/x.txt"}, title="Arguments")
+    sidecar.pretty_print_json(result, title="Result")
+
+    translator = CanonicalTranslator("run-1", agent_id="gaia")
+    wire = [c for e in sidecar_events for c in translator.translate(e)]
+    ui = _FakeSSEHandler()
+    for event in wire:
+        relay_module._dispatch_one(ui, event, GAIA_PROFILE)
+    [step] = [e for e in ui.events if e["type"] == "tool_result"]
+    return step
+
+
+class TestRelayedToolResult:
+    def test_a_failed_tool_is_shown_as_failed_with_its_reason(self):
+        step = _relayed_tool_result(
+            "read_file", {"status": "error", "error": "File not found: C:/x.txt"}
+        )
+        assert step["success"] is False
+        assert "File not found: C:/x.txt" in step["summary"]
+
+    def test_a_denied_write_is_not_shown_as_written(self):
+        step = _relayed_tool_result(
+            "write_file",
+            # The shape Agent._execute_tool returns when the user says Deny.
+            {"status": "denied", "error": "Tool 'write_file' was denied by the user."},
+        )
+        assert step["success"] is False
+        assert step["summary"] == "denied: Tool 'write_file' was denied by the user."
+
+    def test_a_successful_tool_shows_the_sidecars_summary(self):
+        step = _relayed_tool_result(
+            "read_file",
+            {"status": "success", "message": "Read 3 lines from x.txt"},
+        )
+        assert step["success"] is True
+        assert step["summary"] == "success: Read 3 lines from x.txt"
+        assert "Result with keys" not in step["summary"]
+
+    def test_full_tool_data_is_still_summarized_from_its_fields(self):
+        ui = _FakeSSEHandler()
+        relay_module._dispatch_one(
+            ui,
+            {
+                "type": "tool_result",
+                "tool": "search_files",
+                "data": {"files": ["a.txt", "b.txt"], "count": 2},
+            },
+            GAIA_PROFILE,
+        )
+        [step] = ui.events
+        assert step["success"] is True
+        assert step["summary"].startswith("Found 2 file(s)")
+
+    def test_full_tool_data_with_an_error_status_is_a_failure(self):
+        ui = _FakeSSEHandler()
+        relay_module._dispatch_one(
+            ui,
+            {
+                "type": "tool_result",
+                "tool": "list_messages",
+                "data": {"status": "error", "error": "mailbox offline"},
+            },
+            EMAIL_PROFILE,
+        )
+        [step] = ui.events
+        assert step["success"] is False
+        assert step["summary"] == "error: mailbox offline"
 
 
 # ── session_id is gated per agent (both request models forbid extras) ────────

@@ -191,7 +191,7 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
         detail=(
             f"Unknown agent_type '{agent_type}'.{reason} Registered agent ids: "
             f"{', '.join(valid_ids)}. Pick one of these, or install the agent "
-            "from the Agent Hub (`gaia hub`) and restart the server."
+            "from the Agent Hub (`gaia hub`) and try again."
         ),
     )
 

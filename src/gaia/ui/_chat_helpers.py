@@ -43,6 +43,8 @@ from gaia.ui.email_sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
     api_version_supported,
+    confirmations_supported,
+    documents_supported,
     profile_for,
 )
 from gaia.ui.memory_settings import memory_enabled
@@ -206,7 +208,11 @@ def _agent_type_unknown(agent_type: str, registry) -> bool:
     profile = profile_for(agent_type)
     if profile is not None and profile.always_relay:
         return False
-    return bool(registry) and not registry.get(agent_type)
+    if not registry or registry.get(agent_type):
+        return False
+    # Setup or `gaia hub install` may have added it after startup.
+    registry.refresh_installed()
+    return not registry.get(agent_type)
 
 
 # ── Per-session agent cache ───────────────────────────────────────────────────
@@ -256,17 +262,16 @@ _classify_chat_exception = classify_lemonade_exception
 # ── Auto-titling ────────────────────────────────────────────────────────────
 #
 # After the agent finishes a turn, kick off a background task that asks the
-# same LLM to generate a 3-6 word title summarising the conversation, then
-# update the session title in the DB. Fires when:
-#   * Title is still the default ("New Chat" / "New Task" / starts with
-#     "Untitled") — first-response pass
-#   * The new user message has low word-overlap with the existing title
-#     (≤ 0.15 Jaccard on lowercase words) AND the message is substantive
-#     (≥ 25 chars) — topic-shift pass
+# same LLM (the default chat model if that one is a safety classifier) to
+# generate a 3-6 word title summarising the conversation, then
+# update the session title in the DB. Fires only while the title is still a
+# placeholder ("New Chat" / "New Task" / "Untitled"): once named, a chat keeps
+# its name, so the sidebar never drifts to the latest question. The title is
+# always drawn from the chat's first question, even if that turn was stopped.
 #
 # Skipped when:
 #   * The session's title_is_custom flag is set — an explicit user/API title
-#     is pinned forever (#2165); only auto-generated titles may be replaced
+#     is pinned forever (#2165)
 #   * Title starts with "Eval:" — those are owned by the eval framework
 #   * Title was last updated < 30 s ago — prevents thrash mid-conversation
 #   * No agent / no Lemonade base URL available
@@ -277,42 +282,67 @@ _AUTO_TITLE_DEFAULTS = PLACEHOLDER_TITLES
 _AUTO_TITLE_LOCK = threading.Lock()
 _AUTO_TITLE_LAST_AT: dict[str, float] = {}  # session_id -> monotonic ts
 _AUTO_TITLE_THROTTLE_S = 30.0
-_AUTO_TITLE_RE_NONWORD = _re.compile(r"[^a-z0-9 ]+")
 
 
-def _title_word_set(s: str) -> set[str]:
-    """Lowercase word set for overlap comparison; strips punctuation,
-    drops 1-letter tokens (mostly noise like "a" / "I")."""
-    cleaned = _AUTO_TITLE_RE_NONWORD.sub(" ", (s or "").lower())
-    return {w for w in cleaned.split() if len(w) > 1}
+#: Safety-classifier model families. They answer any prompt with a verdict
+#: ("safe" / "unsafe S1" / "Yes"), never a title, and Lemonade's catalog has
+#: no label marking them, so they are matched by name.
+_GUARD_MODEL_NAME_PATTERNS = (
+    "llama-guard",
+    "llamaguard",
+    "prompt-guard",
+    "qwen3guard",
+    "wildguard",
+    "nemoguard",
+    "shieldgemma",
+    "granite-guardian",
+)
+#: First lines a classifier gives instead of a title.
+_CLASSIFIER_VERDICT_RE = _re.compile(
+    r"^(safe|unsafe|yes|no)([\s,:]+s\d+)*$", _re.IGNORECASE
+)
+_QUESTION_TITLE_MAX_CHARS = 60
 
 
-def _should_retitle(
-    current_title: str, last_user_msg: str, title_is_custom: bool = False
-) -> bool:
-    """Decide whether the session deserves a fresh title.
+def _is_guard_model(model_id: str) -> bool:
+    """True for a safety-classifier model, which cannot write a title."""
+    name = model_id.lower().replace("_", "-")
+    return any(pattern in name for pattern in _GUARD_MODEL_NAME_PATTERNS)
 
-    See module-level comment for the rule set.  Returns True/False; pure
-    function so it's easy to unit-test in isolation.
-    """
+
+def _title_model_for(session_model: str) -> str:
+    """The model that writes the title: the session's, unless it is a guard model."""
+    if not _is_guard_model(session_model):
+        return session_model
+    from gaia.llm.lemonade_client import resolve_default_chat_model
+
+    title_model = resolve_default_chat_model()
+    logger.info(
+        "Auto-title: %s is a safety classifier; titling with %s instead",
+        session_model,
+        title_model,
+    )
+    return title_model
+
+
+def _title_from_question(user_msg: str) -> Optional[str]:
+    """The first question itself, cut at a word boundary, as a title."""
+    text = " ".join((user_msg or "").split())
+    if len(text) > _QUESTION_TITLE_MAX_CHARS:
+        cut = text[:_QUESTION_TITLE_MAX_CHARS]
+        text = (cut.rsplit(" ", 1)[0] or cut) + "…"
+    text = text.rstrip(".!?;:,").strip()
+    return text or None
+
+
+def _should_retitle(current_title: str, title_is_custom: bool = False) -> bool:
+    """True only while the session still carries a placeholder title."""
     if title_is_custom:
         return False  # explicit user/API title — pinned (#2165)
     title = (current_title or "").strip()
-    title_lower = title.lower()
     if title.startswith("Eval:"):
         return False  # eval framework owns these
-    if not title or title_lower in _AUTO_TITLE_DEFAULTS:
-        return True  # first-response pass: replace the default
-    # Topic-shift pass: low overlap + substantive new message.
-    user_msg = (last_user_msg or "").strip()
-    if len(user_msg) < 25:
-        return False
-    title_words = _title_word_set(title)
-    user_words = _title_word_set(user_msg)
-    if not title_words:
-        return True
-    overlap = len(title_words & user_words) / len(title_words)
-    return overlap <= 0.15
+    return not title or title.lower() in _AUTO_TITLE_DEFAULTS
 
 
 async def _generate_session_title(
@@ -324,7 +354,9 @@ async def _generate_session_title(
     """Call Lemonade chat completions to produce a short tab-style title.
 
     Returns the cleaned title (≤ 64 chars, no quotes, no trailing
-    punctuation) or None on an HTTP or parse failure.  Times out at 30 s so a hung
+    punctuation) or None on an HTTP or parse failure.  An empty reply or a
+    classifier verdict ("safe", "unsafe S1") yields the first question instead,
+    with a warning.  Times out at 30 s so a hung
     LLM doesn't keep the background task alive forever.
     """
     import httpx  # pylint: disable=import-outside-toplevel
@@ -381,10 +413,35 @@ async def _generate_session_title(
             for prefix in ("title:", "tab:", "summary:"):
                 if title.lower().startswith(prefix):
                     title = title[len(prefix) :].strip()
-            return title[:64] if title else None
+            if not title or _CLASSIFIER_VERDICT_RE.match(title):
+                logger.warning(
+                    "Auto-title: %s replied %r, not a title; "
+                    "titling from the first question instead",
+                    model_id,
+                    content[:80],
+                )
+                return _title_from_question(user_msg)
+            return title[:64]
     except (httpx.HTTPError, ValueError, LookupError, AttributeError) as exc:
         logger.debug("Auto-title LLM call failed: %s", exc)
         return None
+
+
+def _first_exchange(
+    db: ChatDatabase, session_id: str, user_msg: str, assistant_msg: str
+) -> tuple[str, str]:
+    """The session's first user question and the reply that followed it."""
+    messages = db.get_messages(session_id, limit=20)
+    for i, msg in enumerate(messages):
+        if msg.get("role") != "user" or not (msg.get("content") or "").strip():
+            continue
+        if msg["content"] == user_msg:
+            return user_msg, assistant_msg
+        reply = messages[i + 1] if i + 1 < len(messages) else {}
+        return msg["content"], (
+            reply.get("content") or "" if reply.get("role") == "assistant" else ""
+        )
+    return user_msg, assistant_msg
 
 
 async def _maybe_update_session_title(
@@ -409,8 +466,10 @@ async def _maybe_update_session_title(
         return
     current_title = session.get("title") or ""
     title_is_custom = bool(session.get("title_is_custom"))
-    if not _should_retitle(current_title, user_msg, title_is_custom):
+    if not _should_retitle(current_title, title_is_custom):
         return
+    # Name the chat after its first question, even when that turn was stopped.
+    user_msg, assistant_msg = _first_exchange(db, session_id, user_msg, assistant_msg)
 
     # Throttle: don't re-title if we updated within the last 30 s.
     now = _time.monotonic()
@@ -427,7 +486,7 @@ async def _maybe_update_session_title(
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
     new_title = await _generate_session_title(
         base_url=base_url,
-        model_id=model_id,
+        model_id=_title_model_for(model_id),
         user_msg=user_msg,
         assistant_msg=assistant_msg,
     )
@@ -1249,6 +1308,13 @@ def _session_mail_provider(session: dict) -> str | None:
 # before the first POST.
 
 
+_RELAY_CONTEXT_PAIRS = 5
+
+# Last history view per in-process chat session, so a model switch that hides
+# more turns is announced too.
+_history_cuts: dict = {}
+
+
 def _query_context_from_history(history_pairs: list) -> list[dict]:
     """Flatten (user, assistant) history pairs into ``QueryContextItem``-shaped
     dicts for the sidecar's ``/query`` request body (#2109).
@@ -1257,10 +1323,9 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     email session's context window stays comparable: last 5 pairs, 2000 chars
     per turn.
     """
-    _MAX_PAIRS = 5
     _MAX_CHARS = 2000
     context: list[dict] = []
-    for user_msg, assistant_msg in history_pairs[-_MAX_PAIRS:]:
+    for user_msg, assistant_msg in history_pairs[-_RELAY_CONTEXT_PAIRS:]:
         u = user_msg[:_MAX_CHARS]
         a = assistant_msg[:_MAX_CHARS]
         if len(assistant_msg) > _MAX_CHARS:
@@ -1270,9 +1335,16 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     return context
 
 
-def _restore_model_history(agent, db, session_id: str, query: str) -> None:
-    """Reserve the current prompt and output before admitting completed turns."""
+def _restore_model_history(
+    agent, db, session_id: str, query: str, sse_handler=None
+) -> None:
+    """Reserve the current prompt and output before admitting completed turns.
+
+    With *sse_handler*, a turn that pushes older turns out of the model's view
+    streams a ``history_cut`` status so the chat can say so.
+    """
     from gaia.agents.base.history import (
+        CutReporter,
         history_budget,
         select_history,
         text_tool_history,
@@ -1285,7 +1357,30 @@ def _restore_model_history(agent, db, session_id: str, query: str) -> None:
         and not agent._uses_native_tool_calls()
     ):
         turns = text_tool_history(turns)
-    agent.conversation_history = select_history(turns, history_budget(agent, query))
+
+    def on_cut(cut):
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": cut.notice,
+                "turns": cut.turns,
+                "tokens": cut.tokens,
+            }
+        )
+
+    agent.conversation_history = select_history(
+        turns,
+        history_budget(agent, query),
+        on_cut if sse_handler is not None else None,
+        # Only streamed turns move the baseline, so a cut made while nobody
+        # could be told is announced on the next streamed turn.
+        (
+            _history_cuts.setdefault(session_id, CutReporter())
+            if sse_handler is not None
+            else None
+        ),
+    )
 
 
 def _probe_is_only_unreachable(init_body: dict | None) -> bool:
@@ -1305,6 +1400,27 @@ def _probe_is_only_unreachable(init_body: dict | None) -> bool:
     return True
 
 
+def _probe_misses_only_another_model(
+    init_body: dict | None, model_id: str | None
+) -> bool:
+    """True when ``/init``'s only complaint is a model this turn does not use.
+
+    The sidecar probes its *default* chat model, not the one the turn sends.
+    A user who picked a cloud model never downloads the local default, so
+    without this every cloud turn is refused for a model it would not touch.
+    """
+    body = init_body or {}
+    lemonade = body.get("lemonade") or {}
+    if lemonade.get("reachable") is not True or lemonade.get("compatible") is False:
+        return False
+    probed = (body.get("model") or {}).get("id")
+    if not probed or not model_id:
+        return False
+    from gaia.llm.lemonade_client import _model_ids_match
+
+    return not _model_ids_match(probed, model_id)
+
+
 def _host_corrected_hint(hint: str | None) -> str | None:
     """Replace a sidecar hint that names a command this host does not have.
 
@@ -1320,6 +1436,40 @@ def _host_corrected_hint(hint: str | None) -> str | None:
     return describe_start_hint().instruction
 
 
+def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
+    """Hand Lemonade the remembered key for a cloud model before a relayed turn.
+
+    Lemonade keeps a cloud key in memory only, so after it restarts every cloud
+    model vanishes until the key is replayed. In-process agents get that from
+    the readiness gate; a relayed turn skips it, so it happens here. One
+    ``/system-info`` read when the key is already held. A failed replay is
+    surfaced, never swallowed, but does not stop the turn: the sidecar's own
+    answer names the missing model.
+    """
+    import requests
+
+    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+    from gaia.llm.gateway import GatewayError
+
+    provider, dot, _ = str(model_id or "").partition(".")
+    provider = provider.lower()
+    if not dot or provider not in PROVIDERS:
+        return
+    try:
+        ensure_authenticated(provider)
+    except (CloudKeyError, GatewayError, requests.RequestException) as exc:
+        logger.warning("chat: could not reconnect the %s provider: %s", provider, exc)
+        sse_handler._emit(
+            {
+                "type": "status",
+                "message": (
+                    f"Could not reconnect {provider}: {exc}. If the answer says "
+                    "the model is unavailable, reconnect it in Settings > Model."
+                ),
+            }
+        )
+
+
 def _dispatch_sidecar_query(
     sse_handler,
     request: ChatRequest,
@@ -1327,8 +1477,13 @@ def _dispatch_sidecar_query(
     model_id: str | None,
     agent_type: str,
     session_id: str | None = None,
+    documents: list | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
+
+    *documents* are the session's attached file paths. A sidecar that takes
+    them gets them on every turn; one that should but is too old to stops
+    the turn with an upgrade message rather than answer without them.
 
     Self-contained: every path here either relays the sidecar's ``/query``
     loop to completion or emits a terminal SSE error and returns. The CALLER
@@ -1371,7 +1526,19 @@ def _dispatch_sidecar_query(
         )
         return
 
+    relayed_documents = None
+    if documents and profile.min_documents_api_version is not None:
+        if not documents_supported(profile, handle.api_version):
+            sse_handler._emit(
+                {"type": "agent_error", "content": profile.documents_upgrade_message}
+            )
+            return
+        relayed_documents = [str(Path(p).resolve()) for p in documents]
+
     proxy = handle.proxy()
+
+    # Before /init: a cloud model whose key Lemonade forgot reads as "not present".
+    _replay_cloud_key_for_relay(sse_handler, model_id)
 
     # First-turn-per-session readiness check (#2101 lesson): a 503 from
     # /v1/<agent>/init is contract ("not ready yet"), not a transport failure.
@@ -1380,7 +1547,18 @@ def _dispatch_sidecar_query(
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
         return
-    if status_code != 200:
+    if (
+        status_code != 200
+        and not profile.readiness_is_blocking
+        and _probe_misses_only_another_model(init_body, model_id)
+    ):
+        logger.info(
+            "chat: %s sidecar's default model is not downloaded; this turn uses "
+            "%s, so continuing",
+            agent_type,
+            model_id,
+        )
+    elif status_code != 200:
         hint = _host_corrected_hint((init_body or {}).get("hint"))
         if profile.readiness_is_blocking or not _probe_is_only_unreachable(init_body):
             msg = (
@@ -1411,17 +1589,44 @@ def _dispatch_sidecar_query(
         return
 
     context = _query_context_from_history(history_pairs)
-    # Known gap: session-attached documents do not cross this hop. The body
-    # carries the transcript, not rag_file_paths, so a relayed agent cannot
-    # see a file the user attached in this session (#4166).
+    if len(history_pairs) == _RELAY_CONTEXT_PAIRS + 1:
+        from gaia.agents.base.turn_metrics import count_tokens
+
+        # The window slides from here on; say so once, when it first does.
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": (
+                    "Older messages are now out of the model's view: this agent "
+                    f"sees the last {_RELAY_CONTEXT_PAIRS} exchanges of the chat."
+                ),
+                "turns": 1,
+                "tokens": count_tokens(
+                    json.dumps(list(history_pairs[0]), ensure_ascii=False)
+                ),
+            }
+        )
+    from gaia.ui.email_sidecar.profiles import full_access_supported
+
     relay_query(
         sse_handler,
         proxy,
         query=request.message,
         context=context,
         model_id=model_id,
+        # The chat's own mode, read per turn: the in-process path applies it
+        # to its handler, the relayed one to the sidecar session.
+        full_access=(
+            session_permissions.for_session(session_id).mode
+            == session_permissions.MODE_FULL_ACCESS
+            if session_id and full_access_supported(profile, handle.api_version)
+            else None
+        ),
         profile=profile,
         session_id=session_id,
+        answers_confirmations=confirmations_supported(profile, handle.api_version),
+        documents=relayed_documents,
     )
 
 
@@ -1431,6 +1636,21 @@ def _find_last_tool_step(steps: list) -> dict | None:
         if steps[i].get("type") == "tool":
             return steps[i]
     return None
+
+
+def _echoes_failed_tool(event: dict, steps: list) -> bool:
+    """A recoverable error right after a failed tool repeats that tool's error.
+
+    A tool that raises or times out reports its error before its result lands,
+    so a still-running tool step counts too: its result always follows as failed.
+    """
+    if not event.get("recoverable") or not steps:
+        return False
+    last = steps[-1]
+    if last.get("type") != "tool":
+        return False
+    running = last.get("active") and last.get("success") is None
+    return last.get("success") is False or bool(running)
 
 
 class _UserWaitClock:
@@ -2104,10 +2324,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             ": " + "x" * 512 + "\n\n"
         )
 
-        # Only the email relay consumes text pairs; other agents restore traces below.
+        # A relayed sidecar only sees the transcript it is sent; in-process
+        # agents restore traces below.
         history_pairs = (
             _build_history_pairs(db.get_context_messages(request.session_id))
-            if (request.agent_type or session.get("agent_type")) == "email"
+            if _should_relay_to_sidecar(
+                request.agent_type or session.get("agent_type") or "chat",
+                _agent_registry,
+            )
             else []
         )
 
@@ -2200,6 +2424,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     # -- Cache hit --
                     agent = cached_agent
                     agent.console = sse_handler
+                    # A non-streaming turn may have built this agent.
+                    agent.streaming = True
 
                     # Re-register tools so _TOOL_REGISTRY points at this agent's self.
                     agent._register_tools()
@@ -2368,6 +2594,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         model_id,
                         agent_type,
                         session_id=session_id,
+                        documents=rag_file_paths,
                     )
                     return
 
@@ -2481,7 +2708,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
 
-                _restore_model_history(agent, db, session_id, request.message)
+                _restore_model_history(
+                    agent, db, session_id, request.message, sse_handler
+                )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -2754,6 +2983,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
                     )
+                elif event_type == "agent_error" and _echoes_failed_tool(
+                    event, captured_steps
+                ):
+                    pass  # The failed tool's step already holds this error.
                 elif event_type == "agent_error":
                     step_id += 1
                     for s in captured_steps:

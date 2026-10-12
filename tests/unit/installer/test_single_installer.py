@@ -85,6 +85,34 @@ def test_build_script_accepts_exactly_electron_builders_windows_artifact_name():
     assert re.match(pattern.group(1), produced)
 
 
+def test_build_script_accepts_a_release_candidates_desktop_app_setup():
+    pattern = re.search(r"=~ (\^gaia-agent-ui-\S+\$) \]\]", BUILD_SETUP.read_text())
+    m = re.match(pattern.group(1), fetch.setup_name("0.25.0-rc.2"))
+    assert m and m.group(1) == "0.25.0-rc.2"
+
+
+def _setup_version_pattern() -> str:
+    m = re.search(r'"\$\{VERSION\}" =~ (\^\S+\$) \]\]', BUILD_SETUP.read_text())
+    assert m, "build-setup.sh no longer validates --version"
+    return m.group(1)
+
+
+@pytest.mark.parametrize(
+    "version,quad",
+    [("0.25.0", "0.25.0.0"), ("0.25.0-rc.2", "0.25.0.0"), ("1.2.3-rc.12", "1.2.3.0")],
+)
+def test_setup_version_keeps_a_numeric_windows_form(version, quad):
+    m = re.match(_setup_version_pattern(), version)
+    assert m and f"{m.group(1)}.0" == quad
+    assert '"-DVERSION_QUAD=${VERSION_QUAD}"' in BUILD_SETUP.read_text()
+    assert 'VIProductVersion "${VERSION_QUAD}"' in _nsi()
+
+
+@pytest.mark.parametrize("version", ["v0.25.0", "0.25.0-rc2", "0.25.0-beta.1", "0.25"])
+def test_setup_version_refuses_anything_without_a_numeric_form(version):
+    assert not re.match(_setup_version_pattern(), version)
+
+
 def test_the_desktop_app_installs_per_user_like_electron_builder_yml_asks():
     assert _electron("perMachine") == "false"
     assert "/S /currentuser" in _nsi()
@@ -193,9 +221,25 @@ def test_verify_refuses_the_wrong_version_a_non_pe_or_a_truncated_file(
         fetch.verify(path, "0.25.0")
 
 
-def test_release_source_refuses_a_tag_that_is_not_a_version(tmp_path):
+@pytest.mark.parametrize("tag", ["latest", "v0.15.4.1", "v0.25.0-rc.2"])
+def test_release_source_refuses_a_tag_that_is_not_a_version(tmp_path, tag):
     with pytest.raises(SystemExit, match="vX.Y.Z"):
-        fetch.from_release("amd/gaia", "latest", tmp_path)
+        fetch.from_release("amd/gaia", tag, tmp_path)
+
+
+def test_release_source_takes_a_release_candidates_setup_by_its_npm_version(
+    tmp_path, monkeypatch
+):
+    name = fetch.setup_name("0.25.0-rc.2")
+
+    def gh(args):
+        assert args[:3] == ["release", "download", "v0.25.0-rc2"]
+        assert args[args.index("--pattern") + 1] == name
+        (tmp_path / name).write_bytes(_setup_bytes())
+        return b""
+
+    monkeypatch.setattr(fetch, "_gh", gh)
+    assert fetch.from_release("amd/gaia", "v0.25.0-rc2", tmp_path) == tmp_path / name
 
 
 class _FakeGitHub:
@@ -292,6 +336,28 @@ def test_publish_run_source_ignores_another_tags_run_on_the_same_commit(
     )
     with pytest.raises(SystemExit, match="no publish.yml push run for v0.25.0"):
         _fetch(tmp_path, wait_minutes=0)
+
+
+def test_publish_run_source_finds_a_release_candidates_own_run(tmp_path, monkeypatch):
+    # The RC's publish.yml run passes its own SHA: its tag is v0.25.0-rc2, its
+    # desktop app setup is named for 0.25.0-rc.2, and the final's run on the same
+    # commit must not be taken instead.
+    name = fetch.setup_name("0.25.0-rc.2")
+    final = dict(RUN, id=8, run_number=12)
+    rc = dict(RUN, id=6, run_number=9, head_branch="v0.25.0-rc2")
+    fake = _FakeGitHub(
+        [{"runs": [final, rc], "gate": PASSED, "artifacts": ARTIFACT}],
+        archive=_zip(name, _setup_bytes()),
+    )
+    _install(monkeypatch, fake)
+    path = fetch.from_publish_run("amd/gaia", "abc", "0.25.0-rc.2", tmp_path, 5)
+    assert path == tmp_path / name
+
+
+@pytest.mark.parametrize("version", ["0.25.0-rc2", "v0.25.0", "0.15.4.1"])
+def test_publish_run_source_refuses_a_version_that_names_no_release(tmp_path, version):
+    with pytest.raises(SystemExit, match="vX.Y.Z or vX.Y.Z-rcN"):
+        fetch.from_publish_run("amd/gaia", "abc", version, tmp_path, 0)
 
 
 def test_publish_run_source_fails_loudly_when_the_run_ended_before_its_checks(

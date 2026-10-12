@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import stat
 import string
 from contextlib import contextmanager
@@ -448,6 +449,40 @@ def managed_documents_dir() -> Path:
 def uploads_dir() -> Path:
     """Where chat attachments are stored (``<GAIA_HOME>/chat/uploads``)."""
     return _ui_gaia_home() / "chat" / "uploads"
+
+
+UPLOAD_URL_PREFIX = "/api/files/uploads/"
+_UPLOAD_LINK_RE = re.compile(
+    r"(?P<bang>!?)\[(?P<label>[^\]\n]*)\]\("
+    + re.escape(UPLOAD_URL_PREFIX)
+    + r"(?P<name>[^)\s]+)\)"
+)
+
+
+def resolve_upload_links(message: str) -> str:
+    """Point a message's attachment links at the files on disk, for the agent.
+
+    The composer appends ``[name](/api/files/uploads/<file>)`` links, which only
+    the browser can follow. The agent reads files by path, so each link to a
+    file that exists directly inside ``uploads_dir()`` gets its absolute path
+    as the target. Anything else (traversal, a missing file) is left as is.
+    """
+    if UPLOAD_URL_PREFIX not in message:
+        return message
+    root = uploads_dir().resolve()
+
+    def _sub(match: "re.Match[str]") -> str:
+        name = match.group("name")
+        if name in (".", "..") or "/" in name or "\\" in name:
+            logger.warning("Upload link %r is not a plain file name; left as is", name)
+            return match.group(0)
+        path = (root / name).resolve()
+        if path.parent != root or not path.is_file():
+            logger.warning("Upload link %r names no file in %s; left as is", name, root)
+            return match.group(0)
+        return f"{match.group('bang')}[{match.group('label')}]({path})"
+
+    return _UPLOAD_LINK_RE.sub(_sub, message)
 
 
 def document_roots() -> List[Path]:
