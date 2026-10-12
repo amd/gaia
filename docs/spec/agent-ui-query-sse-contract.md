@@ -675,6 +675,12 @@ does not list them. A plain progress `status` omits them.
 | `lemonade_version` | string? | The Lemonade version, when the health check reported one. |
 | `lemonade_base_url` | string | The Lemonade URL that was probed. |
 
+A turn whose history no longer fits the model's context sends one more `status`
+before it starts: `history_cut` is `{"turns": N, "tokens": T}`, the completed
+turns (and their estimated tokens) no longer replayed to the model, and
+`message` is the line the TUI keeps in the transcript. It is sent only when the
+newest turn moved the cut, so a stable cut is reported once.
+
 Over stdio the agent never sends `tool_result.render`,
 `needs_confirmation.confirm_url` or `error.source`. The TUI decodes them for
 other transports, and it sets `source` itself on an error it synthesizes.

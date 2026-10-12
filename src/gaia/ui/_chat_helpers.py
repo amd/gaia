@@ -1329,8 +1329,14 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     return context
 
 
-def _restore_model_history(agent, db, session_id: str, query: str) -> None:
-    """Reserve the current prompt and output before admitting completed turns."""
+def _restore_model_history(
+    agent, db, session_id: str, query: str, sse_handler=None
+) -> None:
+    """Reserve the current prompt and output before admitting completed turns.
+
+    With *sse_handler*, a turn that pushes older turns out of the model's view
+    streams a ``history_cut`` status so the chat can say so.
+    """
     from gaia.agents.base.history import (
         history_budget,
         select_history,
@@ -1344,7 +1350,23 @@ def _restore_model_history(agent, db, session_id: str, query: str) -> None:
         and not agent._uses_native_tool_calls()
     ):
         turns = text_tool_history(turns)
-    agent.conversation_history = select_history(turns, history_budget(agent, query))
+
+    def on_cut(cut):
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": cut.notice,
+                "turns": cut.turns,
+                "tokens": cut.tokens,
+            }
+        )
+
+    agent.conversation_history = select_history(
+        turns,
+        history_budget(agent, query),
+        on_cut if sse_handler is not None else None,
+    )
 
 
 def _probe_is_only_unreachable(init_body: dict | None) -> bool:
@@ -2654,7 +2676,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
 
-                _restore_model_history(agent, db, session_id, request.message)
+                _restore_model_history(
+                    agent, db, session_id, request.message, sse_handler
+                )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():

@@ -6,7 +6,8 @@
 import json
 from collections import deque
 from copy import deepcopy
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
 
 from gaia.agents.base.turn_metrics import count_tokens
 from gaia.logger import get_logger
@@ -83,11 +84,32 @@ class TurnMessages(list):
         return result
 
 
-def select_history(turns: list[list[dict[str, Any]]], budget: int) -> list[dict]:
+@dataclass(frozen=True)
+class HistoryCut:
+    """Turns the latest completed turn pushed out of the model's view."""
+
+    turns: int
+    tokens: int
+
+    @property
+    def notice(self) -> str:
+        noun = "turn" if self.turns == 1 else "turns"
+        return (
+            f"Older messages are now out of the model's view ({self.turns} {noun}). "
+            "Ask me to recall them if you need them."
+        )
+
+
+def select_history(
+    turns: list[list[dict[str, Any]]],
+    budget: int,
+    on_cut: Optional[Callable[[HistoryCut], None]] = None,
+) -> list[dict]:
     """Replay whole turns, evicting to half the estimated budget on overflow.
 
     Replaying the same prefix makes eviction deterministic across restarts.
-    The persistent transcript is never shortened.
+    The persistent transcript is never shortened. *on_cut* fires only when the
+    newest turn moved the cut, so a stable cut is reported once, not per turn.
     """
     if budget <= 0:
         logger.warning(
@@ -101,16 +123,22 @@ def select_history(turns: list[list[dict[str, Any]]], budget: int) -> list[dict]
     evicted = 0
     unreplayable = 0
     hole = False
-    for turn in turns:
+    hidden_tokens = 0
+    hidden_before_newest = 0
+    for index, turn in enumerate(turns):
+        if index == len(turns) - 1:
+            hidden_before_newest = evicted + unreplayable
         cost = count_tokens(json.dumps(turn, ensure_ascii=False))
         if cost > budget:
             hole = True
             unreplayable += 1
+            hidden_tokens += cost
             continue
         if hole:
             # Replay stays contiguous: nothing before a dropped turn may sit
             # next to what followed it.
             evicted += len(retained)
+            hidden_tokens += used
             retained.clear()
             used = 0
             hole = False
@@ -121,6 +149,7 @@ def select_history(turns: list[list[dict[str, Any]]], budget: int) -> list[dict]
             while len(retained) > 1 and used > target:
                 _, removed = retained.popleft()
                 used -= removed
+                hidden_tokens += removed
                 evicted += 1
     if evicted or unreplayable:
         logger.warning(
@@ -131,6 +160,8 @@ def select_history(turns: list[list[dict[str, Any]]], budget: int) -> list[dict]
             unreplayable,
             budget,
         )
+    if on_cut is not None and evicted + unreplayable > hidden_before_newest:
+        on_cut(HistoryCut(turns=evicted + unreplayable, tokens=hidden_tokens))
     return [message for turn, _ in retained for message in turn]
 
 
@@ -260,7 +291,12 @@ class SessionHistory(list):
                 (json.dumps(messages, ensure_ascii=False),),
             )
 
-    def prepare(self, agent: Any, query: str) -> None:
+    def prepare(
+        self,
+        agent: Any,
+        query: str,
+        on_cut: Optional[Callable[[HistoryCut], None]] = None,
+    ) -> None:
         """Rebuild the bounded view for the currently selected model."""
         turns = [
             json.loads(row[0])
@@ -271,7 +307,7 @@ class SessionHistory(list):
             and not agent._uses_native_tool_calls()
         ):
             turns = text_tool_history(turns)
-        self[:] = select_history(turns, history_budget(agent, query))
+        self[:] = select_history(turns, history_budget(agent, query), on_cut)
 
     def clear(self) -> None:
         with self._db:

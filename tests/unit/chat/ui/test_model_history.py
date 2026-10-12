@@ -270,6 +270,24 @@ def test_budget_follows_device_and_reserves_overhead(monkeypatch, device, expect
     db.close()
 
 
+def test_history_cut_streams_one_notice(monkeypatch):
+    db = ChatDatabase(":memory:")
+    session = db.create_session()["id"]
+    agent = SimpleNamespace(device="gpu", system_prompt="small")
+    monkeypatch.setattr("gaia.agents.base.history.history_budget", lambda *a: 100)
+    monkeypatch.setattr("gaia.agents.base.history.count_tokens", lambda _: 10)
+    handler = MagicMock()
+    for i in range(13):
+        db.add_message(session, "user", f"q{i}")
+        db.add_message(session, "assistant", f"a{i}")
+        helpers._restore_model_history(agent, db, session, "next", handler)
+    events = [c.args[0] for c in handler._emit.call_args_list]
+    assert len(events) == 1
+    assert events[0]["status"] == "history_cut"
+    assert (events[0]["turns"], events[0]["tokens"]) == (6, 60)
+    db.close()
+
+
 @pytest.mark.parametrize(
     "stream,blocked", [(False, False), (True, False), (True, True)]
 )

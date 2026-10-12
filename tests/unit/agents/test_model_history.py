@@ -8,7 +8,11 @@ from unittest.mock import patch
 
 import pytest
 
-from gaia.agents.base.history import TurnMessages, select_history, transcript_turns
+from gaia.agents.base.history import (
+    TurnMessages,
+    select_history,
+    transcript_turns,
+)
 from tests.unit.agents import test_parallel_tool_calls
 from tests.unit.agents.test_parallel_tool_calls import (
     _native_envelope,
@@ -63,6 +67,25 @@ def test_block_eviction_keeps_prefix_stable_until_budget_crossed():
         assert select_history(turns[:10], 100) == sum(turns[:10], [])
         assert select_history(turns[:11], 100) == sum(turns[6:11], [])
         assert select_history(turns[:12], 100) == sum(turns[6:12], [])
+
+
+def test_a_cut_is_reported_once_with_its_size():
+    turns = [_turn(i) for i in range(13)]
+    cuts = []
+    with patch("gaia.agents.base.history.count_tokens", return_value=10):
+        for n in range(1, 14):
+            select_history(turns[:n], 100, cuts.append)
+    # Turn 11 overflows the budget and evicts the six oldest; 12 and 13 fit.
+    assert [(c.turns, c.tokens) for c in cuts] == [(6, 60)]
+    assert cuts[0].notice.startswith(
+        "Older messages are now out of the model's view (6 turns)."
+    )
+
+
+def test_no_cut_reports_nothing():
+    cuts = []
+    select_history([_turn(i) for i in range(30)], 10000, cuts.append)
+    assert cuts == []
 
 
 def test_oversized_turn_is_not_split_or_silently_truncated():
