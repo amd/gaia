@@ -5792,6 +5792,50 @@ class TestExtractionYieldsToUserTurns:
         assert host.wait_for_memory_extraction(timeout=5) is True
         assert self.calls == [True]
 
+    def test_interpreter_exit_flushes_a_held_extraction(self, host):
+        """A host that shuts down inside the idle window keeps the turn's memories."""
+        import gaia.agents.base.memory as memory_module
+
+        host._note_user_turn_started()
+        self._queue_turn(host)
+        host._note_user_turn_finished()
+        assert not self.started.is_set()
+
+        memory_module._drain_extraction_at_exit()
+        assert self.calls, "exit dropped the held extraction"
+
+    def test_a_timed_out_wait_restores_the_idle_hold(self, host):
+        host._note_user_turn_started()
+        self._queue_turn(host)
+        release = threading.Event()
+        host.chat.send_messages.side_effect = lambda *a, **k: (
+            self.started.set(),
+            release.wait(5),
+            MagicMock(text="[]"),
+        )[-1]
+
+        assert host.wait_for_memory_extraction(timeout=0.2) is False
+        assert host._extraction_flush is False
+        release.set()
+        host._note_user_turn_finished()
+
+
+def test_side_request_keeps_calls_out_of_the_llm_call_sink():
+    from gaia.chat.sdk import AgentSDK
+
+    sdk = AgentSDK.__new__(AgentSDK)
+    sdk.llm_client = MagicMock()
+    sdk.llm_client.get_last_usage.return_value = {}
+    seen = []
+    sdk.llm_call_sink = seen.append
+
+    with AgentSDK.side_request():
+        sdk._report_llm_call(time.perf_counter(), streamed=False, ok=True)
+    assert seen == []
+
+    sdk._report_llm_call(time.perf_counter(), streamed=False, ok=True)
+    assert len(seen) == 1
+
 
 def test_side_request_hides_calls_from_the_turn_recorder_on_its_thread_only():
     from gaia.chat.sdk import AgentSDK

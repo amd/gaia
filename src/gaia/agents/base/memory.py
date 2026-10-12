@@ -33,6 +33,7 @@ Usage:
 Spec: docs/spec/agent-memory-architecture.md
 """
 
+import atexit
 import ctypes
 import difflib
 import json
@@ -42,6 +43,7 @@ import re
 import sys
 import threading
 import time
+import weakref
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -444,6 +446,26 @@ def drain_memory_extraction(
         timeout,
     )
     return False
+
+
+#: Agents that have started an extraction worker, keyed by ``id``; drained at exit.
+_EXTRACTION_AGENTS: "weakref.WeakValueDictionary[int, Any]" = (
+    weakref.WeakValueDictionary()
+)
+
+
+@atexit.register
+def _drain_extraction_at_exit() -> None:
+    """Flush jobs still held for the idle window before the interpreter exits.
+
+    The worker is a daemon thread, so a long-lived host (Agent UI, sidecar) that
+    shuts down without draining would otherwise drop them without a word.
+    """
+    with _EXTRACTION_STATE_LOCK:
+        agents = list(_EXTRACTION_AGENTS.values())
+    deadline = time.monotonic() + EXTRACTION_EXIT_WAIT_S
+    for agent in agents:
+        drain_memory_extraction(agent, max(0.0, deadline - time.monotonic()))
 
 
 #: Opt back in where faiss and torch share one OpenMP runtime and coexist fine
@@ -3869,6 +3891,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             if self._extraction_thread is not None:
                 return
             self._extraction_idle.clear()
+            with _EXTRACTION_STATE_LOCK:
+                _EXTRACTION_AGENTS[id(self)] = self
             self._extraction_thread = threading.Thread(
                 target=self._drain_extraction_queue,
                 name="gaia-memory-extraction",
@@ -3967,7 +3991,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             if self._extraction_thread is not None:
                 self._extraction_flush = True
                 self._extraction_wake.notify_all()
-        return self._extraction_idle.wait(timeout)
+        if self._extraction_idle.wait(timeout):
+            return True
+        # A caller that outlives its timeout gets the idle hold back for later turns.
+        with self._extraction_lock:
+            self._extraction_flush = False
+        return False
 
     # ------------------------------------------------------------------
     # Tool Registration
