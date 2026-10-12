@@ -46,6 +46,7 @@ from gaia.ports import (
     listeners_on_port,
     terminate_pid,
 )
+from gaia.utils.terminal import windows_hidden_popen_kwargs
 from gaia.version import parse_version
 
 # For the module-level helpers; the client class keeps its own ``self.log``.
@@ -2562,6 +2563,7 @@ class LemonadeClient:
         popen_env = child_env(spec.env)
         # Own process group, so terminate_server's group kill can't reach the caller.
         session = {} if sys.platform.startswith("win") else {"start_new_session": True}
+        hidden = windows_hidden_popen_kwargs()
 
         if background == "terminal":
             # New console window on Windows; argv-only — a resolved path must
@@ -2584,6 +2586,7 @@ class LemonadeClient:
                     bufsize=1,
                     env=popen_env,
                     **session,
+                    **hidden,
                 )
             except Exception:
                 self._log_file.close()
@@ -2599,6 +2602,7 @@ class LemonadeClient:
                 bufsize=1,
                 env=popen_env,
                 **session,
+                **hidden,
             )
 
             # Print stdout and stderr in real-time only for foreground mode
@@ -2672,6 +2676,7 @@ class LemonadeClient:
                         ],
                         shell=False,
                         check=False,
+                        **windows_hidden_popen_kwargs(),
                     )
                 elif self.server_process.pid:
                     # The server leads its own group, so its pid is the group id;

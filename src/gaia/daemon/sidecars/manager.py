@@ -60,6 +60,10 @@ from gaia.daemon.sidecars.errors import (
 )
 from gaia.daemon.sidecars.spec import AgentSidecarSpec
 from gaia.logger import get_logger
+from gaia.utils.terminal import (
+    background_popen_kwargs,
+    windows_hidden_popen_kwargs,
+)
 
 logger = get_logger(__name__)
 
@@ -511,12 +515,8 @@ class AgentSidecarManager:
         return data[-limit:].decode("utf-8", "replace")
 
     def _spawn_process(self, argv, popen_kwargs, port: int) -> None:
-        creationflags = 0
-        start_new_session = False
-        if os.name == "nt":
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
-        else:
-            start_new_session = True  # own process group for tree-kill
+        # Own process group for tree-kill; on Windows also a hidden console.
+        group_kwargs = background_popen_kwargs()
         # Hand the sidecar its per-session caller-auth token (#1706). Merge over
         # the inherited env / any cwd already in popen_kwargs — never clobber
         # them. Delivery leg (0600 file vs deprecated bare env) is negotiated
@@ -558,9 +558,8 @@ class AgentSidecarManager:
                 argv,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
-                start_new_session=start_new_session,
-                creationflags=creationflags,
                 env=spawn_env,
+                **group_kwargs,
                 **popen_kwargs,
             )
         except OSError as e:
@@ -970,6 +969,7 @@ class AgentSidecarManager:
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         check=False,
+                        **windows_hidden_popen_kwargs(),
                     )
             else:
                 os.killpg(proc.pid, sig)
