@@ -12,6 +12,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
 
 // First-boot setup for a chat opened WITHOUT the readiness gate in front of it.
@@ -175,7 +176,8 @@ func (m ChatModel) skipLocalChatSetup() bool {
 }
 
 func (m ChatModel) startSetupRun(firstBoot bool) (tea.Model, tea.Cmd) {
-	ch, cancel, err := gaiainit.Start(m.skipLocalChatSetup())
+	// The same pin as the gate's setup, or /setup moves GAIA off its server.
+	ch, cancel, err := gaiainit.Start(m.skipLocalChatSetup(), preflight.PinnedLemonadeEnv(context.Background())...)
 	if err != nil {
 		m.messages = append(m.messages, Message{
 			Role: RoleError,

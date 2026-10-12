@@ -27,8 +27,9 @@ const (
 	// model, and connectors) and 1.5s times it out. Callers with a known-slow or
 	// streaming call still pass their own client.
 	defaultRequestTimeout = 60 * time.Second
-	// Daemon start: spawn + bind + import.
-	defaultStartTimeout = 30 * time.Second
+	// Daemon start: spawn + bind + import. Above client.py's _START_TIMEOUT (60s)
+	// plus the launcher's own interpreter start, or this kills a start that works.
+	defaultStartTimeout = 90 * time.Second
 	// Ensure: a first-run ensure may lazily fetch the sidecar binary before answering.
 	defaultEnsureTimeout = 900 * time.Second
 	// Cap on captured launcher output quoted back in an error.
@@ -265,24 +266,13 @@ const installGaiaHint = "Install GAIA with `curl -fsSL https://amd-gaia.ai/insta
 	"into the Python environment on your PATH, then retry. " +
 	"From a clone of the repo, `pip install -e .` works too"
 
-// LaunchEnv, when set, adds environment to a daemon this process starts. The
-// TUI uses it to keep a new daemon on the Lemonade its gate is already using:
-// left alone, the daemon starts GAIA's own beside it.
-var LaunchEnv func(ctx context.Context) []string
-
 // gaiaDaemonStart builds the default launcher command.
 func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
 	bin, err := exec.LookPath("gaia")
 	if err != nil {
 		return nil, &StartError{Reason: unresolvableGaiaReason(findInstalledButUnresolvable())}
 	}
-	cmd := exec.CommandContext(ctx, bin, "daemon", "start")
-	if LaunchEnv != nil {
-		if env := LaunchEnv(ctx); len(env) > 0 {
-			cmd.Env = append(os.Environ(), env...)
-		}
-	}
-	return cmd, nil
+	return exec.CommandContext(ctx, bin, "daemon", "start"), nil
 }
 
 // installEvidence is what the filesystem says about a past GAIA install after

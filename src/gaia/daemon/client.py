@@ -18,7 +18,7 @@ import os
 import subprocess
 import sys
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from gaia.daemon import paths
 from gaia.daemon.constants import API_PREFIX, AUTH_SCHEME, DAEMON_API_VERSION
@@ -36,10 +36,28 @@ from gaia.daemon.lock import StartLock
 from gaia.env import is_internal_secret
 from gaia.log_rotation import rotate_if_oversized
 from gaia.logger import get_logger
+from gaia.utils.terminal import background_popen_kwargs
 
 logger = get_logger(__name__)
 
-_START_TIMEOUT = 30.0
+# A first start without compiled bytecode takes tens of seconds under endpoint
+# scanning. tests/unit/test_daemon_lemonade.py keeps the TUI's CheckTimeout above.
+_START_TIMEOUT = 60.0
+#: Silence for a normal start; after this the caller hears the daemon is coming up.
+_PROGRESS_AFTER = 5.0
+_PROGRESS_EVERY = 10.0
+_LOG_TAIL_LINES = 5
+
+#: Called with the seconds waited so far while a daemon start is in progress.
+ProgressCallback = Callable[[float], None]
+
+# (module, distribution) the daemon process imports that a base install lacks.
+# The [api] extra declares every one (tests/unit/test_api_extras.py).
+DAEMON_DEPS = (
+    ("fastapi", "fastapi"),
+    ("uvicorn", "uvicorn"),
+    ("psutil", "psutil"),
+)
 
 # The daemon MINOR that introduced the /daemon/v1/agents control plane + the
 # /v1/<agent>/* relay (#2142 / #2150). A pre-#2142 daemon passes the MAJOR gate
@@ -53,7 +71,7 @@ _REQUIRED_LEMONADE_MINOR = 2
 # sidecar binary before answering (mirrors gaia.ui.email_sidecar.daemon_client).
 _ENSURE_TIMEOUT = (5.0, 900.0)
 # A cold start's health wait (60s) plus a start already in flight. Keep
-# gaiainit.CheckTimeout in the TUI above this plus daemon start (30s).
+# gaiainit.CheckTimeout in the TUI above this plus daemon start (60s).
 _LEMONADE_ENSURE_TIMEOUT = (5.0, 80.0)
 
 # How long `gaia daemon stop` waits before tree-killing. Shutdown now stops the
@@ -99,8 +117,14 @@ def attach(timeout: float = 1.5) -> Optional[DaemonInstance]:
     return inst
 
 
-def start_or_attach(timeout: float = _START_TIMEOUT) -> DaemonInstance:
-    """Return the running daemon, starting one if needed. Single-instance guaranteed."""
+def start_or_attach(
+    timeout: float = _START_TIMEOUT, on_progress: Optional[ProgressCallback] = None
+) -> DaemonInstance:
+    """Return the running daemon, starting one if needed. Single-instance guaranteed.
+
+    *on_progress* is called every few seconds while a start is still under way,
+    so a front-end can show that something is happening.
+    """
     inst = attach()
     if inst is not None:
         return inst
@@ -119,7 +143,22 @@ def start_or_attach(timeout: float = _START_TIMEOUT) -> DaemonInstance:
                 inst.pid,
             )
             terminate_instance(inst)
-        return _spawn_and_wait(timeout)
+        missing = missing_daemon_deps()
+        if missing:
+            raise DaemonStartError(
+                f"the GAIA daemon needs {', '.join(missing)}, which this Python "
+                f"({sys.executable}) does not have. Install the daemon extras "
+                'into that environment with pip install "amd-gaia[api]" '
+                "(or uv pip install), then retry."
+            )
+        return _spawn_and_wait(timeout, on_progress)
+
+
+def missing_daemon_deps() -> list:
+    """Distributions the daemon needs that this interpreter cannot import."""
+    import importlib.util
+
+    return [pkg for mod, pkg in DAEMON_DEPS if importlib.util.find_spec(mod) is None]
 
 
 def _daemon_env() -> dict:
@@ -136,7 +175,35 @@ def _daemon_env() -> dict:
     }
 
 
-def _spawn_and_wait(timeout: float) -> DaemonInstance:
+def _is_spawned_daemon(registered_pid: int, spawned_pid: int) -> bool:
+    """True when the registered pid is the process we spawned, or its child.
+
+    A Windows venv's ``python.exe`` is a launcher that runs the base interpreter
+    as a child, so the daemon registers that child's pid, never the launcher's.
+    """
+    if registered_pid == spawned_pid:
+        return True
+    import psutil
+
+    try:
+        return psutil.Process(registered_pid).ppid() == spawned_pid
+    except psutil.Error:
+        return False
+
+
+def _log_tail(lines: int = _LOG_TAIL_LINES) -> str:
+    """The last *lines* of the daemon log, or why they could not be read."""
+    try:
+        text = paths.log_path().read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return f"(could not read {paths.log_path()}: {e})"
+    tail = [line for line in text.splitlines() if line.strip()][-lines:]
+    return "\n".join(tail) if tail else "(the daemon log is empty)"
+
+
+def _spawn_and_wait(
+    timeout: float, on_progress: Optional[ProgressCallback] = None
+) -> DaemonInstance:
     """Spawn the daemon detached, wait until it registers a live instance.json."""
     paths.ensure_host_dir()
     # The daemon's stdout can't be rotated while it runs, so cap it per start.
@@ -153,22 +220,17 @@ def _spawn_and_wait(timeout: float) -> DaemonInstance:
         os.chmod(paths.log_path(), 0o600)
     except OSError:
         pass
-    creationflags = 0
-    start_new_session = False
-    if sys.platform == "win32":
-        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: outlive the launcher.
-        creationflags = 0x00000008 | 0x00000200
-    else:
-        start_new_session = True
+    # Own group/session to outlive the launcher. A hidden console, not none, so
+    # the console programs the daemon starts don't each open a blank window.
+    spawn_kwargs = background_popen_kwargs()
     try:
         proc = subprocess.Popen(
             [sys.executable, "-m", "gaia.daemon"],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            start_new_session=start_new_session,
-            creationflags=creationflags,
             env=_daemon_env(),
+            **spawn_kwargs,
         )
     except OSError as e:
         log_file.close()
@@ -180,8 +242,17 @@ def _spawn_and_wait(timeout: float) -> DaemonInstance:
         # The child inherits the fd; the parent no longer needs it.
         log_file.close()
 
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
+    next_progress = started + _PROGRESS_AFTER
     while time.monotonic() < deadline:
+        now = time.monotonic()
+        if now >= next_progress:
+            next_progress = now + _PROGRESS_EVERY
+            elapsed = now - started
+            logger.info("daemon: still starting after %.0fs", elapsed)
+            if on_progress is not None:
+                on_progress(elapsed)
         rc = proc.poll()
         if rc is not None:
             raise DaemonStartError(
@@ -190,15 +261,26 @@ def _spawn_and_wait(timeout: float) -> DaemonInstance:
             )
         inst = read_instance()
         # Trust only OUR child's registration (pid match), and only once live.
-        if inst is not None and inst.pid == proc.pid and is_live(inst):
+        if (
+            inst is not None
+            and _is_spawned_daemon(inst.pid, proc.pid)
+            and is_live(inst)
+        ):
             _check_version(inst)
             logger.info("daemon: started pid=%s port=%s", inst.pid, inst.port)
             return inst
         time.sleep(0.1)
 
+    state = (
+        f"It is still running (pid {proc.pid}) and may finish on its own; run "
+        "the command again in a minute"
+        if proc.poll() is None
+        else f"It exited with code {proc.returncode}"
+    )
     raise DaemonStartError(
-        f"the daemon did not become healthy within {timeout}s. It may be stuck "
-        f"binding a port or importing. Inspect the daemon log at {paths.log_path()}."
+        f"the daemon did not become healthy within {timeout:.0f}s. {state}. If it "
+        f"keeps happening, `gaia daemon logs` shows why; the full log is "
+        f"{paths.log_path()}. Last lines:\n{_log_tail()}"
     )
 
 

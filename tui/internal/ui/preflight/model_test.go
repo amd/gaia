@@ -25,7 +25,17 @@ func newModel(t *testing.T, f *fakeTransport) Model {
 	t.Helper()
 	m := New(f, EmailConfig(), Options{ManualProceed: true, ReadyHold: time.Millisecond})
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	return settle(t, updated.(Model), f)
+	return settle(t, autoStartSpent(updated.(Model)), f)
+}
+
+// autoStartSpent is the screen after its one automatic start per row has been
+// used, which is the only time a person sees the daemon and agent rows offer
+// `f`. Tests of the manual path start here; agent_autostart_test.go covers the
+// automatic one.
+func autoStartSpent(m Model) Model {
+	m.autoTried[KeyDaemon] = true
+	m.autoTried[KeySidecar] = true
+	return m
 }
 
 func TestFixStartsTheDaemonThenRechecks(t *testing.T) {
@@ -450,7 +460,7 @@ func TestBlockedReportSchedulesNoTick(t *testing.T) {
 		t.Fatal("test setup: want a blocked report")
 	}
 
-	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	m := autoStartSpent(New(f, EmailConfig(), Options{ReadyHold: time.Millisecond}))
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	_, cmd := updated.(Model).Update(reportMsg{rep: rep})
 

@@ -535,6 +535,29 @@ def test_boundary_forward_all_ungranted_agent_maps_to_403():
     assert "grant_agent_id" in r.json()["detail"]
 
 
+def test_forward_all_is_a_quiet_noop_for_an_agent_with_no_forwarded_connectors():
+    """The flagship takes no forwarded connectors and has no grant id. Raising
+    NotGrantedError for it logged a traceback on every 5-minute refresh tick."""
+    spec = AgentSidecarSpec(
+        agent_id="gaia",
+        service_id="gaia-agent-gaia",
+        display_name="GAIA",
+        expected_api_major="2",
+        token_env_var="GAIA_GAIA_SIDECAR_TOKEN",
+        mode_env_var="GAIA_GAIA_AGENT_MODE",
+        cache_dir_name="gaia",
+    )
+    http = _RecordingHTTP()
+    fwd = ConnectionForwarder(
+        {"gaia": spec}, http_post=http.post, http_delete=http.delete
+    )
+
+    summary = fwd.forward_all("gaia", base_url="http://127.0.0.1:1", bearer="b")
+
+    assert summary == {"agent_id": "gaia", "forwarded": [], "skipped": [], "errors": []}
+    assert http.posts == []
+
+
 def test_boundary_delivery_failure_maps_to_502():
     fwd, _ = _forwarder(
         grants={"google": {"installed:email": ["s1"]}},

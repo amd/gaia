@@ -201,7 +201,7 @@ func TestLemonadeRowSaysNothingAboutStartingWhenItDidNotTry(t *testing.T) {
 	if strings.Contains(row.Raw, "auto-start") {
 		t.Fatalf("no attempt was made, so the details must not mention one: %q", row.Raw)
 	}
-	if row.Fix != FixRunSetup {
+	if row.Fix != FixInstallServer {
 		t.Fatalf("an uninstalled Lemonade must keep its one-key setup, got Fix=%v", row.Fix)
 	}
 }
@@ -284,9 +284,27 @@ func linuxProbeWithUnit() hostProbe {
 	}
 }
 
+// A test that reaches a real spawn must fail on the spot, never start the
+// developer's installed server.
+func TestATestCannotSpawnARealLemonade(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("startLemonade spawned from a test binary without opting in")
+		}
+	}()
+	l := launcher{Argv: []string{"lemonade-that-must-not-run"}, Found: true}
+	_ = startLemonade(context.Background(), l, func(context.Context) bool { return false })
+}
+
 func TestMain(m *testing.M) {
 	if runtime.GOOS == "" { // keeps the import used on every platform
 		return
 	}
+	// A down Lemonade must never start the developer's real one: by default
+	// the starter finds nothing to start. Tests of the starter opt back in via
+	// autoStartForTest.
+	tryAutoStartLemonade = func(context.Context) (bool, string, string) { return false, "", "" }
+	// Nor may a test start the developer's real daemon to replay a key.
+	replayKeptKey = func(context.Context, string) (bool, error) { return false, nil }
 	os.Exit(m.Run())
 }

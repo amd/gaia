@@ -42,6 +42,7 @@ def _response(status_code=200, body=None):
 def manager():
     client = MagicMock()
     client.base_url = "http://localhost:13305/api/v1"
+    client.credential_base_url.return_value = client.base_url
     return GatewayManager(client=client)
 
 

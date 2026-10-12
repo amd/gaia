@@ -1121,6 +1121,22 @@ def test_reachability_check_preloads_selected_local_model_at_its_window(mock_cls
 
 
 @patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_preload_false_is_reachability_only(mock_cls, caplog):
+    """``preload=False`` (the UI boot check) loads and downloads nothing on an
+    idle server, and leaves the manager for the next caller to initialise."""
+    client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
+    mock_cls.return_value = client
+
+    with caplog.at_level(logging.INFO, logger="gaia.llm.lemonade_manager"):
+        ok = LemonadeManager.ensure_ready(min_context_size=0, quiet=True, preload=False)
+
+    assert ok is True
+    client.load_model.assert_not_called()
+    assert LemonadeManager._initialized is False
+    assert any("preload disabled" in r.getMessage() for r in caplog.records)
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
 def test_local_caller_on_cloud_default_machine_still_preloads(mock_cls):
     """An agent pinned to a local model must keep its preload even when
     default_model is cloud — the caller's model decides, not the config."""

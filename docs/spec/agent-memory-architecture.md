@@ -691,7 +691,7 @@ Extraction runs on a background thread, one job at a time per agent, so `process
 
 `EXTRACTION_MAX_TOKENS` (4096) is the output budget. It is generous because a reasoning model bills its hidden chain-of-thought against the same budget as the JSON, and a budget that only fits the JSON gets spent on thinking — the call then returns prose or nothing.
 
-Anything that exits right after a turn must call `wait_for_memory_extraction(timeout)` (or the module-level `drain_memory_extraction(agent)`) first, or the turn's facts die with the process. In-tree callers: the one-shot `gaia chat -q` path, the flagship sidecar's `close_agent()`, and the eval harnesses.
+Anything that exits right after a turn must call `wait_for_memory_extraction(timeout)` (or the module-level `drain_memory_extraction(agent)`) first, or the turn's facts die with the process. In-tree callers: the one-shot `gaia chat -q` path, the flagship sidecar's `close_agent()`, the flagship's stdio transport when stdin closes (the TUI quitting), and the eval harnesses.
 
 ### New MemoryMixin Methods
 

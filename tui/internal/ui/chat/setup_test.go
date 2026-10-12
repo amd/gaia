@@ -4,16 +4,19 @@
 package chat
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/ui/components"
+	"github.com/amd/gaia/tui/internal/ui/preflight"
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
 )
@@ -119,6 +122,49 @@ func TestSetupStartFailureIsSurfacedLoudly(t *testing.T) {
 	}
 	if !strings.Contains(last.Content, "gaia init") {
 		t.Errorf("the failure must name the fallback command, got: %q", last.Content)
+	}
+}
+
+// /setup runs the same `gaia init` as the gate's setup key, so it must stay on
+// the system Lemonade the gate is using rather than install GAIA's own beside it.
+func TestSetupStaysOnTheSystemLemonadeTheGateUses(t *testing.T) {
+	const base = "http://localhost:13305/api/v1"
+	t.Setenv("GAIA_HOME", t.TempDir())
+	t.Setenv("LEMONADE_BASE_URL", "")
+	t.Cleanup(preflight.StubLemonadeProbeForTest(func(context.Context) (string, bool, string) {
+		return base, true, "stub"
+	}))
+	dir := t.TempDir()
+	seen := filepath.Join(dir, "seen.txt")
+	var path, script string
+	if runtime.GOOS == "windows" {
+		path = filepath.Join(dir, "gaia-stub.bat")
+		script = fmt.Sprintf("@echo off\r\necho [%%LEMONADE_BASE_URL%%]> \"%s\"\r\nexit /b 0\r\n", seen)
+	} else {
+		path = filepath.Join(dir, "gaia-stub.sh")
+		script = fmt.Sprintf("#!/bin/sh\necho \"[$LEMONADE_BASE_URL]\" > '%s'\nexit 0\n", seen)
+	}
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stubGaiaBinary(t, path)
+
+	m := gaiaTestModel(t)
+	updated, _ := m.submit("/setup")
+	m = updated.(ChatModel)
+	if m.setupCancel != nil {
+		t.Cleanup(m.setupCancel)
+	}
+
+	var got string
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if raw, err := os.ReadFile(seen); err == nil && strings.Contains(string(raw), "]") {
+			got = strings.TrimSpace(string(raw))
+			break
+		}
+	}
+	if got != "["+base+"]" {
+		t.Fatalf("/setup ran `gaia init` with LEMONADE_BASE_URL=%q, want %s", got, base)
 	}
 }
 

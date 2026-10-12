@@ -71,7 +71,8 @@ class SystemStatus(BaseModel):
     # this machine has a modern daemon, a legacy CLI, or a tray app, and a
     # second copy of the answer is how `lemonade-server serve` survived in the
     # banner long after it stopped existing. ``start_command`` is None on hosts
-    # requiring GUI/manual configuration, including service context changes.
+    # requiring GUI/manual configuration, including service context changes,
+    # and on Windows when Command Prompt and PowerShell need different lines.
     # In those cases start_instruction carries the necessary steps.
     start_instruction: Optional[str] = None
     start_command: Optional[str] = None
@@ -94,6 +95,8 @@ class SystemStatus(BaseModel):
     # Required model for GAIA Chat; None when an unreadable config hides it
     # (``config_error`` then says why).
     default_model_name: Optional[str] = "Gemma-4-E4B-it-GGUF"
+    # True for a cloud model: nothing to download, load or resize locally.
+    default_model_is_cloud: bool = False
     # Catalog-reported size of ``default_model_name``. Populated alongside
     # ``model_downloaded`` so the "not downloaded" banner can show an accurate
     # size hint instead of a hard-coded one (the previous "~25 GB" was a stale

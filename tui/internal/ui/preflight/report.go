@@ -134,6 +134,9 @@ const (
 	// FixRestartSidecar — stop the sidecar running in the wrong mode, then
 	// ensure it again in the one this launch asked for.
 	FixRestartSidecar
+	// FixInstallServer — setup's first step alone: install and start GAIA's
+	// Lemonade and download nothing, so the models are a step the user sees sized.
+	FixInstallServer
 )
 
 // Label is the key hint shown next to `f`.
@@ -147,7 +150,7 @@ func (k FixKind) Label() string {
 		return "download it now"
 	case FixConnectMailbox:
 		return "connect a mailbox"
-	case FixRunSetup:
+	case FixRunSetup, FixInstallServer:
 		return "set it up now"
 	case FixRestartSidecar:
 		return "restart it in this mode"
@@ -162,7 +165,41 @@ func (k FixKind) Label() string {
 type Remedy struct {
 	Action  string
 	Command string
-	Where   string
+	// PowerShell is Command for PowerShell, set only when the two differ
+	// (Windows); Command is then the Command Prompt form.
+	PowerShell string
+	Where      string
+}
+
+// ShellCommand is one copy-pasteable command line. Shell names the shell it is
+// for, empty when the line runs as-is in the user's shell.
+type ShellCommand struct {
+	Shell string
+	Line  string
+}
+
+// Label is the "run:" prefix, naming the shell when the line needs one.
+func (c ShellCommand) Label() string {
+	if c.Shell == "" {
+		return "run:"
+	}
+	return "run in " + c.Shell + ":"
+}
+
+// Commands is every form of the command to show, in display order.
+func (r Remedy) Commands() []ShellCommand { return shellCommands(r.Command, r.PowerShell) }
+
+func shellCommands(command, powerShell string) []ShellCommand {
+	switch {
+	case command == "":
+		return nil
+	case powerShell == "" || powerShell == command:
+		return []ShellCommand{{Line: command}}
+	}
+	return []ShellCommand{
+		{Shell: "Command Prompt", Line: command},
+		{Shell: "PowerShell", Line: powerShell},
+	}
 }
 
 // Empty reports whether there is nothing to tell the user.
@@ -186,6 +223,9 @@ type Row struct {
 	Remedy Remedy
 	// Fix is what `f` does on this row, FixNone when nothing is safe.
 	Fix FixKind
+	// AutoFix marks a Fix the screen applies once on its own, without a
+	// keypress: starting a local daemon or agent that is simply not running.
+	AutoFix bool
 	// Provider is the mailbox provider a FixConnectMailbox targets.
 	Provider string
 	// Optional marks a row that gates a CAPABILITY rather than the launch: the
@@ -277,6 +317,9 @@ type Report struct {
 	// ChatModel is the local chat model id the check loaded, when chat runs
 	// on this machine. Empty for Claude, a cloud model, or an unproven row.
 	ChatModel string
+	// StepsDone counts first-run steps finished earlier this session, so the
+	// step left after them still reads "step 2 of 2", not "step 1 of 1".
+	StepsDone int
 }
 
 // Ready reports whether every precondition proved OK. An indeterminate row is
@@ -399,7 +442,7 @@ func (r Report) Summary() string {
 		return "ready"
 	}
 	if steps := r.Steps(); len(steps) > 0 {
-		return fmt.Sprintf("step 1 of %d", len(steps))
+		return fmt.Sprintf("step %d of %d", r.StepsDone+1, r.StepCount())
 	}
 	return fmt.Sprintf("%d of %d ready", r.OKCount(), len(r.Rows))
 }
@@ -421,14 +464,20 @@ func (r Report) Steps() []int {
 	return steps
 }
 
-// StepNumber is the 1-based position of row i among Steps, or 0.
+// StepNumber is the 1-based position of row i among Steps, after any steps
+// already done, or 0.
 func (r Report) StepNumber(i int) int {
 	for n, idx := range r.Steps() {
 		if idx == i {
-			return n + 1
+			return r.StepsDone + n + 1
 		}
 	}
 	return 0
+}
+
+// StepCount is how many first-run steps this setup has, done ones included.
+func (r Report) StepCount() int {
+	return r.StepsDone + len(r.Steps())
 }
 
 // LemonadeStep is the first-run step number that sets up Lemonade, or 0 when
@@ -498,8 +547,8 @@ func (r Report) String() string {
 		if row.Remedy.Action != "" {
 			fmt.Fprintf(&b, "        %s\n", row.Remedy.Action)
 		}
-		if row.Remedy.Command != "" {
-			fmt.Fprintf(&b, "        run: %s\n", row.Remedy.Command)
+		for _, c := range row.Remedy.Commands() {
+			fmt.Fprintf(&b, "        %s %s\n", c.Label(), c.Line)
 		}
 		if row.Remedy.Where != "" {
 			fmt.Fprintf(&b, "        look: %s\n", row.Remedy.Where)

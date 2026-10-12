@@ -64,7 +64,6 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 	if err != nil {
 		return err
 	}
-	daemon.LaunchEnv = preflight.PinnedLemonadeEnv
 	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
@@ -96,9 +95,34 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 	}
 
 	c := client.NewSubprocessClient(bin, argv[1:], dev).WithTrace(trace)
-	defer c.Close()
+	defer func() {
+		if err := closeSession(c, os.Stderr, slowCloseNotice); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+		}
+	}()
 
 	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, dev), dev, ctrl)
+}
+
+// slowCloseNotice is how long quit runs before it says what it is waiting on.
+const slowCloseNotice = time.Second
+
+// savingMemoriesNotice explains a quit that lingers: the agent saves the last
+// turns' memories before it exits, bounded by the client's exit grace.
+const savingMemoriesNotice = "Saving memories before exit…"
+
+// closeSession closes what the session opened, printing savingMemoriesNotice
+// to w if that takes longer than after, so a slow quit never looks hung.
+func closeSession(c io.Closer, w io.Writer, after time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- c.Close() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(after):
+		fmt.Fprintln(w, savingMemoriesNotice)
+	}
+	return <-done
 }
 
 // DECSET/DECRST 1007, alternate scroll mode.
@@ -137,7 +161,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	// event loop has stopped, rather than left to the OS.
 	if closer, ok := model.(io.Closer); ok {
 		defer func() {
-			if err := closer.Close(); err != nil {
+			if err := closeSession(closer, os.Stderr, slowCloseNotice); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 			}
 		}()
@@ -262,6 +286,11 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	}
 
 	if query != "" {
+		var notice string
+		model, notice = oneShotModel(agent.ID, model, useClaude, preflight.ReadLastModel)
+		if notice != "" {
+			fmt.Fprintln(os.Stderr, notice)
+		}
 		logf("one-shot: agent=%s transport=%s model=%q timeout=%s",
 			agent.ID, agent.Transport, orDefault(model, "the agent's default"), timeout)
 
@@ -279,7 +308,7 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 			rep = ReportReadiness(context.Background(), t, cfg, os.Stderr)
 		} else {
 			rep = ReportLocalReadiness(context.Background(),
-				preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: useClaude},
+				preflight.LocalOptions{Binary: agent.BinaryPath, ClaudeMode: useClaude, Model: model},
 				cfg, os.Stderr)
 		}
 		// Every row, not just the blocker: a turn that answers nothing is
@@ -377,6 +406,28 @@ func launchFullAccess(agent catalog.Agent, fullAccess, saved bool) (bool, string
 		return false, "", err
 	}
 	return fullAccess, "", nil
+}
+
+// oneShotModel is the model a --query run uses: an explicit --model, else the
+// flagship's remembered Lemonade model, so a one-shot answers on the provider
+// the chat runs on instead of loading (or downloading) a local default.
+func oneShotModel(agentID, model string, useClaude bool, read func() (preflight.LastModel, error)) (string, string) {
+	if model != "" || useClaude || agentID != catalog.FlagshipID {
+		return model, ""
+	}
+	saved, err := read()
+	if err != nil {
+		return "", "[!] Your last model was not restored: " + err.Error() + "."
+	}
+	if !saved.Set() {
+		return "", ""
+	}
+	if client.IsClaudeModelID(saved.Model) {
+		return "", "[!] Your last model, " + saved.Model + ", runs on Claude; add " +
+			"--use-claude --claude-model " + saved.Model + " to use it for --query. " +
+			"Using the agent's default model."
+	}
+	return saved.Model, ""
 }
 
 // withLastModel restores the model the user last chose and remembers the next

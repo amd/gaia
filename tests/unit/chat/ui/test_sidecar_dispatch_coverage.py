@@ -45,6 +45,9 @@ class _Registry:
     def list(self):
         return self.agents
 
+    def refresh_installed(self):
+        pass
+
 
 def _registration(agent_id, *, is_sidecar):
     return AgentRegistration(

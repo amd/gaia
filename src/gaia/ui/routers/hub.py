@@ -169,6 +169,14 @@ async def install_agent(
         installer_mod.ensure_trust_ack(body.id, manifest, trusted=body.trust_native)
     except installer_mod.TrustRequiredError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    # Before the sidecar shutdown: an update this core cannot run must not
+    # take the running agent down.
+    try:
+        installer_mod.ensure_core_can_install(body.id, manifest, body.version)
+    except installer_mod.CoreTooOldError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except installer_mod.InstallError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     _shutdown_email_sidecar(body.id)
 

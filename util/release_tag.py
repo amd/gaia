@@ -90,6 +90,21 @@ def parse_tag(tag: str) -> ReleaseTag:
     raise ValueError(f"'{tag}' is not a release tag. {TAG_HELP}")
 
 
+NPM_VERSION_RE = re.compile(r"^(?P<base>\d+\.\d+\.\d+)(?:-rc\.(?P<rc>[1-9]\d*))?$")
+
+
+def parse_npm_version(version: str) -> ReleaseTag:
+    """The release a build's npm-style version belongs to: ``0.25.0-rc.2`` -> v0.25.0-rc2."""
+    m = NPM_VERSION_RE.match(version)
+    if not m:
+        raise ValueError(
+            f"'{version}' is not a release version. Expected X.Y.Z or X.Y.Z-rc.N (N >= 1)."
+        )
+    if m.group("rc"):
+        return parse_tag(f"v{m.group('base')}-rc{m.group('rc')}")
+    return parse_tag(f"v{m.group('base')}")
+
+
 def _read(path: Path) -> str:
     # newline="" keeps the file's own line endings on a Windows runner.
     with open(path, encoding="utf-8", newline="") as f:

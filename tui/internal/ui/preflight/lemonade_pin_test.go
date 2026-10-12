@@ -126,6 +126,21 @@ func TestSetupIsNotPinnedWhenItAlreadyResolvesTheServer(t *testing.T) {
 			t.Fatalf("pinned %v while GAIA's own server is the one in use", env)
 		}
 	})
+	// The pin would reach the child as a chosen LEMONADE_BASE_URL, and the
+	// child would send cloud keys to a server that is not GAIA's.
+	t.Run("GAIA's own server installed but stopped", func(t *testing.T) {
+		systemLemonadeAnswering(t)
+		dist := filepath.Join(os.Getenv("GAIA_HOME"), "lemonade", "dist", "11.0.0")
+		if err := os.MkdirAll(dist, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dist, "lemond"), nil, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if env := PinnedLemonadeEnv(context.Background()); env != nil {
+			t.Fatalf("pinned %v to a system server while GAIA's own is installed", env)
+		}
+	})
 }
 
 // A system Lemonade too old for GAIA: setup cannot fix it, and running it ends in

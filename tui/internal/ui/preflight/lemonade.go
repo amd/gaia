@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 )
@@ -67,6 +68,11 @@ type launcher struct {
 	// Restart is the command for a server that is up but wedged. Equal to Start
 	// where the launcher has no distinct restart form.
 	Restart string
+	// StartPS and RestartPS are Start and Restart for PowerShell, set only on
+	// Windows, where Start is the Command Prompt form. PowerShell 5.1 rejects
+	// `&&` and needs `&` before a quoted path, so no single line runs in both.
+	StartPS   string
+	RestartPS string
 	// Argv is Start as something this process can SPAWN: program first, then
 	// arguments, already split and unquoted.
 	//
@@ -95,6 +101,9 @@ type launcher struct {
 	// BadOverride is a LEMONADE_SERVER_PATH that names something absent. It is
 	// its own state: the fix is to correct the variable, not to install anything.
 	BadOverride string
+	// Windows is true when the host shell is cmd.exe or PowerShell, whose
+	// commands for clearing a variable differ from POSIX `unset`.
+	Windows bool
 	// Found is false when no Lemonade tooling could be located, in which case the
 	// honest remedy is to install it, not to start it.
 	Found bool
@@ -174,6 +183,10 @@ func resolveLemonadeWith(p hostProbe) launcher {
 	if l.Found {
 		l.CtxSize = profileCtxSize(p)
 		if !l.ServiceManaged {
+			if p.goos == "windows" && len(l.Argv) > 0 && l.Restart == l.Start {
+				l.StartPS = powerShellCommand(l.CtxSize, l.Argv)
+				l.RestartPS = l.StartPS
+			}
 			prefix := ctxPrefix(p.goos, l.CtxSize)
 			l.Start, l.Restart = prefix+l.Start, prefix+l.Restart
 		}
@@ -189,7 +202,7 @@ func resolveLauncherWith(p hostProbe) launcher {
 	// reports itself rather than silently falling through to a different answer.
 	if override := strings.TrimSpace(p.getenv(serverPathEnv)); override != "" {
 		if !p.exists(override) {
-			return launcher{BadOverride: override}
+			return launcher{BadOverride: override, Windows: p.goos == "windows"}
 		}
 		cmd := quoteCommand(override)
 		return launcher{Start: cmd, Restart: cmd, Argv: []string{override}, Found: true}
@@ -239,15 +252,9 @@ func resolveLauncherWith(p hostProbe) launcher {
 	return launcher{}
 }
 
-// windowsStart renders the server invocation.
+// windowsStart renders the server invocation in cmd.exe syntax; the PowerShell
+// form is built from Argv by powerShellCommand.
 //
-// SHELL NOTE: this is cmd.exe syntax. A leading quoted string is an expression in
-// PowerShell, which needs the `&` call operator — and `&` is a command separator
-// in cmd.exe, so no single string is right in both. The quoting only appears when
-// the install path contains a space (a user profile like "Jane Doe"), and the
-// AppHint carries a shell-free alternative for exactly that reason: the tray app
-// is what the docs tell a Windows user to use, so it leads the remedy's prose and
-// this line is the terminal fallback.
 // windowsSilentFlag keeps the installer's tray-less start out of a second
 // literal, so the pasted command and the spawned argv cannot drift.
 const windowsSilentFlag = "--silent"
@@ -444,6 +451,31 @@ func quoteCommand(path string) string {
 	return path
 }
 
+// psBareToken matches a word PowerShell takes literally without quotes.
+var psBareToken = regexp.MustCompile(`^[A-Za-z0-9_\-.:\\/=+]+$`)
+
+// psQuote single-quotes a word for PowerShell, where `$` and backtick stay
+// literal only inside single quotes.
+func psQuote(s string) string {
+	if psBareToken.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// powerShellCommand renders argv for PowerShell, carrying the context window.
+func powerShellCommand(ctx int, argv []string) string {
+	parts := make([]string, 0, len(argv))
+	for _, a := range argv {
+		parts = append(parts, psQuote(a))
+	}
+	if parts[0] != argv[0] {
+		// A quoted string is an expression in PowerShell; `&` makes it a call.
+		parts[0] = "& " + parts[0]
+	}
+	return fmt.Sprintf("$env:%s=%d; %s", ctxSizeEnv, ctx, strings.Join(parts, " "))
+}
+
 // --- the two remedies -------------------------------------------------------
 
 // lemonadeStartRemedy is what to do about a local model server that is not
@@ -462,9 +494,10 @@ func lemonadeStartRemedy() Remedy {
 		}
 	}
 	return Remedy{
-		Action:  "Start it" + orTheApp(l) + comeBack(l) + ctxNote(l),
-		Command: l.Start,
-		Where:   lemonadeDocs,
+		Action:     "Start it" + orTheApp(l) + comeBack(l) + ctxNote(l),
+		Command:    l.Start,
+		PowerShell: l.StartPS,
+		Where:      lemonadeDocs,
 	}
 }
 
@@ -518,9 +551,10 @@ func lemonadeRestartRemedy() Remedy {
 	}
 	if l.Restart != l.Start {
 		return Remedy{
-			Action:  "Restart it, then press r to re-check." + ctxNote(l),
-			Command: l.Restart,
-			Where:   lemonadeDocs,
+			Action:     "Restart it, then press r to re-check." + ctxNote(l),
+			Command:    l.Restart,
+			PowerShell: l.RestartPS,
+			Where:      lemonadeDocs,
 		}
 	}
 	// No distinct restart form, so the stop is the user's to do — and saying WHY
@@ -532,18 +566,30 @@ func lemonadeRestartRemedy() Remedy {
 	return Remedy{
 		Action: "Stop the running server first — it holds the port, and a second one just " +
 			"exits — then start it again" + orTheApp(l) + comeBack(l) + ctxNote(l),
-		Command: l.Restart,
-		Where:   lemonadeDocs,
+		Command:    l.Restart,
+		PowerShell: l.RestartPS,
+		Where:      lemonadeDocs,
 	}
 }
 
 // badOverrideRemedy names the variable, because nothing else on the machine is
-// wrong and installing something would not help.
+// wrong and installing something would not help. It says relaunch, not press r:
+// this process keeps the environment it started with.
 func badOverrideRemedy(l launcher) Remedy {
+	lead := fmt.Sprintf("%s points at %q, which is not on this machine. ", serverPathEnv, l.BadOverride)
+	if l.Windows {
+		return Remedy{
+			Action: lead + "Clear it (or correct it) in the terminal you start GAIA from, " +
+				"then relaunch GAIA from there. If it is saved as a user or system variable, " +
+				"also remove it under System Properties → Environment Variables and open a new terminal.",
+			Command:    "set " + serverPathEnv + "=",
+			PowerShell: "Remove-Item Env:" + serverPathEnv,
+			Where:      lemonadeDocs,
+		}
+	}
 	return Remedy{
-		Action: fmt.Sprintf(
-			"%s points at %q, which is not on this machine. Unset it (or correct it) so "+
-				"GAIA can find the installed server, then press r.", serverPathEnv, l.BadOverride),
+		Action: lead + "Unset it (or correct it) in the shell you start GAIA from, then " +
+			"relaunch GAIA from there. If your shell profile sets it, remove it there too.",
 		Command: "unset " + serverPathEnv,
 		Where:   lemonadeDocs,
 	}
