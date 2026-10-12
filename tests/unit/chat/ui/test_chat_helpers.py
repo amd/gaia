@@ -1115,3 +1115,25 @@ async def test_spawn_background_keeps_the_task_alive_until_done():
     await task
     await asyncio.sleep(0)
     assert task not in ch._background_tasks
+
+
+def test_a_recoverable_error_after_a_failed_tool_is_not_saved_twice():
+    from gaia.ui._chat_helpers import _echoes_failed_tool
+
+    failed = [{"type": "tool", "success": False, "result": "boom"}]
+    assert _echoes_failed_tool({"content": "boom", "recoverable": True}, failed)
+    assert not _echoes_failed_tool({"content": "boom"}, failed)
+    assert not _echoes_failed_tool(
+        {"content": "boom", "recoverable": True}, [{"type": "tool", "success": True}]
+    )
+
+
+def test_a_recoverable_error_from_a_tool_that_raised_is_not_saved_twice():
+    from gaia.ui._chat_helpers import _echoes_failed_tool
+
+    running = [{"type": "tool", "active": True}]
+    assert _echoes_failed_tool({"content": "boom", "recoverable": True}, running)
+    after_thought = running + [{"type": "thinking", "active": True}]
+    assert not _echoes_failed_tool(
+        {"content": "boom", "recoverable": True}, after_thought
+    )

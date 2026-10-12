@@ -676,6 +676,8 @@ export interface StreamEvent {
     mcp_server?: string;
     /** Tool call latency in milliseconds (for tool_result). */
     latency_ms?: number;
+    /** agent_error the agent recovers from by retrying, rather than a turn-ending one. */
+    recoverable?: boolean;
     /** Governance decision (for policy_alert). */
     decision?: string;
     /** Governance policy reason (for policy_alert). */

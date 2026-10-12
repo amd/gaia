@@ -1522,6 +1522,21 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _echoes_failed_tool(event: dict, steps: list) -> bool:
+    """A recoverable error right after a failed tool repeats that tool's error.
+
+    A tool that raises or times out reports its error before its result lands,
+    so a still-running tool step counts too: its result always follows as failed.
+    """
+    if not event.get("recoverable") or not steps:
+        return False
+    last = steps[-1]
+    if last.get("type") != "tool":
+        return False
+    running = last.get("active") and last.get("success") is None
+    return last.get("success") is False or bool(running)
+
+
 class _UserWaitClock:
     """Total seconds a stream has spent waiting on the user, open wait included."""
 
@@ -2850,6 +2865,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
                     )
+                elif event_type == "agent_error" and _echoes_failed_tool(
+                    event, captured_steps
+                ):
+                    pass  # The failed tool's step already holds this error.
                 elif event_type == "agent_error":
                     step_id += 1
                     for s in captured_steps:

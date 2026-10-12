@@ -73,6 +73,19 @@ function stripStreamingEnvelope(text: string): string {
     return content.replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
 }
 
+/**
+ * A recoverable error right after a failed tool repeats that tool's error, which
+ * its card already shows; the agent retries, so it isn't a turn-level error.
+ * A tool that raises or times out reports the error before its result lands, so a
+ * still-running tool counts too — its result always follows as failed.
+ */
+export function isEchoOfFailedTool(event: StreamEvent, steps: AgentStep[]): boolean {
+    if (event.type !== 'agent_error' || event.recoverable !== true) return false;
+    const last = steps[steps.length - 1];
+    if (!last || last.type !== 'tool') return false;
+    return last.success === false || (!!last.active && last.success == null);
+}
+
 /** Map an SSE agent event to an AgentStep for the UI. */
 function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<number>): AgentStep | null {
     const id = ++stepIdRef.current;
@@ -180,6 +193,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
     const pendingPrompt = useChatStore((s) => s.pendingPrompt);
     const liveStatus = useChatStore((s) => s.liveStatus);
+    const awaitingUser = useChatStore((s) => s.awaitingUser);
 
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
@@ -595,6 +609,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const streamCallbacks: api.StreamCallbacks = {
             onChunk: (event) => {
                 if (isStale()) return; // stop writing after a session switch (#1580)
+                if (useChatStore.getState().awaitingUser) useChatStore.getState().setAwaitingUser(false);
                 const content = event.content || '';
                 if (content) {
                     // 'answer' events carry the full final text (not a delta),
@@ -640,6 +655,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // Ignore events from a stream the user navigated away from so its
                 // steps don't leak into the new session's view (#1580).
                 if (isStale()) return;
+                // The agent emits nothing while it blocks on the user, so the next event ends the wait.
+                const waitsOnUser = event.type === 'permission_request' || event.type === 'needs_input';
+                if (useChatStore.getState().awaitingUser !== waitsOnUser) {
+                    useChatStore.getState().setAwaitingUser(waitsOnUser);
+                }
                 // Permission request — shown inline above the composer. Calls the
                 // user already allowed "always" never get here: the backend skips them.
                 if (event.type === 'permission_request') {
@@ -866,6 +886,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return; // Step headers are redundant with actual tool/thinking steps
                 }
 
+                if (event.type === 'agent_error' && isEchoOfFailedTool(event, useChatStore.getState().agentSteps)) {
+                    return;
+                }
                 const step = agentEventToStep(event, stepIdRef);
                 if (step) {
                     addAgentStep(step);
@@ -1477,6 +1500,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
                                 cards={isStreaming ? cards : lastCardsRef.current}
                                 liveStatus={isStreaming ? liveStatus : null}
+                                awaitingUser={isStreaming && awaitingUser}
                             />
                         </div>
                     )}

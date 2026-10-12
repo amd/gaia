@@ -144,7 +144,8 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
             ) : (
                 <div className="perm-card-actions">
                     <button type="button" className="perm-btn is-primary" onClick={() => answer('allow')} disabled={busy}>
-                        Allow once
+                        {/* Granting a path lasts for the chat, as the question says. */}
+                        {notification.tool === PATH_ACCESS_TOOL ? 'Allow for this chat' : 'Allow once'}
                     </button>
                     {scope && (
                         <button
