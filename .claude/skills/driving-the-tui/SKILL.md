@@ -101,6 +101,7 @@ degraded — relaunch under `wt.exe`.
 |---|---|
 | `GET status` | Where the session is, plus `state.chat` diagnostics (below) |
 | `GET screen?format=plain\|ansi\|svg` | The frame as text, as styled text, or as a picture |
+|  | JSON forms also carry `cursors`: every cell drawn as a block cursor, with the two cells left of it |
 | `POST keys` | `{"keys": ["ctrl+t", "enter"]}` |
 | `POST mouse` | `{"events": [{"action": "click", "x": 24, "y": 16}]}` |
 | `POST text` | Type into the composer |
@@ -298,6 +299,10 @@ where `ask` types, submits, and blocks on `gone streaming`.
 - **Always `screen 0 999`.** A cropped capture once produced a fabricated
   "uninstall silently does nothing" — the status line is the second-to-last row.
 - **`resize` FIRST** or cols/rows are 0 and everything wraps wrongly.
+- **Look at the picture, not just the text.** Render `screen?format=svg` in a
+  browser and screenshot it; a doubled cursor, a leaked label, or a repeated line
+  is invisible in a grep. A focused input must report exactly one entry in
+  `cursors`, with no bar glyph (`┃`, `│`) in its `left`.
 - **`format=plain` strips ANSI** — but `format=ansi` does not, and it is the
   fastest way to settle a colour question. Count `\x1b` in the result: a styled
   frame returns dozens (a healthy header is
