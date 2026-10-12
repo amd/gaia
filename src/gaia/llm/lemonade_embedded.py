@@ -49,6 +49,10 @@ from typing import Callable, Dict, List, Optional, Tuple
 from gaia.env import child_env
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.terminal import (
+    background_popen_kwargs,
+    windows_hidden_popen_kwargs,
+)
 from gaia.version import LEMONADE_VERSION
 
 log = get_logger(__name__)
@@ -93,7 +97,8 @@ EMBEDDABLE_SHA256: Dict[str, str] = {
 #
 # Deliberately absent: no_fetch_executables. Setting it true collapses the
 # advertised catalogue from 204 models to the 4 runnable by built-in backends,
-# which would break `gaia download` for everything else.
+# which would break `gaia download` for everything else. write_config() merges
+# over the existing file, so it strips this key rather than merely not adding it.
 # auto_evict=false is pinned rather than inherited. Lemonade v2026.39.1 added
 # VRAM auto-eviction and defaults it off today, but it is a new knob and GAIA's
 # residency model rests on which way it points.
@@ -115,6 +120,7 @@ _LEMOND_CONFIG = {
     "broadcast": False,
     "auto_evict": False,
 }
+_LEMOND_STRIPPED_KEYS = ("no_fetch_executables",)
 
 
 def _lemond_config(ctx_size: Optional[int] = None) -> Dict[str, object]:
@@ -667,28 +673,43 @@ class EmbeddedLemonade:
         # the keys GAIA owns are overwritten; the rest must survive a restart.
         existing: Dict[str, object] = {}
         if path.is_file():
+            problem = None
             try:
                 loaded = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError) as e:
-                log.warning(
-                    "Replacing unreadable %s (%s); any cloud providers Lemonade "
-                    "saved there must be reinstalled",
-                    path,
-                    e,
-                )
+                problem = str(e)
             else:
                 if isinstance(loaded, dict):
                     existing = loaded
                 else:
-                    log.warning(
-                        "Replacing %s: expected a JSON object, found %s",
-                        path,
-                        type(loaded).__name__,
-                    )
+                    problem = f"expected a JSON object, found {type(loaded).__name__}"
+            if problem:
+                log.warning(
+                    "Replacing unusable %s (%s); reinstall any cloud provider "
+                    "that was connected to embedded Lemonade",
+                    path,
+                    problem,
+                )
         # Rewritten on every start(), so a device-profile or GAIA_CTX_SIZE change
         # moves the request budget with it rather than leaving a stale number.
         merged = {**existing, **_lemond_config()}
-        path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+        for key in _LEMOND_STRIPPED_KEYS:
+            if key in merged:
+                log.warning(
+                    "Removing %s=%r from %s: GAIA's embedded Lemonade needs it "
+                    "unset to list its full model catalogue and install backends",
+                    key,
+                    merged.pop(key),
+                    path,
+                )
+        # Atomic: a torn write would lose settings only Lemonade can recreate.
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            tmp.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
         self._pin_llamacpp_backends()
         return path
 
@@ -830,6 +851,7 @@ class EmbeddedLemonade:
                     text=True,
                     timeout=15,
                     check=False,
+                    **windows_hidden_popen_kwargs(),
                 )
                 return "lemond" in result.stdout.lower()
             result = subprocess.run(
@@ -1046,14 +1068,10 @@ class EmbeddedLemonade:
         ]
         log.info("Starting embedded Lemonade: %s", " ".join(argv))
 
-        # Detach so the daemon outlives the CLI process that spawned it.
-        kwargs = {}
-        if platform.system() == "Windows":
-            kwargs["creationflags"] = (
-                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-            )
-        else:
-            kwargs["start_new_session"] = True
+        # Own group/session so the server outlives the CLI process that spawned
+        # it. A hidden console, not none: lemond's llama/whisper/kokoro children
+        # inherit it instead of each opening a blank window.
+        kwargs = background_popen_kwargs()
 
         self.root.mkdir(parents=True, exist_ok=True)
         with open(self.log_path, "ab") as logfile:
@@ -1221,6 +1239,7 @@ class EmbeddedLemonade:
                     check=True,
                     capture_output=True,
                     timeout=30,
+                    **windows_hidden_popen_kwargs(),
                 )
             else:
                 # start() makes the daemon a session leader, so its backends
@@ -1300,6 +1319,7 @@ class EmbeddedLemonade:
                 text=True,
                 timeout=timeout,
                 check=False,
+                **windows_hidden_popen_kwargs(),
             )
         except subprocess.TimeoutExpired as e:
             raise EmbeddedLemonadeError(

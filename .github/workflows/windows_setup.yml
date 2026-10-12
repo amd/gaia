@@ -13,13 +13,18 @@
 # Callers name exactly one desktop app source -- never "whatever is latest":
 #
 #   agent_ui_release           a published vX.Y.Z release (PR gate, manual runs)
-#   agent_ui_publish_run_sha   publish.yml's push run for this commit (tags),
-#                              which builds the installers before its approval
-#                              gate, so a release does not wait on a human.
+#   agent_ui_publish_run_sha   publish.yml's push run for this commit and
+#                              version's tag, which builds the installers before
+#                              its approval gate, so a release does not wait on a
+#                              human. A release candidate's own publish.yml run
+#                              passes its own SHA and embeds its own build.
 #
 # `sidecar` works as it does in tui_installers.yml: pinned fetches the real
 # gaia-agent against the committed digest; stub stands gaia-tui in for it on
 # PRs, where that digest is a placeholder. Nothing stub-built is published.
+# A release candidate passes `artifact`: the gaia-agent its own run froze
+# (build_flagship_sidecar.yml), because the committed pin is the last
+# published flagship, not one built from the candidate's commit.
 #
 # Reads the `tui-binaries` artifact the caller's tui_installers.yml run uploaded,
 # so the setup wraps the same gaia-tui bytes the raw downloads publish.
@@ -30,16 +35,16 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Version stamped into the setup and its filename (x.y.z).'
+        description: 'Version stamped into the setup and its filename (x.y.z, or x.y.z-rc.N for a release candidate).'
         required: true
         type: string
       sidecar:
-        description: 'pinned (fetch + verify the real gaia-agent) or stub (PR gate).'
+        description: "pinned (fetch + verify the hub's gaia-agent), artifact (this run's gaia-agent-win32-x64 build), or stub (PR gate)."
         required: false
         default: pinned
         type: string
       agent_ui_release:
-        description: 'Take the desktop app setup from this published release tag (vX.Y.Z).'
+        description: 'Take the desktop app setup from this published release tag (vX.Y.Z or vX.Y.Z-rcN).'
         required: false
         default: ''
         type: string
@@ -124,6 +129,12 @@ jobs:
           name: agent-ui-win-setup
           path: agent-ui
 
+      - uses: actions/download-artifact@v8
+        if: inputs.sidecar == 'artifact'
+        with:
+          name: gaia-agent-win32-x64
+          path: flagship
+
       # What build-setup.sh consumes: gaia-tui.exe, gaia-agent.exe, LICENSE.md.
       - name: Stage the terminal payload
         env:
@@ -133,16 +144,27 @@ jobs:
           mkdir -p stage/win-x64
           cp bin/gaia-win-x64.exe stage/win-x64/gaia-tui.exe
           cp LICENSE.md stage/win-x64/LICENSE.md
-          if [ "${SIDECAR}" = "stub" ]; then
-            # The committed sidecar digest is a placeholder between releases, so
-            # a PR cannot fetch a real one and must not pretend to. Everything
-            # but the sidecar's identity stays under test; nothing is published.
-            cp stage/win-x64/gaia-tui.exe stage/win-x64/gaia-agent.exe
-          else
-            # Verified against hub/agents/gaia/npm/binaries.lock.json; a
-            # placeholder or mismatched digest fails the build.
-            python installer/tui/fetch_sidecar.py --platform win-x64 --out stage/win-x64
-          fi
+          case "${SIDECAR}" in
+            stub)
+              # The committed sidecar digest is a placeholder between releases, so
+              # a PR cannot fetch a real one and must not pretend to. Everything
+              # but the sidecar's identity stays under test; nothing is published.
+              cp stage/win-x64/gaia-tui.exe stage/win-x64/gaia-agent.exe
+              ;;
+            artifact)
+              # Verified against the hash its freeze leg recorded.
+              python util/flagship_rc_assets.py stage --artifacts flagship --platform win32-x64 --out stage/win-x64
+              ;;
+            pinned)
+              # Verified against hub/agents/gaia/npm/binaries.lock.json; a
+              # placeholder or mismatched digest fails the build.
+              python installer/tui/fetch_sidecar.py --platform win-x64 --out stage/win-x64
+              ;;
+            *)
+              echo "::error::sidecar must be pinned, artifact or stub (got '${SIDECAR}')."
+              exit 1
+              ;;
+          esac
           ls -l stage/win-x64
 
       # Verified against the digests committed in installer/tui/fonts/fonts.lock.json.

@@ -391,7 +391,9 @@
         flex-direction: row;
         width: 100%;
         padding: 10px 52px 10px 10px;
-        overflow-x: auto;
+        /* Wrap, don't scroll: a clipped "Privac…" hides that more tabs exist. */
+        flex-wrap: wrap;
+        overflow-y: visible;
         border-right: none;
         border-bottom: 1px solid var(--border-light);
     }

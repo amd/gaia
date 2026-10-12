@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
+    cloud_model_provider,
     lemonade_auth_headers,
     resolve_effective_ctx_size,
     resolve_lemonade_api_key,
@@ -500,6 +501,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     # Always named, not only once a model is loaded: the UI's load and download
     # actions target this. None only when an unreadable config hides it.
     status.default_model_name = db.get_setting("custom_model") or default_model
+    status.default_model_is_cloud = bool(
+        cloud_model_provider(status.default_model_name)
+    )
 
     # Check Lemonade Server
     # Use a generous timeout (10s) because when the LLM is handling many
@@ -523,6 +527,16 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 health_data = health_resp.json()
                 status.model_loaded = health_data.get("model_loaded") or None
                 status.lemonade_version = health_data.get("version")
+                # The root field names the most recent load, which is often the
+                # embedder; that is never the chat model, so fall back below.
+                if status.model_loaded and any(
+                    m.get("type") == "embedding"
+                    and (m.get("model_name") or "").lower()
+                    == status.model_loaded.lower()
+                    for m in health_data.get("all_models_loaded", [])
+                ):
+                    status.embedding_model_loaded = True
+                    status.model_loaded = None
 
                 # Extract device info AND actual loaded context size from
                 # all_models_loaded. Some Lemonade versions omit the root-level

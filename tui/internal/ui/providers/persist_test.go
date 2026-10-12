@@ -4,6 +4,7 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -39,7 +40,19 @@ func TestMain(m *testing.M) {
 		return nil
 	}
 	restoreKey = func(provider string) { store.restored = append(store.restored, provider) }
-	os.Exit(m.Run())
+	// The user's own GAIA Lemonade would otherwise be where a pasted key goes.
+	home, err := os.MkdirTemp("", "gaia-providers-test-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("GAIA_HOME", home)
+	os.Setenv("LEMONADE_BASE_URL", "")
+	lemonade.StubEnsureEmbeddedForTest(func(context.Context) error {
+		return errors.New("test: no daemon")
+	})
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
 }
 
 func resetStore() { store = keyStoreCalls{} }
@@ -65,6 +78,67 @@ func TestAKeyThatFindsNoModelsIsNotKept(t *testing.T) {
 	if len(store.remembered) != 0 {
 		t.Fatalf("kept %v for a key that discovered nothing", store.remembered)
 	}
+}
+
+// Retyping a key over a working one sent the typo to Lemonade, and when it found
+// nothing Lemonade kept it: chat broke, and a blank Enter only reused the typo.
+// A failed key is cleared and the kept one put back.
+func TestAFailedKeyGivesBackTheKeptOne(t *testing.T) {
+	resetStore()
+	srv, cleared := clearRecordingLemonade(t, http.StatusOK)
+
+	connectFireworks(t, srv, "typo-key")
+	if strings.Join(*cleared, ",") != "/api/v1/cloud/auth/fireworks" {
+		t.Errorf("cleared %v, want the failed fireworks key removed from Lemonade", *cleared)
+	}
+	if strings.Join(store.restored, ",") != "fireworks" {
+		t.Errorf("restored %v, want the kept fireworks key put back", store.restored)
+	}
+}
+
+// Only a key that found nothing is dropped: a blank Enter keeps the key Lemonade
+// holds, and a listing that failed says nothing about a newly typed key.
+func TestOnlyAKeyThatFoundNothingIsDropped(t *testing.T) {
+	for _, tc := range []struct {
+		name, key string
+		status    int
+	}{
+		{"blank Enter", "", http.StatusOK},
+		{"listing failed", "new-key", http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetStore()
+			srv, cleared := clearRecordingLemonade(t, tc.status)
+			connectFireworks(t, srv, tc.key)
+			if len(*cleared) != 0 || len(store.restored) != 0 {
+				t.Errorf("cleared %v and restored %v", *cleared, store.restored)
+			}
+		})
+	}
+}
+
+// clearRecordingLemonade lists no models (or fails the listing with status) and
+// records every key Lemonade is asked to drop.
+func clearRecordingLemonade(t *testing.T, status int) (string, *[]string) {
+	t.Helper()
+	var cleared []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodDelete:
+			cleared = append(cleared, r.URL.Path)
+			_, _ = w.Write([]byte(`{}`))
+		case r.URL.Path == "/api/v1/models":
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case r.URL.Path == "/api/v1/system-info":
+			_, _ = w.Write([]byte(`{"cloud":{"providers":[]}}`))
+		default:
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/api/v1", &cleared
 }
 
 // When the credential store refuses, the user is told it works for now only.

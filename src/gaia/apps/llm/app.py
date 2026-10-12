@@ -12,6 +12,7 @@ import sys
 from typing import Iterator, Optional, Union
 
 from gaia.llm import create_client
+from gaia.llm.lemonade_client import no_thinking_kwargs, resolve_default_chat_model
 from gaia.logger import get_logger
 
 
@@ -53,6 +54,11 @@ class LlmApp:
         generate_kwargs = dict(kwargs)
         if max_tokens:
             generate_kwargs["max_tokens"] = max_tokens
+        # A thinking model otherwise spends the whole budget reasoning and never answers.
+        for key, value in no_thinking_kwargs(
+            model or resolve_default_chat_model()
+        ).items():
+            generate_kwargs.setdefault(key, value)
 
         # Generate response
         return self.client.generate(

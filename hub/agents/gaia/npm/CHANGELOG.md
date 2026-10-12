@@ -6,6 +6,50 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **`/model` names the command that connects a cloud provider.** With no
+  Fireworks or AMD gateway connection, the list told users to "connect this
+  provider in the TUI provider settings", a screen with no obvious way in. It
+  now says to run `/provider`, the command that opens it.
+- **The TUI's provider picker works after GAIA's Lemonade restarts.** When the
+  agent ran as the TUI's own child, its model-state ping kept naming the port
+  Lemonade started on, so after a restart the picker said "Lemonade did not
+  respond" while chat worked. With a local or cloud chat model the ping now
+  reports the port the agent talks to, and it still never starts a stopped
+  server. A Claude session still reports the port it started with.
+- **The Agent UI's Skills settings list this agent's skills.** With the agent
+  installed from the Hub, the page said the agent package was not installed
+  and to run `gaia init`, which changed nothing: the bundled skills live
+  inside the binary, where the UI could not read them. `GET /v1/gaia/skills`
+  (contract **2.17**) now returns them.
+- **A message sent right after Stop is answered instead of refused.** A stopped
+  turn holds its session until its model call returns, so the next `/query`
+  got `409 … is already running a turn` for as long as the stopped answer would
+  have taken — about 40 s for a long one. It now waits for the stopped turn to
+  finish (up to 240 s) and then runs. A turn that was not cancelled is still
+  refused at once.
+- **Documents attached to a chat now reach the agent.** In the Agent UI, a
+  Hub-installed agent answered "no documents are indexed" about a file the user
+  had attached, because the relayed turn never carried the chat's files.
+  `/query` now takes a `documents` field (contract **2.16**): the agent indexes
+  them before the turn, granting each exact file and not its folder, including
+  a file attached partway through a conversation.
+- **The first chat after the agent starts uses its own tools.** A session built
+  while the start-up warm-up was still building could end up running the
+  warm-up agent's tools, so a file it had just indexed read as access denied.
+  Agents are now built one at a time.
+- **Web requests work behind a corporate TLS-inspecting proxy.** HTTPS now
+  trusts the operating system's certificate store, as pip does, instead of only
+  Python's bundled list, so a proxy root such as Zscaler's no longer fails every
+  fetch with `CERTIFICATE_VERIFY_FAILED`.
+- **Starting the agent no longer downloads a model you skipped.** The HTTP
+  sidecar's start-up warm-up skips the default local model when it is not
+  downloaded, so someone using a cloud model is not handed a multi-GB download
+  they never asked for.
+
+## [0.3.0]
+
+Released with GAIA 0.25.0, and requires it.
+
 ### Changed
 
 - **Requires `amd-gaia>=0.25.0` and `gaia-agent-chat>=0.2.0`.** Every file tool
@@ -116,6 +160,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Answering the agent's question from the Agent UI or the TUI works.**
+  `POST /query/{run_id}/respond` only took the answer as `response`, while
+  both front-ends send `{ request_id, value }` as the contract specifies, so
+  every answer was refused and the run waited until the question timed out.
+  It now takes `value`. `response` is still accepted; sending both, or
+  neither, is a 422.
 - **A file you allow is usable by every tool, including document Q&A.** Indexing
   or querying a file outside the chat's scope was refused with no prompt, and
   approving it through another tool still left it unreadable to the document

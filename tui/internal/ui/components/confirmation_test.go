@@ -171,6 +171,14 @@ func TestClassifyActionRiskKnownActions(t *testing.T) {
 	}
 }
 
+// The folder-access prompt read "WRITE Allow allow_path_access?" — the tool's
+// internal name as the question.
+func TestPathAccessPromptAsksInWords(t *testing.T) {
+	if got := ActionTitle("allow_path_access"); strings.Contains(got, "_") {
+		t.Errorf("ActionTitle(allow_path_access) = %q, want a plain question", got)
+	}
+}
+
 // An action this client has never heard of still gated the sidecar on
 // confirmation, so it gets the MORE cautious tier, not less.
 func TestClassifyActionRiskUnknownDefaultsToDestructive(t *testing.T) {

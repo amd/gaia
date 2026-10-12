@@ -56,11 +56,19 @@ function readPkg() {
   }
 }
 
-function printHelp() {
-  const pkg = readPkg();
-  console.log(`
+/**
+ * The npm dist-tag this build was published under. Release candidates go out
+ * under `next`; pointing an RC user at `latest` would downgrade them.
+ */
+function npmDistTag(version) {
+  return /^\d+\.\d+\.\d+-/.test(version || "") ? "next" : "latest";
+}
+
+function helpText(version) {
+  const tag = npmDistTag(version);
+  return `
 GAIA - Run AI agents locally on your PC
-Version: ${pkg.version}
+Version: ${version}
 
 Usage: gaia-ui [options]
 
@@ -73,16 +81,20 @@ Options:
   --version, -v          Show version
 
 On first run, GAIA automatically installs the Python backend
-(uv, Python 3.12, amd-gaia[ui]==${pkg.version}) into ~/.gaia/venv.
+(uv, Python 3.12, amd-gaia[ui]==${installer.toPep440(version)}) into ~/.gaia/venv.
 On subsequent runs, it auto-updates if the version doesn't match.
 
 Logs: ~/.gaia/electron-install.log
 
-Update:   npm install -g @amd-gaia/agent-ui@latest
+Update:   npm install -g @amd-gaia/agent-ui@${tag}
 Uninstall: npm uninstall -g @amd-gaia/agent-ui && rm -rf ~/.gaia
 
 Documentation: https://amd-gaia.ai/docs/guides/agent-ui
-`);
+`;
+}
+
+function printHelp() {
+  console.log(helpText(readPkg().version));
 }
 
 function printVersion() {
@@ -129,11 +141,13 @@ function openBrowser(url) {
   });
 }
 
+let shuttingDown = false;
+
 /**
  * Start the Python backend.
  * Uses "chat --ui" for compatibility with all gaia versions.
  */
-function startBackend(gaiaBin, port) {
+function startBackend(gaiaBin, port, exit = process.exit) {
   console.log(`Starting GAIA backend on port ${port}...`);
 
   const child = spawn(
@@ -164,13 +178,16 @@ function startBackend(gaiaBin, port) {
 
   child.on("error", (err) => {
     console.error(`Failed to start backend: ${err.message}`);
-    process.exit(1);
+    exit(1);
   });
 
-  child.on("exit", (code) => {
-    if (code !== 0 && code !== null) {
-      console.error(`Backend exited with code ${code}`);
-    }
+  // The backend serves the UI, so once it is gone there is nothing to open.
+  child.on("exit", (code, signal) => {
+    if (shuttingDown) return;
+    console.error(
+      `Backend exited with ${code !== null ? `code ${code}` : signal} — see the [backend] lines above.`
+    );
+    exit(code ?? 1);
   });
 
   return child;
@@ -187,7 +204,9 @@ async function serveFrontend(port) {
     console.error(`Expected: ${path.join(distDir, "index.html")}`);
     console.error("");
     console.error("The npm package may be corrupted. Try reinstalling:");
-    console.error("  npm install -g @amd-gaia/agent-ui@latest");
+    console.error(
+      `  npm install -g @amd-gaia/agent-ui@${npmDistTag(readPkg().version)}`
+    );
     process.exit(1);
   }
 
@@ -344,6 +363,7 @@ async function main() {
 
   // Graceful shutdown
   function cleanup() {
+    shuttingDown = true;
     if (backendProcess) {
       console.log("\nShutting down GAIA...");
       backendProcess.kill("SIGTERM");
@@ -364,7 +384,11 @@ async function main() {
   process.on("SIGTERM", cleanup);
 }
 
-main().catch((err) => {
-  console.error("Fatal error:", err && err.stack ? err.stack : err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error("Fatal error:", err && err.stack ? err.stack : err);
+    process.exit(1);
+  });
+}
+
+module.exports = { npmDistTag, helpText, startBackend };

@@ -6,6 +6,12 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Gmail and Outlook work behind a corporate TLS-inspecting proxy.** The agent
+  now trusts the operating system's certificate store, as pip does, so a proxy
+  root such as Zscaler's no longer fails every mailbox request with
+  `CERTIFICATE_VERIFY_FAILED`. With an `amd-gaia` too old to do this it prints a
+  warning naming the upgrade.
+
 - **The downloaded binary's memory recalls by meaning again.** The release
   build left out the vector index library, so the stateful agent started with
   "vector search disabled" and recalled memories by keyword only. The library

@@ -25,9 +25,9 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: build-setup.sh --version <x.y.z> --payload <dir> --out <dir> --lemonade-msi <path> --fonts <dir> --agent-ui-setup <path>
+usage: build-setup.sh --version <x.y.z[-rc.N]> --payload <dir> --out <dir> --lemonade-msi <path> --fonts <dir> --agent-ui-setup <path>
 
-  --version       version to stamp into the installer and its filename
+  --version       version to stamp into the installer and its filename (x.y.z, or x.y.z-rc.N)
   --payload       directory holding gaia-tui.exe, gaia-agent.exe and LICENSE.md
   --out           directory the setup .exe is written to
   --lemonade-msi  the pinned lemonade-server-minimal.msi to bundle
@@ -75,15 +75,16 @@ if [ -n "${missing}" ]; then
   usage
 fi
 
-# VIProductVersion is four integers, and the .nsi builds it as ${VERSION}.0 so
-# Explorer sorts setups correctly. Anything else makes makensis reject it, so
-# reject it here where the message can name the argument.
-if ! [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+# VIProductVersion is four integers, so a release candidate gets its final's
+# x.y.z.0 there -- the same numeric version electron-builder and gen-winres.sh
+# give it -- and keeps its full version in the filename, strings and registry.
+if ! [[ "${VERSION}" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-rc\.[1-9][0-9]*)?$ ]]; then
   die "--version '${VERSION}' is not a valid version." \
-      "Expected MAJOR.MINOR.PATCH with digits only, e.g. 0.23.0." \
-      "Windows stores the setup's version as four integers, so a prerelease or" \
-      "'v' prefix has no numeric form and would leave the setup reporting 0.0.0.0."
+      "Expected MAJOR.MINOR.PATCH, or MAJOR.MINOR.PATCH-rc.N for a release candidate," \
+      "e.g. 0.23.0 or 0.25.0-rc.2. Windows stores the setup's version as four" \
+      "integers, so any other suffix or a 'v' prefix has no numeric form."
 fi
+VERSION_QUAD="${BASH_REMATCH[1]}.0"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../../.." && pwd)"
@@ -124,9 +125,9 @@ done
 # what electron-builder.yml's artifactName produces -- anything else is not a
 # desktop app setup.
 UI_NAME="$(basename "${AGENT_UI_SETUP}")"
-if ! [[ "${UI_NAME}" =~ ^gaia-agent-ui-([0-9]+\.[0-9]+\.[0-9]+)-x64-setup\.exe$ ]]; then
+if ! [[ "${UI_NAME}" =~ ^gaia-agent-ui-([0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?)-x64-setup\.exe$ ]]; then
   die "--agent-ui-setup '${AGENT_UI_SETUP}' is not a desktop app setup." \
-      "Expected gaia-agent-ui-<x.y.z>-x64-setup.exe, as electron-builder names it." \
+      "Expected gaia-agent-ui-<x.y.z[-rc.N]>-x64-setup.exe, as electron-builder names it." \
       "Download one with: python installer/tui/fetch_agent_ui_setup.py --release v<x.y.z> --out <dir>"
 fi
 AGENT_UI_VERSION="${BASH_REMATCH[1]}"
@@ -168,6 +169,7 @@ winpath() {
 # expanded to nothing), and makensis exits 0 with one by default.
 "${MAKENSIS}" -WX \
   "-DVERSION=${VERSION}" \
+  "-DVERSION_QUAD=${VERSION_QUAD}" \
   "-DPAYLOAD_DIR=$(winpath "$(cd "${PAYLOAD}" && pwd)")" \
   "-DLEMONADE_MSI=$(winpath "$(cd "$(dirname "${LEMONADE_MSI}")" && pwd)/$(basename "${LEMONADE_MSI}")")" \
   "-DLEMONADE_VERSION=${LEMONADE_VERSION}" \

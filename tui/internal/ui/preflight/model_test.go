@@ -25,7 +25,17 @@ func newModel(t *testing.T, f *fakeTransport) Model {
 	t.Helper()
 	m := New(f, EmailConfig(), Options{ManualProceed: true, ReadyHold: time.Millisecond})
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	return settle(t, updated.(Model), f)
+	return settle(t, autoStartSpent(updated.(Model)), f)
+}
+
+// autoStartSpent is the screen after its one automatic start per row has been
+// used, which is the only time a person sees the daemon and agent rows offer
+// `f`. Tests of the manual path start here; agent_autostart_test.go covers the
+// automatic one.
+func autoStartSpent(m Model) Model {
+	m.autoTried[KeyDaemon] = true
+	m.autoTried[KeySidecar] = true
+	return m
 }
 
 func TestFixStartsTheDaemonThenRechecks(t *testing.T) {
@@ -152,6 +162,33 @@ func TestALateProvisionEventCannotDriveTheScreen(t *testing.T) {
 	}
 	if row, _ := m.Report().Find(KeyModel); row.State != StateFailed {
 		t.Errorf("a stale event changed the report: model row is %s", row.State.Word())
+	}
+}
+
+func TestEscClosesTheDetailsPaneInsteadOfLeaving(t *testing.T) {
+	f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
+	m := newModel(t, f)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+
+	if m.details {
+		t.Error("esc left the details pane open")
+	}
+	if cmd != nil {
+		if _, left := cmd().(CancelMsg); left {
+			t.Error("esc on the details pane left the gate instead of closing the pane")
+		}
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("esc with the pane closed produced no command")
+	}
+	if _, left := cmd().(CancelMsg); !left {
+		t.Error("esc with the pane closed no longer leaves the gate")
 	}
 }
 
@@ -423,7 +460,7 @@ func TestBlockedReportSchedulesNoTick(t *testing.T) {
 		t.Fatal("test setup: want a blocked report")
 	}
 
-	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	m := autoStartSpent(New(f, EmailConfig(), Options{ReadyHold: time.Millisecond}))
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	_, cmd := updated.(Model).Update(reportMsg{rep: rep})
 

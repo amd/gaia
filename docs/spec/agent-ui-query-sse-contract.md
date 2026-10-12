@@ -81,6 +81,7 @@ net-new agent instrumentation.
 | `max_steps` | integer ≥ 1 | no | Agent-loop step ceiling. Omitted ⇒ the sidecar's configured default. |
 | `can_answer_questions` | boolean | no | Whether **this caller** can render a `needs_input` event and POST the answer (§5.1). **Send only to a peer at contract ≥ 2.6** — an older sidecar 422s the unknown field (see §7). **The two shipped sidecars default this differently when it's omitted.** The email agent's field is a plain `bool` defaulting to `False` — the safe answer, since a caller that cannot answer would otherwise park the run until the question times out, which is indistinguishable from a hang. The flagship (`gaia`) agent's field is `Optional[bool]` defaulting to `None`, and only an *explicit* `false` turns answering off — an omitted field behaves as answerable. A client driving both sidecars with the same "omit when unsure" logic gets opposite behavior; send the field explicitly rather than relying on either default. |
 | `session_id` | string, `^[A-Za-z0-9_-]{1,128}$` | no | Opaque conversation id, host-minted once per conversation and reused across turns (#2829). **Send only to a peer at contract ≥ 2.12** — an older sidecar 422s the unknown field (see §7). Omitted ⇒ today's stateless behaviour: a throwaway agent per call. Present ⇒ the run resolves the SAME agent every other turn on this id used, so a reference to something an earlier turn surfaced (e.g. "reply to number 1") can resolve. See §2.4. |
+| `documents` | array of strings (absolute file paths) | no | **Flagship (`gaia`) only, contract ≥ 2.16** (#4166) — the email agent and an older flagship 422 the unknown field (see §7). The files the user attached to this conversation. Send the whole set on every turn; the agent indexes the ones it has not indexed yet before the turn runs, so a file attached mid-conversation is read on the next turn. Each path is granted as that exact file — never its folder — and a relative path is a 422. A file that is missing, a folder, or a secret the path policy refuses is named as not indexed in the turn's `index_documents` step, and the turn still runs. See §2.5. |
 
 ```jsonc
 // JSON Schema (draft 2020-12) — request body
@@ -108,7 +109,8 @@ net-new agent instrumentation.
     "provider":  { "type": "string" },
     "max_steps": { "type": "integer", "minimum": 1 },
     "can_answer_questions": { "type": "boolean", "default": false },
-    "session_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" }
+    "session_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" },
+    "documents": { "type": "array", "items": { "type": "string" } }
   }
 }
 ```
@@ -140,6 +142,15 @@ is the host-owned transcript, the session is the agent's own working state.
 A `session_id` the sidecar has never seen (e.g. it restarted mid-conversation
 — the session registry is in-memory) is surfaced as a one-time `status`
 event, never a silent cold start.
+
+### 2.5 Attached documents (schema 2.16)
+
+A relayed agent cannot see the host's session table, so the files a user
+attached to a chat travel in `documents` (#4166). The Agent UI sends them only
+to a flagship at contract ≥ 2.16. Against an older flagship, a chat with
+attached documents stops before the turn with an `agent_error` that says to
+update the agent or remove the documents. Answering without them would read
+as "no documents are indexed" about a file the user can see attached.
 
 ---
 
@@ -663,6 +674,14 @@ does not list them. A plain progress `status` omits them.
 | `lemonade_reachable` | bool | Whether the local Lemonade server answered a health check. It is reported even for a remote chat model, because embeddings still run on Lemonade. A receiver must tell a missing field (an older agent) apart from `false`. |
 | `lemonade_version` | string? | The Lemonade version, when the health check reported one. |
 | `lemonade_base_url` | string | The Lemonade URL that was probed. |
+
+A turn whose history no longer fits the model's context sends one more `status`
+before it starts: `history_cut` is `{"turns": N, "tokens": T}`, the completed
+turns (and their estimated tokens) no longer replayed to the model, and
+`message` is the line the TUI keeps in the transcript. It is sent only when more
+turns are hidden than in the last reported view (the newest turn moved the cut,
+or a smaller model or longer prompt shrank the budget), so a stable cut is
+reported once.
 
 Over stdio the agent never sends `tool_result.render`,
 `needs_confirmation.confirm_url` or `error.source`. The TUI decodes them for
