@@ -375,14 +375,35 @@ class TestConfig:
         assert config["broadcast"] is False
         assert config["auto_evict"] is False
 
-    def test_a_stale_no_fetch_executables_is_stripped(self, manager):
+    def test_a_stale_no_fetch_executables_is_stripped_loudly(self, manager, caplog):
         manager.config_dir.mkdir(parents=True, exist_ok=True)
         path = manager.config_dir / "config.json"
         path.write_text(json.dumps({"no_fetch_executables": True}), encoding="utf-8")
 
-        config = json.loads(manager.write_config().read_text(encoding="utf-8"))
+        with caplog.at_level("WARNING"):
+            config = json.loads(manager.write_config().read_text(encoding="utf-8"))
 
         assert "no_fetch_executables" not in config
+        assert "no_fetch_executables" in caplog.text
+
+    def test_a_failed_write_keeps_the_old_config_and_no_temp_file(
+        self, manager, monkeypatch
+    ):
+        manager.config_dir.mkdir(parents=True, exist_ok=True)
+        path = manager.config_dir / "config.json"
+        original = json.dumps({"cloud_providers": [{"name": "fireworks"}]})
+        path.write_text(original, encoding="utf-8")
+
+        def _replace_fails(src, dst):
+            raise PermissionError("locked")
+
+        monkeypatch.setattr("gaia.llm.lemonade_embedded.os.replace", _replace_fails)
+
+        with pytest.raises(PermissionError):
+            manager.write_config()
+
+        assert path.read_text(encoding="utf-8") == original
+        assert list(manager.config_dir.glob("*.tmp")) == []
 
     @pytest.mark.parametrize("content", ["{ not json", "[1, 2]"])
     def test_unusable_existing_config_is_replaced_loudly(

@@ -690,11 +690,22 @@ class EmbeddedLemonade:
         # moves the request budget with it rather than leaving a stale number.
         merged = {**existing, **_lemond_config()}
         for key in _LEMOND_STRIPPED_KEYS:
-            merged.pop(key, None)
+            if key in merged:
+                log.warning(
+                    "Removing %s=%r from %s: GAIA's embedded Lemonade needs it "
+                    "unset to list its full model catalogue and install backends",
+                    key,
+                    merged.pop(key),
+                    path,
+                )
         # Atomic: a torn write would lose settings only Lemonade can recreate.
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(merged, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        try:
+            tmp.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
         self._pin_llamacpp_backends()
         return path
 
