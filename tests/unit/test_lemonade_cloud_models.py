@@ -187,7 +187,7 @@ def test_discovered_custom_cloud_avoids_local_load(client):
 @pytest.mark.parametrize(
     "status,remedy",
     [
-        (401, "Reconnect"),
+        (401, "Run /provider"),
         (403, "model access"),
         (404, "deployed model"),
         (429, "Wait before retrying"),
@@ -207,7 +207,7 @@ def test_cloud_error_never_echoes_upstream_body(client, status, remedy, caplog):
     with pytest.raises(LemonadeClientError) as error:
         client.chat_completions("fireworks.gemma-4-31b-it", [])
     assert str(status) in str(error.value)
-    assert "provider settings" in str(error.value)
+    assert "TUI" in str(error.value)
     assert remedy in str(error.value)
     assert reflected_key not in str(error.value)
     assert reflected_key not in caplog.text
@@ -424,7 +424,7 @@ def test_model_availability_does_not_hide_programming_errors(client, monkeypatch
 @pytest.mark.parametrize(
     "status,remedy",
     [
-        (401, "Reconnect"),
+        (401, "Run /provider"),
         (403, "model access"),
         (404, "deployed model"),
         (429, "Wait before retrying"),

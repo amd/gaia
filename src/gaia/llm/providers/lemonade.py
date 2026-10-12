@@ -13,6 +13,7 @@ from ..lemonade_client import (
     CONTEXT_OVERFLOW_PHRASES,
     CONVERSATION_SLOT,
     DEFAULT_MODEL_NAME,
+    LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
     active_profile_ctx_size,
@@ -293,8 +294,8 @@ class LemonadeAuthRejectedError(LemonadeError):
 
     retryable = False
     user_message = (
-        "The request was rejected as unauthorized. Reconnect the provider in "
-        "the TUI provider settings, or verify LEMONADE_API_KEY."
+        "The request was rejected as unauthorized. Run /provider in the TUI "
+        "to reconnect the provider, or verify LEMONADE_API_KEY."
     )
 
 
@@ -416,6 +417,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         seen.add(id(cur))
         if isinstance(cur, LemonadeError):
             return cur
+        if isinstance(cur, LemonadeAuthError):
+            return LemonadeAuthRejectedError(user_message=str(cur))
         chain_text.append(str(cur))
         cur = cur.__cause__ or cur.__context__
 
@@ -428,11 +431,13 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     )
     if refused:
         return LemonadeCloudAccountError(user_message=refused.group(0).strip())
-    # Wording from ``lemonade_client`` for a cloud 401/403 and a local 401,
-    # searched down the chain: AgentSDK may wrap the auth error with ``from``.
+    # A ``LemonadeAuthError`` flattened to text by a wrapper; stop at the sentence
+    # naming LEMONADE_API_KEY so a wrapper's own trailing advice is dropped.
     rejected = re.search(
         r"(?:cloud authentication or access was denied \(http 40[13]\)"
-        r"|lemonade returned 401 unauthorized)[^\n]*",
+        r"|lemonade returned 401 unauthorized"
+        r"|lemonade rejected the api key \(401 unauthorized\))"
+        r"[^\n]*?lemonade_api_key[^\n.]*\.",
         "\n".join(chain_text),
         re.IGNORECASE,
     )

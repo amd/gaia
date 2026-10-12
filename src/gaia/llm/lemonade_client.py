@@ -1720,7 +1720,7 @@ def _cloud_request_error(
     if status in {401, 403}:
         return LemonadeAuthError(
             f"Cloud authentication or access was denied (HTTP {status}). "
-            "Reconnect the provider in the TUI provider settings and check "
+            "Run /provider in the TUI to reconnect the provider, and check "
             "your account's model access. If Lemonade itself requires "
             "authentication, verify LEMONADE_API_KEY."
         )

@@ -21,6 +21,8 @@ timeout case correctly.
 
 from __future__ import annotations
 
+import pytest
+
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_LOAD_TIMEOUT,
     LemonadeAuthError,
@@ -282,7 +284,8 @@ def test_rejected_key_is_not_retryable_and_keeps_its_remedy() -> None:
         assert err.user_message.startswith(
             f"Cloud authentication or access was denied (HTTP {status})"
         )
-        assert "Reconnect the provider" in err.user_message
+        assert "/provider" in err.user_message
+        assert err.user_message.endswith("verify LEMONADE_API_KEY.")
 
 
 def test_agent_says_reconnect_not_try_again_for_a_rejected_key() -> None:
@@ -302,19 +305,50 @@ def test_agent_says_reconnect_not_try_again_for_a_rejected_key() -> None:
     except RuntimeError as outer:
         msg = agent._extract_lemonade_user_message(outer)
     assert msg is not None
-    assert "Reconnect the provider" in msg
+    assert "/provider" in msg
     assert "temporary" not in msg
 
 
-def test_local_lemonade_401_names_the_api_key() -> None:
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Lemonade returned 401 Unauthorized for /chat/completions. "
+        "Verify LEMONADE_API_KEY is correct (currently set).",
+        # The streaming path, which the Agent UI and CLI take.
+        "Lemonade rejected the API key (401 Unauthorized) on "
+        "streaming chat completions. Verify LEMONADE_API_KEY is correct.",
+        "Lemonade rejected the API key (401 Unauthorized) on "
+        "streaming text completions. Verify LEMONADE_API_KEY is correct.",
+    ],
+)
+def test_local_lemonade_401_names_the_api_key(message: str) -> None:
+    # Typed, flattened to text, and chained under a wrapper: all three reach it.
+    flattened = RuntimeError(f"Error in send_messages: {message}")
+    try:
+        raise RuntimeError("Error in send_messages") from LemonadeAuthError(message)
+    except RuntimeError as outer:
+        chained = outer
+    for exc in (LemonadeAuthError(message), flattened, chained):
+        err = _classify_chat_exception(exc)
+        assert isinstance(err, LemonadeAuthRejectedError)
+        assert err.retryable is False
+        assert err.user_message == message
+
+
+def test_rejected_key_headline_drops_a_wrapper_s_trailing_advice() -> None:
     err = _classify_chat_exception(
-        LemonadeAuthError(
-            "Lemonade returned 401 Unauthorized for /chat/completions. "
-            "Verify LEMONADE_API_KEY is correct (currently set)."
+        RuntimeError(
+            "Failed to load model 'Gemma-4-E4B-it-GGUF': Lemonade returned 401 "
+            "Unauthorized. Verify LEMONADE_API_KEY is correct (currently set). "
+            "Check that the model is available and the Lemonade server has "
+            "enough memory."
         )
     )
     assert isinstance(err, LemonadeAuthRejectedError)
-    assert "LEMONADE_API_KEY" in err.user_message
+    assert err.user_message == (
+        "Lemonade returned 401 Unauthorized. "
+        "Verify LEMONADE_API_KEY is correct (currently set)."
+    )
 
 
 # ── Agent loop: typed-message surfacing (no generic "try again" wrapper) ─
@@ -484,8 +518,6 @@ def test_agent_extract_lemonade_user_message_typed_in_cycle() -> None:
 # classify as NOT corrupt and surface as an actionable error.
 
 from unittest.mock import patch
-
-import pytest
 
 from gaia.llm.lemonade_client import (
     LemonadeClient,
