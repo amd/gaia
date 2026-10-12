@@ -262,7 +262,8 @@ _classify_chat_exception = classify_lemonade_exception
 # ── Auto-titling ────────────────────────────────────────────────────────────
 #
 # After the agent finishes a turn, kick off a background task that asks the
-# same LLM to generate a 3-6 word title summarising the conversation, then
+# same LLM (the default chat model if that one is a safety classifier) to
+# generate a 3-6 word title summarising the conversation, then
 # update the session title in the DB. Fires only while the title is still a
 # placeholder ("New Chat" / "New Task" / "Untitled"): once named, a chat keeps
 # its name, so the sidebar never drifts to the latest question. The title is
@@ -281,6 +282,57 @@ _AUTO_TITLE_DEFAULTS = PLACEHOLDER_TITLES
 _AUTO_TITLE_LOCK = threading.Lock()
 _AUTO_TITLE_LAST_AT: dict[str, float] = {}  # session_id -> monotonic ts
 _AUTO_TITLE_THROTTLE_S = 30.0
+
+
+#: Safety-classifier model families. They answer any prompt with a verdict
+#: ("safe" / "unsafe S1" / "Yes"), never a title, and Lemonade's catalog has
+#: no label marking them, so they are matched by name.
+_GUARD_MODEL_NAME_PATTERNS = (
+    "llama-guard",
+    "llamaguard",
+    "prompt-guard",
+    "qwen3guard",
+    "wildguard",
+    "nemoguard",
+    "shieldgemma",
+    "granite-guardian",
+)
+#: First lines a classifier gives instead of a title.
+_CLASSIFIER_VERDICT_RE = _re.compile(
+    r"^(safe|unsafe|yes|no)([\s,:]+s\d+)*$", _re.IGNORECASE
+)
+_QUESTION_TITLE_MAX_CHARS = 60
+
+
+def _is_guard_model(model_id: str) -> bool:
+    """True for a safety-classifier model, which cannot write a title."""
+    name = model_id.lower().replace("_", "-")
+    return any(pattern in name for pattern in _GUARD_MODEL_NAME_PATTERNS)
+
+
+def _title_model_for(session_model: str) -> str:
+    """The model that writes the title: the session's, unless it is a guard model."""
+    if not _is_guard_model(session_model):
+        return session_model
+    from gaia.llm.lemonade_client import resolve_default_chat_model
+
+    title_model = resolve_default_chat_model()
+    logger.info(
+        "Auto-title: %s is a safety classifier; titling with %s instead",
+        session_model,
+        title_model,
+    )
+    return title_model
+
+
+def _title_from_question(user_msg: str) -> Optional[str]:
+    """The first question itself, cut at a word boundary, as a title."""
+    text = " ".join((user_msg or "").split())
+    if len(text) > _QUESTION_TITLE_MAX_CHARS:
+        cut = text[:_QUESTION_TITLE_MAX_CHARS]
+        text = (cut.rsplit(" ", 1)[0] or cut) + "…"
+    text = text.rstrip(".!?;:,").strip()
+    return text or None
 
 
 def _should_retitle(current_title: str, title_is_custom: bool = False) -> bool:
@@ -302,7 +354,9 @@ async def _generate_session_title(
     """Call Lemonade chat completions to produce a short tab-style title.
 
     Returns the cleaned title (≤ 64 chars, no quotes, no trailing
-    punctuation) or None on an HTTP or parse failure.  Times out at 30 s so a hung
+    punctuation) or None on an HTTP or parse failure.  An empty reply or a
+    classifier verdict ("safe", "unsafe S1") yields the first question instead,
+    with a warning.  Times out at 30 s so a hung
     LLM doesn't keep the background task alive forever.
     """
     import httpx  # pylint: disable=import-outside-toplevel
@@ -359,7 +413,15 @@ async def _generate_session_title(
             for prefix in ("title:", "tab:", "summary:"):
                 if title.lower().startswith(prefix):
                     title = title[len(prefix) :].strip()
-            return title[:64] if title else None
+            if not title or _CLASSIFIER_VERDICT_RE.match(title):
+                logger.warning(
+                    "Auto-title: %s replied %r, not a title; "
+                    "titling from the first question instead",
+                    model_id,
+                    content[:80],
+                )
+                return _title_from_question(user_msg)
+            return title[:64]
     except (httpx.HTTPError, ValueError, LookupError, AttributeError) as exc:
         logger.debug("Auto-title LLM call failed: %s", exc)
         return None
@@ -424,7 +486,7 @@ async def _maybe_update_session_title(
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
     new_title = await _generate_session_title(
         base_url=base_url,
-        model_id=model_id,
+        model_id=_title_model_for(model_id),
         user_msg=user_msg,
         assistant_msg=assistant_msg,
     )
@@ -1246,6 +1308,13 @@ def _session_mail_provider(session: dict) -> str | None:
 # before the first POST.
 
 
+_RELAY_CONTEXT_PAIRS = 5
+
+# Last history view per in-process chat session, so a model switch that hides
+# more turns is announced too.
+_history_cuts: dict = {}
+
+
 def _query_context_from_history(history_pairs: list) -> list[dict]:
     """Flatten (user, assistant) history pairs into ``QueryContextItem``-shaped
     dicts for the sidecar's ``/query`` request body (#2109).
@@ -1254,10 +1323,9 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     email session's context window stays comparable: last 5 pairs, 2000 chars
     per turn.
     """
-    _MAX_PAIRS = 5
     _MAX_CHARS = 2000
     context: list[dict] = []
-    for user_msg, assistant_msg in history_pairs[-_MAX_PAIRS:]:
+    for user_msg, assistant_msg in history_pairs[-_RELAY_CONTEXT_PAIRS:]:
         u = user_msg[:_MAX_CHARS]
         a = assistant_msg[:_MAX_CHARS]
         if len(assistant_msg) > _MAX_CHARS:
@@ -1267,9 +1335,16 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     return context
 
 
-def _restore_model_history(agent, db, session_id: str, query: str) -> None:
-    """Reserve the current prompt and output before admitting completed turns."""
+def _restore_model_history(
+    agent, db, session_id: str, query: str, sse_handler=None
+) -> None:
+    """Reserve the current prompt and output before admitting completed turns.
+
+    With *sse_handler*, a turn that pushes older turns out of the model's view
+    streams a ``history_cut`` status so the chat can say so.
+    """
     from gaia.agents.base.history import (
+        CutReporter,
         history_budget,
         select_history,
         text_tool_history,
@@ -1282,7 +1357,30 @@ def _restore_model_history(agent, db, session_id: str, query: str) -> None:
         and not agent._uses_native_tool_calls()
     ):
         turns = text_tool_history(turns)
-    agent.conversation_history = select_history(turns, history_budget(agent, query))
+
+    def on_cut(cut):
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": cut.notice,
+                "turns": cut.turns,
+                "tokens": cut.tokens,
+            }
+        )
+
+    agent.conversation_history = select_history(
+        turns,
+        history_budget(agent, query),
+        on_cut if sse_handler is not None else None,
+        # Only streamed turns move the baseline, so a cut made while nobody
+        # could be told is announced on the next streamed turn.
+        (
+            _history_cuts.setdefault(session_id, CutReporter())
+            if sse_handler is not None
+            else None
+        ),
+    )
 
 
 def _probe_is_only_unreachable(init_body: dict | None) -> bool:
@@ -1491,6 +1589,24 @@ def _dispatch_sidecar_query(
         return
 
     context = _query_context_from_history(history_pairs)
+    if len(history_pairs) == _RELAY_CONTEXT_PAIRS + 1:
+        from gaia.agents.base.turn_metrics import count_tokens
+
+        # The window slides from here on; say so once, when it first does.
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": (
+                    "Older messages are now out of the model's view: this agent "
+                    f"sees the last {_RELAY_CONTEXT_PAIRS} exchanges of the chat."
+                ),
+                "turns": 1,
+                "tokens": count_tokens(
+                    json.dumps(list(history_pairs[0]), ensure_ascii=False)
+                ),
+            }
+        )
     from gaia.ui.email_sidecar.profiles import full_access_supported
 
     relay_query(
@@ -2592,7 +2708,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
 
-                _restore_model_history(agent, db, session_id, request.message)
+                _restore_model_history(
+                    agent, db, session_id, request.message, sse_handler
+                )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():

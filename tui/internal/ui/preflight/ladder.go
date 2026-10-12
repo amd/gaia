@@ -21,13 +21,15 @@ type Diagnosis struct {
 	Remedy string
 	// Command is the exact command that fixes it, or "" when there is none.
 	Command string
+	// PowerShell is Command for PowerShell, set only when the two differ.
+	PowerShell string
 	// Where names the log, file, or page to read next.
 	Where string
 }
 
 // AsRemedy converts a diagnosis into a row remedy.
 func (d Diagnosis) AsRemedy() Remedy {
-	return Remedy{Action: d.Remedy, Command: d.Command, Where: d.Where}
+	return Remedy{Action: d.Remedy, Command: d.Command, PowerShell: d.PowerShell, Where: d.Where}
 }
 
 // withRemedy is the inverse: a cause plus an already-built Remedy. It exists so
@@ -35,7 +37,10 @@ func (d Diagnosis) AsRemedy() Remedy {
 // what is installed) is built in one place and reused by both the ladder and the
 // rows, instead of each spelling out a command of its own.
 func withRemedy(cause string, r Remedy) Diagnosis {
-	return Diagnosis{Cause: cause, Remedy: r.Action, Command: r.Command, Where: r.Where}
+	return Diagnosis{
+		Cause: cause, Remedy: r.Action, Command: r.Command,
+		PowerShell: r.PowerShell, Where: r.Where,
+	}
 }
 
 // String is the one-line form, for logs and for chat's mid-run error line.
@@ -44,8 +49,8 @@ func (d Diagnosis) String() string {
 	if d.Remedy != "" {
 		parts = append(parts, d.Remedy)
 	}
-	if d.Command != "" {
-		parts = append(parts, "run: "+d.Command)
+	for _, c := range shellCommands(d.Command, d.PowerShell) {
+		parts = append(parts, c.Label()+" "+c.Line)
 	}
 	if d.Where != "" {
 		parts = append(parts, "look: "+d.Where)

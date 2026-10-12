@@ -92,6 +92,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
+		// Kept in the transcript, not the live line: it explains later answers.
+		if e.HistoryCut != nil {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: truncateRunes(clean(e.Message), narrationMax),
+			})
+			break
+		}
+
 		// A phase report drives the live line and nothing else: it is not
 		// narration, so it never lands in the work log.
 		if e.Phase != "" {
