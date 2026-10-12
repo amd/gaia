@@ -104,6 +104,51 @@ def test_a_turn_waits_for_the_running_warm_up(monkeypatch):
     assert waited.is_set()
 
 
+class _NoAgentsRegistry:
+    """A registry with the flagship registered that must never be built."""
+
+    def get(self, name):
+        return object()
+
+    def resolve_model(self, name):
+        return None
+
+    def create_agent(self, *args, **kwargs):
+        raise AssertionError("a skipped warm-up must not build the agent")
+
+
+class _EmptyDb:
+    def get_setting(self, key, default=None):
+        return default
+
+
+def test_a_catalog_cloud_model_is_never_warmed(monkeypatch):
+    """A cloud model only the catalog names (no built-in prefix) costs nothing."""
+    from gaia.llm import lemonade_client
+    from gaia.ui import _chat_helpers as chat
+
+    model = "acme.big-model"
+    monkeypatch.setattr(chat, "_agent_registry", _NoAgentsRegistry())
+    monkeypatch.setattr("gaia.ui.database.resolved_default_model", lambda: model)
+
+    def catalog(self, name):
+        monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {model: {}})
+        return {"id": name, "downloaded": True}
+
+    monkeypatch.setattr(lemonade_client.LemonadeClient, "get_model_info", catalog)
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {})
+    assert warmup._warm_new_chat_prefix(_EmptyDb()) is None
+
+
+def test_the_eval_cloud_provider_is_never_warmed(monkeypatch):
+    from gaia.ui import _chat_helpers as chat
+
+    monkeypatch.setenv("GAIA_EVAL_AGENT_PROVIDER", "claude")
+    monkeypatch.setenv("GAIA_EVAL_CLAUDE_MODEL", "claude-sonnet-5")
+    monkeypatch.setattr(chat, "_agent_registry", _NoAgentsRegistry())
+    assert warmup._warm_new_chat_prefix(_EmptyDb()) is None
+
+
 # ── Exact prefix ────────────────────────────────────────────────────────────
 
 _DIM = 768

@@ -8,8 +8,9 @@ renders the same prefix, so building the flagship the way a new chat does and
 running its :meth:`~gaia.agents.base.agent.Agent.warm_up` leaves that prefix in
 Lemonade's cache and the first real question only reads its own words.
 
-One warm-up runs at a time, and never while a chat turn is running: both would
-share Lemonade's single slot. A turn that starts mid-warm-up waits for it
+One warm-up runs at a time, and never starts while a streamed chat turn is
+running: both would share Lemonade's single slot (a non-streaming turn is not
+tracked, so it can overlap). A turn that starts mid-warm-up waits for it
 (:func:`wait_for_warm_up`) instead of reading the prefix a second time.
 """
 
@@ -135,14 +136,29 @@ def _warm_new_chat_prefix(db) -> Optional[Dict[str, Any]]:
     not downloaded yet (loading it would start a download nobody asked for),
     or no flagship registered.
     """
-    from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
+    from gaia.llm.lemonade_client import LemonadeClient
     from gaia.ui import _chat_helpers as chat
     from gaia.ui.database import resolved_default_model
 
+    if chat._eval_provider_kwargs():
+        logger.info("Warm-up skipped: chat turns run on a cloud provider")
+        return None
     registry = chat.get_agent_registry()
     if registry is None or registry.get(NEW_CHAT_AGENT) is None:
         logger.info("Warm-up skipped: the %s agent is not registered", NEW_CHAT_AGENT)
         return None
+    client = LemonadeClient(verbose=False)
+
+    def skip_reason(model: Optional[str]) -> Optional[str]:
+        # The catalog read comes first: it is what teaches the cloud check
+        # about providers beyond the built-in ones.
+        downloaded = client.get_model_info(model)["downloaded"]
+        if chat._ui_cloud_provider(model):
+            return "runs in the cloud"
+        if not downloaded:
+            return "is not downloaded yet"
+        return None
+
     # What ChatDatabase.create_session stores for a chat the user just opened.
     session = {
         "model": resolved_default_model(),
@@ -153,14 +169,9 @@ def _warm_new_chat_prefix(db) -> Optional[Dict[str, Any]]:
     model_id, device_ctx = chat.resolve_session_model(
         session, NEW_CHAT_AGENT, custom_model, registry
     )
-    if model_id and cloud_model_provider(model_id):
-        logger.info("Warm-up skipped: %s runs in the cloud", model_id)
-        return None
-    if (
-        model_id
-        and not LemonadeClient(verbose=False).get_model_info(model_id)["downloaded"]
-    ):
-        logger.info("Warm-up skipped: %s is not downloaded yet", model_id)
+    reason = skip_reason(model_id) if model_id else None
+    if reason:
+        logger.info("Warm-up skipped: %s %s", model_id, reason)
         return None
 
     agent = registry.create_agent(
@@ -182,9 +193,19 @@ def _warm_new_chat_prefix(db) -> Optional[Dict[str, Any]]:
         ),
     )
     try:
+        # An omitted model_id lets the agent pick its own default: check that one.
+        effective = chat._effective_model(agent, model_id)
+        if not effective:
+            logger.info("Warm-up skipped: the %s agent has no model", NEW_CHAT_AGENT)
+            return None
+        if effective != model_id:
+            reason = skip_reason(effective)
+            if reason:
+                logger.info("Warm-up skipped: %s %s", effective, reason)
+                return None
         # The turn's own pre-flight: load at the ctx a turn expects, or the
         # first turn reloads the model and the primed cache goes with it.
-        chat._maybe_load_expected_model(chat._effective_model(agent, model_id))
+        chat._maybe_load_expected_model(effective)
         return agent.warm_up()
     finally:
         close = getattr(agent, "close", None)
