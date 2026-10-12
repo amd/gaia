@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Smartphone, Copy, Check } from 'lucide-react';
 import type { TunnelStatus } from '../types';
 import * as api from '../services/api';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { log } from '../utils/logger';
 import './MobileAccessModal.css';
 
@@ -24,6 +25,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
     const [copied, setCopied] = useState(false);
     const [qrError, setQrError] = useState<string | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    useEscapeToClose(isOpen, onClose);
 
     // Fetch current tunnel status using centralized API client
     const fetchStatus = useCallback(async () => {

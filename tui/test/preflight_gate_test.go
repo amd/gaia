@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -57,6 +58,11 @@ type gateTransport struct {
 	ensures  int
 	healths  int
 	searches int
+
+	// startErr and ensureErr make the daemon or agent start fail, the way a
+	// machine without `gaia` on PATH would.
+	startErr  error
+	ensureErr error
 
 	// lemonadeStarts counts POST /daemon/v1/lemonade/start. lemonadeStartErr is
 	// what that call answers; onLemonadeStart lets a test repair initBody the
@@ -119,12 +125,18 @@ func (g *gateTransport) Attach(context.Context) (preflight.DaemonInfo, error) {
 
 func (g *gateTransport) Start(ctx context.Context) (preflight.DaemonInfo, error) {
 	g.starts++
+	if g.startErr != nil {
+		return preflight.DaemonInfo{}, g.startErr
+	}
 	g.attachErr = nil
 	return g.Attach(ctx)
 }
 
 func (g *gateTransport) EnsureAgent(context.Context, string) error {
 	g.ensures++
+	if g.ensureErr != nil {
+		return g.ensureErr
+	}
 	g.agentState = "running"
 	return nil
 }
@@ -579,34 +591,62 @@ func TestTheMailboxIsNotReadWhenAnEarlierRowFailed(t *testing.T) {
 
 // `f` on a stopped sidecar is the gate's most-used fix. Root has to carry the
 // fix's result back to it, or the screen spins forever on work that finished.
-func TestFixingAStoppedSidecarFromTheGateReachesChat(t *testing.T) {
+func TestAStoppedSidecarIsStartedWithoutAKeypress(t *testing.T) {
 	g := readyGateTransport()
 	g.agentState = "stopped"
 	d := newRootDriver(t, g, 80, 24)
 	d.launchEmail()
 
-	screen := d.flat()
-	if !strings.Contains(screen, "installed, not started") {
-		t.Fatalf("the gate does not report the stopped sidecar:\n%s", d.screen())
+	if g.ensures != 1 {
+		t.Fatalf("the gate asked the daemon to start the agent %d times, want 1", g.ensures)
 	}
-	if !strings.Contains(screen, "f start the agent") {
-		t.Errorf("the stopped-sidecar row offers no fix:\n%s", d.screen())
+	if got := d.view(); got != "chat" {
+		t.Fatalf("a stopped agent the gate started itself landed on %q, want chat\n%s", got, d.screen())
+	}
+}
+
+// After a reboot nothing is running: the gate starts the daemon, then the agent,
+// and hands off to chat with no keypress in between.
+func TestAfterARebootTheGateStartsTheDaemonAndTheAgent(t *testing.T) {
+	g := readyGateTransport()
+	g.attachErr = &daemon.NotRunningError{Path: "/tmp/instance.json"}
+	g.agentState = "stopped"
+	d := newRootDriver(t, g, 80, 24)
+	d.launchEmail()
+
+	if g.starts != 1 || g.ensures != 1 {
+		t.Fatalf("daemon starts = %d, agent starts = %d, want 1 each", g.starts, g.ensures)
+	}
+	if got := d.view(); got != "chat" {
+		t.Fatalf("the launch landed on %q, want chat\n%s", got, d.screen())
+	}
+}
+
+// A start that fails keeps the row, its remedy and its `f` key — and pressing f
+// once the cause is fixed still reaches chat.
+func TestAFailedAgentStartLeavesTheFixKey(t *testing.T) {
+	g := readyGateTransport()
+	g.agentState = "stopped"
+	g.ensureErr = errors.New("the sidecar binary is missing")
+	d := newRootDriver(t, g, 80, 24)
+	d.launchEmail()
+
+	screen := d.flat()
+	for _, want := range []string{"installed, not started", "f start the agent", "Could not start the Email agent automatically"} {
+		if !strings.Contains(screen, want) {
+			t.Errorf("the screen does not show %q:\n%s", want, d.screen())
+		}
 	}
 
+	g.ensureErr = nil
 	d.send(key("f"))
-	if g.ensures != 1 {
-		t.Fatalf("f asked the daemon to start the agent %d times, want 1", g.ensures)
+	if g.ensures != 2 {
+		t.Fatalf("f asked the daemon to start the agent %d times in total, want 2", g.ensures)
 	}
-	// The fix re-checks and everything else was already green — but a gate that
-	// has just CHANGED something holds for a keypress rather than handing off,
-	// so the user can read what the fix did before chat replaces the screen.
+	// A fix the user asked for holds for enter, so they can read what it did.
 	if got := d.view(); got != "preflight" {
 		t.Fatalf("the gate handed off to %q without letting the fix be read\n%s", got, d.screen())
 	}
-	if !strings.Contains(d.flat(), "enter continue") {
-		t.Errorf("the held gate does not advertise the way on:\n%s", d.screen())
-	}
-
 	d.send(keyEnter())
 	if got := d.view(); got != "chat" {
 		t.Fatalf("enter on the held gate landed on %q, want chat\n%s", got, d.screen())
@@ -868,6 +908,7 @@ func TestEveryGateStateFitsEightyByTwentyFour(t *testing.T) {
 		{name: "daemon down", build: func() *gateTransport {
 			g := readyGateTransport()
 			g.attachErr = &daemon.NotRunningError{Path: "/tmp/instance.json"}
+			g.startErr = &daemon.StartError{Reason: "the `gaia` CLI is not on PATH"}
 			return g
 		}, wants: []string{"Background service", "not running", "f start it for me", "esc back"}},
 	}

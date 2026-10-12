@@ -512,6 +512,8 @@ func (s *Server) handleScreen(w http.ResponseWriter, r *http.Request) {
 		"rows":   rows,
 		"lines":  countLines(screen),
 		"screen": screen,
+		// Cells drawn as a block cursor — invisible in the plain text.
+		"cursors": CursorCells(raw),
 	})
 }
 

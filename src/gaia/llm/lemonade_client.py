@@ -46,6 +46,7 @@ from gaia.ports import (
     listeners_on_port,
     terminate_pid,
 )
+from gaia.utils.terminal import windows_hidden_popen_kwargs
 from gaia.version import parse_version
 
 # For the module-level helpers; the client class keeps its own ``self.log``.
@@ -116,6 +117,14 @@ def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
         if not pid_exists(pid):
             return None
     return state
+
+
+def running_embedded_lemonade_url() -> Optional[str]:
+    """Base URL of GAIA's own server while it runs, else None."""
+    state = _read_embedded_lemonade_state()
+    if state is None:
+        return None
+    return resolve_lemonade_base_url(f"http://{DEFAULT_HOST}:{state['port']}")
 
 
 def _get_lemonade_config() -> tuple:
@@ -2119,6 +2128,10 @@ def _check_disk_space(size_gb: float, free_bytes: int, path: str) -> bool:
 class LemonadeClient:
     """Client for interacting with the Lemonade server REST API."""
 
+    #: True while this client is aimed at GAIA's own server, so it follows that
+    #: server to whatever port and key the daemon last started it with.
+    follows_gaia_lemonade: bool = False
+
     def __init__(
         self,
         model: Optional[str] = None,
@@ -2184,6 +2197,23 @@ class LemonadeClient:
         self.keep_alive = keep_alive
         self._log_file = None
         self.api_key = resolve_lemonade_api_key(api_key, base_url=self.base_url)
+        # GAIA's own server gets a new port and key each time the daemon
+        # (re)starts it. A client aimed at it -- running, or stopped at the
+        # default address -- follows it there.
+        if api_key is not None or configured_lemonade_url() is not None:
+            self.follows_gaia_lemonade = False
+        elif self.api_key is not None:
+            embedded_key = _embedded_lemonade_api_key(self.base_url)
+            self.follows_gaia_lemonade = self.api_key == embedded_key
+        else:
+            # A resolved default URL dates from a restart; the server may be
+            # back on another port already, so it no longer compares equal.
+            self.follows_gaia_lemonade = gaia_runs_lemonade(self.base_url) or (
+                host is None
+                and port is None
+                and self.base_url == DEFAULT_LEMONADE_URL
+                and gaia_runs_lemonade()
+            )
         # Instance-scoped exact-pin ctx override (#1892). Never a class-level
         # default or MODELS mutation — chat/RAG clients sharing this process
         # must keep their own floor semantics.
@@ -2299,6 +2329,49 @@ class LemonadeClient:
         self._stop_listeners(stoppable)
         return foreign
 
+    def current_base_url(self) -> str:
+        """Where this client sends requests now.
+
+        Follows GAIA's own server to the port the daemon last started it on,
+        as every request does; any other server is returned as configured.
+
+        Raises:
+            LemonadeClientError: GAIA's server is gone and the daemon could not
+                start it.
+        """
+        self._follow_gaia_lemonade()
+        return self.base_url
+
+    def credential_base_url(self) -> str:
+        """Where this client may send a cloud provider key.
+
+        While GAIA runs Lemonade itself, only its own running server qualifies:
+        a client resolved during a restart sits at the default port, where some
+        other Lemonade may be listening. Follows GAIA's server first, so a
+        restart in progress is waited out through the daemon.
+
+        Raises:
+            LemonadeClientError: GAIA's server is restarting and is not back
+                yet, or this client points at a server that is not GAIA's.
+        """
+        base_url = self.current_base_url()
+        if not gaia_runs_lemonade():
+            return base_url
+        own = running_embedded_lemonade_url()
+        if base_url == own:
+            return base_url
+        if own is None:
+            raise LemonadeClientError(
+                "GAIA's Lemonade Server is restarting and is not back yet. Try "
+                "again in a moment; if this persists, run `gaia daemon status` "
+                "and check the daemon log."
+            )
+        raise LemonadeClientError(
+            f"{base_url} is not GAIA's Lemonade Server (that runs at {own}), so "
+            "GAIA did not send it a cloud key. To use that server instead, set "
+            "LEMONADE_BASE_URL to it."
+        )
+
     def _start_gaia_lemonade(self) -> None:
         """Have the daemon start GAIA's own server, then point this client at it.
 
@@ -2306,8 +2379,6 @@ class LemonadeClient:
             LemonadeClientError: the daemon could not start it. There is no
                 retry against a system install.
         """
-        from urllib.parse import urlparse
-
         from gaia.daemon.client import ensure_lemonade
         from gaia.daemon.errors import DaemonError
 
@@ -2318,11 +2389,83 @@ class LemonadeClient:
             raise LemonadeClientError(
                 f"Could not start GAIA's Lemonade Server: {e}"
             ) from e
-        self.base_url = served["base_url"]
+        self._point_at_gaia_lemonade(served["base_url"])
+
+    def _point_at_gaia_lemonade(self, base_url: str) -> None:
+        """Talk to GAIA's own server at *base_url*, with the key it recorded."""
+        from urllib.parse import urlparse
+
+        self.base_url = resolve_lemonade_base_url(base_url)
         parsed = urlparse(self.base_url)
         self.host = parsed.hostname or DEFAULT_HOST
         self.port = parsed.port or DEFAULT_PORT
         self.api_key = _embedded_lemonade_api_key(self.base_url)
+        self.follows_gaia_lemonade = True
+
+    def _follow_gaia_lemonade(self, model: Optional[str] = None) -> None:
+        """Re-point at GAIA's own server if the daemon restarted it elsewhere.
+
+        A long-lived client (a cached chat agent, a sidecar) otherwise keeps
+        calling the port and key of a server that no longer exists. Clients
+        configured for any other server are left alone. When *model* is a
+        cloud model, the restarted server also gets the kept provider key back.
+
+        Raises:
+            LemonadeClientError: the server is gone and the daemon could not
+                start it; the message names why.
+        """
+        if not self.follows_gaia_lemonade:
+            return
+        state = _read_embedded_lemonade_state()
+        if state is None:
+            self.log.warning(
+                f"GAIA's Lemonade Server at {self.base_url} has stopped; asking "
+                "the GAIA daemon for the server it runs now."
+            )
+            self._start_gaia_lemonade()
+            self.log.info(f"Now using GAIA's Lemonade Server at {self.base_url}")
+            self._replay_cloud_key(model)
+            return
+        recorded_key = state.get("api_key")
+        if isinstance(recorded_key, str):
+            recorded_key = recorded_key.strip()
+        if state["port"] == self.port and recorded_key == self.api_key:
+            return
+        previous = self.base_url
+        self._point_at_gaia_lemonade(f"http://{DEFAULT_HOST}:{state['port']}")
+        self.log.warning(
+            f"GAIA's Lemonade Server moved from {previous} to {self.base_url} "
+            "(the daemon restarted it); following it."
+        )
+        self._replay_cloud_key(model)
+
+    def _replay_cloud_key(self, model: Optional[str]) -> None:
+        """Give a restarted server the kept key for *model*'s cloud provider.
+
+        Lemonade holds cloud keys in memory only, so without this every cloud
+        model 404s until the user relaunches. A failed replay is logged and the
+        turn goes ahead: its own error then names the unavailable model.
+        """
+        from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+        from gaia.llm.gateway import GatewayError
+
+        provider = self.cloud_model_provider(model or self.model or "")
+        if provider not in PROVIDERS:
+            return
+        try:
+            usable = ensure_authenticated(provider, client=self)
+        except (CloudKeyError, GatewayError, requests.RequestException) as e:
+            self.log.warning(
+                f"Could not give the restarted Lemonade Server the kept {provider} "
+                f"key: {e}"
+            )
+            return
+        if not usable:
+            self.log.warning(
+                f"The restarted Lemonade Server still lists no {provider} models; "
+                f"reconnect {provider} in the TUI's /provider panel or the Agent "
+                "UI's Settings > Model."
+            )
 
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
@@ -2420,6 +2563,7 @@ class LemonadeClient:
         popen_env = child_env(spec.env)
         # Own process group, so terminate_server's group kill can't reach the caller.
         session = {} if sys.platform.startswith("win") else {"start_new_session": True}
+        hidden = windows_hidden_popen_kwargs()
 
         if background == "terminal":
             # New console window on Windows; argv-only — a resolved path must
@@ -2442,6 +2586,7 @@ class LemonadeClient:
                     bufsize=1,
                     env=popen_env,
                     **session,
+                    **hidden,
                 )
             except Exception:
                 self._log_file.close()
@@ -2457,6 +2602,7 @@ class LemonadeClient:
                 bufsize=1,
                 env=popen_env,
                 **session,
+                **hidden,
             )
 
             # Print stdout and stderr in real-time only for foreground mode
@@ -2530,6 +2676,7 @@ class LemonadeClient:
                         ],
                         shell=False,
                         check=False,
+                        **windows_hidden_popen_kwargs(),
                     )
                 elif self.server_process.pid:
                     # The server leads its own group, so its pid is the group id;
@@ -3111,6 +3258,7 @@ class LemonadeClient:
           }]
         }
         """
+        self._follow_gaia_lemonade(model)
         if timeout is None:
             # Resolved per call, not as a default argument: GAIA_CTX_SIZE and the
             # device profile can change between calls, and the budget follows them.
@@ -3819,6 +3967,7 @@ class LemonadeClient:
         Returns:
             Dict with 'data' containing list of embedding vectors
         """
+        self._follow_gaia_lemonade()
         try:
             # Ensure input is a list
             if isinstance(input_texts, str):

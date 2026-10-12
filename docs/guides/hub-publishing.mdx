@@ -187,6 +187,14 @@ interfaces:                  # the ways your agent can be used (see "Standalone 
 `download_size_bytes` is **not** yours to set — the server measures it when you
 publish. `permissions` is optional.
 
+`min_gaia_version` is enforced. The hub records it per version, and GAIA installs
+and offers as an update only the newest version whose `min_gaia_version` the user's
+core meets. Publishing a version that needs a newer core leaves users on an older
+core with the last version that runs there, and tells them which core to upgrade
+to. A release candidate (`0.25.0rc1`) does **not** meet `0.25.0`. GAIA releases from
+0.24.1 and earlier ignore the field and always take the newest version, so raise it
+only after the core it names has shipped.
+
 `security_tier` **is** read from your manifest, and it matters. Omit it and you get
 the most restrictive tier (`experimental`), which means users can only install your
 agent by passing an explicit `--trust` opt-in. The value you write is what the hub

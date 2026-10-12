@@ -374,6 +374,21 @@ It reads `.env` (gitignored) or the environment, writes probes under
 still cannot prove the credential works **from GitHub's runners** — a token with
 Client IP Address Filtering passes locally and fails in CI.
 
+### The flagship agent in a core release
+
+`gaia init`, `gaia hub install gaia`, and the Windows setup install the flagship
+agent's `gaia-agent` binary from the Agent Hub and from the pin in
+`hub/agents/gaia/npm/binaries.lock.json`. Only `release_agent_gaia.yml` (tag
+`agent-pkg-gaia-vX.Y.Z`) fills either, so a core release does not rebuild it.
+A final core release therefore fails unless that flagship release was cut from
+the same code: same frozen sources at its tag, its hashes committed to the
+lock, and it is the hub's latest. Check before tagging:
+
+```bash
+git fetch --tags origin
+python util/check_flagship_release.py
+```
+
 ### Release candidates
 
 A release can go out as a candidate first, so testers get the exact build before
@@ -382,8 +397,17 @@ it becomes what `pip install amd-gaia` and the website hand everyone. Tag
 release PR has landed); `publish.yml` runs the usual pipeline, behind the same
 approval, and keeps the result off every stable channel:
 
-- **GitHub** — a pre-release, never marked latest, with the desktop app
-  installers, the terminal binaries, and the wheel attached.
+- **GitHub** — a pre-release, never marked latest, with the one-step Windows
+  setup (`gaia-X.Y.Z-rc.N-win-x64-setup.exe`), the desktop app installers, the
+  terminal binaries, and the wheel attached. If the Windows setup fails to build
+  or fails its smoke test, the pre-release still ships without it, its notes say
+  so, and the run fails.
+- **GAIA agent** — the flagship `gaia-agent` binaries, frozen from the
+  candidate's commit and attached to the pre-release with
+  `gaia-agent-release.json`. The candidate's `gaia init`, `gaia hub install gaia`
+  and Windows setup use these, never the Agent Hub's `gaia`, which can be many
+  commits older. A candidate whose flagship build fails is not published; an
+  install that cannot reach the pre-release's agent fails with the reason.
 - **PyPI** — `X.Y.ZrcN`. `pip install amd-gaia` skips it; `pip install --pre amd-gaia`
   or `amd-gaia==X.Y.ZrcN` gets it.
 - **npm** — `@amd-gaia/agent-ui@X.Y.Z-rc.N` under the `next` dist-tag; `latest`
@@ -391,8 +415,8 @@ approval, and keeps the result off every stable channel:
 - **Website** — a collapsed "Try the release candidate" entry under the stable
   downloads, shown only while the candidate is newer than the latest release.
 - **Not published** — Agent Hub components (the catalog has no pre-release
-  channel), the one-step Windows setup, and the terminal's `.pkg`/`.deb`/`.rpm`
-  packages. No Context7 refresh.
+  channel) and the terminal's `.pkg`/`.deb`/`.rpm` packages, which need a
+  numeric-only version. No Context7 refresh.
 
 The candidate reuses the final's release notes (`docs/releases/vX.Y.Z.mdx`), and
 the `-rcN` suffix is stamped from the tag at build time, so the final `vX.Y.Z`

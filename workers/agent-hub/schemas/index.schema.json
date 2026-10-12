@@ -97,6 +97,11 @@
           "type": "string",
           "description": "Minimum GAIA version (SemVer); empty string when the manifest omits it."
         },
+        "min_gaia_versions": {
+          "type": "object",
+          "description": "Every published version mapped to the oldest GAIA core it runs on (SemVer), or an empty string when that version never recorded one. Clients offer the newest version their core satisfies. Absent on skill entries.",
+          "additionalProperties": { "type": "string" }
+        },
         "permissions": {
           "type": "array",
           "items": { "type": "string" },

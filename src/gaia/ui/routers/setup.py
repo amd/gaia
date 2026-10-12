@@ -28,7 +28,12 @@ def setup_check(skip_chat_model: bool = False, load: bool = False) -> Dict[str, 
         status = check(skip_chat_model=skip_chat_model, load=load)
     except SetupError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    return {**status, "steps": step_labels(skip_chat_model)}
+    # cloud_steps lets the UI show a cloud choice's smaller download before it starts.
+    return {
+        **status,
+        "steps": step_labels(skip_chat_model),
+        "cloud_steps": step_labels(True),
+    }
 
 
 class SetupRunRequest(BaseModel):

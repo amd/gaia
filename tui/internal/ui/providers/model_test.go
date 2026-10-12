@@ -44,6 +44,15 @@ func TestMaskedPasteNeverReachesViewAndClearsOnCancel(t *testing.T) {
 		t.Fatal("cancel retained key")
 	}
 }
+func TestThePanelOpensOnTheCurrentProvider(t *testing.T) {
+	for provider, want := range map[string]string{
+		"amd": "amd", "fireworks": "fireworks", "local": "local", "claude": "local", "": "local",
+	} {
+		if got := New("", 100, 30).WithCurrent(provider).chosen(); got != want {
+			t.Fatalf("WithCurrent(%q) chose %q, want %q", provider, got, want)
+		}
+	}
+}
 func TestProviderScreenOffersAllDestinations(t *testing.T) {
 	m := New("", 100, 30)
 	for _, label := range []string{"Local", "Fireworks AI", "AMD LLM Gateway"} {

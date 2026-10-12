@@ -338,6 +338,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 min_context_size=0,  # Only check reachability — don't trigger model reloads
                 # The selected model, so a cloud pick never seeds a local one.
                 model=db.get_setting("custom_model") or _default_model_name(),
+                # Seeding here would download the model before setup runs.
+                preload=False,
             )
 
         def _import_modules():
@@ -405,6 +407,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             from gaia.ui.routers.system import _default_model_name
 
             model_id = db.get_setting("custom_model") or _default_model_name()
+            # Before the lease: waiting on a sidecar's local load for a cloud
+            # model held the whole UI at "starting" for nothing.
+            if cloud_model_provider(model_id, None):
+                return
 
             # model_load_lock guards other threads in THIS process; the broker
             # lease guards other processes sharing Lemonade's single slot
@@ -431,9 +437,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                         model_id,
                     )
 
-                if cloud_model_provider(model_id, None):
-                    return  # cloud models are never loaded locally
-                LemonadeClient(verbose=False).load_model(
+                client = LemonadeClient(verbose=False)
+                # A boot preload must never start a multi-GB download the
+                # user did not ask for (setup may be about to pick a cloud model).
+                if not client.get_model_info(model_id)["downloaded"]:
+                    logger.info(
+                        "Model preload: %s is not downloaded; skipping the boot "
+                        "preload (setup or the first chat downloads it)",
+                        model_id,
+                    )
+                    return
+                client.load_model(
                     model_id, ctx_size=resolve_ctx_size(model_id), prompt=False
                 )
 
@@ -933,6 +947,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 def main():
     """Run the Agent UI server."""
     import argparse
+
+    from gaia.tls import use_os_trust_store
+
+    use_os_trust_store()
 
     import uvicorn
 

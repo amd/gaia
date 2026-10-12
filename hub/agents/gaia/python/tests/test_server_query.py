@@ -609,6 +609,89 @@ def test_cancelling_a_live_run_reports_it_stopped(built, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# A turn sent right after Stop
+#
+# A stopped turn keeps its session's run lock until its in-flight model call
+# returns. The next message used to get 409 for that whole time, so the user
+# hit Stop, asked again, and was told the chat was busy until the stopped
+# answer would have finished.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def parked_session(built, monkeypatch):
+    """A retained session whose first turn is parked until ``gate`` is set."""
+    client, agents = built
+    gate = threading.Event()
+
+    def build(**kw):
+        agent = _ScriptedAgent(**kw)
+        agent.block = gate
+        agents.append(agent)
+        return agent
+
+    monkeypatch.setattr(sr, "build_session_agent", build)
+    session_id = f"s-{uuid.uuid4()}"
+    first_run = str(uuid.uuid4())
+    results: dict = {}
+
+    def post(name, run_id):
+        results[name] = client.post(
+            "/v1/gaia/query", json=_body(session_id=session_id, run_id=run_id)
+        )
+
+    first = threading.Thread(target=post, args=("first", first_run), daemon=True)
+    first.start()
+    assert _wait_until(lambda: server_mod._registry.get(first_run) is not None)
+    try:
+        yield client, session_id, first_run, gate, post, results
+    finally:
+        gate.set()
+        first.join(timeout=10)
+
+
+def test_a_turn_sent_after_stop_waits_for_the_stopped_one(parked_session):
+    client, _session_id, first_run, gate, post, results = parked_session
+
+    assert client.post(f"/v1/gaia/query/{first_run}/cancel").json()["cancelled"]
+    second = threading.Thread(
+        target=post, args=("second", str(uuid.uuid4())), daemon=True
+    )
+    second.start()
+    second.join(timeout=0.5)
+    assert second.is_alive(), "the new turn must wait, not fail, while Stop lands"
+
+    gate.set()
+    second.join(timeout=10)
+
+    assert results["second"].status_code == 200, results["second"].text
+    assert _terminals(results["second"]) == [
+        {"type": "final", "answer": "answered: hello"}
+    ], _events(results["second"])
+
+
+def test_a_turn_sent_while_one_is_live_is_still_refused(parked_session):
+    client, session_id, _first_run, _gate, _post, _results = parked_session
+
+    r = client.post("/v1/gaia/query", json=_body(session_id=session_id))
+
+    assert r.status_code == 409, r.text
+    assert "already running a turn" in r.json()["detail"]
+
+
+def test_a_stopped_turn_that_never_ends_is_not_waited_on_forever(
+    parked_session, monkeypatch
+):
+    client, session_id, first_run, _gate, _post, _results = parked_session
+    monkeypatch.setattr(server_mod, "STOPPED_TURN_WAIT_S", 0.2)
+
+    client.post(f"/v1/gaia/query/{first_run}/cancel")
+    r = client.post("/v1/gaia/query", json=_body(session_id=session_id))
+
+    assert r.status_code == 409, r.text
+
+
+# ---------------------------------------------------------------------------
 # Inference backend
 # ---------------------------------------------------------------------------
 #

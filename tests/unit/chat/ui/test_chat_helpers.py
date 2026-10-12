@@ -976,8 +976,7 @@ class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
 # replaced by the auto-retitler; placeholder titles ("New Task"/"New Chat"/
 # empty) must still be auto-titled on the first substantive message.
 
-# Long + zero word-overlap with any title used below → would trigger the
-# topic-shift pass if the pin didn't hold.
+# A later question unrelated to any title used below.
 _SHIFT_MSG = "please summarize quarterly revenue figures across all the divisions"
 
 
@@ -990,60 +989,41 @@ class TestShouldRetitle:
     def test_placeholder_titles_are_retitled(self, placeholder):
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert _should_retitle(placeholder, "hi") is True
+        assert _should_retitle(placeholder) is True
 
     def test_custom_title_never_retitled(self):
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert (
-            _should_retitle("My Research Project", _SHIFT_MSG, title_is_custom=True)
-            is False
-        )
-
-    def test_custom_flag_pins_across_multiple_turns(self):
-        from gaia.ui._chat_helpers import _should_retitle
-
-        turns = [
-            _SHIFT_MSG,
-            "now write me a haiku about mountains and rivers flowing",
-            "explain the difference between tcp and udp networking protocols",
-        ]
-        for msg in turns:
-            assert (
-                _should_retitle("Weekly Standup Notes", msg, title_is_custom=True)
-                is False
-            )
+        assert _should_retitle("My Research Project", title_is_custom=True) is False
 
     def test_custom_flag_pins_even_placeholder_lookalike(self):
         """A pinned title wins even if its text happens to be a placeholder."""
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert _should_retitle("New Chat", _SHIFT_MSG, title_is_custom=True) is False
+        assert _should_retitle("New Chat", title_is_custom=True) is False
 
-    def test_auto_generated_title_still_topic_shifts(self):
-        """Non-pinned (auto-generated) titles keep the topic-shift pass."""
+    def test_auto_generated_title_is_kept_on_topic_shift(self):
+        """Once auto-named, a chat keeps its name when the topic changes."""
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert (
-            _should_retitle("Python Sorting Help", _SHIFT_MSG, title_is_custom=False)
-            is True
-        )
+        assert _should_retitle("Python Sorting Help", title_is_custom=False) is False
 
     def test_eval_titles_never_retitled(self):
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert _should_retitle("Eval: rag_quality run 3", _SHIFT_MSG) is False
+        assert _should_retitle("Eval: rag_quality run 3") is False
 
 
 class TestMaybeUpdateSessionTitleHonorsPin:
     """_maybe_update_session_title must read the session's title_is_custom
     flag and skip pinned sessions without calling the LLM or the DB."""
 
-    def _run(self, session, msg=_SHIFT_MSG):
+    def _run(self, session, msg=_SHIFT_MSG, history=()):
         from gaia.ui import _chat_helpers as ch
 
         db = MagicMock()
         db.get_session.return_value = session
+        db.get_messages.return_value = list(history)
         gen = AsyncMock(return_value="LLM Title")
         with (
             patch.object(ch, "_generate_session_title", gen),
@@ -1066,10 +1046,30 @@ class TestMaybeUpdateSessionTitleHonorsPin:
         gen.assert_not_awaited()
         db.update_session.assert_not_called()
 
+    def test_auto_named_session_is_not_renamed_by_a_later_turn(self):
+        db, gen = self._run(
+            {"id": "auto-2", "title": "Python Sorting Help", "title_is_custom": 0}
+        )
+        gen.assert_not_awaited()
+        db.update_session.assert_not_called()
+
     def test_placeholder_session_is_retitled(self):
         db, gen = self._run({"id": "auto-1", "title": "New Task", "title_is_custom": 0})
         gen.assert_awaited_once()
         db.update_session.assert_called_once_with("auto-1", title="LLM Title")
+
+    def test_stopped_first_turn_still_names_the_chat(self):
+        """A first turn stopped before any reply still supplies the title."""
+        db, gen = self._run(
+            {"id": "auto-3", "title": "New Chat", "title_is_custom": 0},
+            history=[
+                {"role": "user", "content": "plan a trip to Lisbon"},
+                {"role": "user", "content": _SHIFT_MSG},
+                {"role": "assistant", "content": "assistant reply"},
+            ],
+        )
+        assert gen.await_args.kwargs["user_msg"] == "plan a trip to Lisbon"
+        assert gen.await_args.kwargs["assistant_msg"] == ""
 
 
 class TestSessionTitleRequest:
@@ -1103,6 +1103,87 @@ class TestSessionTitleRequest:
         assert "chat_template_kwargs" not in self._sent_body("Gemma-4-E4B-it-GGUF")
 
 
+class TestGuardModelTitles:
+    """A safety classifier must never name a chat "safe" (the name now sticks)."""
+
+    def _title_reply(self, content, user_msg="How do I reset my router password?"):
+        from gaia.ui import _chat_helpers as ch
+
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"choices": [{"message": {"content": content}}]}
+        client = MagicMock()
+        client.post = AsyncMock(return_value=resp)
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        with patch("httpx.AsyncClient", return_value=client):
+            return asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1", "some-model", user_msg, "ok"
+                )
+            )
+
+    @pytest.mark.parametrize("verdict", ["safe", "unsafe\nS1", "unsafe S1,S10", "Yes"])
+    def test_classifier_verdict_falls_back_to_the_question(self, verdict):
+        assert self._title_reply(verdict) == "How do I reset my router password"
+
+    def test_empty_reply_falls_back_to_the_question(self):
+        assert self._title_reply("   ") == "How do I reset my router password"
+
+    def test_long_question_is_cut_at_a_word(self):
+        title = self._title_reply("safe", user_msg="word " * 40)
+        assert title.endswith("…") and len(title) <= 64
+        assert "wor…" not in title
+
+    def test_normal_title_is_unchanged(self):
+        assert self._title_reply('"Safe Router Setup."') == "Safe Router Setup"
+
+    def _titling_model(self, session_model):
+        from gaia.ui import _chat_helpers as ch
+
+        db = MagicMock()
+        sid = f"guard-{session_model}"  # unique: the 30 s throttle is per session
+        db.get_session.return_value = {"id": sid, "title": "New Chat"}
+        db.get_messages.return_value = []
+        gen = AsyncMock(return_value="Router Password Reset")
+        with (
+            patch.object(ch, "_generate_session_title", gen),
+            patch(
+                "gaia.llm.lemonade_client.resolve_default_chat_model",
+                return_value="Gemma-4-E4B-it-GGUF",
+            ),
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+                return_value="http://localhost:13305/api/v1",
+            ),
+        ):
+            asyncio.run(
+                ch._maybe_update_session_title(
+                    db, sid, "reset my router", "ok", session_model
+                )
+            )
+        db.update_session.assert_called_once_with(sid, title="Router Password Reset")
+        return gen.await_args.kwargs["model_id"]
+
+    @pytest.mark.parametrize(
+        "guard",
+        [
+            "Llama-Guard-3-8B-GGUF",
+            "user.llama_guard_4_12b",
+            "ShieldGemma-2B-GGUF",
+            "granite-guardian-3.2-5b",
+            "Qwen3Guard-Gen-4B-GGUF",
+        ],
+    )
+    def test_guard_session_model_titles_with_the_default_model(self, guard):
+        assert self._titling_model(guard) == "Gemma-4-E4B-it-GGUF"
+
+    @pytest.mark.parametrize(
+        "model", ["Qwen3.6-35B-A3B-GGUF", "openai.gpt-5", "anthropic.claude-opus-5"]
+    )
+    def test_chat_and_cloud_models_title_themselves(self, model):
+        assert self._titling_model(model) == model
+
+
 async def test_spawn_background_keeps_the_task_alive_until_done():
     """asyncio holds tasks weakly; a fire-and-forget title task must be pinned."""
     import gaia.ui._chat_helpers as ch
@@ -1115,3 +1196,25 @@ async def test_spawn_background_keeps_the_task_alive_until_done():
     await task
     await asyncio.sleep(0)
     assert task not in ch._background_tasks
+
+
+def test_a_recoverable_error_after_a_failed_tool_is_not_saved_twice():
+    from gaia.ui._chat_helpers import _echoes_failed_tool
+
+    failed = [{"type": "tool", "success": False, "result": "boom"}]
+    assert _echoes_failed_tool({"content": "boom", "recoverable": True}, failed)
+    assert not _echoes_failed_tool({"content": "boom"}, failed)
+    assert not _echoes_failed_tool(
+        {"content": "boom", "recoverable": True}, [{"type": "tool", "success": True}]
+    )
+
+
+def test_a_recoverable_error_from_a_tool_that_raised_is_not_saved_twice():
+    from gaia.ui._chat_helpers import _echoes_failed_tool
+
+    running = [{"type": "tool", "active": True}]
+    assert _echoes_failed_tool({"content": "boom", "recoverable": True}, running)
+    after_thought = running + [{"type": "thinking", "active": True}]
+    assert not _echoes_failed_tool(
+        {"content": "boom", "recoverable": True}, after_thought
+    )

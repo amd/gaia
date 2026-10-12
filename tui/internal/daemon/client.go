@@ -27,8 +27,9 @@ const (
 	// model, and connectors) and 1.5s times it out. Callers with a known-slow or
 	// streaming call still pass their own client.
 	defaultRequestTimeout = 60 * time.Second
-	// Daemon start: spawn + bind + import.
-	defaultStartTimeout = 30 * time.Second
+	// Daemon start: spawn + bind + import. Above client.py's _START_TIMEOUT (60s)
+	// plus the launcher's own interpreter start, or this kills a start that works.
+	defaultStartTimeout = 90 * time.Second
 	// Ensure: a first-run ensure may lazily fetch the sidecar binary before answering.
 	defaultEnsureTimeout = 900 * time.Second
 	// Cap on captured launcher output quoted back in an error.

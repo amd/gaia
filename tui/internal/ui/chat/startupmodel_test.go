@@ -131,7 +131,7 @@ func TestRestoredModelIsSwitchedToAndNamedInTheHeader(t *testing.T) {
 		t.Fatalf("header does not name the restored model: %q", header)
 	}
 	last := m.messages[len(m.messages)-1]
-	if !strings.HasPrefix(last.Content, "Restored your last model.") {
+	if !strings.HasPrefix(last.Content, "Restored your last model: ") || strings.Contains(last.Content, "Switched to") {
 		t.Fatalf("the restore was not stated: %q", last.Content)
 	}
 	if len(*saves) != 1 || (*saves)[0] != (savedCall{"fireworks", flashID}) {

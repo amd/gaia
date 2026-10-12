@@ -976,6 +976,86 @@ def test_model_switch_lemonade_unreachable_is_actionable_and_leaves_model_runnin
     assert agent.rebuild_count == 0
 
 
+_RESTARTED_URL = "http://localhost:50751/api/v1"
+
+
+class _FollowingClient:
+    """A live Lemonade client that has followed GAIA's server to a new port."""
+
+    def __init__(self, url=_RESTARTED_URL, error=None):
+        self.url, self.error = url, error
+
+    def current_base_url(self):
+        if self.error:
+            raise self.error
+        return self.url
+
+
+def test_model_switch_after_a_lemonade_restart_uses_the_new_port(
+    monkeypatch, stub_lemonade
+):
+    """The agent's config keeps the port it started on; every switch hit it."""
+    from gaia_agent import stdio as stdio_mod
+
+    listed, built = [], []
+    monkeypatch.setattr(
+        stdio_mod,
+        "_lemonade_models",
+        lambda base_url: listed.append(base_url) or ["amd.DeepSeek-V4.1-Flash"],
+    )
+    monkeypatch.setattr(
+        stdio_mod, "create_client", lambda **kwargs: built.append(kwargs) or object()
+    )
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient()
+
+    out = _model_run(agent, "/model amd.DeepSeek-V4.1-Flash")
+
+    assert [e["type"] for e in _events(out)] == ["status", "final"]
+    assert listed == [_RESTARTED_URL]
+    assert built[0]["base_url"] == _RESTARTED_URL
+
+
+def test_model_list_after_a_lemonade_restart_reads_the_new_port(monkeypatch):
+    from gaia_agent import stdio as stdio_mod
+
+    listed = []
+    monkeypatch.setattr(
+        stdio_mod,
+        "_lemonade_models",
+        lambda base_url: listed.append(base_url) or ["Gemma-4-E4B-it-GGUF"],
+    )
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient()
+
+    _model_run(agent, "/model")
+
+    assert listed == [_RESTARTED_URL]
+
+
+def test_model_switch_when_lemonade_cannot_be_restarted_keeps_the_model(monkeypatch):
+    from gaia_agent import stdio as stdio_mod
+
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    monkeypatch.setattr(
+        stdio_mod, "_lemonade_models", lambda base_url: pytest.fail("not reached")
+    )
+    agent = _ModelSwitchAgent()
+    previous_client = agent.chat.llm_client = _FollowingClient(
+        error=LemonadeClientError(
+            "Could not start GAIA's Lemonade Server: lemond exited; read lemond.log"
+        )
+    )
+
+    out = _model_run(agent, "/model amd.DeepSeek-V4.1-Flash")
+
+    events = _events(out)
+    assert len(events) == 1 and events[0]["type"] == "error"
+    assert "read lemond.log" in events[0]["detail"]
+    assert agent.chat.llm_client is previous_client
+
+
 def test_model_switch_survives_alongside_history_and_skills(monkeypatch, stub_lemonade):
     """The whole point: switching models must not disturb what makes the
     flagship agent stateful (see test_the_agent_survives_between_turns)."""
@@ -1003,6 +1083,53 @@ def test_model_state_event_names_the_resolved_model_not_a_launch_flag(stub_lemon
     assert banner["model_remote"] is False
     assert banner["lemonade_reachable"] is True
     assert banner["lemonade_version"] == "8.1.2"
+
+
+def _probed_url(monkeypatch, agent, running):
+    """The URL ``_model_state_event`` hands its health probe."""
+    probed = []
+    monkeypatch.setattr(stdio, "running_embedded_lemonade_url", lambda: running)
+    monkeypatch.setattr(
+        stdio,
+        "_lemonade_health",
+        lambda base_url: probed.append(base_url) or {"lemonade_base_url": base_url},
+    )
+    event = stdio._model_state_event(agent)
+    assert probed == [event["lemonade_base_url"]]
+    return probed[0]
+
+
+def test_status_after_a_lemonade_restart_reports_the_new_port(monkeypatch):
+    """The TUI opens its provider picker on this URL; the started-with port
+    made it say "Lemonade did not respond" while chat worked."""
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient()
+
+    assert _probed_url(monkeypatch, agent, _RESTARTED_URL) == _RESTARTED_URL
+
+
+def test_status_never_starts_a_stopped_lemonade(monkeypatch):
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient(error=AssertionError("started a server"))
+
+    url = _probed_url(monkeypatch, agent, None)
+
+    assert url == agent.chat.config.base_url
+
+
+def test_status_reports_the_configured_url_when_following_fails(monkeypatch, caplog):
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    agent = _ModelSwitchAgent()
+    agent.chat.llm_client = _FollowingClient(
+        error=LemonadeClientError("Could not start GAIA's Lemonade Server: boom")
+    )
+
+    with caplog.at_level(logging.WARNING, logger=stdio.logger.name):
+        url = _probed_url(monkeypatch, agent, _RESTARTED_URL)
+
+    assert url == agent.chat.config.base_url
+    assert "boom" in caplog.text
 
 
 def test_a_bad_base_url_is_reported_as_such_not_as_a_dead_server(monkeypatch, caplog):
@@ -1351,6 +1478,16 @@ def test_model_list_groups_discovered_cloud_without_downloads(stub_lemonade):
     assert answer.index("AMD LLM Gateway") < answer.index("amd.gemma")
     assert "fireworks.embedding" not in answer
     assert "other.gemma" not in answer
+
+
+def test_model_list_names_the_command_that_connects_a_missing_provider(
+    stub_lemonade,
+):
+    stub_lemonade.catalog = {
+        "data": [{"id": "Gemma-4-E4B-it-GGUF", "downloaded": True}]
+    }
+    answer = _events(_model_run(_ModelSwitchAgent(), "/model"))[0]["answer"]
+    assert answer.count("run `/provider` to connect it") == 2
 
 
 def test_undiscovered_cloud_model_is_refused_without_changing_session(stub_lemonade):
@@ -1732,6 +1869,100 @@ def test_the_exit_path_survives_a_dead_stderr(monkeypatch):
     assert exit_call.value.code == 0
 
 
+def _memory_agent_class(extract):
+    """A stdio-shaped agent whose turns queue a real background extraction.
+
+    *extract* stands in for the extraction LLM call.
+    """
+    import time
+
+    from gaia.agents.base.memory import MemoryMixin, _ExtractionJob
+
+    class _Agent(MemoryMixin):
+        def __init__(self, config=None):
+            self.console = None
+
+        def process_query(self, query):
+            self._schedule_memory_extraction(
+                _ExtractionJob(
+                    user_input=query,
+                    assistant_response="Noted.",
+                    context="global",
+                    queued_at=time.monotonic(),
+                )
+            )
+            return {"answer": "Noted."}
+
+        def _hybrid_search(self, *args, **kwargs):
+            return []
+
+        def _extract_via_llm(self, user_input, *args, **kwargs):
+            extract(user_input)
+            return []
+
+    return _Agent
+
+
+def _run_main_until_exit(monkeypatch, agent_cls, stdin_text):
+    import gaia_agent.agent as agent_mod
+
+    monkeypatch.setattr(agent_mod, "GaiaAgent", agent_cls)
+    monkeypatch.setattr(agent_mod, "GaiaAgentConfig", lambda **kwargs: None)
+    monkeypatch.setattr(stdio, "_configure_logging", lambda out, dev=False: None)
+    monkeypatch.setattr(stdio, "_model_state_event", lambda agent: {"type": "status"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin_text))
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    _no_return_exit(monkeypatch)
+    with pytest.raises(_ExitCalled) as exit_call:
+        stdio.main([])
+    return exit_call.value.code
+
+
+def test_stdin_close_saves_the_last_turns_memories_before_exiting(monkeypatch):
+    """Quitting the TUI right after an answer must not drop that turn's facts.
+
+    The exit is ``os._exit``, which kills the extraction thread mid-call, so
+    the run loop has to wait for it first.
+    """
+    import time
+
+    extracted = []
+
+    def _slow_llm(user_input):
+        time.sleep(0.5)  # still running when stdin closes
+        extracted.append(user_input)
+
+    code = _run_main_until_exit(
+        monkeypatch, _memory_agent_class(_slow_llm), "I deploy on Fridays\n"
+    )
+
+    assert code == 0
+    assert extracted == ["I deploy on Fridays"], "exit ran before extraction did"
+
+
+def test_a_drain_that_runs_out_says_how_many_jobs_it_dropped(monkeypatch, caplog):
+    """The budget keeps quit bounded, and running out of it is never silent."""
+    import logging
+    import threading
+
+    from gaia.agents.base import memory
+
+    release = threading.Event()
+    monkeypatch.setattr(memory, "EXTRACTION_EXIT_WAIT_S", 0.3)
+
+    with caplog.at_level(logging.WARNING, logger="gaia.agents.base.memory"):
+        code = _run_main_until_exit(
+            monkeypatch,
+            _memory_agent_class(lambda _q: release.wait(30)),
+            "first fact here\nsecond fact here\n",
+        )
+    release.set()
+
+    assert code == 0
+    assert "2 memory extraction job(s) still pending" in caplog.text
+    assert "not stored" in caplog.text
+
+
 def test_main_reports_a_crashed_turn_and_keeps_going(monkeypatch):
     """The other half of the same handler: a live wire still gets the error."""
     import gaia_agent.agent as agent_mod
@@ -1834,6 +2065,40 @@ def test_context_eviction_does_not_delete_tui_archive(tmp_path, monkeypatch):
     agent.conversation_history.prepare(agent, "all evidence")
     assert len(agent.conversation_history) == 24
     assert agent.conversation_history[0]["content"] == "q0"
+    agent.conversation_history.close()
+
+
+def test_a_history_cut_shows_one_transcript_notice(tmp_path, monkeypatch):
+    from gaia.agents.base import history
+
+    agent = _HistoryAgent()
+    agent.conversation_history = history.SessionHistory(tmp_path / "session.db")
+    monkeypatch.setattr(history, "history_budget", lambda *args: 100)
+    monkeypatch.setattr(history, "count_tokens", lambda *args: 10)
+    notices = []
+    for i in range(13):
+        out = _run(agent, f"q{i}")
+        notices += [e for e in map(json.loads, _lines(out)) if e.get("history_cut")]
+    assert len(notices) == 1
+    assert notices[0]["history_cut"] == {"turns": 6, "tokens": 60}
+    assert notices[0]["message"].startswith("Older messages are now out")
+    agent.conversation_history.close()
+
+
+def test_a_smaller_model_that_hides_turns_shows_a_notice(tmp_path, monkeypatch):
+    from gaia.agents.base import history
+
+    agent = _HistoryAgent()
+    agent.conversation_history = history.SessionHistory(tmp_path / "session.db")
+    budget = {"value": 1000}
+    monkeypatch.setattr(history, "history_budget", lambda *args: budget["value"])
+    monkeypatch.setattr(history, "count_tokens", lambda *args: 10)
+    for i in range(10):
+        _run(agent, f"q{i}")
+    budget["value"] = 60
+    out = _run(agent, "after the switch")
+    notices = [e for e in map(json.loads, _lines(out)) if e.get("history_cut")]
+    assert [n["history_cut"] for n in notices] == [{"turns": 4, "tokens": 40}]
     agent.conversation_history.close()
 
 

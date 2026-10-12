@@ -168,6 +168,7 @@ describe('pickReleaseCandidate', () => {
   const RC1 = release('v0.25.0-rc1', true, {
     assets: [
       asset('gaia-agent-ui-0.25.0-rc.1-x64-setup.exe'),
+      asset('gaia-0.25.0-rc.1-win-x64-setup.exe'),
       asset('gaia-agent-ui-0.25.0-rc.1-arm64.dmg'),
       asset('gaia-agent-ui-0.25.0-rc.1-arm64.dmg.blockmap'),
       asset('gaia-agent-ui-0.25.0-rc.1-x86_64.AppImage'),
@@ -195,7 +196,10 @@ describe('pickReleaseCandidate', () => {
     expect(rc!.htmlUrl).toBe('https://github.com/amd/gaia/releases/tag/v0.25.0-rc1');
     // Installers in a fixed order; the blockmap, wheel and raw binary are left
     // to the release page.
+    // The one Windows setup leads even though it is listed after the desktop
+    // app's own setup on the release.
     expect(rc!.downloads.map((d) => d.url.split('/').at(-1))).toEqual([
+      'gaia-0.25.0-rc.1-win-x64-setup.exe',
       'gaia-agent-ui-0.25.0-rc.1-x64-setup.exe',
       'gaia-agent-ui-0.25.0-rc.1-arm64.dmg',
       'gaia-agent-ui-0.25.0-rc.1-x86_64.AppImage',

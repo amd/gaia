@@ -33,8 +33,12 @@ icon: "hand-wave"
     ```python
     from gaia.agents.base.agent import Agent
 
-    agent = Agent()
-    response = agent.process_query("Summarize my meeting notes")
+    class MyAgent(Agent):
+        def _register_tools(self):
+            pass  # add @tool functions here
+
+    agent = MyAgent()
+    response = agent.process_query("What can you help me with?")
     ```
   </Tab>
   <Tab title="C++">
@@ -89,7 +93,7 @@ icon: "hand-wave"
       <Card title="Flagship GAIA Agent" icon="sparkles" href="/guides/gaia">
         Conversation, documents, data, web, memory, and skills in one agent.
       </Card>
-      <Card title="Code Index" icon="magnifying-glass-code" href="/guides/code-index">
+      <Card title="Code Index" icon="folder-magnifying-glass" href="/guides/code-index">
         Semantic search over your codebase using local AMD-accelerated embeddings.
       </Card>
       <Card title="MCP Integration" icon="plug" href="/sdk/sdks/mcp">
@@ -133,7 +137,7 @@ icon: "hand-wave"
   <Card title="Glossary" icon="book-open" href="/glossary">
     Technical terms explained
   </Card>
-  <Card title="Discord" icon="discord" href="https://discord.com/channels/1392562559122407535/1402013282495102997">
+  <Card title="Discord" icon="discord" href="https://discord.com/invite/5xXzkMu8Zk">
     Join community
   </Card>
 </CardGroup>
