@@ -110,6 +110,16 @@ def test_the_weekly_limit_pattern_does_not_depend_on_the_reset_date():
     assert v.kind == "quota"
 
 
+def test_the_session_limit_is_quota_too():
+    # Seen on the secondary account; it went unclassified and read as an unknown failure.
+    v = ccp.classify(
+        "﻿You've hit your session limit · resets 4:30pm (America/Los_Angeles)",
+        exit_code=1,
+    )
+    assert v.kind == "quota"
+    assert v.exit_code == ccp.EXIT_QUOTA
+
+
 def test_main_reports_the_weekly_limit_as_quota(tmp_path, capsys):
     """End to end through the eval preflight's own invocation."""
     p = tmp_path / "claude_probe.txt"

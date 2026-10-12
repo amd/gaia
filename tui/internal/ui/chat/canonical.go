@@ -274,14 +274,27 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				m.startup.confirmed = true
 				m.startup.warmNext = true
 				if m.startup.kind == StartupRestore {
-					content = "Restored your last model.\n\n" + content
+					if rest, ok := strings.CutPrefix(content, "Switched to "); ok {
+						content = "Restored your last model: " + rest
+					} else {
+						content = "Restored your last model.\n\n" + content
+					}
 				}
 			}
+		}
+		duration := time.Since(m.queryStart)
+		if m.startup.warmNext && !m.dev {
+			// The opening switch's time belongs to the ready line, not its own.
+			duration = 0
 		}
 		// The turn is over, so a confirmation still up is dead — resolved here,
 		// before the work is committed, so its step carries the outcome.
 		m.resolveConfirmationOnTurnEnd()
-		m.commitWork()
+		if content != "" {
+			m.commitAnsweredWork()
+		} else {
+			m.commitWork()
+		}
 		// A turn stopped before it said anything ends with an empty final; the
 		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
 		if content != "" || !m.cancelPending {
@@ -289,7 +302,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				Role:         RoleAssistant,
 				Content:      content,
 				Rendered:     components.RenderMarkdown(content),
-				Duration:     time.Since(m.queryStart),
+				Duration:     duration,
 				TTFT:         ttft,
 				TokPerS:      usage.TokPerS,
 				InputTokens:  usage.InputTokens,

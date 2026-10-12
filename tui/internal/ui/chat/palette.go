@@ -345,9 +345,9 @@ var (
 					Foreground(theme.Selected)
 )
 
-// paletteBoxMaxWidth caps the panel on a wide terminal, matching the help
+// paletteBoxMaxWidth is the panel's width on a wide terminal, matching the help
 // panel's own budget (helpoverlay.go's helpBoxMaxWidth) so the two overlays
-// read as one family.
+// read as one family; it grows past this only to fit a description whole.
 const paletteBoxMaxWidth = 60
 
 // paletteNameColumn is how many columns a command's name gets before its
@@ -395,9 +395,13 @@ func buildPaletteBox(query string, items []paletteCommand, selected, width, heig
 		return "", false
 	}
 
-	boxWidth := width - 4
-	if boxWidth > paletteBoxMaxWidth {
-		boxWidth = paletteBoxMaxWidth
+	// Wider than the usual cap only to show descriptions whole, never past the window.
+	boxWidth := paletteBoxMaxWidth
+	if need := paletteContentWidth(items) + 4; need > boxWidth {
+		boxWidth = need
+	}
+	if boxWidth > width-4 {
+		boxWidth = width - 4
 	}
 	inner := boxWidth - 4
 	if inner < 1 || height < 3 {
@@ -470,6 +474,29 @@ func paletteHitTest(query string, items []paletteCommand, selected, width, heigh
 	return item, true
 }
 
+// paletteColumn is where descriptions start: past the widest listed name, so
+// they line up in one column.
+func paletteColumn(items []paletteCommand) int {
+	column := paletteNameColumn
+	for _, c := range items {
+		if w := lipgloss.Width(c.Name) + paletteNameGutter; w > column {
+			column = w
+		}
+	}
+	return column
+}
+
+// paletteContentWidth is the widest item row, marker included.
+func paletteContentWidth(items []paletteCommand) int {
+	column, widest := paletteColumn(items), 0
+	for _, c := range items {
+		if w := lipgloss.Width(c.Desc); w > widest {
+			widest = w
+		}
+	}
+	return 2 + column + widest
+}
+
 // paletteBodyLines lays out the box's content: a title, a divider, the
 // typed filter text, a blank line, then one row per matching command.
 func paletteBodyLines(query string, items []paletteCommand, selected, inner int) []string {
@@ -481,9 +508,10 @@ func paletteBodyLines(query string, items []paletteCommand, selected, inner int)
 		ansi.Truncate(paletteQueryStyle.Render(query)+"▏", inner, "…"),
 		"",
 	}
+	column := paletteColumn(items)
 	for i, c := range items {
 		name := c.Name + strings.Repeat(" ", paletteNameGutter)
-		for lipgloss.Width(name) < paletteNameColumn {
+		for lipgloss.Width(name) < column {
 			name += " "
 		}
 		nameStyle, descStyle, marker := paletteNameStyle, paletteDescStyle, "  "

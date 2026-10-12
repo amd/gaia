@@ -2116,7 +2116,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		}
 
 	case event.AnswerEvent:
-		m.commitWork()
+		m.commitAnsweredWork()
 		m.flushBuffer()
 		duration := time.Since(m.queryStart)
 		content := StripVerificationScope(e.Content)
@@ -3504,7 +3504,7 @@ func (m ChatModel) View() string {
 		Connected:        m.connected,
 		Streaming:        m.streaming,
 		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
-		Preparing:        m.warming,
+		Preparing:        m.warming || m.startup.inFlight,
 	}
 	barState.Hint = fitHints(m.statusHints(), m.hintBudget())
 	statusBar := components.RenderStatusBar(barState, m.width)
