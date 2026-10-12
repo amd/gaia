@@ -678,8 +678,10 @@ does not list them. A plain progress `status` omits them.
 A turn whose history no longer fits the model's context sends one more `status`
 before it starts: `history_cut` is `{"turns": N, "tokens": T}`, the completed
 turns (and their estimated tokens) no longer replayed to the model, and
-`message` is the line the TUI keeps in the transcript. It is sent only when the
-newest turn moved the cut, so a stable cut is reported once.
+`message` is the line the TUI keeps in the transcript. It is sent only when more
+turns are hidden than in the last reported view (the newest turn moved the cut,
+or a smaller model or longer prompt shrank the budget), so a stable cut is
+reported once.
 
 Over stdio the agent never sends `tool_result.render`,
 `needs_confirmation.confirm_url` or `error.source`. The TUI decodes them for

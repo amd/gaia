@@ -874,8 +874,11 @@ reserving space for the system prompt, tool schemas, current question and answer
 Older turns are evicted in blocks from the model view, never cut into invalid
 call/result pairs. The archive remains intact across context eviction and model
 switches. `prepare()` and `select_history()` take an optional `on_cut` callback
-that receives a `HistoryCut(turns, tokens)` when the newest turn moves the cut;
-the TUI and Agent UI use it to tell the user. The terminal event is sent only after the completed trace is committed;
+that receives a `HistoryCut(turns, tokens)` when more turns are hidden than
+before. `select_history()` alone compares with the view minus the newest turn;
+pass a `CutReporter` (as `SessionHistory.prepare()` does) to compare with the
+last reported view, so a switch to a smaller model is reported too. The TUI and
+Agent UI use it to tell the user. The terminal event is sent only after the completed trace is committed;
 a storage failure is reported as an error rather than a successful saved turn.
 
 

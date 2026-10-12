@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from gaia.agents.base.history import (
+    CutReporter,
     TurnMessages,
     select_history,
     transcript_turns,
@@ -86,6 +87,30 @@ def test_no_cut_reports_nothing():
     cuts = []
     select_history([_turn(i) for i in range(30)], 10000, cuts.append)
     assert cuts == []
+
+
+def test_a_smaller_budget_that_hides_turns_is_reported():
+    turns = [_turn(i) for i in range(10)]
+    cuts = []
+    reporter = CutReporter()
+    with patch("gaia.agents.base.history.count_tokens", return_value=10):
+        select_history(turns, 1000, cuts.append, reporter)
+        # A smaller model: the same turns no longer fit, though no turn was added.
+        select_history(turns, 60, cuts.append, reporter)
+        # Back to the larger one, then the same small one again.
+        select_history(turns, 1000, cuts.append, reporter)
+        select_history(turns, 60, cuts.append, reporter)
+        # A restart sees the stable cut fresh and does not re-announce it.
+        select_history(turns, 60, cuts.append, CutReporter())
+    assert [(c.turns, c.tokens) for c in cuts] == [(4, 40), (4, 40)]
+
+
+def test_no_budget_left_reports_every_hidden_turn():
+    cuts = []
+    with patch("gaia.agents.base.history.count_tokens", return_value=10):
+        assert select_history([_turn(i) for i in range(3)], 0, cuts.append) == []
+        select_history([], 0, cuts.append)
+    assert [(c.turns, c.tokens) for c in cuts] == [(3, 30)]
 
 
 def test_oversized_turn_is_not_split_or_silently_truncated():

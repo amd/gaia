@@ -46,10 +46,13 @@ The agent searches your common folders first, then offers a deep search across a
 In-process chat agents retain file reads, tool calls and tool results for later
 questions, including after the server restarts. Complete older turns leave the
 model's context only when its estimated history budget fills; the transcript and
-stored evidence remain on your machine. When a turn pushes older turns out, the
-chat shows one quiet line before the reply — "Older messages are now out of the
-model's view (N turns)" — and the TUI shows the same line in its transcript. Ask
-GAIA to recall anything from before it. Earlier conversations saved before this feature retain text only.
+stored evidence remain on your machine. When more older turns leave the model's
+view — a long chat, or a switch to a smaller model — the chat shows one quiet
+line before the reply — "Older messages are now out of the model's view (N
+turns)" — and the TUI shows the same line in its transcript. Ask GAIA to recall
+anything from before it. A Hub-installed GAIA agent relayed from the Agent UI
+sees only the last 5 exchanges, and the chat says so once, when the sixth one
+lands. Earlier conversations saved before this feature retain text only.
 If the current prompt leaves no history budget, GAIA warns and sends no older
 turns; saved evidence remains intact. Switching to a model without native tool
 calling replays recorded calls and results as text.
