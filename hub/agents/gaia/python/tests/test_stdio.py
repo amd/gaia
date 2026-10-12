@@ -1480,6 +1480,16 @@ def test_model_list_groups_discovered_cloud_without_downloads(stub_lemonade):
     assert "other.gemma" not in answer
 
 
+def test_model_list_names_the_command_that_connects_a_missing_provider(
+    stub_lemonade,
+):
+    stub_lemonade.catalog = {
+        "data": [{"id": "Gemma-4-E4B-it-GGUF", "downloaded": True}]
+    }
+    answer = _events(_model_run(_ModelSwitchAgent(), "/model"))[0]["answer"]
+    assert answer.count("run `/provider` to connect it") == 2
+
+
 def test_undiscovered_cloud_model_is_refused_without_changing_session(stub_lemonade):
     agent = _ModelSwitchAgent()
     previous = agent.chat.llm_client

@@ -846,7 +846,7 @@ def _format_model_list(agent: Any) -> str:
                 lines.append(
                     "- (none downloaded — run `gaia init`)"
                     if provider is None
-                    else "- (connect this provider in the TUI provider settings)"
+                    else "- (not connected — run `/provider` to connect it)"
                 )
             for model_id in group:
                 marker = " ← current" if model_id == current else ""
