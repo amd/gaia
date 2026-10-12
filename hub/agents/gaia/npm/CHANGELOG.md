@@ -6,6 +6,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **`/model` names the command that connects a cloud provider.** With no
+  Fireworks or AMD gateway connection, the list told users to "connect this
+  provider in the TUI provider settings", a screen with no obvious way in. It
+  now says to run `/provider`, the command that opens it.
 - **The TUI's provider picker works after GAIA's Lemonade restarts.** When the
   agent ran as the TUI's own child, its model-state ping kept naming the port
   Lemonade started on, so after a restart the picker said "Lemonade did not
