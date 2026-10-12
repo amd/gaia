@@ -976,8 +976,7 @@ class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
 # replaced by the auto-retitler; placeholder titles ("New Task"/"New Chat"/
 # empty) must still be auto-titled on the first substantive message.
 
-# Long + zero word-overlap with any title used below → would trigger the
-# topic-shift retitle if one still existed.
+# A later question unrelated to any title used below.
 _SHIFT_MSG = "please summarize quarterly revenue figures across all the divisions"
 
 
@@ -990,60 +989,41 @@ class TestShouldRetitle:
     def test_placeholder_titles_are_retitled(self, placeholder):
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert _should_retitle(placeholder, "hi") is True
+        assert _should_retitle(placeholder) is True
 
     def test_custom_title_never_retitled(self):
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert (
-            _should_retitle("My Research Project", _SHIFT_MSG, title_is_custom=True)
-            is False
-        )
-
-    def test_custom_flag_pins_across_multiple_turns(self):
-        from gaia.ui._chat_helpers import _should_retitle
-
-        turns = [
-            _SHIFT_MSG,
-            "now write me a haiku about mountains and rivers flowing",
-            "explain the difference between tcp and udp networking protocols",
-        ]
-        for msg in turns:
-            assert (
-                _should_retitle("Weekly Standup Notes", msg, title_is_custom=True)
-                is False
-            )
+        assert _should_retitle("My Research Project", title_is_custom=True) is False
 
     def test_custom_flag_pins_even_placeholder_lookalike(self):
         """A pinned title wins even if its text happens to be a placeholder."""
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert _should_retitle("New Chat", _SHIFT_MSG, title_is_custom=True) is False
+        assert _should_retitle("New Chat", title_is_custom=True) is False
 
     def test_auto_generated_title_is_kept_on_topic_shift(self):
         """Once auto-named, a chat keeps its name when the topic changes."""
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert (
-            _should_retitle("Python Sorting Help", _SHIFT_MSG, title_is_custom=False)
-            is False
-        )
+        assert _should_retitle("Python Sorting Help", title_is_custom=False) is False
 
     def test_eval_titles_never_retitled(self):
         from gaia.ui._chat_helpers import _should_retitle
 
-        assert _should_retitle("Eval: rag_quality run 3", _SHIFT_MSG) is False
+        assert _should_retitle("Eval: rag_quality run 3") is False
 
 
 class TestMaybeUpdateSessionTitleHonorsPin:
     """_maybe_update_session_title must read the session's title_is_custom
     flag and skip pinned sessions without calling the LLM or the DB."""
 
-    def _run(self, session, msg=_SHIFT_MSG):
+    def _run(self, session, msg=_SHIFT_MSG, history=()):
         from gaia.ui import _chat_helpers as ch
 
         db = MagicMock()
         db.get_session.return_value = session
+        db.get_messages.return_value = list(history)
         gen = AsyncMock(return_value="LLM Title")
         with (
             patch.object(ch, "_generate_session_title", gen),
@@ -1077,6 +1057,19 @@ class TestMaybeUpdateSessionTitleHonorsPin:
         db, gen = self._run({"id": "auto-1", "title": "New Task", "title_is_custom": 0})
         gen.assert_awaited_once()
         db.update_session.assert_called_once_with("auto-1", title="LLM Title")
+
+    def test_stopped_first_turn_still_names_the_chat(self):
+        """A first turn stopped before any reply still supplies the title."""
+        db, gen = self._run(
+            {"id": "auto-3", "title": "New Chat", "title_is_custom": 0},
+            history=[
+                {"role": "user", "content": "plan a trip to Lisbon"},
+                {"role": "user", "content": _SHIFT_MSG},
+                {"role": "assistant", "content": "assistant reply"},
+            ],
+        )
+        assert gen.await_args.kwargs["user_msg"] == "plan a trip to Lisbon"
+        assert gen.await_args.kwargs["assistant_msg"] == ""
 
 
 class TestSessionTitleRequest:

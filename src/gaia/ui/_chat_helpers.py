@@ -265,7 +265,8 @@ _classify_chat_exception = classify_lemonade_exception
 # same LLM to generate a 3-6 word title summarising the conversation, then
 # update the session title in the DB. Fires only while the title is still a
 # placeholder ("New Chat" / "New Task" / "Untitled"): once named, a chat keeps
-# its name, so the sidebar never drifts to the latest question.
+# its name, so the sidebar never drifts to the latest question. The title is
+# always drawn from the chat's first question, even if that turn was stopped.
 #
 # Skipped when:
 #   * The session's title_is_custom flag is set — an explicit user/API title
@@ -282,9 +283,7 @@ _AUTO_TITLE_LAST_AT: dict[str, float] = {}  # session_id -> monotonic ts
 _AUTO_TITLE_THROTTLE_S = 30.0
 
 
-def _should_retitle(
-    current_title: str, last_user_msg: str, title_is_custom: bool = False
-) -> bool:
+def _should_retitle(current_title: str, title_is_custom: bool = False) -> bool:
     """True only while the session still carries a placeholder title."""
     if title_is_custom:
         return False  # explicit user/API title — pinned (#2165)
@@ -366,6 +365,23 @@ async def _generate_session_title(
         return None
 
 
+def _first_exchange(
+    db: ChatDatabase, session_id: str, user_msg: str, assistant_msg: str
+) -> tuple[str, str]:
+    """The session's first user question and the reply that followed it."""
+    messages = db.get_messages(session_id, limit=20)
+    for i, msg in enumerate(messages):
+        if msg.get("role") != "user" or not (msg.get("content") or "").strip():
+            continue
+        if msg["content"] == user_msg:
+            return user_msg, assistant_msg
+        reply = messages[i + 1] if i + 1 < len(messages) else {}
+        return msg["content"], (
+            reply.get("content") or "" if reply.get("role") == "assistant" else ""
+        )
+    return user_msg, assistant_msg
+
+
 async def _maybe_update_session_title(
     db: ChatDatabase,
     session_id: str,
@@ -388,8 +404,10 @@ async def _maybe_update_session_title(
         return
     current_title = session.get("title") or ""
     title_is_custom = bool(session.get("title_is_custom"))
-    if not _should_retitle(current_title, user_msg, title_is_custom):
+    if not _should_retitle(current_title, title_is_custom):
         return
+    # Name the chat after its first question, even when that turn was stopped.
+    user_msg, assistant_msg = _first_exchange(db, session_id, user_msg, assistant_msg)
 
     # Throttle: don't re-title if we updated within the last 30 s.
     now = _time.monotonic()
