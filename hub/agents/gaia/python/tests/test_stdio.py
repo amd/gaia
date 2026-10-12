@@ -1869,6 +1869,100 @@ def test_the_exit_path_survives_a_dead_stderr(monkeypatch):
     assert exit_call.value.code == 0
 
 
+def _memory_agent_class(extract):
+    """A stdio-shaped agent whose turns queue a real background extraction.
+
+    *extract* stands in for the extraction LLM call.
+    """
+    import time
+
+    from gaia.agents.base.memory import MemoryMixin, _ExtractionJob
+
+    class _Agent(MemoryMixin):
+        def __init__(self, config=None):
+            self.console = None
+
+        def process_query(self, query):
+            self._schedule_memory_extraction(
+                _ExtractionJob(
+                    user_input=query,
+                    assistant_response="Noted.",
+                    context="global",
+                    queued_at=time.monotonic(),
+                )
+            )
+            return {"answer": "Noted."}
+
+        def _hybrid_search(self, *args, **kwargs):
+            return []
+
+        def _extract_via_llm(self, user_input, *args, **kwargs):
+            extract(user_input)
+            return []
+
+    return _Agent
+
+
+def _run_main_until_exit(monkeypatch, agent_cls, stdin_text):
+    import gaia_agent.agent as agent_mod
+
+    monkeypatch.setattr(agent_mod, "GaiaAgent", agent_cls)
+    monkeypatch.setattr(agent_mod, "GaiaAgentConfig", lambda **kwargs: None)
+    monkeypatch.setattr(stdio, "_configure_logging", lambda out, dev=False: None)
+    monkeypatch.setattr(stdio, "_model_state_event", lambda agent: {"type": "status"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin_text))
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    _no_return_exit(monkeypatch)
+    with pytest.raises(_ExitCalled) as exit_call:
+        stdio.main([])
+    return exit_call.value.code
+
+
+def test_stdin_close_saves_the_last_turns_memories_before_exiting(monkeypatch):
+    """Quitting the TUI right after an answer must not drop that turn's facts.
+
+    The exit is ``os._exit``, which kills the extraction thread mid-call, so
+    the run loop has to wait for it first.
+    """
+    import time
+
+    extracted = []
+
+    def _slow_llm(user_input):
+        time.sleep(0.5)  # still running when stdin closes
+        extracted.append(user_input)
+
+    code = _run_main_until_exit(
+        monkeypatch, _memory_agent_class(_slow_llm), "I deploy on Fridays\n"
+    )
+
+    assert code == 0
+    assert extracted == ["I deploy on Fridays"], "exit ran before extraction did"
+
+
+def test_a_drain_that_runs_out_says_how_many_jobs_it_dropped(monkeypatch, caplog):
+    """The budget keeps quit bounded, and running out of it is never silent."""
+    import logging
+    import threading
+
+    from gaia.agents.base import memory
+
+    release = threading.Event()
+    monkeypatch.setattr(memory, "EXTRACTION_EXIT_WAIT_S", 0.3)
+
+    with caplog.at_level(logging.WARNING, logger="gaia.agents.base.memory"):
+        code = _run_main_until_exit(
+            monkeypatch,
+            _memory_agent_class(lambda _q: release.wait(30)),
+            "first fact here\nsecond fact here\n",
+        )
+    release.set()
+
+    assert code == 0
+    assert "2 memory extraction job(s) still pending" in caplog.text
+    assert "not stored" in caplog.text
+
+
 def test_main_reports_a_crashed_turn_and_keeps_going(monkeypatch):
     """The other half of the same handler: a live wire still gets the error."""
     import gaia_agent.agent as agent_mod

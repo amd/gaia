@@ -423,7 +423,7 @@ drain_memory_extraction(agent)          # waits EXTRACTION_EXIT_WAIT_S, logs if 
 agent.wait_for_memory_extraction(timeout=10)   # same wait, as a method
 ```
 
-Both return `True` when nothing is left in flight. `drain_memory_extraction()` is a no-op on an agent without memory, so it is safe to call unconditionally. The CLI chat paths call it from their cleanup block, which covers the one-shot, interactive, Ctrl-C and error exits alike; the Agent UI and TUI need no change, because `signal_done()` follows `process_query()`, which no longer waits.
+Both return `True` when nothing is left in flight. `drain_memory_extraction()` is a no-op on an agent without memory, so it is safe to call unconditionally. The CLI chat paths call it from their cleanup block, which covers the one-shot, interactive, Ctrl-C and error exits alike; the Agent UI needs no change, because `signal_done()` follows `process_query()`, which no longer waits. The TUI's agent drains when the TUI closes its stdin on quit, and the TUI gives it up to 20 s to exit (printing "Saving memories before exit…" after the first second) before killing it.
 
 ### Consolidation
 
