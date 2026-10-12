@@ -977,7 +977,7 @@ class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
 # empty) must still be auto-titled on the first substantive message.
 
 # Long + zero word-overlap with any title used below → would trigger the
-# topic-shift pass if the pin didn't hold.
+# topic-shift retitle if one still existed.
 _SHIFT_MSG = "please summarize quarterly revenue figures across all the divisions"
 
 
@@ -1020,13 +1020,13 @@ class TestShouldRetitle:
 
         assert _should_retitle("New Chat", _SHIFT_MSG, title_is_custom=True) is False
 
-    def test_auto_generated_title_still_topic_shifts(self):
-        """Non-pinned (auto-generated) titles keep the topic-shift pass."""
+    def test_auto_generated_title_is_kept_on_topic_shift(self):
+        """Once auto-named, a chat keeps its name when the topic changes."""
         from gaia.ui._chat_helpers import _should_retitle
 
         assert (
             _should_retitle("Python Sorting Help", _SHIFT_MSG, title_is_custom=False)
-            is True
+            is False
         )
 
     def test_eval_titles_never_retitled(self):
@@ -1062,6 +1062,13 @@ class TestMaybeUpdateSessionTitleHonorsPin:
     def test_pinned_session_is_skipped(self):
         db, gen = self._run(
             {"id": "pin-1", "title": "My Research Project", "title_is_custom": 1}
+        )
+        gen.assert_not_awaited()
+        db.update_session.assert_not_called()
+
+    def test_auto_named_session_is_not_renamed_by_a_later_turn(self):
+        db, gen = self._run(
+            {"id": "auto-2", "title": "Python Sorting Help", "title_is_custom": 0}
         )
         gen.assert_not_awaited()
         db.update_session.assert_not_called()
