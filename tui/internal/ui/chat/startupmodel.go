@@ -5,6 +5,7 @@ package chat
 
 import (
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -41,6 +42,7 @@ type startupModel struct {
 	pending  bool // not sent yet
 	inFlight bool // its turn has not ended
 	pinged   bool // the agent reported its model during that turn
+	began    time.Time
 	// confirmed is set when the agent switched to exactly this model;
 	// warmNext then starts the warm-up (warmup.go) on it.
 	confirmed bool
@@ -95,6 +97,10 @@ func (m ChatModel) WithModelMemory(save func(provider, model string) error) Chat
 // loaded for this session, until the agent's own model-state ping replaces it.
 // Ignored when the launch already names a model or runs on Claude.
 func (m ChatModel) WithExpectedModel(id string) ChatModel {
+	// The header names the model being restored, not the one it replaces.
+	if m.startup.pending && (m.startup.provider == "" || m.startup.provider == "local") {
+		id = m.startup.model
+	}
 	if id = strings.TrimSpace(id); id == "" || m.modelDisplay != "" || m.claudeMode {
 		return m
 	}
@@ -117,6 +123,7 @@ func (m ChatModel) runStartupModel() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.startup.inFlight = true
+	m.startup.began = time.Now()
 	if sw, ok := m.relayedSwitcher(); ok {
 		// Answered by relayedSwitchMsg, not a turn.
 		return m.switchRelayedModel(sw, m.startup.model)
