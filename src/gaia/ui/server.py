@@ -457,11 +457,25 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             "Checking LLM server", _check_lemonade, visible=True
         )
         queue.dispatch("Loading ML libraries", _import_modules, visible=True)
-        queue.dispatch(
+        model_job = queue.dispatch(
             "Loading AI model",
             _load_model,
             visible=True,
             depends_on=lemonade_id,
+        )
+        from gaia.ui import warmup
+        from gaia.ui.dispatch import JobStatus
+
+        warmup.configure(db)
+
+        def _prime_first_prompt():
+            # A failed model load already explains a slow first turn.
+            if queue.get_job(model_job).status == JobStatus.DONE:
+                warmup.request_warm_up("startup")
+
+        # Not visible: priming the prompt must never hold the composer.
+        queue.dispatch(
+            "Priming the first prompt", _prime_first_prompt, depends_on=model_job
         )
 
         # Start autonomous agent loop

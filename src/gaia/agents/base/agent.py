@@ -7214,7 +7214,14 @@ Do NOT wrap conversational replies in JSON.
             tools=self._openai_tools,
             max_tokens=1,
         )
-        return {"seconds": round(time.perf_counter() - started, 1)}
+        result: Dict[str, Any] = {"seconds": round(time.perf_counter() - started, 1)}
+        client = getattr(self.chat, "llm_client", None)
+        usage_of = getattr(client, "get_last_usage", None)
+        usage = usage_of() if callable(usage_of) else None
+        if isinstance(usage, dict):
+            result["prompt_tokens"] = usage.get("prompt_tokens")
+            result["cached_tokens"] = usage.get("cached_tokens")
+        return result
 
     def process_query(
         self,

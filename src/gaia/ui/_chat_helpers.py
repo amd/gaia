@@ -61,6 +61,7 @@ from .sse_handler import (
     _fix_double_escaped,
 )
 from .utils import managed_documents_dir
+from .warmup import wait_for_warm_up
 
 logger = logging.getLogger(__name__)
 
@@ -2028,6 +2029,8 @@ async def _get_chat_response(
         )
 
         # ── Agent cache ──────────────────────────────────────────────────────
+        # Reuse what a running warm-up is caching rather than read it twice.
+        wait_for_warm_up()
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
         if cached_agent is not None:
@@ -2418,6 +2421,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 t0 = _time.monotonic()
 
                 # ── Agent cache check ─────────────────────────────────────────
+                # Reuse what a running warm-up is caching rather than read it twice.
+                wait_for_warm_up()
                 cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
                 if cached_agent is not None:
