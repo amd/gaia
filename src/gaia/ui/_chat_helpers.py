@@ -263,16 +263,14 @@ _classify_chat_exception = classify_lemonade_exception
 #
 # After the agent finishes a turn, kick off a background task that asks the
 # same LLM to generate a 3-6 word title summarising the conversation, then
-# update the session title in the DB. Fires when:
-#   * Title is still the default ("New Chat" / "New Task" / starts with
-#     "Untitled") — first-response pass
-#   * The new user message has low word-overlap with the existing title
-#     (≤ 0.15 Jaccard on lowercase words) AND the message is substantive
-#     (≥ 25 chars) — topic-shift pass
+# update the session title in the DB. Fires only while the title is still a
+# placeholder ("New Chat" / "New Task" / "Untitled"): once named, a chat keeps
+# its name, so the sidebar never drifts to the latest question. The title is
+# always drawn from the chat's first question, even if that turn was stopped.
 #
 # Skipped when:
 #   * The session's title_is_custom flag is set — an explicit user/API title
-#     is pinned forever (#2165); only auto-generated titles may be replaced
+#     is pinned forever (#2165)
 #   * Title starts with "Eval:" — those are owned by the eval framework
 #   * Title was last updated < 30 s ago — prevents thrash mid-conversation
 #   * No agent / no Lemonade base URL available
@@ -283,42 +281,16 @@ _AUTO_TITLE_DEFAULTS = PLACEHOLDER_TITLES
 _AUTO_TITLE_LOCK = threading.Lock()
 _AUTO_TITLE_LAST_AT: dict[str, float] = {}  # session_id -> monotonic ts
 _AUTO_TITLE_THROTTLE_S = 30.0
-_AUTO_TITLE_RE_NONWORD = _re.compile(r"[^a-z0-9 ]+")
 
 
-def _title_word_set(s: str) -> set[str]:
-    """Lowercase word set for overlap comparison; strips punctuation,
-    drops 1-letter tokens (mostly noise like "a" / "I")."""
-    cleaned = _AUTO_TITLE_RE_NONWORD.sub(" ", (s or "").lower())
-    return {w for w in cleaned.split() if len(w) > 1}
-
-
-def _should_retitle(
-    current_title: str, last_user_msg: str, title_is_custom: bool = False
-) -> bool:
-    """Decide whether the session deserves a fresh title.
-
-    See module-level comment for the rule set.  Returns True/False; pure
-    function so it's easy to unit-test in isolation.
-    """
+def _should_retitle(current_title: str, title_is_custom: bool = False) -> bool:
+    """True only while the session still carries a placeholder title."""
     if title_is_custom:
         return False  # explicit user/API title — pinned (#2165)
     title = (current_title or "").strip()
-    title_lower = title.lower()
     if title.startswith("Eval:"):
         return False  # eval framework owns these
-    if not title or title_lower in _AUTO_TITLE_DEFAULTS:
-        return True  # first-response pass: replace the default
-    # Topic-shift pass: low overlap + substantive new message.
-    user_msg = (last_user_msg or "").strip()
-    if len(user_msg) < 25:
-        return False
-    title_words = _title_word_set(title)
-    user_words = _title_word_set(user_msg)
-    if not title_words:
-        return True
-    overlap = len(title_words & user_words) / len(title_words)
-    return overlap <= 0.15
+    return not title or title.lower() in _AUTO_TITLE_DEFAULTS
 
 
 async def _generate_session_title(
@@ -393,6 +365,23 @@ async def _generate_session_title(
         return None
 
 
+def _first_exchange(
+    db: ChatDatabase, session_id: str, user_msg: str, assistant_msg: str
+) -> tuple[str, str]:
+    """The session's first user question and the reply that followed it."""
+    messages = db.get_messages(session_id, limit=20)
+    for i, msg in enumerate(messages):
+        if msg.get("role") != "user" or not (msg.get("content") or "").strip():
+            continue
+        if msg["content"] == user_msg:
+            return user_msg, assistant_msg
+        reply = messages[i + 1] if i + 1 < len(messages) else {}
+        return msg["content"], (
+            reply.get("content") or "" if reply.get("role") == "assistant" else ""
+        )
+    return user_msg, assistant_msg
+
+
 async def _maybe_update_session_title(
     db: ChatDatabase,
     session_id: str,
@@ -415,8 +404,10 @@ async def _maybe_update_session_title(
         return
     current_title = session.get("title") or ""
     title_is_custom = bool(session.get("title_is_custom"))
-    if not _should_retitle(current_title, user_msg, title_is_custom):
+    if not _should_retitle(current_title, title_is_custom):
         return
+    # Name the chat after its first question, even when that turn was stopped.
+    user_msg, assistant_msg = _first_exchange(db, session_id, user_msg, assistant_msg)
 
     # Throttle: don't re-title if we updated within the last 30 s.
     now = _time.monotonic()
