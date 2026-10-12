@@ -5712,6 +5712,107 @@ def test_failed_tool_keeps_original_error_when_memory_unavailable(disabled, capl
 
 
 # ===========================================================================
+# Extraction yields to the user: it never starts while a turn runs
+# ===========================================================================
+
+
+class TestExtractionYieldsToUserTurns:
+    """A queued extraction waits out user turns instead of competing with them."""
+
+    IDLE_S = 0.3
+
+    @pytest.fixture
+    def host(self, tmp_path, monkeypatch):
+        import gaia.agents.base.memory as memory_module
+
+        monkeypatch.setattr(memory_module, "EXTRACTION_IDLE_S", self.IDLE_S)
+
+        class Host(MemoryMixin, FakeAgent):
+            pass
+
+        host = Host()
+        with _mock_v2_init_context():
+            host.init_memory(db_path=tmp_path / "yield.db", context="global")
+        host._embedder = _make_mock_embedder()
+        self.calls = []
+        self.started = threading.Event()
+
+        def _send(*_args, **_kwargs):
+            from gaia.chat import sdk as sdk_module
+
+            self.calls.append(getattr(sdk_module._SIDE_CALLS, "active", False))
+            self.started.set()
+            return MagicMock(text="[]")
+
+        host.chat = MagicMock()
+        host.chat.send_messages.side_effect = _send
+        yield host
+        host.wait_for_memory_extraction(timeout=5)
+        host._memory_store.close()
+
+    @staticmethod
+    def _queue_turn(host):
+        host._after_process_query(
+            "My name is Priya and I always deploy on Fridays from Berlin",
+            "Noted.",
+        )
+
+    def test_extraction_waits_for_the_running_turn_then_the_idle_window(self, host):
+        host._note_user_turn_started()
+        self._queue_turn(host)
+
+        assert not self.started.wait(self.IDLE_S * 3), "ran during a user turn"
+
+        finished_at = time.monotonic()
+        host._note_user_turn_finished()
+        assert self.started.wait(5), "never ran after the turn ended"
+        assert time.monotonic() - finished_at >= self.IDLE_S * 0.9
+
+    def test_a_new_turn_inside_the_idle_window_pushes_extraction_back(self, host):
+        host._note_user_turn_started()
+        self._queue_turn(host)
+        host._note_user_turn_finished()
+        host._note_user_turn_started()
+
+        assert not self.started.wait(self.IDLE_S * 3), "ran during the second turn"
+        host._note_user_turn_finished()
+        assert self.started.wait(5)
+
+    def test_wait_for_memory_extraction_skips_the_wait(self, host):
+        """A one-shot caller exiting now must not lose the queued memories."""
+        host._note_user_turn_started()
+        self._queue_turn(host)
+
+        assert host.wait_for_memory_extraction(timeout=5) is True
+        assert self.calls, "the flush dropped the queued extraction"
+        host._note_user_turn_finished()
+
+    def test_extraction_call_stays_out_of_the_turn_metrics(self, host):
+        self._queue_turn(host)
+        assert host.wait_for_memory_extraction(timeout=5) is True
+        assert self.calls == [True]
+
+
+def test_side_request_hides_calls_from_the_turn_recorder_on_its_thread_only():
+    from gaia.chat.sdk import AgentSDK
+
+    sdk = AgentSDK.__new__(AgentSDK)
+    sdk.turn_recorder = recorder = object()
+    seen = {}
+
+    def _other_thread():
+        seen["other"] = sdk._turn_recorder()
+
+    with AgentSDK.side_request():
+        assert sdk._turn_recorder() is None
+        worker = threading.Thread(target=_other_thread)
+        worker.start()
+        worker.join()
+    assert seen["other"] is recorder
+    assert sdk._turn_recorder() is recorder
+
+
+# ===========================================================================
 # Side requests turn a thinking model's reasoning off
 # ===========================================================================
 

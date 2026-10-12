@@ -411,6 +411,9 @@ Extraction runs **after** the turn returns, not before it. `_after_process_query
 | `EXTRACTION_MAX_TOKENS` | 4096 | Budget, sized so a reasoning model's hidden chain-of-thought does not consume it all |
 | `EXTRACTION_QUEUE_MAX` | 4 | Turns that may queue behind a running job; the oldest is dropped, with a log line |
 | `EXTRACTION_EXIT_WAIT_S` | 15 | How long a drain waits before giving up and saying the turn's facts were not stored |
+| `EXTRACTION_IDLE_S` | 3 | Quiet time after the last user turn before a queued job starts |
+
+**It yields to the user.** A queued job does not start while a user turn is running, or until `EXTRACTION_IDLE_S` has passed since the last one ended. Extraction shares the local model with the conversation, so a job started the moment a turn ended made a quick follow-up queue behind it. A job already running is not interrupted. Its model call is kept out of the turn's metrics (`AgentSDK.side_request()`), so a turn's recorded stats are its own.
 
 One extraction thread per agent. Each job freezes the turn's text and context at turn end, so mutating the agent afterwards cannot change what gets extracted.
 
@@ -423,7 +426,7 @@ drain_memory_extraction(agent)          # waits EXTRACTION_EXIT_WAIT_S, logs if 
 agent.wait_for_memory_extraction(timeout=10)   # same wait, as a method
 ```
 
-Both return `True` when nothing is left in flight. `drain_memory_extraction()` is a no-op on an agent without memory, so it is safe to call unconditionally. The CLI chat paths call it from their cleanup block, which covers the one-shot, interactive, Ctrl-C and error exits alike; the Agent UI and TUI need no change, because `signal_done()` follows `process_query()`, which no longer waits.
+Both return `True` when nothing is left in flight. Waiting also skips the idle window, so queued jobs run at once. `drain_memory_extraction()` is a no-op on an agent without memory, so it is safe to call unconditionally. The CLI chat paths call it from their cleanup block, which covers the one-shot, interactive, Ctrl-C and error exits alike; the Agent UI and TUI need no change, because `signal_done()` follows `process_query()`, which no longer waits.
 
 ### Consolidation
 

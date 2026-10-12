@@ -71,6 +71,7 @@ from gaia.agents.base.memory_store import (
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
 from gaia.agents.base.verification import check_was_executed
+from gaia.chat.sdk import AgentSDK
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
@@ -255,6 +256,10 @@ EXTRACTION_QUEUE_MAX = 4
 
 #: How long a one-shot caller (CLI, batch) waits for extraction before exiting.
 EXTRACTION_EXIT_WAIT_S = 15.0
+
+#: Quiet time after a user turn before extraction starts. Extraction shares the
+#: local model with the conversation, so a turn sent while it runs queues behind it.
+EXTRACTION_IDLE_S = 3.0
 
 #: Tool calls shown to extraction, most recent last, and each entry's detail cap.
 EXTRACTION_TOOL_RECORD_MAX_CALLS = 20
@@ -1802,15 +1807,16 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             def _call_llm():
                 try:
-                    outcome["response"] = self.chat.send_messages(
-                        messages=[{"role": "user", "content": prompt}],
-                        system_prompt="You are a memory extraction engine. Return valid JSON only.",
-                        # Off the conversation's slot, so its cache survives.
-                        id_slot=SIDE_SLOT,
-                        temperature=0.1,
-                        max_tokens=EXTRACTION_MAX_TOKENS,
-                        **self._side_request_kwargs(),
-                    )
+                    with AgentSDK.side_request():
+                        outcome["response"] = self.chat.send_messages(
+                            messages=[{"role": "user", "content": prompt}],
+                            system_prompt="You are a memory extraction engine. Return valid JSON only.",
+                            # Off the conversation's slot, so its cache survives.
+                            id_slot=SIDE_SLOT,
+                            temperature=0.1,
+                            max_tokens=EXTRACTION_MAX_TOKENS,
+                            **self._side_request_kwargs(),
+                        )
                 except BaseException as exc:  # re-raised on the caller's thread
                     outcome["error"] = exc
                 finally:
@@ -3111,7 +3117,11 @@ class MemoryMixin(ProceduralMemoryMixin):
         dynamic = self.get_memory_dynamic_context()
         augmented = f"{dynamic}\n\n{user_input}" if dynamic else user_input
 
-        return super().process_query(augmented, **kwargs)
+        self._note_user_turn_started()
+        try:
+            return super().process_query(augmented, **kwargs)
+        finally:
+            self._note_user_turn_finished()
 
     # ------------------------------------------------------------------
     # Hook 3: _execute_tool Override (auto-logging)
@@ -3798,9 +3808,50 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._extraction_lock = threading.Lock()
             self._extraction_thread: Optional[threading.Thread] = None
             self._extraction_queue: Deque[_ExtractionJob] = deque()
+            self._extraction_wake = threading.Condition(self._extraction_lock)
+            self._turns_in_flight = 0
+            self._last_turn_end = float("-inf")
+            self._extraction_flush = False
             idle = threading.Event()
             idle.set()
             self._extraction_idle = idle
+
+    def _note_user_turn_started(self) -> None:
+        """Hold back extraction that has not started while a user turn runs."""
+        self._ensure_extraction_state()
+        with self._extraction_lock:
+            self._turns_in_flight += 1
+
+    def _note_user_turn_finished(self) -> None:
+        """Start the idle clock that queued extraction waits out."""
+        self._ensure_extraction_state()
+        with self._extraction_lock:
+            self._turns_in_flight = max(0, self._turns_in_flight - 1)
+            self._last_turn_end = time.monotonic()
+            self._extraction_wake.notify_all()
+
+    def _wait_for_extraction_turn(self) -> None:
+        """Block (lock held) until no user turn ran for ``EXTRACTION_IDLE_S``.
+
+        A flush from ``wait_for_memory_extraction`` skips the wait: its caller
+        is about to exit and wants the memories on disk now.
+        """
+        deferred = False
+        while not self._extraction_flush:
+            if self._turns_in_flight > 0:
+                remaining = None
+            else:
+                remaining = EXTRACTION_IDLE_S - (time.monotonic() - self._last_turn_end)
+                if remaining <= 0:
+                    break
+            if not deferred:
+                deferred = True
+                logger.debug(
+                    "[MemoryMixin] extraction deferred until the user is idle "
+                    "(%d queued)",
+                    len(self._extraction_queue),
+                )
+            self._extraction_wake.wait(remaining)
 
     def _schedule_memory_extraction(self, job: _ExtractionJob) -> None:
         """Queue *job* for the single background extraction thread."""
@@ -3832,8 +3883,11 @@ class MemoryMixin(ProceduralMemoryMixin):
                 with self._extraction_lock:
                     if not self._extraction_queue:
                         self._extraction_thread = None
+                        self._extraction_flush = False
                         self._extraction_idle.set()
                         return
+                    # Only this thread pops, so the queue is still non-empty after.
+                    self._wait_for_extraction_turn()
                     job = self._extraction_queue.popleft()
                 self._run_extraction_job(job)
         except BaseException:
@@ -3842,6 +3896,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             with self._extraction_lock:
                 self._extraction_thread = None
                 self._extraction_queue.clear()
+                self._extraction_flush = False
                 self._extraction_idle.set()
             logger.error(
                 "[MemoryMixin] extraction worker died; queue dropped", exc_info=True
@@ -3908,6 +3963,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             (work is still running and the caller should say so).
         """
         self._ensure_extraction_state()
+        with self._extraction_lock:
+            if self._extraction_thread is not None:
+                self._extraction_flush = True
+                self._extraction_wake.notify_all()
         return self._extraction_idle.wait(timeout)
 
     # ------------------------------------------------------------------
