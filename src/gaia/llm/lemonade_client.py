@@ -319,10 +319,9 @@ def resolve_default_chat_model() -> str:
 DEFAULT_EMBEDDING_MODEL = "user.embeddinggemma-300m-GGUF"
 DEFAULT_EMBEDDING_CHECKPOINT = "ggml-org/embeddinggemma-300M-GGUF:Q8_0"
 
-#: llama.cpp's Vulkan cooperative-matrix path crashes llama-server as it loads
-#: an embedding model on AMD Radeon iGPUs (#1831). The embedder is small, so it
-#: runs on the CPU backend and chat models keep the fast GPU path.
-CPU_BACKEND_MODELS = frozenset(
+#: Embedders whose llama.cpp backend GAIA chooses: the GPU, falling back to the
+#: CPU only when the GPU load fails (#5049).
+EMBEDDER_MODELS = frozenset(
     {DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_MODEL.removeprefix("user.")}
 )
 
@@ -332,15 +331,19 @@ EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
 
 
-def llamacpp_backend_for(model_name: Optional[str]) -> Optional[str]:
-    """The llama.cpp backend *model_name* must load on, or None for the default."""
-    if platform.system() == "Darwin" or model_name not in CPU_BACKEND_MODELS:
-        return None
-    return "cpu"
+def manages_embedder_backend(model_name: Optional[str]) -> bool:
+    """Whether GAIA picks *model_name*'s llama.cpp backend and saves it.
+
+    macOS is left to Lemonade, which runs everything on Metal.
+    """
+    return platform.system() != "Darwin" and model_name in EMBEDDER_MODELS
 
 
 #: ``(base_url, model)`` pairs whose backend this process has saved on the server.
 _PINNED_BACKENDS: set = set()
+#: ``(base_url, model)`` pairs whose GPU load failed in this process; they go
+#: straight to the CPU backend instead of crashing the GPU one again.
+_CPU_FALLBACK_EMBEDDERS: set = set()
 _PINNED_BACKENDS_LOCK = threading.Lock()
 
 
@@ -517,13 +520,11 @@ CO_RESIDENT_MODELS = (DEFAULT_EMBEDDING_MODEL,)
 def co_resident_reserve_gb(capacity) -> float:
     """Memory the ``CO_RESIDENT_MODELS`` take from *capacity*'s pool.
 
-    They run on the CPU backend (``llamacpp_backend_for``), so they only draw on
-    a pool that shares system RAM; a discrete GPU's VRAM is not theirs.
+    They load on the GPU (or system RAM on a CPU-only PC), the same pool the
+    chat model's window is sized from.
     """
     from gaia.llm.model_fit import required_memory_gb
 
-    if not capacity.shares_system_ram:
-        return 0.0
     total = 0.0
     for model_id in CO_RESIDENT_MODELS:
         mr = find_model_requirement(model_id)
@@ -1639,13 +1640,11 @@ def backend_crash_remedy(model: str) -> str:
     """What to do when Lemonade is up but llama-server dies loading ``model``."""
     return (
         f"Lemonade is running, but llama.cpp exited while loading '{model}'. "
-        "On an AMD Radeon GPU with the Vulkan backend, the likely cause is "
-        "llama.cpp's cooperative-matrix crash. GAIA loads its embedding model on "
-        "the CPU backend to avoid it: run `gaia lemonade embedded stop`, then "
-        "`gaia lemonade embedded start`, so GAIA's server picks that up. For "
-        "another model, load it with llamacpp_backend=cpu, or start Lemonade "
-        "with GGML_VK_DISABLE_COOPMAT=1 (every model then runs slower). "
-        "Otherwise, Lemonade's server log has llama-server's own output."
+        "On an AMD Radeon GPU with the Vulkan backend, a possible cause is "
+        "llama.cpp's cooperative-matrix crash: load the model with "
+        "llamacpp_backend=cpu, or start Lemonade with GGML_VK_DISABLE_COOPMAT=1 "
+        "(every model then runs slower). Otherwise, Lemonade's server log has "
+        "llama-server's own output."
     )
 
 
@@ -3132,6 +3131,63 @@ class LemonadeClient:
             # latest error to the caller's handling. Fail-loudly is preserved.
             raise last_error
 
+    def _default_llamacpp_backend(self) -> Optional[str]:
+        """The llama.cpp backend Lemonade picks for this machine (``vulkan``...).
+
+        Named explicitly in an embedder load so it replaces a saved CPU pin.
+        None when the server does not say; the load then omits the backend.
+        """
+        try:
+            info = self.get_system_info(timeout=15)
+        except LemonadeAuthError:
+            raise
+        except LemonadeClientError as e:
+            self.log.warning(
+                f"Could not read {self.base_url}/system-info to pick the embedding "
+                f"model's llama.cpp backend ({e}); letting Lemonade choose it."
+            )
+            return None
+        llamacpp = (info.get("recipes") or {}).get("llamacpp") or {}
+        backend = llamacpp.get("default_backend")
+        return backend if isinstance(backend, str) and backend else None
+
+    def _post_embedder_load(
+        self,
+        url: str,
+        request_data: Dict[str, Any],
+        timeout: int,
+        model_name: str,
+        load_retries: int,
+    ) -> Dict[str, Any]:
+        """Load an embedder on the GPU, falling back to the CPU when it won't start.
+
+        Only a backend-startup failure falls back — a missing or corrupt model
+        is raised for the caller's download/repair handling. The fallback is
+        logged as a warning and saved in Lemonade like any embedder load.
+        """
+        try:
+            return self._post_load_with_transient_retry(
+                url, request_data, timeout, model_name, min(load_retries, 1)
+            )
+        except Exception as e:
+            if not self._is_transient_load_error(e):
+                raise
+            backend = request_data.get("llamacpp_backend") or "default"
+            self.log.warning(
+                f"Embedding model '{model_name}' failed to load on llama.cpp's "
+                f"{backend} backend ({e}). Loading it on the CPU backend instead: "
+                "memory and document search keep working, but indexing uses the "
+                "CPU. GAIA tries the GPU again next time it starts; see "
+                "https://amd-gaia.ai/docs/reference/troubleshooting if it keeps "
+                "failing."
+            )
+            with _PINNED_BACKENDS_LOCK:
+                _CPU_FALLBACK_EMBEDDERS.add((self.base_url, model_name))
+            request_data["llamacpp_backend"] = "cpu"
+            return self._post_load_with_transient_retry(
+                url, request_data, timeout, model_name, load_retries
+            )
+
     def _execute_with_auto_download(
         self,
         api_call: Callable,
@@ -3989,12 +4045,13 @@ class LemonadeClient:
             raise LemonadeClientError(f"Error generating embeddings: {str(e)}")
 
     def _pin_llamacpp_backend(self, model_name: str) -> None:
-        """Load *model_name* once on its required backend, saving the choice.
+        """Load *model_name* once per process on its backend, saving the choice.
 
-        ``/embeddings`` makes Lemonade load the model itself on its default
-        backend; the saved option makes those auto-loads use the right one.
+        ``/embeddings`` makes Lemonade load the model itself from its saved
+        options, so the saved backend must be one that loads on this machine —
+        and a CPU pin saved by an older GAIA is replaced by the GPU here.
         """
-        if llamacpp_backend_for(model_name) is None:
+        if not manages_embedder_backend(model_name):
             return
         with _PINNED_BACKENDS_LOCK:
             if (self.base_url, model_name) in _PINNED_BACKENDS:
@@ -5465,7 +5522,7 @@ class LemonadeClient:
                 prompt=prompt,
                 load_retries=load_retries,
             )
-        if llamacpp_backend_for(model_name) is not None:
+        if manages_embedder_backend(model_name):
             with _PINNED_BACKENDS_LOCK:
                 _PINNED_BACKENDS.add((self.base_url, model_name))
         return response
@@ -5504,8 +5561,8 @@ class LemonadeClient:
                      Overrides the default value for this model.
             save_options: If True, persists ctx_size and llamacpp_args to config file.
                          Model will use these settings on future loads.
-                         Always on for a model with a forced llama.cpp backend
-                         (:func:`llamacpp_backend_for`).
+                         Always on for an embedder whose backend GAIA picks
+                         (:func:`manages_embedder_backend`).
             prompt: If True, prompt user before downloading (default: True).
                    Set to False to download automatically without user confirmation.
             load_retries: Number of times to retry on a TRANSIENT backend-startup
@@ -5528,12 +5585,9 @@ class LemonadeClient:
         """
         self.log.debug(f"Loading {model_name}")
 
-        # A forced-backend load saves its options; never save the chat flags.
-        if (
-            llamacpp_args is None
-            and ctx_size is not None
-            and llamacpp_backend_for(model_name) is None
-        ):
+        managed_embedder = manages_embedder_backend(model_name)
+        # An embedder load saves its options; never save the chat flags.
+        if llamacpp_args is None and ctx_size is not None and not managed_embedder:
             # The chat flags are a speed-up; an unreadable catalog must not
             # block the load itself, which only needs POST /load.
             try:
@@ -5550,13 +5604,16 @@ class LemonadeClient:
                 )
             if recipe == "llamacpp":
                 llamacpp_args = CHAT_LLAMACPP_ARGS
-        if llamacpp_args is None and model_name in CPU_BACKEND_MODELS:
+        if llamacpp_args is None and model_name in EMBEDDER_MODELS:
             llamacpp_args = EMBEDDER_LLAMACPP_ARGS
 
         request_data = {"model_name": model_name}
-        backend = llamacpp_backend_for(model_name)
-        if backend:
-            request_data["llamacpp_backend"] = backend
+        if managed_embedder:
+            with _PINNED_BACKENDS_LOCK:
+                fell_back = (self.base_url, model_name) in _CPU_FALLBACK_EMBEDDERS
+            backend = "cpu" if fell_back else self._default_llamacpp_backend()
+            if backend:
+                request_data["llamacpp_backend"] = backend
             # Saved so Lemonade's own auto-loads (``/embeddings``) use it too.
             save_options = True
         if llamacpp_args:
@@ -5568,9 +5625,14 @@ class LemonadeClient:
         url = f"{self.base_url}/load"
 
         try:
-            response = self._post_load_with_transient_retry(
-                url, request_data, timeout, model_name, load_retries
-            )
+            if managed_embedder and request_data.get("llamacpp_backend") != "cpu":
+                response = self._post_embedder_load(
+                    url, request_data, timeout, model_name, load_retries
+                )
+            else:
+                response = self._post_load_with_transient_retry(
+                    url, request_data, timeout, model_name, load_retries
+                )
             self.log.debug(f"Loaded {model_name} successfully: response={response}")
             self.model = model_name
             return response
