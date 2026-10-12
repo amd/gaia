@@ -299,7 +299,7 @@ _GUARD_MODEL_NAME_PATTERNS = (
 )
 #: First lines a classifier gives instead of a title.
 _CLASSIFIER_VERDICT_RE = _re.compile(
-    r"^(safe|unsafe|yes|no)(\s*[,:]?\s*s\d+)*$", _re.IGNORECASE
+    r"^(safe|unsafe|yes|no)([\s,:]+s\d+)*$", _re.IGNORECASE
 )
 _QUESTION_TITLE_MAX_CHARS = 60
 
