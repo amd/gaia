@@ -508,6 +508,8 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 	ti.CharLimit = 4096
 	ti.SetHeight(1)
 	ti.ShowLineNumbers = false
+	// The default "┃ " prompt sits beside the block cursor and reads as a second one.
+	ti.Prompt = "› "
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
