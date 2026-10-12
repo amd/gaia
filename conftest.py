@@ -146,6 +146,16 @@ def _isolate_config_dir() -> None:
     config.GAIA_CONFIG_DIR = Path(os.environ["GAIA_CONFIG_FILE"]).parent
 
 
+def _keep_ssl_unpatched() -> None:
+    """Tests that call an entry point must not swap ``ssl.SSLContext`` for the
+    rest of the session; tests/unit/test_tls_trust_store.py covers injection."""
+    if importlib.util.find_spec("gaia.tls") is None:  # an older installed wheel
+        return
+    from gaia import tls
+
+    tls._injected = True
+
+
 _prepend_source_roots()
 _isolate_gaia_state()
 
@@ -156,6 +166,7 @@ def pytest_sessionstart(session):  # noqa: D103 — pytest hook
 
     _assert_local(_fail)
     _isolate_config_dir()
+    _keep_ssl_unpatched()
 
 
 def _restore_tool_registry():

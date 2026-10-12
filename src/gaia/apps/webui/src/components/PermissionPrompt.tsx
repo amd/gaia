@@ -118,6 +118,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                             : <>Allow GAIA to use <code>{notification.tool}</code>?</>}
                     </h2>
                     {detail && <p className="perm-card-detail"><code>{detail}</code></p>}
+                    {!detail && notification.summary && <p className="perm-card-detail">{notification.summary}</p>}
                     {freshConsent && notification.message && <p className="perm-card-detail">{notification.message}</p>}
                 </div>
                 {remaining !== null && !expired && (

@@ -71,7 +71,8 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
 
     const cloud = choice !== 'local';
     const steps: SetupStep[] = run?.steps ?? (cloud ? initial.cloud_steps ?? initial.steps : initial.steps);
-    const reason = initial.reasons?.find((r) => !(cloud && CHAT_MODEL_MISSING.test(r)));
+    // The check ran before setup; once a run starts its steps say what is left.
+    const reason = run ? undefined : initial.reasons?.find((r) => !(cloud && CHAT_MODEL_MISSING.test(r)));
     const running = run?.state === 'running' || run?.state === 'verifying';
     const installed = run?.state === 'ready';
 

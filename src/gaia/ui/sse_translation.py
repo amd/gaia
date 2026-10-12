@@ -98,6 +98,16 @@ def _debug_enabled_by_env() -> bool:
 #: the same stream once the answer arrives (spec §5.1).
 TERMINAL_TYPES = frozenset({"final", "error"})
 
+#: What a ``tool_result``'s ``data`` carries when the tool gave no structured
+#: ``result_data``: the handler's own summary view of the result.
+SUMMARY_VIEW_KEYS = (
+    "summary",
+    "success",
+    "summary_truncated",
+    "command_output",
+    "latency_ms",
+)
+
 #: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
 #: words so far, or characters of a tool call's arguments so far.
 _PHASE_COUNT_FIELDS = ("words", "chars")
@@ -352,13 +362,7 @@ class CanonicalTranslator:
             # The handler's tool_result event is a summary view; carry the
             # available structured bits so the generic result card has content.
             data = {}
-            for key in (
-                "summary",
-                "success",
-                "summary_truncated",
-                "command_output",
-                "latency_ms",
-            ):
+            for key in SUMMARY_VIEW_KEYS:
                 if key in event:
                     data[key] = event[key]
         tool = self._last_tool or "unknown"

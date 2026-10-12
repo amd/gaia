@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -40,6 +41,9 @@ type Config struct {
 	AgentName string
 	// Extras run after the generic checks, in order.
 	Extras []ExtraCheck
+	// Model is the chat model this launch starts on. A cloud id means the
+	// agent's default local chat model is not needed.
+	Model string
 }
 
 func (c Config) withDefaults() Config {
@@ -191,6 +195,7 @@ func checkDaemon(ctx context.Context, t Transport, cfg Config, rep *Report) Stat
 		// resolving a version skew is not, and must stay the user's call.
 		if startable(err) {
 			row.Fix = FixStartDaemon
+			row.AutoFix = simplyNotRunning(err) && !lemonadeElsewhere()
 			row.Line = "not running"
 		} else {
 			row.Line = "unusable"
@@ -215,6 +220,25 @@ func startable(err error) bool {
 		return stale.Kind != daemon.StaleUnresponsive
 	}
 	return false
+}
+
+// simplyNotRunning reports whether the daemon is absent rather than foreign: no
+// record, or one whose process is gone. A port answering as something else
+// keeps the `f` key — reclaiming it is the user's call.
+func simplyNotRunning(err error) bool {
+	var notRunning *daemon.NotRunningError
+	if errors.As(err, &notRunning) {
+		return true
+	}
+	var stale *daemon.StaleError
+	return errors.As(err, &stale) && (stale.Kind == daemon.StalePIDDead || stale.Kind == daemon.StaleCorrupt)
+}
+
+// lemonadeElsewhere reports whether LEMONADE_BASE_URL points at another
+// machine. That setup is the user's own, so the gate starts nothing for it.
+func lemonadeElsewhere() bool {
+	base := strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv))
+	return base != "" && !isLoopback(base)
 }
 
 func (r Row) commit(rep *Report) State {
@@ -304,6 +328,7 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 		row.Line = "installed, not started"
 		row.Detail = fmt.Sprintf("The %s agent is registered but its state is %q.", cfg.AgentName, a.State)
 		row.Fix = FixStartSidecar
+		row.AutoFix = !lemonadeElsewhere()
 		row.Remedy = Remedy{
 			Action:  "Start it — the background service supervises it from then on.",
 			Command: "gaia daemon start-agent " + cfg.AgentID,
@@ -729,6 +754,18 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 	setRow(rep, lemonade)
 
 	// --- AI model -----------------------------------------------------------
+	// The sidecar reports on its default LOCAL chat model, which a launch on a
+	// cloud model never loads — so ask whether the cloud model can answer.
+	if cfg.runsInCloud() {
+		row, listed := checkCloudModel(ctx, cfg.Model, model)
+		if listed {
+			row.State = StateOK
+			row.Line = "chat uses " + cfg.Model
+		}
+		setRow(rep, row)
+		return row.State, false
+	}
+
 	// KeyModel is not agent-repairable either — a missing model blocks the
 	// same way a down daemon does.
 	if !body.Model.Present {

@@ -153,6 +153,8 @@ interface ChatState {
     draftPermissionMode: PermissionMode;
     /** The mode a new chat starts in: `full_access` in config, else ask. */
     defaultPermissionMode: PermissionMode;
+    /** Library documents picked with no chat open; the next new chat starts with them. */
+    draftDocumentIds: string[];
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     isLoadingMessages: boolean;
@@ -170,6 +172,9 @@ interface ChatState {
     setDraftPermissionMode: (mode: PermissionMode) => void;
     /** Adopt the configured default; an untouched draft follows it. */
     setDefaultPermissionMode: (mode: PermissionMode) => void;
+    addDraftDocuments: (ids: string[]) => void;
+    removeDraftDocument: (id: string) => void;
+    clearDraftDocuments: () => void;
     setSidebarOpen: (open: boolean) => void;
     toggleSidebarCollapsed: () => void;
     setSidebarCollapsed: (collapsed: boolean) => void;
@@ -332,6 +337,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showSchedules: false,
     draftPermissionMode: 'ask',
     defaultPermissionMode: 'ask',
+    draftDocumentIds: [],
     setThemePreference: (pref) => {
         writePref('gaia-chat-theme', pref);
         const theme = resolveTheme(pref);
@@ -363,6 +369,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             draftPermissionMode:
                 state.draftPermissionMode === state.defaultPermissionMode ? mode : state.draftPermissionMode,
         })),
+    addDraftDocuments: (ids) =>
+        set((state) => {
+            const toAdd = ids.filter((id) => !state.draftDocumentIds.includes(id));
+            return toAdd.length ? { draftDocumentIds: [...state.draftDocumentIds, ...toAdd] } : state;
+        }),
+    removeDraftDocument: (id) =>
+        set((state) => ({ draftDocumentIds: state.draftDocumentIds.filter((d) => d !== id) })),
+    clearDraftDocuments: () => set({ draftDocumentIds: [] }),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     toggleSidebarCollapsed: () =>
         set((state) => {

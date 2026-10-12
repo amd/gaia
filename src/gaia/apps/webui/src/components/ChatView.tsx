@@ -665,6 +665,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         toolArgs: event.args as Record<string, unknown> | undefined,
                         confirmId: event.confirm_id,
                         alwaysScope: typeof event.always_scope === 'string' ? event.always_scope : undefined,
+                        // A relayed agent sends a summary of the call instead of its args.
+                        summary: typeof event.summary === 'string' && event.summary ? event.summary : undefined,
                         // No timeout from the backend means it waits; don't invent one.
                         timeoutSeconds: event.timeout_seconds,
                     });

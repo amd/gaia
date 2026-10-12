@@ -26,18 +26,29 @@ logger = logging.getLogger(__name__)
 
 # ── Error helpers ──────────────────────────────────────────────────────────
 
-_NGROK_INSTALL_HINT = (
-    "ngrok is not installed. Install it from https://ngrok.com/download "
-    "or run one of:\n"
-    "    brew install ngrok                          # macOS\n"
-    "    choco install ngrok                         # Windows\n"
-    "    sudo snap install ngrok                     # Linux (snap)\n"
-    "    curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | "
-    "sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null && "
-    "echo 'deb https://ngrok-agent.s3.amazonaws.com buster main' | "
-    "sudo tee /etc/apt/sources.list.d/ngrok.list && "
-    "sudo apt update && sudo apt install ngrok       # Linux (apt)"
-)
+_NGROK_INSTALL_COMMANDS = {
+    "Darwin": ["brew install ngrok"],
+    "Windows": ["choco install ngrok"],
+    "Linux": [
+        "sudo snap install ngrok",
+        "curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | "
+        "sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null && "
+        "echo 'deb https://ngrok-agent.s3.amazonaws.com buster main' | "
+        "sudo tee /etc/apt/sources.list.d/ngrok.list && "
+        "sudo apt update && sudo apt install ngrok",
+    ],
+}
+
+
+def _ngrok_install_hint(system: Optional[str] = None) -> str:
+    """How to install ngrok, naming only this OS's package-manager commands."""
+    commands = _NGROK_INSTALL_COMMANDS.get(system or platform.system(), [])
+    hint = "ngrok is not installed. Install it from https://ngrok.com/download"
+    if not commands:
+        return hint + "."
+    lead = "or run:" if len(commands) == 1 else "or run one of:"
+    return f"{hint} {lead}\n" + "\n".join(f"    {c}" for c in commands)
+
 
 _NGROK_AUTHTOKEN_HINT = (
     "ngrok authtoken not configured. Sign up for a free account at "
@@ -373,7 +384,7 @@ class TunnelManager:
         # Check ngrok installation
         ngrok_path = self._find_ngrok()
         if not ngrok_path:
-            self._error = _NGROK_INSTALL_HINT
+            self._error = _ngrok_install_hint()
             logger.warning("ngrok not found on PATH")
             return self.get_status()
 

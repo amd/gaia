@@ -402,6 +402,12 @@ approval, and keeps the result off every stable channel:
   terminal binaries, and the wheel attached. If the Windows setup fails to build
   or fails its smoke test, the pre-release still ships without it, its notes say
   so, and the run fails.
+- **GAIA agent** — the flagship `gaia-agent` binaries, frozen from the
+  candidate's commit and attached to the pre-release with
+  `gaia-agent-release.json`. The candidate's `gaia init`, `gaia hub install gaia`
+  and Windows setup use these, never the Agent Hub's `gaia`, which can be many
+  commits older. A candidate whose flagship build fails is not published; an
+  install that cannot reach the pre-release's agent fails with the reason.
 - **PyPI** — `X.Y.ZrcN`. `pip install amd-gaia` skips it; `pip install --pre amd-gaia`
   or `amd-gaia==X.Y.ZrcN` gets it.
 - **npm** — `@amd-gaia/agent-ui@X.Y.Z-rc.N` under the `next` dist-tag; `latest`

@@ -16,6 +16,7 @@ then runs remotely and only the embedding model is needed locally.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -29,11 +30,12 @@ logger = get_logger(__name__)
 
 PROFILE = "gaia"
 #: Covers a daemon start plus an embedded Lemonade start (see gaiainit.CheckTimeout).
-CHECK_TIMEOUT_S = 150
+CHECK_TIMEOUT_S = 180
 #: The check plus a cold model load on a slow disk.
 VERIFY_TIMEOUT_S = CHECK_TIMEOUT_S + 150
 _NOT_READY_EXIT = 1
 _LOAD_FAILED_EXIT = 3
+_UNWRAPPED_COLUMNS = 1000
 
 PHASE_SERVER = "server"
 PHASE_MODELS = "models"
@@ -282,6 +284,9 @@ class SetupRunner:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
+                    # Rich wraps a pipe at 80 columns, which would cut the
+                    # error line shown as the failure reason mid-sentence.
+                    env={**os.environ, "COLUMNS": str(_UNWRAPPED_COLUMNS)},
                 )
             except OSError as e:
                 raise SetupError(

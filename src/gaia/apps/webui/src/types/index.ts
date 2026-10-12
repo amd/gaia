@@ -374,6 +374,8 @@ export interface SystemStatus {
     context_size_sufficient: boolean;
     model_downloaded: boolean | null;
     default_model_name: string | null;
+    /** A cloud model: nothing to download, load or resize on this PC. */
+    default_model_is_cloud?: boolean;
     /**
      * Catalog-reported size of ``default_model_name`` (GB). Used by the
      * "model not downloaded" banner so the size hint stays in sync with

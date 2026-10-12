@@ -63,6 +63,12 @@ describe('SetupScreen', () => {
         expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
     });
 
+    it('stops naming the missing model once setup has started', async () => {
+        await start();
+        expect(await screen.findByRole('button', { name: 'Start chatting' })).toBeInTheDocument();
+        expect(screen.queryByText('The local model server is not installed.')).not.toBeInTheDocument();
+    });
+
     it('installs the local chat model when running on this PC', async () => {
         await start();
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(false));

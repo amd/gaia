@@ -33,6 +33,7 @@ from gaia.config import GAIA_CONFIG_DIR
 from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     LemonadeClient,
+    LemonadeClientError,
     lemonade_auth_headers,
     resolve_lemonade_api_key,
 )
@@ -377,13 +378,22 @@ class GatewayManager:
 
     @property
     def base_url(self) -> str:
-        """Lemonade's own base URL (already ends in ``/api/v1``)."""
-        return self.client.base_url
+        """Lemonade's own base URL (already ends in ``/api/v1``).
 
-    def _headers(self) -> Dict[str, str]:
+        Raises:
+            GatewayError: GAIA's Lemonade is restarting, or the client points
+                at a server that is not GAIA's; a token must not go there.
+        """
+        try:
+            return self.client.credential_base_url()
+        except LemonadeClientError as e:
+            raise GatewayError(str(e)) from e
+
+    @staticmethod
+    def _headers(base_url: str) -> Dict[str, str]:
         return {
             "Content-Type": "application/json",
-            **lemonade_auth_headers(resolve_lemonade_api_key()),
+            **lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url)),
         }
 
     def _request(
@@ -395,15 +405,20 @@ class GatewayManager:
         timeout: int = _REQUEST_TIMEOUT,
         redact: bool = False,
     ) -> Dict[str, Any]:
-        url = f"{self.base_url}/{path.lstrip('/')}"
+        base_url = self.base_url
+        url = f"{base_url}/{path.lstrip('/')}"
         self.log.debug(f"{method} {url}" + ("" if redact else f" {payload or ''}"))
         try:
             response = requests.request(
-                method, url, json=payload, headers=self._headers(), timeout=timeout
+                method,
+                url,
+                json=payload,
+                headers=self._headers(base_url),
+                timeout=timeout,
             )
         except requests.exceptions.RequestException as e:
             raise GatewayError(
-                f"Lemonade Server is not reachable at {self.base_url}: {e}. "
+                f"Lemonade Server is not reachable at {base_url}: {e}. "
                 f"{describe_start_hint().instruction} "
                 f"Or point LEMONADE_BASE_URL at a server already running."
             ) from e

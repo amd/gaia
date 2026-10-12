@@ -347,6 +347,25 @@ def test_a_clean_run_is_verified_then_ready(monkeypatch):
     assert "[====] 100% (5 MB/5 MB)" in view["log_tail"]
 
 
+def test_init_error_lines_are_not_wrapped_at_80_columns(monkeypatch):
+    """The failure reason is the last ❌ line; Rich would wrap it in a pipe."""
+    from rich.console import Console
+
+    calls = []
+    _popen(monkeypatch, _FakeProc(io.BytesIO(b"")), calls)
+    monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
+    runner = sr.SetupRunner()
+    runner.start(False)
+    _wait_done(runner)
+
+    env = calls[0][1]["env"]
+    assert env["PATH"] == __import__("os").environ["PATH"]
+    message = "❌ " + "Could not reach the Agent Hub " * 10
+    buf = io.StringIO()
+    Console(file=buf, _environ=env).print(message)
+    assert buf.getvalue().strip() == message.strip()
+
+
 def test_progress_follows_the_output(monkeypatch):
     stdout = _BlockingStdout(_OUTPUT)
     proc = _FakeProc(stdout)

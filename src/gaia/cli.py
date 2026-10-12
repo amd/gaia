@@ -42,6 +42,7 @@ from gaia.mcp.ports import (
 )
 from gaia.perf_analysis import run_perf_visualization
 from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
+from gaia.tls import use_os_trust_store
 from gaia.version import version
 
 # Load environment variables from .env file
@@ -4323,6 +4324,7 @@ def _handle_schedule(args):
 
 
 def main():
+    use_os_trust_store()
     parser = build_parser()
     log = get_logger(__name__)
 
@@ -8052,6 +8054,16 @@ def handle_agent_list(_args):
             aid = entry.get("id", "?")
             ver = entry.get("latest_version", "?")
             mark = "  [installed]" if aid in installed else ""
+            gate, gate_error = catalog.listing_core_gate(entry)
+            if gate_error:
+                mark += f"  [unreadable min_gaia_version: {gate_error}]"
+            if gate.requires_gaia_version:
+                mark += f"  [needs GAIA {gate.requires_gaia_version}+"
+                mark += (
+                    f"; installs {gate.installable_version}]"
+                    if gate.installable_version
+                    else "]"
+                )
             print(f"  {aid:<24} {ver}{mark}")
 
     extra = [aid for aid in sorted(installed) if aid not in available_ids]
@@ -8064,6 +8076,13 @@ def handle_agent_list(_args):
         print("No agents installed, and the Agent Hub catalog is unavailable.")
     else:
         print("\nInstall one with: gaia agent install <id>")
+        if any(
+            catalog.listing_core_gate(e)[0].requires_gaia_version for e in available
+        ):
+            print(
+                f"A version marked 'needs GAIA' installs after upgrading the core: "
+                f"{catalog.CORE_UPGRADE_COMMAND}"
+            )
 
 
 def handle_agent_install(args):
@@ -8284,12 +8303,21 @@ def _fmt_uptime(seconds: float) -> str:
     return f"{s}s"
 
 
+def _print_daemon_start_progress(elapsed: float) -> None:
+    print(
+        f"⏳ Starting the GAIA daemon ({elapsed:.0f}s). The first start after "
+        "installing or upgrading GAIA takes longer.",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _handle_daemon_start():
     from gaia.daemon import client
     from gaia.daemon.errors import DaemonError
 
     try:
-        inst = client.start_or_attach()
+        inst = client.start_or_attach(on_progress=_print_daemon_start_progress)
     except DaemonError as e:
         print(f"❌ {e}")
         sys.exit(1)
@@ -8420,7 +8448,7 @@ def _handle_daemon_start_agent(args):
             sys.exit(1)
 
     try:
-        inst = client.start_or_attach()
+        inst = client.start_or_attach(on_progress=_print_daemon_start_progress)
     except DaemonError as e:
         print(f"❌ {e}")
         sys.exit(1)
@@ -8690,7 +8718,7 @@ def _hub_daemon():
     from gaia.daemon.errors import DaemonError
 
     try:
-        return client.start_or_attach()
+        return client.start_or_attach(on_progress=_print_daemon_start_progress)
     except DaemonError as e:
         print(f"❌ {e}")
         sys.exit(1)
@@ -8765,6 +8793,19 @@ def _handle_hub_list(args):
             f"{state:<12} {_fmt_size(a.get('download_size_bytes')):<8} "
             f"{a.get('name') or ''}"
         )
+    from gaia.hub.catalog import CORE_UPGRADE_COMMAND
+
+    for a in agents:
+        if a.get("core_gate_error"):
+            print(f"\n{a.get('id')}: {a['core_gate_error']}")
+        if a.get("requires_gaia_version"):
+            usable = a.get("installable_version")
+            print(
+                f"\n{a.get('id')} {a.get('latest_version')} needs GAIA "
+                f"{a['requires_gaia_version']} or newer"
+                + (f"; this core installs {usable}" if usable else "")
+                + f". Upgrade: {CORE_UPGRADE_COMMAND}"
+            )
     hidden = body.get("unsupervised_filtered") or []
     if hidden:
         print(

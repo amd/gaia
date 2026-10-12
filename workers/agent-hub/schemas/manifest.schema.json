@@ -146,6 +146,10 @@
         "published_at": { "type": "string", "format": "date-time" },
         "publisher": { "type": "string" },
         "deprecated": { "type": "boolean" },
+        "min_gaia_version": {
+          "type": "string",
+          "description": "Oldest GAIA core this version runs on, from its own gaia-agent.yaml. Absent on versions published before it was recorded; for the latest version a client then reads the top-level min_gaia_version."
+        },
         "artifact": {
           "$ref": "#/definitions/artifact",
           "description": "Primary artifact (first published for this version). Kept for catalog display and single-artifact (wheel) agents."

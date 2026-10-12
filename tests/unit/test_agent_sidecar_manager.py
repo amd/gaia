@@ -614,6 +614,21 @@ def test_version_tuple_parses_and_rejects_garbage():
         mgr._version_tuple("not-a-version")
 
 
+def test_version_tuple_ignores_build_metadata():
+    # A release candidate's flagship installs as <agent>+<rc tag>.
+    assert mgr._version_tuple("0.3.0+v0.25.0-rc3") == (0, 3, 0)
+
+
+def test_user_mode_release_candidate_binary_spawns(monkeypatch, tmp_path):
+    m, captured = _install_fake_user_spawn(
+        monkeypatch, tmp_path, version="0.6.0+v0.25.0-rc3"
+    )
+    m.start()
+    assert captured["popen_kwargs"] is not None
+    assert m.secret_delivery == "file"
+    m.shutdown()
+
+
 def test_start_captures_version(monkeypatch, tmp_path):
     m, captured = _install_fake_spawn(
         monkeypatch,

@@ -5,6 +5,10 @@
 - Requires `amd-gaia>=0.25.0`, the first core release that ships
   `gaia.agents.tools.path_access`, which the agent imports at start. With an
   older core the agent fails at import.
+- A chat started while GAIA's Lemonade Server was stopped no longer stays on the
+  stopped-state address `localhost:13305`. Without a configured `base_url` the
+  agent takes the port the server actually starts on, so its first turn answers
+  instead of failing with "Couldn't reach the local LLM".
 - `run_python`, `execute_python_file` and the Windows notification fallback start
   their child process without GAIA's internal credentials, as core's shell and
   MCP children already do.

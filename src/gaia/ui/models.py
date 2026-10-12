@@ -94,6 +94,8 @@ class SystemStatus(BaseModel):
     # Required model for GAIA Chat; None when an unreadable config hides it
     # (``config_error`` then says why).
     default_model_name: Optional[str] = "Gemma-4-E4B-it-GGUF"
+    # True for a cloud model: nothing to download, load or resize locally.
+    default_model_is_cloud: bool = False
     # Catalog-reported size of ``default_model_name``. Populated alongside
     # ``model_downloaded`` so the "not downloaded" banner can show an accurate
     # size hint instead of a hard-coded one (the previous "~25 GB" was a stale
