@@ -346,6 +346,19 @@ When GAIA asks permission, the prompt takes focus and `Enter` does nothing, so a
 
 ---
 
+## Long Responses
+
+A chat reply that runs longer than 600 seconds stops with "Response timed out after 600s." Time spent waiting for you to answer a question or approve a tool doesn't count. Raise the limit for slow models or heavy queries with `GAIA_STREAM_TIMEOUT`, set before GAIA starts:
+
+```bash
+export GAIA_STREAM_TIMEOUT=1800   # seconds; whole number from 1 to 86400
+gaia chat --ui
+```
+
+An invalid value (not a whole number, or out of range) stops the Agent UI server at startup with an error naming the variable, rather than quietly using the default.
+
+---
+
 ## Memory
 
 The agent can remember facts, preferences, and decisions across sessions. Memory is **on by default (beta)** — see the [Agent Memory guide](/guides/memory) to learn more. Turn it off in **Settings → Memory**, and open **Memory** in the sidebar to search, edit or forget what GAIA remembers.

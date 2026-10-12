@@ -236,6 +236,44 @@ _MAX_CACHED_AGENTS = 10
 # Non-streaming turns are cut off after this long (seconds).
 _CHAT_TIMEOUT_SECONDS = 600.0
 
+_STREAM_TIMEOUT_ENV = "GAIA_STREAM_TIMEOUT"
+_DEFAULT_STREAM_TIMEOUT_SECONDS = 600
+_MAX_STREAM_TIMEOUT_SECONDS = 86400
+
+
+def _stream_timeout_from_env() -> int:
+    """Resolve the streaming-turn timeout in seconds from ``GAIA_STREAM_TIMEOUT``.
+
+    Unset or empty returns the 600 s default. Any other value must be a whole
+    number of seconds from 1 to 86400 (24 h).
+
+    Raises:
+        ValueError: the variable is set to a non-integer or out-of-range value.
+    """
+    raw = os.environ.get(_STREAM_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_STREAM_TIMEOUT_SECONDS
+    remedy = (
+        f"Set it to a whole number of seconds from 1 to "
+        f"{_MAX_STREAM_TIMEOUT_SECONDS} (e.g. {_STREAM_TIMEOUT_ENV}=1800), or "
+        f"unset it for the {_DEFAULT_STREAM_TIMEOUT_SECONDS}s default. See "
+        "https://amd-gaia.ai/docs/guides/agent-ui#long-responses"
+    )
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"{_STREAM_TIMEOUT_ENV}={raw!r} is not a whole number of seconds. "
+            f"{remedy}"
+        ) from e
+    if not 1 <= value <= _MAX_STREAM_TIMEOUT_SECONDS:
+        raise ValueError(f"{_STREAM_TIMEOUT_ENV}={value} is out of range. {remedy}")
+    return value
+
+
+# Read once at import so a bad value stops the Agent UI server at startup.
+_STREAM_TIMEOUT_SECONDS = _stream_timeout_from_env()
+
 # Alias so call-sites read naturally; the canonical value lives in database.py.
 _DB_DEFAULT_MODEL = SESSION_DEFAULT_MODEL
 
@@ -2820,7 +2858,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         step_id = 0
         idle_cycles = 0
         _stream_start = _time.time()
-        _STREAM_TIMEOUT = 600  # 10 minutes — large system prompts need time
         # Time spent waiting on a request_user_input answer is the user's, not
         # the turn's; that wait has its own deadline.
         _user_wait = _UserWaitClock()
@@ -2864,13 +2901,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             # Guard: total timeout for the streaming response
             _now = _time.time()
             _waited = _user_wait.update(sse_handler.awaiting_user_input(), _now)
-            if _now - _stream_start - _waited > _STREAM_TIMEOUT:
-                logger.error("Streaming response timed out after %ds", _STREAM_TIMEOUT)
+            if _now - _stream_start - _waited > _STREAM_TIMEOUT_SECONDS:
+                logger.error(
+                    "Streaming response timed out after %ds", _STREAM_TIMEOUT_SECONDS
+                )
                 timeout_event = json.dumps(
                     {
                         "type": "agent_error",
-                        "content": f"Response timed out after {_STREAM_TIMEOUT}s. "
-                        "Try a simpler query or break it into smaller questions.",
+                        "content": f"Response timed out after {_STREAM_TIMEOUT_SECONDS}s. "
+                        "Try a simpler query, break it into smaller questions, "
+                        f"or raise {_STREAM_TIMEOUT_ENV} and restart GAIA.",
                     }
                 )
                 yield f"data: {timeout_event}\n\n"
