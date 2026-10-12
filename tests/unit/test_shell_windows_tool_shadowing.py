@@ -12,18 +12,31 @@ model expected a count.
 import os
 import shutil
 import sys
+from pathlib import Path
 
 import pytest
 
 from gaia.agents.tools.shell_tools import (
     ShellToolsMixin,
-    _system32_first,
+    _parse_line,
+    _pin_windows_tools,
     _wants_windows_tool,
 )
 
 windows_only = pytest.mark.skipif(
     sys.platform != "win32", reason="cmd.exe tool resolution is Windows-only"
 )
+
+
+def _git_usr_bin(tool):
+    """Git-for-Windows' usr/bin, wherever Git is installed, or skip."""
+    git = shutil.which("git")
+    # git.exe sits in cmd\ or mingw64\bin\ under the install root.
+    for root in Path(git).parents if git else ():
+        gnu_bin = root / "usr" / "bin"
+        if (gnu_bin / f"{tool}.exe").is_file():
+            return str(gnu_bin)
+    pytest.skip(f"Git-for-Windows GNU {tool} is not installed")
 
 
 class _Host(ShellToolsMixin):
@@ -48,6 +61,7 @@ def _run(command, cwd):
         ["FIND", "/i", "x", "file.txt"],
         ["sort", "/r"],
         ["sort", "/+3", "data.txt"],
+        ["find.exe", "/c", "x"],
     ],
 )
 def test_cmd_style_switches_mean_the_windows_tool(segment):
@@ -69,18 +83,67 @@ def test_gnu_spellings_and_other_tools_are_left_alone(segment):
     assert not _wants_windows_tool(segment)
 
 
-def test_system32_leads_path_only_when_a_segment_needs_it(monkeypatch):
-    monkeypatch.setenv("SystemRoot", r"C:\Windows")
-    env = {"PATH": r"C:\Program Files\Git\usr\bin"}
+@pytest.fixture
+def system_root(tmp_path, monkeypatch):
+    system32 = tmp_path / "System32"
+    system32.mkdir()
+    for name in ("find.exe", "sort.exe"):
+        (system32 / name).write_text("")
+    monkeypatch.setenv("SystemRoot", str(tmp_path))
+    return system32
 
-    assert _system32_first(env, [["dir", "/s", "/b"]]) is env
 
-    routed = _system32_first(env, [["dir", "/s", "/b"], ["find", "/c", ".pyd"]])
-    assert routed["PATH"].split(os.pathsep) == [
-        os.path.join(r"C:\Windows", "System32"),
-        r"C:\Program Files\Git\usr\bin",
-    ]
-    assert env["PATH"] == r"C:\Program Files\Git\usr\bin"
+def _segments(text):
+    steps, error = _parse_line(text)
+    assert error is None, error
+    assert len(steps) == 1
+    return steps[0].segments
+
+
+def test_text_is_untouched_when_no_segment_needs_the_windows_tool(system_root):
+    text = 'dir /s /b | find . -name "*.py" | sort -u'
+    assert _pin_windows_tools(text, _segments(text)) == text
+
+
+def test_only_the_switch_spelled_segment_is_pinned_by_absolute_path(system_root):
+    text = 'type log.txt | sort -u | find /c "a|b"'
+
+    pinned = _pin_windows_tools(text, _segments(text))
+
+    find_exe = str(system_root / "find.exe")
+    assert pinned == f'type log.txt | sort -u | "{find_exe}" /c "a|b"'
+
+
+def test_find_exe_spelling_is_pinned_too(system_root):
+    text = "FIND.EXE /i x file.txt"
+    pinned = _pin_windows_tools(text, _segments(text))
+    assert pinned == f'"{system_root / "find.exe"}" /i x file.txt'
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # cmd.exe sees three commands where the parser saw two.
+        "dir /b|find /c x | sort /r",
+        # The command word is not literally at the start of its segment.
+        'dir /b | "find" /c x',
+    ],
+)
+def test_a_segment_that_cannot_be_located_is_refused(system_root, text):
+    with pytest.raises(ValueError):
+        _pin_windows_tools(text, _segments(text))
+
+
+def test_missing_system_root_is_an_actionable_error(monkeypatch):
+    monkeypatch.delenv("SystemRoot", raising=False)
+    with pytest.raises(RuntimeError, match="SystemRoot is not set"):
+        _pin_windows_tools("find /c x f", [["find", "/c", "x", "f"]])
+
+
+def test_missing_windows_binary_is_not_found(tmp_path, monkeypatch):
+    monkeypatch.setenv("SystemRoot", str(tmp_path))
+    with pytest.raises(FileNotFoundError):
+        _pin_windows_tools("sort /r f", [["sort", "/r", "f"]])
 
 
 @pytest.mark.parametrize(
@@ -95,14 +158,14 @@ def test_windows_sort_output_switch_is_not_a_read(command):
 
 @windows_only
 def test_find_count_runs_windows_find_even_with_gnu_find_first(tmp_path, monkeypatch):
-    gnu_bin = r"C:\Program Files\Git\usr\bin"
-    if not os.path.isfile(os.path.join(gnu_bin, "find.exe")):
-        pytest.skip("Git-for-Windows GNU find is not installed")
+    gnu_bin = _git_usr_bin("find")
     monkeypatch.setenv("PATH", gnu_bin + os.pathsep + os.environ["PATH"])
     assert shutil.which("find").lower().startswith(gnu_bin.lower())
     (tmp_path / "a.pyd").write_text("")
     (tmp_path / "b.pyd").write_text("")
     (tmp_path / "c.txt").write_text("")
+    # cmd.exe resolves a bare name from the working directory before PATH.
+    (tmp_path / "find.bat").write_text("@echo shadowed\n")
 
     result = _run('dir /b | find /c ".pyd"', tmp_path)
 
@@ -112,9 +175,7 @@ def test_find_count_runs_windows_find_even_with_gnu_find_first(tmp_path, monkeyp
 
 @windows_only
 def test_gnu_find_still_runs_for_gnu_spelling(tmp_path, monkeypatch):
-    gnu_bin = r"C:\Program Files\Git\usr\bin"
-    if not os.path.isfile(os.path.join(gnu_bin, "find.exe")):
-        pytest.skip("Git-for-Windows GNU find is not installed")
+    gnu_bin = _git_usr_bin("find")
     monkeypatch.setenv("PATH", gnu_bin + os.pathsep + os.environ["PATH"])
     (tmp_path / "a.pyd").write_text("")
 
@@ -122,3 +183,15 @@ def test_gnu_find_still_runs_for_gnu_spelling(tmp_path, monkeypatch):
 
     assert result["status"] == "success", result
     assert result["stdout"].strip() == "./a.pyd"
+
+
+@windows_only
+def test_gnu_sort_and_windows_find_share_one_pipeline(tmp_path, monkeypatch):
+    gnu_bin = _git_usr_bin("sort")
+    monkeypatch.setenv("PATH", gnu_bin + os.pathsep + os.environ["PATH"])
+    (tmp_path / "log.txt").write_text("err a\nerr a\nerr b\nok\n")
+
+    result = _run('cat log.txt | sort -u | find /c "err"', tmp_path)
+
+    assert result["status"] == "success", result
+    assert result["stdout"].strip() == "2"

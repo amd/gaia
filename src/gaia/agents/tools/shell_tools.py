@@ -2046,21 +2046,80 @@ _CMD_SWITCH_RE = re.compile(r"/[a-z+?][^/\\]*", re.IGNORECASE)
 
 def _wants_windows_tool(segment: list) -> bool:
     """Whether *segment* is find/sort spelled with cmd-style ``/x`` switches."""
-    return segment[0].lower() in _SHADOWED_WIN_TOOLS and any(
+    return segment[0].lower().removesuffix(".exe") in _SHADOWED_WIN_TOOLS and any(
         _CMD_SWITCH_RE.fullmatch(arg) for arg in segment[1:]
     )
 
 
-def _system32_first(env: Dict[str, str], segments: list) -> Dict[str, str]:
-    """*env* with System32 leading PATH when a segment means the Windows tool.
+def _split_cmd_pipes(text: str) -> list:
+    """*text* split on the ``|`` cmd.exe reads as a pipe: not quoted, not ``^|``."""
+    honour_quotes = text.count('"') % 2 == 0
+    pieces: list = []
+    start = 0
+    quoted = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if honour_quotes and char == '"':
+            quoted = not quoted
+        elif not quoted and char == "^":
+            index += 2
+            continue
+        elif not quoted and char == "|":
+            pieces.append(text[start:index])
+            start = index + 1
+        index += 1
+    pieces.append(text[start:])
+    return pieces
 
-    GNU find reads ``/c`` as the C: drive and walks all of it.
+
+def _system32_tool(name: str) -> str:
+    """The absolute path of the Windows *name* tool in System32."""
+    root = os.environ.get("SystemRoot")
+    if not root:
+        raise RuntimeError(
+            f"SystemRoot is not set, so Windows {name}.exe cannot be located. "
+            "Run the command from a normal Windows session, or use the GNU "
+            f"spelling of {name} (e.g. '{name} -...')."
+        )
+    path = os.path.join(root, "System32", f"{name}.exe")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Windows {name} not found at {path}")
+    return path
+
+
+def _pin_windows_tools(shell_text: str, segments: list) -> str:
+    """*shell_text* with each ``/x``-switch find/sort pinned to System32 by path.
+
+    By path, not PATH order: Git-for-Windows' GNU find reads ``/c`` as the C:
+    drive and walks all of it, and cmd.exe would also prefer a ``find.bat`` in
+    the working directory.
     """
     if not any(_wants_windows_tool(segment) for segment in segments):
-        return env
-    system32 = os.path.join(os.environ["SystemRoot"], "System32")
-    logger.info("Resolving find/sort with cmd-style switches from %s", system32)
-    return {**env, "PATH": system32 + os.pathsep + env.get("PATH", "")}
+        return shell_text
+    pieces = _split_cmd_pipes(shell_text)
+    if len(pieces) != len(segments):
+        raise ValueError(
+            f"Cannot tell which command is find/sort in: {shell_text}. "
+            "Put spaces around each '|' and run it again."
+        )
+    pinned = []
+    for piece, segment in zip(pieces, segments):
+        if _wants_windows_tool(segment):
+            body = piece.lstrip()
+            word = segment[0]
+            rest = body[len(word) :]
+            if body[: len(word)].lower() != word.lower() or (
+                rest and not rest[0].isspace()
+            ):
+                raise ValueError(
+                    f"Cannot pin '{word}' to Windows {word} in: {piece.strip()}. "
+                    "Write it unquoted at the start of its pipe segment."
+                )
+            name = word.lower().removesuffix(".exe")
+            piece = f'{piece[: len(piece) - len(body)]}"{_system32_tool(name)}"{rest}'
+        pinned.append(piece)
+    return "|".join(pinned)
 
 
 def _run_step(
@@ -2122,6 +2181,8 @@ def _run_step(
         # there creates a file called NUL — so it gets the lifted text and the
         # redirection is applied below.
         exec_cmd = (step.shell_text or step.text) if os.name == "nt" else step.text
+        if os.name == "nt":
+            exec_cmd = _pin_windows_tools(exec_cmd, segments)
         cmd_base = segments[0][0].lower()
         if cmd_base in _UNIX_TO_WIN:
             if not shutil.which(cmd_base):
@@ -2142,10 +2203,6 @@ def _run_step(
     mode = (
         "" if shell_owns_redirection or not step.stderr_modes else step.stderr_modes[0]
     )
-
-    env = _segment_env(step.envs[0] if step.envs else {})
-    if use_shell and os.name == "nt":
-        env = _system32_first(env, segments)
 
     # encoding/errors are explicit, and load-bearing. Bare ``text=True``
     # decodes with the locale codec — cp1252 on a default Windows box — and
@@ -2191,7 +2248,7 @@ def _run_step(
         stdin=subprocess.DEVNULL,
         encoding="utf-8",
         errors="replace",
-        env=env,
+        env=_segment_env(step.envs[0] if step.envs else {}),
         # POSIX: its own session, so the kill reaches every descendant — and
         # never the agent's own process group. Windows gets that reach from
         # taskkill /T instead.
