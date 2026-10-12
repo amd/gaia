@@ -61,15 +61,6 @@ class MachineCapacity:
         """The memory pool is a GPU's, not system RAM on a CPU-only PC."""
         return self.memory_source != SYSTEM_RAM
 
-    @property
-    def shares_system_ram(self) -> bool:
-        """A model on the CPU backend draws from this same pool.
-
-        True for unified memory (an AMD iGPU, Apple Silicon) and for a CPU-only
-        PC; False for a discrete GPU, whose VRAM the CPU backend never touches.
-        """
-        return self.memory_source in ("AMD iGPU", "Apple GPU", SYSTEM_RAM)
-
 
 @dataclass(frozen=True)
 class FitVerdict:
