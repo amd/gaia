@@ -463,6 +463,10 @@ class _PosixGuardian:
                     "stop it if the agent died."
                 ) from exc
 
+    def registered(self, pgid: int) -> bool:
+        with self._lock:
+            return pgid in self._groups
+
     def unregister(self, pgid: int) -> None:
         with self._lock:
             if pgid not in self._groups:
@@ -770,8 +774,10 @@ class BackgroundProcess:
             os.close(read_fd)
 
     def _release_empty_groups(self) -> None:
+        # A group the guardian's pruner already saw empty may now carry a
+        # reused pgid, so it is dropped here without a liveness check.
         for pgid in list(self._groups):
-            if not _group_alive(pgid):
+            if not _GUARDIAN.registered(pgid) or not _group_alive(pgid):
                 _GUARDIAN.unregister(pgid)
                 self._groups.remove(pgid)
 
@@ -799,7 +805,8 @@ class BackgroundProcess:
                     break
                 time.sleep(_POLL_SECONDS)
             for pgid in groups:
-                _signal_group(pgid, _SIGKILL)
+                if _GUARDIAN.registered(pgid):
+                    _signal_group(pgid, _SIGKILL)
         self._thread.join(STOP_GRACE_SECONDS + 5)
         for proc in self._procs:
             if proc.poll() is None:
@@ -847,6 +854,19 @@ def _stop_everything_at_exit() -> None:
 atexit.register(_stop_everything_at_exit)
 
 
+def _dispose_logged(process: BackgroundProcess) -> None:
+    """Dispose an evicted *process*; a failure is logged, not raised over a launch."""
+    try:
+        process.dispose(delete_log=True)
+    except Exception as exc:  # noqa: BLE001 — the caller's launch must not fail on it
+        logger.error(
+            "Could not dispose evicted background process %s (%s): %s",
+            process.process_id,
+            process.command,
+            exc,
+        )
+
+
 class ProcessLimitError(RuntimeError):
     """Starting another process would exceed :data:`MAX_RUNNING`."""
 
@@ -876,43 +896,52 @@ class ProcessTable:
             return self._processes.get((process_id or "").strip())
 
     def start(self, command: str, plan: Any, name: str) -> BackgroundProcess:
-        with self._lock:
-            if self._closed:
-                raise ProcessStartError("This agent's process table is closed.")
-            running = [p for p in self._processes.values() if not p.finished]
-            if len(running) >= MAX_RUNNING:
-                raise ProcessLimitError(
-                    f"{len(running)} background processes are already running "
-                    f"(the limit is {MAX_RUNNING}): "
-                    + ", ".join(f"{p.process_id} ({p.command})" for p in running)
-                )
-            self._evict_finished_locked()
-            process_id = f"p{next(self._ids)}"
-            self.log_dir.mkdir(parents=True, exist_ok=True)
-            log = OutputLog(self.log_dir / f"{process_id}.log")
-            try:
-                process = BackgroundProcess(
-                    process_id=process_id,
-                    name=name,
-                    command=command,
-                    plan=plan,
-                    log=log,
-                )
-            except BaseException:
-                log.close(delete=True)
-                raise
-            self._processes[process_id] = process
-            # Under the lock, so a concurrent close() never sees it unstarted.
-            process.start()
+        evicted: List[BackgroundProcess] = []
+        try:
+            with self._lock:
+                if self._closed:
+                    raise ProcessStartError("This agent's process table is closed.")
+                running = [p for p in self._processes.values() if not p.finished]
+                if len(running) >= MAX_RUNNING:
+                    raise ProcessLimitError(
+                        f"{len(running)} background processes are already running "
+                        f"(the limit is {MAX_RUNNING}): "
+                        + ", ".join(f"{p.process_id} ({p.command})" for p in running)
+                    )
+                evicted = self._evict_finished_locked()
+                process_id = f"p{next(self._ids)}"
+                self.log_dir.mkdir(parents=True, exist_ok=True)
+                log = OutputLog(self.log_dir / f"{process_id}.log")
+                try:
+                    process = BackgroundProcess(
+                        process_id=process_id,
+                        name=name,
+                        command=command,
+                        plan=plan,
+                        log=log,
+                    )
+                except BaseException:
+                    log.close(delete=True)
+                    raise
+                self._processes[process_id] = process
+                # Under the lock, so a concurrent close() never sees it unstarted.
+                process.start()
+        finally:
+            # Outside the lock: stopping a leftover child can take the grace period.
+            for old in evicted:
+                _dispose_logged(old)
         return process
 
-    def _evict_finished_locked(self) -> None:
+    def _evict_finished_locked(self) -> List[BackgroundProcess]:
+        """Drop the oldest finished processes past the cap; the caller disposes them."""
+        evicted: List[BackgroundProcess] = []
         while len(self._processes) >= MAX_RETAINED:
             oldest = next((p for p in self._processes.values() if p.finished), None)
             if oldest is None:
-                return
+                break
             del self._processes[oldest.process_id]
-            oldest.dispose(delete_log=True)
+            evicted.append(oldest)
+        return evicted
 
     def take_unreported_finishes(self) -> List[BackgroundProcess]:
         """Finished processes the model has not been told about, marked told."""

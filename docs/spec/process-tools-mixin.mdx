@@ -113,7 +113,8 @@ daemon) has left the group and is out of reach, as it would be from any shell.
 
 The guardian is a shell script rather than Python because the flagship ships as
 a frozen binary. Groups are unregistered within seconds of emptying, so a
-process-group id the OS reuses is not one the guardian would kill.
+process-group id the OS reuses is not one the guardian, `stop_process` or agent
+close would kill.
 
 If the log cannot rotate — on Windows, while something else holds it open —
 output keeps flowing to it up to the cap and anything past that is discarded;

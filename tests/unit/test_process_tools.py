@@ -401,6 +401,23 @@ class TestLifecycle:
         assert host._process_table().get(first["process_id"]) is None
         assert not os.path.exists(log)
 
+    def test_eviction_disposes_outside_the_table_lock(self, host, monkeypatch):
+        monkeypatch.setattr(bp, "MAX_RETAINED", 2)
+        table = host._process_table()
+        held = []
+        real_dispose = bp.BackgroundProcess.dispose
+
+        def dispose(self, *args, **kwargs):
+            held.append(table._lock.locked())
+            return real_dispose(self, *args, **kwargs)
+
+        monkeypatch.setattr(bp.BackgroundProcess, "dispose", dispose)
+        for _ in range(3):
+            started = _tool("start_process")(f"{PY} -c pass")
+            _tool("wait_for_process")(started["process_id"], timeout=30)
+        # A slow stop must not block process_status or start_process meanwhile.
+        assert held == [False]
+
     def test_a_finished_test_run_is_a_check(self, host, tmp_path):
         _script(tmp_path, "test_ok.py", "def test_ok():\n    assert True\n")
         # Rooted at tmp_path: otherwise the child's collection walks the
@@ -815,6 +832,43 @@ def test_a_forked_child_neither_holds_the_guardian_nor_stops_the_parents(host):
     _, status = os.waitpid(pid, 0)
     assert os.WEXITSTATUS(status) == 0
     assert host._process_table().running()
+
+
+class _TrackingGuardian:
+    def __init__(self, groups):
+        self.groups = set(groups)
+
+    def registered(self, pgid):
+        return pgid in self.groups
+
+    def unregister(self, pgid):
+        self.groups.discard(pgid)
+
+
+def test_a_group_the_guardian_dropped_is_never_signalled(tmp_path, monkeypatch):
+    """A pgid seen empty may be reused by an unrelated group by the time we stop."""
+    tracked, dropped = 4242, 4343
+    monkeypatch.setattr(bp, "_GUARDIAN", _TrackingGuardian({tracked}))
+    # Both look alive: the dropped one because its id now belongs to someone else.
+    monkeypatch.setattr(bp, "_group_alive", lambda pgid: True)
+    monkeypatch.setattr(bp, "STOP_GRACE_SECONDS", 0.2)
+    signalled = []
+    monkeypatch.setattr(bp, "_signal_group", lambda pgid, sig: signalled.append(pgid))
+    plan = SimpleNamespace(steps=[], step_cwds=[], granted=frozenset(), bypass=False)
+    process = bp.BackgroundProcess(
+        "p1", "", "noop", plan, OutputLog(tmp_path / "p1.log")
+    )
+    if process._job is not None:
+        process._job.close()
+        process._job = None
+    process._groups = [tracked, dropped]
+    process.start()
+    assert process.wait(10)
+
+    process.stop()
+    process.log.close()
+
+    assert signalled and set(signalled) == {tracked}
 
 
 def test_a_host_without_shell_tools_is_refused_by_name():
