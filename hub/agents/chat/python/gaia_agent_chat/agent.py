@@ -1767,7 +1767,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
                 Compute or check something without creating a file. Runs
                 from the project root, so relative paths reach the user's
-                files. Report numbers from its output — do not work them
+                files; with no project it runs in your scratch directory,
+                so use absolute paths for the user's files. Report numbers from its output — do not work them
                 out in your head.
 
                 No access to your tools: `from gaia import <tool>` fails —
@@ -1812,6 +1813,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except ValueError as e:  # GAIA_PROJECT_ROOT names no directory
                     return {"status": "error", "error": str(e), "has_errors": True}
                 run_dir = Path(project) if project else Path.cwd()
+                scratch = getattr(self, "scratch_dir", None)
+                if (
+                    not project
+                    and scratch is not None
+                    and not self.path_validator.is_path_allowed(str(run_dir))
+                ):
+                    # A UI server's cwd is its install dir; the scratch dir is ours.
+                    run_dir = scratch
                 if not self.path_validator.is_path_allowed(str(run_dir)):
                     return {
                         "status": "error",
