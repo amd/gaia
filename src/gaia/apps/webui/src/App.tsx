@@ -38,6 +38,7 @@ type SetupGate =
     | { state: 'unknown'; error: string };
 
 const LEMONADE_FAIL_THRESHOLD = 3;
+const RESTORE_NOTICE_MS = 6000;
 
 function Loading() {
     return <div className="loading-spinner" role="status" aria-label="Loading" />;
@@ -69,6 +70,13 @@ function App() {
     const dismissRestoreNotice = useModelStore((s) => s.dismissRestoreNotice);
     const showNotificationPanel = useNotificationStore((s) => s.showPanel);
     const setShowNotificationPanel = useNotificationStore((s) => s.setShowPanel);
+
+    // A successful restore is news for a moment; a failed one waits for the user to pick a model.
+    useEffect(() => {
+        if (!restoreNotice?.ok) return;
+        const t = setTimeout(dismissRestoreNotice, RESTORE_NOTICE_MS);
+        return () => clearTimeout(t);
+    }, [restoreNotice, dismissRestoreNotice]);
 
     const [setup, setSetup] = useState<SetupGate>({ state: 'checking' });
     const [createError, setCreateError] = useState<string | null>(null);

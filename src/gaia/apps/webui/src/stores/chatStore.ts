@@ -268,8 +268,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     addAgentStep: (step) =>
         set((state) => ({
             agentSteps: [
-                // Deactivate previous steps
-                ...state.agentSteps.map((s) => ({ ...s, active: false })),
+                // A status or thought arriving mid-call doesn't end a running tool; its tool_end does.
+                ...state.agentSteps.map((s) =>
+                    s.active && s.type === 'tool' && step.type !== 'tool' && s.success == null && !s.result
+                        ? s
+                        : { ...s, active: false }),
                 step,
             ],
         })),

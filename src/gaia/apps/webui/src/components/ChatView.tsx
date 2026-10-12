@@ -73,6 +73,16 @@ function stripStreamingEnvelope(text: string): string {
     return content.replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
 }
 
+/**
+ * A recoverable error right after a failed tool repeats that tool's error, which
+ * its card already shows; the agent retries, so it isn't a turn-level error.
+ */
+export function isEchoOfFailedTool(event: StreamEvent, steps: AgentStep[]): boolean {
+    if (event.type !== 'agent_error' || event.recoverable !== true) return false;
+    const last = steps[steps.length - 1];
+    return !!last && last.type === 'tool' && last.success === false;
+}
+
 /** Map an SSE agent event to an AgentStep for the UI. */
 function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<number>): AgentStep | null {
     const id = ++stepIdRef.current;
@@ -866,6 +876,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return; // Step headers are redundant with actual tool/thinking steps
                 }
 
+                if (event.type === 'agent_error' && isEchoOfFailedTool(event, useChatStore.getState().agentSteps)) {
+                    return;
+                }
                 const step = agentEventToStep(event, stepIdRef);
                 if (step) {
                     addAgentStep(step);
