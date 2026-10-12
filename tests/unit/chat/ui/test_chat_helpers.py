@@ -1126,3 +1126,14 @@ def test_a_recoverable_error_after_a_failed_tool_is_not_saved_twice():
     assert not _echoes_failed_tool(
         {"content": "boom", "recoverable": True}, [{"type": "tool", "success": True}]
     )
+
+
+def test_a_recoverable_error_from_a_tool_that_raised_is_not_saved_twice():
+    from gaia.ui._chat_helpers import _echoes_failed_tool
+
+    running = [{"type": "tool", "active": True}]
+    assert _echoes_failed_tool({"content": "boom", "recoverable": True}, running)
+    after_thought = running + [{"type": "thinking", "active": True}]
+    assert not _echoes_failed_tool(
+        {"content": "boom", "recoverable": True}, after_thought
+    )

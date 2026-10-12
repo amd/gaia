@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MessageBubble, escapeBareNumberLines } from '../MessageBubble';
 import { AgentActivity, formatArgsDisplay, formatToolLatency } from '../AgentActivity';
@@ -103,6 +103,40 @@ describe('a recoverable tool error', () => {
 
     it('still shows a turn-ending error', () => {
         expect(isEchoOfFailedTool({ type: 'agent_error', content: 'boom' }, [failed])).toBe(false);
+    });
+
+    it('is not shown twice when the tool raised, before its result lands', () => {
+        const running: AgentStep = { id: 1, type: 'tool', label: 'x', tool: 'run_shell_command', active: true, timestamp: 1 };
+        expect(isEchoOfFailedTool({ type: 'agent_error', content: 'boom', recoverable: true }, [running])).toBe(true);
+    });
+});
+
+describe('the live status while GAIA waits on the user', () => {
+    const streaming = (props: { liveStatus?: string | null; awaitingUser?: boolean }) =>
+        render(<MessageBubble message={{ ...baseMessage, id: -1 }} isStreaming agentStepsActive {...props} />);
+
+    // The label types out one timer per character, so step the clock rather than jump it.
+    const wait = (ms: number) => {
+        for (let t = 0; t < ms; t += 100) act(() => { vi.advanceTimersByTime(100); });
+    };
+
+    afterEach(() => vi.useRealTimers());
+
+    it('says it is waiting for you and does not time the model', () => {
+        vi.useFakeTimers();
+        const { container } = streaming({ liveStatus: 'Reading your request', awaitingUser: true });
+        wait(10_000);
+        const indicator = container.querySelector('.thinking-indicator');
+        expect(indicator?.textContent).toContain('Waiting for you');
+        expect(indicator?.textContent).not.toContain('Reading your request');
+        expect(container.querySelector('.thinking-indicator-elapsed')).toBeNull();
+    });
+
+    it('counts seconds while the model works', () => {
+        vi.useFakeTimers();
+        const { container } = streaming({ liveStatus: 'Reading your request' });
+        wait(5_000);
+        expect(container.querySelector('.thinking-indicator-elapsed')?.textContent).toMatch(/\d+s/);
     });
 });
 

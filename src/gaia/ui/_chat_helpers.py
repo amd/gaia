@@ -1532,11 +1532,18 @@ def _find_last_tool_step(steps: list) -> dict | None:
 
 
 def _echoes_failed_tool(event: dict, steps: list) -> bool:
-    """A recoverable error right after a failed tool repeats that tool's error."""
+    """A recoverable error right after a failed tool repeats that tool's error.
+
+    A tool that raises or times out reports its error before its result lands,
+    so a still-running tool step counts too: its result always follows as failed.
+    """
     if not event.get("recoverable") or not steps:
         return False
     last = steps[-1]
-    return last.get("type") == "tool" and last.get("success") is False
+    if last.get("type") != "tool":
+        return False
+    running = last.get("active") and last.get("success") is None
+    return last.get("success") is False or bool(running)
 
 
 class _UserWaitClock:

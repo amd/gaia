@@ -33,6 +33,8 @@ interface MessageBubbleProps {
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
     liveStatus?: string | null;
+    /** The run is blocked on the user's approval or answer; the indicator says so instead of timing the model. */
+    awaitingUser?: boolean;
 }
 
 
@@ -42,8 +44,8 @@ interface MessageBubbleProps {
  * "Reasoning — 38 words so far"), or "Thinking..." until the first one arrives.
  * Types out on first show, swaps text in place after that, erases when done.
  */
-function ThinkingIndicator({ active, label }: { active: boolean; label?: string | null }) {
-    const text = label || 'Thinking...';
+function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
+    const text = awaitingUser ? WAITING_ON_USER_LABEL : (label || 'Thinking...');
     const [chars, setChars] = useState(0);
     const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>('typing');
     const wasActiveRef = useRef(active);
@@ -90,13 +92,15 @@ function ThinkingIndicator({ active, label }: { active: boolean; label?: string 
     return (
         <span className="thinking-indicator">
             <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
-            {active && elapsed >= PHASE_ELAPSED_MIN_S && (
+            {active && !awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
                 <span className="thinking-indicator-elapsed"> · {elapsed}s</span>
             )}
             {active && <span className="cursor" />}
         </span>
     );
 }
+
+const WAITING_ON_USER_LABEL = 'Waiting for you';
 
 /** A phase shorter than this needs no clock; past it, the count shows GAIA is still working. */
 const PHASE_ELAPSED_MIN_S = 3;
@@ -396,7 +400,7 @@ function formatLatency(ms: number): string {
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, liveStatus }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
@@ -475,7 +479,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                 <div className="msg-header">
                     <div className="msg-header-left">
                         {message.role === 'assistant' && isStreaming && (
-                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} />
+                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
                         )}
                     </div>
                     {!isStreaming && (
@@ -643,7 +647,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 // exponential-backtracking ReDoS (js/redos) on adversarial non-matching input.
 // Exactly one separator between segments, so a last segment without an
 // extension (`C:\Users\me\notes`) is kept as well as `...\a.txt` or `...\dir\`.
-const WIN_PATH_RE = /[A-Z]:[\\/][^\s*?"<>|,;)}\]\\/]+(?:[\\/][^\s*?"<>|,;)}\]\\/]+)*[\\/]?/gi;
+const WIN_PATH_RE = /\b[A-Z]:[\\/][^\s*?"<>|,;)}\]\\/]+(?:[\\/][^\s*?"<>|,;)}\]\\/]+)*[\\/]?/gi;
 /** Sentence punctuation the path regex swallows: "see C:\a\b." ends at `b`. */
 const PATH_TRAILING_PUNCT_RE = /[.:!']+$/;
 
