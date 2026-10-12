@@ -41,6 +41,7 @@ MANIFEST = "hub/agents/gaia/python/gaia-agent.yaml"
 LOCK = "hub/agents/gaia/npm/binaries.lock.json"
 DEFAULT_HUB_URL = "https://hub.amd-gaia.ai"
 TAG_PREFIX = "agent-pkg-gaia-v"
+# darwin-x64 is left out on purpose: release_agent_gaia.yml publishes it best-effort.
 REQUIRED_PLATFORMS = ("win32-x64", "darwin-arm64", "linux-x64")
 
 # What the flagship freeze bundles. Tests, eval data and the web frontend are
@@ -64,7 +65,9 @@ _VERSION_RE = re.compile(r"(?m)^version:\s*['\"]?([^'\"\s#]+)")
 HOW_TO_FIX = (
     "To release the flagship from this commit: bump it with "
     "hub/agents/gaia/python/packaging/stamp_version.py (plus its CHANGELOG), "
-    f"tag {TAG_PREFIX}<version> on the release commit, approve "
+    "dispatch release_components.yml if the terminal-hub version the lock "
+    f"pins is not on the hub yet, tag {TAG_PREFIX}<version> on the release "
+    "commit, approve "
     "release_agent_gaia.yml, commit the binaries.lock.json it regenerates, and "
     "tag the core release on that commit. See the gaia-release skill."
 )
@@ -182,7 +185,7 @@ def fetch_hub_manifest(hub_url: str) -> dict:
             req, timeout=60
         ) as r:  # noqa: S310 - fixed https host
             return json.loads(r.read())
-    except (urllib.error.URLError, ValueError, TimeoutError) as e:
+    except (urllib.error.URLError, ConnectionError, ValueError, TimeoutError) as e:
         raise SystemExit(f"could not read the Agent Hub manifest at {url}: {e}") from e
 
 
