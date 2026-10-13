@@ -129,6 +129,38 @@ class TestExtractJsonStringField:
     def test_missing_key(self):
         assert extract_json_string_field('{"thought": "x"}', "answer") is None
 
+    def test_unescaped_inner_quotes_kept(self):
+        text = '{"thought": "t", "answer": "The press became the "engine" of it.\n"}'
+        assert extract_json_string_field(text, "answer") == (
+            'The press became the "engine" of it.\n',
+            True,
+        )
+
+    def test_unescaped_quote_before_comma_is_not_the_close(self):
+        text = '{"answer": "Pick "red", "green" or "blue".", "goal": "g"}'
+        assert extract_json_string_field(text, "answer") == (
+            'Pick "red", "green" or "blue".',
+            True,
+        )
+
+    def test_value_followed_by_next_key_closes(self):
+        text = '{"thought": "plan it", "answer": "done"'
+        assert extract_json_string_field(text, "thought") == ("plan it", True)
+
+    def test_truncated_after_unescaped_quote_is_incomplete(self):
+        text = '{"answer": "The press became the "engine'
+        assert extract_json_string_field(text, "answer") == (
+            'The press became the "engine',
+            False,
+        )
+
+    def test_trailing_bare_backslash_is_not_an_escaped_quote(self):
+        text = r'{"answer": "Saved to C:\Users\me\"}'
+        assert extract_json_string_field(text, "answer") == (
+            "Saved to C:\\Users\\me\\",
+            True,
+        )
+
 
 class TestStreamDecoder:
     def test_every_split_point_decodes_identically(self):
@@ -181,6 +213,21 @@ class TestParseLongAnswer:
         assert parsed["answer"].endswith(TRUNCATED_ANSWER_NOTE)
         assert "\\n" not in parsed["answer"]
         assert parsed["thought"] == "Write it"
+
+    def test_unescaped_quotes_keep_whole_answer(self):
+        response = (
+            '{"thought": "t", "answer": "The press became the "engine" of '
+            'the Reformation.\n\nIt spread "heresy" fast."}'
+        )
+        assert _bare_agent()._parse_llm_response(response)["answer"] == (
+            'The press became the "engine" of the Reformation.\n\n'
+            'It spread "heresy" fast.'
+        )
+
+    def test_complete_answer_never_gets_truncation_note(self):
+        response = r'{"thought": "t", "answer": "Saved it to C:\Users\me\"}'
+        parsed = _bare_agent()._parse_llm_response(response)
+        assert parsed["answer"] == "Saved it to C:\\Users\\me\\"
 
     def test_truncated_mid_escape_drops_only_the_partial_escape(self):
         response = '{"answer": "Caf\\u00e9 and \\u00'

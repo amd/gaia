@@ -26,6 +26,9 @@ _SIMPLE_ESCAPES = {
     "t": "\t",
 }
 _HEX = frozenset("0123456789abcdefABCDEF")
+# What may follow a string value's closing quote in a JSON object or array.
+_VALUE_END_RE = re.compile(r'\s*(?:\}|\]|,\s*"[^"\n]*"\s*:|$)')
+_BARE_BACKSLASH_END_RE = re.compile(r'\\"\s*\}\s*$')
 
 
 def _read_hex4(raw: str, pos: int) -> Tuple[Optional[int], bool]:
@@ -128,6 +131,11 @@ def extract_json_string_field(text: str, key: str) -> Optional[Tuple[str, bool]]
     Works on JSON that ``json.loads`` rejects — raw control characters,
     invalid escapes, or an object cut off mid-value.
 
+    A quote that is not followed by JSON structure (``, "next":``, ``}``,
+    ``]`` or the end of the text) is a quote the model forgot to escape, and
+    is kept as part of the value. A value whose last characters are ``\\"}``
+    ended with a bare backslash (``C:\\temp\\``), not an escaped quote.
+
     Returns ``(value, complete)`` where ``complete`` is False when the text
     ended before the value's closing quote (the value holds everything that
     was received), or None when ``key`` has no string value in ``text``.
@@ -135,8 +143,25 @@ def extract_json_string_field(text: str, key: str) -> Optional[Tuple[str, bool]]
     start = json_string_field_start(text, key)
     if start is None:
         return None
-    decoded, _consumed, closed = decode_json_string_prefix(text[start:])
-    return decoded, closed
+    body = text[start:]
+    parts = []
+    pos = 0
+    while True:
+        decoded, consumed, closed = decode_json_string_prefix(body[pos:])
+        if not closed:
+            break
+        parts.append(decoded)
+        pos += consumed
+        if _VALUE_END_RE.match(body, pos):
+            return "".join(parts), True
+        parts.append('"')
+    bare_backslash = _BARE_BACKSLASH_END_RE.search(body, pos)
+    if bare_backslash:
+        decoded, _, _ = decode_json_string_prefix(body[pos : bare_backslash.start()])
+        parts.append(decoded + "\\")
+        return "".join(parts), True
+    parts.append(decoded)
+    return "".join(parts), False
 
 
 class JsonStringStreamDecoder:
