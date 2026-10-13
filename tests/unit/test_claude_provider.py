@@ -2044,3 +2044,171 @@ def test_rolling_breakpoint_stays_valid_with_replayed_thinking(fake_anthropic):
     assert not any("cache_control" in b for b in turn["content"])
     assert call["messages"][-1]["content"][-1]["cache_control"] == _EPHEMERAL
     assert _breakpoints(call) == 3
+
+
+# The kept thinking blocks must be an unbroken run of the original sequence:
+# dropping from the front is accepted, a gap in the middle is a 400 on models
+# that check the chain. Only the newest unbroken run of assistant turns that
+# all have stored thinking goes back.
+
+
+def _plan(tag):
+    return SimpleNamespace(
+        type="thinking", thinking=f"Plan {tag}.", signature=f"EqQB-sig-{tag}"
+    )
+
+
+def _tool_step(provider, history, response, call_id, stream=False):
+    provider._client.messages.create.return_value = response
+    result = provider.chat(history, tools=OPENAI_TOOLS, stream=stream)
+    text = list(result)[-1] if stream else result
+    return history + [
+        _as_agent_turn(text),
+        {"role": "tool", "tool_call_id": call_id, "content": "ok"},
+    ]
+
+
+def _answer_step(provider, history, *thinking):
+    """A final-answer turn: its thinking is never stored for replay."""
+    provider._client.messages.create.return_value = _response(
+        [*thinking, _text_block("Here is the summary.")]
+    )
+    answer = provider.chat(history, tools=OPENAI_TOOLS)
+    return history + [{"role": "assistant", "content": answer}]
+
+
+def _thinking_of(call):
+    return [
+        (
+            [b.get("signature") for b in turn["content"] if b["type"] == "thinking"]
+            if isinstance(turn["content"], list)
+            else []
+        )
+        for turn in _assistant_turns(call)
+    ]
+
+
+def test_a_gap_in_the_middle_drops_every_older_turns_thinking(fake_anthropic):
+    """ask -> T1(tool) -> answer -> ask -> T2(tool): T1 must not go back, or
+    the request carries thinking [T1], [], [T2] and the API rejects the gap."""
+    provider = _provider(fake_anthropic)
+    history = _tool_step(
+        provider, [_SYSTEM, _ASK], _tool_turn_response(_plan(1)), "toolu_r1"
+    )
+    history = _answer_step(provider, history, _plan("answer"))
+    history.append({"role": "user", "content": "Now the archive, please."})
+    history = _tool_step(
+        provider,
+        history,
+        _tool_turn_response(_plan(2), call_id="toolu_r2", path="archive.txt"),
+        "toolu_r2",
+    )
+
+    call = _second_call(provider, history)
+
+    assert _thinking_of(call) == [[], [], ["EqQB-sig-2"]]
+    first = _assistant_turns(call)[0]
+    assert first["content"] == [
+        {"type": "text", "text": "Reading the file."},
+        {
+            "type": "tool_use",
+            "id": "toolu_r1",
+            "name": "read_file",
+            "input": {"path": "notes.txt"},
+        },
+    ]
+
+
+def test_a_dropped_turn_is_never_put_back(fake_anthropic):
+    """Re-adding a removed block voids the blocks produced while it was gone,
+    so T1 stays out once a later turn broke the run."""
+    provider = _provider(fake_anthropic)
+    history = _tool_step(
+        provider, [_SYSTEM, _ASK], _tool_turn_response(_plan(1)), "toolu_r1"
+    )
+    history = _answer_step(provider, history, _plan("answer"))
+    history.append({"role": "user", "content": "Now the archive, please."})
+    for step in (2, 3):
+        history = _tool_step(
+            provider,
+            history,
+            _tool_turn_response(_plan(step), call_id=f"toolu_r{step}"),
+            f"toolu_r{step}",
+        )
+
+    call = _second_call(provider, history)
+
+    assert _thinking_of(call) == [[], [], ["EqQB-sig-2"], ["EqQB-sig-3"]]
+
+
+def test_a_cut_off_turn_breaks_the_run(fake_anthropic):
+    """A streamed turn that ended before its signature can't be replayed, so
+    the stored turn before it must go back without thinking as well."""
+    provider = _provider(fake_anthropic)
+    history = _tool_step(
+        provider, [_SYSTEM, _ASK], _tool_turn_response(_plan(1)), "toolu_r1"
+    )
+    unsigned = iter(
+        e
+        for e in _thinking_stream(call_id="toolu_s1")
+        if e.type != "content_block_delta" or e.delta.type != "signature_delta"
+    )
+    history = _tool_step(provider, history, unsigned, "toolu_s1", stream=True)
+
+    call = _second_call(provider, history)
+    assert _thinking_of(call) == [[], []]
+
+    history = _tool_step(
+        provider,
+        history,
+        _tool_turn_response(_plan(3), call_id="toolu_r3"),
+        "toolu_r3",
+    )
+    call = _second_call(provider, history)
+    assert _thinking_of(call) == [[], [], ["EqQB-sig-3"]]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_an_all_tool_turn_loop_sends_every_turns_thinking(fake_anthropic, stream):
+    provider = _provider(fake_anthropic)
+    history = [_SYSTEM, _ASK]
+    for step in range(3):
+        history = _tool_step(
+            provider,
+            history,
+            _tool_turn_response(_plan(step), call_id=f"toolu_l{step}"),
+            f"toolu_l{step}",
+        )
+
+    call = _second_call(provider, history, stream=stream)
+
+    assert _thinking_of(call) == [[f"EqQB-sig-{step}"] for step in range(3)]
+    for turn in _assistant_turns(call):
+        assert [b["type"] for b in turn["content"]] == ["thinking", "text", "tool_use"]
+        assert turn["content"][0]["signature"]
+        assert not any("cache_control" in b for b in turn["content"])
+    assert call["messages"][-1]["content"][-1]["cache_control"] == _EPHEMERAL
+    assert _breakpoints(call) == 3
+
+
+def test_thinking_off_sends_the_same_request_as_without_replay(fake_anthropic):
+    """With no thinking in any response nothing is stored, so every turn goes
+    out exactly as a provider with no replay store would send it."""
+    provider = _provider(fake_anthropic)
+    history = _tool_step(provider, [_SYSTEM, _ASK], _tool_turn_response(), "toolu_r1")
+    history = _answer_step(provider, history)
+    history.append({"role": "user", "content": "Now the archive, please."})
+    history = _tool_step(
+        provider,
+        history,
+        _tool_turn_response(call_id="toolu_r2", path="archive.txt"),
+        "toolu_r2",
+    )
+
+    call = _second_call(provider, history)
+    fresh = _provider(fake_anthropic)
+    baseline = _second_call(fresh, history)
+
+    assert provider._replay_turns == {}
+    assert call["messages"] == baseline["messages"]
+    assert _thinking_of(call) == [[], [], []]

@@ -238,6 +238,13 @@ def _canonical(node: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _has_thinking(message: dict) -> bool:
+    content = message.get("content")
+    return isinstance(content, list) and any(
+        isinstance(b, dict) and b.get("type") in _THINKING_BLOCK_TYPES for b in content
+    )
+
+
 def _without_thinking(message: dict) -> dict:
     content = message.get("content")
     if not isinstance(content, list):
@@ -660,29 +667,65 @@ class ClaudeProvider(LLMClient):
     # ── thinking replay ─────────────────────────────────────────────────
     #
     # Thinking goes back unmodified with its tool turn, and only while
-    # everything before it is unchanged (else a 400):
+    # everything before it is unchanged (else a 400). The kept blocks must be an
+    # unbroken run of the original sequence: dropping from the front is fine, a
+    # gap in the middle is not.
     # https://platform.claude.com/docs/en/build-with-claude/preserved-thinking
 
     def _replay_thinking(
         self, system: Optional[str], tools: Optional[List[dict]], cleaned: List[dict]
     ) -> Tuple[List[dict], str]:
-        """Restore each tool turn's original blocks where its prefix still holds.
+        """Restore the newest unbroken run of assistant turns' original blocks.
 
         Walks the messages in order with a running digest, so one edit voids
         every later turn, as the API does. Thinking blocks are left out of the
         digest: the API chains each block to the previous one rather than binding
         it as prefix, so dropping the oldest turns' thinking first stays valid.
+
+        Any assistant turn whose thinking can't be restored (a final answer, a
+        cut-off stream, an edited turn) ends the run: every older turn goes back
+        without its thinking, so the kept blocks never have a gap.
         """
         digest = hashlib.sha256(_canonical({"system": system, "tools": tools}))
         out: List[dict] = []
+        assistant_turns: List[Tuple[int, Optional[bool]]] = []
         for message in cleaned:
             if message["role"] == "assistant":
-                message = self._with_original_blocks(message, digest.hexdigest())
+                restored = self._with_original_blocks(message, digest.hexdigest())
+                # None: the caller sent its own thinking, which is left alone.
+                kept: Optional[bool]
+                if restored is not message:
+                    kept = True
+                elif _has_thinking(message):
+                    kept = None
+                else:
+                    kept = False
+                assistant_turns.append((len(out), kept))
+                message = restored
             out.append(message)
             digest.update(b"\n" + _canonical(_without_thinking(message)))
+
+        broken = False
+        dropped = 0
+        for index, kept in reversed(assistant_turns):
+            if kept is False:
+                broken = True
+            elif kept and broken:
+                # Strip only the thinking, so the rest stays byte-identical to
+                # what earlier requests sent.
+                out[index] = _without_thinking(out[index])
+                dropped += 1
+        if dropped:
+            logger.debug(
+                "Not replaying thinking for %d older tool turn(s): a later "
+                "assistant turn has no stored thinking, and a gap would be rejected",
+                dropped,
+            )
         return out, digest.hexdigest()
 
     def _with_original_blocks(self, message: dict, prefix_digest: str) -> dict:
+        """The turn with its stored original blocks, or ``message`` itself when
+        they can't be restored."""
         content = message.get("content")
         if not isinstance(content, list):
             return message
@@ -694,10 +737,7 @@ class ClaudeProvider(LLMClient):
         turn = self._replay_turns.get(ids) if ids else None
         if turn is None:
             return message
-        if any(
-            isinstance(b, dict) and b.get("type") in _THINKING_BLOCK_TYPES
-            for b in content
-        ):
+        if _has_thinking(message):
             return message  # the caller already sent Anthropic-shaped thinking
         if _turn_view(content) != turn.view:
             logger.debug(
