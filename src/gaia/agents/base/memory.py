@@ -3858,10 +3858,14 @@ class MemoryMixin(ProceduralMemoryMixin):
         """Block (lock held) until no user turn ran for ``EXTRACTION_IDLE_S``.
 
         A flush from ``wait_for_memory_extraction`` skips the wait: its caller
-        is about to exit and wants the memories on disk now.
+        is about to exit and wants the memories on disk now. So does a full
+        queue, because holding it longer would drop the oldest turn's facts.
         """
         deferred = False
-        while not self._extraction_flush:
+        while (
+            not self._extraction_flush
+            and len(self._extraction_queue) < EXTRACTION_QUEUE_MAX
+        ):
             if self._turns_in_flight > 0:
                 remaining = None
             else:
@@ -3891,6 +3895,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
             self._extraction_queue.append(job)
             if self._extraction_thread is not None:
+                self._extraction_wake.notify_all()
                 return
             self._extraction_idle.clear()
             with _EXTRACTION_STATE_LOCK:

@@ -413,7 +413,7 @@ Extraction runs **after** the turn returns, not before it. `_after_process_query
 | `EXTRACTION_EXIT_WAIT_S` | 15 | How long a drain waits before giving up and saying the turn's facts were not stored |
 | `EXTRACTION_IDLE_S` | 3 | Quiet time after the last user turn before a queued job starts |
 
-**It yields to the user.** A queued job does not start while a user turn is running, or until `EXTRACTION_IDLE_S` has passed since the last one ended. Extraction shares the local model with the conversation, so a job started the moment a turn ended made a quick follow-up queue behind it. A job already running is not interrupted. Its model call is kept out of the turn's metrics (`AgentSDK.side_request()`), so a turn's recorded stats are its own.
+**It yields to the user.** A queued job does not start while a user turn is running, or until `EXTRACTION_IDLE_S` has passed since the last one ended. A queue that reaches `EXTRACTION_QUEUE_MAX` starts at once instead, so holding never drops a turn. Extraction shares the local model with the conversation, so a job started the moment a turn ended made a quick follow-up queue behind it. A job already running is not interrupted. Its model call is kept out of the turn's metrics (`AgentSDK.side_request()`), so a turn's recorded stats are its own.
 
 One extraction thread per agent. Each job freezes the turn's text and context at turn end, so mutating the agent afterwards cannot change what gets extracted.
 

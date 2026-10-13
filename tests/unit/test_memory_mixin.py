@@ -5779,6 +5779,20 @@ class TestExtractionYieldsToUserTurns:
         host._note_user_turn_finished()
         assert self.started.wait(5)
 
+    def test_a_full_queue_starts_extraction_instead_of_dropping_a_turn(self, host):
+        import gaia.agents.base.memory as memory_module
+
+        host._note_user_turn_started()
+        for _ in range(memory_module.EXTRACTION_QUEUE_MAX - 1):
+            self._queue_turn(host)
+        assert not self.started.wait(self.IDLE_S * 2), "ran during a user turn"
+
+        self._queue_turn(host)
+        assert self.started.wait(5), "a full queue stayed held"
+        host._note_user_turn_finished()
+        assert host.wait_for_memory_extraction(timeout=10) is True
+        assert len(self.calls) == memory_module.EXTRACTION_QUEUE_MAX
+
     def test_wait_for_memory_extraction_skips_the_wait(self, host):
         """A one-shot caller exiting now must not lose the queued memories."""
         host._note_user_turn_started()
