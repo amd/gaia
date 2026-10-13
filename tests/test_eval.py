@@ -202,15 +202,15 @@ class TestAgentEvalAudit:
     def test_audit_reads_real_chat_helpers_values(self):
         """Integration canary: audit must read the real constants from _chat_helpers.py.
 
-        This test breaks intentionally if someone renames or changes _MAX_PAIRS
+        This test breaks intentionally if someone renames or changes _RELAY_CONTEXT_PAIRS
         or _MAX_CHARS, alerting that eval recommendations need updating.
         """
         from gaia.eval.audit import audit_chat_helpers
 
         constants = audit_chat_helpers()
         assert (
-            constants.get("_MAX_PAIRS") == 5
-        ), "_MAX_PAIRS changed in _chat_helpers.py — update eval recommendations"
+            constants.get("_RELAY_CONTEXT_PAIRS") == 5
+        ), "_RELAY_CONTEXT_PAIRS changed in _chat_helpers.py — update eval recommendations"
         assert (
             constants.get("_MAX_CHARS") == 2000
         ), "_MAX_CHARS changed in _chat_helpers.py — update eval recommendations"

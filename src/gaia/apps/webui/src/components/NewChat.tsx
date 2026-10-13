@@ -6,6 +6,7 @@ import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { useAttachments } from '../hooks/useAttachments';
+import { useWarmUp } from '../hooks/useWarmUp';
 import { useChatStore } from '../stores/chatStore';
 import { STARTING_REASON } from '../utils/constants';
 import './NewChat.css';
@@ -22,6 +23,7 @@ export function NewChat({ onSend }: NewChatProps) {
     const [error, setError] = useState<string | null>(null);
     const [sending, setSending] = useState(false);
     const attachments = useAttachments();
+    const warming = useWarmUp();
 
     const submit = useCallback(async () => {
         const message = attachments.compose(text.trim());
@@ -52,6 +54,11 @@ export function NewChat({ onSend }: NewChatProps) {
                     leftControls={<PermissionModeChip sessionId={null} />}
                     rightControls={<ModelChip />}
                 />
+                {warming !== null && !starting && (
+                    <p className="new-chat-warmup" role="status">
+                        Getting GAIA ready… {warming}s
+                    </p>
+                )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
             </div>
         </main>

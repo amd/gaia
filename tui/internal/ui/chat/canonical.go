@@ -92,6 +92,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
+		// Kept in the transcript, not the live line: it explains later answers.
+		if e.HistoryCut != nil {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: truncateRunes(clean(e.Message), narrationMax),
+			})
+			break
+		}
+
 		// A phase report drives the live line and nothing else: it is not
 		// narration, so it never lands in the work log.
 		if e.Phase != "" {
@@ -274,14 +283,28 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				m.startup.confirmed = true
 				m.startup.warmNext = true
 				if m.startup.kind == StartupRestore {
-					content = "Restored your last model.\n\n" + content
+					if rest, ok := strings.CutPrefix(content, "Switched to "); ok {
+						content = "Restored your last model: " + rest
+					} else {
+						content = "Restored your last model.\n\n" + content
+					}
 				}
 			}
+		}
+		active := m.turnElapsed(time.Now())
+		duration := active
+		if m.startup.warmNext && !m.dev {
+			// The opening switch's time belongs to the ready line, not its own.
+			duration = 0
 		}
 		// The turn is over, so a confirmation still up is dead — resolved here,
 		// before the work is committed, so its step carries the outcome.
 		m.resolveConfirmationOnTurnEnd()
-		m.commitWork()
+		if content != "" {
+			m.commitAnsweredWork()
+		} else {
+			m.commitWork()
+		}
 		// A turn stopped before it said anything ends with an empty final; the
 		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
 		if content != "" || !m.cancelPending {
@@ -289,7 +312,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				Role:         RoleAssistant,
 				Content:      content,
 				Rendered:     components.RenderMarkdown(content),
-				Duration:     time.Since(m.queryStart),
+				Duration:     duration,
 				TTFT:         ttft,
 				TokPerS:      usage.TokPerS,
 				InputTokens:  usage.InputTokens,
@@ -303,7 +326,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// One ledger entry per turn, from what the backend reported. A turn
 		// with no token counts still counts as a turn — see sessionCost.
 		m.cost.add(turnCost{
-			duration:  time.Since(m.queryStart),
+			duration:  active,
 			steps:     usage.Steps,
 			tools:     usage.ToolsUsed,
 			inTok:     usage.InputTokens,

@@ -2747,8 +2747,9 @@ class TestEmbedderLoadFailure:
         )
         message = failed_host.memory_unavailable_message()
         assert "would not load" in message
+        assert "llamacpp_backend=cpu" in message
         assert "GGML_VK_DISABLE_COOPMAT=1" in message
-        assert "gaia lemonade embedded stop" in message
+        assert "server log" in message
         assert "unreachable" not in message
 
     def test_reaches_the_user_console(self, failed_host):

@@ -4,6 +4,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
@@ -70,8 +71,11 @@ function formatFullTimestamp(isoString: string): string {
 
 export function DocumentLibrary() {
     const { documents, setDocuments, setShowDocLibrary, setShowFileBrowser,
-            currentSessionId, sessions, updateSessionInList } = useChatStore();
+            currentSessionId, sessions, updateSessionInList,
+            draftDocumentIds, addDraftDocuments, removeDraftDocument } = useChatStore();
     const currentSession = sessions.find(s => s.id === currentSessionId) ?? null;
+    const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
+    useEscapeToClose(true, closeLibrary);
     const [isDragOver, setIsDragOver] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState('');
@@ -242,6 +246,10 @@ export function DocumentLibrary() {
                 } catch (attachErr) {
                     log.doc.warn(`Could not attach document to session: ${attachErr}`);
                 }
+            } else if (doc?.id) {
+                // No chat is open: the agent only sees attached documents, so hold it for the next one.
+                addDraftDocuments([doc.id]);
+                log.doc.info(`"${filename}" will be attached to the next new chat`);
             }
             // Refresh document list
             const data = await api.listDocuments();
@@ -256,7 +264,7 @@ export function DocumentLibrary() {
         } finally {
             setIsUploading(false);
         }
-    }, [currentSessionId, updateSessionInList, setDocuments]);
+    }, [currentSessionId, updateSessionInList, setDocuments, addDraftDocuments]);
 
     /** Index a document by a server-side filesystem path (used by the file browser and path input). */
     const uploadFile = useCallback(async (filepath: string, filename: string) => {
@@ -291,12 +299,13 @@ export function DocumentLibrary() {
         try {
             await api.deleteDocument(id);
             indexingStartTimes.current.delete(id);
+            removeDraftDocument(id);
             setDocuments(documents.filter((d) => d.id !== id));
             log.doc.info(`Deleted document: ${doc?.filename || id}`);
         } catch (err) {
             log.doc.error(`Failed to delete document: ${doc?.filename || id}`, err);
         }
-    }, [documents, setDocuments]);
+    }, [documents, setDocuments, removeDraftDocument]);
 
     const handleOpenFolder = useCallback(async (filepath: string, filename: string) => {
         log.doc.info(`Opening folder for: ${filepath}`);
@@ -352,8 +361,12 @@ export function DocumentLibrary() {
     }, [documents, setDocuments, reindexingIds]);
 
     const handleAttachDoc = useCallback(async (docId: string) => {
-        if (!currentSessionId) return;
         const doc = documents.find((d) => d.id === docId);
+        if (!currentSessionId) {
+            addDraftDocuments([docId]);
+            log.doc.info(`"${doc?.filename || docId}" will be attached to the next new chat`);
+            return;
+        }
         log.doc.info(`Attaching document to session: ${doc?.filename || docId}`);
         try {
             await api.attachDocument(currentSessionId, docId);
@@ -368,7 +381,7 @@ export function DocumentLibrary() {
         } catch (err) {
             log.doc.error(`Failed to attach document to session: ${doc?.filename || docId}`, err);
         }
-    }, [currentSessionId, documents, updateSessionInList]);
+    }, [currentSessionId, documents, updateSessionInList, addDraftDocuments]);
 
     const handleFolderSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
@@ -561,14 +574,17 @@ export function DocumentLibrary() {
                                             <FolderOpen size={14} />
                                         </button>
                                     )}
-                                    {currentSessionId &&
-                                     doc.indexing_status === 'complete' &&
-                                     !currentSession?.document_ids?.includes(doc.id) && (
+                                    {doc.indexing_status === 'complete' &&
+                                     !(currentSessionId
+                                        ? currentSession?.document_ids?.includes(doc.id)
+                                        : draftDocumentIds.includes(doc.id)) && (
                                         <button
                                             className="btn-icon-sm doc-attach"
                                             onClick={() => handleAttachDoc(doc.id)}
-                                            title="Use in current session"
-                                            aria-label={`Attach ${doc.filename} to current session`}
+                                            title={currentSessionId ? 'Use in current session' : 'Use in your next chat'}
+                                            aria-label={currentSessionId
+                                                ? `Attach ${doc.filename} to current session`
+                                                : `Attach ${doc.filename} to your next chat`}
                                         >
                                             <Link2 size={14} />
                                         </button>

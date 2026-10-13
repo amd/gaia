@@ -14,6 +14,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now streams its model calls and sends the answer as `token` events before
   `final`, the same as the stdio transport. A run cancelled mid-answer now
   stops within a token and ends with an empty `final`, as stdio does.
+- **The sidecar's start-up warm-up now makes the first question fast.** It
+  primed only the agent's own instructions, without the tool list or the rest
+  of the system prompt, so the first question re-read all ~19K prompt tokens
+  (34 s on Qwen3.6-35B-A3B). It now sends exactly what a turn sends, and the
+  first question reads only its own ~50 tokens (5 s). A warm-up that fails is
+  logged as a warning with its cause instead of an info line.
+- **`/model` names the command that connects a cloud provider.** With no
+  Fireworks or AMD gateway connection, the list told users to "connect this
+  provider in the TUI provider settings", a screen with no obvious way in. It
+  now says to run `/provider`, the command that opens it.
 - **The TUI's provider picker works after GAIA's Lemonade restarts.** When the
   agent ran as the TUI's own child, its model-state ping kept naming the port
   Lemonade started on, so after a restart the picker said "Lemonade did not

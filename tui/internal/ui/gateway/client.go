@@ -300,11 +300,25 @@ func (c *Client) Probe(baseURL string) (int, error) {
 
 // installResult is the useful half of Lemonade's install response.
 type installResult struct {
-	ModelsDiscovered int `json:"models_discovered"`
+	// ModelsDiscovered is nil when this Lemonade does not report it.
+	ModelsDiscovered *int `json:"models_discovered"`
 	AuthState        struct {
 		EnvVarSet     bool `json:"env_var_set"`
 		RuntimeKeySet bool `json:"runtime_key_set"`
 	} `json:"auth_state"`
+}
+
+// discovered is the reported model count, 0 when Lemonade did not say.
+func (r installResult) discovered() int {
+	if r.ModelsDiscovered == nil {
+		return 0
+	}
+	return *r.ModelsDiscovered
+}
+
+// foundNone is true only when Lemonade reported discovering zero models.
+func (r installResult) foundNone() bool {
+	return r.ModelsDiscovered != nil && *r.ModelsDiscovered == 0
 }
 
 // Install registers the gateway with Lemonade as a cloud provider.

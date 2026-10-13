@@ -65,6 +65,14 @@ jobs:
       dry_run: ${{ steps.v.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the flagship gate below compares against its agent tag
+
+      # The Windows setup published below bundles the flagship the lock pins.
+      # Same gate as publish.yml's validate: never ship one older than the release.
+      - name: Verify the flagship agent is built from this release
+        if: github.event_name != 'workflow_dispatch'
+        run: python3 util/check_flagship_release.py --ref "${GITHUB_SHA}"
 
       # Both components ship as part of the core release and carry its version,
       # deliberately: one number for the whole release is simpler to reason

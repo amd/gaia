@@ -162,6 +162,10 @@ describe('renderMarkdown sanitization', () => {
     expect(html).toContain('id="browser--electron-renderer"');
     const codeHeading = renderMarkdown('## The `fetch` CLI');
     expect(codeHeading).toContain('id="the-fetch-cli"'); // backticks dropped
+    // GitHub keeps underscores; dropping them broke `#52-session_id-...` links.
+    expect(renderMarkdown('### 5.2 `session_id` and agent retention')).toContain(
+      'id="52-session_id-and-agent-retention"',
+    );
   });
 
   it('renders *italic* as <em> without clashing with **bold** or underscores', () => {
@@ -205,5 +209,37 @@ describe('release-tag links are rewritten to a ref GitHub serves', () => {
     ]) {
       expect(renderMarkdown(`[x](${url})`)).toContain(`href="${url}"`);
     }
+  });
+});
+
+// A package's docs link each other relatively (`./SPEC.md#54-...`). On the hub
+// page that resolved to /hub/SPEC.md and 404'd; the files are doc tabs there.
+describe('sibling-doc links open their doc tab', () => {
+  it('turns ./SPEC.md#anchor into a tab jump that keeps the anchor', () => {
+    const html = renderMarkdown('See [SPEC.md §5.4](./SPEC.md#54-caller-authentication).');
+    expect(html).toContain(
+      '<a href="#docs" data-doc-goto="spec" data-doc-anchor="54-caller-authentication">SPEC.md §5.4</a>',
+    );
+    expect(html).not.toContain('./SPEC.md');
+  });
+
+  it('maps every published doc file to its tab key', () => {
+    for (const [file, tab] of [
+      ['README.md', 'readme'],
+      ['./SKILL.md', 'skill'],
+      ['CHANGELOG.md', 'changelog'],
+      ['./EVALUATION.md', 'evaluation'],
+      ['./CAPABILITY_MATRIX.md', 'capability_matrix'],
+      ['SCORECARD.md', 'scorecard'],
+    ]) {
+      expect(renderMarkdown(`[x](${file})`)).toContain(`<a href="#docs" data-doc-goto="${tab}">x</a>`);
+    }
+  });
+
+  it('leaves other relative links and unsafe anchors alone', () => {
+    expect(renderMarkdown('[x](./docs/SPEC.md)')).toContain('href="./docs/SPEC.md"');
+    expect(renderMarkdown('[x](./NOTES.md)')).toContain('href="./NOTES.md"');
+    // An anchor outside the slug charset never reaches an attribute.
+    expect(renderMarkdown('[x](./SPEC.md#a"onmouseover=x)')).not.toContain('data-doc-goto');
   });
 });

@@ -1515,51 +1515,48 @@ def _warmup_blocking() -> None:
 
     Three costs move off the first turn: importing the agent stack (faiss,
     RAG, tool mixins), loading the model into its Lemonade slot, and the
-    first pass over the system prompt. The last one is why the warm-up sends
-    the agent's *real* system prompt rather than a bare "hi" — Lemonade
-    prefix-caches it, so the first question reuses the cache instead of
-    reprocessing ~10K tokens.
+    first pass over the ~20K-token prompt prefix. The agent's own
+    :meth:`warm_up` sends that prefix exactly as a turn would (composed system
+    prompt and tool schemas), and every session agent renders the same one, so
+    the first question in any session reads it from Lemonade's cache.
+
+    Never fatal — a cold first turn is slow, not broken — but a failure is
+    logged as a warning with its cause, not hidden.
     """
-    import time
+    from gaia_agent.session_registry import build_session_agent
 
-    started = time.time()
     try:
-        from gaia_agent.session_registry import build_session_agent
-
-        from gaia.llm.lemonade_client import create_lemonade_client
-
         if not _default_model_is_servable():
             return
         agent = build_session_agent()
-        try:
-            system_prompt = agent._get_system_prompt()  # noqa: SLF001
-            model = getattr(agent, "model_id", None)
-        finally:
-            close_agent(agent)
-
-        if not system_prompt or not model:
-            logger.info("GAIA sidecar: warm-up skipped (no prompt/model resolved)")
-            return
-
-        client = create_lemonade_client(auto_start=False, verbose=False)
-        response = client.chat_completions(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": "Reply with OK."},
-            ],
-            max_completion_tokens=1,
+    except Exception as e:  # noqa: BLE001 - reported, and chat still works
+        logger.warning(
+            "GAIA sidecar: warm-up failed before the model was reached (%s). "
+            "Chat still works, but the first answer will take longer; check "
+            "that Lemonade is running and the model is downloaded.",
+            e,
+            exc_info=True,
         )
-        cached = (response.get("usage") or {}).get("prompt_tokens_details") or {}
+        return
+    try:
+        result = agent.warm_up()
         logger.info(
-            "GAIA sidecar: warmed %s in %.1fs (system prompt %d chars, %s cached)",
-            model,
-            time.time() - started,
-            len(system_prompt),
-            cached.get("cached_tokens", "?"),
+            "GAIA sidecar: warmed %s in %ss (%s of %s prompt tokens cached)",
+            getattr(agent, "model_id", "?"),
+            result.get("seconds"),
+            result.get("cached_tokens", "?"),
+            result.get("prompt_tokens", "?"),
         )
-    except Exception as e:  # noqa: BLE001 — warm-up is best-effort by design
-        logger.info("GAIA sidecar: model warm-up skipped (%s)", e)
+    except Exception as e:  # noqa: BLE001 - reported, and chat still works
+        logger.warning(
+            "GAIA sidecar: warm-up request to %s failed (%s). Chat still works, "
+            "but the first answer will take longer; check the Lemonade log.",
+            getattr(agent, "model_id", "?"),
+            e,
+            exc_info=True,
+        )
+    finally:
+        close_agent(agent)
 
 
 app = build_app()

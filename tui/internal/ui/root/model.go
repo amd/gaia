@@ -1,6 +1,7 @@
 package root
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -143,6 +144,10 @@ type FlagshipModel struct {
 type clientBox struct {
 	mu sync.Mutex
 	c  client.AgentClient
+	// retiring tracks clients closed off the event loop by retire; close
+	// waits for them so quit cannot orphan one mid-shutdown.
+	retiring  sync.WaitGroup
+	retireErr error
 }
 
 func (b *clientBox) set(c client.AgentClient) {
@@ -151,15 +156,45 @@ func (b *clientBox) set(c client.AgentClient) {
 	b.c = c
 }
 
+// retire closes the current client in the background. A departing agent can
+// spend seconds saving memories before it exits, and an /agents switch must
+// not freeze the screen for that.
+func (b *clientBox) retire() {
+	b.mu.Lock()
+	c := b.c
+	b.c = nil
+	if c != nil {
+		b.retiring.Add(1)
+	}
+	b.mu.Unlock()
+	if c == nil {
+		return
+	}
+	go func() {
+		defer b.retiring.Done()
+		if err := c.Close(); err != nil {
+			b.mu.Lock()
+			b.retireErr = errors.Join(b.retireErr, err)
+			b.mu.Unlock()
+		}
+	}()
+}
+
 func (b *clientBox) close() error {
 	b.mu.Lock()
 	c := b.c
 	b.c = nil
 	b.mu.Unlock()
-	if c == nil {
-		return nil
+	var err error
+	if c != nil {
+		err = c.Close()
 	}
-	return c.Close()
+	b.retiring.Wait()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	retireErr := b.retireErr
+	b.retireErr = nil
+	return errors.Join(err, retireErr)
 }
 
 // NewFlagshipModel builds the TUI around one agent.
@@ -596,7 +631,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	// b.c without closing it (see clientBox's own doc comment).
 	if m.chat != nil {
 		m.chat.CancelActiveTurn()
-		m.chatClient.close()
+		m.chatClient.retire()
 	}
 	m.chatClient.set(c)
 

@@ -80,7 +80,8 @@ export function ModelChip({ disabled }: { disabled?: boolean }) {
         : 'Model';
     const title = !place
         ? UNKNOWN_PLACE_TITLE
-        : place.description
+        // The server writes the model name as Markdown code; a tooltip shows backticks literally.
+        : place.description?.replace(/`/g, '')
             ?? (place.remote ? `Runs on ${place.label} — chat history leaves this PC` : 'Runs on this PC');
 
     return (

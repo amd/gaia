@@ -233,7 +233,8 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
 
     // Build summary — always use stable step count so the bar doesn't
     // visually change when transitioning from thinking to answer streaming.
-    const stepCount = displaySteps.length;
+    // Progress-status rows aren't saved with the turn; counting them made the total drop on finish.
+    const stepCount = displaySteps.filter((s) => s.type !== 'status').length || displaySteps.length;
     const summaryText = hasPolicyAlerts
         ? `Blocked by policy \u00b7 ${policySteps.length} alert${policySteps.length !== 1 ? 's' : ''}`
         : `${stepCount} step${stepCount !== 1 ? 's' : ''}`
@@ -460,7 +461,12 @@ interface FlowToolCardProps {
 function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
     const meta = getToolMeta(step.tool);
     const Icon = meta.icon;
-    const friendlyLabel = step.active ? meta.activeLabel : meta.label;
+    // The done-label ("Wrote file") would claim a failed, denied or stopped call succeeded.
+    const unfinished = step.success == null && !step.result;
+    const friendlyLabel = step.active
+        ? meta.activeLabel
+        : step.success === false ? `${meta.activeLabel} failed`
+        : unfinished ? `${meta.activeLabel} didn't finish` : meta.label;
     const hasDetail = !!(step.detail || step.result || step.commandOutput || step.fileList?.files?.length);
 
     return (
@@ -488,7 +494,7 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
                 </div>
                 <div className="flow-tool-right">
                     {step.latencyMs != null && !step.active && (
-                        <span className="flow-tool-latency">{Math.round(step.latencyMs)}ms</span>
+                        <span className="flow-tool-latency">{formatToolLatency(step.latencyMs)}</span>
                     )}
                     {hasDetail && (
                         <span className={`flow-tool-chevron ${isExpanded ? 'expanded' : ''}`}>
@@ -739,7 +745,17 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-function formatArgsDisplay(detail: string): React.ReactNode {
+/** `47031` -> "47.0s", `312.4` -> "312ms", `0.3` -> "<1ms". */
+export function formatToolLatency(ms: number): string {
+    if (ms < 1) return '<1ms';
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
+}
+
+/** `key: value`, where the colon is followed by a space — so `C:\x` is never read as key `C`. */
+const ARG_ROW_RE = /^([A-Za-z_][\w.-]{0,29}):(?:\s+([\s\S]*))?$/;
+
+export function formatArgsDisplay(detail: string): React.ReactNode {
     const parts = detail.includes('\n')
         ? detail.split('\n').filter(Boolean)
         : detail.split(', ').filter(Boolean);
@@ -751,10 +767,10 @@ function formatArgsDisplay(detail: string): React.ReactNode {
     return (
         <div className="args-grid">
             {parts.map((part, i) => {
-                const colonIdx = part.indexOf(':');
-                if (colonIdx > 0 && colonIdx < 30) {
-                    const key = part.slice(0, colonIdx).trim();
-                    const val = part.slice(colonIdx + 1).trim();
+                const row = ARG_ROW_RE.exec(part.trim());
+                if (row) {
+                    const key = row[1];
+                    const val = (row[2] ?? '').trim();
                     return (
                         <div key={i} className="arg-row">
                             <span className="arg-key">{key}</span>

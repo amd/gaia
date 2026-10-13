@@ -41,7 +41,6 @@ from gaia.agents.install_hints import (
     format_command,
     gaia_extra_requirements,
     resolve_pip_frontend,
-    source_install_command,
 )
 from gaia.installer._stdin import stdin_is_tty
 from gaia.llm.model_fit import MachineCapacity
@@ -105,19 +104,20 @@ def hub_unreachable_message(agent_id: str, hub_url: str, exc: BaseException) -> 
 # Hub to install. Its wheel is source-install only (#2240).
 HUB_INSTALL_AGENTS = frozenset({"gaia"})
 
-# Agent ids a profile's quick-start commands need, whether or not `gaia init`
-# can fetch them. Wider than HUB_INSTALL_AGENTS by exactly `chat`: `--profile
-# chat` and `--profile npu` both lead with `gaia chat`, which imports the
-# flagship's `gaia-agent-gaia` wheel and the `gaia-agent-chat` wheel it builds
-# on, so reporting "initialization complete" without them would be a false
-# promise even though init cannot install them.
-PROFILE_REQUIRED_AGENTS = HUB_INSTALL_AGENTS | {"chat"}
+# The agent the Agent UI and gaia-tui talk to. Profiles that don't install it
+# say so in their completion message and name `gaia hub install gaia`.
+FLAGSHIP_AGENT_ID = "gaia"
 
 # Hub agent id -> the module a source/pip install of it makes importable. Every
 # `gaia-agent-<id>` distribution installs `gaia_agent_<id>` except the flagship:
 # `gaia-agent-gaia` ships plain `gaia_agent` (hub/agents/gaia/python's
 # gaia-agent.yaml `entry_module`).
 _AGENT_IMPORT_NAMES = {"gaia": "gaia_agent"}
+
+_NPU_ACTIVE_NOTE = (
+    "NPU is now the default device. Switch back with: "
+    "gaia config set default_device gpu"
+)
 
 # The profile a bare `gaia init` runs — the flagship agent's configuration.
 DEFAULT_INIT_PROFILE = "gaia"
@@ -207,7 +207,9 @@ INIT_PROFILES = {
     },
     "npu": {
         "description": "Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU)",
-        "agent": "chat",
+        # The flagship, from the Agent Hub like the `gaia` profile -- the Agent
+        # UI lists no agent without it (#2972). Only the models differ.
+        "agent": "gaia",
         # FLM chat model + FLM-native embedder so chat and embeddings stay
         # co-resident on the NPU backend. A GGUF embedder would run on Vulkan
         # and evict the FLM chat model every turn (#1744). Both are built-in
@@ -220,7 +222,8 @@ INIT_PROFILES = {
         # `gaia init --profile npu` report 4096 while the loader requested
         # 32768. FLM at 32k is confirmed loading on a Ryzen AI 7 350 / 16 GB.
         "min_context_size": 32768,
-        "pip_extras": [],
+        # Same as the gaia profile: the daemon and Agent UI the flagship runs in.
+        "pip_extras": ["ui"],
         # NPU-specific keys (not present on other profiles):
         "recipe": "flm",
         "backend": "flm:npu",
@@ -2058,39 +2061,24 @@ class InitCommand:
 
         return hub_installer.read_sentinel(agent_id) is not None
 
-    @staticmethod
-    def _chat_agent_missing_wheels() -> list:
-        """The wheels ``gaia chat`` imports that are missing, in install order.
+    def _profile_installs_flagship(self) -> bool:
+        """Whether this profile installs the flagship agent itself."""
+        return INIT_PROFILES[self.profile].get("agent") == FLAGSHIP_AGENT_ID
 
-        ``gaia chat`` runs the flagship (``gaia_agent``), which builds on the
-        ``gaia_agent_chat`` wheel. No init profile installs either as a wheel
-        (#2240), and the flagship the hub installs is a binary no import can
-        see -- so only an importable ``gaia_agent`` counts for it, never its
-        hub sentinel. Printing `gaia chat` as a ready next step without both
-        is a false promise, so completion messaging checks first.
+    def _agent_install_note(self) -> Optional[str]:
+        """What to tell the user when no chat agent is installed, else None.
+
+        Every profile gets the same supported remedy, `gaia hub install gaia`:
+        the Agent UI and gaia-tui list no agent without the flagship (#2972).
         """
-        missing = []
-        if not InitCommand._is_hub_agent_available("chat"):
-            missing.append("gaia-agent-chat")
-        if importlib.util.find_spec(_AGENT_IMPORT_NAMES["gaia"]) is None:
-            missing.append("gaia-agent-gaia")
-        return missing
-
-    def _profile_agent_available(self) -> bool:
-        """Whether the agent THIS profile's quick-start commands need is present.
-
-        True for profiles that need none (sd/vlm/minimal/...), so their
-        completion headline is never gated on someone else's agent. Keyed on
-        ``PROFILE_REQUIRED_AGENTS``, not ``HUB_INSTALL_AGENTS``: `chat` cannot
-        be hub-installed but `--profile chat`/`--profile npu` still need it,
-        along with the flagship wheel `gaia chat` runs.
-        """
-        agent_id = INIT_PROFILES[self.profile].get("agent")
-        if agent_id not in PROFILE_REQUIRED_AGENTS:
-            return True
-        if agent_id == "chat":
-            return not self._chat_agent_missing_wheels()
-        return self._is_hub_agent_available(agent_id)
+        if self._is_hub_agent_available(FLAGSHIP_AGENT_ID):
+            return None
+        if self._profile_installs_flagship():
+            return "GAIA agent not installed yet -- run: gaia hub install gaia"
+        return (
+            f"No chat agent is installed: the '{self.profile}' profile sets up "
+            "models only. Install the GAIA agent with: gaia hub install gaia"
+        )
 
     def _ensure_hub_agent_installed(self) -> None:
         """Install this profile's hub agent from the Agent Hub catalog if it
@@ -2246,45 +2234,28 @@ class InitCommand:
         Returns False when the headline says setup is incomplete, which
         ``run()`` turns into a non-zero exit.
         """
-        missing_chat_wheels = self._chat_agent_missing_wheels()
-        chat_agent_available = not missing_chat_wheels
-        chat_install_note = "`gaia chat` agent not installed yet -- run: " + (
-            " then ".join(source_install_command(w) for w in missing_chat_wheels)
-        )
-        # The flagship is a hub BINARY, so its missing-hint names the hub, not a
-        # pip command. Pointing at gaia-agent-chat here would answer a headline
-        # about the flagship with a different package's install line.
-        flagship_install_note = (
-            "GAIA agent not installed yet -- run: gaia hub install gaia"
-        )
+        # The flagship is a hub BINARY, so the remedy names the hub, never a
+        # pip install from a git checkout.
+        agent_note = self._agent_install_note()
         has_tui = self._tui_installed()
         tui_install_note = (
             f"Terminal UI (gaia-tui) ships with the installer -- run: {_INSTALLER_HINT}"
         )
-        # Scoped per profile -- gating on the chat wheel alone would mark
-        # sd/vlm/minimal permanently "incomplete", and would call the flagship
-        # profile complete while its own binary is missing.
-        agent_id = INIT_PROFILES[self.profile].get("agent")
-        agent_missing = not self._profile_agent_available()
-        # Incomplete only when init was meant to install the agent and could
-        # have: chat's wheels are source-install only (#2240).
+        installs_flagship = self._profile_installs_flagship()
+        agent_missing = agent_note is not None
+        # Incomplete only when init was meant to install the agent and could have.
         setup_incomplete = (
-            agent_missing
-            and agent_id in HUB_INSTALL_AGENTS
-            and not self._no_hub_build_for_machine
+            agent_missing and installs_flagship and not self._no_hub_build_for_machine
         )
         if setup_incomplete:
             headline = "GAIA initialization incomplete - see below"
-        elif agent_missing and agent_id in HUB_INSTALL_AGENTS:
+        elif agent_missing and installs_flagship:
             headline = (
-                f"GAIA initialization complete, except the '{agent_id}' agent: "
-                "the Agent Hub has no build for this machine"
+                f"GAIA initialization complete, except the '{FLAGSHIP_AGENT_ID}' "
+                "agent: the Agent Hub has no build for this machine"
             )
         elif agent_missing:
-            headline = (
-                "GAIA initialization complete, except `gaia chat`: install its "
-                "packages below"
-            )
+            headline = "GAIA initialization complete - no chat agent installed"
         else:
             headline = "GAIA initialization complete!"
         color = "red" if setup_incomplete else "green"
@@ -2307,7 +2278,7 @@ class InitCommand:
                     "Then ask for an image — image generation runs through the "
                     "agent's SD tools"
                 )
-            elif self.profile == "gaia":
+            elif self.profile in ("gaia", "npu"):
                 if has_tui:
                     self.console.print(
                         "    [cyan]gaia-tui[/cyan]                             Start the GAIA agent (terminal UI)"
@@ -2319,8 +2290,10 @@ class InitCommand:
                     self.console.print(
                         f"    [dim]{rich_escape(tui_install_note)}[/dim]"
                     )
-                if not self._profile_agent_available():
-                    self.console.print(f"    [yellow]{flagship_install_note}[/yellow]")
+                if self.profile == "npu":
+                    self.console.print(
+                        f"    [dim]{rich_escape(_NPU_ACTIVE_NOTE)}[/dim]"
+                    )
             elif self.profile == "chat":
                 self.console.print(
                     "    [cyan]gaia chat[/cyan]                            Start interactive chat with RAG"
@@ -2334,20 +2307,6 @@ class InitCommand:
                 self.console.print(
                     "    [cyan]gaia chat --ui[/cyan]                       Launch the Agent UI (browser-based)"
                 )
-                if not chat_agent_available:
-                    self.console.print(f"    [yellow]{chat_install_note}[/yellow]")
-            elif self.profile == "npu":
-                self.console.print(
-                    "    [cyan]gaia chat --device npu[/cyan]             Chat using Ryzen AI NPU"
-                )
-                self.console.print(
-                    "    [cyan]gaia chat --ui[/cyan]                     Agent UI (select NPU in device dropdown)"
-                )
-                self.console.print(
-                    "    [dim]Note: NPU inference is active. Use --device gpu to switch back.[/dim]"
-                )
-                if not chat_agent_available:
-                    self.console.print(f"    [yellow]{chat_install_note}[/yellow]")
             elif self.profile == "vlm":
                 self.console.print(
                     "    [cyan]gaia cache status[/cyan]      Verify VLM model is available"
@@ -2380,8 +2339,8 @@ class InitCommand:
                 self.console.print(
                     "    [cyan]gaia talk[/cyan]              Voice interaction"
                 )
-                if not chat_agent_available:
-                    self.console.print(f"    [yellow]{chat_install_note}[/yellow]")
+            if agent_note:
+                self.console.print(f"    [yellow]{rich_escape(agent_note)}[/yellow]")
             self.console.print()
         else:
             self._print("")
@@ -2397,7 +2356,7 @@ class InitCommand:
                     "    gaia chat                    Then ask for an image — "
                     "image generation runs through the agent's SD tools"
                 )
-            elif self.profile == "gaia":
+            elif self.profile in ("gaia", "npu"):
                 if has_tui:
                     self._print(
                         "    gaia-tui                             # Start the GAIA agent (terminal UI)"
@@ -2407,8 +2366,8 @@ class InitCommand:
                 )
                 if not has_tui:
                     self._print(f"    {tui_install_note}")
-                if not self._profile_agent_available():
-                    self._print(f"    {flagship_install_note}")
+                if self.profile == "npu":
+                    self._print(f"    {_NPU_ACTIVE_NOTE}")
             elif self.profile == "chat":
                 self._print(
                     "    gaia chat                            # Start interactive chat with RAG"
@@ -2422,21 +2381,6 @@ class InitCommand:
                 self._print(
                     "    gaia chat --ui                       # Launch the Agent UI (browser-based)"
                 )
-                if not chat_agent_available:
-                    self._print(f"    {chat_install_note}")
-            elif self.profile == "npu":
-                self._print(
-                    "    gaia chat --device npu             # Chat using Ryzen AI NPU"
-                )
-                self._print(
-                    "    gaia chat --ui                     # Agent UI (select NPU in device dropdown)"
-                )
-                self._print("")
-                self._print(
-                    "  Note: NPU inference is active. Use --device gpu to switch back."
-                )
-                if not chat_agent_available:
-                    self._print(f"    {chat_install_note}")
             elif self.profile == "vlm":
                 self._print(
                     "    gaia cache status      # Verify VLM model is available"
@@ -2461,8 +2405,8 @@ class InitCommand:
                 )
                 self._print("    gaia llm 'Hello'       # Quick LLM query")
                 self._print("    gaia talk              # Voice interaction")
-                if not chat_agent_available:
-                    self._print(f"    {chat_install_note}")
+            if agent_note:
+                self._print(f"    {agent_note}")
             self._print("")
         return not setup_incomplete
 

@@ -92,14 +92,14 @@ the embedding models, but the next launch asks for the default again unless
 Qwen3.6 35B A3B reads up to 262,144 tokens. Only 10 of its 40 layers keep a
 growing KV cache, about 20 KiB per token, so memory sets the limit rather than
 the model. GAIA loads it with the largest window, in 8,192-token steps, whose
-cache fits beside the weights, leaving 10% of the memory free and, on shared
-memory, room for the embedding model. It never goes below 65,536 tokens.
+cache fits beside the weights, leaving 10% of the memory free and room for the
+embedding model, which loads on the GPU too. It never goes below 65,536 tokens.
 
 | PC | Memory for models | Window | KV cache |
 |----|-------------------|--------|----------|
 | Strix Halo 128 GB (96 GB carve-out) | ~112 GB | 262,144 | 5.4 GB |
 | Strix Halo 64 GB | ~48–56 GB | 262,144 | 5.4 GB |
-| 32 GB GPU | 32 GB | 155,648 | 3.2 GB |
+| 32 GB GPU | 32 GB | 90,112 | 1.8 GB |
 | 24 GB GPU | 24 GB | Qwen3.6 not picked; Gemma at 65,536 | — |
 
 Gemma 4 E4B stays at 65,536 tokens on every PC.
@@ -187,7 +187,8 @@ mid-session, the TUI reports any reversion to its launch model.
 
 The model you last switched to — from `/provider`, `/model`, or the provider
 screen at startup — is restored the next time you open the TUI. The header names
-it before your first message, and a restore says "Restored your last model."
+it before your first message, and a restore says "Restored your last model:"
+followed by the model's name.
 
 If it can't be restored — the key is gone, the provider isn't connected, the
 model is no longer listed, or you stop the restore — GAIA says so in one line and
