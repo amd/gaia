@@ -217,7 +217,7 @@ async def send_message(
 
                 # Fire-and-forget auto-titling — same hook the streaming
                 # path uses. GAIA renames its own session after the first
-                # answer (and on topic shifts thereafter); see
+                # answer, and never again; see
                 # _maybe_update_session_title for the rules. We pass
                 # model_id from the loaded session so the title call uses
                 # whichever LLM is actually live in Lemonade.

@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from gaia.logger import get_logger
+from gaia.utils.terminal import windows_hidden_popen_kwargs
 
 logger = get_logger(__name__)
 
@@ -142,6 +143,7 @@ def check(skip_chat_model: bool = False, load: bool = False) -> Dict[str, Any]:
             errors="replace",
             timeout=VERIFY_TIMEOUT_S if load else CHECK_TIMEOUT_S,
             check=False,
+            **windows_hidden_popen_kwargs(),
         )
     except subprocess.TimeoutExpired as e:
         raise SetupError(
@@ -287,6 +289,7 @@ class SetupRunner:
                     # Rich wraps a pipe at 80 columns, which would cut the
                     # error line shown as the failure reason mid-sentence.
                     env={**os.environ, "COLUMNS": str(_UNWRAPPED_COLUMNS)},
+                    **windows_hidden_popen_kwargs(),
                 )
             except OSError as e:
                 raise SetupError(

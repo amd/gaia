@@ -440,9 +440,11 @@ def drain_memory_extraction(
         return True
     if wait(timeout):
         return True
+    pending = getattr(agent, "pending_memory_extractions", None)
     logger.warning(
-        "[MemoryMixin] memory extraction was still running after %.0fs and is "
-        "being dropped — this turn's facts were not stored",
+        "[MemoryMixin] %s memory extraction job(s) still pending after %.0fs are "
+        "being dropped — those turns' facts were not stored",
+        pending() if callable(pending) else "unknown number of",
         timeout,
     )
     return False
@@ -3997,6 +3999,13 @@ class MemoryMixin(ProceduralMemoryMixin):
         with self._extraction_lock:
             self._extraction_flush = False
         return False
+
+    def pending_memory_extractions(self) -> int:
+        """Turns whose extraction has not finished: the queue plus the running one."""
+        self._ensure_extraction_state()
+        with self._extraction_lock:
+            running = 1 if self._extraction_thread is not None else 0
+            return len(self._extraction_queue) + running
 
     # ------------------------------------------------------------------
     # Tool Registration

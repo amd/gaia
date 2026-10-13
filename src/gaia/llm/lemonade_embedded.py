@@ -49,6 +49,10 @@ from typing import Callable, Dict, List, Optional, Tuple
 from gaia.env import child_env
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.terminal import (
+    background_popen_kwargs,
+    windows_hidden_popen_kwargs,
+)
 from gaia.version import LEMONADE_VERSION
 
 log = get_logger(__name__)
@@ -713,13 +717,14 @@ class EmbeddedLemonade:
         """Record per-model load options Lemonade applies even when it auto-loads.
 
         The embedder is loaded on demand by ``/embeddings`` as well as by GAIA's
-        explicit loads, so its backend and ubatch have to live in Lemonade's
-        saved options.
+        explicit loads, so its ubatch has to live in Lemonade's saved options.
+        A saved CPU backend is dropped so each start tries the GPU again; the
+        client saves the CPU back only if the GPU load fails.
         """
         from gaia.llm.lemonade_client import (
             DEFAULT_EMBEDDING_MODEL,
             EMBEDDER_LLAMACPP_ARGS,
-            llamacpp_backend_for,
+            manages_embedder_backend,
         )
 
         path = self.config_dir / "recipe_options.json"
@@ -740,12 +745,18 @@ class EmbeddedLemonade:
             options = loaded
         # Lemonade keys saved options by the registered (``user.``) name.
         for model in (DEFAULT_EMBEDDING_MODEL,):
-            backend = llamacpp_backend_for(model)
-            if backend is None:
+            if not manages_embedder_backend(model):
                 continue
             entry = options.get(model)
             entry = dict(entry) if isinstance(entry, dict) else {}
-            entry["llamacpp_backend"] = backend
+            if entry.get("llamacpp_backend") == "cpu":
+                log.info(
+                    "Clearing the saved CPU backend for %s in %s so it tries the "
+                    "GPU again",
+                    model,
+                    path,
+                )
+                del entry["llamacpp_backend"]
             args = str(entry.get("llamacpp_args") or "")
             if "--ubatch-size" not in args:
                 entry["llamacpp_args"] = f"{args} {EMBEDDER_LLAMACPP_ARGS}".strip()
@@ -847,6 +858,7 @@ class EmbeddedLemonade:
                     text=True,
                     timeout=15,
                     check=False,
+                    **windows_hidden_popen_kwargs(),
                 )
                 return "lemond" in result.stdout.lower()
             result = subprocess.run(
@@ -1063,14 +1075,10 @@ class EmbeddedLemonade:
         ]
         log.info("Starting embedded Lemonade: %s", " ".join(argv))
 
-        # Detach so the daemon outlives the CLI process that spawned it.
-        kwargs = {}
-        if platform.system() == "Windows":
-            kwargs["creationflags"] = (
-                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-            )
-        else:
-            kwargs["start_new_session"] = True
+        # Own group/session so the server outlives the CLI process that spawned
+        # it. A hidden console, not none: lemond's llama/whisper/kokoro children
+        # inherit it instead of each opening a blank window.
+        kwargs = background_popen_kwargs()
 
         self.root.mkdir(parents=True, exist_ok=True)
         with open(self.log_path, "ab") as logfile:
@@ -1238,6 +1246,7 @@ class EmbeddedLemonade:
                     check=True,
                     capture_output=True,
                     timeout=30,
+                    **windows_hidden_popen_kwargs(),
                 )
             else:
                 # start() makes the daemon a session leader, so its backends
@@ -1317,6 +1326,7 @@ class EmbeddedLemonade:
                 text=True,
                 timeout=timeout,
                 check=False,
+                **windows_hidden_popen_kwargs(),
             )
         except subprocess.TimeoutExpired as e:
             raise EmbeddedLemonadeError(

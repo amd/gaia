@@ -165,7 +165,41 @@ func (k FixKind) Label() string {
 type Remedy struct {
 	Action  string
 	Command string
-	Where   string
+	// PowerShell is Command for PowerShell, set only when the two differ
+	// (Windows); Command is then the Command Prompt form.
+	PowerShell string
+	Where      string
+}
+
+// ShellCommand is one copy-pasteable command line. Shell names the shell it is
+// for, empty when the line runs as-is in the user's shell.
+type ShellCommand struct {
+	Shell string
+	Line  string
+}
+
+// Label is the "run:" prefix, naming the shell when the line needs one.
+func (c ShellCommand) Label() string {
+	if c.Shell == "" {
+		return "run:"
+	}
+	return "run in " + c.Shell + ":"
+}
+
+// Commands is every form of the command to show, in display order.
+func (r Remedy) Commands() []ShellCommand { return shellCommands(r.Command, r.PowerShell) }
+
+func shellCommands(command, powerShell string) []ShellCommand {
+	switch {
+	case command == "":
+		return nil
+	case powerShell == "" || powerShell == command:
+		return []ShellCommand{{Line: command}}
+	}
+	return []ShellCommand{
+		{Shell: "Command Prompt", Line: command},
+		{Shell: "PowerShell", Line: powerShell},
+	}
 }
 
 // Empty reports whether there is nothing to tell the user.
@@ -513,8 +547,8 @@ func (r Report) String() string {
 		if row.Remedy.Action != "" {
 			fmt.Fprintf(&b, "        %s\n", row.Remedy.Action)
 		}
-		if row.Remedy.Command != "" {
-			fmt.Fprintf(&b, "        run: %s\n", row.Remedy.Command)
+		for _, c := range row.Remedy.Commands() {
+			fmt.Fprintf(&b, "        %s %s\n", c.Label(), c.Line)
 		}
 		if row.Remedy.Where != "" {
 			fmt.Fprintf(&b, "        look: %s\n", row.Remedy.Where)

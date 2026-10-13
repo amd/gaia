@@ -410,10 +410,15 @@ def restore_last_model(db: ChatDatabase) -> Dict[str, Any]:
             # Not cached: the UI asks again once the server is up.
             return {"status": "pending", "message": None}
         if reason is None:
+            from gaia.llm.lemonade_client import resolve_default_chat_model
+
+            current = (db.get_setting("custom_model") or "").strip()
+            unchanged = last == (current or resolve_default_chat_model())
             db.set_setting("custom_model", last)
             _restore_result = {
                 "status": "restored",
-                "message": "Restored your last model.",
+                # Nothing to announce when the model was going to run anyway.
+                "message": None if unchanged else "Restored your last model.",
             }
         else:
             _restore_result = {

@@ -327,7 +327,8 @@ var (
 				Bold(true).
 				Foreground(theme.Dim)
 
-	paletteQueryStyle = lipgloss.NewStyle().
+	paletteCursorStyle = lipgloss.NewStyle().Reverse(true)
+	paletteQueryStyle  = lipgloss.NewStyle().
 				Foreground(theme.Dim)
 
 	paletteNameStyle = lipgloss.NewStyle().
@@ -505,7 +506,7 @@ func paletteBodyLines(query string, items []paletteCommand, selected, inner int)
 		// onto two rows and pushed the box past the window.
 		ansi.Truncate(paletteTitleStyle.Render("Slash Commands"), inner, "…"),
 		dividerStyle.Render(strings.Repeat("─", inner)),
-		ansi.Truncate(paletteQueryStyle.Render(query)+"▏", inner, "…"),
+		ansi.Truncate(paletteQueryStyle.Render(query)+paletteCursorStyle.Render(" "), inner, "…"),
 		"",
 	}
 	column := paletteColumn(items)

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia.env import child_env
 from gaia.logger import get_logger
+from gaia.utils.terminal import windows_hidden_popen_kwargs
 
 from .base import MCPTransport
 
@@ -178,6 +179,7 @@ class StdioTransport(MCPTransport):
                 # threads (e.g. after loading native extensions via
                 # LemonadeManager) crashes the child with SIGSEGV on macOS.
                 close_fds=False,
+                **windows_hidden_popen_kwargs(),
             )
 
             logger.debug(f"MCP server process started (PID: {self._process.pid})")
@@ -269,11 +271,10 @@ class StdioTransport(MCPTransport):
             return ""
         try:
             stderr = self._process.stderr.read()
-            if stderr:
-                return stderr.strip()[-2000:]
-        except Exception:
-            pass
-        return ""
+        except (OSError, ValueError) as e:
+            logger.debug("Could not read the MCP server's stderr: %s", e)
+            return ""
+        return stderr.strip()[-2000:] if stderr else ""
 
     def _process_died_error(self) -> RuntimeError:
         """Build a RuntimeError with exit code, signal name, and stderr from a dead process."""

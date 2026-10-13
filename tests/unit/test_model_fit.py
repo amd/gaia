@@ -580,10 +580,11 @@ class TestQwenWindowFollowsMemory:
             (STRIX_HALO_128, 262144),
             # 48 GB carve-out + 7.9 GB GTT: still the native maximum.
             (STRIX_HALO_64, 262144),
-            # 32 GB card: 28.8 GB usable - 25.5 GB weights leaves ~152K of KV.
+            # 32 GB card: 28.8 GB usable - 25.5 GB weights - 1.35 GB embedder
+            # leaves ~97K of KV.
             (
                 {"devices": {"amd_dgpu": [{"available": True, "vram_gb": 32.0}]}},
-                155648,
+                90112,
             ),
             # 24 GB card: Qwen3.6 is not the default here; forced, it gets 64K.
             (DGPU, lc.GPU_CTX_SIZE),
@@ -629,7 +630,7 @@ class TestQwenWindowFollowsMemory:
         model_id, _, cap = lc.recommend_default_chat_model(FakeClient())
         assert model_id == lc.LARGE_DEFAULT_MODEL_NAME
         window = lc.context_for_capacity(QWEN, cap)
-        assert window == 155648
+        assert window == 90112
         assert charged[0] == pytest.approx(
             model_fit.kv_cache_gb(QWEN.kv_bytes_per_token, window)
         )

@@ -94,6 +94,11 @@ class TestDeriveNarration:
             == "Running zork thing: alpha"
         )
 
+    def test_browse_directory_reads_as_listing_a_folder(self):
+        assert derive_narration("browse_directory", {"path": ".ux"}) == (
+            "Listing folder: .ux"
+        )
+
     @pytest.mark.parametrize("tool", ["", "   ", None])
     def test_unnamed_tool_never_yields_an_empty_narration(self, tool):
         """No-silent-fallback: an honest generic phrase, never ``''``."""

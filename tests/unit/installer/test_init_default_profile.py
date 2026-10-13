@@ -164,9 +164,11 @@ class TestExplicitProfilesUnchanged:
     def test_chat_profile_still_installs_the_chat_wheel(self):
         assert INIT_PROFILES["chat"]["agent"] == "chat"
 
-    def test_npu_profile_still_installs_the_chat_wheel_on_flm_models(self):
+    def test_npu_profile_installs_the_flagship_on_flm_models(self):
+        """#2972: the flagship, like the default profile -- only the models
+        and device keys differ."""
         npu = INIT_PROFILES["npu"]
-        assert npu["agent"] == "chat"
+        assert npu["agent"] == FLAGSHIP_AGENT_ID
         assert npu["models"] == ["gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"]
         assert npu["required_device"] == "amd_npu"
 

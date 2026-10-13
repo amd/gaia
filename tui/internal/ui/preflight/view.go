@@ -441,15 +441,22 @@ func (m Model) remedyLines(row Row, w int) []string {
 	if row.Fix != FixNone {
 		out = append(out, keyStyle.Render("f")+" "+dimStyle.Render(row.Fix.Label()))
 	}
-	if row.Remedy.Command != "" {
-		label := "run:   "
+	for _, c := range row.Remedy.Commands() {
+		label := c.Label()
 		if row.Fix != FixNone {
-			label = "or run:"
+			label = "or " + label
 		}
-		for i, l := range wrap(row.Remedy.Command, w-8) {
-			prefix := dimStyle.Render(label + " ")
+		first := dimStyle.Render(fmt.Sprintf("%-7s", label) + " ")
+		if c.Shell != "" {
+			// A shell-named label gets its own line so the command keeps the
+			// full width and a long path is not split mid-word.
+			out = append(out, dimStyle.Render(label))
+			first = strings.Repeat(" ", 8)
+		}
+		for i, l := range wrap(c.Line, w-8) {
+			prefix := first
 			if i > 0 {
-				prefix = strings.Repeat(" ", len(label)+1)
+				prefix = strings.Repeat(" ", 8)
 			}
 			out = append(out, prefix+cmdStyle.Render(l))
 		}

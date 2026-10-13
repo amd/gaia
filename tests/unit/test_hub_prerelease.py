@@ -183,10 +183,10 @@ class TestInit:
             "gaia", fetcher=_fetcher_for(release_assets, []), core_version=RC_CORE
         )
 
-    def _run(self, source, sentinel):
+    def _run(self, source, sentinel, profile="gaia"):
         from gaia.installer.init_command import InitCommand
 
-        cmd = InitCommand(profile="gaia", yes=True)
+        cmd = InitCommand(profile=profile, yes=True)
         with (
             patch.object(prerelease, "flagship_source", return_value=source),
             patch.object(installer, "read_sentinel", return_value=sentinel),
@@ -201,6 +201,11 @@ class TestInit:
     def test_replaces_an_agent_installed_from_the_hub(self, release_assets):
         stale = SimpleNamespace(version="0.2.0", artifact_sha256="0" * 64)
         install = self._run(self._source(release_assets), stale)
+        install.assert_called_once_with("gaia", trusted=True)
+
+    def test_npu_profile_installs_the_candidates_flagship(self, release_assets):
+        """The NPU profile installs the same flagship as the default one (#2972)."""
+        install = self._run(self._source(release_assets), None, profile="npu")
         install.assert_called_once_with("gaia", trusted=True)
 
     def test_keeps_the_candidates_own_build(self, release_assets):

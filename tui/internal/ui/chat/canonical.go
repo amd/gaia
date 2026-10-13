@@ -92,6 +92,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
+		// Kept in the transcript, not the live line: it explains later answers.
+		if e.HistoryCut != nil {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: truncateRunes(clean(e.Message), narrationMax),
+			})
+			break
+		}
+
 		// A phase report drives the live line and nothing else: it is not
 		// narration, so it never lands in the work log.
 		if e.Phase != "" {
@@ -282,7 +291,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				}
 			}
 		}
-		duration := time.Since(m.queryStart)
+		active := m.turnElapsed(time.Now())
+		duration := active
 		if m.startup.warmNext && !m.dev {
 			// The opening switch's time belongs to the ready line, not its own.
 			duration = 0
@@ -316,7 +326,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// One ledger entry per turn, from what the backend reported. A turn
 		// with no token counts still counts as a turn — see sessionCost.
 		m.cost.add(turnCost{
-			duration:  time.Since(m.queryStart),
+			duration:  active,
 			steps:     usage.Steps,
 			tools:     usage.ToolsUsed,
 			inTok:     usage.InputTokens,
