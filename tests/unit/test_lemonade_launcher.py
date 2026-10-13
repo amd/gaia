@@ -315,8 +315,7 @@ def test_env_override_modern_non_exe_launched_verbatim(mocker):
 def test_no_process_gaia_spawns_disables_vulkan_coopmat_globally(
     mocker, system, tooling_kwargs
 ):
-    """The flag halved every chat model's prompt speed on Strix Halo; the
-    embedder that needed it now loads on the CPU backend instead (#1831)."""
+    """The flag halved every chat model's prompt speed on Strix Halo (#1831)."""
     from gaia.llm.lemonade_launcher import LemonadeTooling
 
     mocker.patch("platform.system", return_value=system)

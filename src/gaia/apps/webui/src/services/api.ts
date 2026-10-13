@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus } from '../types';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -129,6 +129,15 @@ async function apiFetch<T>(
 
 export async function getSystemStatus(): Promise<SystemStatus> {
     return apiFetch<SystemStatus>('GET', '/system/status');
+}
+
+/** Ask the backend to prime a new chat's prompt. Debounced and single-flight there. */
+export async function requestWarmUp(): Promise<WarmUpStatus> {
+    return apiFetch<WarmUpStatus>('POST', '/system/warm-up');
+}
+
+export async function getWarmUp(): Promise<WarmUpStatus> {
+    return apiFetch<WarmUpStatus>('GET', '/system/warm-up');
 }
 
 // -- Settings ------------------------------------------------------------------

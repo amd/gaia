@@ -53,6 +53,7 @@ beforeEach(() => {
         provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma', remote: false, is_default: true,
     });
     mocked.checkSetup.mockResolvedValue(READY);
+    mocked.requestWarmUp.mockResolvedValue({ state: 'ready' });
     mocked.getSystemStatus.mockResolvedValue({
         lemonade_running: true,
         model_loaded: 'Gemma-4-E4B-it-GGUF',

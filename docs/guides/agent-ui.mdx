@@ -244,6 +244,10 @@ and where that model runs.
   while GAIA is working.
 - **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
   the detail.
+- **"Getting GAIA ready… 12s"** under the message box means a local model is
+  reading GAIA's instructions ahead of your first message, so that message
+  gets a quick answer. You can type and send meanwhile; a message sent early
+  waits for it to finish rather than starting over.
 
 Every chat runs the GAIA agent. Chats made by the retired `chat`, `doc` and
 `file` agents stay readable but can't be continued; start a new chat instead.
@@ -339,6 +343,19 @@ Sessions let you organize conversations by topic. They sync between the CLI (`ga
 | `Ctrl+,` | Settings |
 
 When GAIA asks permission, the prompt takes focus and `Enter` does nothing, so a message you were typing can't approve it. `Escape` denies (it takes priority over stopping the reply); `Tab` to **Allow once** or **Always allow** and press `Enter` or `Space` to approve. The prompt counts down the time the agent will wait, and GAIA denies when it runs out.
+
+---
+
+## Long Responses
+
+A chat reply that runs longer than 600 seconds stops with "Response timed out after 600s." Time spent waiting for you to answer a question or approve a tool doesn't count. Raise the limit for slow models or heavy queries with `GAIA_STREAM_TIMEOUT`, set before GAIA starts:
+
+```bash
+export GAIA_STREAM_TIMEOUT=1800   # seconds; whole number from 1 to 86400
+gaia chat --ui
+```
+
+An invalid value (not a whole number, or out of range) stops the Agent UI server at startup with an error naming the variable, rather than quietly using the default.
 
 ---
 
