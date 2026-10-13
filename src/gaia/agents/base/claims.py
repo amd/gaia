@@ -279,17 +279,20 @@ def action_claims(answer: str) -> List[Tuple[str, str]]:
 
 
 def read_claims(answer: str) -> List[str]:
-    """Every clause where *answer* reports reading something, from the verb on.
+    """Every clause where *answer* reports reading or checking something, from
+    the verb on.
 
     ``"I also reviewed `lanczos.c`, and it is fast"`` → ``["reviewed
     `lanczos.c`"]``: the caller checks which names a clause covers.
     """
-    pattern = dict(ACTION_CLAIMS)["read"]
+    kinds = dict(ACTION_CLAIMS)
+    patterns = (kinds["read"], kinds["verified"])
     found: List[str] = []
     for clause in _asserted_clauses(answer):
-        match = pattern.search(clause)
-        if match and _reported(clause, match.start()):
-            found.append(clause[match.start() :])
+        starts = [m.start() for m in (p.search(clause) for p in patterns) if m]
+        start = min(starts, default=None)
+        if start is not None and _reported(clause, start):
+            found.append(clause[start:])
     return found
 
 

@@ -941,3 +941,38 @@ def test_an_invented_microsecond_value_is_still_caught():
     assert [f.gate for f in findings] == [CONTENT]
     assert "287" in findings[0].correction
     assert "342" not in findings[0].correction
+
+
+def test_a_value_is_not_derived_from_its_own_rounding_source():
+    # 342 + its source 341.7 is 684: doubling a shown value is not arithmetic.
+    bench = _run_python("bilinear median 341.7 us\nnearest median 172.3 us\n")
+    answer = (
+        "| variant | median (us) |\n|---|---|\n| bilinear | 342 |\n| lanczos | 684 |"
+    )
+
+    findings = content_findings(answer, [bench])
+
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "684" in findings[0].correction
+
+
+def test_a_total_of_two_shown_timings_is_still_derived():
+    bench = _run_python("bilinear median 341.7 us\nnearest median 172.3 us\n")
+    answer = (
+        "| variant | median (us) |\n|---|---|\n| bilinear | 342 |\n"
+        "| nearest | 172 |\n| total | 514 |"
+    )
+
+    assert content_findings(answer, [bench]) == []
+
+
+def test_a_claimed_check_of_a_candidate_never_opened_is_still_caught():
+    answer = (
+        "I optimised `resize/bilinear.c`. I checked `resize/lanczos.c` and it "
+        "is already vectorised."
+    )
+
+    findings = look_findings(answer, RESIZE_QUERY, _resize_records(), _locate_resize)
+
+    assert [f.gate for f in findings] == [LOOK]
+    assert "`resize/lanczos.c`" in findings[0].correction

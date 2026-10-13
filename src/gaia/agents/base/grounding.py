@@ -573,16 +573,24 @@ def _rounds_to(number: float, value: _Value) -> bool:
     return math.isfinite(number) and abs(number - value.number) <= half + 1e-9
 
 
-def _derived(value: _Value, operands: Sequence[float]) -> bool:
-    """*value* is one arithmetic step from two grounded values the answer shows."""
-    for i, a in enumerate(operands):
-        for b in operands[i + 1 :]:
-            results = [a + b, abs(a - b), a * b, (a + b) / 2]
-            for x, y in ((a, b), (b, a)):
-                if y:
-                    results += [x / y, 100 * x / y]
-            if any(_rounds_to(r, value) for r in results):
-                return True
+def _derived(value: _Value, operands: Sequence[Set[float]]) -> bool:
+    """*value* is one arithmetic step from two grounded values the answer shows.
+
+    Each set is one shown value and the evidence numbers it rounds. Pairing
+    a value with its own source would ground its double, its half, 1 and 100%.
+    """
+    for i, left in enumerate(operands):
+        for right in operands[i + 1 :]:
+            if left & right:
+                continue
+            for a in left:
+                for b in right:
+                    results = [a + b, abs(a - b), a * b, (a + b) / 2]
+                    for x, y in ((a, b), (b, a)):
+                        if y:
+                            results += [x / y, 100 * x / y]
+                    if any(_rounds_to(r, value) for r in results):
+                        return True
     return False
 
 
@@ -617,14 +625,11 @@ def content_findings(
         for v in (_value(m.group(0)) for m in _PLAIN.finditer(_DATE.sub(" ", answer)))
         if corpus.holds(v)
     ]
-    operands = list(
-        dict.fromkeys(
-            n
-            for v in stated
-            if v.number is not None
-            for n in [v.number] + corpus.sources(v)
-        )
-    )[:40]
+    by_value: Dict[float, Set[float]] = {}
+    for v in stated:
+        if v.number is not None and len(by_value) < 20:
+            by_value.setdefault(v.number, {v.number}).update(corpus.sources(v))
+    operands = list(by_value.values())
     missing = [
         v.text
         for v in values
