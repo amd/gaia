@@ -216,7 +216,7 @@ canonical choices list):
 | `mcp` | _(none)_ | Sets up the MCP servers config (`~/.gaia/mcp_servers.json`) — no Lemonade install or model downloads | – |
 | `vlm` | Gemma-4-E4B-it-GGUF | Vision pipeline for document and image extraction | ~6 GB |
 | `email` | Gemma-4-E4B-it-GGUF | Gmail/Outlook triage with local inference | ~6 GB |
-| `npu` | gemma4-it-e2b-FLM, embed-gemma-300m-FLM | Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU) | ~3 GB |
+| `npu` | gemma4-it-e2b-FLM, embed-gemma-300m-FLM | The flagship [GAIA agent](/guides/gaia) on the Ryzen AI NPU via the FLM backend (requires XDNA2 NPU) | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
@@ -233,7 +233,15 @@ network or proxy, then run `gaia hub install gaia`.
 <Note>
 `gaia init` picks the profile on the *agent* axis only. NPU users must still ask for the
 device axis explicitly with `gaia init --profile npu`, which swaps the GGUF models for
-their FLM equivalents — the default never switches your backend for you.
+their FLM equivalents — the default never switches your backend for you. It installs
+the same flagship agent from the Agent Hub as a bare `gaia init`, and fails the same way
+when the hub can't be reached.
+</Note>
+
+<Note>
+Only the `gaia` and `npu` profiles install an agent. The other model profiles set up
+models only; when no agent is installed yet, they say so and name the fix,
+`gaia hub install gaia`.
 </Note>
 
 <Note>
