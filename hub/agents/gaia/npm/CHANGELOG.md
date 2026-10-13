@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **`run_python` works in the Agent UI without a project.** It ran from the
+  server's own folder, which is not an allowed path, so every approved snippet
+  was refused and the agent fell back to slower shell commands. With no project
+  and a working directory you did not allow, a snippet now runs in the agent's
+  scratch directory, and its result says so. A project outside the allowed
+  paths is still refused.
 - **The TUI's provider picker works after GAIA's Lemonade restarts.** When the
   agent ran as the TUI's own child, its model-state ping kept naming the port
   Lemonade started on, so after a restart the picker said "Lemonade did not
