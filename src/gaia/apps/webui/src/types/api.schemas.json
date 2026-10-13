@@ -3253,6 +3253,16 @@
       "version": {
         "title": "Version",
         "type": "string"
+      },
+      "warm_up": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/WarmUpStatus"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "title": "SystemStatus",
@@ -3569,6 +3579,64 @@
       "type"
     ],
     "title": "ValidationError",
+    "type": "object"
+  },
+  "WarmUpStatus": {
+    "description": "Whether a new chat's first turn will find its prompt already read.",
+    "properties": {
+      "cached_tokens": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cached Tokens"
+      },
+      "elapsed_seconds": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Elapsed Seconds"
+      },
+      "error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error"
+      },
+      "prompt_tokens": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Prompt Tokens"
+      },
+      "state": {
+        "title": "State",
+        "type": "string"
+      }
+    },
+    "required": [
+      "state"
+    ],
+    "title": "WarmUpStatus",
     "type": "object"
   }
 }

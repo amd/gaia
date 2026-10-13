@@ -25,6 +25,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_manager import gpu_display_info
 
+from .. import warmup
 from ..agent_loop import resolve_agent_mode
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_dispatch_queue
@@ -37,6 +38,7 @@ from ..models import (
     SystemStatus,
     TaskListResponse,
     TaskResponse,
+    WarmUpStatus,
 )
 
 # "autonomous" is intentionally absent: its observation cycle is unimplemented
@@ -471,6 +473,7 @@ def _probe_ok(probe: str) -> None:
 async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
     status = SystemStatus()
+    status.warm_up = WarmUpStatus(**warmup.warm_up_status())
 
     # Resolve how to start Lemonade on THIS host once, here, so every surface
     # renders the same answer. Never fatal: a banner losing its hint is far
@@ -856,6 +859,23 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         status.download_progress = DownloadProgress(**progress_dict)
 
     return status
+
+
+@router.post("/api/system/warm-up", response_model=WarmUpStatus)
+async def request_warm_up():
+    """Prime the prompt a new chat's first turn sends; returns the warm-up state.
+
+    Called when the user opens a new chat. Debounced and single-flight, so a
+    repeat call while one runs, or just after one finished, changes nothing.
+    """
+    warmup.request_warm_up("new chat")
+    return WarmUpStatus(**warmup.warm_up_status())
+
+
+@router.get("/api/system/warm-up", response_model=WarmUpStatus)
+async def get_warm_up():
+    """The warm-up state alone, cheap enough to poll while one runs."""
+    return WarmUpStatus(**warmup.warm_up_status())
 
 
 @router.get("/api/system/tasks", response_model=TaskListResponse)

@@ -532,6 +532,23 @@ class AttachDocumentRequest(BaseModel):
     ```
   </Accordion>
 
+  <Accordion title="POST /api/system/warm-up">
+    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. Returns the warm-up state. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
+
+    **Response:**
+    ```json
+    {
+      "state": "warming",
+      "elapsed_seconds": 0.0,
+      "prompt_tokens": null,
+      "cached_tokens": null,
+      "error": null
+    }
+    ```
+
+    `state` is one of `idle`, `warming`, `ready`, `failed`, or `skipped`.
+  </Accordion>
+
   <Accordion title="GET /api/settings">
     Get current user settings including the custom model override and its status on the Lemonade server.
 

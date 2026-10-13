@@ -1629,12 +1629,12 @@ def _run_capturing_subprocess(host, command):
 
 def test_a_granted_cli_is_handed_argv_not_a_shell_string():
     call = _run_capturing_subprocess(
-        _Gated("gh"), "gh issue list --search x|echo pwned"
+        _Gated("gh"), 'gh issue list --search "x|echo pwned"'
     )
     assert call["shell"] is False, "a granted CLI must not go through cmd.exe"
     assert isinstance(call["args"], list)
-    # The metacharacter stays inside one argument instead of becoming a pipe.
-    assert "x|echo" in call["args"], call["args"]
+    # The quoted metacharacter stays inside one argument instead of a pipe.
+    assert "x|echo pwned" in call["args"], call["args"]
 
 
 def test_an_env_var_in_a_granted_write_reaches_the_process_unexpanded():

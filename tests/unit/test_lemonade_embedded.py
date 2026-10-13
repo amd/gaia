@@ -462,7 +462,7 @@ class TestStatus:
         assert manager.state_path.exists(), "live daemon lost its state file"
 
     def test_start_leaves_vulkan_coopmat_on_for_chat_models(self, manager, monkeypatch):
-        """The global flag halved chat prompt speed; the embedder runs on CPU instead."""
+        """The global flag halved chat prompt speed for every model."""
         monkeypatch.delenv("GGML_VK_DISABLE_COOPMAT", raising=False)
         # Any GPU but the Strix Halo iGPU (see TestVulkanWorkarounds).
         monkeypatch.setattr(

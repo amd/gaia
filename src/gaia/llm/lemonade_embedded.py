@@ -717,13 +717,14 @@ class EmbeddedLemonade:
         """Record per-model load options Lemonade applies even when it auto-loads.
 
         The embedder is loaded on demand by ``/embeddings`` as well as by GAIA's
-        explicit loads, so its backend and ubatch have to live in Lemonade's
-        saved options.
+        explicit loads, so its ubatch has to live in Lemonade's saved options.
+        A saved CPU backend is dropped so each start tries the GPU again; the
+        client saves the CPU back only if the GPU load fails.
         """
         from gaia.llm.lemonade_client import (
             DEFAULT_EMBEDDING_MODEL,
             EMBEDDER_LLAMACPP_ARGS,
-            llamacpp_backend_for,
+            manages_embedder_backend,
         )
 
         path = self.config_dir / "recipe_options.json"
@@ -744,12 +745,18 @@ class EmbeddedLemonade:
             options = loaded
         # Lemonade keys saved options by the registered (``user.``) name.
         for model in (DEFAULT_EMBEDDING_MODEL,):
-            backend = llamacpp_backend_for(model)
-            if backend is None:
+            if not manages_embedder_backend(model):
                 continue
             entry = options.get(model)
             entry = dict(entry) if isinstance(entry, dict) else {}
-            entry["llamacpp_backend"] = backend
+            if entry.get("llamacpp_backend") == "cpu":
+                log.info(
+                    "Clearing the saved CPU backend for %s in %s so it tries the "
+                    "GPU again",
+                    model,
+                    path,
+                )
+                del entry["llamacpp_backend"]
             args = str(entry.get("llamacpp_args") or "")
             if "--ubatch-size" not in args:
                 entry["llamacpp_args"] = f"{args} {EMBEDDER_LLAMACPP_ARGS}".strip()
