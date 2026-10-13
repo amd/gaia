@@ -49,12 +49,23 @@ _MIN_MAX_TOKENS = 8192
 #: schemas *and* the system prompt — the whole fixed prefill an agent re-sends
 #: on every call of every turn.
 #:
-#: Two breakpoints, not one, because caching is a prefix match with no partial
-#: credit: with only the system marker, one byte of drift anywhere in the
+#: Caching is a prefix match with no partial credit, so the prefill gets two
+#: markers: with only the system marker, one byte of drift anywhere in the
 #: system prompt (a memory confidence score, a skill body swapping in) would
-#: throw away the tool schemas as well. The second marker after the last tool
-#: keeps that segment readable whenever the tools themselves are unchanged.
+#: throw away the tool schemas as well. The marker after the last tool keeps
+#: that segment readable whenever the tools themselves are unchanged.
+#:
+#: A third, rolling marker sits on the newest message so the conversation is
+#: cached too: each call writes its history, and the next call — the same
+#: history plus new turns — reads it back instead of re-billing it in full.
 _CACHE_CONTROL = {"type": "ephemeral"}
+
+#: Anthropic rejects a request carrying more breakpoints than this.
+_MAX_CACHE_BREAKPOINTS = 4
+
+#: Opaque reasoning blocks: never answer text, never a ``cache_control``
+#: target.
+_THINKING_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
 
 #: OpenAI ``tool_choice`` strings with a direct Anthropic equivalent.
 _TOOL_CHOICE_MAP = {"none": {"type": "none"}, "auto": {"type": "auto"}}
@@ -121,15 +132,78 @@ class _UsageTotals:
 def _cached_system(system: str) -> List[dict]:
     """System prompt as one text block carrying the cache breakpoint.
 
-    Deliberately a block-level breakpoint rather than top-level
-    ``cache_control=`` on ``messages.create()``: top-level auto-placement marks
-    the *last* cacheable block, which in an agent loop is the newest user turn
-    or tool result — content that differs on every call, so each request would
-    write a fresh entry and read almost nothing. Marking the system block pins
-    the boundary at the tools+system prefix, which is byte-identical across
-    calls and turns.
+    The history is cached by the rolling marker on the newest message
+    (``_cache_last_message``), but that entry is only reusable while every
+    earlier message is byte-identical. This marker pins a second boundary at
+    the tools+system prefix, which survives anything that rewrites history —
+    a new session, a trimmed or edited turn — so the fixed prefill still reads
+    from cache when the conversation entry cannot.
     """
     return [{"type": "text", "text": system, "cache_control": dict(_CACHE_CONTROL)}]
+
+
+def _can_carry_breakpoint(block: Any) -> bool:
+    if not isinstance(block, dict) or block.get("type") in _THINKING_BLOCK_TYPES:
+        return False
+    # The API refuses cache_control on an empty text block.
+    return not (block.get("type") == "text" and not block.get("text"))
+
+
+def _cache_last_message(messages: List[dict]) -> List[dict]:
+    """Rolling breakpoint on the last cacheable block of the newest message.
+
+    Copies rather than mutating: the agent appends to and resends the same
+    list, so a marker left in it would add a breakpoint per turn.
+    """
+    last = messages[-1]
+    content = last.get("content")
+    if isinstance(content, str) and content:
+        marked_content = [
+            {"type": "text", "text": content, "cache_control": dict(_CACHE_CONTROL)}
+        ]
+    elif isinstance(content, list):
+        marked_content = list(content)
+        for index in range(len(marked_content) - 1, -1, -1):
+            if _can_carry_breakpoint(marked_content[index]):
+                marked_content[index] = {
+                    **marked_content[index],
+                    "cache_control": dict(_CACHE_CONTROL),
+                }
+                break
+        else:
+            # Thinking-only or empty: the tools+system markers still apply.
+            logger.debug("Newest Claude message has no block that can be cached")
+            return messages
+    else:
+        return messages
+    marked = list(messages)
+    marked[-1] = {**last, "content": marked_content}
+    return marked
+
+
+def _count_breakpoints(params: Dict[str, Any]) -> int:
+    """Block-level ``cache_control`` markers, the unit Anthropic's limit counts.
+
+    Walks block lists only — never into ``tool_use.input`` — so a tool argument
+    that happens to be named ``cache_control`` is not mistaken for a marker.
+    """
+
+    def in_blocks(blocks: Any) -> int:
+        if not isinstance(blocks, list):
+            return 0
+        total = 0
+        for block in blocks:
+            if isinstance(block, dict):
+                total += "cache_control" in block
+                if block.get("type") == "tool_result":
+                    total += in_blocks(block.get("content"))
+        return total
+
+    return (
+        in_blocks(params.get("tools"))
+        + in_blocks(params.get("system"))
+        + sum(in_blocks(m.get("content")) for m in params["messages"])
+    )
 
 
 def _cache_last_tool(tools: List[dict]) -> List[dict]:
@@ -442,7 +516,10 @@ class ClaudeProvider(LLMClient):
                 "Dropping non-Anthropic kwargs for Claude request: %s", dropped
             )
 
-        params: Dict[str, Any] = {"model": model, "messages": cleaned}
+        params: Dict[str, Any] = {
+            "model": model,
+            "messages": _cache_last_message(cleaned),
+        }
         for k in _PASSTHROUGH_KWARGS:
             if k in kwargs and kwargs[k] is not None:
                 params[k] = kwargs[k]
@@ -465,6 +542,15 @@ class ClaudeProvider(LLMClient):
             params["tool_choice"] = dict(_TOOL_CHOICE_MAP[tool_choice])
         if system:
             params["system"] = _cached_system(system)
+        breakpoints = _count_breakpoints(params)
+        if breakpoints > _MAX_CACHE_BREAKPOINTS:
+            raise ValueError(
+                f"Claude request carries {breakpoints} cache_control breakpoints; "
+                f"Anthropic allows at most {_MAX_CACHE_BREAKPOINTS}. The Claude "
+                "provider already places up to 3 (last tool, system prompt, "
+                "newest message), so remove cache_control from the messages or "
+                "tools you pass in."
+            )
         return params, name_map
 
     # ── error translation ───────────────────────────────────────────────
