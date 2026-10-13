@@ -12,9 +12,8 @@
 #   scale   - five repos from 1.7K to ~97K chunks; most of a day. Weekly,
 #             reported, not gated.
 #
-# The embedder is pinned to the CPU backend (lemonade_client.CPU_BACKEND_MODELS),
-# so throughput and timings depend on the CPU. The baselines were captured on a
-# Strix Halo, hence the strix-halo label; do not widen it.
+# Throughput and timings depend on the GPU the embedder loads on. The baselines
+# were captured on a Strix Halo, hence the strix-halo label; do not widen it.
 name: Code retrieval benchmark
 
 on:

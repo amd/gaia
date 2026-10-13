@@ -187,7 +187,13 @@ Restoration budgets complete turns against the resolved model/device window
 Counts use GAIA's shared token estimator, not a guarantee against the model's
 exact tokenizer. On overflow, old turns are removed in a block toward half the
 history budget; the newest turn is retained if it fits. The full stored trace
-remains in SQLite, and exclusions produce a warning in the backend log.
+remains in SQLite, and exclusions produce a warning in the backend log. When a
+streamed turn hides more turns than the session's last streamed turn did (a
+longer chat, or a smaller model's budget), the stream sends one `status` event
+with `status: "history_cut"`, `turns` and `tokens` (the turns no longer replayed
+and their estimated size), which the chat shows as an inline note. A stable cut
+is not reported again. A relayed sidecar agent receives only the last 5
+exchanges; its stream sends the same event once, on the turn the sixth arrives.
 
 `get_messages` and the ordinary transcript API do not expose the internal trace.
 Deleting a transcript message also deletes its evidence.
@@ -524,6 +530,23 @@ class AttachDocumentRequest(BaseModel):
       "model": "Qwen3.5-35B-A3B-GGUF"
     }
     ```
+  </Accordion>
+
+  <Accordion title="POST /api/system/warm-up">
+    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. Returns the warm-up state. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
+
+    **Response:**
+    ```json
+    {
+      "state": "warming",
+      "elapsed_seconds": 0.0,
+      "prompt_tokens": null,
+      "cached_tokens": null,
+      "error": null
+    }
+    ```
+
+    `state` is one of `idle`, `warming`, `ready`, `failed`, or `skipped`.
   </Accordion>
 
   <Accordion title="GET /api/settings">

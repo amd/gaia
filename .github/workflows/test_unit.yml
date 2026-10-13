@@ -80,9 +80,8 @@ jobs:
   unit-tests:
     name: Unit Tests (Linux, py3.12)
     runs-on: ubuntu-latest
-    # Grown past the old 30-min budget from normal test-suite growth (was 26min
-    # on 2026-09-26, timing out consistently by 2026-09-29) — not a hang.
-    timeout-minutes: 45
+    # Sized to suite growth, not a hang: ~44 min passing by 2026-10-13.
+    timeout-minutes: 60
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v7

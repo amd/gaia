@@ -169,6 +169,7 @@ _SALIENT_ARG_KEYS = (
 _NARRATION_OVERRIDES = {
     "list_skills": "Checking your installed skills",
     "list_directory": "Listing folder contents",
+    "browse_directory": "Listing folder",
     "list_indexed_documents": "Checking which documents are indexed",
     "query_documents": "Searching your documents",
     "search_indexed_chunks": "Searching your documents",

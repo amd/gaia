@@ -33,6 +33,8 @@ interface MessageBubbleProps {
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
     liveStatus?: string | null;
+    /** The run is blocked on the user's approval or answer; the indicator says so instead of timing the model. */
+    awaitingUser?: boolean;
 }
 
 
@@ -42,8 +44,8 @@ interface MessageBubbleProps {
  * "Reasoning — 38 words so far"), or "Thinking..." until the first one arrives.
  * Types out on first show, swaps text in place after that, erases when done.
  */
-function ThinkingIndicator({ active, label }: { active: boolean; label?: string | null }) {
-    const text = label || 'Thinking...';
+function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
+    const text = awaitingUser ? WAITING_ON_USER_LABEL : (label || 'Thinking...');
     const [chars, setChars] = useState(0);
     const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>('typing');
     const wasActiveRef = useRef(active);
@@ -83,14 +85,37 @@ function ThinkingIndicator({ active, label }: { active: boolean; label?: string 
         }
     }, [active, phase]);
 
+    const elapsed = usePhaseElapsedSeconds(active, text);
+
     if (phase === 'done') return null;
 
     return (
         <span className="thinking-indicator">
             <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
+            {active && !awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
+                <span className="thinking-indicator-elapsed"> · {elapsed}s</span>
+            )}
             {active && <span className="cursor" />}
         </span>
     );
+}
+
+const WAITING_ON_USER_LABEL = 'Waiting for you';
+
+/** A phase shorter than this needs no clock; past it, the count shows GAIA is still working. */
+const PHASE_ELAPSED_MIN_S = 3;
+
+/** Whole seconds the current phase label has been showing; resets when the label changes. */
+function usePhaseElapsedSeconds(active: boolean, label: string): number {
+    const [elapsed, setElapsed] = useState(0);
+    useEffect(() => {
+        setElapsed(0);
+        if (!active) return;
+        const started = Date.now();
+        const t = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+        return () => clearInterval(t);
+    }, [active, label]);
+    return elapsed;
 }
 
 /** Detect if message content looks like an error. */
@@ -340,7 +365,21 @@ function cleanToolCallContent(content: string, streaming = false): string {
     // fences with unknown/fake language tags; preserves real code blocks.
     cleaned = stripBogusCodeFences(cleaned).trim();
 
-    return cleaned;
+    return escapeBareNumberLines(cleaned);
+}
+
+/**
+ * A line that is only a number and a period ("391.") parses as an empty ordered
+ * list item, which shows the marker and hides the number. Escaping the period
+ * keeps it as text; fenced code is left alone.
+ */
+export function escapeBareNumberLines(text: string): string {
+    let inFence = false;
+    return text.split('\n').map((line) => {
+        if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+        if (inFence) return line;
+        return line.replace(/^(\s*\d+)\.(\s*)$/, '$1\\.$2');
+    }).join('\n');
 }
 
 /** Format a full absolute timestamp for the stats tooltip. */
@@ -361,7 +400,7 @@ function formatLatency(ms: number): string {
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, liveStatus }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
@@ -440,7 +479,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                 <div className="msg-header">
                     <div className="msg-header-left">
                         {message.role === 'assistant' && isStreaming && (
-                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} />
+                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
                         )}
                     </div>
                     {!isStreaming && (
@@ -532,13 +571,13 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 <span title="Total response time">{formatLatency(latencyMs)}</span>
                             )}
                             {message.stats?.tokens_per_second != null && message.stats.tokens_per_second > 0 && (
-                                <span title="Tokens per second">{message.stats.tokens_per_second} tok/s</span>
+                                <span title="Tokens per second, final model call of this answer">{message.stats.tokens_per_second} tok/s</span>
                             )}
                             {message.stats?.time_to_first_token != null && message.stats.time_to_first_token > 0 && (
-                                <span title="Time to first token">{(message.stats.time_to_first_token * 1000).toFixed(0)}ms TTFT</span>
+                                <span title="Time to first token, final model call of this answer">{(message.stats.time_to_first_token * 1000).toFixed(0)}ms TTFT</span>
                             )}
                             {message.stats?.output_tokens != null && message.stats.output_tokens > 0 && (
-                                <span title="Input → output tokens">
+                                <span title="Input → output tokens, final model call of this answer">
                                     {(message.stats.input_tokens ?? 0).toLocaleString()} → {message.stats.output_tokens.toLocaleString()} tokens
                                 </span>
                             )}
@@ -606,9 +645,11 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 // Path separators are excluded from the segment class so each `(segment sep)`
 // repetition has exactly one parse — the ambiguity CodeQL flagged as
 // exponential-backtracking ReDoS (js/redos) on adversarial non-matching input.
-const WIN_PATH_RE = /[A-Z]:[\\/](?:[^\s*?"<>|,;)}\]\\/]+[\\/])*[^\s*?"<>|,;)}\]\\/]*\.\w{1,5}/gi;
-/** Regex to detect Windows directory paths like C:\Users\...\folder\ */
-const WIN_DIR_RE = /[A-Z]:[\\/](?:[^\s*?"<>|,;)}\]\\/]+[\\/])+/gi;
+// Exactly one separator between segments, so a last segment without an
+// extension (`C:\Users\me\notes`) is kept as well as `...\a.txt` or `...\dir\`.
+const WIN_PATH_RE = /\b[A-Z]:[\\/][^\s*?"<>|,;)}\]\\/]+(?:[\\/][^\s*?"<>|,;)}\]\\/]+)*[\\/]?/gi;
+/** Sentence punctuation the path regex swallows: "see C:\a\b." ends at `b`. */
+const PATH_TRAILING_PUNCT_RE = /[.:!']+$/;
 
 function FilePathLink({ path }: { path: string }) {
     const handleClick = (e: React.MouseEvent) => {
@@ -635,7 +676,7 @@ function FilePathLink({ path }: { path: string }) {
 /** Split text into segments, replacing file paths with clickable links. */
 function linkifyFilePaths(text: string): React.ReactNode {
     // Combine both regexes: match files first, then directories
-    const combined = new RegExp(`(${WIN_PATH_RE.source}|${WIN_DIR_RE.source})`, 'gi');
+    const combined = new RegExp(WIN_PATH_RE.source, 'gi');
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -645,8 +686,9 @@ function linkifyFilePaths(text: string): React.ReactNode {
         if (match.index > lastIndex) {
             parts.push(text.slice(lastIndex, match.index));
         }
-        parts.push(<FilePathLink key={match.index} path={match[0]} />);
-        lastIndex = combined.lastIndex;
+        const path = match[0].replace(PATH_TRAILING_PUNCT_RE, '');
+        parts.push(<FilePathLink key={match.index} path={path} />);
+        lastIndex = match.index + path.length;
     }
 
     // No paths found — return original text
@@ -759,8 +801,8 @@ function RenderedContent({ content, showCursor }: { content: string; showCursor?
                     ul({ children }) {
                         return <ul className="md-ul">{children}</ul>;
                     },
-                    ol({ children }) {
-                        return <ol className="md-ol">{children}</ol>;
+                    ol({ children, start }) {
+                        return <ol className="md-ol" start={start}>{children}</ol>;
                     },
                     li({ children }) {
                         return <li className="md-li">{linkifyChildren(children)}</li>;

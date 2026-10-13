@@ -56,6 +56,10 @@ from gaia.llm.lemonade_launcher import (
 )
 from gaia.log_rotation import rotate_if_oversized
 from gaia.logger import get_logger
+from gaia.utils.terminal import (
+    background_popen_kwargs,
+    windows_hidden_popen_kwargs,
+)
 
 log = get_logger(__name__)
 
@@ -345,15 +349,7 @@ class LemonadeSupervisor:
         self._log_handle.write(f"\n=== GAIA daemon start: {' '.join(spec.argv)} ===\n")
         self._log_handle.flush()
 
-        creationflags = 0
-        start_new_session = False
-        if os.name == "nt":
-            creationflags = getattr(
-                subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-            ) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        else:
-            start_new_session = True
-
+        group_kwargs = background_popen_kwargs()
         try:
             # Merge — never replace — the parent environment; the child loses
             # PATH/LOCALAPPDATA otherwise and LemonadeServer.exe cannot start.
@@ -363,8 +359,7 @@ class LemonadeSupervisor:
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
                 env=child_env(spec.env),
-                creationflags=creationflags,
-                start_new_session=start_new_session,
+                **group_kwargs,
             )
         except OSError:
             self._close_log()
@@ -529,6 +524,7 @@ def _tree_kill(proc: subprocess.Popen, timeout: float) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
+                **windows_hidden_popen_kwargs(),
             )
         else:
             os.killpg(os.getpgid(pid), 15)

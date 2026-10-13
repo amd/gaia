@@ -109,7 +109,7 @@ class TestRunAudit:
         target = tmp_path / "src" / "gaia" / "ui"
         target.mkdir(parents=True)
         src = textwrap.dedent("""\
-            _MAX_PAIRS = 3
+            _RELAY_CONTEXT_PAIRS = 3
             _MAX_CHARS = 500
             agent = ChatAgent(model="test")
             agent_steps = agent.run()
@@ -129,7 +129,7 @@ class TestRunAudit:
     def test_recommendations_on_low_history(self, tmp_path, monkeypatch):
         target = tmp_path / "src" / "gaia" / "ui"
         target.mkdir(parents=True)
-        src = "_MAX_PAIRS = 2\n"
+        src = "_RELAY_CONTEXT_PAIRS = 2\n"
         (target / "_chat_helpers.py").write_text(src, encoding="utf-8")
         monkeypatch.setattr("gaia.eval.audit.GAIA_ROOT", tmp_path)
 
@@ -153,7 +153,7 @@ class TestRunAudit:
         target = tmp_path / "src" / "gaia" / "ui"
         target.mkdir(parents=True)
         src = textwrap.dedent("""\
-            _MAX_PAIRS = 20
+            _RELAY_CONTEXT_PAIRS = 20
             _MAX_CHARS = 5000
             agent = ChatAgent(model="test")
             agent_steps = agent.run()

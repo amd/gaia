@@ -132,9 +132,8 @@ func ctxPrefix(goos string, ctx int) string {
 		// everything up to the ampersand, trailing space included — which the
 		// server then fails to parse. `set "VAR=1"` bounds the value.
 		//
-		// PowerShell wants `$env:VAR=...;` instead, and no single string is right
-		// in both; same tradeoff as the quoted exe path, and the tray app remains
-		// the shell-free alternative.
+		// PowerShell wants `$env:VAR=...;` instead; powerShellCommand renders
+		// that form alongside this one.
 		return fmt.Sprintf(`set "%s=%d" && `, ctxSizeEnv, ctx)
 	}
 	// POSIX: `env VAR=value command` runs in any shell, unlike `VAR=value command`

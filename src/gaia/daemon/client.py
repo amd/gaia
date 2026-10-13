@@ -36,6 +36,7 @@ from gaia.daemon.lock import StartLock
 from gaia.env import is_internal_secret
 from gaia.log_rotation import rotate_if_oversized
 from gaia.logger import get_logger
+from gaia.utils.terminal import background_popen_kwargs
 
 logger = get_logger(__name__)
 
@@ -219,22 +220,17 @@ def _spawn_and_wait(
         os.chmod(paths.log_path(), 0o600)
     except OSError:
         pass
-    creationflags = 0
-    start_new_session = False
-    if sys.platform == "win32":
-        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: outlive the launcher.
-        creationflags = 0x00000008 | 0x00000200
-    else:
-        start_new_session = True
+    # Own group/session to outlive the launcher. A hidden console, not none, so
+    # the console programs the daemon starts don't each open a blank window.
+    spawn_kwargs = background_popen_kwargs()
     try:
         proc = subprocess.Popen(
             [sys.executable, "-m", "gaia.daemon"],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            start_new_session=start_new_session,
-            creationflags=creationflags,
             env=_daemon_env(),
+            **spawn_kwargs,
         )
     except OSError as e:
         log_file.close()

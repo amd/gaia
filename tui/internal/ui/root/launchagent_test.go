@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/ui/chat"
@@ -39,11 +40,62 @@ func TestLaunchAgentCommitClosesTheOutgoingClient(t *testing.T) {
 	updated, _ := m.launchAgent(fixtureAgent(t, "other"), true)
 	m = updated.(FlagshipModel)
 
+	m.chatClient.retiring.Wait()
 	if !oldClient.closed {
 		t.Fatal("the outgoing client survived the switch — it leaks")
 	}
 	if m.agent.ID != "other" || m.activeView != viewChat {
 		t.Fatalf("test setup: the switch itself did not commit: agent=%v view=%v", m.agent.ID, m.activeView)
+	}
+}
+
+// slowCloseClient is an agent still saving memories when it is asked to stop.
+type slowCloseClient struct {
+	nullClient
+	release chan struct{}
+	done    chan struct{}
+}
+
+func (c *slowCloseClient) Close() error {
+	<-c.release
+	close(c.done)
+	return nil
+}
+
+// The outgoing agent's shutdown runs off the event loop — a switch must not
+// freeze the screen while it saves memories — but quit still waits for it.
+func TestSwitchDoesNotWaitForTheOutgoingAgentButQuitDoes(t *testing.T) {
+	m, _ := liveChatModel(t, catalog.FlagshipID)
+	slow := &slowCloseClient{release: make(chan struct{}), done: make(chan struct{})}
+	m.chatClient.set(slow)
+
+	switched := make(chan FlagshipModel, 1)
+	go func() {
+		updated, _ := m.launchAgent(fixtureAgent(t, "other"), true)
+		switched <- updated.(FlagshipModel)
+	}()
+	select {
+	case m = <-switched:
+	case <-time.After(5 * time.Second):
+		close(slow.release)
+		t.Fatal("the switch blocked on the outgoing agent's shutdown")
+	}
+
+	quit := make(chan error, 1)
+	go func() { quit <- m.Close() }()
+	select {
+	case <-quit:
+		t.Fatal("quit returned while the outgoing agent was still shutting down")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(slow.release)
+	if err := <-quit; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-slow.done:
+	default:
+		t.Fatal("quit returned before the outgoing agent finished closing")
 	}
 }
 

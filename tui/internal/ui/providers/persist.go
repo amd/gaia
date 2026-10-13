@@ -5,6 +5,7 @@ package providers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -24,29 +25,45 @@ func keyPath(provider, action string) string {
 	return "/daemon/v1/providers/" + url.PathEscape(provider) + "/" + action
 }
 
-// rememberKey, forgetKey and restoreKey are variables so tests can stand in
-// for the daemon.
+// callDaemon, rememberKey, forgetKey and restoreKey are variables so tests can
+// stand in for the daemon.
+var callDaemon = daemon.Call
+
 var rememberKey = func(provider, key string) error {
 	body, err := json.Marshal(map[string]string{"key": key})
 	if err != nil {
 		return fmt.Errorf("could not encode the request: %w", err)
 	}
 	// Starting the daemon is warranted: the user just asked to connect.
-	_, err = daemon.Call(http.MethodPost, keyPath(provider, "key"), body, true,
+	_, err = callDaemon(http.MethodPost, keyPath(provider, "key"), body, true,
 		"keep the "+provider+" key", keyAlternative)
 	return err
 }
 
 var forgetKey = func(provider string) error {
-	_, err := daemon.Call(http.MethodDelete, keyPath(provider, "key"), nil, true,
+	_, err := callDaemon(http.MethodDelete, keyPath(provider, "key"), nil, true,
 		"forget the "+provider+" key", keyAlternative)
 	return err
 }
 
-// restoreKey replays a kept key into Lemonade. Nothing stored, or no daemon
-// running, is the common case and not an error worth showing: the panel's key
-// field already asks for one.
-var restoreKey = func(provider string) {
-	_, _ = daemon.Call(http.MethodPost, keyPath(provider, "authenticate"), nil, false,
+// restoreKey replays a kept key into Lemonade. Nothing stored is not an error.
+// The daemon is started if it is down: it alone can read the credential store,
+// and without it a saved key reads as "key needed".
+var restoreKey = func(provider string) error {
+	_, err := callDaemon(http.MethodPost, keyPath(provider, "authenticate"), nil, true,
 		"restore the "+provider+" key", keyAlternative)
+	return err
+}
+
+// daemonUnreachable reports that err is the daemon itself failing to come up
+// or answer, not one provider's restore being refused.
+func daemonUnreachable(err error) bool {
+	var (
+		notRunning *daemon.NotRunningError
+		stale      *daemon.StaleError
+		version    *daemon.VersionError
+		start      *daemon.StartError
+	)
+	return errors.As(err, &notRunning) || errors.As(err, &stale) ||
+		errors.As(err, &version) || errors.As(err, &start)
 }

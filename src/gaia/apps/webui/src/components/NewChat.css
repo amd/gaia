@@ -20,3 +20,9 @@
     color: var(--danger);
     font-size: 13px;
 }
+
+.new-chat-warmup {
+    margin-top: 10px;
+    color: var(--text-muted);
+    font-size: 13px;
+}

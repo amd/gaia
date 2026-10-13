@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from gaia.utils.terminal import windows_hidden_popen_kwargs
+
 logger = logging.getLogger(__name__)
 
 
@@ -425,6 +427,7 @@ class TunnelManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.PIPE,
+                **windows_hidden_popen_kwargs(),
             )
 
             # Poll ngrok's local API to get the tunnel URL
@@ -545,6 +548,7 @@ class TunnelManager:
                     capture_output=True,
                     timeout=5,
                     check=False,
+                    **windows_hidden_popen_kwargs(),
                 )
             else:
                 subprocess.run(
@@ -555,8 +559,8 @@ class TunnelManager:
                 )
             # Brief pause to let the process fully die
             await asyncio.sleep(0.5)
-        except Exception:
-            pass  # Ignore errors - there may be no stale process
+        except (OSError, subprocess.TimeoutExpired) as e:
+            logger.debug("Could not clear stale ngrok processes: %s", e)
 
     async def _fetch_public_ip(self) -> None:
         """Fetch the server's public IP (for ngrok interstitial password)."""
@@ -637,9 +641,9 @@ class TunnelManager:
                 self._error = _parse_ngrok_error(stderr)
                 return None
 
-            try:
-                import httpx
+            import httpx
 
+            try:
                 async with httpx.AsyncClient(timeout=3.0) as client:
                     resp = await client.get("http://127.0.0.1:4040/api/tunnels")
                     if resp.status_code == 200:
@@ -651,9 +655,8 @@ class TunnelManager:
                                 if url:
                                     return url
                         # If no HTTPS tunnel found yet, keep polling
-            except Exception:
-                # ngrok API not ready yet, keep polling
-                pass
+            except (httpx.HTTPError, ValueError) as e:
+                logger.debug("ngrok API not ready yet: %s", e)
 
         # Timed out. ngrok is still running but didn't open an HTTPS tunnel.
         # Most likely cause: authtoken rejected by the server but the agent

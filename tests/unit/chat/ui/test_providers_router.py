@@ -814,6 +814,19 @@ def test_restore_waits_for_a_starting_server_instead_of_failing(
     second = client.get("/api/providers/active").json()
     assert second["restore"]["status"] == "restored"
     assert db.get_setting("custom_model") == DEFAULT_MODEL_NAME
+    # The default was going to run anyway, so there is nothing to announce.
+    assert second["restore"]["message"] is None
+
+
+def test_restoring_a_different_model_says_so(client, lemonade, keys, db):
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+    body = client.get("/api/providers/active").json()
+    assert body["restore"] == {
+        "status": "restored",
+        "message": "Restored your last model.",
+    }
 
 
 def test_restore_of_a_cloud_model_never_goes_to_a_remote_lemonade(
