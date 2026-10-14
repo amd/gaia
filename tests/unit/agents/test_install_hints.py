@@ -449,3 +449,103 @@ class TestGaiaExtraRequirements:
 
         extras = {e for p in INIT_PROFILES.values() for e in p.get("pip_extras", [])}
         assert install_hints.gaia_extra_requirements(sorted(extras))
+
+
+# ---------------------------------------------------------------------------
+# Adversarial: a hint is true for the build the user is running
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(params=["stock", "installer", "none"])
+def any_installer(request, monkeypatch, tmp_path):
+    """Every kind of source environment, to freeze on top of."""
+    pip = request.param == "stock"
+    uv = "/home/u/.local/bin/uv" if request.param == "installer" else None
+    monkeypatch.setattr(install_hints, "_pip_available", lambda: pip)
+    monkeypatch.setattr(
+        install_hints.shutil, "which", lambda name: uv if name == "uv" else None
+    )
+    monkeypatch.setattr(install_hints.Path, "home", lambda: tmp_path)
+    return request.param
+
+
+@pytest.mark.parametrize("frozen_value", [True, 1, "macosx_app", "windows_exe"])
+def test_a_frozen_build_never_names_an_install_command(
+    any_installer, monkeypatch, frozen_value
+):
+    monkeypatch.setattr(sys, "frozen", frozen_value, raising=False)
+    monkeypatch.setattr(sys, "executable", r"C:\GAIA\gaia-agent.exe")
+
+    hints = [
+        install_hints.pip_install_hint("psutil"),
+        install_hints.missing_package_hint("pypdf", "openpyxl"),
+        install_hints.missing_extra_hint("rag"),
+    ]
+
+    for hint in hints:
+        assert "pip install" not in hint, hint
+        assert "gaia-agent.exe" not in hint, hint
+        assert "-m pip" not in hint, hint
+
+
+@pytest.mark.parametrize("frozen_value", [False, 0, None, ""])
+def test_a_falsy_frozen_flag_is_a_source_build(stock_venv, monkeypatch, frozen_value):
+    monkeypatch.setattr(sys, "frozen", frozen_value, raising=False)
+
+    assert install_hints.missing_package_hint("pypdf") == (
+        f"Install with: {sys.executable} -m pip install pypdf"
+    )
+
+
+def test_a_source_build_without_pip_never_says_python_m_pip(installer_venv):
+    hint = install_hints.missing_package_hint("pypdf")
+
+    assert "-m pip" not in hint
+    assert hint == f"Install with: uv pip install --python {sys.executable} pypdf"
+
+
+def test_a_source_build_with_no_installer_says_to_get_uv_first(no_installer):
+    hint = install_hints.missing_package_hint("pypdf")
+
+    assert "install uv" in hint
+    assert hint.endswith(f"uv pip install --python {sys.executable} pypdf")
+    assert "-m pip install" not in hint
+
+
+@pytest.mark.parametrize(
+    "spec", ["watchdog>=2.1.0", "requests<3", "pkg; sys_platform == 'win32'"]
+)
+def test_a_requirement_spec_is_quoted_so_pasting_it_does_not_redirect(stock_venv, spec):
+    hint = install_hints.missing_package_hint(spec)
+
+    assert f'"{spec}"' in hint
+
+
+def test_an_interpreter_path_with_spaces_is_quoted(stock_venv, monkeypatch):
+    exe = r"C:\Program Files\Python313\python.exe"
+    monkeypatch.setattr(sys, "executable", exe)
+
+    assert install_hints.missing_package_hint("pypdf").startswith(
+        f'Install with: "{exe}" -m pip install'
+    )
+
+
+def test_converted_tool_errors_follow_the_build(frozen_build):
+    from gaia.agents.tools import code_index_tools, rag_tools
+
+    for message in (
+        rag_tools._rag_not_available(),
+        code_index_tools._missing_deps_msg(),
+    ):
+        assert "isn't bundled in this GAIA build" in message
+        assert "pip install" not in message
+
+
+def test_converted_tool_errors_give_the_command_from_source(stock_venv, monkeypatch):
+    from gaia.agents.tools import rag_tools
+
+    monkeypatch.setattr(
+        install_hints, "gaia_extras_install_args", lambda e: ["amd-gaia[rag]"]
+    )
+
+    assert f"{sys.executable} -m pip install" in rag_tools._rag_not_available()

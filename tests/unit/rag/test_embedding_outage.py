@@ -271,3 +271,121 @@ class TestIndexTools:
         assert result["indexed_count"] == 1
         assert result["failed_count"] == 1
         assert "1 failed" in result["message"]
+
+
+class TestOutageAdversarial:
+    """An outage, an empty result and a partial failure stay distinguishable."""
+
+    @pytest.mark.parametrize(
+        "errors",
+        [
+            # Every key fails, for different reasons.
+            [
+                EmbeddingUnavailableError(MODEL, _lemonade_down()),
+                EmbeddingUnavailableError(MODEL, LemonadeClientError("500")),
+            ],
+            # Every key fails the same way.
+            [EmbeddingUnavailableError(MODEL, LemonadeClientError("timeout"))] * 2,
+        ],
+    )
+    def test_every_key_failing_is_an_outage_whatever_the_mix(self, errors):
+        rag = _rag(["the vacation policy is 20 days"])
+        rag._retrieve_chunks.side_effect = errors
+        _RagHost(rag).register_rag_tools()
+
+        result = _tool("query_documents", query="vacation policy")
+
+        assert result["status"] == "error", result
+        assert result["error_type"] == "embedding_unavailable"
+        assert "No relevant information" not in str(result)
+
+    def test_a_key_that_worked_but_found_nothing_beside_a_failed_one(self):
+        """One search ran and found nothing: an empty answer, never an outage."""
+        rag = _rag(["the vacation policy is 20 days"])
+        rag._retrieve_chunks.side_effect = [
+            ([], []),
+            EmbeddingUnavailableError(MODEL, LemonadeClientError("blip")),
+        ]
+        _RagHost(rag).register_rag_tools()
+
+        result = _tool("query_documents", query="quarterly revenue")
+
+        assert result["status"] == "success", result
+        assert result["num_chunks"] == 0
+
+    def test_the_last_key_failing_after_a_hit_keeps_the_hit(self):
+        rag = _rag(["the vacation policy is 20 days"])
+        rag._retrieve_chunks.side_effect = [
+            (["the vacation policy is 20 days"], [0.9]),
+            EmbeddingUnavailableError(MODEL, _lemonade_down()),
+        ]
+        _RagHost(rag).register_rag_tools()
+
+        result = _tool("query_documents", query="vacation")
+
+        assert result["status"] == "success"
+        assert result["num_chunks"] == 1
+
+    def test_a_non_embedding_failure_on_every_key_is_an_error_not_empty(self):
+        rag = _rag(["the vacation policy is 20 days"])
+        rag._retrieve_chunks.side_effect = RuntimeError("faiss index corrupt")
+        _RagHost(rag).register_rag_tools()
+
+        result = _tool("query_documents", query="vacation")
+
+        assert result["status"] == "error", result
+        assert "No relevant information" not in str(result)
+        assert "general knowledge" not in str(result)
+
+    def test_a_keyword_only_hit_is_not_returned_when_no_search_ran(self):
+        down = EmbeddingUnavailableError(MODEL, _lemonade_down())
+        chunks = ["quarterly revenue was $4M", "quarterly revenue table"]
+        _RagHost(_rag(chunks, down)).register_rag_tools()
+
+        result = _tool("query_documents", query="quarterly revenue")
+
+        assert result["status"] == "error"
+        assert "quarterly revenue was $4M" not in str(result)
+
+    def test_a_server_error_is_not_mislabelled_unreachable(self):
+        cause = LemonadeClientError("Error generating embeddings: 503 overloaded")
+        error = EmbeddingUnavailableError(MODEL, cause)
+
+        assert not error.unreachable
+        assert "not reachable" not in str(error)
+
+    def test_a_deeply_chained_connection_failure_is_unreachable(self):
+        try:
+            try:
+                raise _lemonade_down()
+            except LemonadeClientError as inner:
+                raise RuntimeError("embed batch 3 of 9 failed") from inner
+        except RuntimeError as outer:
+            error = EmbeddingUnavailableError(MODEL, outer)
+
+        assert error.unreachable
+
+    def test_a_file_search_whose_every_key_failed_is_an_error_not_a_hit(self):
+        rag = _rag(["the vacation policy is 20 days"])
+        rag._retrieve_chunks_from_file.side_effect = RuntimeError("faiss index corrupt")
+        _RagHost(rag).register_rag_tools()
+
+        result = _tool(
+            "query_specific_file", file_path="/docs/handbook.md", query="vacation"
+        )
+
+        assert result["status"] == "error", result
+        assert "faiss index corrupt" in result["error"]
+
+    def test_one_key_failing_for_another_reason_is_still_a_search(self):
+        rag = _rag(["the vacation policy is 20 days"])
+        rag._retrieve_chunks.side_effect = [
+            RuntimeError("one bad key"),
+            (["the vacation policy is 20 days"], [0.9]),
+        ]
+        _RagHost(rag).register_rag_tools()
+
+        result = _tool("query_documents", query="vacation")
+
+        assert result["status"] == "success"
+        assert result["num_chunks"] == 1

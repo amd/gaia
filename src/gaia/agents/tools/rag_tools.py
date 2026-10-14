@@ -386,6 +386,7 @@ class RAGToolsMixin:
 
                 # First, use embedding-based retrieval
                 embedding_errors: List[EmbeddingUnavailableError] = []
+                key_failures: List[Exception] = []
                 for search_key in search_keys:
                     try:
                         # Use RAG to retrieve chunks
@@ -448,6 +449,7 @@ class RAGToolsMixin:
                                     f"[DEBUG] Embedding search '{search_key}': found {len(chunks)} chunks (indices: {chunk_global_indices})"
                                 )
                     except Exception as e:
+                        key_failures.append(e)
                         if isinstance(e, EmbeddingUnavailableError):
                             embedding_errors.append(e)
                         logger.warning(f"Search key '{search_key}' failed: {e}")
@@ -458,8 +460,10 @@ class RAGToolsMixin:
                         continue
 
                 # Keyword hits alone would pass a half-run search off as a result.
-                if search_keys and len(embedding_errors) == len(search_keys):
-                    return _embedding_error(embedding_errors[-1])
+                if search_keys and len(key_failures) == len(search_keys):
+                    if embedding_errors:
+                        return _embedding_error(embedding_errors[-1])
+                    raise key_failures[-1]
 
                 # HYBRID SEARCH: Boost scores of chunks containing keywords
                 # Instead of creating new text snippets, we boost the scores of existing chunks
@@ -913,6 +917,7 @@ class RAGToolsMixin:
 
                 # First, do embedding-based retrieval
                 embedding_errors: List[EmbeddingUnavailableError] = []
+                key_failures: List[Exception] = []
                 for search_key in search_keys:
                     try:
                         # Use the new per-file retrieval method
@@ -974,6 +979,7 @@ class RAGToolsMixin:
                                     }
                                 )
                     except Exception as e:
+                        key_failures.append(e)
                         if isinstance(e, EmbeddingUnavailableError):
                             embedding_errors.append(e)
                         logger.warning(f"Search key '{search_key}' failed: {e}")
@@ -982,8 +988,10 @@ class RAGToolsMixin:
                                 {"search_key": search_key, "error": str(e)}
                             )
 
-                if search_keys and len(embedding_errors) == len(search_keys):
-                    return _embedding_error(embedding_errors[-1])
+                if search_keys and len(key_failures) == len(search_keys):
+                    if embedding_errors:
+                        return _embedding_error(embedding_errors[-1])
+                    raise key_failures[-1]
 
                 # HYBRID SEARCH: Boost scores of chunks containing keywords
                 # Instead of creating new text snippets, we boost the scores of existing chunks

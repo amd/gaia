@@ -1301,3 +1301,65 @@ class TestChatAgentBrowserIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestDuckDuckGoFailuresAreNotEmptyResults:
+    """Adversarial: a search that was not answered never reads as "no results"."""
+
+    @pytest.fixture(autouse=True)
+    def client(self):
+        pytest.importorskip("bs4")
+        self.client = WebClient()
+        yield
+        self.client.close()
+
+    def _respond(self, status, text="<html><body></body></html>"):
+        response = MagicMock()
+        response.status_code = status
+        response.text = text
+        response.headers = {"Content-Type": "text/html"}
+        response.encoding = "utf-8"
+        response.apparent_encoding = "utf-8"
+        return patch.object(self.client, "_request", return_value=response)
+
+    @pytest.mark.parametrize(
+        "status", [201, 202, 204, 206, 301, 302, 400, 403, 404, 418, 429, 500, 503]
+    )
+    def test_any_status_but_200_raises_naming_it(self, status):
+        page = (
+            "<div class='result'><a class='result__a' "
+            "href='https://example.com'>Looks like a hit</a></div>"
+        )
+        with self._respond(status, page):
+            with pytest.raises(RuntimeError, match=f"HTTP {status}"):
+                self.client.search_duckduckgo("test query")
+
+    def test_a_200_with_no_results_is_a_genuine_empty_answer(self):
+        with self._respond(200):
+            assert self.client.search_duckduckgo("xyzzy 12345") == []
+
+    def test_the_search_tool_does_not_say_no_results_for_a_blocked_search(self):
+        from gaia.agents.tools.browser_tools import BrowserToolsMixin
+
+        tools = {}
+
+        class _Host(BrowserToolsMixin):
+            def __init__(self, web_client):
+                self._web_client = web_client
+                self._path_validator = None
+                self._tools = {}
+
+        def capture(atomic=True):
+            def decorator(func):
+                tools[func.__name__] = func
+                return func
+
+            return decorator
+
+        with patch("gaia.agents.base.tools.tool", capture):
+            _Host(self.client).register_browser_tools()
+        with self._respond(429):
+            result = tools["search_web"]("test query")
+
+        assert "No results found" not in str(result)
+        assert "429" in str(result)

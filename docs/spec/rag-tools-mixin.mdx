@@ -197,6 +197,10 @@ class RAGToolsMixin:
         4. Hash-based deduplication
         5. Sort by score, take adaptive top-N
 
+        When the search fails for every key, the result is an error and no
+        keyword-only hits are returned; one failed key among several is
+        still a search.
+
         Args:
             query: Question or query to search for
             debug: Enable detailed retrieval metrics (default: False)
