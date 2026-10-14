@@ -220,6 +220,14 @@ models, not a local chat model. Press `Enter` again to start step 2:
 `esc` cancels it. If setup stops, the screen says why and `d` shows its full
 output; `gaia init` does the same work from a terminal.
 
+If this PC already runs a Lemonade Server (v10.9.0 or newer) on its default
+port, the Lemonade row offers it instead of step 1: press `f` to use it, or `g`
+to install GAIA's own. Using yours keeps one server and one copy of each model
+on the PC. A server that needs an API key shows the `gaia lemonade connect`
+command that saves the key. The choice is remembered. To switch back, run
+`gaia config set lemonade_mode gaia`. See
+[Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
+
 When setup finishes, the gate checks the models by **loading** them once — the
 chat model, and the embedding model that document search and memory use — and
 only then says it is ready, naming the chat model and its size:

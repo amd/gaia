@@ -63,6 +63,7 @@ from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
 from .routers import goals as goals_router_mod
 from .routers import hub as hub_router_mod
+from .routers import lemonade as lemonade_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
 from .routers import onboarding as onboarding_router_mod
@@ -216,12 +217,13 @@ def start_model_server_owner() -> threading.Thread:
 
 
 def lemonade_is_remote() -> bool:
-    """Whether ``LEMONADE_BASE_URL`` names another machine, which no daemon here owns."""
+    """Whether the chosen Lemonade is on another machine, which no daemon here owns."""
     from urllib.parse import urlparse
 
+    from gaia.llm.lemonade_client import configured_lemonade_url
     from gaia.llm.lemonade_supervisor import _is_loopback
 
-    base_url = os.environ.get("LEMONADE_BASE_URL")
+    base_url = configured_lemonade_url()
     return bool(base_url) and not _is_loopback(urlparse(base_url).hostname or "")
 
 
@@ -709,6 +711,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(system_router_mod.router)
     app.include_router(onboarding_router_mod.router)
     app.include_router(setup_router_mod.router)
+    app.include_router(lemonade_router_mod.router)
     app.include_router(providers_router_mod.router)
     app.include_router(skills_router_mod.router)
     app.include_router(hub_router_mod.router)

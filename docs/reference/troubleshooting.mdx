@@ -103,6 +103,15 @@ icon: "bug"
     pass `--skip-webui-build` or set `GAIA_SKIP_WEBUI_BUILD=1`.
   </Accordion>
 
+  <Accordion title="GAIA runs a second Lemonade next to mine" icon="clone">
+    GAIA runs its own private Lemonade Server unless you tell it to use yours, so a
+    PC that already runs Lemonade can end up with two servers and two copies of each
+    model. Point GAIA at yours with `gaia lemonade connect http://localhost:13305`, or
+    in the Agent UI under **Settings → Advanced → Model server**. Switching stops
+    GAIA's own server. See
+    [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
+  </Accordion>
+
   <Accordion title="gaia init can't download or start Lemonade Server" icon="cloud-slash">
     `gaia init` downloads GAIA's own Lemonade Server from GitHub into `~/.gaia/lemonade`
     and starts it on a private port. It needs no admin rights and never uses a package

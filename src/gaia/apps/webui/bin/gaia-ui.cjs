@@ -281,6 +281,26 @@ async function serveFrontend(port) {
   return server;
 }
 
+/**
+ * First install found a Lemonade already running: ask on the terminal.
+ * Null without a terminal; `gaia init` then installs GAIA's own and says how to switch.
+ */
+function chooseLemonadeOnTerminal(found, { input = process.stdin, output = process.stdout } = {}) {
+  if (!input.isTTY) return Promise.resolve(null);
+  const readline = require("readline");
+  const rl = readline.createInterface({ input, output });
+  const question =
+    `\nA Lemonade Server (v${found.version}) is already running at ${found.url}.\n` +
+    "Use it instead of installing GAIA's own? This avoids running two servers " +
+    "and keeping two copies of each model. [Y/n] ";
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(/^n(o)?$/i.test(answer.trim()) ? "gaia" : "external");
+    });
+  });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -321,6 +341,7 @@ async function main() {
     try {
       gaiaBin = await installer.ensureBackend({
         version: GAIA_VERSION_OVERRIDE || undefined,
+        chooseLemonade: chooseLemonadeOnTerminal,
         onProgress: (stage, percent, message) => {
           // Simple CLI progress formatting
           process.stdout.write(
@@ -394,4 +415,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { npmDistTag, helpText, startBackend };
+module.exports = { npmDistTag, helpText, startBackend, chooseLemonadeOnTerminal };

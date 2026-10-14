@@ -82,6 +82,7 @@ export interface ApiSchemas {
   SourceInfo: SourceInfo;
   StartAgentServerRequest: StartAgentServerRequest;
   SystemStatus: SystemStatus;
+  TargetRequest: TargetRequest;
   TaskCreate: TaskCreate;
   TaskListResponse: TaskListResponse;
   TaskResponse: TaskResponse;
@@ -878,6 +879,14 @@ export interface WarmUpStatus {
   error?: string | null;
   prompt_tokens?: number | null;
   state: string;
+}
+/**
+ * ``mode`` "gaia" or "external"; the URL and key only for "external".
+ */
+export interface TargetRequest {
+  api_key?: string | null;
+  base_url?: string | null;
+  mode: string;
 }
 export interface TaskCreate {
   description: string;

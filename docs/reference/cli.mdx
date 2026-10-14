@@ -194,6 +194,8 @@ gaia init [OPTIONS]
 | `--yes, -y` | flag | false | Skip confirmation prompts (non-interactive) |
 | `--verbose` | flag | false | Enable verbose output |
 | `--remote` | flag | false | Use the Lemonade Server `LEMONADE_BASE_URL` names instead of GAIA's own (checks it, downloads models via its API). Requires `LEMONADE_BASE_URL`; implied when it is a non-localhost URL. |
+| `--lemonade-url` | string | — | Use the Lemonade Server you already run at this address instead of installing GAIA's own, and save that choice. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
+| `--gaia-lemonade` | flag | false | Use GAIA's own Lemonade Server and save that choice, without the offer to use one already running |
 | `--skip-chat-model` | flag | false | Skip the profile's chat LLM but still install Lemonade and any embedding model the profile needs — for a session backed by a remote LLM (e.g. the Go TUI's `--use-claude`) that never calls the local chat model but still needs Lemonade for RAG/memory embeddings |
 | `--check` | flag | false | Report whether the profile is already set up and exit — no install, no download. A stopped GAIA Lemonade Server is started through the GAIA daemon (started too if needed), as any GAIA command would. Exit code `0` means ready, `1` means `gaia init` still has work to do. Used by the Go TUI's first-boot check and `/setup` command |
 | `--load` | flag | false | With `--check`: once everything is downloaded, load each model once — the chat model at its context size, the embedding model with a one-word embedding — so "downloaded but will not load" is caught before first use. Exit code `3` means a downloaded model would not load; re-running setup will not fix that. Used by the Go TUI's readiness gate |
@@ -301,6 +303,10 @@ gaia init --profile vlm
 gaia init --yes
 ```
 
+```bash Use the Lemonade You Already Run
+gaia init --lemonade-url http://localhost:13305
+```
+
 ```bash Use Another Lemonade Server
 LEMONADE_BASE_URL=http://192.168.1.100:13305/api/v1 gaia init
 ```
@@ -327,10 +333,17 @@ never touches a Lemonade app you installed yourself.
     3. **Verifies Setup** — tests each model with inference to detect corrupted downloads
   </Tab>
   <Tab title="Another Lemonade Server">
-    Set `LEMONADE_BASE_URL` to use a Lemonade Server you run yourself, on this
-    machine or another (e.g., `http://192.168.1.100:13305/api/v1`). `gaia init`
-    then installs and starts nothing: it checks that server and downloads models
-    through its API.
+    To use a Lemonade Server you run yourself, save it with `gaia init
+    --lemonade-url <url>` or `gaia lemonade connect <url>` (see
+    [Use a Lemonade you already run](#use-a-lemonade-you-already-run)), or set
+    `LEMONADE_BASE_URL` for one session (e.g., `http://192.168.1.100:13305/api/v1`).
+    `gaia init` then installs and starts nothing: it checks that server and
+    downloads models through its API, without unloading your other models or
+    saving its load options there.
+
+    On a first run with nothing chosen yet, `gaia init` offers a new-enough
+    Lemonade it finds on this PC's default ports. `--yes` never accepts that offer
+    for you: it installs GAIA's own and prints the `gaia lemonade connect` command.
 
     If that server requires authentication, also set `LEMONADE_API_KEY` —
     GAIA sends it as `Authorization: Bearer <key>` on every Lemonade-bound request
@@ -1561,6 +1574,9 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
 | `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-tui`, restored on its next launch — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
 | `lemonade_idle_timeout_minutes` | `15` | Stop GAIA's own Lemonade Server once no GAIA app or command has used it for this many minutes; `0` keeps it running until `gaia daemon stop` — see [GAIA's Lemonade Server](#gaias-lemonade-server) |
+| `lemonade_mode` | _(unset)_ | `gaia` runs GAIA's own Lemonade Server; `external` uses yours at `lemonade_base_url` and never starts one. Unset means not chosen yet, which runs GAIA's own. Setting `external` checks the server first; either change tells a running daemon. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
+| `lemonade_base_url` | _(unset)_ | Your Lemonade Server's address, for `lemonade_mode external` |
+| `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
 
 ### Full access
 
@@ -1753,8 +1769,9 @@ Nothing else on the machine can reach it: it binds a port of its own and require
 an API key GAIA generates, so two apps never fight over one server.
 
 This is the self-contained path — GAIA downloads the server itself, no installer
-and no admin rights. The system-wide install (`gaia init`) is unaffected and keeps
-serving everything else.
+and no admin rights. `gaia init` installs and starts it; a Lemonade you installed
+yourself is left alone unless you choose to use it (see
+[Use a Lemonade you already run](#use-a-lemonade-you-already-run)).
 
 ```bash
 gaia lemonade embedded start      # download if needed, then run
@@ -1782,11 +1799,33 @@ since whatever grabs that port next would inherit the trust. On Windows it is
 `env.ps1`, loaded with `. $HOME\.gaia\lemonade\env.ps1`.
 
 <Note>
-GAIA agents do not pick the embedded instance up on their own yet — source that
-file to point them at it. Automatic preference is coming with the startup wiring.
+GAIA agents find the embedded instance on their own through its state file. The
+`env.sh` / `env.ps1` file is for other tools.
 </Note>
 
-### Commands
+### Use a Lemonade you already run
+
+Point GAIA at a Lemonade Server you run yourself instead of its own. GAIA then
+installs and starts no Lemonade at all; if yours is down, the error says so and how
+to start it. The [install guide](/guides/install#use-a-lemonade-you-already-run)
+covers what GAIA does on your server.
+
+```bash
+gaia lemonade detect                           # is one running on this PC's default ports?
+gaia lemonade connect http://localhost:13305   # check it and save it
+gaia lemonade status                           # which server GAIA uses, and who chose it
+gaia config set lemonade_mode gaia             # back to GAIA's own
+```
+
+| Command | Description |
+|---------|-------------|
+| `connect [URL]` | Check the server (it must be Lemonade v10.9.0 or newer), save it as `lemonade_mode external`, and switch a running daemon. Without `URL`, uses the one `detect` finds. Asks for the API key if the server needs one; `--api-key-stdin` reads it from a pipe. The key goes to the OS credential store |
+| `detect` | Look for a Lemonade on `localhost:13305` and `localhost:8000`. Only a Lemonade `/health` answer counts, or a request for an API key on a PC with Lemonade installed. `--json` prints one object, or `null` |
+| `status` | Print which server GAIA uses and whether `LEMONADE_BASE_URL` or the saved setting chose it. `--json` prints one object |
+
+`LEMONADE_BASE_URL` wins over the saved setting.
+
+### Embedded commands
 
 | Command | Description |
 |---------|-------------|
@@ -3131,8 +3170,9 @@ run yourself, is never killed.
 The daemon never installs Lemonade, never restarts a server that is slow to
 answer while its owner is running (it may be loading a model), and never
 replaces one running a different version. Those need `gaia init`. With
-`LEMONADE_BASE_URL` set, it leaves Lemonade alone entirely: no unload, no idle
-stop, no `gaia daemon stop`.
+`LEMONADE_BASE_URL` set, or `lemonade_mode` set to `external`, it leaves
+Lemonade alone entirely: no unload, no idle stop, no `gaia daemon stop`.
+Switching to your own server stops GAIA's; switching back starts it again.
 
 #### Model-slot serialization
 
@@ -3189,6 +3229,8 @@ contract; every route needs `Authorization: Bearer <token>` from
 | `POST /daemon/v1/lemonade/clients` | Register a front end using GAIA's Lemonade: `{"kind": "app"\|"cli", "pids": [...], "name": "..."}` → `{"client_id", "clients"}`. Lives as long as every pid. 400 for a pid that is not running. Host API ≥ 1.4 |
 | `DELETE /daemon/v1/lemonade/clients/{id}` | Release it; the last app to leave unloads every model (`{"clients", "unloaded"}`). 404 if already released. Host API ≥ 1.4 |
 | `GET /daemon/v1/lemonade/clients` | Connected clients and how long the server has been idle. Host API ≥ 1.4 |
+| `POST /daemon/v1/lemonade/reconfigure` | Apply a changed `lemonade_mode`: stop GAIA's own server when switching to yours, start it when switching back. Clients restart an older daemon instead. Host API ≥ 1.5 |
+| `GET /daemon/v1/lemonade/target` | Which Lemonade GAIA uses and who chose it, with the saved API key for your own server (for the terminal UI, which can't read the Python credential store). Host API ≥ 1.5 |
 | `POST /daemon/v1/shutdown` | graceful drain + exit |
 | `GET /daemon/v1/agents` | registered sidecars — never the bearer token |
 | `POST /daemon/v1/agents/{id}/ensure` | spawn-or-attach; the body carries the sidecar token |

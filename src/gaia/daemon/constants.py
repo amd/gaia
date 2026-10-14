@@ -29,7 +29,10 @@ SERVICE_ID = "gaia-daemon"
 # exactly that.
 # MINOR 4 added /daemon/v1/lemonade/clients (front ends register while they use
 # GAIA's Lemonade, so it can unload when the last app closes and stop when idle).
-DAEMON_API_VERSION = "1.4"
+# MINOR 5 added POST /daemon/v1/lemonade/reconfigure and GET .../lemonade/target
+# (the saved "use my Lemonade" choice). Clients that need it restart an older
+# daemon rather than leave it on the old server.
+DAEMON_API_VERSION = "1.5"
 
 # Client-token auth: header name and scheme.
 AUTH_SCHEME = "Bearer"

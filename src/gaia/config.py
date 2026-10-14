@@ -128,6 +128,13 @@ class GaiaConfig:
         last_model: Model id last chosen in the TUI, restored on its next
             launch. A restore that fails is reported, never replaced with
             another model. ``gaia config set last_model ""`` forgets it.
+        lemonade_mode: ``"gaia"`` runs GAIA's own private Lemonade;
+            ``"external"`` uses the server at ``lemonade_base_url`` and never
+            starts one. ``None`` means nobody has chosen yet (behaves as
+            ``"gaia"``). See :mod:`gaia.llm.lemonade_choice`.
+        lemonade_base_url: The user's Lemonade Server, for ``external`` mode.
+        lemonade_api_key_stored: Its API key is in the OS credential store.
+            The key itself is never written here.
         lemonade_idle_timeout_minutes: Stop GAIA's own Lemonade Server once no
             GAIA app or command has used it for this many minutes, so its
             memory goes back to the system. 0 keeps it running until
@@ -145,6 +152,9 @@ class GaiaConfig:
     full_access: bool = False
     last_provider: Optional[str] = None
     last_model: Optional[str] = None
+    lemonade_mode: Optional[str] = None
+    lemonade_base_url: Optional[str] = None
+    lemonade_api_key_stored: bool = False
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
 
@@ -182,6 +192,10 @@ class GaiaConfig:
         given ``"false"`` would otherwise be stored truthy and read back as
         enabled.
         """
+        if key == "lemonade_mode":
+            return cls._coerce_lemonade_mode(value)
+        if key == "lemonade_base_url":
+            return cls._coerce_lemonade_url(value)
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -193,6 +207,35 @@ class GaiaConfig:
                 f"Use one of: {', '.join(sorted(cls._BOOL_WORDS))}."
             )
         return cls._BOOL_WORDS[word]
+
+    @staticmethod
+    def _coerce_lemonade_mode(value: Any) -> Optional[str]:
+        from gaia.llm.lemonade_choice import MODES
+
+        word = str(value or "").strip().lower()
+        if not word:
+            return None
+        if word not in MODES:
+            raise GaiaConfigError(
+                f"lemonade_mode must be one of {', '.join(MODES)}, got {value!r}. "
+                "'gaia' runs GAIA's own Lemonade; 'external' uses the one at "
+                "lemonade_base_url."
+            )
+        return word
+
+    @staticmethod
+    def _coerce_lemonade_url(value: Any) -> Optional[str]:
+        from gaia.llm.lemonade_choice import (
+            LemonadeChoiceError,
+            normalize_external_url,
+        )
+
+        if value is None or not str(value).strip():
+            return None
+        try:
+            return normalize_external_url(str(value))
+        except LemonadeChoiceError as e:
+            raise GaiaConfigError(f"lemonade_base_url: {e}") from e
 
     @staticmethod
     def _whole_number(key: str, value: Any) -> int:
@@ -300,6 +343,13 @@ class GaiaConfig:
                         "Fix it by hand, or delete the key to go back to the "
                         "default."
                     )
+        mode = data.get("lemonade_mode")
+        if mode is not None and mode not in ("gaia", "external"):
+            raise GaiaConfigError(
+                f"GAIA config at {config_file}: 'lemonade_mode' must be \"gaia\" "
+                f'or "external", but it is {mode!r}. Fix or delete that key in '
+                "the file, then retry."
+            )
         kwargs = {k: v for k, v in data.items() if k in known}
         if "llamacpp_backend" in kwargs:
             kwargs["llamacpp_backend"] = cls._check_llamacpp_backend(

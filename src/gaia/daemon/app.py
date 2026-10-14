@@ -205,12 +205,56 @@ def create_app(
 
         @app.post(f"{API_PREFIX}/lemonade/ensure")
         def ensure_lemonade(_: None = Depends(require_token)) -> dict:
+            from gaia.config import GaiaConfigError
+            from gaia.llm.lemonade_choice import LemonadeChoiceError
+
             try:
                 return lemonade_owner.ensure().to_dict()
-            except LemonadeNotManaged as e:
+            except (LemonadeNotManaged, LemonadeChoiceError, GaiaConfigError) as e:
                 raise HTTPException(status_code=409, detail=str(e)) from e
             except EmbeddedLemonadeError as e:
                 raise HTTPException(status_code=503, detail=str(e)) from e
+
+        @app.post(f"{API_PREFIX}/lemonade/reconfigure")
+        def reconfigure_lemonade(_: None = Depends(require_token)) -> dict:
+            """Apply a changed ``lemonade_mode`` without restarting the daemon."""
+            from gaia.config import GaiaConfigError
+            from gaia.llm.lemonade_choice import LemonadeChoiceError
+
+            try:
+                return lemonade_owner.reconfigure()
+            except (LemonadeChoiceError, GaiaConfigError) as e:
+                raise HTTPException(status_code=409, detail=str(e)) from e
+            except EmbeddedLemonadeError as e:
+                raise HTTPException(status_code=503, detail=str(e)) from e
+
+        @app.get(f"{API_PREFIX}/lemonade/target")
+        def lemonade_target(_: None = Depends(require_token)) -> dict:
+            """Which Lemonade GAIA uses, with the key for the user's own server.
+
+            The Go TUI cannot read the Python credential store, and it talks to
+            Lemonade directly, so it gets the key here over the same
+            token-guarded loopback it uses for everything else. Only a key the
+            user saved for their own server is returned; GAIA's own server's key
+            is in a file the TUI already reads.
+            """
+            from gaia.config import GaiaConfigError
+            from gaia.llm.lemonade_choice import (
+                LemonadeChoiceError,
+                describe,
+                external_api_key,
+            )
+
+            try:
+                target = describe()
+                key = (
+                    external_api_key(target["base_url"])
+                    if target["source"] == "config"
+                    else None
+                )
+            except (LemonadeChoiceError, GaiaConfigError) as e:
+                raise HTTPException(status_code=409, detail=str(e)) from e
+            return {**target, "api_key": key}
 
         if lemonade_clients is not None:
             from gaia.daemon.lemonade_routes import build_clients_router
