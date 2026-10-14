@@ -1252,6 +1252,9 @@ class SSEOutputHandler(OutputHandler):
                 # Nothing is waiting: the next prompt starts a fresh slot, so an
                 # answer recorded here would be reported delivered and then lost.
                 return False
+            if self._confirm_event.is_set():
+                # Answered already: a second answer must not overwrite the first.
+                return False
             if always and self._confirm_tool:
                 self.grant_call_for_session(self._confirm_tool, self._confirm_args)
             self._confirm_result = (approved or always) and not timed_out

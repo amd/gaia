@@ -5516,6 +5516,23 @@ Do NOT wrap conversational replies in JSON.
                 logger.error(err)
                 return {**NOT_EXECUTED, "status": "error", "error": err}
 
+        # Prompt-only fields are written by GAIA, never taken from the model.
+        reserved = sorted(
+            key
+            for key in (tool_args if isinstance(tool_args, dict) else {})
+            if key in (RISK_NOTE_ARG, SCRATCH_ARG)
+        )
+        if reserved:
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error_type": "invalid_arguments",
+                "error": (
+                    f"Unexpected argument(s) for {tool_name}: {', '.join(reserved)}. "
+                    "Call the tool again without them."
+                ),
+            }
+
         # Validate first, confirm second: a call the guardrails already refuse
         # must never reach a prompt.
         refusal = self._policy_refusal(tool_name, tool_args)

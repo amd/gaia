@@ -289,9 +289,12 @@ def _destroys(argv: list) -> bool:
 
 
 #: Characters that make text read differently from what it runs: control
-#: characters, bidirectional overrides, and zero-width marks.
+#: characters, bidirectional overrides, zero-width and invisible marks, and
+#: spaces or line breaks the shell does not split on.
 _MISLEADING_CHARS_RE = re.compile(
-    "[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]"
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f\xa0\xad\u061c\u115f\u1160\u1680\u180e"
+    "\u2000-\u200f\u2028-\u202f\u205f-\u2064\u2066-\u206f\u3000\u3164"
+    "\ufeff\uffa0]"
 )
 
 #: Where one command can sit inside another's text: separators, quotes,
@@ -320,6 +323,16 @@ def _hard_if_unofferable(error: Dict[str, Any], command: str) -> Dict[str, Any]:
     }
 
 
+def _unreadable_reason(command: str) -> str:
+    """Why *command* would not read on a prompt the way it runs, or ""."""
+    if "\n" in command or "\r" in command or _MISLEADING_CHARS_RE.search(command):
+        return (
+            "it contains line breaks or invisible characters, so it would not "
+            "read on screen the way it runs"
+        )
+    return ""
+
+
 def _one_time_hard_reason(command: str) -> str:
     """Why a line that would run as raw shell text must still be refused, or "".
 
@@ -328,11 +341,9 @@ def _one_time_hard_reason(command: str) -> str:
     is never offered: an encoded script, or one that deletes or discards work.
     The text is over-read on purpose, quotes and substitutions included.
     """
-    if "\n" in command or "\r" in command or _MISLEADING_CHARS_RE.search(command):
-        return (
-            "it contains line breaks or invisible characters, so it would not "
-            "read on screen the way it runs"
-        )
+    unreadable = _unreadable_reason(command)
+    if unreadable:
+        return unreadable
     lowered = command.lower()
     if re.search(r"\b(?:powershell|pwsh)\b", lowered) and _ENCODED_PS_RE.search(
         command
@@ -2721,6 +2732,19 @@ class ShellToolsMixin:
                     worst = verdict
         if worst is not None and worst.get("tier") == TIER_CONFIRM_ONCE:
             worst = _hard_if_unofferable(worst, command)
+        elif worst is not None and worst.get("tier") == TIER_CONFIRM:
+            # Any prompt shows the line, so it must read the way it runs.
+            unreadable = _unreadable_reason(command)
+            if unreadable:
+                worst = {
+                    **worst,
+                    "tier": TIER_REFUSE,
+                    "error": (
+                        f"Not offered: `{command}` cannot be approved, because "
+                        f"{unreadable}."
+                    ),
+                    "hint": "Retype the command with plain spaces and characters.",
+                }
         # Steps travel with the block: a TIER_CONFIRM one still has to run once
         # approved, and it can only run what was parsed.
         return worst, steps
