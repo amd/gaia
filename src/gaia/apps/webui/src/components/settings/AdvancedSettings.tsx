@@ -10,9 +10,10 @@ import { useModelActions } from '../../hooks/useModelActions';
 import { useUpdateStatus } from '../../hooks/useUpdateStatus';
 import type { SystemStatus, MCPServerStatus } from '../../types';
 import { VersionPicker } from '../VersionPicker';
+import { LemonadeServerSection } from './LemonadeServerSection';
 import '../SettingsModal.css';
 
-/** Model server status, context size, custom model id, beta flags, MCP status, version. */
+/** Model server status and choice, context size, custom model id, beta flags, MCP status, version. */
 export function AdvancedSettings() {
     const [status, setStatus] = useState<SystemStatus | null>(null);
     const [loading, setLoading] = useState(true);
@@ -303,6 +304,8 @@ export function AdvancedSettings() {
                         </div>
                     )}
                 </section>
+
+                <LemonadeServerSection />
 
                 {/* Active Model */}
                 <section className="settings-section">

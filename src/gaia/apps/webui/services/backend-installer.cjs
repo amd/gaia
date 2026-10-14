@@ -1376,12 +1376,75 @@ function toPep440(version) {
 }
 
 /**
+ * Run a `gaia ... --json` command and parse what it printed.
+ * Returns undefined after logging a warning that names the failure.
+ */
+async function readGaiaJson(run, gaiaBin, args) {
+  const shown = `gaia ${args.join(" ")}`;
+  const result = await run(gaiaBin, args, { stageLabel: "lemonade" });
+  if (result.code !== 0) {
+    log(`Warning: ${shown} exited with code ${result.code}: ${(result.stderr || result.stdout || "").trim().slice(-400)}`);
+    return undefined;
+  }
+  const lines = (result.stdout || "").trim().split(/\r?\n/);
+  try {
+    return JSON.parse(lines[lines.length - 1]);
+  } catch (err) {
+    log(`Warning: ${shown} printed no JSON (${err.message}): ${(result.stdout || "").trim().slice(-400)}`);
+    return undefined;
+  }
+}
+
+/**
+ * Extra `gaia init` args for a Lemonade Server the user already runs.
+ *
+ * Asks `chooseLemonade(found)` only on a first setup (nothing saved, no
+ * LEMONADE_BASE_URL) when a usable server answers. "external" adds
+ * `--lemonade-url <url>`, "gaia" adds `--gaia-lemonade`, null adds nothing:
+ * init then sets up GAIA's own and prints how to switch, as it always has.
+ * A server that needs a key or is too old is left to the app's setup screen.
+ */
+async function lemonadeInitArgs(gaiaBin, chooseLemonade, run = runCommand) {
+  if (typeof chooseLemonade !== "function") return [];
+  const unchanged = "gaia init will set up GAIA's own Lemonade Server; to use yours later run `gaia lemonade connect <url>`.";
+  const status = await readGaiaJson(run, gaiaBin, ["lemonade", "status", "--json"]);
+  if (status === undefined || status === null) {
+    log(`Warning: could not read which Lemonade Server GAIA uses; ${unchanged}`);
+    return [];
+  }
+  if (status.saved_mode != null || status.source === "env") return [];
+  const found = await readGaiaJson(run, gaiaBin, ["lemonade", "detect", "--json"]);
+  if (found === undefined) {
+    log(`Warning: could not look for a Lemonade Server already running; ${unchanged}`);
+    return [];
+  }
+  if (!found) return [];
+  if (found.status !== "ok") {
+    log(`Found a Lemonade Server at ${found.url} (${found.status}); the app's setup screen offers it.`);
+    return [];
+  }
+  let answer;
+  try {
+    answer = await chooseLemonade(found);
+  } catch (err) {
+    log(`Warning: could not ask whether to use the Lemonade Server at ${found.url}: ${err.message}; ${unchanged}`);
+    return [];
+  }
+  log(`Lemonade Server at ${found.url}: user chose ${answer || "not to answer"}`);
+  if (answer === "external") return ["--lemonade-url", found.url];
+  if (answer === "gaia") return ["--gaia-lemonade"];
+  return [];
+}
+
+/**
  * Install the GAIA Python backend from scratch.
  *
  * opts:
  *   - onProgress(stage, percent, message)
  *   - version: string — override the pinned version
  *   - skipGaiaInit: boolean — skip `gaia init` (for testing)
+ *   - chooseLemonade(found): Promise<"external"|"gaia"|null> — asked when a
+ *     Lemonade Server already runs here; see lemonadeInitArgs
  *
  * Throws InstallError on failure. The state file is updated to reflect
  * the current stage so a subsequent launch can recover.
@@ -1609,9 +1672,10 @@ async function installBackend(opts = {}) {
       "Setting up Lemonade Server and downloading models (this can take several minutes)"
     );
 
+    const lemonadeArgs = await lemonadeInitArgs(GAIA_BIN, opts.chooseLemonade);
     const initResult = await runCommand(
       GAIA_BIN,
-      ["init", "--profile", "minimal", "--yes"],
+      ["init", "--profile", "minimal", "--yes", ...lemonadeArgs],
       { stageLabel: "gaia-init" }
     );
 
@@ -1722,6 +1786,7 @@ function getInstalledVersion(gaiaBin) {
  *   - onProgress(stage, percent, message)
  *   - version: override the pinned version
  *   - skipGaiaInit: bool
+ *   - chooseLemonade: see installBackend
  *   - allowPartialRestart: bool (default true) — restart from scratch if
  *     the state file indicates a `partial` install.
  *
@@ -1873,6 +1938,7 @@ module.exports = {
   getInstalledVersion,
   findGaiaBin,
   toPep440,
+  lemonadeInitArgs,
 
   // Pre-checks
   runPreChecks,

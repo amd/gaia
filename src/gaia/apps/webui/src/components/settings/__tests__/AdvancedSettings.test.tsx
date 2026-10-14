@@ -34,6 +34,10 @@ function status(overrides: Partial<SystemStatus>): SystemStatus {
 beforeEach(() => {
     vi.clearAllMocks();
     mockedApi.getMCPRuntimeStatus.mockResolvedValue({ servers: [] } as never);
+    mockedApi.getLemonadeTarget.mockResolvedValue({
+        mode: 'gaia', saved_mode: null, source: 'gaia', base_url: null, saved_base_url: null,
+        api_key_stored: false, gaia_installed: true, offer: false, what_gaia_does: '',
+    });
     mockedApi.getSettings.mockResolvedValue(
         { custom_model: null, dynamic_tools: false, dynamic_tools_locked: false } as never,
     );

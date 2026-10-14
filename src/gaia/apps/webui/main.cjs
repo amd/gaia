@@ -729,6 +729,21 @@ function setupJumpList() {
 
 // ── Backend Bootstrap (Phase A) ───────────────────────────────────────────
 
+/** First install found a Lemonade already running: use it, or install GAIA's own? */
+async function chooseLemonadeInDialog(found) {
+  const { response } = await dialog.showMessageBox({
+    type: "question",
+    title: "Lemonade Server found",
+    message: `A Lemonade Server (v${found.version}) is already running at ${found.url}. Use it instead of installing GAIA's own?`,
+    detail: "This avoids running two servers and keeping two copies of each model.",
+    buttons: ["Use my Lemonade", "Install GAIA's own"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  return response === 0 ? "external" : "gaia";
+}
+
 /**
  * Ensure the Python backend is installed before the main window loads.
  *
@@ -776,6 +791,7 @@ async function bootstrapBackend() {
       await backendInstaller.ensureBackend({
         onProgress: progress.onProgress,
         isPackaged: app.isPackaged,
+        chooseLemonade: chooseLemonadeInDialog,
       });
       progress.close();
       console.log("[main] Backend bootstrap complete");
