@@ -120,8 +120,8 @@ class GaiaLogger:
             "[%(asctime)s] | %(levelname)s | %(name)s.%(funcName)s | %(filename)s:%(lineno)d | %(message)s"
         )
 
-        # Create and configure handlers with Unicode support
-        console_handler = logging.StreamHandler(sys.stdout)
+        # stderr: stdout carries command output and stdio protocols (MCP, JSON).
+        console_handler = logging.StreamHandler(sys.stderr)
         console_handler.setFormatter(console_formatter)
 
         # Size-capped and safe to share across GAIA processes; see gaia.log_rotation.
@@ -303,8 +303,9 @@ class GaiaLogger:
         stdio transports (``gaia mcp serve --stdio`` and friends) reserve
         stdout for JSON-RPC framing; a single log line written to stdout
         corrupts the client's message parser and the session goes quiet after
-        the first reply. GAIA's console handler writes to stdout, so redirect
-        every stdout ``StreamHandler`` on the root logger to stderr. ``gaia``
+        the first reply. GAIA's own console handler already writes to stderr;
+        this moves any stdout ``StreamHandler`` on the root logger there too
+        (e.g. one a caller or test pointed back at stdout). ``gaia``
         loggers propagate to these root handlers, so this covers log lines
         emitted lazily during a request, not just at startup.
         """
