@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 from typing import Any, Dict, Optional, Set
 
@@ -245,6 +246,20 @@ class TurnScopeGuard:
         prefix = self.scratch.rstrip(os.sep) + os.sep
         return any(p == self.scratch or p.startswith(prefix) for p in paths)
 
+    def _command_in_scratch(self, normalized: str) -> bool:
+        if not self.scratch:
+            return False
+        # A path that only starts with the scratch name, or climbs out of it, is not in it.
+        scratch = _slashed(self.scratch).rstrip("/")
+        pattern = re.escape(scratch) + r"([^\s\"'`;|&<>]*)"
+        for rest in re.findall(pattern, normalized):
+            if rest and not rest.startswith("/"):
+                continue
+            resolved = posixpath.normpath(scratch + rest)
+            if resolved == scratch or resolved.startswith(scratch + "/"):
+                return True
+        return False
+
     def _call_urls(self, args: Dict[str, Any]) -> Set[str]:
         return {
             _url_key(value)
@@ -295,7 +310,7 @@ class TurnScopeGuard:
             ):
                 return True
             normalized = _slashed(text)
-            if self.scratch and _slashed(self.scratch) in normalized:
+            if self._command_in_scratch(normalized):
                 return True
             for path in self.paths:
                 rel = _slashed(_relative(path, self.root))
