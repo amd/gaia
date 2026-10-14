@@ -29,6 +29,10 @@ _HEX = frozenset("0123456789abcdefABCDEF")
 # What may follow a string value's closing quote in a JSON object or array.
 _VALUE_END_RE = re.compile(r'\s*(?:\}|\]|,\s*"[^"\n]*"\s*:|$)')
 _BARE_BACKSLASH_END_RE = re.compile(r'\\"\s*\}\s*$')
+# A drive path written with single backslashes (C:\Users, not C:\\Users).
+_UNESCAPED_DRIVE_RE = re.compile(r'(?<![A-Za-z0-9])[A-Za-z]:\\(?![\\"])')
+# Decoded text that ends inside a drive path: "C:" or "C:\Users\me".
+_IN_DRIVE_PATH_RE = re.compile(r'(?<![A-Za-z0-9])[A-Za-z]:(?:\\[^\\\s"\'<>|*?]*)*$')
 
 
 def _read_hex4(raw: str, pos: int) -> Tuple[Optional[int], bool]:
@@ -48,7 +52,9 @@ def _read_hex4(raw: str, pos: int) -> Tuple[Optional[int], bool]:
     return None, False
 
 
-def decode_json_string_prefix(raw: str) -> Tuple[str, int, bool]:
+def decode_json_string_prefix(
+    raw: str, literal_path_escapes: bool = False
+) -> Tuple[str, int, bool]:
     """Decode the body of a JSON string — the text after its opening quote.
 
     Decoding stops at the first unescaped ``"``. Escapes follow JSON
@@ -64,6 +70,10 @@ def decode_json_string_prefix(raw: str) -> Tuple[str, int, bool]:
       escape that is not complete yet (``\\``, ``\\u00``, or a high surrogate
       waiting for its low half) is left unconsumed so a streaming caller can
       retry it once more text arrives.
+
+    With ``literal_path_escapes``, ``\\b \\f \\n \\r \\t`` that continue a drive
+    path stay literal, so ``C:\\temp\\file`` keeps its backslashes instead of
+    becoming a tab and a form feed.
     """
     out = []
     i = 0
@@ -79,6 +89,14 @@ def decode_json_string_prefix(raw: str) -> Tuple[str, int, bool]:
         if i + 1 >= n:
             break  # lone trailing backslash — wait for the escaped char
         esc = raw[i + 1]
+        if (
+            literal_path_escapes
+            and esc in "bfnrt"
+            and _IN_DRIVE_PATH_RE.search("".join(out[-260:]))
+        ):
+            out.append("\\" + esc)
+            i += 2
+            continue
         if esc in _SIMPLE_ESCAPES:
             out.append(_SIMPLE_ESCAPES[esc])
             i += 2
@@ -144,10 +162,12 @@ def extract_json_string_field(text: str, key: str) -> Optional[Tuple[str, bool]]
     if start is None:
         return None
     body = text[start:]
+    # A model that wrote one drive path with bare backslashes wrote them all so.
+    paths = bool(_UNESCAPED_DRIVE_RE.search(body))
     parts = []
     pos = 0
     while True:
-        decoded, consumed, closed = decode_json_string_prefix(body[pos:])
+        decoded, consumed, closed = decode_json_string_prefix(body[pos:], paths)
         if not closed:
             break
         parts.append(decoded)
@@ -157,7 +177,9 @@ def extract_json_string_field(text: str, key: str) -> Optional[Tuple[str, bool]]
         parts.append('"')
     bare_backslash = _BARE_BACKSLASH_END_RE.search(body, pos)
     if bare_backslash:
-        decoded, _, _ = decode_json_string_prefix(body[pos : bare_backslash.start()])
+        decoded, _, _ = decode_json_string_prefix(
+            body[pos : bare_backslash.start()], paths
+        )
         parts.append(decoded + "\\")
         return "".join(parts), True
     parts.append(decoded)
