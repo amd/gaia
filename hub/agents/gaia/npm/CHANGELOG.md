@@ -6,6 +6,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **`run_python` and `execute_python_file` work in the released binary.** The
+  binary has no Python interpreter, so it handed every script to its own
+  argument parser, which rejected it, and no calculation, chart or `.xlsx`
+  could be produced. It now runs scripts itself, with openpyxl, python-docx,
+  python-pptx, reportlab, pypdf, pandas, numpy, matplotlib and the full
+  standard library bundled for them. The Windows binary grows from 147 MB to
+  168 MB.
+- **A Python script that fails is reported as a failure.** A non-zero exit
+  came back as `status: success`, so the TUI showed a failed run as
+  successful. It is now `status: error`, with an `error` naming the exit code
+  and the last stderr line; `stdout`, `stderr` and `return_code` are unchanged.
 - **The sidecar's start-up warm-up now makes the first question fast.** It
   primed only the agent's own instructions, without the tool list or the rest
   of the system prompt, so the first question re-read all ~19K prompt tokens

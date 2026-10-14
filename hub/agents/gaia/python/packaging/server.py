@@ -18,13 +18,22 @@ they serve a byte-for-byte identical ``/v1/gaia/*`` contract.
 
     GET /health   -> {"status": "ok", "service": "gaia-agent-gaia"}
     GET /version  -> {"apiVersion": <wire contract>, "agentVersion": <package>}
+
+A frozen build has no Python interpreter, so ``run_python`` re-launches this
+binary with ``--gaia-run-python-file <script>``. That argv runs the
+script and exits before the agent stack is imported or argv is parsed.
 """
 
 from __future__ import annotations
 
 import sys
 
-from gaia_agent.server import (  # noqa: F401  (re-exported for the freeze/daemon)
+from gaia_agent_chat.python_runner import requests_run_python_file, run_python_file
+
+if __name__ == "__main__" and requests_run_python_file(sys.argv[1:]):
+    sys.exit(run_python_file(sys.argv[2:]))
+
+from gaia_agent.server import (  # noqa: E402,F401  (re-exported for the freeze/daemon)
     DEFAULT_HOST,
     DEFAULT_PORT,
     app,

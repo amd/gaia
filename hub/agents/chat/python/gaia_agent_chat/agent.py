@@ -27,6 +27,7 @@ except ImportError as _watchdog_err:
     Observer = None
 
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
+from gaia_agent_chat.python_runner import python_command
 from gaia_agent_chat.session import SessionManager
 from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent_chat.tool_requests import requested_tools
@@ -129,6 +130,37 @@ def _imports_gaia_tools(code: str) -> Optional[str]:
     """The offending line when a snippet tries to import GAIA itself."""
     match = _GAIA_TOOL_IMPORT_PATTERN.search(code or "")
     return match.group(0).strip() if match else None
+
+
+def _python_run_result(
+    run: Any,
+    stdout: str,
+    stderr: str,
+    seconds: float,
+) -> Dict[str, Any]:
+    """A finished Python run as a tool result; a non-zero exit is an error.
+
+    The error names the last stderr line — the exception or ``sys.exit``
+    message — so a failed run never reads as a success to the model or the UI.
+    """
+    code = run.returncode
+    result: Dict[str, Any] = {
+        "status": "success" if code == 0 else "error",
+        "stdout": stdout,
+        "stderr": stderr,
+        "return_code": code,
+        "has_errors": code != 0,
+        "duration_seconds": round(seconds, 2),
+    }
+    if code != 0:
+        last = next(
+            (s.strip() for s in reversed((run.stderr or "").splitlines()) if s.strip()),
+            "",
+        )
+        result["error"] = f"Python exited with code {code}" + (
+            f": {last[:300]}" if last else ""
+        )
+    return result
 
 
 def _python_script_run_context(
@@ -1694,7 +1726,6 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 """
                 import shlex
                 import subprocess
-                import sys
                 import time
 
                 file_path = os.path.expanduser(file_path)
@@ -1711,8 +1742,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "status": "error",
                         "error": f"File not found: {file_path}",
                     }
-                cmd = [sys.executable, str(p.resolve())] + (
-                    shlex.split(args) if args.strip() else []
+                cmd = python_command(
+                    p.resolve(), shlex.split(args) if args.strip() else []
                 )
                 start = time.monotonic()
                 try:
@@ -1737,14 +1768,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     from gaia.agents.base.artifacts import retain_excerpt
 
                     return attach_check(
-                        {
-                            "status": "success",
-                            "stdout": retain_excerpt(self, r.stdout, 8000),
-                            "stderr": retain_excerpt(self, r.stderr, 2000),
-                            "return_code": r.returncode,
-                            "has_errors": r.returncode != 0,
-                            "duration_seconds": round(time.monotonic() - start, 2),
-                        },
+                        _python_run_result(
+                            r,
+                            retain_excerpt(self, r.stdout, 8000),
+                            retain_excerpt(self, r.stderr, 2000),
+                            time.monotonic() - start,
+                        ),
                         check_from_python_run(
                             " ".join([file_path, args]).strip(),
                             r.returncode,
@@ -1756,6 +1785,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     return {
                         "status": "error",
                         "error": f"Timed out after {timeout}s",
+                        "has_errors": True,
+                    }
+                except OSError as e:
+                    return {
+                        "status": "error",
+                        "error": f"Could not start {cmd[0]}: {e}",
                         "has_errors": True,
                     }
                 except Exception as e:
@@ -1781,7 +1816,6 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     stdout, stderr, return_code, and duration.
                 """
                 import subprocess
-                import sys
                 import tempfile
                 import time
 
@@ -1838,10 +1872,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 ) as handle:
                     handle.write(code)
                     snippet = Path(handle.name)
+                cmd = python_command(snippet)
                 start = time.monotonic()
                 try:
                     r = subprocess.run(
-                        [sys.executable, str(snippet)],
+                        cmd,
                         cwd=str(run_dir),
                         env=env,
                         capture_output=True,
@@ -1860,20 +1895,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except OSError as e:
                     return {
                         "status": "error",
-                        "error": f"Could not start {sys.executable}: {e}",
+                        "error": f"Could not start {cmd[0]}: {e}",
                         "has_errors": True,
                     }
                 finally:
                     snippet.unlink(missing_ok=True)
                 return attach_check(
-                    {
-                        "status": "success",
-                        "stdout": r.stdout[:8000],
-                        "stderr": r.stderr[:2000],
-                        "return_code": r.returncode,
-                        "has_errors": r.returncode != 0,
-                        "duration_seconds": round(time.monotonic() - start, 2),
-                    },
+                    _python_run_result(
+                        r, r.stdout[:8000], r.stderr[:2000], time.monotonic() - start
+                    ),
                     check_from_python_run(
                         snippet_target(code), r.returncode, r.stdout, r.stderr
                     ),
