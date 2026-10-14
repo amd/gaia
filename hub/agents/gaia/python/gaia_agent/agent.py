@@ -57,7 +57,7 @@ from gaia_agent.engineering_tools import (
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 from gaia_agent_chat.profiles import get_profile_spec
 
-from gaia.agents.base.agent import parse_skill_manifest
+from gaia.agents.base.agent import default_max_steps, parse_skill_manifest
 from gaia.agents.base.project_map import ProjectMapMixin, is_code_repository
 from gaia.agents.base.skill_catalog import catalog_env_override
 from gaia.agents.base.skill_loader import (
@@ -150,6 +150,18 @@ def fast_env_override() -> Optional[bool]:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+#: The flagship's step limit when nothing overrides it. Desktop tasks (read nine
+#: datasheets, price a BOM, write two files) need ~60-70 steps, so the fleet's
+#: 50 ended them mid-research with nothing written. ``GAIA_AGENT_MAX_STEPS``
+#: and an explicit ``max_steps`` still win.
+FLAGSHIP_MAX_STEPS = 150
+
+
+def flagship_max_steps() -> int:
+    """``GAIA_AGENT_MAX_STEPS`` if set, else :data:`FLAGSHIP_MAX_STEPS`."""
+    return default_max_steps(FLAGSHIP_MAX_STEPS)
+
+
 def _locate_agent_manifest() -> Optional[str]:
     """Absolute path to this package's ``gaia-agent.yaml``, or ``None``.
 
@@ -180,6 +192,9 @@ class GaiaAgentConfig(ChatAgentConfig):
     # "full" is the only spec whose tool_groups are the union this agent needs:
     # doc_rag + file_fs + data_scratch + web_browse + full_screenshot.
     prompt_profile: str = "full"
+
+    # None (the CLI's "not given") also resolves to the flagship limit.
+    max_steps: Optional[int] = field(default_factory=flagship_max_steps)
 
     # Kept explicit even though "full" already implies them: these gate mixin
     # *construction* (indexes, DB handles, HTTP session) in __init__, separately
@@ -367,6 +382,8 @@ class GaiaAgent(
                 "Set them on the config object, or drop the config= argument."
             )
         resolved = config or GaiaAgentConfig(**kwargs)
+        if resolved.max_steps is None:
+            resolved.max_steps = flagship_max_steps()
         # ``GAIA_FAST`` wins in both directions, so a launcher that hard-codes
         # fast=True is still overridable from the shell. Written back to the
         # field so ``config.fast`` never disagrees with how the agent was built.

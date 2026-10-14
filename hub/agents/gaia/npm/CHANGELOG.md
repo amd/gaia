@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Long desktop tasks finish with their deliverables instead of a bare "I
+  can't confirm this is done".** Picking a controller from nine datasheets and
+  pricing a 40-unit BOM ran out of its 50 steps while still searching for
+  prices, and the reply dropped the recommendation the agent had already
+  written. The agent's default step limit is now **150** (a `/query`
+  `max_steps` or `GAIA_AGENT_MAX_STEPS` still wins); at 20, 10 and 5 steps left
+  it is told to write the requested files from what it has, marking unverified
+  values, and a turn that still runs out keeps its findings and lists what is
+  missing after them.
 - **The sidecar's start-up warm-up now makes the first question fast.** It
   primed only the agent's own instructions, without the tool list or the rest
   of the system prompt, so the first question re-read all ~19K prompt tokens
