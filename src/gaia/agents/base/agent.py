@@ -10005,8 +10005,12 @@ Do NOT wrap conversational replies in JSON.
                 "error_history": self.error_history,
             }
             self.last_result["model_messages"] = messages.finish("")
-            # Returns before the tail seal below.
-            self._finish_turn_record("", steps_taken)
+            # Returns before the tail seal below. A front-end that ends the turn
+            # on a streamed answer cancels it too; record the answer it showed.
+            delivered = getattr(self.console, "delivered_answer", "")
+            self._finish_turn_record(
+                delivered if isinstance(delivered, str) else "", steps_taken
+            )
             return self.last_result
 
         # The loop guard returns its answer and breaks, so unlike the normal and
