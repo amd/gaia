@@ -35,7 +35,8 @@ def tool_result_dict(result: Any) -> Optional[Dict[str, Any]]:
         if text.startswith("{"):
             try:
                 parsed = json.loads(text)
-            except ValueError:
+            # Nesting too deep for the parser is not an envelope a tool built.
+            except (ValueError, RecursionError):
                 return None
             if isinstance(parsed, dict):
                 return parsed
