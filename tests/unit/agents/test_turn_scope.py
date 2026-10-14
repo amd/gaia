@@ -361,3 +361,125 @@ def test_only_a_structured_failure_keeps_a_table_out_of_scope(tmp_path):
 
     assert scope.check("insert_data", {"table_name": "t", "data": "[]"}) is not None
     assert scope.check("insert_data", {"table_name": "u", "data": "[]"}) is None
+
+
+def test_the_agents_scratch_directory_is_never_new_work(tmp_path):
+    scratch = tmp_path / "gaia-scratch-abc"
+    scope = TurnScopeGuard(failure_limit=4)
+    scope.begin_turn("Write the BOM to `bom.xlsx`.", str(tmp_path), scratch=scratch)
+    scope.mark_answered()
+    helper = str(scratch / "make_bom.py")
+    assert scope.check("write_file", {"file_path": helper}) is None
+    assert scope.check("run_shell_command", {"command": f"python {helper}"}) is None
+    assert scope.check("write_file", {"file_path": str(tmp_path / "x.py")}) is not None
+
+
+def test_a_page_the_turns_own_search_linked_is_in_scope(guard):
+    page = "https://www.raspberrypi.com/products/compute-module-5/"
+    guard.record(
+        "search_web",
+        {"query": "cm5 price"},
+        {"success": True, "summary": f"1. Buy a CM5\n   {page}\n   The new..."},
+    )
+    guard.mark_answered()
+    assert guard.check("fetch_page", {"url": page.rstrip("/")}) is None
+    assert guard.check("fetch_page", {"url": "https://news.example.com/"}) is not None
+
+
+class PlanAgent(ScopeAgent):
+    def _register_tools(self):
+        super()._register_tools()
+
+        @tool
+        def search_web(query: str) -> dict:
+            """Search the web."""
+            return {
+                "success": True,
+                "summary": f"Results for {query}:\n1. Buy\n   {PAGE}\n",
+            }
+
+        @tool
+        def fetch_page(url: str) -> dict:
+            """Fetch a web page."""
+            self.fetched.append(url)
+            return {"success": True, "summary": "CM5 8GB: $95.00"}
+
+
+PAGE = "https://shop.example.com/cm5-8gb/"
+OTHER_PAGE = "https://other-shop.example.com/cm5/"
+
+
+def test_a_plan_budget_stop_does_not_count_as_the_answer(tmp_path, monkeypatch):
+    """rc12 kw-02: the plan budget forced an answer, the completion check sent it
+    back for the missing BOM, and the guard then refused the work the BOM needed."""
+    from gaia.security import PathValidator
+
+    snapshot = dict(_TOOL_REGISTRY)
+    _TOOL_REGISTRY.clear()
+    monkeypatch.chdir(tmp_path)
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = PlanAgent(silent_mode=True, skip_lemonade=True, max_plan_iterations=1)
+    try:
+        agent.fetched = []
+        agent.streaming = False
+        agent._tool_requires_confirmation = lambda *a, **kw: False
+        agent.console = MagicMock()
+        agent.console.cancelled = None
+        scratch = tmp_path / "gaia-scratch-kw02"
+        scratch.mkdir()
+        agent.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
+        agent.path_validator.set_scratch_dir(str(scratch))
+        helper = str(scratch / "make_bom.py")
+        bom = str(tmp_path / "bom.xlsx")
+        sent = script(
+            agent,
+            {
+                "goal": "Get prices",
+                "plan": [
+                    {"tool": "search_web", "tool_args": {"query": "cm5 price"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5io price"}},
+                ],
+            },
+            # The reply to the budget stop, with the BOM not yet written.
+            {"answer": "I recommend the CM5 8GB; the BOM is done."},
+            call("fetch_page", url=PAGE),
+            # Not linked by any result: still the request's own work, since no
+            # real answer has been given yet.
+            call("fetch_page", url=OTHER_PAGE),
+            call("write_file", file_path=helper, content="print('bom')\n"),
+            call("write_file", file_path=bom, content="CM5 8GB,40,95.00,3800.00\n"),
+            call("read_file", file_path=bom),
+            {"answer": f"Wrote `{bom}`: 40 x CM5 8GB at $95.00, total $3800.00."},
+        )
+        result = agent.process_query(
+            "Using current prices online, write a 40-unit BOM to `bom.xlsx`."
+        )
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(snapshot)
+    assert any("Maximum plan iterations" in str(m["content"]) for m in sent[1])
+    assert "[check:completion]" in sent[2][-1]["content"]
+    refusals = [
+        m["content"]
+        for m in sent[-1]
+        if m.get("role") == "tool" and "already answered" in str(m["content"])
+    ]
+    assert refusals == []
+    assert agent.fetched == [PAGE, OTHER_PAGE]
+    assert Path(helper).exists()
+    assert "total $3800.00" in result["result"]
+    agent.console.print_repeated_tool_warning.assert_not_called()
+
+
+def test_ending_on_drift_is_not_reported_as_a_repeated_call(agent, tmp_path):
+    (tmp_path / "other.txt").write_text("x")
+    (tmp_path / "third.txt").write_text("y")
+    script(
+        agent,
+        {"answer": "Done."},
+        call("read_file", file_path="other.txt"),
+        call("read_file", file_path="third.txt"),
+        {"answer": "Done. I did not save summary.md."},
+    )
+    agent.process_query("Save a summary of the fix to `summary.md`")
+    agent.console.print_repeated_tool_warning.assert_not_called()
