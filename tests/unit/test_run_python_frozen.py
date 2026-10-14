@@ -344,3 +344,138 @@ def test_frozen_output_is_utf8_whatever_the_console_codec(project, child_env):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.decode("utf-8").strip() == "done \u2713"
+
+
+# ---------------------------------------------------------------------------
+# A script that starts sys.executable itself reaches the binary too
+# ---------------------------------------------------------------------------
+
+from gaia_agent_chat.python_runner import (  # noqa: E402
+    BUNDLED_LIBRARIES,
+    interpreter_request,
+)
+
+#: Stand-in for the frozen entry point's ``dispatch`` call; 97 = "not Python".
+_DISPATCH = (
+    "import sys\n"
+    "from gaia_agent_chat.python_runner import dispatch\n"
+    "code = dispatch(sys.argv[1:])\n"
+    "sys.exit(97 if code is None else code)\n"
+)
+
+
+def _dispatch(argv, cwd, env):
+    return subprocess.run(
+        [sys.executable, "-c", _DISPATCH, *argv],
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "argv,expected",
+    [
+        (["-m", "pip", "install", "x"], ("module", "pip", ["install", "x"])),
+        (["-mjson.tool", "f"], ("module", "json.tool", ["f"])),
+        (["-c", "print(1)", "a"], ("code", "print(1)", ["a"])),
+        (["-u", "-X", "utf8", "s.py", "a"], ("file", "s.py", ["a"])),
+        (["s.py"], ("file", "s.py", [])),
+    ],
+)
+def test_python_command_lines_are_recognised(argv, expected):
+    assert interpreter_request(argv) == expected
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [],
+        ["--json-events"],
+        ["--host", "127.0.0.1", "--port", "8141"],
+        ["--serve"],
+        ["--dev", "--full-access"],
+        ["-h"],
+        ["-m"],
+        ["-u"],
+    ],
+)
+def test_the_agents_own_argv_is_left_to_the_agent(argv):
+    assert interpreter_request(argv) is None
+
+
+def test_pip_says_nothing_can_be_installed_and_what_is_there(project, child_env):
+    result = _dispatch(["-m", "pip", "install", "pypdf"], project, child_env)
+
+    assert result.returncode == 1
+    assert "can't be installed" in result.stderr
+    for name in BUNDLED_LIBRARIES:
+        assert name in result.stderr
+    assert "unrecognized arguments" not in result.stderr
+
+
+def test_a_module_runs_as_main(project, child_env):
+    data = project / "d.json"
+    data.write_text('{"b": 1}', encoding="utf-8")
+
+    result = _dispatch(["-m", "json.tool", str(data)], project, child_env)
+
+    assert result.returncode == 0, result.stderr
+    assert '"b": 1' in result.stdout
+
+
+def test_a_missing_module_is_reported_like_python(project, child_env):
+    result = _dispatch(["-m", "no_such_module_xyz"], project, child_env)
+
+    assert result.returncode == 1
+    assert "No module named no_such_module_xyz" in result.stderr
+
+
+def test_code_runs_with_its_arguments(project, child_env):
+    result = _dispatch(
+        ["-c", "import sys; print(__name__, sys.argv)", "a"], project, child_env
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "__main__ ['-c', 'a']"
+
+
+def test_code_traceback_names_the_code_not_the_runner(project, child_env):
+    result = _dispatch(["-c", "1 / 0"], project, child_env)
+
+    assert result.returncode == 1
+    assert 'File "<string>"' in result.stderr
+    assert "ZeroDivisionError" in result.stderr
+    assert "python_runner" not in result.stderr
+
+
+def test_a_file_with_interpreter_flags_runs(project, child_env):
+    script = project / "s.py"
+    script.write_text("import sys\nprint(sys.argv[1:])\n", encoding="utf-8")
+
+    result = _dispatch(["-u", str(script), "x"], project, child_env)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "['x']"
+
+
+def test_an_agent_argv_falls_through_to_the_agent(project, child_env):
+    assert _dispatch(["--json-events"], project, child_env).returncode == 97
+
+
+@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+def test_the_description_names_the_bundled_libraries(tool, tools):
+    from gaia.agents.base.tools import MAX_TOOL_DESCRIPTION_CHARS
+
+    description = _TOOL_REGISTRY[tool]["description"]
+    line = next(s for s in description.split("\n\n") if s.startswith("Has "))
+    named = line.removeprefix("Has ").split(";")[0].replace("\n", " ")
+
+    assert [n.strip() for n in named.split(",")] == list(BUNDLED_LIBRARIES.values())
+    assert "no pip" in line
+    assert len(description) <= MAX_TOOL_DESCRIPTION_CHARS

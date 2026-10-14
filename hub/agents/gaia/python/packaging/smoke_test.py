@@ -37,8 +37,9 @@ stdio JSONL -- what the TUI spawns as a child process:
 run_python -- the binary is the only Python a release user has:
 
   9. ``--gaia-run-python-file <script>`` runs a script that imports the
-     bundled office/data libraries, writes an ``.xlsx``, and starts a process
-     pool, and a failing script's exit code comes back unchanged. Before the fix the script path
+     bundled office/data libraries, writes an ``.xlsx``, starts a process
+     pool, and starts ``sys.executable -c`` / ``-m pip`` itself; a failing
+     script's exit code comes back unchanged. Before the fix the script path
      reached the stdio parser and exited 2 with ``unrecognized arguments``.
 
 The handshake deliberately stops short of a real turn: an answer needs a running
@@ -94,8 +95,9 @@ RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
 #: chart, and stdlib modules nothing in GAIA itself imports.
 RUN_PYTHON_SCRIPT = """\
 import sys, statistics, sqlite3, zipfile, xml.etree.ElementTree, csv, decimal
-import openpyxl, docx, pptx, pandas, numpy, reportlab, pypdf
+import openpyxl, docx, pptx, pandas, numpy, reportlab, pypdf, pymupdf, xlsxwriter
 import matplotlib.pyplot as plt
+import subprocess
 
 assert __name__ == "__main__", __name__
 wb = openpyxl.Workbook()
@@ -111,6 +113,13 @@ frame = pandas.DataFrame({"qty": [4, 6]})
 from concurrent.futures import ProcessPoolExecutor
 with ProcessPoolExecutor(2) as pool:  # workers re-launch the binary
     assert list(pool.map(abs, [-1, -2])) == [1, 2]
+# A script starting sys.executable -- the binary -- as an interpreter.
+def py(*argv):
+    return subprocess.run([sys.executable, *argv], capture_output=True, text=True)
+nested = py("-c", "import pypdf, fitz, xlsxwriter; print('nested ok')")
+assert nested.stdout.strip() == "nested ok", nested.stderr
+pip = py("-m", "pip", "install", "pypdf")
+assert pip.returncode == 1 and "can't be installed" in pip.stderr, pip.stderr
 print("RUN_PYTHON_OK", sys.argv[1:], int(frame["qty"].sum()), statistics.mean([1, 3]))
 """
 

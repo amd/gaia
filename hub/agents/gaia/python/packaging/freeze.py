@@ -103,10 +103,12 @@ COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia", "gaia-agent-chat"]
 # .pdf), tables and charts are what knowledge-work tasks ask for.
 SCRIPT_LIBRARIES = [
     "openpyxl",
+    "xlsxwriter",
     "docx",
     "pptx",
     "reportlab",
     "pypdf",
+    "pymupdf",
     "numpy",
     "pandas",
     "matplotlib",
