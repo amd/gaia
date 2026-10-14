@@ -152,13 +152,15 @@ func TestAFailedRegistrationIsReportedAtExit(t *testing.T) {
 
 func TestReleaseDoesNotHangOnASlowRegistration(t *testing.T) {
 	block := make(chan struct{})
-	t.Cleanup(func() { close(block) })
 	stubDaemonCalls(t, func(daemonCall) ([]byte, error) {
 		<-block
 		return nil, errors.New("too late")
 	})
 	started := time.Now()
-	if err := HoldForApp("tui").Release(50 * time.Millisecond); err == nil {
+	h := HoldForApp("tui")
+	// Let the registration finish before the stub is restored (cleanups run last-in first-out).
+	t.Cleanup(func() { close(block); <-h.done })
+	if err := h.Release(50 * time.Millisecond); err == nil {
 		t.Fatal("want an error naming the unfinished registration")
 	}
 	if time.Since(started) > time.Second {
