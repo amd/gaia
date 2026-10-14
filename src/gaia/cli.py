@@ -4411,6 +4411,7 @@ def main():
             if resolved:
                 args.model = resolved
                 log.debug("Using default_model from config: %s", resolved)
+                _warn_if_default_model_unavailable(resolved)
 
     # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):
@@ -6403,12 +6404,60 @@ def _print_gateway_models(models, state):
         else:
             marker = " "
         details = list(model.labels)
+        failure = state.unavailable(model.id)
+        if failure:
+            details.insert(0, f"unavailable: HTTP {failure.get('status', 404)}")
         if model.ctx_size:
             details.append(f"{model.ctx_size // 1024}K ctx")
         suffix = f"  [{', '.join(details)}]" if details else ""
         star = " ★" if model.recommended else ""
         print(f"  {marker} {model.id}{star}{suffix}")
     print("\n  ▶ active   ✓ enabled   ★ recommended")
+    active_failure = state.unavailable(state.active_model)
+    if active_failure:
+        from gaia.llm.gateway import describe_unavailable
+
+        print(f"\n⚠️  {describe_unavailable(state.active_model, active_failure)}")
+
+
+def _warn_if_default_model_unavailable(model_id: str) -> None:
+    """One stderr line when the saved default last failed with a 404.
+
+    The model is still used: switching would hide that the saved choice broke.
+    """
+    from gaia.llm.gateway import GatewayError, GatewayState, describe_unavailable
+
+    try:
+        failure = GatewayState.load().unavailable(model_id)
+    except GatewayError as e:
+        print(f"⚠️  {e}", file=sys.stderr)
+        return
+    if failure:
+        print(
+            f"⚠️  Your default model {describe_unavailable(model_id, failure)}",
+            file=sys.stderr,
+        )
+
+
+def _report_unavailable_gateway_model(manager, model_id: str) -> None:
+    """Say *model_id* is not served and name deployed models to switch to."""
+    from gaia.llm.gateway import GatewayState
+
+    state = GatewayState.load()
+    candidates = [
+        m.id
+        for m in manager.list_models()
+        if m.id != model_id and not state.unavailable(m.id)
+    ][:5]
+    print(
+        f"❌ {model_id} is unavailable on the gateway (HTTP 404) — it is not "
+        f"deployed, was renamed, or your account has no access to it.\n"
+        f"   Pick a deployed model: gaia gateway use <id>",
+        file=sys.stderr,
+    )
+    if candidates:
+        print(f"   For example: {', '.join(candidates)}", file=sys.stderr)
+    print("   See every model with `gaia gateway models`.", file=sys.stderr)
 
 
 def _resolve_gateway_token(args, *, prompt: str) -> str:
@@ -6456,10 +6505,12 @@ def handle_gateway_command(args):
         GatewayError,
         GatewayManager,
         GatewayState,
+        describe_unavailable,
         forget_token,
         recall_token,
         remember_token,
     )
+    from gaia.llm.lemonade_client import CloudModelUnavailableError
 
     action = getattr(args, "gateway_action", None)
     if not action:
@@ -6503,6 +6554,15 @@ def handle_gateway_command(args):
                 print("\n  Register it with `gaia gateway install`.")
             print(f"\nEnabled models: {', '.join(state.enabled_models) or '(none)'}")
             print(f"Active model:   {state.active_model or '(none)'}")
+            if state.active_model:
+                failure = state.unavailable(state.active_model)
+                if failure:
+                    print(
+                        f"  ⚠️  Unavailable: "
+                        f"{describe_unavailable(state.active_model, failure)}"
+                    )
+                else:
+                    print("  Availability:  no failed call recorded")
             return
 
         if action == "install":
@@ -6648,6 +6708,9 @@ def handle_gateway_command(args):
                 )
                 sys.exit(1)
             manager.set_active(args.model)
+            failure = state.unavailable(args.model)
+            if failure:
+                print(f"⚠️  {describe_unavailable(args.model, failure)}")
             # Route through the existing default_model mechanism so chat/llm/
             # prompt pick it up with no extra precedence rules (issue #98).
             from gaia.config import GaiaConfig
@@ -6700,15 +6763,23 @@ def handle_gateway_command(args):
                         sys.exit(1)
                     model = discovered[0].id
                 print(f"No active model set; using {model}.\n")
+            source = "from --model" if args.model else "the active gateway model"
             # Deliberately goes through the ordinary client so this exercises
             # the same path agents use, cloud short-circuits included.
             manager.client.refresh_cloud_models()
-            print(f"Sending a prompt to {model} ...\n")
-            response = manager.client.chat_completions(
-                model=model,
-                messages=[{"role": "user", "content": args.prompt}],
-                max_tokens=256,
-            )
+            print(f"Testing {model} ({source}) ...\n")
+            try:
+                response = manager.client.chat_completions(
+                    model=model,
+                    messages=[{"role": "user", "content": args.prompt}],
+                    max_tokens=256,
+                )
+            except CloudModelUnavailableError:
+                _report_unavailable_gateway_model(manager, model)
+                sys.exit(1)
+            except LemonadeClientError as e:
+                print(f"❌ Testing {model} failed: {e}", file=sys.stderr)
+                sys.exit(1)
             content = response["choices"][0]["message"]["content"]
             print(content)
             usage = response.get("usage") or {}
