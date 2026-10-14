@@ -343,10 +343,9 @@ def test_a_table_the_turn_never_touched_is_still_new_work(tmp_path):
     )
 
 
-def test_only_a_structured_failure_keeps_a_table_out_of_scope(tmp_path):
-    """A dict failure keeps its table out of scope. The scratchpad tools report
-    failure as an "Error: ..." string, which _is_tool_failure does not classify,
-    so that table still enters scope; the later call then fails at the tool."""
+def test_a_failed_create_keeps_its_table_out_of_scope(tmp_path):
+    """A dict failure and the scratchpad tools' "Error ...:" string both keep
+    their table out of scope."""
     scope = TurnScopeGuard(failure_limit=4)
     scope.begin_turn("Load the sheet.", str(tmp_path))
     scope.record(
@@ -360,4 +359,4 @@ def test_only_a_structured_failure_keeps_a_table_out_of_scope(tmp_path):
     scope.mark_answered()
 
     assert scope.check("insert_data", {"table_name": "t", "data": "[]"}) is not None
-    assert scope.check("insert_data", {"table_name": "u", "data": "[]"}) is None
+    assert scope.check("insert_data", {"table_name": "u", "data": "[]"}) is not None
