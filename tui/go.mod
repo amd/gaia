@@ -52,4 +52,5 @@ require (
 tool github.com/josephspurrier/goversioninfo/cmd/goversioninfo
 
 replace github.com/muesli/reflow => ./third_party/reflow
+
 replace github.com/charmbracelet/bubbletea => ./third_party/bubbletea
