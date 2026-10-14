@@ -187,8 +187,14 @@ mid-session, the TUI reports any reversion to its launch model.
 
 The model you last switched to — from `/provider`, `/model`, or the provider
 screen at startup — is restored the next time you open the TUI. The header names
-it before your first message, and a restore says "Restored your last model:"
-followed by the model's name.
+it before your first message, and a restore says it in one line:
+
+```
+Restored your last model: DeepSeek-V4.1-Flash on the AMD LLM Gateway (cloud). Your
+messages, and anything read from files or memory, are sent there.
+```
+
+In `/model`, the configured default model is marked `(default)`.
 
 If it can't be restored — the key is gone, the provider isn't connected, the
 model is no longer listed, or you stop the restore — GAIA says so in one line and
