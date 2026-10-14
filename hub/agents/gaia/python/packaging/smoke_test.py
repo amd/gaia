@@ -37,8 +37,8 @@ stdio JSONL -- what the TUI spawns as a child process:
 run_python -- the binary is the only Python a release user has:
 
   9. ``--gaia-run-python-file <script>`` runs a script that imports the
-     bundled office/data libraries and writes an ``.xlsx``, and a failing
-     script's exit code comes back unchanged. Before the fix the script path
+     bundled office/data libraries, writes an ``.xlsx``, and starts a process
+     pool, and a failing script's exit code comes back unchanged. Before the fix the script path
      reached the stdio parser and exited 2 with ``unrecognized arguments``.
 
 The handshake deliberately stops short of a real turn: an answer needs a running
@@ -108,6 +108,9 @@ pptx.Presentation().save("deck.pptx")
 plt.plot([1, 2, 3])
 plt.savefig("chart.png")
 frame = pandas.DataFrame({"qty": [4, 6]})
+from concurrent.futures import ProcessPoolExecutor
+with ProcessPoolExecutor(2) as pool:  # workers re-launch the binary
+    assert list(pool.map(abs, [-1, -2])) == [1, 2]
 print("RUN_PYTHON_OK", sys.argv[1:], int(frame["qty"].sum()), statistics.mean([1, 3]))
 """
 
