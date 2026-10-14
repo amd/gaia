@@ -74,8 +74,10 @@ def resolve_python_timeout(requested: Optional[int]) -> int:
     if requested is None:
         return DEFAULT_PYTHON_TIMEOUT
     try:
+        if isinstance(requested, bool):
+            raise TypeError("a boolean is not a number of seconds")
         seconds = int(requested)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(
             f"timeout must be a whole number of seconds, got {requested!r}. "
             f"Omit it for the {DEFAULT_PYTHON_TIMEOUT}s default."
