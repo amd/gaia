@@ -1252,6 +1252,10 @@ _PLACEHOLDER_LITERALS = frozenset(
 _CONTENT_ARG_NAMES = frozenset(
     {"content", "code", "script", "text", "body", "new_string", "new_content"}
 )
+# What to look for, not a value to fill in: searching for "TODO" is real work.
+_SEARCH_ARG_NAMES = frozenset(
+    {"pattern", "query", "regex", "search", "search_term", "term", "keyword", "q"}
+)
 _ANGLE_PLACEHOLDER = re.compile(r"<[^<>/=]+>")
 _UNRESOLVED_PLAN_REF = re.compile(r"\$(?:PREV|STEP_\d+)\.")
 
@@ -1259,6 +1263,8 @@ _UNRESOLVED_PLAN_REF = re.compile(r"\$(?:PREV|STEP_\d+)\.")
 def _placeholder_value(name: str, value: str) -> bool:
     """True when *value* is a stand-in for a real argument, not the argument."""
     text = value.strip()
+    if name.lower() in _SEARCH_ARG_NAMES:
+        return bool(_UNRESOLVED_PLAN_REF.match(text))
     if text.lower() in _PLACEHOLDER_LITERALS:
         return True
     if _ANGLE_PLACEHOLDER.fullmatch(text) or _UNRESOLVED_PLAN_REF.match(text):
@@ -1294,7 +1300,8 @@ def _plan_step_placeholder(
         if isinstance(value, str):
             if _placeholder_value(str(key), value):
                 return path, value
-        else:
+        elif str(key).lower() not in _CONTENT_ARG_NAMES:
+            # Structured content is data to write as-is, not args to fill in.
             found = _plan_step_placeholder(tool_name, value, path)
             if found is not None:
                 return found
