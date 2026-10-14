@@ -355,3 +355,32 @@ def test_non_email_install_does_not_shutdown_sidecar(client, monkeypatch):
     resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
     assert resp.status_code == 202
     assert recorder.calls == []
+
+
+def test_email_update_the_core_cannot_run_is_409_and_keeps_the_sidecar(
+    client, monkeypatch
+):
+    recorder = _StopSidecarRecorder()
+    monkeypatch.setattr(daemon_client_module, "stop_sidecar", recorder)
+    monkeypatch.setattr(catalog_mod, "_running_core_version", lambda: "0.24.1")
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {
+            "id": "email",
+            "language": "python",
+            "security_tier": "verified",
+            "latest_version": "0.7.0",
+            "versions": {"0.7.0": {"version": "0.7.0", "min_gaia_version": "0.25.0"}},
+        },
+    )
+    called = {}
+    monkeypatch.setattr(
+        installer_mod, "install", lambda agent_id, **k: called.update(id=agent_id)
+    )
+    resp = client.post("/api/agents/install", json={"id": "email"}, headers=UI)
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "GAIA 0.25.0" in detail and "pip install --upgrade amd-gaia" in detail
+    assert recorder.calls == []
+    assert called == {}

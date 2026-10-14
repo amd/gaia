@@ -40,6 +40,7 @@ import sys
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
@@ -47,6 +48,7 @@ from gaia_agent import caller_auth
 from gaia_agent.entry import main as _entry_main
 from gaia_agent.memory_dump import build_memory_dump
 from gaia_agent.session_registry import (
+    AGENT_BUILD_LOCK,
     PROVIDER_CLAUDE,
     PROVIDER_LOCAL,
     SessionCapacityError,
@@ -54,7 +56,7 @@ from gaia_agent.session_registry import (
 )
 from gaia_agent.session_registry import registry as session_registry
 from gaia_agent_chat.session import validate_session_id
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import StreamingResponse
 
 from gaia.agents.base.readiness import start_advice, version_meets_min
@@ -73,7 +75,9 @@ AGENT_ID = "gaia"
 #: 2.14 added ``/query/{run_id}/tool_decision`` and ``/sessions/{id}/bypass``,
 #: and the ``claude`` provider value.
 #: 2.15 (#3620) added ``POST /query/{run_id}/followup`` for mid-turn messages.
-API_VERSION = "2.15"
+#: 2.16 (#4166) added ``/query``'s ``documents`` field.
+#: 2.17 added ``GET /skills`` for the Agent UI's Skills settings.
+API_VERSION = "2.17"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -164,6 +168,30 @@ class QueryRequest(_Strict):
             "with nobody there to answer, which reads as a hang."
         ),
     )
+    documents: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Absolute paths of the files the user attached to this conversation "
+            "(contract >= 2.16). Each is granted as that exact file, never its "
+            "folder, and indexed before the turn runs. Send the full set every "
+            "turn: files already indexed in a retained session are skipped, so "
+            "one attached mid-conversation is picked up on the next turn."
+        ),
+    )
+
+    @field_validator("documents")
+    @classmethod
+    def _documents_absolute(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        relative = [p for p in v if not p or not Path(p).is_absolute()]
+        if relative:
+            raise ValueError(
+                f"documents must be absolute file paths; got {relative!r}. The "
+                "agent's working directory is not the caller's, so a relative "
+                "path would name a different file."
+            )
+        return list(dict.fromkeys(v))
 
     @field_validator("run_id")
     @classmethod
@@ -190,7 +218,31 @@ class QueryRespondRequest(_Strict):
             "than silently dropped."
         )
     )
-    response: str
+    value: Optional[str] = Field(
+        default=None,
+        description=(
+            "The answer: an option's 'value' (or its 'label'), or free text "
+            "when the question set allow_free_text. The spec §5.1 name, shared "
+            "with the email agent, the Agent UI and the TUI."
+        ),
+    )
+    response: Optional[str] = Field(
+        default=None,
+        description="Deprecated spelling of 'value'. Send exactly one of the two.",
+    )
+
+    @model_validator(mode="after")
+    def _exactly_one_answer(self) -> "QueryRespondRequest":
+        if (self.value is None) == (self.response is None):
+            raise ValueError(
+                "send the answer in exactly one field: 'value' (preferred) or "
+                "the deprecated 'response'"
+            )
+        return self
+
+    @property
+    def answer(self) -> str:
+        return self.value if self.value is not None else self.response
 
 
 class QueryRespondResponse(_Strict):
@@ -456,6 +508,82 @@ def _confirmation_refusal(action: str) -> Dict[str, Any]:
     }
 
 
+#: Step name the attached-document indexing is reported under — the same one
+#: the in-process Agent UI path uses, so both read alike.
+_ATTACH_TOOL = "index_documents"
+
+
+def _attach_refusal(agent: Any, path: str) -> str:
+    """Why an attached *path* cannot be indexed, or ``""`` when it can."""
+    target = Path(path)
+    if not target.exists():
+        return "file not found"
+    if not target.is_file():
+        return "not a file; only individual files can be attached"
+    blocked, reason = agent.path_validator.is_read_blocked(path)
+    return reason if blocked else ""
+
+
+def _index_attached_documents(agent: Any, documents: List[str], handler: Any) -> None:
+    """Index the documents the caller attached to this conversation (>= 2.16).
+
+    Grants each as that exact file, never its folder: the scope an in-process
+    Agent UI agent gets. Files already indexed are skipped, so a retained
+    session pays only for documents attached since its last turn.
+    """
+    indexed = agent.indexed_files
+    pending = [d for d in documents if d not in indexed]
+    if not pending:
+        return
+    handler.print_tool_usage(_ATTACH_TOOL)
+    handler.pretty_print_json(
+        {"documents": [Path(d).name for d in pending]}, title="Arguments"
+    )
+    rag = agent.rag
+    lines: List[str] = []
+    for doc in pending:
+        name = Path(doc).name
+        reason = (
+            "document search is not available in this session"
+            if rag is None
+            else _attach_refusal(agent, doc)
+        )
+        if reason:
+            lines.append(f"{name}: not indexed: {reason}")
+            continue
+        agent.path_validator.add_allowed_path(doc)
+        try:
+            result = rag.index_document(doc)
+        except Exception as exc:  # reported in the visible step below
+            logger.exception("Indexing attached document %s failed", doc)
+            lines.append(f"{name}: not indexed: {exc}")
+            continue
+        if result.get("success") and not result.get("error"):
+            indexed.add(doc)
+            lines.append(f"{name}: {result.get('num_chunks', 0)} chunks")
+        else:
+            error = result.get("error") or "the indexer gave no reason"
+            lines.append(f"{name}: not indexed: {error}")
+    succeeded = sum(1 for d in pending if d in indexed)
+    if succeeded:
+        agent.rebuild_system_prompt()
+    all_indexed = succeeded == len(pending)
+    handler._emit(
+        {
+            "type": "tool_result",
+            "title": "Index Documents",
+            "summary": "\n".join(lines),
+            "success": all_indexed,
+            # The status/message shape is what a relaying host summarizes from.
+            "result_data": {
+                "status": "indexed" if all_indexed else "not all indexed",
+                "message": "; ".join(lines),
+                "success": all_indexed,
+            },
+        }
+    )
+
+
 def build_query_agent(**config_kwargs: Any):
     """Construct the flagship agent for one run.
 
@@ -463,7 +591,8 @@ def build_query_agent(**config_kwargs: Any):
     """
     from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
-    return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
+    with AGENT_BUILD_LOCK:
+        return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
 
 
 def _probe_lemonade() -> Dict[str, Any]:
@@ -648,6 +777,27 @@ async def memory() -> Dict[str, Any]:
             close_agent(agent)
 
 
+@router.get("/skills")
+async def skills() -> Dict[str, Any]:
+    """The skills this agent can load, for the Agent UI's Skills settings.
+
+    The bundled skills live inside the frozen binary, so a UI that does not
+    have the agent package installed beside it can only list them from here.
+    """
+    from gaia_agent.agent import ENGINEERING_SKILL, GaiaAgent
+
+    from gaia.skills.errors import SkillError
+    from gaia.skills.listing import skills_listing
+
+    try:
+        # Off the event loop: discovery reads every skill folder.
+        return await asyncio.to_thread(
+            skills_listing, GaiaAgent.SKILL_DIRS, (ENGINEERING_SKILL,)
+        )
+    except SkillError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 def _require_valid_session_id(session_id: str) -> None:
     """Reject a session_id the agent could not persist, as the caller's error."""
     try:
@@ -726,6 +876,30 @@ def _switch_target(session: Any, request: "QueryRequest") -> Optional[str]:
     return None
 
 
+#: How long a new turn waits for a stopped one to finish its in-flight model
+#: call. Under the Agent UI relay's 300 s read timeout, so the wait never
+#: outlives the caller.
+STOPPED_TURN_WAIT_S = 240.0
+
+
+async def _acquire_turn(session: Any) -> bool:
+    """Take *session*'s run lock; ``False`` when another turn is still live.
+
+    A turn the user already stopped still holds the lock until its model call
+    returns, which for a long answer is most of a minute. Refusing the next
+    message for all that time made Stop look broken, so a stopped turn is
+    waited out instead. A turn that is NOT stopped is still refused at once.
+    """
+    if session.run_lock.acquire(blocking=False):
+        return True
+    stopping = session.active_cancel
+    if stopping is None or not stopping.is_set():
+        return False
+    return await asyncio.to_thread(
+        session.run_lock.acquire, True, STOPPED_TURN_WAIT_S
+    )
+
+
 @router.post("/query")
 async def query(request: QueryRequest):
     """Run the flagship agent loop for one request, streaming canonical SSE."""
@@ -766,6 +940,7 @@ async def query(request: QueryRequest):
         if registered:
             _registry.remove(request.run_id)
         if session is not None:
+            session.active_cancel = None
             session.run_lock.release()
         if one_shot_agent is not None:
             close_agent(one_shot_agent)
@@ -791,7 +966,7 @@ async def query(request: QueryRequest):
             # visibly Agent.loaded_skills — vanishes next turn otherwise, while
             # the model goes on telling the user the skill is still loaded.
             session = session_registry.get_or_create(request.session_id, **kwargs)
-            if not session.run_lock.acquire(blocking=False):
+            if not await _acquire_turn(session):
                 session = None  # not ours to release
                 raise HTTPException(
                     status_code=409,
@@ -875,6 +1050,8 @@ async def query(request: QueryRequest):
         run = _QueryRun(request.run_id, agent, handler)
         precancelled = _registry.add(run)
         registered = True
+        if session is not None:
+            session.active_cancel = run.cancel_event
         agent._cancel_event = run.cancel_event
         agent._followup_queue = run.followups
         if precancelled:
@@ -904,6 +1081,8 @@ async def query(request: QueryRequest):
 
     def _run_agent() -> None:
         try:
+            if request.documents:
+                _index_attached_documents(agent, request.documents, handler)
             if request.max_steps is not None:
                 run.result = agent.process_query(
                     request.query, max_steps=request.max_steps
@@ -934,6 +1113,7 @@ async def query(request: QueryRequest):
                 # Collect this turn's "always" grants into the session before
                 # the handler is dropped, or the next turn re-asks for them.
                 session.permissions.detach(handler)
+                session.active_cancel = None
                 session.run_lock.release()
             # This thread is the last thing to touch a one-shot agent — the
             # stream reads only run.result and the handler — so its RAG index,
@@ -1074,7 +1254,7 @@ async def respond_to_query(
                 "been cancelled; the answer was not delivered."
             ),
         )
-    if not run.handler.resolve_user_input(body.request_id, body.response):
+    if not run.handler.resolve_user_input(body.request_id, body.answer):
         raise HTTPException(
             status_code=409,
             detail=(
@@ -1293,54 +1473,79 @@ def build_app() -> FastAPI:
     return app
 
 
+def _default_model_is_servable() -> bool:
+    """Whether warming the default model would load it rather than download it.
+
+    Building the warm-up agent preloads its model, and Lemonade downloads a
+    missing one on load — gigabytes the user never asked for when they chose
+    a cloud model and skipped the local one.
+    """
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        cloud_model_provider,
+        resolve_default_chat_model,
+    )
+
+    model = resolve_default_chat_model()
+    if cloud_model_provider(model):
+        return True
+    if not LemonadeClient(verbose=False).get_model_info(model)["downloaded"]:
+        logger.info(
+            "GAIA sidecar: warm-up skipped (%s is not downloaded; a turn that "
+            "uses it downloads it)",
+            model,
+        )
+        return False
+    return True
+
+
 def _warmup_blocking() -> None:
     """Make the first real question cheap.
 
     Three costs move off the first turn: importing the agent stack (faiss,
     RAG, tool mixins), loading the model into its Lemonade slot, and the
-    first pass over the system prompt. The last one is why the warm-up sends
-    the agent's *real* system prompt rather than a bare "hi" — Lemonade
-    prefix-caches it, so the first question reuses the cache instead of
-    reprocessing ~10K tokens.
+    first pass over the ~20K-token prompt prefix. The agent's own
+    :meth:`warm_up` sends that prefix exactly as a turn would (composed system
+    prompt and tool schemas), and every session agent renders the same one, so
+    the first question in any session reads it from Lemonade's cache.
+
+    Never fatal — a cold first turn is slow, not broken — but a failure is
+    logged as a warning with its cause, not hidden.
     """
-    import time
+    from gaia_agent.session_registry import build_session_agent
 
-    started = time.time()
     try:
-        from gaia_agent.session_registry import build_session_agent
-
-        from gaia.llm.lemonade_client import create_lemonade_client
-
-        agent = build_session_agent()
-        try:
-            system_prompt = agent._get_system_prompt()  # noqa: SLF001
-            model = getattr(agent, "model_id", None)
-        finally:
-            close_agent(agent)
-
-        if not system_prompt or not model:
-            logger.info("GAIA sidecar: warm-up skipped (no prompt/model resolved)")
+        if not _default_model_is_servable():
             return
-
-        client = create_lemonade_client(auto_start=False, verbose=False)
-        response = client.chat_completions(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": "Reply with OK."},
-            ],
-            max_completion_tokens=1,
+        agent = build_session_agent()
+    except Exception as e:  # noqa: BLE001 - reported, and chat still works
+        logger.warning(
+            "GAIA sidecar: warm-up failed before the model was reached (%s). "
+            "Chat still works, but the first answer will take longer; check "
+            "that Lemonade is running and the model is downloaded.",
+            e,
+            exc_info=True,
         )
-        cached = (response.get("usage") or {}).get("prompt_tokens_details") or {}
+        return
+    try:
+        result = agent.warm_up()
         logger.info(
-            "GAIA sidecar: warmed %s in %.1fs (system prompt %d chars, %s cached)",
-            model,
-            time.time() - started,
-            len(system_prompt),
-            cached.get("cached_tokens", "?"),
+            "GAIA sidecar: warmed %s in %ss (%s of %s prompt tokens cached)",
+            getattr(agent, "model_id", "?"),
+            result.get("seconds"),
+            result.get("cached_tokens", "?"),
+            result.get("prompt_tokens", "?"),
         )
-    except Exception as e:  # noqa: BLE001 — warm-up is best-effort by design
-        logger.info("GAIA sidecar: model warm-up skipped (%s)", e)
+    except Exception as e:  # noqa: BLE001 - reported, and chat still works
+        logger.warning(
+            "GAIA sidecar: warm-up request to %s failed (%s). Chat still works, "
+            "but the first answer will take longer; check the Lemonade log.",
+            getattr(agent, "model_id", "?"),
+            e,
+            exc_info=True,
+        )
+    finally:
+        close_agent(agent)
 
 
 app = build_app()

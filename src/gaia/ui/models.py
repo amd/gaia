@@ -7,10 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-try:
-    from gaia.version import __version__ as _gaia_version
-except ImportError:
-    _gaia_version = "0.1.0"
+from gaia.version import __version__ as _gaia_version
 
 # ── System ──────────────────────────────────────────────────────────────────
 
@@ -66,14 +63,16 @@ class SystemStatus(BaseModel):
     # any agent declaring ``min_memory_gb > 0`` would appear to be over budget.
     memory_available_gb: Optional[float] = None
     initialized: bool = False
-    version: str = _gaia_version
+    # A factory keeps the version out of the exported schema, which RC builds restamp.
+    version: str = Field(default_factory=lambda: _gaia_version)
     # How to start Lemonade ON THIS HOST, resolved server-side by
     # gaia.llm.lemonade_launcher.describe_start_hint. Served rather than
     # hardcoded in the UI so one rule decides it: the UI cannot know whether
     # this machine has a modern daemon, a legacy CLI, or a tray app, and a
     # second copy of the answer is how `lemonade-server serve` survived in the
     # banner long after it stopped existing. ``start_command`` is None on hosts
-    # requiring GUI/manual configuration, including service context changes.
+    # requiring GUI/manual configuration, including service context changes,
+    # and on Windows when Command Prompt and PowerShell need different lines.
     # In those cases start_instruction carries the necessary steps.
     start_instruction: Optional[str] = None
     start_command: Optional[str] = None
@@ -96,6 +95,8 @@ class SystemStatus(BaseModel):
     # Required model for GAIA Chat; None when an unreadable config hides it
     # (``config_error`` then says why).
     default_model_name: Optional[str] = "Gemma-4-E4B-it-GGUF"
+    # True for a cloud model: nothing to download, load or resize locally.
+    default_model_is_cloud: bool = False
     # Catalog-reported size of ``default_model_name``. Populated alongside
     # ``model_downloaded`` so the "not downloaded" banner can show an accurate
     # size hint instead of a hard-coded one (the previous "~25 GB" was a stale
@@ -110,6 +111,8 @@ class SystemStatus(BaseModel):
     # Boot-time initialization tracking (populated from DispatchQueue)
     init_state: str = "ready"  # "initializing" | "ready" | "degraded"
     init_tasks: List["InitTaskInfo"] = Field(default_factory=list)
+    # Priming of a new chat's prompt prefix; never blocks sending.
+    warm_up: Optional["WarmUpStatus"] = None
     # Multi-device support (issue #1220): hardware devices detected on this host.
     # Populated from Lemonade ``/system-info``. The frontend uses this to filter
     # which device options to show in the per-agent device dropdown.
@@ -125,6 +128,16 @@ class SystemStatus(BaseModel):
 
 
 # ── Tasks ──────────────────────────────────────────────────────────────────
+
+
+class WarmUpStatus(BaseModel):
+    """Whether a new chat's first turn will find its prompt already read."""
+
+    state: str  # idle | warming | ready | failed | skipped
+    elapsed_seconds: Optional[float] = None
+    prompt_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    error: Optional[str] = None
 
 
 class InitTaskInfo(BaseModel):

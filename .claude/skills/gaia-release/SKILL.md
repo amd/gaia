@@ -78,7 +78,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
 1. **Survey commits since previous tag, then sanity-check the version request against scope.**
    ```bash
-   PREV=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+   PREV=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -1)
    echo "Previous tag: $PREV"
    git log "$PREV..HEAD" --pretty=format:'%h  %s'
    echo
@@ -373,7 +373,18 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    python util/validate_release_notes.py docs/releases/v<version>.mdx --tag v<version>
    ```
 
-4. **Trigger Build Installers via `workflow_dispatch` against the merged SHA.** This builds the same artifacts the tag push will build, on the same code, *before* the tag exists.
+4. **For a final: check the flagship agent was released from this commit.** `gaia init`, `gaia hub install gaia` and the Windows setup install the flagship from the Agent Hub and `hub/agents/gaia/npm/binaries.lock.json`, which only `release_agent_gaia.yml` (tag `agent-pkg-gaia-vX.Y.Z`) fills. `publish.yml` and `release_components.yml` run this same check on a final tag and fail it; run it first so a missing flagship release is found before the tag exists. (An RC skips it: it freezes its own flagship.)
+   ```bash
+   git fetch --tags origin
+   python util/check_flagship_release.py --ref "$MERGED_SHA"
+   ```
+   If it fails, release the flagship in this order. Skipping step 2 deadlocks: `release_agent_gaia.yml` refuses to run until the terminal-hub version the lock pins is on the hub, and terminal-hub normally publishes only on the final tag, which this gate blocks.
+   1. Bump the flagship in a PR: edit `__version__` in `hub/agents/gaia/python/gaia_agent/__init__.py`, run `python hub/agents/gaia/python/packaging/stamp_version.py`, add a `hub/agents/gaia/npm/CHANGELOG.md` entry.
+   2. **Publish terminal-hub first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its agent-ui and Windows-setup legs fail because there is no GitHub release or new flagship yet; they publish nothing. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
+   3. Tag `agent-pkg-gaia-v<flagship-version>` on the merged commit and approve `release_agent_gaia.yml`.
+   4. Land the `binaries.lock.json` it regenerated (its log prints it) and re-run Phase 3 on that commit. Code the binary is frozen from must not change between the agent tag and the core tag.
+
+5. **Trigger Build Installers via `workflow_dispatch` against the merged SHA.** This builds the same artifacts the tag push will build, on the same code, *before* the tag exists.
    ```bash
    gh workflow run "Build Installers" --repo amd/gaia --ref main
    sleep 5
@@ -389,6 +400,7 @@ Required before continuing:
 
 - `__version__` matches the target.
 - `validate_release_notes.py` passes.
+- For a final, `check_flagship_release.py` passes.
 - Build Installers run on the merged commit is **green** (not yellow, not "mostly green except smoke tests").
 
 Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the **merged SHA** (`$MERGED_SHA`). Ask: **"Pre-tag verification green on `<sha>` (release PR #N). Push tag `v<version>`?"** — the SHA and PR number being in the question text means Phase 4 can re-derive them even if the user resumes in a fresh shell.
@@ -406,10 +418,11 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 | npm `@amd-gaia/agent-ui` | dist-tag `latest` | `<version>-rc.N` under dist-tag `next` |
 | Agent Hub R2 (`release_components.yml`) | publishes | does not run — the catalog has no pre-release channel |
 | Website | stable downloads | a collapsed "Try the release candidate" entry, hidden once the final ships |
+| Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub |
 | Context7 refresh, `release` branch, release-notes bot | run | skipped |
 | Release notes | `docs/releases/v<version>.mdx` | the same file — no RC-specific notes |
 
-`version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. The one-step Windows setup and the terminal's `.pkg`/`.deb`/`.rpm` packages are not built for an RC (they come from `release_components.yml` and need a numeric-only version); the RC carries the desktop app installers, the raw terminal binaries, and the wheel/sdist.
+`version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. The terminal's `.pkg`/`.deb`/`.rpm` packages are not built for an RC (they need a numeric-only version); the RC carries the one-step Windows setup (`gaia-X.Y.Z-rc.N-win-x64-setup.exe`, built by `publish.yml`'s `rc-windows-setup` around that run's own desktop app build — never published to R2), the desktop app installers, the raw terminal binaries, and the wheel/sdist. A failed setup leaves it off the pre-release and turns the run red via `rc-windows-setup-missing`.
 
 ### Steps
 
@@ -433,7 +446,8 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    ```bash
    pip install amd-gaia==<version>rc1 && gaia -v      # must print <version>rc1
    npm view @amd-gaia/agent-ui dist-tags                # latest unchanged, next = <version>-rc.1
-   gh release view v<version>-rc1 --repo amd/gaia       # Pre-release, installers attached
+   gh release view v<version>-rc1 --repo amd/gaia       # Pre-release, installers + gaia-agent-* attached
+   gaia init && gaia hub list                           # gaia agent version ends in +v<version>-rc1
    ```
    Then install the desktop app from the pre-release and walk the golden paths the release notes advertise.
 
@@ -550,7 +564,7 @@ Do not bundle two phases into one user prompt. The gates exist for review.
 
 ## Notes
 
-- The argument-passing convention is the *target tag*, not the previous tag. If the user says "release v0.17.5", that is what gets created — the previous tag is derived via `git tag --sort=-v:refname | head -1`.
+- The argument-passing convention is the *target tag*, not the previous tag. If the user says "release v0.17.5", that is what gets created — the previous tag is the newest final tag (Phase 1 step 1's `PREV`) — never an `-rcN` tag, or the notes would cover only the changes since the candidate.
 - Hotfix releases (`v0.15.4.1`) follow the same flow; the `validate_release_notes.py` check accepts the four-part form.
 - Release candidates are `v<version>-rcN` only (Phase 3.5). There is no RC form of a four-part hotfix tag.
 - Minor/major releases (`v0.18.0`, `v1.0.0`) need a richer notes structure — a "Highlights" block, the `pip install` instructions, and migration notes if breaking. The skeleton above is patch-shaped; expand for non-patch releases by mirroring the prior minor/major release notes.

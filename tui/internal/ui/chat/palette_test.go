@@ -456,6 +456,36 @@ func containsAll(haystack []string, want ...string) bool {
 	return true
 }
 
+// With room to spare, every description shows whole and starts in one column.
+func TestPaletteShowsDescriptionsWholeAndAligned(t *testing.T) {
+	items := filterPaletteCommands("/", nil)
+	box, ok := buildPaletteBox("/", items, 0, 160, 40)
+	if !ok {
+		t.Fatal("palette did not render on a 160x40 window")
+	}
+	plain := ansi.Strip(box)
+	col := -1
+	for _, c := range items {
+		var row string
+		for _, line := range strings.Split(plain, "\n") {
+			if strings.Contains(line, c.Name+" ") {
+				row = line
+				break
+			}
+		}
+		at := strings.Index(row, c.Desc)
+		if at < 0 {
+			t.Errorf("description of %s not shown whole: %q", c.Name, row)
+			continue
+		}
+		at = ansi.StringWidth(row[:at])
+		if col >= 0 && at != col {
+			t.Errorf("description of %s starts at column %d, others at %d", c.Name, at, col)
+		}
+		col = at
+	}
+}
+
 // The borderless palette adds no rows of its own, so the full 7-command list
 // (4 prefix lines + 7 items = 11 lines) must render on any window that can
 // hold those 11 lines. The old bordered-design chrome budget (4 rows, 2 when

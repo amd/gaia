@@ -35,11 +35,20 @@ def _drain(handler: SSEOutputHandler):
 
 
 def _wait_for_pending_confirmation(handler: SSEOutputHandler):
-    """Wait until confirm_tool_execution has installed its pending event."""
-    deadline = time.time() + 2.0
-    while handler._confirm_event is None and time.time() < deadline:
+    """Wait until confirm_tool_execution has armed AND emitted its prompt."""
+
+    # The pending event is armed before permission_request is queued.
+    def _emitted() -> bool:
+        with handler.event_queue.mutex:
+            return any(
+                e.get("type") == "permission_request" for e in handler.event_queue.queue
+            )
+
+    deadline = time.time() + 5.0
+    while (handler._confirm_event is None or not _emitted()) and time.time() < deadline:
         time.sleep(0.05)
     assert handler._confirm_event is not None
+    assert _emitted(), "confirm_tool_execution never emitted permission_request"
 
 
 # ===========================================================================
@@ -197,13 +206,28 @@ class TestConfirmToolExecutionDeny:
 
 
 class TestResolveToolConfirmationNoPending:
-    """resolve_tool_confirmation with no pending request just sets the event."""
+    """An answer with no prompt waiting is refused, never reported delivered."""
 
-    def test_no_pending_sets_event(self, handler):
-        """Calling resolve with no pending confirm just sets the event/result."""
-        handler.resolve_tool_confirmation(approved=True)
-        assert handler._confirm_result is True
-        assert handler._confirm_event.is_set()
+    def test_no_pending_is_not_delivered(self, handler):
+        assert handler.resolve_tool_confirmation(approved=True) is False
+        assert handler._confirm_event is None
+
+    def test_an_early_answer_does_not_cost_the_real_one(self, handler):
+        """The prompt that follows still takes its own answer."""
+        assert handler.resolve_tool_confirmation(approved=True) is False
+        result_holder = {}
+
+        def run_confirm():
+            result_holder["result"] = handler.confirm_tool_execution("tool", {})
+
+        t = threading.Thread(target=run_confirm)
+        t.start()
+        _wait_for_pending_confirmation(handler)
+
+        assert handler.resolve_tool_confirmation(approved=True) is True
+        t.join(timeout=3.0)
+        assert not t.is_alive()
+        assert result_holder["result"] is True
 
 
 # ===========================================================================

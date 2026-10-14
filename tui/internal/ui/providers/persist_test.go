@@ -4,16 +4,21 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
@@ -25,11 +30,19 @@ type keyStoreCalls struct {
 	forgotten   []string
 	restored    []string
 	rememberErr error
+	restoreErr  error
 }
 
 var store keyStoreCalls
 
+// realRestoreKey is the shipped restoreKey, kept so its daemon call can be
+// checked against a stubbed callDaemon.
+var realRestoreKey = restoreKey
+
 func TestMain(m *testing.M) {
+	callDaemon = func(method, path string, body []byte, start bool, op, alternative string) ([]byte, error) {
+		return nil, errors.New("a test reached the daemon")
+	}
 	rememberKey = func(provider, key string) error {
 		store.remembered = append(store.remembered, provider+"="+key)
 		return store.rememberErr
@@ -38,8 +51,66 @@ func TestMain(m *testing.M) {
 		store.forgotten = append(store.forgotten, provider)
 		return nil
 	}
-	restoreKey = func(provider string) { store.restored = append(store.restored, provider) }
-	os.Exit(m.Run())
+	restoreKey = func(provider string) error {
+		store.restored = append(store.restored, provider)
+		return store.restoreErr
+	}
+	// The user's own GAIA Lemonade would otherwise be where a pasted key goes.
+	home, err := os.MkdirTemp("", "gaia-providers-test-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("GAIA_HOME", home)
+	os.Setenv("LEMONADE_BASE_URL", "")
+	lemonade.StubEnsureEmbeddedForTest(func(context.Context) error {
+		return errors.New("test: no daemon")
+	})
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
+}
+
+// A saved key lives in a credential store only the daemon can read, so
+// restoring it must start a daemon that is down rather than skip the restore.
+func TestRestoringAKeyStartsTheDaemon(t *testing.T) {
+	orig := callDaemon
+	t.Cleanup(func() { callDaemon = orig })
+	var started []bool
+	callDaemon = func(method, path string, body []byte, start bool, op, alternative string) ([]byte, error) {
+		started = append(started, start)
+		return []byte(`{"authenticated":true}`), nil
+	}
+	if err := realRestoreKey("amd"); err != nil {
+		t.Fatal(err)
+	}
+	if len(started) != 1 || !started[0] {
+		t.Fatalf("restore called the daemon with start=%v, want it started", started)
+	}
+}
+
+// Until the first read lands no row may claim a key is needed.
+func TestRowsDoNotSayKeyNeededBeforeTheFirstRead(t *testing.T) {
+	m := New("", 100, 30)
+	view := m.View()
+	if strings.Contains(view, "key needed") {
+		t.Fatalf("a row said key needed before anything was checked:\n%s", view)
+	}
+	next, _ := m.Update(loadedMsg{source: m.client, providers: []lemonade.Provider{
+		{Name: "amd", RuntimeKey: true}, {Name: "fireworks"}}, started: time.Now()})
+	view = next.(Model).View()
+	if !strings.Contains(view, "key configured") || !strings.Contains(view, "key needed") {
+		t.Fatalf("after the read the rows must report each key:\n%s", view)
+	}
+}
+
+// A restore that failed is said, not hidden behind a "key needed" row.
+func TestAFailedRestoreIsReported(t *testing.T) {
+	m := New("", 100, 30)
+	next, _ := m.Update(loadedMsg{source: m.client, providers: []lemonade.Provider{{Name: "amd"}},
+		restoreErr: errors.New("daemon-down-sentinel"), started: time.Now()})
+	if view := next.(Model).View(); !strings.Contains(view, "daemon-down-sentinel") {
+		t.Fatalf("the restore failure was not shown:\n%s", view)
+	}
 }
 
 func resetStore() { store = keyStoreCalls{} }
@@ -67,6 +138,67 @@ func TestAKeyThatFindsNoModelsIsNotKept(t *testing.T) {
 	}
 }
 
+// Retyping a key over a working one sent the typo to Lemonade, and when it found
+// nothing Lemonade kept it: chat broke, and a blank Enter only reused the typo.
+// A failed key is cleared and the kept one put back.
+func TestAFailedKeyGivesBackTheKeptOne(t *testing.T) {
+	resetStore()
+	srv, cleared := clearRecordingLemonade(t, http.StatusOK)
+
+	connectFireworks(t, srv, "typo-key")
+	if strings.Join(*cleared, ",") != "/api/v1/cloud/auth/fireworks" {
+		t.Errorf("cleared %v, want the failed fireworks key removed from Lemonade", *cleared)
+	}
+	if strings.Join(store.restored, ",") != "fireworks" {
+		t.Errorf("restored %v, want the kept fireworks key put back", store.restored)
+	}
+}
+
+// Only a key that found nothing is dropped: a blank Enter keeps the key Lemonade
+// holds, and a listing that failed says nothing about a newly typed key.
+func TestOnlyAKeyThatFoundNothingIsDropped(t *testing.T) {
+	for _, tc := range []struct {
+		name, key string
+		status    int
+	}{
+		{"blank Enter", "", http.StatusOK},
+		{"listing failed", "new-key", http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetStore()
+			srv, cleared := clearRecordingLemonade(t, tc.status)
+			connectFireworks(t, srv, tc.key)
+			if len(*cleared) != 0 || len(store.restored) != 0 {
+				t.Errorf("cleared %v and restored %v", *cleared, store.restored)
+			}
+		})
+	}
+}
+
+// clearRecordingLemonade lists no models (or fails the listing with status) and
+// records every key Lemonade is asked to drop.
+func clearRecordingLemonade(t *testing.T, status int) (string, *[]string) {
+	t.Helper()
+	var cleared []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodDelete:
+			cleared = append(cleared, r.URL.Path)
+			_, _ = w.Write([]byte(`{}`))
+		case r.URL.Path == "/api/v1/models":
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case r.URL.Path == "/api/v1/system-info":
+			_, _ = w.Write([]byte(`{"cloud":{"providers":[]}}`))
+		default:
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/api/v1", &cleared
+}
+
 // When the credential store refuses, the user is told it works for now only.
 func TestAKeyThatCannotBeKeptSaysSo(t *testing.T) {
 	resetStore()
@@ -86,6 +218,97 @@ func TestOpeningThePanelRestoresKeptKeys(t *testing.T) {
 	m.Init()()
 	if strings.Join(store.restored, ",") != "fireworks,amd" {
 		t.Errorf("restored %v, want fireworks and amd", store.restored)
+	}
+}
+
+// A Lemonade that has never seen the AMD gateway cannot take back a saved key:
+// the row read "key needed" and a blank connect found no models. Opening the
+// row registers it with the form's settings, then restores the key.
+func TestOpeningAnUnregisteredGatewayRegistersItAndRestoresTheKey(t *testing.T) {
+	resetStore()
+	var installs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/install":
+			raw, _ := io.ReadAll(r.Body)
+			installs = append(installs, string(raw))
+			_, _ = w.Write([]byte(`{}`))
+		case "/api/v1/system-info":
+			_, _ = w.Write([]byte(`{"cloud":{"providers":[]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	m := New(srv.URL+"/api/v1", 100, 30)
+	next, _ := m.Update(loadedMsg{source: m.client, providers: nil, started: time.Now()})
+	m = next.(Model)
+	m.selected = 2
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	drain(cmd)
+
+	if len(installs) != 1 || !strings.Contains(installs[0], lemonade.AMDGatewayURL) ||
+		!strings.Contains(installs[0], lemonade.AMDGatewayAuthHeader) {
+		t.Fatalf("registered %v, want the AMD gateway with its own header", installs)
+	}
+	if strings.Join(store.restored, ",") != "amd" {
+		t.Fatalf("restored %v after registering, want amd", store.restored)
+	}
+	if next.(Model).stage != "setup" {
+		t.Fatalf("stage = %q, want the setup form", next.(Model).stage)
+	}
+}
+
+// Before the first read nothing is known to be missing, and registering then
+// would overwrite another gateway's stored settings with the defaults.
+func TestNothingIsRegisteredBeforeTheFirstRead(t *testing.T) {
+	resetStore()
+	m := New(fakeLemonade(t, nil), 100, 30)
+	m.selected = 2
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if msgs := drain(cmd); len(msgs) != 0 || len(store.restored) != 0 {
+		t.Fatalf("opening a row before the first read registered it: %v", msgs)
+	}
+}
+
+// A read that failed proves no provider absent, so opening a row after it must
+// not register the defaults over a gateway the user saved.
+func TestAFailedReadDoesNotRegisterOverASavedGateway(t *testing.T) {
+	resetStore()
+	m := New(fakeLemonade(t, nil), 100, 30)
+	next, _ := m.Update(loadedMsg{source: m.client, err: errors.New("HTTP 500"), started: time.Now()})
+	m = next.(Model)
+	m.selected = 2
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if msgs := drain(cmd); len(msgs) != 0 || len(store.restored) != 0 {
+		t.Fatalf("opening a row after a failed read registered it: %v", msgs)
+	}
+}
+
+// A daemon that would not start is not started again for the next provider.
+func TestADaemonThatWillNotStartIsTriedOnce(t *testing.T) {
+	resetStore()
+	store.restoreErr = fmt.Errorf("could not reach the GAIA daemon: %w", &daemon.StartError{Reason: "hung"})
+	m := New(fakeLemonade(t, nil), 100, 30)
+	msg := m.Init()()
+	if len(store.restored) != 1 {
+		t.Fatalf("restore tried %v, want one attempt", store.restored)
+	}
+	if v, ok := msg.(loadedMsg); !ok || v.restoreErr == nil {
+		t.Fatalf("the failed restore was not passed on: %#v", msg)
+	}
+}
+
+// A refusal for one provider still lets the next one be restored.
+func TestOneProvidersRefusalStillRestoresTheNext(t *testing.T) {
+	resetStore()
+	store.restoreErr = errors.New("HTTP 503: gateway down")
+	m := New(fakeLemonade(t, nil), 100, 30)
+	m.Init()()
+	if len(store.restored) != 2 {
+		t.Fatalf("restore tried %v, want both providers", store.restored)
 	}
 }
 

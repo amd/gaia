@@ -35,7 +35,7 @@ func firstRunReport() Report {
 		{Key: KeyBinary, Label: "GAIA agent", State: StateOK, Line: `C:\gaia\gaia-agent.exe`},
 		{
 			Key: KeyLemonade, Label: lemonadeRowLabel, State: StateFailed, FirstRun: true,
-			Disposition: status.DispositionHalt, Fix: FixRunSetup,
+			Disposition: status.DispositionHalt, Fix: FixInstallServer,
 			Line: "not installed yet", Step: installServerStep,
 			Detail: "Lemonade runs AI models on this machine.",
 			Remedy: Remedy{Action: "Install the local model server first — it is not on this " +
@@ -89,6 +89,20 @@ func TestFirstRunIsNumberedStepsNotFailures(t *testing.T) {
 	}
 }
 
+// `d` on a step setup has not done titled it "Lemonade — failed".
+func TestFirstRunDetailsDoNotCallTheStepFailed(t *testing.T) {
+	m, _ := settledOn(t, firstRunReport(), 100, 24)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	screen := plain(updated.(Model))
+
+	if !strings.Contains(screen, "Lemonade — not set up yet") {
+		t.Errorf("details pane does not name the step as not set up yet:\n%s", screen)
+	}
+	if strings.Contains(screen, "— failed") {
+		t.Errorf("details pane calls a first-run step failed:\n%s", screen)
+	}
+}
+
 func TestAFirstRunStepIsNeverPaintedRed(t *testing.T) {
 	prev := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
@@ -128,7 +142,7 @@ func TestEnterStartsTheFocusedStep(t *testing.T) {
 		t.Fatal("enter started nothing")
 	}
 	drainUntilDone(t, m)
-	if len(*fixes) != 1 || (*fixes)[0] != FixRunSetup {
+	if len(*fixes) != 1 || (*fixes)[0] != FixInstallServer {
 		t.Errorf("fixes = %v, want one setup run", *fixes)
 	}
 }
@@ -211,6 +225,44 @@ func TestRevisitingAnEarlierRowDoesNotFinishALaterOne(t *testing.T) {
 	m = updated.(Model)
 	if modelLine := lineWith(plain(m), modelRowLabel); strings.Contains(modelLine, "done") {
 		t.Errorf("the model row reads done before its download began: %q", modelLine)
+	}
+}
+
+// Step 1 now stops after the server, and the re-check that follows has one step
+// left. It must read as the second of two, not as a fresh "step 1 of 1".
+func TestTheStepLeftAfterStepOneKeepsItsNumber(t *testing.T) {
+	m, _ := settledOn(t, firstRunReport(), 100, 24)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	ch := m.provisionCh
+	drainUntilDone(t, m)
+	updated, _ = m.Update(provisionMsg{ch: ch, event: provisionEvent{done: true,
+		result: ProvisionResult{OK: true}}})
+	m = updated.(Model)
+
+	after := firstRunReport()
+	after.Rows[1] = Row{Key: KeyLemonade, Label: lemonadeRowLabel, State: StateOK, Line: "running"}
+	after.Rows[2] = Row{Key: KeyModel, Label: modelRowLabel, State: StateFailed, FirstRun: true,
+		Disposition: status.DispositionHalt, Fix: FixRunSetup, Line: "not downloaded yet",
+		Step: "download the models (~6 GB)"}
+	updated, _ = m.Update(reportMsg{rep: after})
+	m = updated.(Model)
+	screen := plain(m)
+	t.Logf("\n%s", screen)
+	if !strings.Contains(lineWith(screen, modelRowLabel), "Step 2 of 2") {
+		t.Errorf("the model step lost its number: %q", lineWith(screen, modelRowLabel))
+	}
+	if header := strings.SplitN(screen, "\n", 2)[0]; !strings.Contains(header, "step 2 of 2") {
+		t.Errorf("header = %q, want step 2 of 2", header)
+	}
+	if !strings.Contains(screen, "start step 2") {
+		t.Error("the enter hint does not name step 2")
+	}
+
+	// A plain re-check keeps the count.
+	updated, _ = m.Update(reportMsg{rep: after})
+	if got := lineWith(plain(updated.(Model)), modelRowLabel); !strings.Contains(got, "Step 2 of 2") {
+		t.Errorf("a re-check renumbered the step: %q", got)
 	}
 }
 

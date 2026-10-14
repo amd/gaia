@@ -7,6 +7,9 @@ A streaming turn attaches its cancel event and SSE console to the cached agent
 and fires both on cleanup. Later non-streaming turns and AgentLoop ticks reuse
 that agent, so they must start with a clear cancel event and a live console —
 otherwise the agent loop stops at step 0 with the timeout message.
+
+The reverse also holds: a streaming turn that reuses an agent built by a
+non-streaming turn must still stream its answer.
 """
 
 import asyncio
@@ -71,6 +74,32 @@ def test_non_streaming_cache_hit_gets_clear_cancel_and_live_console(clean_cache)
 
     assert result == "ok"
     assert agent.seen == {"cancel_set": False, "console_cancelled": False}
+
+
+def test_streaming_cache_hit_streams_after_a_non_streaming_turn(clean_cache):
+    """A non-streaming turn caches a streaming=False agent; later turns must stream."""
+
+    class _StreamFlagAgent(_RecordingAgent):
+        def process_query(self, _message, **_kwargs):
+            self.seen = {"streaming": self.streaming}
+            return "ok"
+
+    db = ChatDatabase(":memory:")
+    session = db.create_session(model="M-GGUF", agent_type="chat")
+    agent = _StreamFlagAgent("M-GGUF")
+    agent.streaming = False
+    helpers._store_agent(session["id"], "M-GGUF", [], agent, "chat")
+
+    request = ChatRequest(session_id=session["id"], message="hi", stream=True)
+
+    async def drain():
+        run = types.SimpleNamespace(handler=None)
+        async for _ in helpers._stream_chat_impl(run, db, session, request):
+            pass
+
+    asyncio.run(drain())
+
+    assert agent.seen == {"streaming": True}
 
 
 async def test_agent_loop_tick_cache_hit_gets_clear_cancel(clean_cache, monkeypatch):

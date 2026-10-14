@@ -141,6 +141,15 @@ class AgentTrustRequiredError(SidecarError):
     """
 
 
+class AgentNeedsNewerCoreError(SidecarError):
+    """No requested/published version of the agent runs on this GAIA core.
+
+    The daemon-side mirror of :class:`gaia.hub.installer.CoreTooOldError`. The
+    route maps it to 409 before any sidecar is stopped; the message names the
+    core version to upgrade to and the command.
+    """
+
+
 class AgentNotInstalledError(SidecarError):
     """The agent has no ``.installed`` sentinel — there is nothing to remove."""
 

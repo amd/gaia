@@ -13,6 +13,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -20,6 +21,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // Provider is the name the gateway is registered under. Lemonade namespaces
@@ -35,13 +38,13 @@ const APIKeyEnv = "LEMONADE_AMD_API_KEY"
 // DefaultBaseURL is AMD's gateway. `llm.amd.com` is the SSO-gated portal, not
 // the API; the OpenAI-compatible surface is the Unified API on a separate host.
 // Verified live: <base>/models lists 76 models, <base>/chat/completions works.
-const DefaultBaseURL = "https://llm-api.amd.com/Unified/v1"
+const DefaultBaseURL = lemonade.AMDGatewayURL
 
 // The gateway is Azure API Management, which authenticates on its own
 // subscription-key header, not a bearer token. Verified: this header alone
 // returns 200; `Authorization: Bearer` alone returns 401 "missing subscription
 // key". Lemonade can carry exactly one auth header, so this is the one.
-const DefaultAuthHeaderName = "Ocp-Apim-Subscription-Key"
+const DefaultAuthHeaderName = lemonade.AMDGatewayAuthHeader
 const DefaultAuthHeaderPrefix = ""
 
 // cloudRecipe is what Lemonade stamps on a model it proxies to a gateway.
@@ -50,14 +53,15 @@ const cloudRecipe = "cloud"
 // preferredModelHints orders the picker, best first. The first match is what
 // the screen selects automatically when nothing has been chosen yet.
 //
-// Gemma-4-31B leads deliberately: it is currently the ONLY gateway model that
-// streams. The others return zero tokens on a streaming request while
-// non-streaming works, and the agent path streams by default — so any other
-// default hands a new user an agent that produces nothing. It is also on-prem,
-// so it carries no per-token cost.
+// DeepSeek-V4.1-Flash leads: it streams on the gateway (checked live) and is the
+// fastest model in the agent benchmark. A default must stream — the agent path
+// streams, and a model that returns zero tokens on a stream hands a new user an
+// agent that produces nothing. Gemma-4-31B is the fallback: on-prem, no
+// per-token cost. "deepseek-v4.1-flash" does not match DeepSeek-V4-Flash.
 //
 // Matched lowercase: the gateway mixes casing across its catalogue.
 var preferredModelHints = []string{
+	"deepseek-v4.1-flash",
 	"gemma-4-31b",
 	"claude-opus-5",
 	"claude-sonnet-5",
@@ -107,25 +111,18 @@ func (s Status) Authenticated() bool { return s.EnvVarSet || s.RuntimeKeySet }
 
 // Client speaks Lemonade's cloud-provider API.
 type Client struct {
+	// baseURL pins the server; empty resolves it on every request, so a token
+	// sent after a Lemonade restart goes to where GAIA's server is now.
 	baseURL string
 	http    *http.Client
 }
 
-// NewClient resolves Lemonade's address the same way the agent transport does.
-// It returns an error rather than a client pointed at nothing, so a missing
-// server is reported once, here, instead of as a confusing failure later.
-func NewClient() (*Client, error) {
-	base := DetectLemonadeURL()
-	if base == "" {
-		// No start command is named here on purpose: it differs per machine
-		// and `lemonade-server serve` no longer exists on a modern install.
-		// /setup resolves the right one against this host.
-		return nil, fmt.Errorf(
-			"Lemonade Server is not reachable on port 13305 or 8000.\n" +
-				"Run /setup to start it, or set LEMONADE_BASE_URL to a server " +
-				"that is already running")
-	}
-	return &Client{baseURL: base, http: &http.Client{Timeout: 60 * time.Second}}, nil
+// NewClient talks to the Lemonade a cloud key may go to: the one in
+// LEMONADE_BASE_URL, GAIA's own running server, or a system Lemonade when
+// GAIA's is not installed. Nothing is probed here; each request resolves it,
+// and the first one that cannot says why on the screen.
+func NewClient() *Client {
+	return &Client{http: &http.Client{Timeout: 60 * time.Second}}
 }
 
 // NewClientAt builds a client against an explicit Lemonade base URL. Tests use
@@ -137,58 +134,13 @@ func NewClientAt(baseURL string) *Client {
 	}
 }
 
-// BaseURL is the Lemonade address this client talks to.
-func (c *Client) BaseURL() string { return c.baseURL }
-
-// DetectLemonadeURL probes the ports Lemonade listens on and returns the first
-// reachable API base, honouring LEMONADE_BASE_URL when it is set.
-//
-// The probe carries LEMONADE_API_KEY. An embedded Lemonade is always launched
-// with a key — that is how it locks out other apps — so a probe without one
-// gets 401 and the whole gateway screen reports "Lemonade is not reachable"
-// against a server that is running fine.
-//
-// A 401 still counts as found: the server is there, and every later request
-// carries the same key, so a genuinely wrong key surfaces on that call with
-// Lemonade's own message rather than as a bogus "not reachable".
-func DetectLemonadeURL() string {
-	probe := &http.Client{Timeout: 2 * time.Second}
-	key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY"))
-
-	reachable := func(base string) bool {
-		req, err := http.NewRequest(http.MethodGet, base+"/models", nil)
-		if err != nil {
-			return false
-		}
-		if key != "" {
-			req.Header.Set("Authorization", "Bearer "+key)
-		}
-		resp, err := probe.Do(req)
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK ||
-			resp.StatusCode == http.StatusUnauthorized
+// target is the Lemonade this request goes to. Never "whatever answers on the
+// default port": mid-restart, someone else's Lemonade may be the one there.
+func (c *Client) target() (string, error) {
+	if c.baseURL != "" {
+		return c.baseURL, nil
 	}
-
-	if env := strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")); env != "" {
-		base := strings.TrimRight(env, "/")
-		if !strings.HasSuffix(base, "/api/v1") {
-			base += "/api/v1"
-		}
-		if reachable(base) {
-			return base
-		}
-		return ""
-	}
-	for _, port := range []string{"13305", "8000"} {
-		base := "http://localhost:" + port + "/api/v1"
-		if reachable(base) {
-			return base
-		}
-	}
-	return ""
+	return lemonade.CredentialBaseURL(context.Background(), "")
 }
 
 // do issues a request to Lemonade and decodes the JSON body. The payload is
@@ -205,24 +157,31 @@ func (c *Client) do(method, path string, payload any, out any) error {
 		body = bytes.NewReader(nil)
 	}
 
-	url := c.baseURL + "/" + strings.TrimLeft(path, "/")
+	base, err := c.target()
+	if err != nil {
+		return err
+	}
+	url := base + "/" + strings.TrimLeft(path, "/")
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return fmt.Errorf("could not build request for %s: %w", url, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY")); key != "" {
+	if key := lemonade.APIKeyFor(base); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("Lemonade at %s is not reachable: %w", c.baseURL, err)
+		// No start command named: it differs per machine, and /setup resolves it.
+		return fmt.Errorf("Lemonade at %s is not reachable: %w\n"+
+			"Run /setup to start it, or set LEMONADE_BASE_URL to a server that "+
+			"is already running", base, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return c.httpError(resp, method, url)
+		return httpError(resp, method, url, base)
 	}
 	if out == nil {
 		return nil
@@ -241,7 +200,7 @@ type errorEnvelope struct {
 	} `json:"error"`
 }
 
-func (c *Client) httpError(resp *http.Response, method, url string) error {
+func httpError(resp *http.Response, method, url, base string) error {
 	var env errorEnvelope
 	_ = json.NewDecoder(resp.Body).Decode(&env)
 
@@ -254,7 +213,7 @@ func (c *Client) httpError(resp *http.Response, method, url string) error {
 	if resp.StatusCode == http.StatusNotFound && strings.Contains(url, "cloud") {
 		return fmt.Errorf(
 			"Lemonade at %s has no cloud-provider API (needs >= 11.8.0).\n"+
-				"Upgrade with `gaia init` and try again.", c.baseURL)
+				"Upgrade with `gaia init` and try again.", base)
 	}
 	if env.Error.Message != "" {
 		return fmt.Errorf("%s failed (HTTP %d): %s", method, resp.StatusCode, env.Error.Message)
@@ -341,11 +300,25 @@ func (c *Client) Probe(baseURL string) (int, error) {
 
 // installResult is the useful half of Lemonade's install response.
 type installResult struct {
-	ModelsDiscovered int `json:"models_discovered"`
+	// ModelsDiscovered is nil when this Lemonade does not report it.
+	ModelsDiscovered *int `json:"models_discovered"`
 	AuthState        struct {
 		EnvVarSet     bool `json:"env_var_set"`
 		RuntimeKeySet bool `json:"runtime_key_set"`
 	} `json:"auth_state"`
+}
+
+// discovered is the reported model count, 0 when Lemonade did not say.
+func (r installResult) discovered() int {
+	if r.ModelsDiscovered == nil {
+		return 0
+	}
+	return *r.ModelsDiscovered
+}
+
+// foundNone is true only when Lemonade reported discovering zero models.
+func (r installResult) foundNone() bool {
+	return r.ModelsDiscovered != nil && *r.ModelsDiscovered == 0
 }
 
 // Install registers the gateway with Lemonade as a cloud provider.

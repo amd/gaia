@@ -13,6 +13,7 @@ import {
   isMainReleaseTag,
   isReleaseCandidateTag,
   pickReleaseCandidate,
+  streamReleases,
   sumAssetDownloads,
   type GithubRelease,
 } from './github';
@@ -168,6 +169,7 @@ describe('pickReleaseCandidate', () => {
   const RC1 = release('v0.25.0-rc1', true, {
     assets: [
       asset('gaia-agent-ui-0.25.0-rc.1-x64-setup.exe'),
+      asset('gaia-0.25.0-rc.1-win-x64-setup.exe'),
       asset('gaia-agent-ui-0.25.0-rc.1-arm64.dmg'),
       asset('gaia-agent-ui-0.25.0-rc.1-arm64.dmg.blockmap'),
       asset('gaia-agent-ui-0.25.0-rc.1-x86_64.AppImage'),
@@ -195,7 +197,10 @@ describe('pickReleaseCandidate', () => {
     expect(rc!.htmlUrl).toBe('https://github.com/amd/gaia/releases/tag/v0.25.0-rc1');
     // Installers in a fixed order; the blockmap, wheel and raw binary are left
     // to the release page.
+    // The one Windows setup leads even though it is listed after the desktop
+    // app's own setup on the release.
     expect(rc!.downloads.map((d) => d.url.split('/').at(-1))).toEqual([
+      'gaia-0.25.0-rc.1-win-x64-setup.exe',
       'gaia-agent-ui-0.25.0-rc.1-x64-setup.exe',
       'gaia-agent-ui-0.25.0-rc.1-arm64.dmg',
       'gaia-agent-ui-0.25.0-rc.1-x86_64.AppImage',
@@ -232,5 +237,63 @@ describe('pickReleaseCandidate', () => {
     const rc = pickReleaseCandidate([bare, STABLE]);
     expect(rc!.downloads).toEqual([]);
     expect(rc!.htmlUrl).toContain('v0.25.0-rc1');
+  });
+});
+
+describe('streamReleases', () => {
+  function release(tag: string, prerelease: boolean, publishedAt: string, draft = false): GithubRelease {
+    return {
+      tag_name: tag,
+      draft,
+      prerelease,
+      published_at: publishedAt,
+      html_url: `https://github.com/amd/gaia/releases/tag/${tag}`,
+      assets: [],
+    };
+  }
+
+  const V0241 = release('v0.24.1', false, '2026-09-16T08:00:00Z');
+  const V0230 = release('v0.23.0', false, '2026-08-13T08:00:00Z');
+  const RC2 = release('v0.25.0-rc2', true, '2026-10-10T08:00:00Z');
+  const RC12 = release('v0.25.0-rc12', true, '2026-10-13T08:00:00Z');
+
+  it('puts the newest open release candidate in the stream, marked as an RC', () => {
+    expect(streamReleases([V0230, RC2, V0241, RC12]).map((r) => [r.tag, r.kind])).toEqual([
+      ['v0.25.0-rc12', 'rc'],
+      ['v0.24.1', 'stable'],
+      ['v0.23.0', 'stable'],
+    ]);
+  });
+
+  // Newest by version, not by list order or date: rc10 sorts after rc9.
+  it('keeps one candidate per upcoming version, chosen by rc number', () => {
+    const rc9 = release('v0.25.0-rc9', true, '2026-10-12T08:00:00Z');
+    const rc10 = release('v0.25.0-rc10', true, '2026-10-12T09:00:00Z');
+    const next = release('v0.26.0-rc1', true, '2026-10-14T08:00:00Z');
+    expect(streamReleases([rc10, next, rc9, V0241]).map((r) => r.tag)).toEqual([
+      'v0.26.0-rc1',
+      'v0.25.0-rc10',
+      'v0.24.1',
+    ]);
+  });
+
+  // Once v0.25.0 ships its candidates are history; twelve of them would bury
+  // the releases the stream exists to show.
+  it('drops candidates for a version that has since shipped', () => {
+    const shipped = release('v0.25.0', false, '2026-10-20T08:00:00Z');
+    expect(streamReleases([shipped, RC12, RC2, V0241]).map((r) => r.tag)).toEqual([
+      'v0.25.0',
+      'v0.24.1',
+    ]);
+  });
+
+  it('leaves out drafts, sub-package releases and RC-named releases not marked pre-release', () => {
+    const tags = streamReleases([
+      V0241,
+      release('v0.25.0-rc13', true, '2026-10-14T08:00:00Z', true),
+      release('agent-pkg-email-v0.5.0', true, '2026-07-19T00:00:00Z'),
+      release('v0.25.0-rc3', false, '2026-10-11T08:00:00Z'),
+    ]).map((r) => r.tag);
+    expect(tags).toEqual(['v0.24.1']);
   });
 });

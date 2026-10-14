@@ -120,6 +120,9 @@ interface ChatState {
     /** What the model is doing right now, from the latest phase status event; null before one arrives. */
     liveStatus: string | null;
     setLiveStatus: (status: string | null) => void;
+    /** The run is blocked on the user's approval or answer, not on the model. */
+    awaitingUser: boolean;
+    setAwaitingUser: (awaiting: boolean) => void;
 
     // Structured cards from tool_result.render events (issue #2108).
     // Accumulated during the stream, transferred onto the finalized
@@ -153,6 +156,8 @@ interface ChatState {
     draftPermissionMode: PermissionMode;
     /** The mode a new chat starts in: `full_access` in config, else ask. */
     defaultPermissionMode: PermissionMode;
+    /** Library documents picked with no chat open; the next new chat starts with them. */
+    draftDocumentIds: string[];
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     isLoadingMessages: boolean;
@@ -170,6 +175,9 @@ interface ChatState {
     setDraftPermissionMode: (mode: PermissionMode) => void;
     /** Adopt the configured default; an untouched draft follows it. */
     setDefaultPermissionMode: (mode: PermissionMode) => void;
+    addDraftDocuments: (ids: string[]) => void;
+    removeDraftDocument: (id: string) => void;
+    clearDraftDocuments: () => void;
     setSidebarOpen: (open: boolean) => void;
     toggleSidebarCollapsed: () => void;
     setSidebarCollapsed: (collapsed: boolean) => void;
@@ -256,15 +264,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setStreaming: (streaming) => set({ isStreaming: streaming }),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
-    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, awaitingUser: false }),
 
     // Agent activity
     agentSteps: [],
     addAgentStep: (step) =>
         set((state) => ({
             agentSteps: [
-                // Deactivate previous steps
-                ...state.agentSteps.map((s) => ({ ...s, active: false })),
+                // A status or thought arriving mid-call doesn't end a running tool; its tool_end does.
+                ...state.agentSteps.map((s) =>
+                    s.active && s.type === 'tool' && step.type !== 'tool' && s.success == null && !s.result
+                        ? s
+                        : { ...s, active: false }),
                 step,
             ],
         })),
@@ -302,9 +313,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // No tool step found — don't corrupt non-tool steps
             return state;
         }),
-    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null }),
+    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, awaitingUser: false }),
     liveStatus: null,
     setLiveStatus: (status) => set({ liveStatus: status }),
+    awaitingUser: false,
+    setAwaitingUser: (awaiting) => set({ awaitingUser: awaiting }),
 
     // Streaming cards (#2108)
     cards: [],
@@ -332,6 +345,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showSchedules: false,
     draftPermissionMode: 'ask',
     defaultPermissionMode: 'ask',
+    draftDocumentIds: [],
     setThemePreference: (pref) => {
         writePref('gaia-chat-theme', pref);
         const theme = resolveTheme(pref);
@@ -363,6 +377,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             draftPermissionMode:
                 state.draftPermissionMode === state.defaultPermissionMode ? mode : state.draftPermissionMode,
         })),
+    addDraftDocuments: (ids) =>
+        set((state) => {
+            const toAdd = ids.filter((id) => !state.draftDocumentIds.includes(id));
+            return toAdd.length ? { draftDocumentIds: [...state.draftDocumentIds, ...toAdd] } : state;
+        }),
+    removeDraftDocument: (id) =>
+        set((state) => ({ draftDocumentIds: state.draftDocumentIds.filter((d) => d !== id) })),
+    clearDraftDocuments: () => set({ draftDocumentIds: [] }),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     toggleSidebarCollapsed: () =>
         set((state) => {

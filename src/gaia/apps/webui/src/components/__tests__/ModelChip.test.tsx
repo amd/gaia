@@ -81,6 +81,15 @@ describe('ModelChip', () => {
         expect(chip.getAttribute('title')).toBe('Sent to Fireworks AI.');
     });
 
+    it('shows the model name in the tooltip without Markdown backticks', () => {
+        useChatStore.setState({
+            sessions: [{ ...SESSION, inference_remote: false, inference_description: 'Runs here, model `Qwen3`.' }],
+        });
+        render(<ModelChip />);
+        const chip = screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF/ });
+        expect(chip.getAttribute('title')).toBe('Runs here, model Qwen3.');
+    });
+
     it('labels a cloud model with its provider', () => {
         useModelStore.setState({ active: CLOUD_ACTIVE });
         render(<ModelChip />);

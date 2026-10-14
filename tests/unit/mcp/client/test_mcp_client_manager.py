@@ -753,6 +753,27 @@ class TestMCPClientManagerStatusReport:
         assert connected["broken"]["error"] == "Refused"
 
     @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
+    def test_failed_server_not_retried_until_reload(self, mock_client_class):
+        """A dead server must not stall every later turn with a fresh connect."""
+        fail_client = Mock()
+        fail_client.connect.return_value = False
+        fail_client.last_error = "Refused"
+        mock_client_class.from_config.return_value = fail_client
+
+        manager = MCPClientManager()
+        manager.config._servers = {"s": {"command": "npx", "args": []}}
+        manager.load_from_config()
+        manager.load_from_config()
+        manager.load_from_config()
+
+        assert mock_client_class.from_config.call_count == 1
+        assert manager._failed["s"] == "Refused"
+
+        with patch.object(manager.config, "_load"):
+            manager.reload()
+        assert mock_client_class.from_config.call_count == 2
+
+    @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
     def test_failed_cleared_on_successful_reconnect(self, mock_client_class):
         """A server that was previously failed should be removed from _failed on success."""
         fail_client = Mock()

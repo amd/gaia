@@ -46,8 +46,13 @@ The agent searches your common folders first, then offers a deep search across a
 In-process chat agents retain file reads, tool calls and tool results for later
 questions, including after the server restarts. Complete older turns leave the
 model's context only when its estimated history budget fills; the transcript and
-stored evidence remain on your machine. A backend log warning identifies context
-exclusions. Earlier conversations saved before this feature retain text only.
+stored evidence remain on your machine. When more older turns leave the model's
+view — a long chat, or a switch to a smaller model — the chat shows one quiet
+line before the reply — "Older messages are now out of the model's view (N
+turns)" — and the TUI shows the same line in its transcript. Ask GAIA to recall
+anything from before it. A Hub-installed GAIA agent relayed from the Agent UI
+sees only the last 5 exchanges, and the chat says so once, when the sixth one
+lands. Earlier conversations saved before this feature retain text only.
 If the current prompt leaves no history budget, GAIA warns and sends no older
 turns; saved evidence remains intact. Switching to a model without native tool
 calling replays recorded calls and results as text.
@@ -239,6 +244,10 @@ and where that model runs.
   while GAIA is working.
 - **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
   the detail.
+- **"Getting GAIA ready… 12s"** under the message box means a local model is
+  reading GAIA's instructions ahead of your first message, so that message
+  gets a quick answer. You can type and send meanwhile; a message sent early
+  waits for it to finish rather than starting over.
 
 Every chat runs the GAIA agent. Chats made by the retired `chat`, `doc` and
 `file` agents stay readable but can't be continued; start a new chat instead.
@@ -277,6 +286,11 @@ Pick **Full access** from the shield to let a chat run everything without
 asking (you confirm once). **Settings → Permissions** lists every chat with full
 access or "always allow" answers and lets you revoke them. Grants end when GAIA
 restarts.
+
+A Hub-installed GAIA, which runs as its own process, follows the chat's mode
+too, from agent contract 2.14. It stops asking, but its shell guardrails stay
+on. If the mode can't be passed on when a turn starts, that turn stops with an
+error, so it never runs with full access you turned off.
 
 ## Settings
 
@@ -329,6 +343,19 @@ Sessions let you organize conversations by topic. They sync between the CLI (`ga
 | `Ctrl+,` | Settings |
 
 When GAIA asks permission, the prompt takes focus and `Enter` does nothing, so a message you were typing can't approve it. `Escape` denies (it takes priority over stopping the reply); `Tab` to **Allow once** or **Always allow** and press `Enter` or `Space` to approve. The prompt counts down the time the agent will wait, and GAIA denies when it runs out.
+
+---
+
+## Long Responses
+
+A chat reply that runs longer than 600 seconds stops with "Response timed out after 600s." Time spent waiting for you to answer a question or approve a tool doesn't count. Raise the limit for slow models or heavy queries with `GAIA_STREAM_TIMEOUT`, set before GAIA starts:
+
+```bash
+export GAIA_STREAM_TIMEOUT=1800   # seconds; whole number from 1 to 86400
+gaia chat --ui
+```
+
+An invalid value (not a whole number, or out of range) stops the Agent UI server at startup with an error naming the variable, rather than quietly using the default.
 
 ---
 

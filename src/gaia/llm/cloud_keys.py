@@ -28,6 +28,7 @@ import requests
 from gaia.llm.gateway import GATEWAY_PROVIDER, GATEWAY_SECRET_NAME
 from gaia.llm.lemonade_client import (
     LemonadeClient,
+    LemonadeClientError,
     lemonade_auth_headers,
     resolve_lemonade_api_key,
 )
@@ -134,7 +135,11 @@ def ensure_authenticated(
 
         return GatewayManager(client).ensure_authenticated()
 
-    base_url = (client or LemonadeClient(verbose=False)).base_url
+    client = client or LemonadeClient(verbose=False)
+    try:
+        base_url = client.credential_base_url()
+    except LemonadeClientError as e:
+        raise CloudKeyError(str(e)) from e
     entry = _provider_entry(base_url, provider)
     if entry is None:
         return False
@@ -171,7 +176,7 @@ def _request(
     url = f"{base_url.rstrip('/')}/{path}"
     headers = {
         "Content-Type": "application/json",
-        **lemonade_auth_headers(resolve_lemonade_api_key()),
+        **lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url)),
     }
     try:
         response = requests.request(

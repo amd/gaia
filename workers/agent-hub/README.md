@@ -150,7 +150,9 @@ schemas live in [`schemas/`](./schemas):
 - [`schemas/index.schema.json`](./schemas/index.schema.json) — `GET /index.json`.
   Each entry: `id`, `name`, `description`, `category`, `latest_version`, `icon`,
   `language`, `author`, `security_tier`, `download_size_bytes`, `tags`,
-  `tools_count`, `models`, `min_gaia_version`, `permissions`, `deprecated`,
+  `tools_count`, `models`, `min_gaia_version`, `min_gaia_versions` (every
+  published version mapped to the oldest core it runs on, `""` when never
+  recorded; agent entries only), `permissions`, `deprecated`,
   `deprecation_message` (only when set), full `requirements` (`min_memory_gb`,
   `min_disk_gb`, `min_context_size`, `platforms`, `npu` as
   `"required"`/`"optional"`, `gpu_vram_gb`), `readme` (latest version's README
@@ -177,7 +179,10 @@ schemas live in [`schemas/`](./schemas):
   primary doc.
 - [`schemas/manifest.schema.json`](./schemas/manifest.schema.json) —
   `GET /agents/<id>/manifest.json`. Full display metadata plus a `versions` map;
-  each version carries `published_at`, `publisher`, `deprecated`, an `artifact`
+  each version carries `published_at`, `publisher`, `deprecated`,
+  `min_gaia_version` (the oldest GAIA core that version runs on; a GAIA client
+  installs the newest version its core satisfies; absent on versions published
+  before it was recorded), an `artifact`
   block (the primary — `filename`, `path`, `size_bytes`, `sha256`,
   `content_type`), and an `artifacts[]` array of every per-platform artifact in
   that version. `GET /skills/<name>/manifest.json` uses the same `versions` shape

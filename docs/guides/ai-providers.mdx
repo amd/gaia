@@ -19,8 +19,8 @@ local chat model when it starts.
 3. Pick a discovered model. The models that scored best on GAIA's agent
    benchmark appear first, ranked and labelled with why, whenever your account
    exposes them:
-   - `fireworks.glm-5p3-flash` — best overall, cheapest
-   - `fireworks.deepseek-v4p1-flash` — fastest
+   - `fireworks.deepseek-v4p1-flash` — best overall, fastest
+   - `fireworks.glm-5p3-flash` — cheapest
    - `fireworks.deepseek-v4-pro-0813` — most truthful
 
    The ranking is a snapshot (September 2026) and is refreshed as models change.
@@ -92,14 +92,14 @@ the embedding models, but the next launch asks for the default again unless
 Qwen3.6 35B A3B reads up to 262,144 tokens. Only 10 of its 40 layers keep a
 growing KV cache, about 20 KiB per token, so memory sets the limit rather than
 the model. GAIA loads it with the largest window, in 8,192-token steps, whose
-cache fits beside the weights, leaving 10% of the memory free and, on shared
-memory, room for the embedding model. It never goes below 65,536 tokens.
+cache fits beside the weights, leaving 10% of the memory free and room for the
+embedding model, which loads on the GPU too. It never goes below 65,536 tokens.
 
 | PC | Memory for models | Window | KV cache |
 |----|-------------------|--------|----------|
 | Strix Halo 128 GB (96 GB carve-out) | ~112 GB | 262,144 | 5.4 GB |
 | Strix Halo 64 GB | ~48–56 GB | 262,144 | 5.4 GB |
-| 32 GB GPU | 32 GB | 155,648 | 3.2 GB |
+| 32 GB GPU | 32 GB | 90,112 | 1.8 GB |
 | 24 GB GPU | 24 GB | Qwen3.6 not picked; Gemma at 65,536 | — |
 
 Gemma 4 E4B stays at 65,536 tokens on every PC.
@@ -133,9 +133,17 @@ still sends conversation history to Fireworks and incurs usage charges — see
   Credential Manager, macOS Keychain, or Secret Service on Linux), so every later
   TUI and every restarted Lemonade gets it back without asking. Lemonade itself
   holds the key in memory only; GAIA hands it over again when a chat starts on a
-  cloud model or you open `/provider`. A key that discovers no models is not
+  cloud model, when you open `/provider`, and when GAIA's Lemonade restarts while
+  a cloud chat is open. A key that discovers no models is not
   kept. GAIA never writes a key to config files, transcripts, control logs,
   traces, or command-line arguments.
+- A key only goes to GAIA's own running Lemonade, to the server named in
+  `LEMONADE_BASE_URL`, or to the system Lemonade when GAIA's own isn't installed.
+  It never goes to whatever answers on port 13305 or 8000. If GAIA's Lemonade is
+  restarting, GAIA waits for the background service to bring it back. If it isn't
+  back in time, you see "GAIA's Lemonade Server is restarting and is not back
+  yet" and nothing is sent. To use another Lemonade server, set
+  `LEMONADE_BASE_URL` to it.
 - Where no credential store is available (a headless Linux session, for
   example), the panel says the key works for this session only. Set
   `LEMONADE_FIREWORKS_API_KEY` or `LEMONADE_AMD_API_KEY` in Lemonade's own
@@ -179,7 +187,8 @@ mid-session, the TUI reports any reversion to its launch model.
 
 The model you last switched to — from `/provider`, `/model`, or the provider
 screen at startup — is restored the next time you open the TUI. The header names
-it before your first message, and a restore says "Restored your last model."
+it before your first message, and a restore says "Restored your last model:"
+followed by the model's name.
 
 If it can't be restored — the key is gone, the provider isn't connected, the
 model is no longer listed, or you stop the restore — GAIA says so in one line and
@@ -194,10 +203,13 @@ model to continue, now or later with /provider.
 A remembered cloud model is what GAIA starts on, so the startup check skips
 loading a local chat model. A remembered local or Claude model is switched to as
 the chat opens, so a deleted model or a missing `ANTHROPIC_API_KEY` gets the same
-one line and picker.
+one line and picker. When the TUI reaches GAIA through the background service, a
+remembered local model is checked against what Lemonade has downloaded and then
+used from the first message; Claude is not available on that route.
 
 The choice is stored in `~/.gaia/config.json` as `last_provider` and `last_model`
-(`GAIA_CONFIG_DIR` relocates it). `--use-claude` overrides it for one launch;
+(`GAIA_CONFIG_DIR` relocates it). A one-shot `gaia-tui run gaia --query "…"` runs
+on it too. `--use-claude` overrides it for one launch;
 `gaia config set last_model ""` forgets it.
 
 For development, build `tui/bin/gaia-tui` and launch the checkout with:

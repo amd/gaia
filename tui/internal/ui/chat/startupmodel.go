@@ -5,6 +5,7 @@ package chat
 
 import (
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -41,6 +42,10 @@ type startupModel struct {
 	pending  bool // not sent yet
 	inFlight bool // its turn has not ended
 	pinged   bool // the agent reported its model during that turn
+	began    time.Time
+	// gateModel is the model the readiness gate loaded, which the header
+	// falls back to when the restore does not take.
+	gateModel string
 	// confirmed is set when the agent switched to exactly this model;
 	// warmNext then starts the warm-up (warmup.go) on it.
 	confirmed bool
@@ -70,6 +75,21 @@ func (m ChatModel) WithStartupModel(kind StartupModelKind, provider, model strin
 	return m
 }
 
+// WithRelayedModel opens a daemon-relayed session on a cloud model. That
+// transport sends the model with every turn and has no `/model` turn to confirm
+// it with, so the header names it now and a gate pick is remembered here.
+// Call after WithModelMemory.
+func (m ChatModel) WithRelayedModel(kind StartupModelKind, provider, model string) ChatModel {
+	m.startup = startupModel{}
+	m.modelDisplay = model
+	m.modelBackend = provider
+	m.modelRemote = true
+	if kind == StartupPicked {
+		m.rememberModel(savedChoice{provider: provider, model: model})
+	}
+	return m
+}
+
 // WithModelMemory sets where a confirmed model switch is saved.
 func (m ChatModel) WithModelMemory(save func(provider, model string) error) ChatModel {
 	m.saveModel = save
@@ -80,6 +100,11 @@ func (m ChatModel) WithModelMemory(save func(provider, model string) error) Chat
 // loaded for this session, until the agent's own model-state ping replaces it.
 // Ignored when the launch already names a model or runs on Claude.
 func (m ChatModel) WithExpectedModel(id string) ChatModel {
+	// The header names the model being restored, not the one it replaces.
+	if m.startup.pending && (m.startup.provider == "" || m.startup.provider == "local") {
+		m.startup.gateModel = strings.TrimSpace(id)
+		id = m.startup.model
+	}
 	if id = strings.TrimSpace(id); id == "" || m.modelDisplay != "" || m.claudeMode {
 		return m
 	}
@@ -102,6 +127,11 @@ func (m ChatModel) runStartupModel() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.startup.inFlight = true
+	m.startup.began = time.Now()
+	if sw, ok := m.relayedSwitcher(); ok {
+		// Answered by relayedSwitchMsg, not a turn.
+		return m.switchRelayedModel(sw, m.startup.model)
+	}
 	updated, cmd := m.submit(modelCommandPrefix + " " + m.startup.model)
 	next := updated.(ChatModel)
 	if next.streaming {
@@ -139,6 +169,10 @@ func (m *ChatModel) endStartupTurn(reason string) {
 // choice back to the user.
 func (m ChatModel) startupRefused() (ChatModel, tea.Cmd) {
 	m.startup.unresolved = false
+	if m.modelID == "" && m.startup.gateModel != "" && m.modelDisplay == m.startup.model {
+		// No ping replaced the restore target, so name what is actually loaded.
+		m.modelDisplay = m.startup.gateModel
+	}
 	m.messages = append(m.messages, Message{Role: RoleError, Content: startupFailureLine(m.startup)})
 	panel := providers.New(m.lemonadeBaseURL, m.width, m.height)
 	m.providerPanel = &panel

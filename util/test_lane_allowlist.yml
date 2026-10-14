@@ -42,6 +42,7 @@ files:
 
   # A live third-party account.
   tests/integration/test_email_agent_live_gmail.py: Reads a real Gmail inbox; needs GAIA_GMAIL_LIVE_ACCOUNT credentials, never available in CI.
+  tests/integration/test_claude_history_cache.py: Proves the live Anthropic API reads conversation history back from the prompt cache; needs a billed ANTHROPIC_API_KEY, which no test lane carries.
 
   # Manual runs against running services.
   tests/stress/test_agent_ui_stress.py: A hand-run stress script against a running Agent UI and Lemonade Server; not a pytest suite.

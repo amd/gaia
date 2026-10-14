@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { MobileAccessModal } from '../MobileAccessModal';
 
 const toCanvas = vi.fn().mockResolvedValue(undefined);
@@ -77,5 +77,19 @@ describe('MobileAccessModal QR colours', () => {
         );
         expect(toCanvas).not.toHaveBeenCalled();
         err.mockRestore();
+    });
+});
+
+describe('MobileAccessModal keyboard', () => {
+    it('closes on Escape', async () => {
+        setTokens('#F0EDE7', '#17161C');
+        const onClose = vi.fn();
+        render(<MobileAccessModal isOpen onClose={onClose} />);
+        await waitFor(() => expect(toCanvas).toHaveBeenCalled());
+
+        fireEvent.keyDown(document, { key: 'Escape' });
+
+        expect(onClose).toHaveBeenCalledOnce();
+        setTokens(null, null);
     });
 });

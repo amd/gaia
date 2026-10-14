@@ -161,9 +161,11 @@ export function AdvancedSettings() {
 
     const version = __APP_VERSION__;
 
-    const wrongModel   = !!(status?.lemonade_running && status.model_loaded && status.expected_model_loaded === false);
-    const smallContext = !!(status?.lemonade_running && status.model_loaded && status.context_size_sufficient === false);
-    const notDownloaded = !!(status?.lemonade_running && !status.model_loaded && status.model_downloaded === false);
+    // A cloud model runs off this PC: no device, download, load or context to manage.
+    const cloudModel   = !!status?.default_model_is_cloud;
+    const wrongModel   = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.expected_model_loaded === false);
+    const smallContext = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.context_size_sufficient === false);
+    const notDownloaded = !cloudModel && !!(status?.lemonade_running && !status.model_loaded && status.model_downloaded === false);
     const needsLoad    = (wrongModel || smallContext) && modelName !== null;
 
     return (
@@ -187,17 +189,17 @@ export function AdvancedSettings() {
                                 <StatusRow
                                     label="Model"
                                     value={status.model_loaded || 'None loaded'}
-                                    ok={!!status.model_loaded && status.expected_model_loaded !== false}
+                                    ok={!!status.model_loaded && (cloudModel || status.expected_model_loaded !== false)}
                                     hint={!status.model_loaded
                                         ? 'None loaded yet — it loads with the first message.'
-                                        : status.expected_model_loaded === false
+                                        : !cloudModel && status.expected_model_loaded === false
                                         ? `Expected: ${modelName}`
                                         : undefined}
                                 />
                                 {status.model_size_gb != null && (
                                     <StatusRow label="Model Size" value={`${status.model_size_gb} GB`} ok={true} />
                                 )}
-                                {status.model_device && (
+                                {status.model_device && !cloudModel && (
                                     <StatusRow label="Device" value={status.model_device.toUpperCase()} ok={status.model_device !== 'cpu'} />
                                 )}
                                 {status.model_context_size != null && (
@@ -276,7 +278,7 @@ export function AdvancedSettings() {
                                 </div>
                             )}
 
-                            {status.lemonade_running && modelName !== null && (
+                            {status.lemonade_running && modelName !== null && !cloudModel && (
                                 <div className="force-redownload-row">
                                     <span className="force-redownload-label">
                                         If the model file is corrupted:
@@ -360,6 +362,7 @@ export function AdvancedSettings() {
                 </section>
 
                 {/* Context Size */}
+                {!cloudModel && (
                 <section className="settings-section">
                     <h4>Context Size</h4>
                     <p className="model-override-desc">
@@ -415,13 +418,14 @@ export function AdvancedSettings() {
                         {status?.model_loaded && <> on <code>{status.model_loaded}</code></>}.
                     </p>
                 </section>
+                )}
 
                 {/* Dynamic Tools (Beta) — #1798 */}
                 <section className="settings-section">
                     <h4>Dynamic Tools <span className="beta-badge">BETA</span></h4>
                     <p className="model-override-desc">
                         Trim each turn&rsquo;s tool list to a semantically-matched subset to
-                        speed up the first response. Currently affects the Doc Agent only.
+                        speed up the first response. It does not apply to the GAIA agent yet.
                     </p>
                     {/* <label> wraps the row so a click on the text or the track
                         forwards to the visually-hidden checkbox (matches the

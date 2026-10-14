@@ -14,6 +14,10 @@ from typing import Optional
 GAIA_ROOT = Path(__file__).parent.parent.parent.parent  # src/gaia/eval/ -> repo root
 
 
+# The chat history window a relayed agent sees.
+_HISTORY_CONSTANTS = ("_RELAY_CONTEXT_PAIRS",)
+
+
 def audit_chat_helpers() -> dict:
     """Read _chat_helpers.py and extract key constants."""
     path = GAIA_ROOT / "src" / "gaia" / "ui" / "_chat_helpers.py"
@@ -34,7 +38,9 @@ def audit_chat_helpers() -> dict:
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
-                if isinstance(target, ast.Name) and target.id.startswith("_MAX"):
+                if isinstance(target, ast.Name) and (
+                    target.id.startswith("_MAX") or target.id in _HISTORY_CONSTANTS
+                ):
                     if isinstance(node.value, ast.Constant) and isinstance(
                         node.value.value, int
                     ):
@@ -83,7 +89,7 @@ def audit_tool_results_in_history(chat_helpers_path: Optional[Path] = None) -> b
 def run_audit() -> dict:
     """Run the full architecture audit and return results."""
     constants = audit_chat_helpers()
-    history_pairs = constants.get("_MAX_PAIRS", "unknown")
+    history_pairs = constants.get("_RELAY_CONTEXT_PAIRS", "unknown")
     max_msg_chars = constants.get("_MAX_CHARS", "unknown")
     tool_results_in_history = audit_tool_results_in_history()
     agent_persistence = audit_agent_persistence()
@@ -97,7 +103,7 @@ def run_audit() -> dict:
                 "id": "increase_history_pairs",
                 "impact": "high",
                 "file": "src/gaia/ui/_chat_helpers.py",
-                "description": f"_MAX_PAIRS={history_pairs} limits multi-turn context. Increase to 10+.",
+                "description": f"_RELAY_CONTEXT_PAIRS={history_pairs} limits multi-turn context. Increase to 10+.",
             }
         )
 

@@ -433,9 +433,11 @@ def drain_memory_extraction(
         return True
     if wait(timeout):
         return True
+    pending = getattr(agent, "pending_memory_extractions", None)
     logger.warning(
-        "[MemoryMixin] memory extraction was still running after %.0fs and is "
-        "being dropped — this turn's facts were not stored",
+        "[MemoryMixin] %s memory extraction job(s) still pending after %.0fs are "
+        "being dropped — those turns' facts were not stored",
+        pending() if callable(pending) else "unknown number of",
         timeout,
     )
     return False
@@ -1892,6 +1894,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                         str(op.get("content", ""))[:80],
                     )
                     continue
+                if op_type in ("add", "update") and not self._normalize_extracted_tags(
+                    op
+                ):
+                    continue
                 if op_type == "add" and "content" in op and "category" in op:
                     if op["category"] in EXTRACTABLE_CATEGORIES:
                         valid_ops.append(op)
@@ -1949,6 +1955,52 @@ class MemoryMixin(ProceduralMemoryMixin):
         except Exception as e:
             logger.warning("[MemoryMixin] LLM extraction failed: %s", e)
             return []
+
+    @staticmethod
+    def _normalize_extracted_tags(op: Dict) -> bool:
+        """Make an op's ``entity`` and ``domain`` a single string or None, in place.
+
+        The prompt asks for one tag per field, but models sometimes wrap it in a
+        list. A one-string list is unwrapped and an empty list means no tag. Any
+        other shape has no single reading, so the whole op is rejected rather
+        than stored with a guessed tag. Returns False when the op was rejected.
+        """
+        for field in ("entity", "domain"):
+            value = op.get(field)
+            if value is None or isinstance(value, str):
+                continue
+            if isinstance(value, list) and not value:
+                logger.debug(
+                    "[MemoryMixin] extracted op had an empty %s list; storing "
+                    "it with no %s",
+                    field,
+                    field,
+                )
+                op[field] = None
+                continue
+            if (
+                isinstance(value, list)
+                and len(value) == 1
+                and isinstance(value[0], str)
+            ):
+                logger.debug(
+                    "[MemoryMixin] unwrapped one-item %s list %r to %r",
+                    field,
+                    value,
+                    value[0],
+                )
+                op[field] = value[0]
+                continue
+            logger.warning(
+                "[MemoryMixin] dropped extracted %s op: '%s' must be a single "
+                "string, got %r. Not stored: %s",
+                op.get("op"),
+                field,
+                value,
+                str(op.get("content", ""))[:80],
+            )
+            return False
+        return True
 
     @staticmethod
     def _format_tool_record(tool_record: List[Dict]) -> str:
@@ -3859,6 +3911,13 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         self._ensure_extraction_state()
         return self._extraction_idle.wait(timeout)
+
+    def pending_memory_extractions(self) -> int:
+        """Turns whose extraction has not finished: the queue plus the running one."""
+        self._ensure_extraction_state()
+        with self._extraction_lock:
+            running = 1 if self._extraction_thread is not None else 0
+            return len(self._extraction_queue) + running
 
     # ------------------------------------------------------------------
     # Tool Registration

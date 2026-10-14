@@ -14,7 +14,9 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
+import shlex
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -59,6 +61,20 @@ def test_classify(tag, is_rc, pep440, npm, notes_tag):
 def test_malformed_tags_are_rejected(tag):
     with pytest.raises(ValueError, match="vX.Y.Z-rcN"):
         release_tag.parse_tag(tag)
+
+
+@pytest.mark.parametrize("tag", ["v0.25.0", "v0.25.0-rc1", "v1.0.0-rc12"])
+def test_an_npm_version_maps_back_to_its_tag(tag):
+    rel = release_tag.parse_tag(tag)
+    assert release_tag.parse_npm_version(rel.npm_version) == rel
+
+
+@pytest.mark.parametrize(
+    "version", ["0.25.0-rc1", "0.25.0rc1", "0.25.0-rc.0", "v0.25.0", "0.25.0-beta.1"]
+)
+def test_a_malformed_npm_version_is_rejected(version):
+    with pytest.raises(ValueError, match="X.Y.Z-rc.N"):
+        release_tag.parse_npm_version(version)
 
 
 def test_rc_versions_are_valid_and_order_before_the_final():
@@ -324,3 +340,95 @@ def test_only_an_rc_requests_the_website_redeploy_from_publish(publish):
     job = publish["redeploy-website-rc"]
     assert IS_RC in job["if"]
     assert "!cancelled()" in job["if"]
+
+
+def test_an_rc_builds_the_windows_setup_for_its_own_prerelease_only(publish):
+    tui = publish["rc-tui-binaries"]
+    assert IS_RC in tui["if"]
+    assert tui["uses"] == "./.github/workflows/tui_installers.yml"
+    # rpm cannot carry -rc.N, so the macOS/Linux packages stay with the final.
+    assert tui["with"]["installers"] is False
+
+    setup = publish["rc-windows-setup"]
+    assert IS_RC in setup["if"] and "!cancelled()" in setup["if"]
+    assert setup["uses"] == "./.github/workflows/windows_setup.yml"
+    # The flagship this RC run froze, not the lock's published build.
+    assert setup["with"]["sidecar"] == "artifact"
+    # This run's own desktop app build, never a published release.
+    assert setup["with"]["agent_ui_publish_run_sha"] == "${{ github.sha }}"
+    assert "agent_ui_release" not in setup["with"]
+    assert "build-desktop-installers" in setup["needs"]
+    for job in (tui, setup):
+        assert job["with"]["version"] == "${{ needs.validate.outputs.npm_version }}"
+
+    # A failed setup turns the run red instead of quietly shipping without it.
+    missing = publish["rc-windows-setup-missing"]
+    assert IS_RC in missing["if"]
+    assert "needs.rc-windows-setup.outputs.ok != 'true'" in missing["if"]
+    assert "exit 1" in missing["steps"][0]["run"]
+
+
+def test_the_windows_setup_attaches_only_after_its_smoke_test(publish):
+    release = publish["github-release"]
+    assert "rc-windows-setup" in release["needs"]
+    # Waited for, never required: a final skips it and must still release.
+    assert "rc-windows-setup" not in release["if"]
+    gated = [s for s in release["steps"] if "rc-windows-setup" in s.get("if", "")]
+    assert gated, "the setup is attached without checking its smoke test"
+    for step in gated:
+        assert step["if"] == f"{IS_RC} && needs.rc-windows-setup.outputs.ok == 'true'"
+
+
+def test_terminal_binaries_on_the_release_exclude_the_setups_input(publish):
+    # rc-tui-binaries uploads `tui-binaries`; on the release it would duplicate
+    # the six raw binaries under other names and enter their checksum file.
+    (step,) = _steps(publish["github-release"], "Download TUI binaries")
+    assert step["with"]["pattern"] == "tui-{linux,darwin,windows}-*"
+    built = {m["goos"] for m in publish["build-tui"]["strategy"]["matrix"]["include"]}
+    assert built == {"linux", "darwin", "windows"}
+
+
+def test_the_windows_setup_never_reaches_the_hub_from_publish():
+    text = (WORKFLOWS / "publish.yml").read_text(encoding="utf-8")
+    assert "publish_to_r2" not in text and "GAIA_HUB" not in text
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def test_final_release_notes_diff_from_the_previous_final_not_an_rc(tmp_path):
+    # claude.yml's release-notes job rewrites the final's notes from the diff
+    # since PREVIOUS_TAG; an RC there would leave the final's notes nearly empty.
+    step = next(
+        s
+        for s in _workflow("claude.yml")["jobs"]["release-notes"]["steps"]
+        if s.get("name") == "Generate release context"
+    )
+    line = next(
+        ln for ln in step["run"].splitlines() if "PREVIOUS_TAG=$(git describe" in ln
+    )
+    describe = shlex.split(re.search(r"\$\((git describe[^)]*?)\s*2>", line)[1])
+
+    _git(tmp_path, "init", "-q")
+    for name in ("v0.24.1", "agent-pkg-gaia-v0.1.1", "v0.25.0-rc1", "v0.25.0"):
+        _git(
+            tmp_path,
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            name,
+        )
+        _git(tmp_path, "tag", name)
+
+    args = [a.replace("$CURRENT_TAG", "v0.25.0") for a in describe[1:]]
+    assert _git(tmp_path, *args) == "v0.24.1"

@@ -48,20 +48,21 @@ exactly what it writes.
 
 ### Or download the binary directly
 
-The installer fetches these and verifies their SHA-256; you can also take one
-yourself. Rename it to `gaia-tui` and put it on your `PATH`:
+Every GitHub release carries the binary for each platform, and these links
+always fetch the latest release's. Rename it to `gaia-tui` and put it on your
+`PATH`:
 
 | Platform | Download |
 |---|---|
-| Windows x64 | [`gaia-win-x64.exe`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-win-x64.exe) |
-| Windows ARM64 | [`gaia-win-arm64.exe`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-win-arm64.exe) |
-| macOS Apple Silicon | [`gaia-darwin-arm64`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-darwin-arm64) |
-| macOS Intel | [`gaia-darwin-x64`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-darwin-x64) |
-| Linux x64 | [`gaia-linux-x64`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-linux-x64) |
-| Linux ARM64 | [`gaia-linux-arm64`](https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0/gaia-linux-arm64) |
+| Windows x64 | [`gaia-windows-amd64.exe`](https://github.com/amd/gaia/releases/latest/download/gaia-windows-amd64.exe) |
+| Windows ARM64 | [`gaia-windows-arm64.exe`](https://github.com/amd/gaia/releases/latest/download/gaia-windows-arm64.exe) |
+| macOS Apple Silicon | [`gaia-darwin-arm64`](https://github.com/amd/gaia/releases/latest/download/gaia-darwin-arm64) |
+| macOS Intel | [`gaia-darwin-amd64`](https://github.com/amd/gaia/releases/latest/download/gaia-darwin-amd64) |
+| Linux x64 | [`gaia-linux-amd64`](https://github.com/amd/gaia/releases/latest/download/gaia-linux-amd64) |
+| Linux ARM64 | [`gaia-linux-arm64`](https://github.com/amd/gaia/releases/latest/download/gaia-linux-arm64) |
 
-`https://hub.amd-gaia.ai/agents/terminal-hub/manifest.json` lists what is
-published, with the SHA-256 of each build. A direct download still needs the
+[`gaia-tui-SHA256SUMS.txt`](https://github.com/amd/gaia/releases/latest/download/gaia-tui-SHA256SUMS.txt)
+lists the SHA-256 of each. A direct download still needs the
 `gaia` CLI on your `PATH` — first-time setup (`gaia init`) and the `email`
 agent's daemon both go through it — so the one-line installer above is the
 shorter route.
@@ -191,11 +192,11 @@ handed back to Lemonade after a restart. Provider settings are shared with
 other clients of that server. Each provider lists a ★ **Recommended** group
 first. For Fireworks that group is the models that scored best on GAIA's
 agent benchmark, ranked and labelled with why
-(`fireworks.glm-5p3-flash` — best overall, cheapest;
-`fireworks.deepseek-v4p1-flash` — fastest;
+(`fireworks.deepseek-v4p1-flash` — best overall, fastest;
+`fireworks.glm-5p3-flash` — cheapest;
 `fireworks.deepseek-v4-pro-0813` — most truthful), whenever your account
 exposes them. AMD Gateway accepts your organization's HTTPS endpoint and
-authentication header.
+authentication header, and selects DeepSeek V4.1 Flash when nothing is chosen.
 
 **Local** lists every chat model Lemonade offers, not only downloaded ones.
 Models that fit this PC's memory and disk download in the panel when selected;
@@ -205,7 +206,7 @@ recommended list lives in `internal/lemonade/recommended_models.json`.
 Type to search discovered models, then press Enter to select. The header shows
 the active provider; remote chat sends conversation history to that provider.
 Embeddings remain on Lemonade. Cloud setup skips downloading a local chat model.
-See [AI providers](../docs/guides/ai-providers.mdx) for key handling and recovery.
+See [AI providers](https://amd-gaia.ai/docs/guides/ai-providers) for key handling and recovery.
 
 ## Testing the harness against Claude
 

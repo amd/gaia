@@ -326,3 +326,22 @@ func TestTooSmallBeatsTooOldInTheReason(t *testing.T) {
 		}
 	}
 }
+
+// The gateway picker opens on its first row, so the default is whatever leads.
+func TestGatewayPickerLeadsWithDeepSeekV41Flash(t *testing.T) {
+	models := []Model{
+		{ID: "amd.Claude-Haiku-4.5", Recipe: "cloud"},
+		{ID: "amd.DeepSeek-V4-Flash", Recipe: "cloud"},
+		{ID: "amd.DeepSeek-V4.1-Flash", Recipe: "cloud"},
+	}
+	entries := BuildEntries("amd", models, Capacity{}, nil)
+	if len(entries) != 3 || entries[0].Model.ID != "amd.DeepSeek-V4.1-Flash" ||
+		entries[0].Recommended == nil || !entries[0].Selectable() {
+		t.Fatalf("first gateway row = %+v, want a selectable recommended DeepSeek-V4.1-Flash", entries[0])
+	}
+	for _, e := range entries[1:] {
+		if e.Recommended != nil {
+			t.Errorf("%s must not be recommended", e.Model.ID)
+		}
+	}
+}

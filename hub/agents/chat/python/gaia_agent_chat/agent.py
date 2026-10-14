@@ -70,6 +70,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import documents_still_indexing
+from gaia.env import child_env
 from gaia.llm.inference_location import (
     InferenceLocation,
     resolve_inference_location,
@@ -144,7 +145,7 @@ def _python_script_run_context(
     needs ``src/`` on the path, which this does not add.
     """
     script = Path(script).resolve()
-    env = dict(os.environ)
+    env = child_env()
     if project_dir is None:
         return script.parent, env
     project = Path(project_dir).resolve()
@@ -517,8 +518,9 @@ class ChatAgent(
             incognito=config.memory_incognito,
         )
 
-        # Store base URL for use in _register_tools() (VLM, etc.)
-        self._base_url = effective_base_url
+        # Store base URL for use in _register_tools() (VLM, etc.). Unset stays
+        # None: GAIA's own server can change port, so its users resolve per use.
+        self._base_url = config.base_url
 
         # MCP client manager — set up before super().__init__() because Agent.__init__()
         # calls _register_tools() internally, and MCP tools are loaded there.
@@ -536,7 +538,8 @@ class ChatAgent(
             use_claude=config.use_claude,
             use_chatgpt=config.use_chatgpt,
             claude_model=config.claude_model,
-            base_url=effective_base_url,
+            # Unset lets the base resolve the port only after starting the server.
+            base_url=config.base_url,
             model_id=effective_model_id,  # Pass the effective model to parent
             max_steps=config.max_steps,
             debug_prompts=config.debug_prompts,
@@ -1818,7 +1821,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "allowed project.",
                         "has_errors": True,
                     }
-                env = dict(os.environ)
+                env = child_env()
                 if project:
                     existing = env.get("PYTHONPATH")
                     env["PYTHONPATH"] = (
@@ -2106,11 +2109,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                                 "-Command",
                                 NOTIFY_DESKTOP_PS_SCRIPT,
                             ],
-                            env={
-                                **os.environ,
-                                NOTIFY_MESSAGE_ENV_VAR: message,
-                                NOTIFY_TITLE_ENV_VAR: title,
-                            },
+                            env=child_env(
+                                {
+                                    NOTIFY_MESSAGE_ENV_VAR: message,
+                                    NOTIFY_TITLE_ENV_VAR: title,
+                                }
+                            ),
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )

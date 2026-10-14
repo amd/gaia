@@ -19,8 +19,14 @@ import (
 // is too old to have the route. A non-2xx answer is returned as the daemon's own
 // detail — a 503 there carries a platform-specific remedy worth passing through.
 func Call(method, path string, body []byte, start bool, op, alternative string) ([]byte, error) {
+	return CallContext(context.Background(), method, path, body, start, op, alternative)
+}
+
+// CallContext is Call bounded by ctx as well, so a caller that gives up — a
+// setup screen the user left — also stops a daemon start it no longer wants.
+func CallContext(ctx context.Context, method, path string, body []byte, start bool, op, alternative string) ([]byte, error) {
 	dc := New(Options{})
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
 	var (

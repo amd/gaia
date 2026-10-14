@@ -708,10 +708,10 @@ def _resize(cols: int, rows: int) -> Dict[str, Any]:
 def route_logging_to_stderr() -> None:
     """Move stdout log handlers to stderr — required before stdio transport.
 
-    Importing ``gaia`` installs a root log handler on **stdout**
-    (:mod:`gaia.logger`), and the MCP server itself logs one INFO line per
-    request. On stdio transport stdout carries JSON-RPC only, so those lines
-    land mid-stream and the client rejects every message that follows.
+    :mod:`gaia.logger` logs to stderr, but any root handler left on stdout
+    would put the MCP server's per-request INFO lines on the wire. On stdio
+    transport stdout carries JSON-RPC only, so those lines land mid-stream
+    and the client rejects every message that follows.
     """
     for handler in logging.getLogger().handlers:
         if isinstance(handler, logging.StreamHandler) and handler.stream is sys.stdout:

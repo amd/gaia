@@ -7448,7 +7448,14 @@ Do NOT wrap conversational replies in JSON.
             tools=self._openai_tools,
             max_tokens=1,
         )
-        return {"seconds": round(time.perf_counter() - started, 1)}
+        result: Dict[str, Any] = {"seconds": round(time.perf_counter() - started, 1)}
+        client = getattr(self.chat, "llm_client", None)
+        usage_of = getattr(client, "get_last_usage", None)
+        usage = usage_of() if callable(usage_of) else None
+        if isinstance(usage, dict):
+            result["prompt_tokens"] = usage.get("prompt_tokens")
+            result["cached_tokens"] = usage.get("cached_tokens")
+        return result
 
     def process_query(
         self,
@@ -7825,10 +7832,12 @@ Do NOT wrap conversational replies in JSON.
                     # Resolve dynamic parameters from previous step results
                     tool_args = self._resolve_plan_parameters(tool_args, step_results)
 
+                    # The user's own words, not the memory context the loop prepends.
+                    request = getattr(self, "_original_user_input", None) or user_input
                     # Create a parsed response structure as if it came from the LLM
                     parsed = {
                         "thought": f"Executing step {self.current_step + 1} of the plan",
-                        "goal": f"Following the plan to {user_input}",
+                        "goal": f"Following the plan to {request}",
                         "tool": tool_name,
                         "tool_args": tool_args,
                     }
