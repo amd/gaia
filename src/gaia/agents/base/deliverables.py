@@ -26,6 +26,7 @@ import csv
 import io
 import json
 import logging
+import math
 import os
 import re
 import zipfile
@@ -355,10 +356,112 @@ def input_paths(records: Sequence[Dict[str, Any]]) -> List[str]:
 
 _NUM = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
 _CODES = r"USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR"
+_SYMBOLS = r"US\$|C\$|A\$|\$|€|£|¥"
+#: "$14.5M", "$500k", "$14.5 million", "$2.1bn": the scale after a figure.
+_MAGNITUDES = {
+    "k": 1e3,
+    "thousand": 1e3,
+    "m": 1e6,
+    "mm": 1e6,
+    "mn": 1e6,
+    "mil": 1e6,
+    "million": 1e6,
+    "b": 1e9,
+    "bn": 1e9,
+    "billion": 1e9,
+    "t": 1e12,
+    "tn": 1e12,
+    "trillion": 1e12,
+}
+_MAG = r"(?i:thousand|million|billion|trillion|mil|mn|mm|bn|tn|[kmbt])(?!\w)"
 _MONEY = re.compile(
-    rf"(?:US\$|C\$|A\$|\$|€|£|¥|\b(?:{_CODES})\s?)\s?(?P<a>{_NUM})"
-    rf"|(?<![\w.,])(?P<b>{_NUM})\s?(?:€|£|\b(?:{_CODES})\b)"
+    rf"(?:{_SYMBOLS}|\b(?:{_CODES})\s?)\s?(?P<a>{_NUM})(?:\s?(?P<ma>{_MAG}))?"
+    rf"|(?<![\w.,])(?P<b>{_NUM})(?:\s?(?P<mb>{_MAG}))?"
+    rf"\s?(?:€|£|\b(?:{_CODES})\b|(?i:\s?(?:dollars?|euros?)\b))"
 )
+#: "$3–5M", "$3M-$5M", "$3 to 5 million": both ends take the closing scale.
+_MONEY_RANGE = re.compile(
+    rf"(?:{_SYMBOLS})\s?(?P<lo>{_NUM})(?:\s?(?P<lomag>{_MAG}))?"
+    rf"\s?(?:-|–|—|to)\s?(?:{_SYMBOLS})?\s?(?P<hi>{_NUM})\s?(?P<mag>{_MAG})"
+)
+_WORD_UNITS = (
+    "zero one two three four five six seven eight nine ten eleven twelve "
+    "thirteen fourteen fifteen sixteen seventeen eighteen nineteen"
+).split()
+_WORD_TENS = "twenty thirty forty fifty sixty seventy eighty ninety".split()
+#: "twelve percent", "twenty-five per cent", "three million dollars".
+_WORD_FIGURE = re.compile(
+    rf"\b(?P<w>(?:{'|'.join(_WORD_TENS)})(?:[- ](?:{'|'.join(_WORD_UNITS[1:10])}))?"
+    rf"|{'|'.join(sorted(_WORD_UNITS, key=len, reverse=True))})\s+"
+    r"(?:(?P<pct>percent|per\s+cent)\b|(?P<mag>thousand|million|billion)\b"
+    r"(?P<cur>\s+(?:dollars?|euros?)\b)?)",
+    re.I,
+)
+
+
+def _magnitude_value(number: str, magnitude: Optional[str]) -> _Value:
+    """*number* scaled by *magnitude*; its precision scales with it.
+
+    "$14.5M" is 14,500,000 to the nearest 100,000, so a source saying
+    "$14,500,000" (or "$14,480,000") supports it.
+    """
+    value = _value(number)
+    scale = _MAGNITUDES.get((magnitude or "").lower())
+    if not scale or value.number is None:
+        return value
+    places = value.decimals - round(math.log10(scale))
+    return _Value(_plain(value.number * scale), value.number * scale, places)
+
+
+def _plain(number: float) -> str:
+    return f"{number:.6f}".rstrip("0").rstrip(".")
+
+
+def _word_number(word: str) -> int:
+    parts = re.split(r"[- ]", word.lower())
+    total = 0
+    for part in parts:
+        if part in _WORD_TENS:
+            total += 20 + 10 * _WORD_TENS.index(part)
+        elif part in _WORD_UNITS:
+            total += _WORD_UNITS.index(part)
+    return total
+
+
+def _spelled_out(text: str) -> str:
+    """*text* with each scaled or spelled-out figure also written in full.
+
+    "$14.5 million" gains "($14500000)" and "twelve percent" gains "(12%)", so
+    a file that writes the other form finds it.
+    """
+    if not text:
+        return text
+
+    def full(match: re.Match) -> str:
+        groups = match.groupdict()
+        if "lo" in groups:
+            mag = groups["lomag"] or groups["mag"]
+            lo = _magnitude_value(groups["lo"], mag).text
+            hi = _magnitude_value(groups["hi"], groups["mag"]).text
+            return f"{match.group(0)} (${lo} ${hi})"
+        number = groups.get("a") or groups.get("b")
+        mag = groups.get("ma") or groups.get("mb")
+        if not mag:
+            return match.group(0)
+        return f"{match.group(0)} (${_magnitude_value(number, mag).text})"
+
+    def words(match: re.Match) -> str:
+        number = _word_number(match.group("w"))
+        if match.group("pct"):
+            return f"{match.group(0)} ({number}%)"
+        scaled = _plain(number * _MAGNITUDES[match.group("mag").lower()])
+        return f"{match.group(0)} ({'$' if match.group('cur') else ''}{scaled})"
+
+    text = _MONEY_RANGE.sub(full, text)
+    text = _MONEY.sub(full, text)
+    return _WORD_FIGURE.sub(words, text)
+
+
 _PERCENT = re.compile(rf"(?<![\w.,])({_NUM})\s?%")
 _UNIT = re.compile(
     rf"(?<![\w.,])({_NUM})\s?(kW|mW|W|mV|V|mAh|Ah|mA|A|GHz|MHz|kHz|Hz|TB|GB|MB|KB|kB|"
@@ -404,6 +507,9 @@ class _Claim:
     row: int
     #: The file says it is an estimate: never reported, still an operand.
     marked: bool = False
+    #: Another reading of the same text: "14.5mm" may be millimetres or
+    #: millions in a finance memo.
+    alt: Optional[_Value] = None
 
 
 def _number(text: str) -> float:
@@ -433,35 +539,56 @@ def _scan(blocks: Sequence[Block]) -> Tuple[List[_Claim], List[List[float]], Lis
             for j, cell in enumerate(row):
                 if cell.lstrip().startswith("="):
                     continue
-                for kind, text, shown in _cell_figures(cell, j in money_cols):
+                for kind, value, shown in _cell_figures(cell, j in money_cols):
                     if not shown:
-                        shown = f"{text} ({header[j].strip()})"
+                        shown = f"{value.text} ({header[j].strip()})"
                     pos = i if block.table else place
                     place += 1
                     seq = (b, j if block.table else -1)
                     marked = row_marked or j in marked_cols
+                    alt = (
+                        _magnitude_value(value.text, "mm")
+                        if kind == "mm" and shown.endswith("mm")
+                        else None
+                    )
                     claims.append(
-                        _Claim(
-                            kind, _value(text), shown, seq, pos, len(rows) - 1, marked
-                        )
+                        _Claim(kind, value, shown, seq, pos, len(rows) - 1, marked, alt)
                     )
     return claims[:MAX_CLAIMS], rows, plain
 
 
-def _cell_figures(cell: str, money_column: bool) -> List[Tuple[str, str, str]]:
-    """``(kind, number, shown)`` per figure in *cell*; ``shown`` is ``""`` for a
-    bare number in a money column, which the caller labels with the header."""
-    figures = [
-        ("money", m.group("a") or m.group("b"), m.group(0).strip())
-        for m in _MONEY.finditer(cell)
-    ]
+def _cell_figures(cell: str, money_column: bool) -> List[Tuple[str, _Value, str]]:
+    """``(kind, value, shown)`` per figure in *cell*; ``shown`` is ``""`` for a
+    bare number in a money column, which the caller labels with the header.
+
+    A scale after a money figure ("$14.5M", "$500k") is part of its value.
+    """
+    figures: List[Tuple[str, _Value, str]] = []
+    taken: List[Tuple[int, int]] = []
+    for m in _MONEY_RANGE.finditer(cell):
+        mag = m.group("lomag") or m.group("mag")
+        figures.append(("money", _magnitude_value(m.group("lo"), mag), m.group(0)))
+        figures.append(
+            ("money", _magnitude_value(m.group("hi"), m.group("mag")), m.group(0))
+        )
+        taken.append(m.span())
+    for m in _MONEY.finditer(cell):
+        if any(start <= m.start() < end for start, end in taken):
+            continue
+        number = m.group("a") or m.group("b")
+        mag = m.group("ma") or m.group("mb")
+        figures.append(("money", _magnitude_value(number, mag), m.group(0).strip()))
+        taken.append(m.span())
     if not figures and money_column and _PURE_NUMBER.match(cell):
-        figures.append(("money", cell.strip(), ""))
+        figures.append(("money", _value(cell.strip()), ""))
     figures += [
-        ("percent", m.group(1), m.group(0).strip()) for m in _PERCENT.finditer(cell)
+        ("percent", _value(m.group(1)), m.group(0).strip())
+        for m in _PERCENT.finditer(cell)
     ]
     figures += [
-        (m.group(2), m.group(1), m.group(0).strip()) for m in _UNIT.finditer(cell)
+        (m.group(2), _value(m.group(1)), m.group(0).strip())
+        for m in _UNIT.finditer(cell)
+        if not any(start <= m.start() < end for start, end in taken)
     ]
     return figures
 
@@ -494,6 +621,7 @@ def _money_evidence(text: str) -> str:
     data row (CSV, tab, pipe table), or the value under a ``price`` key. A
     datasheet's "60 Hz" is not a source for $60.
     """
+    text = _spelled_out(text)
     parts = [m.group("a") or m.group("b") for m in _MONEY.finditer(text)]
     previous = ""
     for line in text.splitlines():
@@ -685,6 +813,17 @@ def _downstream(
     return _run_sums(index, claims, known, backward_only=True)
 
 
+def _holds(corpus: _Corpus, value: _Value) -> bool:
+    """*corpus* holds *value*; a scaled figure ("$14.5M") only to its precision.
+
+    The corpus's "0.45 may be shown as 45%" reading is not applied to a scaled
+    figure, where it would let "$30,000" source "$3M".
+    """
+    if value.decimals >= 0:
+        return corpus.holds(value)
+    return any(_rounds_to(n, value) for n in corpus.numbers)
+
+
 def _unsupported(
     blocks: Sequence[Block],
     general: _Corpus,
@@ -703,7 +842,9 @@ def _unsupported(
     if not claims:
         return []
     known = [
-        c.marked or (money if c.kind == "money" else general).holds(c.value)
+        c.marked
+        or _holds(money if c.kind == "money" else general, c.value)
+        or (c.alt is not None and _holds(money, c.alt))
         for c in claims
     ]
     plain_known = list(
@@ -741,7 +882,8 @@ _TIMESTAMP = re.compile(
 
 
 def _mentioned(claim: _Claim, answer: str) -> bool:
-    return claim.value.number in {_number(n) for n in _ANY_NUMBER.findall(answer)}
+    named = {_number(n) for n in _ANY_NUMBER.findall(_spelled_out(answer))}
+    return claim.value.number in named
 
 
 def file_findings(
@@ -763,7 +905,9 @@ def file_findings(
     if not files:
         return []
     written = {_basename(path) for path in files}
-    texts = _evidence_texts(records, written) + list(inputs)
+    texts = [_spelled_out(t) for t in _evidence_texts(records, written) + list(inputs)]
+    query = _spelled_out(query or "")
+    context = _spelled_out(context or "")
     # "27W", "8GB": a unit glued to its number still shows the number.
     general = _Corpus(_GLUED_UNIT.sub(r"\1 \2", "\n".join([context, query] + texts)))
     money = _Corpus(
@@ -800,8 +944,9 @@ def file_findings(
                 FILE,
                 f"`{name}` has figures no tool result this turn supports: {listed}. "
                 "Show their source with a tool (reading the file back doesn't "
-                "count) and fix the file, or mark them in it as estimates; name "
-                "any still unverified in your answer.",
+                "count) and fix the file, or mark them in it as estimates. Keep "
+                "your answer about the work: name any figure still unverified in "
+                "one short line at the end, and don't explain this check.",
                 f"`{name}` has figures I found no source for this turn: {listed}",
             )
         )
