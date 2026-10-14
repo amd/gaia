@@ -105,6 +105,62 @@ def test_reason_names_the_status_and_never_the_body():
     assert "secret" not in reason
 
 
+# Lemonade 2026.40.0's status-less frames when its hop to a cloud provider
+# fails: libcurl's error, wrapped by CloudServer::forward_streaming_request.
+# kw-05 (#5087) died on the first one after 34 s with no response headers.
+_CLOUD_DROP = (
+    "backend connection failed during SSE stream before DONE: "
+    "CURL error: Failure when receiving data from the peer"
+)
+
+
+@pytest.mark.parametrize(
+    "message, reason",
+    [
+        (_CLOUD_DROP, "connection dropped"),
+        (
+            "backend connection failed during SSE stream before DONE: "
+            "CURL error: Transferred a partial file",
+            "connection dropped",
+        ),
+        (
+            "SSE stream failed: CURL error: Server returned nothing "
+            "(no headers, no data)",
+            "connection dropped",
+        ),
+        (
+            "SSE stream failed: CURL error: Couldn't connect to server",
+            "connection dropped",
+        ),
+        (
+            "SSE stream failed: CURL error: Failed sending data to the peer",
+            "connection dropped",
+        ),
+        ("SSE stream failed: CURL error: Timeout was reached", "upstream timeout"),
+        # Certificate trouble is configuration: the same handshake fails again.
+        (
+            "SSE stream failed: CURL error: SSL peer certificate or SSH remote key was not OK",
+            None,
+        ),
+        # The model is not loaded in Lemonade: no retry brings it back.
+        ("Cloud model not loaded", None),
+    ],
+)
+def test_status_less_cloud_stream_frames(message, reason):
+    frame = openai.APIError(
+        message,
+        request=httpx.Request("POST", "http://test/v1/chat/completions"),
+        body={"message": message, "type": "streaming_error"},
+    )
+    assert classify_exception(frame) == reason
+
+
+def test_local_timeout_wording_is_still_not_retried():
+    """Only the cloud proxy's frame makes a timeout retryable (#1030)."""
+    assert classify_http_failure(None, "CURL error: Timeout was reached") is None
+    assert classify_http_failure(500, "CURL error: Timeout was reached") is None
+
+
 # ── classify_exception ───────────────────────────────────────────────────
 
 

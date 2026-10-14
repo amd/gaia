@@ -253,10 +253,11 @@ def test_step_retry_can_be_turned_off(agent, monkeypatch):
     assert "I stopped at step 2" in result["result"]
 
 
-def test_read_timeout_is_not_retried_at_the_step_level(agent):
+@pytest.mark.parametrize("reason", ["read timeout", "upstream timeout"])
+def test_timeout_is_not_retried_at_the_step_level(agent, reason):
     """The request already spent its whole time budget; #1030's handling
     applies instead of another long wait."""
-    sent = _script(agent, _tool_call(1), _transient(reason="read timeout", attempts=1))
+    sent = _script(agent, _tool_call(1), _transient(reason=reason, attempts=1))
     result = agent.process_query("Check the ledger", max_steps=10)
     assert len(sent) == 2
     assert agent.sleeps == []

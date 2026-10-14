@@ -414,6 +414,72 @@ def test_cloud_rate_limit_gives_up_with_its_own_message_and_retry_state(
     assert 0.0 <= client.sleeps[1] <= 4.0
 
 
+# kw-05 (#5087): the gateway sent no response headers for 34 s, then dropped
+# the connection. Lemonade 2026.40.0 logged "Stream ended with: Failure when
+# receiving data from the peer (response code: 0)" and relayed this frame,
+# which carries no status_code.
+_KW05_DROP = (
+    "backend connection failed during SSE stream before DONE: "
+    "CURL error: Failure when receiving data from the peer"
+)
+
+
+def _streaming_error_frame(message):
+    frame = {"error": {"message": message, "type": "streaming_error"}}
+    return (200, _sse([frame], done=False), "text/event-stream")
+
+
+def test_status_less_cloud_drop_is_retried(make_client):
+    script = [_streaming_error_frame(_KW05_DROP), _GOOD_STREAM]
+    with FakeServer(script) as server:
+        client = make_client(server)
+        client.cloud_model_provider = lambda *a, **k: "amd"
+        assert _complete(client, True) == "Hello"
+    assert len(server.requests) == 2
+    assert client.last_request_retries == 1
+
+
+def test_status_less_cloud_drop_gives_up_in_plain_words(make_client, monkeypatch):
+    monkeypatch.setenv("GAIA_LLM_RETRY_ATTEMPTS", "3")
+    script = [_streaming_error_frame(_KW05_DROP)] * 3
+    with FakeServer(script) as server:
+        client = make_client(server)
+        client.cloud_model_provider = lambda *a, **k: "amd"
+        with pytest.raises(LemonadeClientError) as raised:
+            _complete(client, True)
+    assert len(server.requests) == 3
+    message = str(raised.value)
+    assert message.startswith("The cloud provider dropped the connection")
+    assert "provider settings" not in message
+    assert "CURL" not in message
+    state = retry_state_of(raised.value)
+    assert state is not None and state.last_reason == "connection dropped"
+
+
+def test_cloud_timeout_frame_is_retried_with_its_own_message(make_client, monkeypatch):
+    monkeypatch.setenv("GAIA_LLM_RETRY_ATTEMPTS", "2")
+    frame = _streaming_error_frame("SSE stream failed: CURL error: Timeout was reached")
+    with FakeServer([frame, frame]) as server:
+        client = make_client(server)
+        client.cloud_model_provider = lambda *a, **k: "amd"
+        with pytest.raises(LemonadeClientError, match="did not answer within"):
+            _complete(client, True)
+    assert len(server.requests) == 2
+
+
+def test_cloud_model_not_loaded_is_not_retried(make_client):
+    frame = {"error": {"message": "Cloud model not loaded", "type": "model_not_loaded"}}
+    script = [(200, _sse([frame], done=False), "text/event-stream")]
+    with FakeServer(script) as server:
+        client = make_client(server)
+        client.cloud_model_provider = lambda *a, **k: "amd"
+        with pytest.raises(LemonadeClientError) as raised:
+            _complete(client, True)
+    assert len(server.requests) == 1
+    assert client.sleeps == []
+    assert retry_state_of(raised.value) is None
+
+
 def _rate_limited(retry_after=None):
     body = json.dumps({"error": {"message": "Too Many Requests"}}).encode()
     headers = {"Retry-After": retry_after} if retry_after is not None else {}

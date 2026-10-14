@@ -154,6 +154,26 @@ _TRANSIENT_PHRASES = (
     "server is overloaded",
 )
 
+#: libcurl's wording for a transfer that broke at the connection level, as
+#: Lemonade relays it in a status-less in-stream error frame when its hop to a
+#: cloud provider fails, e.g. "backend connection failed during SSE stream
+#: before DONE: CURL error: Failure when receiving data from the peer".
+_CONNECTION_DROP_PHRASES = (
+    "backend connection failed during sse stream",
+    "failure when receiving data from the peer",
+    "failed sending data to the peer",
+    "transferred a partial file",
+    "server returned nothing",
+    "couldn't connect to server",
+    "couldn't resolve host name",
+    "stream error in the http/2 framing layer",
+)
+
+#: Lemonade's frame when its request to a cloud provider hit libcurl's time
+#: limit. Only the cloud proxy sends this to the client; a local llama-server
+#: timeout arrives in other words and stays unretried (see below).
+_CLOUD_TIMEOUT_PHRASE = "sse stream failed: curl error: timeout was reached"
+
 #: Body wording that makes a failure permanent whatever its status. A 500 is
 #: retried by default, so these are what keep a deterministic rejection from
 #: burning the whole retry budget.
@@ -194,17 +214,25 @@ def classify_http_failure(status: Optional[int], body: str = "") -> Optional[str
       some servers answer a request they will never accept with a 500.
     * Every other status — 400, 401, 403, 404, 413, 422, 501, … — is not.
     * With no status at all (an error event inside a stream), only a body
-      that names a failed upstream hop is retried.
+      that names a failed upstream hop — a dropped connection, a cloud time
+      limit, a proxy's upstream error — is retried.
     """
     from gaia.llm.lemonade_client import is_context_overflow_error
 
     text = (body or "").lower()
     if text and is_context_overflow_error(body):
         return None
-    transient = any(phrase in text for phrase in _TRANSIENT_PHRASES)
+    dropped = any(phrase in text for phrase in _CONNECTION_DROP_PHRASES)
+    transient = dropped or any(phrase in text for phrase in _TRANSIENT_PHRASES)
     permanent = any(phrase in text for phrase in _NOT_RETRYABLE_PHRASES)
     if status is None:
-        return "upstream failure" if transient and not permanent else None
+        if _CLOUD_TIMEOUT_PHRASE in text:
+            return "upstream timeout"
+        if permanent:
+            return None
+        if dropped:
+            return "connection dropped"
+        return "upstream failure" if transient else None
     if status in RETRYABLE_STATUSES:
         # A content filter or a request-shape verdict behind a proxy status is
         # still a verdict.

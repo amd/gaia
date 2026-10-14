@@ -1752,9 +1752,15 @@ _CLOUD_BILLING = {"fireworks": ("Fireworks AI", "https://fireworks.ai/account/bi
 
 
 def _cloud_request_error(
-    status: Optional[int], provider: Optional[str] = None
+    status: Optional[int],
+    provider: Optional[str] = None,
+    reason: Optional[str] = None,
 ) -> LemonadeClientError:
-    """Actionable cloud failures without reflecting provider response bodies."""
+    """Actionable cloud failures without reflecting provider response bodies.
+
+    *reason* is the retry classifier's verdict (``gaia.llm.retry``); it tells a
+    status-less hop failure apart from an unexplained one.
+    """
     if status in {401, 403}:
         return LemonadeAuthError(
             f"Cloud authentication or access was denied (HTTP {status}). "
@@ -1788,10 +1794,27 @@ def _cloud_request_error(
             "message again, or switch to a local model in the TUI provider "
             "settings to keep working now."
         )
-    code = f" (HTTP {status})" if status is not None else ""
+    if status is None:
+        if reason == "upstream timeout":
+            return LemonadeClientError(
+                "The cloud model did not answer within Lemonade's time limit. "
+                "Send your message again; if it keeps happening the provider "
+                "is overloaded, so wait a few minutes or pick another model."
+            )
+        if reason in ("connection dropped", "upstream failure"):
+            return LemonadeClientError(
+                "The cloud provider dropped the connection before the model "
+                "finished answering; no error code came back. This is usually "
+                "momentary, so send your message again."
+            )
+        return LemonadeClientError(
+            "The cloud request failed without an error code from the provider. "
+            "Send your message again; if it fails the same way, check the "
+            "provider connection in the TUI provider settings."
+        )
     return LemonadeClientError(
-        f"Cloud request through Lemonade failed{code}. Check the provider "
-        "connection and selected model in the TUI provider settings."
+        f"Cloud request through Lemonade failed (HTTP {status}). Check the "
+        "provider connection and selected model in the TUI provider settings."
     )
 
 
@@ -3924,7 +3947,9 @@ class LemonadeClient:
             if self.cloud_model_provider(model):
                 raise attach_retry_state(
                     _cloud_request_error(
-                        _cloud_error_status(e), self.cloud_model_provider(model)
+                        _cloud_error_status(e),
+                        self.cloud_model_provider(model),
+                        classify_exception(e),
                     ),
                     state,
                 ) from None

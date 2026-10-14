@@ -127,9 +127,11 @@ local server occasionally drop a request: a reset connection, a 502/503/504, a
 `Retry-After` up to the longest-wait cap below. Retried: connection errors and
 timeouts, 408, 429, 502, 503, 504, and 500 unless its body says the request
 itself was rejected — including a cloud model's 429 or 502 that Lemonade reports
-inside a stream that had already opened. Never retried: 400 (including
-content-filter rejections), 401, 403, 404, 413, 422, and context-window
-overflow. A stream is retried here only before its first token, so one request
+inside a stream that had already opened, and a cloud connection that dropped or
+hit Lemonade's time limit with no status code at all. Never retried: 400
+(including content-filter rejections), 401, 403, 404, 413, 422, a TLS
+certificate failure, and context-window overflow. A cloud time limit is retried
+only within the request's deadline, never again at the agent-step level. A stream is retried here only before its first token, so one request
 never repeats output. Each retry shows a status line such as
 "The model service is busy — retrying in 8s (2/4)".
 
