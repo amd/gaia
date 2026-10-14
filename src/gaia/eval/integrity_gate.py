@@ -254,11 +254,13 @@ def main(argv=None) -> int:
 
     print(
         "enforce=false - reported as warnings, build stays green. Re-run with "
-        "enforce=true (or put [eval-enforce] in the PR title) to make this blocking."
+        "enforce_integrity=true (or put [eval-enforce] in the PR title) to make "
+        "this blocking."
     )
     summary.append(
         "**enforce=false — reported only; the build stays green.** Re-run with "
-        "`enforce: true` (or put `[eval-enforce]` in the PR title) to make this blocking."
+        "`enforce_integrity: true` (or put `[eval-enforce]` in the PR title) to "
+        "make this blocking."
     )
     _write_summary(summary)
     return 0

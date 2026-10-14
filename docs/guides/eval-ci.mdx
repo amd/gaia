@@ -398,6 +398,18 @@ Even if the status stays PASS, a score drop of more than 2.0 points triggers a w
 | context_retention| 75%    | 100%   | +25%   |
 ```
 
+### Confirm a Regression Before Blocking on It
+
+One run is a noisy measurement. A model can fail a scenario it usually passes, so blocking on every PASS to FAIL makes a check that is red on every run. Re-run the scenario that flipped first:
+
+```bash
+gaia eval agent --scenario simple_factual_rag
+```
+
+Count it as a regression only if the re-run fails too.
+
+GAIA's own flagship gate (`.github/workflows/eval_flagship.yml`) works this way. It re-runs each flip up to twice on the same machine. A category fails at two confirmed regressions, or when its pass rate drops more than 15 points. In a category with six or fewer gated scenarios, one confirmed regression is already more than 15 points. The run fails when its total passes fall below the baseline's, with improvements elsewhere counting toward the total. Scenarios measured as unstable are quarantined: they still run and are reported with their pass rate, but they don't block. Thresholds and the quarantine list live in `tests/fixtures/gaia/flagship_regression_gate.json`, and `src/gaia/eval/regression_gate.py` applies them.
+
 ---
 
 ## JUnit Output for CI

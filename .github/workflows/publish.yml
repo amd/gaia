@@ -393,9 +393,9 @@ jobs:
   # runs on the single Lemonade slot.
   #
   # NOTE: the general `gaia eval agent` gate is intentionally NOT wired here yet.
-  # It runs on every qualifying PR (eval_flagship.yml) against the committed
-  # flagship baseline, but in report mode, so it has no enforced verdict to
-  # gate a release on. Wire it once the eval is enforcing.
+  # It runs on every qualifying PR and nightly (eval_flagship.yml) against the
+  # committed flagship baseline and blocks on confirmed regressions. Making it
+  # a release gate as well is a separate decision.
   email-eval:
     name: Email eval suite (release gate)
     needs: validate
