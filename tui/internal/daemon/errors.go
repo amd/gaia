@@ -1,10 +1,30 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 )
+
+// Briefer is an error with a one-line form for a status line: what is wrong and
+// the one thing to do. Error() keeps the full account (route, alternatives, log
+// path) for a details pane.
+type Briefer interface {
+	Brief() string
+}
+
+// Brief is err's one-line form when it has one, else its full text.
+func Brief(err error) string {
+	var b Briefer
+	if errors.As(err, &b) {
+		return b.Brief()
+	}
+	return err.Error()
+}
+
+// upgradeCoreBrief is the status-line form of UpgradeCoreHint.
+const upgradeCoreBrief = "GAIA's background service is out of date. Run `pip install --upgrade amd-gaia`."
 
 // NotRunningError means no daemon has registered itself at all — instance.json
 // is absent. Distinct from StaleError so a caller can decide to start one.
@@ -16,6 +36,11 @@ func (e *NotRunningError) Error() string {
 	return fmt.Sprintf(
 		"no GAIA daemon is registered (%s does not exist). "+
 			"Start one with `gaia daemon start`.", e.Path)
+}
+
+// Brief implements Briefer.
+func (e *NotRunningError) Brief() string {
+	return "GAIA's background service is not running. Run `gaia daemon start`."
 }
 
 // StaleKind classifies WHY a recorded instance cannot be trusted, because the
@@ -53,6 +78,11 @@ func (e *StaleError) Error() string {
 			"the daemon log is at %s.", e.Path, e.Reason, logPathForMessage())
 }
 
+// Brief implements Briefer.
+func (e *StaleError) Brief() string {
+	return "GAIA's background service is not responding. Run `gaia daemon restart`."
+}
+
 // VersionError means the running daemon speaks a contract this client cannot
 // use — a MAJOR skew, or a MINOR below the agents/relay floor.
 //
@@ -71,6 +101,9 @@ func (e *VersionError) Error() string {
 		e.Have, e.Want, e.Reason, UpgradeCoreHint)
 }
 
+// Brief implements Briefer.
+func (e *VersionError) Brief() string { return upgradeCoreBrief }
+
 // UpgradeCoreHint is the remedy for any host-API skew. It says a restart is not
 // the fix, so a user who tries one does not loop on it.
 const UpgradeCoreHint = "Upgrade the installed GAIA core so it matches this app: " +
@@ -88,6 +121,11 @@ func (e *StartError) Error() string {
 		"could not start the GAIA daemon: %s. Inspect the daemon log at %s, "+
 			"or run `gaia daemon start` in a terminal to see the failure directly.",
 		e.Reason, logPathForMessage())
+}
+
+// Brief implements Briefer.
+func (e *StartError) Brief() string {
+	return "GAIA's background service would not start. Run `gaia daemon start` to see why."
 }
 
 // RouteMissingError means the running daemon has no such route at all.
@@ -111,7 +149,7 @@ type RouteMissingError struct {
 func (e *RouteMissingError) Error() string {
 	alternative := ""
 	if e.Alternative != "" {
-		alternative = " " + e.Alternative + "."
+		alternative = " " + strings.TrimSuffix(e.Alternative, ".") + "."
 	}
 	// Diagnosis first, and in the first few words: the hub renders this in a
 	// one-row status bar that truncates at the terminal width, and "it is your
@@ -121,6 +159,9 @@ func (e *RouteMissingError) Error() string {
 			"cannot %s. %s%s The daemon log is at %s.",
 		e.Path, e.Op, UpgradeCoreHint, alternative, logPathForMessage())
 }
+
+// Brief implements Briefer.
+func (e *RouteMissingError) Brief() string { return upgradeCoreBrief }
 
 // IsRouteMissing reports whether a daemon answer describes a route the daemon
 // does not have, rather than one that answered with its own refusal.

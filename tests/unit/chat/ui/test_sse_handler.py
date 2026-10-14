@@ -1123,6 +1123,8 @@ class TestPrintStreamingText:
         assert len(events) == 1
         assert events[0]["type"] == "answer"
         assert events[0]["content"] == "Hello world"
+        # Mid-turn: print_final_answer still follows with the usage.
+        assert events[0]["streamed"] is True
         assert handler._stream_buffer == ""
 
     def test_brace_followed_by_non_json_emits(self, handler):

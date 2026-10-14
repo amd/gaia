@@ -611,6 +611,73 @@ def test_nothing_is_written_after_the_first_terminal_event():
     assert events[-1] is terminals[0], "something was written after the terminal event"
 
 
+class _JsonAnswerAgent(_FakeAgent):
+    """Streams a JSON-protocol answer, then prints the real final with usage."""
+
+    def process_query(self, query):
+        import time
+
+        self.queries.append(query)
+        self.console.print_streaming_text('{"answer": "2"}')
+        self.console.print_streaming_text("", end_of_stream=True)
+        # Give the drain time to see the streamed answer before deciding.
+        time.sleep(0.3)
+        self.cancelled_early = self.console.cancelled.is_set()
+        self.console.print_final_answer("2", total_tokens=7, input_tokens=900)
+        return {"result": "2"}
+
+
+def test_a_streamed_json_answer_does_not_cancel_the_turn():
+    """#5087: the answer pulled out of the stream was sent as the final, so the
+    run was cancelled before its answer-time checks and the usage was lost."""
+    agent = _JsonAnswerAgent()
+
+    events = [json.loads(line) for line in _lines(_run(agent, "say 2"))]
+
+    assert agent.cancelled_early is False
+    finals = [e for e in events if e["type"] in ("final", "error")]
+    assert len(finals) == 1
+    assert finals[0]["answer"] == "2"
+    assert finals[0]["usage"]["input_tokens"] == 900
+    assert finals[0]["usage"]["tokens"] == 7
+
+
+class _StepLimitAgent(_FakeAgent):
+    """Returns its answer the way a step-limit exit does: no answer event."""
+
+    def process_query(self, query):
+        self.queries.append(query)
+        return {
+            "result": "Here is what I got through.",
+            "steps_taken": 50,
+            "input_tokens": 35612,
+            "output_tokens": 1034,
+            "cached_tokens": 20000,
+        }
+
+
+def test_a_turn_that_returned_its_answer_still_reports_its_tokens():
+    """Without usage the TUI cost meter counted the turn as unmeasured."""
+    events = [json.loads(line) for line in _lines(_run(_StepLimitAgent(), "go"))]
+
+    assert events[-1] == {
+        "type": "final",
+        "answer": "Here is what I got through.",
+        "usage": {
+            "steps": 50,
+            "input_tokens": 35612,
+            "tokens": 1034,
+            "cached_tokens": 20000,
+        },
+    }
+
+
+def test_a_returned_answer_with_no_counts_invents_none():
+    events = [json.loads(line) for line in _lines(_run(_FakeAgent(), "go"))]
+
+    assert "usage" not in events[-1]
+
+
 def test_a_turn_that_ended_in_an_error_event_is_not_recorded():
     """Replaying a failure as if it were an answer teaches the model that the
     failure is what it said."""
@@ -1083,6 +1150,19 @@ def test_model_state_event_names_the_resolved_model_not_a_launch_flag(stub_lemon
     assert banner["model_remote"] is False
     assert banner["lemonade_reachable"] is True
     assert banner["lemonade_version"] == "8.1.2"
+
+
+def test_model_state_event_reports_the_running_agent_and_core_versions(
+    stub_lemonade,
+):
+    import gaia_agent
+
+    from gaia.version import version as core_version
+
+    banner = stdio._model_state_event(_ModelSwitchAgent())
+
+    assert banner["agent_version"] == gaia_agent.__version__
+    assert banner["gaia_version"] == core_version
 
 
 def _probed_url(monkeypatch, agent, running):

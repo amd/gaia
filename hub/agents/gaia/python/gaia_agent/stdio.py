@@ -72,6 +72,7 @@ import threading
 import traceback
 from typing import Any, Dict, List, Optional
 
+from gaia_agent import __version__ as agent_version
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
 
 from gaia.agents.base.readiness import (
@@ -92,6 +93,7 @@ from gaia.llm.lemonade_launcher import describe_client_hint
 from gaia.log_rotation import SharedRotatingFileHandler
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
+from gaia.version import version as gaia_version
 
 logger = get_logger(__name__)
 
@@ -468,6 +470,9 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
         "model_display": _model_display_name(model_id, is_claude),
         "model_backend": "claude" if is_claude else cloud_provider or "lemonade",
         "model_remote": is_claude or bool(cloud_provider),
+        # The header shows these, not an install record that may name another build.
+        "agent_version": agent_version,
+        "gaia_version": gaia_version,
     }
     # Reported even on the Claude path: embeddings (RAG, memory) still run on
     # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
@@ -1182,6 +1187,31 @@ def _memory_dump_event(agent: Any) -> Dict[str, Any]:
     return {"type": "final", "answer": json.dumps(payload)}
 
 
+def _usage_from_result(value: Any) -> Dict[str, Any]:
+    """Token counts for a turn that ended without printing its answer.
+
+    Error exits (and a step limit whose summary could not be written) return
+    the answer instead of printing it, so no ``answer`` event carried the usage
+    and the TUI cost meter read the turn as unmeasured. Same omit-don't-fake
+    rule as the printed path: a count that is absent or zero is left out.
+    """
+    if not isinstance(value, dict):
+        return {}
+    usage: Dict[str, Any] = {}
+    for src, dst in (
+        ("steps_taken", "steps"),
+        ("input_tokens", "input_tokens"),
+        ("output_tokens", "tokens"),
+    ):
+        count = value.get(src)
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+            usage[dst] = count
+    cached = value.get("cached_tokens")
+    if "input_tokens" in usage and isinstance(cached, int) and cached >= 0:
+        usage["cached_tokens"] = cached
+    return usage
+
+
 def run_turn(
     agent: Any,
     query: str,
@@ -1332,7 +1362,11 @@ def run_turn(
             logger.exception("Failed to preserve turn history")
             _write(_terminal_error(exc), out)
             return
-        _write({"type": "final", "answer": answer}, out)
+        final: Dict[str, Any] = {"type": "final", "answer": answer}
+        usage = _usage_from_result(value)
+        if usage:
+            final["usage"] = usage
+        _write(final, out)
     finally:
         # Every exit path, including the early returns above: leaving a dead
         # turn's handler attached would send the next decision to a thread that

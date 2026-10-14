@@ -398,6 +398,10 @@ class CanonicalTranslator:
         ]
 
     def _on_answer(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if event.get("streamed"):
+            # Mid-turn text; only the printed answer is the final.
+            content = str(event.get("content", "") or "")
+            return [{"type": "token", "delta": content}] if content else []
         usage: Dict[str, Any] = {}
         # ``tokens``, ``ttft`` and ``tok_per_s`` are already omitted upstream
         # when no real measurement exists (SSEOutputHandler.print_answer), so

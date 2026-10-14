@@ -487,7 +487,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 |---|---|---|
 | `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail`/`mcp_server` dropped (host derives its own label). |
 | `chunk` | `token` | `content` → `delta`. |
-| `answer` | `final` | `content` → `answer`; `elapsed`/`steps`/`tools_used`/`tokens`/`ttft`/`tok_per_s` → `usage`. |
+| `answer` | `final` | `content` → `answer`; `elapsed`/`steps`/`tools_used`/`tokens`/`ttft`/`tok_per_s`/`input_tokens`/`cached_tokens` → `usage`. An `answer` marked `streamed` (text pulled out of a streaming JSON reply, mid-turn) maps to a `token` instead: the agent's printed answer is the one `final`. |
 | `permission_request` | `needs_confirmation` | `tool` → `action`; render `args` as `summary`; carry `run_id`; `confirm_url` per §5. |
 
 ### 6.2 Every remaining top-level source event
@@ -674,6 +674,8 @@ does not list them. A plain progress `status` omits them.
 | `lemonade_reachable` | bool | Whether the local Lemonade server answered a health check. It is reported even for a remote chat model, because embeddings still run on Lemonade. A receiver must tell a missing field (an older agent) apart from `false`. |
 | `lemonade_version` | string? | The Lemonade version, when the health check reported one. |
 | `lemonade_base_url` | string | The Lemonade URL that was probed. |
+| `agent_version` | string | The running agent's own release version (`gaia_agent.__version__`). The TUI header shows this and no other source, so an agent that omits it gets a header with no version. |
+| `gaia_version` | string | The GAIA core version the running agent has loaded. |
 
 A turn whose history no longer fits the model's context sends one more `status`
 before it starts: `history_cut` is `{"turns": N, "tokens": T}`, the completed

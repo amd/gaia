@@ -78,6 +78,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			m.modelDisplay = e.ModelDisplay
 			m.modelBackend = e.ModelBackend
 			m.modelRemote = e.ModelRemote
+			// Replaced, not merged: a respawned agent may be another build.
+			m.agentVersion = e.AgentVersion
+			m.gaiaVersion = e.GaiaVersion
 			if e.LemonadeReachable != nil {
 				m.lemonadeKnown = true
 				m.lemonadeUp = *e.LemonadeReachable
@@ -137,7 +140,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			// --dev is where harness internals belong: suppressing them for
 			// everyone would make a wire-level bug invisible to whoever has to
 			// fix it.
-			m.setLiveStatus(truncateRunes("[harness] "+clean(e.Message), narrationMax))
+			m.setLiveStatus(truncateRunes(clean(e.Message), narrationMax))
 		}
 
 	case event.CanonicalTokenEvent:
@@ -748,7 +751,10 @@ func userFacingStatus(raw string) string {
 //     how to answer" once per agent-loop step; unfiltered, one turn spent three
 //     of its six log lines saying it.
 //   - A new stage with no completed work since the last one: replaces it. Two
-//     stages back to back are one stage changing, not two things done.
+//     stages back to back are one stage changing, not two things done — unless
+//     it returns to the stage standing before that work, in which case the
+//     passing line is dropped. A plan run re-announces "Following the plan to
+//     …" after each step's own status; replacing printed it once per tool call.
 //   - A new stage after a tool ran: its own line. The tool is evidence of work,
 //     and this is genuinely the next thing.
 func (m *ChatModel) setLiveStatus(msg string) {
@@ -761,13 +767,27 @@ func (m *ChatModel) setLiveStatus(msg string) {
 			if m.activity[i].Content == msg {
 				return
 			}
-			if !sawWork {
-				m.activity[i].Content = msg
+			if sawWork {
+				m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})
 				return
 			}
-			m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})
+			if m.standingStageBefore(i) == msg {
+				m.activity = append(m.activity[:i], m.activity[i+1:]...)
+				return
+			}
+			m.activity[i].Content = msg
 			return
 		}
 	}
 	m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})
+}
+
+// standingStageBefore is the last stage line before index i, or "" when none.
+func (m *ChatModel) standingStageBefore(i int) string {
+	for j := i - 1; j >= 0; j-- {
+		if m.activity[j].Kind == "status" {
+			return m.activity[j].Content
+		}
+	}
+	return ""
 }

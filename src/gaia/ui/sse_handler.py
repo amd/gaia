@@ -893,7 +893,11 @@ class SSEOutputHandler(OutputHandler):
                             len(answer_text),
                             answer_text[:100],
                         )
-                        self._emit({"type": "answer", "content": answer_text})
+                        # ``streamed``: the turn is not over. The agent's own
+                        # print_final_answer still follows, with the usage.
+                        self._emit(
+                            {"type": "answer", "content": answer_text, "streamed": True}
+                        )
                     else:
                         logger.debug("Filtered answer JSON: %s", stripped[:100])
                     self._stream_buffer = ""
