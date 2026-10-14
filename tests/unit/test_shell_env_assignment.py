@@ -246,7 +246,8 @@ def test_the_allowlist_still_decides_what_runs(tmp_path):
     result = _run("PYTHONPATH=. rm -rf x", tmp_path)
 
     assert result["status"] == "error", result
-    assert "'rm'" in result["error"], result
+    # No console to ask on, so the confirmable `rm` fails closed, naming it.
+    assert "`PYTHONPATH=. rm -rf x` needs your approval" in result["error"], result
     assert result["executed"] is False
 
 

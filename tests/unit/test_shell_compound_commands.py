@@ -196,7 +196,8 @@ def test_a_refused_segment_refuses_the_line_before_anything_runs(notes, monkeypa
     result = _run("ls && rm -rf /", notes)
 
     assert result["status"] == "error"
-    assert "not in the allowed list" in result["error"]
+    # No console here, so the confirmable `rm` fails closed, naming the line.
+    assert "`ls && rm -rf /` needs your approval" in result["error"]
     assert result["executed"] is False
     assert spawned == []
 

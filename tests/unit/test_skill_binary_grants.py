@@ -499,7 +499,8 @@ def test_a_policed_binary_is_refused_without_a_grant(monkeypatch):
         "gh", ["gh", "issue", "list"], "gh issue list"
     )
     assert error is not None
-    assert "shell:execute:gh" in error["error"]
+    assert error["tier"] == TIER_CONFIRM
+    assert "'gh' runs only after you approve" in error["error"]
 
 
 def test_a_binary_that_is_not_installed_is_not_blamed_on_a_missing_skill(monkeypatch):
@@ -539,59 +540,44 @@ def test_the_python_m_spelling_of_a_missing_binary_is_refused_the_same_way(
     assert BINARY_POLICIES["pytest"].substitute in error["error"]
 
 
-class _Manager:
-    """Just enough SkillManager for a refusal to look up who grants a CLI."""
-
-    def __init__(self, skills):
-        self._skills = skills
-
-    def discover(self):
-        return self._skills
-
-
 @pytest.fixture(name="gh_on_path")
 def _gh_on_path(monkeypatch):
-    """The grant-route refusal is what these tests check, so gh must look
-    installed — otherwise the not-installed refusal answers first."""
+    """The missing-grant answer is what these tests check, so the binary must
+    look installed — otherwise the not-installed refusal answers first."""
     monkeypatch.setattr(
         "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
     )
 
 
-def test_a_refusal_names_the_installed_skill_that_grants_the_binary(gh_on_path):
-    """Without the name the model has no route, and most gave up (#3764)."""
-    from gaia.skills.format import parse_skill
-
-    triage = parse_skill(
-        "---\nname: github-triage\ndescription: Triage GitHub work.\n"
-        "metadata:\n  gaia:\n    security_tier: community\n"
-        "    permissions:\n      - shell:execute:gh\n---\nBody.\n"
-    )
-    error = ShellToolsMixin._validate_command(
-        "gh",
-        ["gh", "issue", "list"],
-        "gh issue list",
-        skill_manager=_Manager({"github-triage": triage}),
-    )
-    assert error is not None
-    assert "load_skill with 'github-triage'" in error["error"]
+#: Grant syntax a user cannot act on. It belongs in the log, never in the text
+#: the model relays to the user (#5086).
+_GRANT_JARGON = ("SKILL.md", "shell:execute", "skill grant", "load_skill")
 
 
-def test_a_refusal_with_no_granting_skill_points_at_the_hub(gh_on_path):
-    error = ShellToolsMixin._validate_command(
-        "gh", ["gh", "issue", "list"], "gh issue list", skill_manager=_Manager({})
-    )
-    assert error is not None
-    assert "search_skill_hub" in error["error"]
-
-
-def test_a_refusal_without_a_skill_manager_does_not_claim_none_exists(gh_on_path):
+def test_a_missing_grant_asks_the_user_instead_of_naming_a_grant(gh_on_path):
+    """No grant means no pre-approval, not no: the user is asked (#5090)."""
     error = ShellToolsMixin._validate_command(
         "gh", ["gh", "issue", "list"], "gh issue list"
     )
     assert error is not None
-    assert "No installed skill declares" not in error["error"]
-    assert "could be looked up here" in error["error"]
+    assert error["tier"] == TIER_CONFIRM
+    assert "approve" in error["error"]
+    for jargon in _GRANT_JARGON:
+        assert jargon not in error["error"] + error["hint"], jargon
+
+
+def test_a_call_a_grant_would_refuse_too_keeps_its_real_reason(gh_on_path):
+    """A fetch is refused under a git grant as well, so blaming the missing
+    grant sent the model hunting for a skill that could not help (#5086)."""
+    error = ShellToolsMixin._validate_command(
+        "git", ["git", "fetch", "origin"], "git fetch origin"
+    )
+    assert error is not None
+    assert error["tier"] == TIER_REFUSE
+    assert "'git fetch' is not allowed" in error["error"]
+    assert "even with the user's approval" in error["hint"]
+    for jargon in _GRANT_JARGON:
+        assert jargon not in error["error"] + error["hint"], jargon
 
 
 def test_a_granted_binary_passes_the_shell_gate():
@@ -1982,10 +1968,11 @@ def test_the_old_whitelist_holes_are_closed(command, why_now):
 
 
 @pytest.mark.parametrize("command", ["git commit -m x", "git add .", "git blame f.py"])
-def test_a_write_needs_the_grant_and_the_refusal_says_so(command):
+def test_a_write_without_the_grant_asks_the_user(command):
     error = ShellToolsMixin._validate_command("git", shlex.split(command), command)
     assert error is not None
-    assert "shell:execute:git" in error["error"]
+    assert error["tier"] == TIER_CONFIRM
+    assert "runs only after you approve the exact command" in error["error"]
 
 
 def test_the_floor_widens_to_the_full_policy_once_granted():
@@ -2114,14 +2101,15 @@ def _validation_error(host, command):
     )
 
 
-def test_python_m_pytest_without_the_grant_points_at_the_skill(monkeypatch):
-    # Installed but ungranted: the answer is the grant, not "not installed".
+def test_python_m_pytest_without_the_grant_is_judged_as_pytest(monkeypatch):
+    # Installed but ungranted: asked about as pytest, not "not installed".
     monkeypatch.setattr(
         "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
     )
     error = _validation_error(_Gated(), "python -m pytest -q")
     assert error is not None
-    assert "shell:execute:pytest" in error["error"], error
+    assert error["tier"] == TIER_CONFIRM
+    assert "'pytest' runs only after you approve" in error["error"], error
     assert "allowed list" not in error["error"]
 
 

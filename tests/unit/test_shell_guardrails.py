@@ -751,12 +751,13 @@ class TestDeveloperBinariesRefusedByDefault:
         result = check("make build", bypass=False)
         assert "not in the allowed list for security reasons" in result["error"]
 
-    def test_gh_default_refusal_still_points_at_the_skill_grant(self):
-        # gh has a BINARY_POLICIES entry, so its refusal is the grant message,
-        # not the allowlist one. Bypass is an additional path to gh, not a
+    def test_gh_default_block_is_the_policy_one(self):
+        # gh has a BINARY_POLICIES entry, so its block comes from that policy,
+        # not the allowlist. Bypass is an additional path to gh, not a
         # replacement for skill_granted_binaries.
         result = check("gh issue list", bypass=False)
-        assert "shell:execute:gh" in result["error"]
+        assert result["tier"] == TIER_CONFIRM
+        assert "'gh' runs only after you approve" in result["error"]
 
 
 class TestBypassIsStillASet:
@@ -823,11 +824,11 @@ class TestOperatorsUnderBypass:
         assert result is not None
         assert "Shell operators" not in result["error"]
         assert "pytest" in result["error"]
-        # The grant id is only the refusal a machine with pytest on PATH gets;
-        # where it is absent the "not installed" refusal fires first. Either
-        # way the pipe is not the reason, which is what this test is about.
+        # Asking is only the answer a machine with pytest on PATH gets; where it
+        # is absent the "not installed" refusal fires first. Either way the
+        # pipe is not the reason, which is what this test is about.
         if shutil.which("pytest"):
-            assert "shell:execute:pytest" in result["error"]
+            assert result["tier"] == TIER_CONFIRM
 
 
 class TestPerSegmentWalkSurvivesBypass:
@@ -1433,12 +1434,18 @@ class TestBlanketApproval:
     ):
         error = refusal("rm notes.txt")
         assert error is not None
-        assert "GAIA_AUTO_APPROVE_TOOLS" in error["hint"]
+        assert error["tier"] == TIER_REFUSE
+        assert "`rm notes.txt` needs your approval" in error["error"]
+        assert "run the request interactively" in error["error"]
 
-    def test_an_embedders_opt_in_is_refused_the_same_way(self):
-        error = refusal("rm notes.txt", auto_approve=True)
+    def test_an_embedders_opt_in_is_refused_the_same_way(self, caplog):
+        with caplog.at_level("INFO", logger="gaia.agents.tools.shell_tools"):
+            error = refusal("rm notes.txt", auto_approve=True)
         assert error is not None
-        assert "auto_approve_gated_tools" in error["hint"]
+        assert "needs your approval" in error["error"]
+        # Which switch made the run unattended is for the log, not the user.
+        assert "auto_approve_gated_tools" not in error["error"]
+        assert "auto_approve_gated_tools" in caplog.text
 
     def test_the_no_prompt_list_still_runs_under_either(self, env_pre_approves):
         assert refusal("git status") is None

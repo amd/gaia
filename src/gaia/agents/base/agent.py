@@ -41,7 +41,11 @@ from typing import (
 )
 
 from gaia.agents.base.completion import CompletionEvidence, incomplete_answer
-from gaia.agents.base.console import AgentConsole, SilentConsole
+from gaia.agents.base.console import (
+    AgentConsole,
+    SilentConsole,
+    user_denial_message,
+)
 from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_KEEP_STEPS,
     DEFAULT_EVICT_MIN_BATCH_TOKENS,
@@ -491,6 +495,13 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # applying the day a non-Windows backend (plyer) becomes reachable.
     "notify_desktop",
 }
+
+#: Put on a call the user declined, so the model stops instead of rerouting.
+DECLINED_HINT = (
+    "The user declined this. Do not try to get the same result another way "
+    "(a different command, tool, or script). Tell the user what you were going "
+    "to do and why, then stop."
+)
 
 # Tools whose result is nothing but a receipt for what the agent itself just
 # did. EVERY other tool is treated as bringing in content the user did not type
@@ -5525,8 +5536,12 @@ Do NOT wrap conversational replies in JSON.
             # where approval took five minutes does not report the tool as
             # having taken five minutes.
             _confirm_started = time.perf_counter()
+            # A host may add what the arguments leave out, such as where a
+            # shell call runs. Display only: the tool runs with tool_args.
+            shows = getattr(self, "confirmation_args_for_call", None)
+            prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
             try:
-                approved = self.console.confirm_tool_execution(tool_name, tool_args)
+                approved = self.console.confirm_tool_execution(tool_name, prompt_args)
             finally:
                 # Accumulates: a tool body that invokes another confirmed tool
                 # asks twice, and the outer timer resets this per turn anyway.
@@ -5540,6 +5555,8 @@ Do NOT wrap conversational replies in JSON.
                     # Nobody said no, so this is not a refusal to route around.
                     denied["timed_out"] = True
                 else:
+                    if denied_error == user_denial_message(tool_name):
+                        denied["hint"] = DECLINED_HINT
                     ledger = getattr(self, "_denied_effects", None)
                     if ledger is not None:
                         ledger.record(tool_name, tool_args, denied_error)

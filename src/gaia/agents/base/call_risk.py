@@ -318,6 +318,19 @@ def call_risk(tool_name: str, tool_args: Any) -> Optional[str]:
     return None
 
 
+#: The plain line a command prompt shows under the command. A read needs no
+#: warning, and front-ends already print their own sentence for a delete.
+_PLAIN_NOTES = {
+    WRITE: "Changes files or repository state where it runs.",
+    EXECUTE: "Can run any code, with your permissions.",
+}
+
+
+def plain_risk_note(risk: Optional[str]) -> str:
+    """One plain sentence for *risk* on a command prompt, or "" when none is due."""
+    return _PLAIN_NOTES.get(risk or "", "")
+
+
 __all__ = [
     "DESTRUCTIVE",
     "EXECUTE",
@@ -325,5 +338,6 @@ __all__ = [
     "SHELL_TOOLS",
     "WRITE",
     "call_risk",
+    "plain_risk_note",
     "shell_command_risk",
 ]

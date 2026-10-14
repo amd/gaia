@@ -1320,34 +1320,6 @@ def _protected_folder(resolved_path: str) -> Optional[str]:
     return None
 
 
-def _grant_route(binary: str, skill_manager: Any) -> str:
-    """How to actually get *binary* granted, naming the skill where one exists.
-
-    "Load a skill that declares it" left models no route to follow.
-    """
-    from gaia.agents.base.skill_catalog import skills_granting
-
-    granting = (
-        skills_granting(skill_manager.discover(), binary)
-        if skill_manager is not None
-        else []
-    )
-    if granting:
-        return (
-            f"Call load_skill with {' or '.join(repr(n) for n in granting)}, "
-            "then run the command again."
-        )
-    if skill_manager is not None:
-        return (
-            f"No installed skill declares 'shell:execute:{binary}'; "
-            "search_skill_hub can find one."
-        )
-    return (
-        f"No skill that grants 'shell:execute:{binary}' could be looked up here; "
-        "list_skills or search_skill_hub can find one."
-    )
-
-
 def _operator_check_text(command: str) -> str:
     """The part of *command* the operator blocklist applies to.
 
@@ -2527,7 +2499,6 @@ class ShellToolsMixin:
                     segment,
                     step.text if len(step.segments) == 1 else " ".join(segment),
                     granted_binaries=granted,
-                    skill_manager=getattr(self, "skill_manager", None),
                     bypass_gates=bypass,
                 )
                 if error:
@@ -2590,7 +2561,7 @@ class ShellToolsMixin:
         if _reaches_the_prompt(error):
             if not self._approval_is_blanket_only():
                 return None
-            error = self._blanket_approval_refusal(error)
+            error = self._blanket_approval_refusal(error, command)
         logger.info(
             "Refusing %r before the confirmation prompt: %s",
             command,
@@ -2631,27 +2602,41 @@ class ShellToolsMixin:
             return True
         return self._approval_is_blanket_only()
 
-    def _blanket_approval_refusal(self, error: Dict[str, Any]) -> Dict[str, Any]:
-        """A confirmable command's block, re-explained for an unasked run."""
+    def _blanket_approval_refusal(
+        self, error: Dict[str, Any], command: str
+    ) -> Dict[str, Any]:
+        """A confirmable command's block, re-explained for an unasked run.
+
+        Fails closed: nobody can answer the prompt this command needs. The
+        user-facing text is one plain sentence naming what they can do; which
+        switch made the run unattended goes to the log.
+        """
         if getattr(self, "console", None) is None:
-            why = (
-                "This run has no console, so nothing could show the confirmation "
-                "prompt this command needs."
+            why = "this run has no console to show the confirmation prompt on"
+            plain = (
+                f"Not run: `{command}` needs your approval, and nothing in this "
+                "run can ask you — start the request from the GAIA terminal UI "
+                "or Agent UI to approve it there."
             )
         else:
             why = (
-                "This run approves prompts automatically (GAIA_AUTO_APPROVE_TOOLS "
-                "or auto_approve_gated_tools), which does not extend to commands "
-                "outside the no-prompt list."
+                "this run pre-approves prompts (GAIA_AUTO_APPROVE_TOOLS or "
+                "auto_approve_gated_tools), which does not extend to commands "
+                "outside the no-prompt list"
             )
-        return {
-            **error,
-            "tier": TIER_REFUSE,
-            "hint": (
-                f"{why} Run it interactively to approve it, or turn on full "
-                "access in the TUI."
-            ),
+            plain = (
+                f"Not run: `{command}` needs your approval, and this run "
+                "approves automatically only commands that are safe unattended "
+                "— run the request interactively to approve it, or turn on full "
+                "access."
+            )
+        logger.info("Refused %r because %s: %s", command, why, error.get("error"))
+        unasked = {
+            key: value
+            for key, value in error.items()
+            if key not in ("hint", "examples")
         }
+        return {**unasked, "tier": TIER_REFUSE, "error": plain}
 
     def skill_grant_covers_call(
         self, tool_name: str, tool_args: Dict[str, Any]
@@ -2731,6 +2716,33 @@ class ShellToolsMixin:
             ", ".join(sorted(granted)),
         )
         return True
+
+    def confirmation_args_for_call(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """The arguments the confirmation prompt shows for this call.
+
+        A shell call with no ``working_directory`` runs where the session's last
+        ``cd`` left it, which the arguments alone do not say. When that is not
+        the folder the session was opened in, the prompt is told, so nobody
+        approves a ``git commit`` believing it lands in a different repository.
+        Display only — the call itself still runs with its own arguments.
+
+        Duck-typed, like :meth:`skill_grant_covers_call`.
+        """
+        if tool_name != _POLICY_GATED_SHELL_TOOL or not isinstance(tool_args, dict):
+            return tool_args
+        if tool_args.get("working_directory"):
+            return tool_args
+        session = getattr(self, "_shell_session", None)
+        if session is None or session.closed:
+            return tool_args
+        # Resolved on both sides: the session stores a resolved path, so a
+        # symlinked start folder must not read as a move.
+        here = os.path.normcase(str(Path.cwd().resolve()))
+        if os.path.normcase(str(Path(session.cwd).resolve())) == here:
+            return tool_args
+        return {**tool_args, "working_directory": session.cwd}
 
     #: Slice length for the pacing wait. Short enough that a Stop lands
     #: promptly, long enough not to spin.
@@ -3086,7 +3098,6 @@ class ShellToolsMixin:
         cmd_parts: list,
         command: str,
         granted_binaries: frozenset = frozenset(),
-        skill_manager: Any = None,
         bypass_gates: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -3096,8 +3107,6 @@ class ShellToolsMixin:
             cmd_base: The lowercased command name.
             cmd_parts: The shlex-split command.
             command: The raw command string.
-            skill_manager: The host's skill manager, so refusing an ungranted CLI
-                can name the installed skill that grants it. Optional.
             granted_binaries: Skill-granted CLIs for *this* agent instance. Passed
                 in rather than read from module state so the grant can never be
                 global.
@@ -3202,18 +3211,34 @@ class ShellToolsMixin:
                 # Not installed is not "load the skill": reloading cannot fix it.
                 message = f"Command '{binary}' cannot run: {policy.unavailable_note()}"
                 hint = "Do not retry this command or reload the skill."
-            else:
-                # Name the skill: "a skill that declares it" left models no route.
-                message = f"{decision.message} {_grant_route(binary, skill_manager)}"
-                # Only the missing grant is in the way when the same invocation
-                # would run with one — that is a question the user can answer.
-                if granted_decision.outcome != REFUSE:
-                    tier = TIER_CONFIRM
+            elif granted_decision.outcome != REFUSE:
+                # Only the missing grant is in the way, and a grant is only
+                # pre-approval: the user at the prompt can approve it instead.
+                logger.debug(
+                    "No skill grants shell:execute:%s, so %r goes to the "
+                    "confirmation prompt",
+                    binary,
+                    command,
+                )
+                tier = TIER_CONFIRM
+                message = decision.message
                 hint = (
-                    f"{policy.summary} To go beyond that, load a skill "
-                    f"declaring 'shell:execute:{binary}' — the grant is what "
-                    "widens this, not a different spelling of the command. If "
-                    f"{binary} itself is missing: {policy.install_hint}"
+                    "It runs once the user approves it at the prompt. If they "
+                    "decline, do not reach the same result another way."
+                )
+            else:
+                # A grant would not run it either, so blaming the missing grant
+                # would send the model hunting for a skill that cannot help.
+                logger.debug(
+                    "Refusing %r: refused even under a shell:execute:%s grant",
+                    command,
+                    binary,
+                )
+                message = granted_decision.message
+                hint = (
+                    "GAIA will not run this, even with the user's approval. "
+                    "Tell the user the exact command and why it is blocked, so "
+                    "they can run it themselves if they want to."
                 )
             return {
                 "status": "error",
@@ -3675,7 +3700,7 @@ class ShellToolsMixin:
                 if error and not _reaches_the_prompt(error):
                     return error
                 if error and unconfirmed:
-                    return self._blanket_approval_refusal(error)
+                    return self._blanket_approval_refusal(error, command)
 
                 granted = skill_granted_binaries(self)
 

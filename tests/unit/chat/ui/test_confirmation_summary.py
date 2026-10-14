@@ -118,9 +118,22 @@ def test_the_translator_uses_it_and_carries_the_risk():
             "risk": "execute",
         }
     )
-    assert event["summary"] == "pytest -q"
+    assert event["summary"] == "pytest -q\nCan run any code, with your permissions."
     assert event["risk"] == "execute"
     assert "run_shell_command" not in event["summary"]
+
+
+def test_a_read_command_gets_no_risk_line():
+    translator = CanonicalTranslator(run_id="r1", agent_id="gaia", debug=False)
+    [event] = translator.translate(
+        {
+            "type": "permission_request",
+            "tool": "run_shell_command",
+            "args": {"command": "ls"},
+            "risk": "read",
+        }
+    )
+    assert event["summary"] == "ls"
 
 
 def test_other_tools_keep_the_labelled_summary():

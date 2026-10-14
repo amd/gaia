@@ -517,6 +517,7 @@ prompt shows the command once, labelled by what it does:
  RUNS CODE  Run this command?
  python -m pytest -q tests/ 2>&1
  in ~/AppData/…/newuser/proj
+ Can run any code, with your permissions.
  mode: ask · shift+tab to change · expires in 10 minutes
  y once · a always: pytest (this session) · n/esc deny
 ```
@@ -530,7 +531,17 @@ prompt shows the command once, labelled by what it does:
 
 Paths are shown relative to the folder you started GAIA in, a leading `cd` moves
 to its own `in …` line, and a long command keeps its start and its end with the
-middle marked as cut.
+middle marked as cut. The `in …` line also appears when an earlier `cd` left the
+session in another folder. A `WRITE` or `RUNS CODE` command gets one plain line
+saying what it can do.
+
+A command GAIA doesn't run unasked — `python script.py`, `git commit`, `npm test`
+with no skill loaded for it — gets this prompt rather than an error. `a` covers
+that one command family (`git commit`, `python (any script)`) for the session and
+nothing wider. If you deny it, the agent is told not to get the same result
+another way, and stops to explain. A few commands are refused even with your
+approval, such as `git push` or Python code passed with `-c`; the agent says what
+it would have run so you can run it yourself.
 
 | Key | What it does |
 |---|---|
@@ -661,7 +672,9 @@ this command?`, `Write this file?`, `Install this skill?`); any other tool reads
 `Allow <tool>?`. A `DESTRUCTIVE` prompt adds a warning line under the call.
 
 **y** runs it once, **n** or **esc** denies. Denying is a normal outcome, not an
-error — the agent is told and carries on.
+error — the agent is told you said no, doesn't try another way to do the same
+thing, and carries on with whatever doesn't need it. When nobody can answer — a
+scheduled or background run, or a prompt that expires — the command doesn't run.
 
 The prompt names the tool *and its arguments*, because the argument is usually
 the part that matters. An "always allow" answer, where offered, is scoped to

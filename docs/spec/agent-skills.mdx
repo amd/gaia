@@ -415,8 +415,11 @@ again — dropping it would change the block from turn to turn. Read-only
 host's marketplace, written for working *on* a repo rather than answering a
 user's question.
 
-A CLI granted through `shell:execute:<binary>` is refused until its skill is
-loaded, and the refusal names the skill to load.
+A CLI granted through `shell:execute:<binary>` is not refused before its skill
+is loaded: each call goes to the user's approval prompt instead. The grant is
+pre-approval — loading the skill lets the policy's reads run without a prompt.
+A call the policy refuses outright (`git push`, `gh auth token`) stays refused
+either way. With nobody to answer the prompt, the call is refused.
 
 Tunable: `GAIA_SKILL_DISCOVERY` (`0` hides the list).
 

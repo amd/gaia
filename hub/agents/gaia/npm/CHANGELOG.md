@@ -6,6 +6,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A command no loaded skill grants asks you instead of failing.** `python
+  script.py`, `git commit` or `pip install` with no skill granting them used to
+  come back as "needs a skill grant … declares 'shell:execute:git' in its
+  SKILL.md", which nobody could act on. They now raise the approval prompt; a
+  skill grant still skips it for reads. A prompt's `summary` for a write or
+  code-running command ends with one plain line on what it can do, and the
+  `in <folder>` line also appears when an earlier `cd` moved the session. A
+  call you decline tells the agent not to reach the same result another way.
+  Commands refused even with approval (`git push`, `git fetch`, `python -c`, a
+  path outside the project) now give their real reason, not a missing grant,
+  and a run nobody can answer refuses in one plain sentence.
 - **The sidecar's start-up warm-up now makes the first question fast.** It
   primed only the agent's own instructions, without the tool list or the rest
   of the system prompt, so the first question re-read all ~19K prompt tokens

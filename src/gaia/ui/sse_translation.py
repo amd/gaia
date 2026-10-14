@@ -71,6 +71,7 @@ import os
 import re
 from typing import Any, Callable, Dict, List, Optional
 
+from gaia.agents.base.call_risk import plain_risk_note
 from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
@@ -461,6 +462,12 @@ class CanonicalTranslator:
         if not isinstance(args, dict):
             args = {}
         summary = self._render_args_summary(tool, args)
+        # The command, where it runs, then one plain line on what it can do.
+        note = (
+            plain_risk_note(event.get("risk")) if tool in COMMAND_SUMMARY_TOOLS else ""
+        )
+        if note:
+            summary = f"{summary}\n{note}"
         # confirm_url omitted: stateless stop-and-hand-off (D1, spec §5 / Q4).
         canonical: Dict[str, Any] = {
             "type": "needs_confirmation",
