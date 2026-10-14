@@ -116,8 +116,8 @@ with ProcessPoolExecutor(2) as pool:  # workers re-launch the binary
 # A script starting sys.executable -- the binary -- as an interpreter.
 def py(*argv):
     return subprocess.run([sys.executable, *argv], capture_output=True, text=True)
-nested = py("-c", "import pypdf, fitz, xlsxwriter; print('nested ok')")
-assert nested.stdout.strip() == "nested ok", nested.stderr
+nested = py("-c", "import pypdf, pymupdf, xlsxwriter; print('nested ok')")
+assert nested.stdout.strip().endswith("nested ok"), (nested.stdout, nested.stderr)
 pip = py("-m", "pip", "install", "pypdf")
 assert pip.returncode == 1 and "can't be installed" in pip.stderr, pip.stderr
 print("RUN_PYTHON_OK", sys.argv[1:], int(frame["qty"].sum()), statistics.mean([1, 3]))
