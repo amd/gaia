@@ -13,6 +13,7 @@ the turn at once, context overflow trims and retries once, a model loaded with
 too small a window re-raises for reload, and an auth error is not retried.
 """
 
+import io
 import json
 import threading
 from types import SimpleNamespace
@@ -35,10 +36,19 @@ from gaia.llm.lemonade_client import (
     LemonadeAuthError,
     LemonadeClientError,
 )
-from gaia.llm.retry import RetryState, attach_retry_state
+from gaia.llm.retry import (
+    ModelCallRetrier,
+    RetryNotice,
+    RetryPolicy,
+    RetryState,
+    attach_retry_state,
+    tag_http_failure,
+)
 
 _TOOL = "read_ledger_for_retry_test"
 _ANSWER = "The ledger balances: 3 entries, total 42."
+#: Pages the tool actually read, in order — proves a step retry never re-runs one.
+_TOOL_RUNS = []
 
 
 class _LedgerAgent(Agent):
@@ -49,6 +59,7 @@ class _LedgerAgent(Agent):
         @tool
         def read_ledger_for_retry_test(page: int) -> dict:
             """Read one page of the ledger."""
+            _TOOL_RUNS.append(page)
             return {"status": "success", "page": page, "entries": 3}
 
     def _create_console(self):
@@ -60,6 +71,7 @@ class _LedgerAgent(Agent):
 @pytest.fixture
 def clean_registry():
     snapshot = dict(_TOOL_REGISTRY)
+    _TOOL_RUNS.clear()
     yield
     _TOOL_REGISTRY.clear()
     _TOOL_REGISTRY.update(snapshot)
@@ -177,7 +189,7 @@ def test_transient_failure_mid_run_does_not_end_the_run(agent, wrapped):
     result = agent.process_query("Check the ledger", max_steps=10)
 
     assert _ANSWER in result["result"]
-    assert "couldn't finish" not in result["result"]
+    assert "I stopped at step" not in result["result"]
     # Progress was kept: the retry sent exactly what the failed call sent,
     # both tool results included.
     assert len(sent) == 4
@@ -210,12 +222,13 @@ def test_persistent_failure_ends_with_a_plain_unreachable_answer(agent):
     result = agent.process_query("Check the ledger", max_steps=10)
 
     text = strip_verification_scope(result["result"])
-    assert "couldn't finish this task" in text
-    assert "language model stopped responding at step 3" in text
-    assert "5 attempts failed, the last with HTTP 503" in text
-    assert "The task is incomplete." in text
-    # What had been done so far.
-    assert f"{_TOOL}: 2x" in text
+    # One sentence saying where it stopped and what is kept, then the next step.
+    assert text == (
+        "I stopped at step 3 because the model service stayed unavailable "
+        "(5 attempts failed, the last with HTTP 503, then 2 more after waiting); "
+        f"the 2 tool calls already made ({_TOOL} 2x) and what they changed are "
+        'kept. Say "continue" once the service is back and I\'ll pick up from here.'
+    )
     # Cannot pass for success.
     assert result["status"] == "failed"
     assert result["model_unreachable"] is True
@@ -227,7 +240,7 @@ def test_persistent_failure_ends_with_a_plain_unreachable_answer(agent):
 def test_unreachable_before_any_tool_says_nothing_ran(agent):
     _script(agent, *[_transient() for _ in range(1 + DEFAULT_MODEL_STEP_RETRIES)])
     result = agent.process_query("Check the ledger", max_steps=10)
-    assert "No tools had run yet" in result["result"]
+    assert "before any tool ran" in result["result"]
     assert result["status"] == "failed"
 
 
@@ -237,7 +250,7 @@ def test_step_retry_can_be_turned_off(agent, monkeypatch):
     result = agent.process_query("Check the ledger", max_steps=10)
     assert len(sent) == 2
     assert agent.sleeps == []
-    assert "couldn't finish this task" in result["result"]
+    assert "I stopped at step 2" in result["result"]
 
 
 def test_read_timeout_is_not_retried_at_the_step_level(agent):
@@ -247,7 +260,7 @@ def test_read_timeout_is_not_retried_at_the_step_level(agent):
     result = agent.process_query("Check the ledger", max_steps=10)
     assert len(sent) == 2
     assert agent.sleeps == []
-    assert "couldn't finish this task" not in result["result"]
+    assert "I stopped at step" not in result["result"]
 
 
 def test_stop_during_the_cool_down_cancels_the_turn(agent):
@@ -306,6 +319,138 @@ def test_stream_cut_after_partial_output_is_asked_again_cleanly(clean_registry):
     assert result["model_retries"]["step_retries"] == 1
 
 
+def test_step_retry_never_reruns_a_tool(agent):
+    """Only the model call is repeated: each tool ran exactly once."""
+    _script(agent, _tool_call(1), _transient(), _tool_call(2), _transient(), _ANSWER)
+    result = agent.process_query("Check the ledger", max_steps=10)
+    assert _ANSWER in result["result"]
+    assert _TOOL_RUNS == [1, 2]
+    assert result["model_retries"]["step_retries"] == 2
+
+
+def _gateway_429(retry_after=None):
+    headers = {"Retry-After": retry_after} if retry_after is not None else None
+    return tag_http_failure(
+        LemonadeClientError("Cloud rate limit reached (HTTP 429)."),
+        429,
+        '{"error":{"message":"cloud (amd) request failed","status_code":429}}',
+        headers,
+    )
+
+
+def test_client_retries_show_one_status_line_each(agent):
+    """A client-level retry inside the model call surfaces as a short status
+    line, not silence: the turn's listener reaches the retrier."""
+    shown = []
+    agent.console.print_warning = shown.append
+    waits = []
+    failures = [_gateway_429("8"), _gateway_429()]
+
+    def flaky():
+        if failures:
+            raise failures.pop(0)
+        return _ANSWER
+
+    retrier = ModelCallRetrier(
+        RetryPolicy(max_attempts=5, base_delay=2, max_delay=30, deadline=120),
+        sleep=waits.append,
+        clock=lambda: 0.0,
+    )
+    chat = MagicMock()
+    chat.get_stats = MagicMock(return_value={})
+    chat.send_messages = MagicMock(
+        side_effect=lambda *_, **__: SimpleNamespace(text=retrier.call(flaky), stats={})
+    )
+
+    def _stream(*_, **__):
+        yield SimpleNamespace(text=retrier.call(flaky), is_complete=False, stats=None)
+        yield SimpleNamespace(text="", is_complete=True, stats={})
+
+    chat.send_messages_stream = MagicMock(side_effect=_stream)
+    agent.chat = chat
+
+    result = agent.process_query("Check the ledger", max_steps=5)
+    assert _ANSWER in result["result"]
+    # Retry-After honoured exactly; the second wait is jittered within 0..4s.
+    assert waits[0] == 8.0
+    assert 0.0 <= waits[1] <= 4.0
+    assert shown[0] == "The model service is busy — retrying in 8s (1/4)"
+    assert shown[1].startswith("The model service is busy — retrying ")
+    assert shown[1].endswith("(2/4)")
+
+
+@pytest.mark.parametrize(
+    "notice, line",
+    [
+        (
+            RetryNotice("HTTP 429", 8.4, 2, 4),
+            "The model service is busy — retrying in 8s (2/4)",
+        ),
+        (
+            RetryNotice("connection error", 0.3, 1, 4),
+            "The connection to the model service dropped — retrying now (1/4)",
+        ),
+        (
+            RetryNotice("HTTP 502", 3.0, 3, 4),
+            "The model service had a problem (HTTP 502) — retrying in 3s (3/4)",
+        ),
+    ],
+)
+def test_retry_status_line_wording(agent, notice, line):
+    shown = []
+    agent.console.print_warning = shown.append
+    agent._announce_model_retry(notice)
+    assert shown == [line]
+
+
+def _tui_turn(agent):
+    """One turn through the stdio transport the TUI drives, as the canonical
+    events it writes to the pipe."""
+    from gaia_agent.stdio import run_turn
+
+    # History sizing needs a real model's context window; not under test here.
+    agent.conversation_history = None
+    out = io.StringIO()
+    run_turn(agent, "Check the ledger", out)
+    return [json.loads(line) for line in out.getvalue().splitlines() if line]
+
+
+def test_tui_turn_survives_a_step_retry_and_ends_with_the_answer(agent):
+    """On the TUI's wire a step retry is a status line, never a terminal
+    error that would cut the turn off."""
+    _script(agent, _tool_call(1), _transient(reason="HTTP 502"), _ANSWER)
+    events = _tui_turn(agent)
+    types = [e["type"] for e in events]
+    assert "error" not in types
+    assert types[-1] == "final"
+    assert _ANSWER in events[-1]["answer"]
+    assert any(
+        e["type"] == "status"
+        and "retrying this step in 1s (1/2)" in e.get("message", "")
+        for e in events
+    )
+    assert _TOOL_RUNS == [1]
+
+
+def test_tui_turn_gives_up_with_the_answer_not_an_error(agent):
+    """When retries run out the user gets the plain answer as the turn's
+    final event; an error event would end the turn without it."""
+    _script(
+        agent,
+        _tool_call(1),
+        *[_transient(reason="HTTP 429") for _ in range(1 + DEFAULT_MODEL_STEP_RETRIES)],
+    )
+    events = _tui_turn(agent)
+    types = [e["type"] for e in events]
+    assert "error" not in types
+    assert types[-1] == "final"
+    assert events[-1]["answer"].startswith("I stopped at step 2 because the model")
+    # Printed by the agent itself (so the CLI shows it too), not recovered
+    # from the return value by the transport's fallback.
+    assert "usage" in events[-1]
+    assert _TOOL_RUNS == [1]
+
+
 # ── permanent failures and the pinned existing paths ─────────────────────
 
 
@@ -318,7 +463,7 @@ def test_permanent_error_still_ends_the_turn_promptly(agent):
     result = agent.process_query("Check the ledger", max_steps=10)
     assert len(sent) == 2
     assert agent.sleeps == []
-    assert "couldn't finish this task" not in result["result"]
+    assert "I stopped at step" not in result["result"]
     assert result["model_retries"]["step_retries"] == 0
     assert result["status"] == "failed"
 
@@ -342,7 +487,7 @@ def test_auth_error_is_not_retried(agent):
     result = agent.process_query("Check the ledger", max_steps=10)
     assert len(sent) == 1
     assert agent.sleeps == []
-    assert "couldn't finish this task" not in result["result"]
+    assert "I stopped at step" not in result["result"]
 
 
 def _overflow(tagged: bool):

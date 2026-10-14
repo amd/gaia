@@ -116,7 +116,13 @@ from gaia.llm.lemonade_client import (
     truncation_budget,
 )
 from gaia.llm.providers.lemonade import CONNECTION_FAILURE_RE
-from gaia.llm.retry import RetryState, describe_retry_state, retry_state_of
+from gaia.llm.retry import (
+    RetryNotice,
+    RetryState,
+    describe_retry_state,
+    model_retry_notices,
+    retry_state_of,
+)
 from gaia.utils.power import stay_awake
 from gaia.utils.terminal import stdin_is_interactive
 
@@ -6514,6 +6520,24 @@ Do NOT wrap conversational replies in JSON.
             return None
         return model_retry_cooldown() * (2**retries_used)
 
+    @staticmethod
+    def _model_trouble(reason: Optional[str]) -> str:
+        """Plain words for why the model service failed, from a retry reason."""
+        if reason in ("HTTP 429", "HTTP 503"):
+            return "The model service is busy"
+        if reason in ("connection error", "connection dropped", "connect timeout"):
+            return "The connection to the model service dropped"
+        return f"The model service had a problem ({reason or 'unknown error'})"
+
+    def _announce_model_retry(self, notice: RetryNotice) -> None:
+        """One status line per client-level retry, so a wait never reads as a
+        hang: "The model service is busy — retrying in 8s (2/4)"."""
+        when = f"in {notice.delay:.0f}s" if notice.delay >= 1 else "now"
+        self.console.print_warning(
+            f"{self._model_trouble(notice.reason)} — retrying {when} "
+            f"({notice.retry}/{notice.max_retries})"
+        )
+
     def _cool_down_for_model(self, seconds: float) -> bool:
         """Wait *seconds* in short slices so Stop still works mid-wait.
 
@@ -6535,10 +6559,7 @@ Do NOT wrap conversational replies in JSON.
         getter = getattr(client, "get_last_retry_count", None)
         if not callable(getter):
             return 0
-        try:
-            count = getter()
-        except Exception:  # noqa: BLE001 - a diagnostic must not fail a step
-            return 0
+        count = getter()
         if isinstance(count, int) and not isinstance(count, bool):
             return count
         return 0
@@ -6584,9 +6605,9 @@ Do NOT wrap conversational replies in JSON.
                 model_step_retries(),
             )
             self.console.print_warning(
-                "The language model isn't responding "
-                f"({describe_retry_state(state)}). Waiting {wait:.0f}s, then "
-                "trying this step again — the work so far is kept."
+                f"{self._model_trouble(state.last_reason)} — retrying this step "
+                f"in {wait:.0f}s ({retries_used + 1}/{model_step_retries()}); "
+                "the work so far is kept"
             )
             if not self._cool_down_for_model(wait):
                 return "cancelled", None
@@ -6595,8 +6616,9 @@ Do NOT wrap conversational replies in JSON.
             f"Language model unreachable at step {steps_taken}: "
             f"{describe_retry_state(state)}"
         )
+        # Logged, not printed as an error: a front-end ends the turn on an
+        # error event, and the answer below is what the user must see.
         logger.error("%s; last error: %s", error_msg, exc)
-        self.console.print_error(error_msg)
         self.error_history.append(
             {"step": steps_taken, "error": str(exc), "type": "llm_unreachable"}
         )
@@ -6613,41 +6635,38 @@ Do NOT wrap conversational replies in JSON.
         step_retries: int,
     ) -> str:
         """The final answer when the model stayed unreachable through every
-        retry: says plainly that the task is unfinished and what was done.
+        retry: one sentence saying the task is unfinished and what was kept,
+        then the next step.
 
         Never phrased as a result — the run is also marked failed — so it
         cannot be read as the task's answer.
         """
-        tools_used = [
+        from collections import Counter
+
+        tools_used = Counter(
             msg["name"]
             for msg in conversation
             if msg.get("role") == "tool" and msg.get("name")
-        ]
-        tries = (
-            f", then {step_retries} more attempt"
-            f"{'s' if step_retries != 1 else ''} after waiting"
-            if step_retries
-            else ""
         )
-        message = (
-            "I couldn't finish this task: the language model stopped "
-            f"responding at step {steps_taken} and stayed unreachable "
-            f"({describe_retry_state(state)}{tries}). "
-            "The task is incomplete.\n\n"
+        tries = f", then {step_retries} more after waiting" if step_retries else ""
+        stopped = (
+            f"I stopped at step {steps_taken} because the model service stayed "
+            f"unavailable ({describe_retry_state(state)}{tries})"
         )
-        if tools_used:
-            from collections import Counter
-
-            message += "Before that, I had run:\n"
-            for tool, count in Counter(tools_used).most_common(10):
-                message += f"  - {tool}: {count}x\n"
-            message += (
-                "\nAnything those steps changed is still in place. "
-                "Ask me to continue once the model is reachable again.\n"
+        if not tools_used:
+            return (
+                f"{stopped}, before any tool ran. "
+                "Send your request again once the service is back."
             )
-        else:
-            message += "No tools had run yet. Try again once the model is reachable.\n"
-        return message
+        calls = sum(tools_used.values())
+        done = ", ".join(
+            f"{tool} {count}x" for tool, count in tools_used.most_common(5)
+        )
+        return (
+            f"{stopped}; the {calls} tool call{'s' if calls != 1 else ''} already "
+            f"made ({done}) and what they changed are kept. "
+            'Say "continue" once the service is back and I\'ll pick up from here.'
+        )
 
     def _shrink_messages_for_overflow(
         self, messages: List[Dict[str, Any]]
@@ -7480,7 +7499,11 @@ Do NOT wrap conversational replies in JSON.
         ns_id = self._namespaced_agent_id()
         try:
             # Standby would stall a local model mid-turn until someone wakes the PC.
-            with self._agent_identity_context(ns_id), stay_awake():
+            with (
+                self._agent_identity_context(ns_id),
+                stay_awake(),
+                model_retry_notices(self._announce_model_retry),
+            ):
                 return self._process_query_impl(user_input, max_steps, trace, filename)
         finally:
             # The impl re-raises on purpose (the wrong-ctx reload its caller
@@ -8273,6 +8296,7 @@ Do NOT wrap conversational replies in JSON.
                             break
                         if outcome == "unreachable":
                             final_answer = unreachable
+                            loop_break_answer_unprinted = True
                             break
                         error_msg = (
                             f"LLM Server Connection Failed (streaming): {str(e)}"
@@ -8358,6 +8382,7 @@ Do NOT wrap conversational replies in JSON.
                             break
                         if outcome == "unreachable":
                             final_answer = unreachable
+                            loop_break_answer_unprinted = True
                             break
 
                         self.error_history.append(
@@ -8463,6 +8488,7 @@ Do NOT wrap conversational replies in JSON.
                             break
                         if outcome == "unreachable":
                             final_answer = unreachable
+                            loop_break_answer_unprinted = True
                             break
                         error_msg = f"LLM Server Connection Failed: {str(e)}"
                         logger.error(error_msg)
@@ -8556,6 +8582,7 @@ Do NOT wrap conversational replies in JSON.
                             break
                         if outcome == "unreachable":
                             final_answer = unreachable
+                            loop_break_answer_unprinted = True
                             break
 
                         # Either context-overflow after trim, or unrelated.

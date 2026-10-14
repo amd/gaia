@@ -124,11 +124,14 @@ local server occasionally drop a request: a reset connection, a 502/503/504, a
 429, a 500 from a failed upstream hop. GAIA retries those, and only those.
 
 **Each request** is retried with exponential backoff and full jitter, honouring
-`Retry-After`. Retried: connection errors and timeouts, 408, 429, 502, 503, 504,
-and 500 unless its body says the request itself was rejected. Never retried:
-400 (including content-filter rejections), 401, 403, 404, 413, 422, and
-context-window overflow. A stream is retried only before its first token, so
-output is never duplicated.
+`Retry-After` up to the longest-wait cap below. Retried: connection errors and
+timeouts, 408, 429, 502, 503, 504, and 500 unless its body says the request
+itself was rejected — including a cloud model's 429 or 502 that Lemonade reports
+inside a stream that had already opened. Never retried: 400 (including
+content-filter rejections), 401, 403, 404, 413, 422, and context-window
+overflow. A stream is retried here only before its first token, so one request
+never repeats output. Each retry shows a status line such as
+"The model service is busy — retrying in 8s (2/4)".
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -139,9 +142,13 @@ output is never duplicated.
 
 **An agent step** whose request still fails after that is not the end of the
 run. The agent waits, then asks again with its conversation and tool history
-intact; the wait doubles each time. If the model stays unreachable, the turn
-ends with an answer that says so and lists what had already been done, and the
-run is reported as failed.
+intact; the wait doubles each time. Only the model call is repeated: tools that
+already ran are not run again. If a reply was cut off part-way, the partial
+text stays on screen and the new reply follows it; only the new reply becomes
+the answer. If the model stays unreachable, the turn ends with a one-line
+answer that says where it stopped and which tool calls are kept, the run is
+reported as failed, and saying "continue" once the service is back picks the
+task up from there.
 
 | Variable | Default | Meaning |
 |---|---|---|
