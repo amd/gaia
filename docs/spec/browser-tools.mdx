@@ -68,7 +68,7 @@ Without browser tools, users must manually download files and feed them to the a
 
 ## 4. Tool Specification
 
-### 4.1 `fetch_page(url, extract, max_length)`
+### 4.1 `fetch_page(url, extract, max_length, offset, find)`
 
 Fetch a web page and extract its readable content.
 
@@ -78,20 +78,34 @@ def fetch_page(
     url: str,
     extract: str = "text",
     max_length: int = 5000,
+    offset: int = 0,
+    find: Optional[str] = None,
 ) -> str:
     """Fetch a web page and extract its content.
 
     Retrieves the page at the given URL and returns readable text content.
     Use this to read articles, documentation, reference pages, or any web content.
     Does NOT execute JavaScript — works best with static content, articles, docs.
+    Long text ends with a marker naming the offset of the next part; to
+    get one detail (a price, a spec) pass find instead of paging.
 
     Args:
         url: The full URL to fetch (must start with http:// or https://)
         extract: What to extract - 'text' (readable content), 'html' (raw HTML),
                  'links' (all links on page), 'tables' (HTML tables as text)
         max_length: Maximum characters to return (default: 5000, max: 20000)
+        offset: Text mode: character offset to start from, to continue a long page
+        find: Text mode: return only the passages containing this word or phrase
     """
 ```
+
+**Text mode never cuts silently.** `Length:` is the whole page's text. A part
+that stops early ends with `[Truncated: showing characters A-B of N. Call
+fetch_page('<url>', offset=B) for the next part ...]`. `find` returns each match
+with 300 characters either side, labelled `[at character N]`; matches that don't
+fit are counted with the offset to continue from, and no match at all says so
+explicitly. A page with almost no static text (rendered by JavaScript) is
+flagged rather than returned as if it were the content.
 
 **Extract modes:**
 - `text` — Strip HTML tags, return readable text with headings preserved. Uses BeautifulSoup `get_text()` with separator formatting.

@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Reviewing a few documents reads them in full.** `read_file` on a Word,
+  PDF or Excel file returned `[Binary file, N bytes]`, so to compare a term
+  sheet against a draft agreement the agent indexed them and ran a handful of
+  searches, and missed a closing date that differed between the two because no
+  search asked for it. `read_file` now returns the extracted text, in parts sized
+  to the model's budget that say where the next part starts, and the prompt
+  tells the agent to read a few documents in full for a review, comparison or
+  reconciliation and keep indexing for large collections and single lookups.
+- **`fetch_page` no longer drops the middle of a long page.** Text past
+  `max_length` was cut to its head and tail, which is where a product page keeps
+  its menus and footer, not its price. It now returns the first part with a
+  marker naming the offset of the next, takes `offset` to continue and `find` to
+  jump to the passages containing a word, says so when a word is not on the
+  page, and flags a page with almost no static text as rendered by JavaScript.
+  `Length:` now reports the whole page rather than the excerpt.
 - **The sidecar's start-up warm-up now makes the first question fast.** It
   primed only the agent's own instructions, without the tool list or the rest
   of the system prompt, so the first question re-read all ~19K prompt tokens

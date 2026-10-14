@@ -100,11 +100,12 @@ not confirm" section.
 ### document-brief
 
 Indexes a file or folder and answers questions from it, quoting the sentence
-that proves each claim rather than paraphrasing from the filename.
+that proves each claim rather than paraphrasing from the filename. A handful of
+documents to review or compare is read in full with `read_file` instead.
 
 - **Demonstrates** — the RAG loop end to end: index, query, summarize, status.
 - **Consumes** — `index_document`, `index_directory`, `list_indexed_documents`,
-  `query_documents`, `summarize_document`, `rag_status`.
+  `query_documents`, `summarize_document`, `rag_status`, `read_file`.
 - **Configure** — a file or directory path.
 
 ### data-explore

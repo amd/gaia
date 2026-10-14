@@ -23,6 +23,11 @@ from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools import search_scope
+from gaia.agents.tools.document_text import (
+    document_type,
+    index_only_error,
+    read_document,
+)
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
     file_read_record,
@@ -872,12 +877,14 @@ class FileSearchToolsMixin:
             Automatically detects file type and provides appropriate analysis:
             - Python files (.py): Syntax validation + symbol extraction (functions/classes)
             - Markdown files (.md): Headers + code blocks + links
+            - Word (.docx), PDF and Excel (.xlsx): extracted text, in parts when
+              long; continue at next_offset until it is null
             - Other text files: Raw content
 
             Args:
                 file_path: Path to the file to read
                 offset: Zero-based character offset for a bounded text page.
-                limit: Page size (1..8000 characters); omitted preserves full analysis.
+                limit: Page size in characters (1..8000 for text files); omitted preserves full analysis.
 
             Returns:
                 Dictionary with file content and type-specific metadata
@@ -927,35 +934,11 @@ class FileSearchToolsMixin:
                         ),
                     }
 
-                # Document formats must be indexed via index_document, not read directly.
-                # The tool docstring explicitly scopes read_file to text files (Python,
-                # Markdown, etc.); binary document types are not supported.  Returning
-                # a clear error here stops the LLM from spinning on a useless
-                # "[Binary file, X bytes]" success response.
-                doc_ext = os.path.splitext(file_path)[1].lower()
-                if doc_ext in {
-                    ".pdf",
-                    ".docx",
-                    ".doc",
-                    ".pptx",
-                    ".ppt",
-                    ".xlsx",
-                    ".xls",
-                    ".odt",
-                    ".ods",
-                    ".odp",
-                    ".epub",
-                }:
-                    return {
-                        "status": "error",
-                        "error": (
-                            f"Cannot read {doc_ext} files directly — they are binary document formats. "
-                            f"Call index_document('{file_path}') to index it, "
-                            "then use query_specific_file or query_documents to retrieve content. "
-                            "If index_document returns 'Access denied', ask the user to index the "
-                            "file via the Document Library (attachment icon in the UI)."
-                        ),
-                    }
+                unreadable = index_only_error(file_path)
+                if unreadable:
+                    return unreadable
+                if document_type(file_path) is not None:
+                    return read_document(self, file_path, offset, limit)
 
                 reads = file_read_record(self)
                 seen = stamp_of(file_path)

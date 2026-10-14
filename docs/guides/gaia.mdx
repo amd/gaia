@@ -17,9 +17,9 @@ GAIA is the agent a new user meets first. One agent handles the everyday work yo
 ## What it does
 
 - **Conversation with memory** — facts you tell it persist to an on-device store and come back in later sessions. It can also search your own past conversations.
-- **Document Q&A over your files** — index a file or a whole folder, then ask questions. PDF, Word, PowerPoint, and plain text; the prompt tells the agent to name which document each fact came from rather than blending sources.
+- **Document Q&A over your files** — index a file or a whole folder, then ask questions. PDF, Word, PowerPoint, and plain text; the prompt tells the agent to name which document each fact came from rather than blending sources. Asked to review, compare or reconcile a few documents, it reads each one in full instead — `read_file` returns the text of Word, PDF and Excel files — so a detail no search asked for, like a date that differs between two of them, isn't missed.
 - **Data exploration** — load a CSV or Excel file into a local SQL scratchpad table and query it, so "which region grew fastest" becomes a real query rather than a guess from a truncated preview.
-- **Web research** — search the web, fetch and read pages, download files.
+- **Web research** — search the web, fetch and read pages, download files. A long page is read in marked parts, or searched for one detail such as a price, rather than cut off unannounced.
 - **Files** — read, search by name or content, and walk directory trees inside your allowed scope. Writing and editing are available too, behind an explicit confirmation (see [Tools that need your approval](#tools-that-need-your-approval)).
 - **Images** — describe a local image or answer a question about it, using the local vision model. It can also *generate* one from a description with local Stable Diffusion; that swaps the resident model, so the reply after an image takes an extra moment while the chat model reloads.
 - **Skills** — short playbooks loaded into the agent's own prompt. One ships always-on; the rest are opt-in. See [Skills](#skills) below for what this release ships.
