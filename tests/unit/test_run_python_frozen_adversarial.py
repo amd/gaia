@@ -26,17 +26,20 @@ from gaia_agent_chat.python_runner import (  # noqa: E402
     interpreter_request,
 )
 
-from tests.unit.test_run_python_frozen import (  # noqa: E402,F401
+from tests.unit import test_run_python_frozen as _base  # noqa: E402
+from tests.unit.test_run_python_frozen import (  # noqa: E402
     _DISPATCH,
     FAKE_BINARY,
     _dispatch,
     _run_both,
-    child_env,
-    frozen,
-    no_inherited_project_root,
-    project,
-    tools,
 )
+
+# Shared fixtures, bound by name so pytest finds them in this module.
+child_env = _base.child_env
+frozen = _base.frozen
+no_inherited_project_root = _base.no_inherited_project_root
+project = _base.project
+tools = _base.tools
 
 _REAL_RUN = subprocess.run
 #: The real interpreter; the ``frozen`` fixture points sys.executable elsewhere.
