@@ -123,15 +123,24 @@ func APIKeyFor(ctx context.Context, base string) (string, error) {
 	if state == nil || state.APIKey == "" {
 		return "", nil
 	}
+	if isEmbeddedEndpoint(target, state.Port) {
+		return state.APIKey, nil
+	}
+	return "", nil
+}
+
+// isEmbeddedEndpoint reports whether target is GAIA's own lemond on port. An
+// unparseable target is not.
+func isEmbeddedEndpoint(target string, port int) bool {
 	u, err := url.Parse(target)
-	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Port() != strconv.Itoa(state.Port) {
-		return "", nil
+	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Port() != strconv.Itoa(port) {
+		return false
 	}
 	// lemond binds localhost. Treat its IPv4/IPv6 spellings as the same
 	// endpoint, without extending that trust to arbitrary 127/8 addresses.
 	switch strings.ToLower(u.Hostname()) {
 	case "localhost", "127.0.0.1", "::1":
-		return state.APIKey, nil
+		return true
 	}
-	return "", nil
+	return false
 }

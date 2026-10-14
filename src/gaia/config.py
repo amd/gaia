@@ -335,13 +335,6 @@ class GaiaConfig:
                         f"false (unquoted), but it is {value!r}. Fix it by hand, "
                         f"or delete the key to go back to the default."
                     )
-        mode = data.get("lemonade_mode")
-        if mode is not None and mode not in ("gaia", "external"):
-            raise GaiaConfigError(
-                f"GAIA config at {config_file}: 'lemonade_mode' must be \"gaia\" "
-                f'or "external", but it is {mode!r}. Fix or delete that key in '
-                "the file, then retry."
-            )
             if key in known and cls._is_int_field(key):
                 if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                     raise GaiaConfigError(
@@ -350,6 +343,13 @@ class GaiaConfig:
                         "Fix it by hand, or delete the key to go back to the "
                         "default."
                     )
+        mode = data.get("lemonade_mode")
+        if mode is not None and mode not in ("gaia", "external"):
+            raise GaiaConfigError(
+                f"GAIA config at {config_file}: 'lemonade_mode' must be \"gaia\" "
+                f'or "external", but it is {mode!r}. Fix or delete that key in '
+                "the file, then retry."
+            )
         kwargs = {k: v for k, v in data.items() if k in known}
         if "llamacpp_backend" in kwargs:
             kwargs["llamacpp_backend"] = cls._check_llamacpp_backend(
