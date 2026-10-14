@@ -348,6 +348,9 @@ class FileEvidence:
     inferred: bool = False
     # Read in full and matched exactly by the framework; a rewrite clears it.
     verified: bool = False
+    # Last written by a file-editing tool (WRITE_TOOLS), not by a generator such
+    # as generate_image or by an executor. Any later change replaces the entry.
+    edited: bool = False
 
     def page(self, start: int, end: int, total: int | None) -> None:
         self.ranges.append((start, end))
@@ -541,6 +544,7 @@ class CompletionEvidence:
                 key,
                 self.sequence if successful else 0,
                 tool in WRITE_TOOLS or tool in _EXEC_TOOLS,
+                edited=tool in WRITE_TOOLS,
             )
 
     def _record_refusal(self, tool: str, args: dict, result: Any) -> None:
