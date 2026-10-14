@@ -1560,6 +1560,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
 | `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-tui`, restored on its next launch — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
+| `lemonade_idle_timeout_minutes` | `15` | Stop GAIA's own Lemonade Server once no GAIA app or command has used it for this many minutes; `0` keeps it running until `gaia daemon stop` — see [GAIA's Lemonade Server](#gaias-lemonade-server) |
 
 ### Full access
 
@@ -1748,8 +1749,8 @@ have to guess which client you have.
 ## Embedded Lemonade
 
 GAIA can run its own private Lemonade Server instead of the machine-wide install.
-Nothing else on the machine can reach it: it binds a port picked at start time and
-requires an API key GAIA generates, so two apps never fight over one server.
+Nothing else on the machine can reach it: it binds a port of its own and requires
+an API key GAIA generates, so two apps never fight over one server.
 
 This is the self-contained path — GAIA downloads the server itself, no installer
 and no admin rights. The system-wide install (`gaia init`) is unaffected and keeps
@@ -1762,8 +1763,9 @@ gaia lemonade embedded stop
 gaia lemonade embedded uninstall  # remove the runtime and downloaded backends
 ```
 
-Both the port and the API key change on every start, and requests without the key
-get a 401. `start` writes them to a file you source rather than printing the key,
+The API key changes on every start, and requests without it get a 401. The port
+stays the same from one start to the next unless another program has taken it,
+in which case a free one is picked and remembered instead. `start` writes them to a file you source rather than printing the key,
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
@@ -1799,7 +1801,7 @@ file to point them at it. Automatic preference is coming with the startup wiring
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--port` | integer | auto | Port to bind; a free one is chosen when omitted |
+| `--port` | integer | auto | Port to bind; the last start's port when free, else a free one |
 | `--no-install` | flag | false | Fail instead of downloading a missing artifact |
 | `--timeout` | float | 60 | Seconds to wait for the server to become healthy |
 
@@ -1837,7 +1839,8 @@ Everything lives under `~/.gaia/lemonade` (or `$GAIA_HOME/lemonade`):
 | `dist/<version>/` | The unpacked server for one version |
 | `cache/` | Downloaded backends (`bin/`), shared across versions |
 | `config/config.json` | Server configuration |
-| `state.json` | The running instance: pid, port, API key (owner-only) |
+| `state.json` | The running instance: pid, port, API key, owning daemon (owner-only) |
+| `last_port.json` | The port the last start used; the next start reuses it while it is free |
 | `env.sh` / `env.ps1` | Sourceable credentials, removed on `stop` (owner-only) |
 | `lemond.log` | Server output — read this first when `start` fails |
 
@@ -1851,6 +1854,10 @@ are picked up immediately.
 `gaia uninstall --purge` and `gaia lemonade embedded uninstall` remove this
 directory, including those downloaded backends.
 </Note>
+
+An instance you start here is still GAIA's: a running daemon takes it over,
+stops it with `gaia daemon stop`, and stops it after the idle timeout like any
+other — see [GAIA's Lemonade Server](#gaias-lemonade-server).
 
 After a Lemonade version bump, stop the old instance before starting the new one —
 `start` refuses rather than silently leaving the previous version serving:
@@ -3096,15 +3103,36 @@ fails loudly with that instruction.
 
 #### GAIA's Lemonade Server
 
-The daemon starts GAIA's own Lemonade Server (the one `gaia init` installs) when
-it comes up, and again whenever a GAIA command finds it stopped, so it is back
-after a reboot without running `gaia init`. `gaia daemon stop` stops the server
-only if this daemon started it; one you started yourself keeps running.
+The daemon owns GAIA's own Lemonade Server (the one `gaia init` installs). It
+starts it when it comes up, and again whenever a GAIA app or command needs it,
+so it is back after a reboot without running `gaia init`. It also frees the
+server's memory when GAIA is not in use:
+
+- **Closing the last GAIA app unloads every model.** The Agent UI (desktop app
+  or `npx @amd-gaia/agent-ui`) and `gaia-tui` register with the daemon while
+  they run. When the last one exits, and no `gaia` command or sidecar agent is
+  still using the server, the daemon unloads all of its models. The server
+  stays up, so the next launch only reloads the model. An app that is killed
+  rather than closed is noticed within about five seconds.
+- **No GAIA client for 15 minutes stops the server.** Change it with
+  `gaia config set lemonade_idle_timeout_minutes <minutes>`, or turn it off
+  with `0`. The next GAIA app or command starts the server again.
+- **`gaia daemon stop` stops the server, whoever started it,** including the one
+  first-time setup starts. If the daemon is not running, it still stops GAIA's
+  server.
+- **A server a crashed daemon left behind** is taken over by the next daemon
+  while it still answers, and stopped and replaced when it does not.
+
+Before stopping anything, GAIA checks that the process is its own server: the
+`lemond` binary under `~/.gaia/lemonade/dist/`, on the recorded port, with the
+recorded API key. A process that reused the recorded pid, or a Lemonade you
+run yourself, is never killed.
 
 The daemon never installs Lemonade, never restarts a server that is slow to
-answer (it may be loading a model), and never replaces one running a different
-version. Those need `gaia init`. With `LEMONADE_BASE_URL` set, it leaves Lemonade
-alone entirely.
+answer while its owner is running (it may be loading a model), and never
+replaces one running a different version. Those need `gaia init`. With
+`LEMONADE_BASE_URL` set, it leaves Lemonade alone entirely: no unload, no idle
+stop, no `gaia daemon stop`.
 
 #### Model-slot serialization
 
@@ -3129,7 +3157,7 @@ restores serialization.
 ```bash
 gaia daemon start      # start the daemon, or attach if one is already running
 gaia daemon status     # pid, port, uptime + the supervised sidecar list
-gaia daemon stop       # graceful shutdown (tree-kills daemon + every sidecar, and the Lemonade Server it started)
+gaia daemon stop       # graceful shutdown (tree-kills daemon + every sidecar, and GAIA's Lemonade Server)
 gaia daemon restart    # stop then start
 gaia daemon logs [--lines N] [--follow]   # tail the daemon log
 gaia daemon agents                        # list supervised sidecar agents
@@ -3141,7 +3169,7 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 |--------|---------|-------------|
 | `start` | — | Start the daemon or attach to the running one (two callers → one daemon), and start GAIA's Lemonade Server if it is installed and stopped. |
 | `status` | — | Print pid / port / uptime and the supervised sidecar list, or report if no daemon is running. |
-| `stop` | — | Shut the daemon down (tree-killing every sidecar, then the Lemonade Server if this daemon started it) and release `~/.gaia/host/instance.json`. |
+| `stop` | — | Shut the daemon down (tree-killing every sidecar, then GAIA's Lemonade Server, whoever started it) and release `~/.gaia/host/instance.json`. With no daemon running it still stops GAIA's Lemonade Server. |
 | `restart` | — | `stop` followed by `start`. |
 | `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
 | `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir; user-mode and stopped entries always report `dev_src_dir: null`. |
@@ -3158,6 +3186,9 @@ contract; every route needs `Authorization: Bearer <token>` from
 | `POST /daemon/v1/lemonade/ensure` | Start GAIA's embedded Lemonade Server if stopped and return where it listens (409 if not managed, 503 on a start failure). Host API ≥ 1.2 |
 | `POST /daemon/v1/lemonade/start` | Start or attach the local model server — GAIA's embedded one when `gaia init` installed it and `LEMONADE_BASE_URL` is unset, otherwise the system install; returns 503 with actionable detail on refusal. Host API ≥ 1.3 |
 | `GET /daemon/v1/lemonade/status` | Whether this daemon supervises a server, its PID, and its log path. Host API ≥ 1.3 |
+| `POST /daemon/v1/lemonade/clients` | Register a front end using GAIA's Lemonade: `{"kind": "app"\|"cli", "pids": [...], "name": "..."}` → `{"client_id", "clients"}`. Lives as long as every pid. 400 for a pid that is not running. Host API ≥ 1.4 |
+| `DELETE /daemon/v1/lemonade/clients/{id}` | Release it; the last app to leave unloads every model (`{"clients", "unloaded"}`). 404 if already released. Host API ≥ 1.4 |
+| `GET /daemon/v1/lemonade/clients` | Connected clients and how long the server has been idle. Host API ≥ 1.4 |
 | `POST /daemon/v1/shutdown` | graceful drain + exit |
 | `GET /daemon/v1/agents` | registered sidecars — never the bearer token |
 | `POST /daemon/v1/agents/{id}/ensure` | spawn-or-attach; the body carries the sidecar token |

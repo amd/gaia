@@ -27,7 +27,9 @@ SERVICE_ID = "gaia-daemon"
 # healthy 1.2 daemon over it would be a worse outcome than the thing it fixes.
 # They read its 404 as "this core is too old to start Lemonade for you" and say
 # exactly that.
-DAEMON_API_VERSION = "1.3"
+# MINOR 4 added /daemon/v1/lemonade/clients (front ends register while they use
+# GAIA's Lemonade, so it can unload when the last app closes and stop when idle).
+DAEMON_API_VERSION = "1.4"
 
 # Client-token auth: header name and scheme.
 AUTH_SCHEME = "Bearer"

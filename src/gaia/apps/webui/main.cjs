@@ -337,7 +337,9 @@ async function startBackend() {
     {
       cwd: os.homedir(),  // Electron's cwd is "/" on macOS when launched from Finder
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      // GAIA_APP_PID: GAIA's daemon unloads its models once this app exits
+      // and no other GAIA client is using them.
+      env: { ...process.env, GAIA_APP_PID: String(process.pid) },
       detached: false,
       windowsHide: true, // Prevent console window flash on Windows
     }

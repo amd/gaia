@@ -2399,9 +2399,9 @@ class LemonadeClient:
         self.keep_alive = keep_alive
         self._log_file = None
         self.api_key = resolve_lemonade_api_key(api_key, base_url=self.base_url)
-        # GAIA's own server gets a new port and key each time the daemon
-        # (re)starts it. A client aimed at it -- running, or stopped at the
-        # default address -- follows it there.
+        # GAIA's own server gets a new key, and a new port if its last one was
+        # taken, each time the daemon (re)starts it. A client aimed at it --
+        # running, or stopped at the default address -- follows it there.
         if api_key is not None or configured_lemonade_url() is not None:
             self.follows_gaia_lemonade = False
         elif self.api_key is not None:
