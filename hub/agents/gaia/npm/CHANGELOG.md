@@ -9,10 +9,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`run_python` and `execute_python_file` work in the released binary.** The
   binary has no Python interpreter, so it handed every script to its own
   argument parser, which rejected it, and no calculation, chart or `.xlsx`
-  could be produced. It now runs scripts itself, with openpyxl, python-docx,
-  python-pptx, reportlab, pypdf, pandas, numpy, matplotlib and the full
-  standard library bundled for them. The Windows binary grows from 147 MB to
-  168 MB.
+  could be produced. It now runs scripts itself, with pypdf, pymupdf,
+  python-docx, python-pptx, openpyxl, xlsxwriter, reportlab, pandas, numpy,
+  matplotlib and the full standard library bundled for them, and both tools
+  name those libraries to the model. A script that starts `sys.executable`
+  (`-m`, `-c`, a file) runs too; `-m pip` says packages can't be installed
+  and lists what is bundled. The Windows binary grows from 147 MB to 168 MB.
 - **A Python script that fails is reported as a failure.** A non-zero exit
   came back as `status: success`, so the TUI showed a failed run as
   successful. It is now `status: error`, with an `error` naming the exit code

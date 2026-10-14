@@ -15,7 +15,10 @@
 - `run_python` and `execute_python_file` run inside a frozen (PyInstaller)
   agent. There `sys.executable` is the agent binary, so they now re-launch it
   with `--gaia-run-python-file`, which its entry point must hand to
-  `gaia_agent_chat.python_runner.run_python_file` before parsing argv.
+  `gaia_agent_chat.python_runner.dispatch` before parsing argv. `dispatch`
+  also runs the `python -m/-c/<file>` forms a script uses to start
+  `sys.executable`, and refuses `-m pip` with the bundled-library list. Both
+  tool descriptions name the bundled libraries.
 - A Python run that exits non-zero now returns `status: "error"` with an
   `error` naming the exit code and the last stderr line, instead of
   `status: "success"`.
