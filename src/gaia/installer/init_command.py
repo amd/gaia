@@ -1677,14 +1677,25 @@ class InitCommand:
             )
 
             if is_llm and min_ctx:
-                from gaia.llm.lemonade_client import resolve_ctx_size
+                from gaia.llm.lemonade_client import (
+                    PIN_UNLOAD_SETTLE_DEADLINE_S,
+                    resolve_ctx_size,
+                )
 
                 min_ctx = resolve_ctx_size(
                     model=model_id, device="npu" if self.profile == "npu" else "gpu"
                 )
-                # Force unload if already loaded to ensure recipe_options are saved
+                # Unload just this model so its recipe_options are saved; the
+                # embedder stays loaded instead of being reloaded after it.
+                # Wait until it is gone, or the load's free-memory check would
+                # count its memory as neither free nor its own.
                 if client.check_model_loaded(model_id):
-                    client.unload_model()
+                    client.unload_model(model_id)
+                    client._wait_model_state(
+                        model_id,
+                        present=False,
+                        deadline_s=PIN_UNLOAD_SETTLE_DEADLINE_S,
+                    )
 
                 # Load with explicit context size and save it
                 client.load_model(
@@ -1827,11 +1838,17 @@ class InitCommand:
             min_ctx = profile_config.get("min_context_size")
             # Loading an undownloaded model makes Lemonade pull it, unannounced.
             if min_ctx and not self.skip_chat_model and not self.skip_models:
-                from gaia.llm.lemonade_client import resolve_ctx_size
+                from gaia.llm.lemonade_client import (
+                    fit_ctx_to_free_memory,
+                    resolve_ctx_size,
+                )
                 from gaia.llm.lemonade_manager import LemonadeManager
 
-                min_ctx = resolve_ctx_size(
-                    device="npu" if self.profile == "npu" else "gpu"
+                # The window the chat model gets in the memory free right now.
+                min_ctx = fit_ctx_to_free_memory(
+                    self._chat_model(client),
+                    resolve_ctx_size(device="npu" if self.profile == "npu" else "gpu"),
+                    client.base_url,
                 )
 
                 self.console.print()

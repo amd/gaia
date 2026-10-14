@@ -1609,9 +1609,11 @@ async function installBackend(opts = {}) {
       "Setting up Lemonade Server and downloading models (this can take several minutes)"
     );
 
+    // The profile the app's own setup check asks about (setup_runner.PROFILE),
+    // so the first launch finds setup done instead of running it a second time.
     const initResult = await runCommand(
       GAIA_BIN,
-      ["init", "--profile", "minimal", "--yes"],
+      ["init", "--profile", "gaia", "--yes", "--skip-webui-build"],
       { stageLabel: "gaia-init" }
     );
 
