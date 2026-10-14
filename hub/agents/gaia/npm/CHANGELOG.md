@@ -14,6 +14,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now streams its model calls and sends the answer as `token` events before
   `final`, the same as the stdio transport. A run cancelled mid-answer now
   stops within a token and ends with an empty `final`, as stdio does.
+- **`run_python` works in the Agent UI without a project.** It ran from the
+  server's own folder, which is not an allowed path, so every approved snippet
+  was refused and the agent fell back to slower shell commands. With no project
+  and a working directory you did not allow, a snippet now runs in the agent's
+  scratch directory, and its result says so. A project outside the allowed
+  paths is still refused.
 - **The sidecar's start-up warm-up now makes the first question fast.** It
   primed only the agent's own instructions, without the tool list or the rest
   of the system prompt, so the first question re-read all ~19K prompt tokens
