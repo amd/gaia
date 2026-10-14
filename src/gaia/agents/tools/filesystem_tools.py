@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools.file_edit import file_read_record, stamp_of
 from gaia.agents.tools.path_access import read_access_error
 from gaia.agents.tools.search_scope import root_depth, search_roots
@@ -1609,7 +1610,7 @@ class FileSystemToolsMixin:
                     import PyPDF2 as _pdf
                 except ImportError:
                     return (
-                        "PDF reading requires pypdf. " "Install with: pip install pypdf"
+                        f"PDF reading requires pypdf. {missing_package_hint('pypdf')}"
                     )
 
             try:

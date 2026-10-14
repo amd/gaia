@@ -139,6 +139,22 @@ class TestFrozenBuild:
             f"Install with: {sys.executable} -m pip install pyperclip"
         )
 
+    def test_missing_extra_hint_says_it_is_not_bundled(self, frozen_build):
+        hint = install_hints.missing_extra_hint("rag")
+        assert hint.startswith("GAIA[rag] isn't bundled in this GAIA build.")
+        assert "pip install" not in hint
+        assert "gaia-agent.exe" not in hint
+
+    def test_missing_extra_hint_from_source_gives_the_command(
+        self, stock_venv, monkeypatch
+    ):
+        monkeypatch.setattr(
+            install_hints, "gaia_extras_install_args", lambda e: ["amd-gaia[rag]"]
+        )
+        assert install_hints.missing_extra_hint("rag") == (
+            f'Install with: {sys.executable} -m pip install "amd-gaia[rag]"'
+        )
+
 
 class TestFormatCommand:
     def test_quotes_shell_meaningful_args_only(self):
