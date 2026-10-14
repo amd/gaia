@@ -3693,7 +3693,7 @@ func (m ChatModel) renderHeader() string {
 func (m ChatModel) agentIdentity() string {
 	version := m.agentVersion
 	if v, ok := m.client.(interface{ AgentVersion() string }); ok {
-		if live := v.AgentVersion(); live != "" {
+		if live := reportedVersion(v.AgentVersion()); live != "" {
 			version = live
 		}
 	}
@@ -3702,6 +3702,17 @@ func (m ChatModel) agentIdentity() string {
 		identity += " v" + version
 	}
 	return identity
+}
+
+// versionMax caps a reported version so a broken agent cannot crowd the header.
+const versionMax = 32
+
+// reportedVersion is a version an agent sent, made safe for one header row: no
+// control bytes or escapes, no leading "v" (the header adds its own), capped.
+func reportedVersion(v string) string {
+	v = strings.Join(strings.Fields(clean(v)), " ")
+	v = strings.TrimLeft(v, "vV")
+	return truncateRunes(v, versionMax)
 }
 
 // coreVersionSuffix names the GAIA core the running agent runs on, when it said.

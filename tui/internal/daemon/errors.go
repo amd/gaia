@@ -14,13 +14,25 @@ type Briefer interface {
 	Brief() string
 }
 
-// Brief is err's one-line form when it has one, else its full text.
+// briefMax caps the one-line form of an error that has no Brief of its own.
+const briefMax = 200
+
+// Brief is err's one-line form: its Brief when it has one, else the first line
+// of its text, capped at briefMax runes. Empty for a nil error.
 func Brief(err error) string {
+	if err == nil {
+		return ""
+	}
 	var b Briefer
 	if errors.As(err, &b) {
 		return b.Brief()
 	}
-	return err.Error()
+	line, _, _ := strings.Cut(err.Error(), "\n")
+	line = strings.TrimSpace(line)
+	if runes := []rune(line); len(runes) > briefMax {
+		line = string(runes[:briefMax-1]) + "…"
+	}
+	return line
 }
 
 // upgradeCoreBrief is the status-line form of UpgradeCoreHint.
