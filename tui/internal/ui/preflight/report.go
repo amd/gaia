@@ -137,6 +137,11 @@ const (
 	// FixInstallServer — setup's first step alone: install and start GAIA's
 	// Lemonade and download nothing, so the models are a step the user sees sized.
 	FixInstallServer
+	// FixChooseChat — open the "where should chat run?" choice.
+	FixChooseChat
+	// FixConnectProvider — hand off to the provider panel to connect the cloud
+	// provider the user chose and pick one of its models.
+	FixConnectProvider
 )
 
 // Label is the key hint shown next to `f`.
@@ -154,6 +159,10 @@ func (k FixKind) Label() string {
 		return "set it up now"
 	case FixRestartSidecar:
 		return "restart it in this mode"
+	case FixChooseChat:
+		return "choose"
+	case FixConnectProvider:
+		return "connect it now"
 	default:
 		return ""
 	}
@@ -303,6 +312,7 @@ const (
 	KeyLemonade         = "lemonade"
 	KeyModel            = "model"
 	KeyMailbox          = "mailbox"
+	KeyChat             = "chat"
 )
 
 // Report is the whole readiness answer: one row per precondition, in dependency
@@ -320,6 +330,9 @@ type Report struct {
 	// StepsDone counts first-run steps finished earlier this session, so the
 	// step left after them still reads "step 2 of 2", not "step 1 of 1".
 	StepsDone int
+	// ChatOptions are the answers to "where should chat run?", set when the
+	// report carries that step (a KeyChat row).
+	ChatOptions []ChatOption
 }
 
 // Ready reports whether every precondition proved OK. An indeterminate row is

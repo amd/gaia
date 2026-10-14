@@ -179,39 +179,81 @@ message would otherwise have spent.
 #### First run
 
 On a new machine nothing is broken yet — Lemonade and the models just are not
-there. The gate shows that as numbered steps, not failures:
+there. The gate shows that as numbered steps, not failures, and the first step
+is a question: where should chat run? It comes before any download, because the
+answer decides what gets downloaded.
 
 ```
-  Setting up GAIA                                                    step 1 of 2
+  Setting up GAIA                                                    step 1 of 3
+  ──────────────────────────────────────────────────────────────────────────────
+  Step 1 of 3 — where should chat run?
+  Change it any time: p on this screen, /provider in chat.
+
+  > 1. Local
+       Private and free: nothing leaves this PC. Speed depends on this PC.
+       Downloads ~6 GB of models. Setup picks the model that fits this PC's
+       memory.
+
+    2. Fireworks AI
+       Fast on any PC. Conversations are sent to Fireworks AI, and usage is
+       billed to your key.
+       Needs a Fireworks AI API key. Downloads under 1 GB.
+
+    3. AMD LLM Gateway
+       Fast on any PC. Conversations are sent to your organisation's AMD LLM
+       Gateway.
+       Needs your gateway key (and its URL). Downloads under 1 GB.
+
+  ──────────────────────────────────────────────────────────────────────────────
+  ↑/↓ move · p all providers · enter choose · esc back to the steps
+```
+
+Move with `↑`/`↓` (or press `1`–`3`) and press `Enter`. When Lemonade is already
+installed, the Local option names the model setup would download and whether it
+fits this PC's memory, by the same rule the provider panel uses. `esc` goes back
+to the list of steps, where the question is step 1 and `Enter` reopens it. If you
+chose a model on an earlier launch, or started with `--model` or
+`--use-claude`, the question is skipped.
+
+Every choice still installs Lemonade next: it runs local models, and for a cloud
+provider it routes the requests and computes the embeddings that document
+search and memory use.
+
+- **Local** — step 2 installs Lemonade, step 3 downloads the models.
+- **Fireworks AI** or **AMD LLM Gateway** — step 2 installs Lemonade. Step 3
+  opens that provider's key form; paste the key, pick a model, and setup
+  downloads only the embedding model. No local chat model is downloaded.
+
+```
+  Setting up GAIA                                                    step 2 of 3
   ──────────────────────────────────────────────────────────────────────────────
     [ok]  GAIA agent          C:\Users\you\.gaia\bin\gaia-agent.exe
-  > [ ]   Lemonade            Step 1 of 2 — install the local model server (~1 min)
+  > [ ]   Lemonade            Step 2 of 3 — install the local model server (~1 min)
           Lemonade runs AI models on this machine and routes chat to the
           provider you pick. Setup installs it privately for GAIA — nothing
           system-wide.
-          enter start step 1
-    [ ]   Language model      Step 2 of 2 — download the models (~6 GB)
+          enter start step 2
+    [ ]   Language model      Step 3 of 3 — download the models (~6 GB)
   ──────────────────────────────────────────────────────────────────────────────
-  enter start step 1 · p AI provider · r re-check · d details · esc back
+  enter start step 2 · p AI provider · r re-check · d details · esc back
 ```
 
 Press `Enter` and the step runs right there. The row it is working on shows it,
 and the line underneath says what is happening in words — never a log line.
-
-Step 1 installs Lemonade and stops, downloading nothing — and so does every
-retry of it, and the key on a Lemonade row that is installed but not running.
-Which models step 2 fetches depends on where chat runs, so this is the moment to press `p` and pick
-Fireworks AI or the AMD LLM Gateway: step 2 then downloads only the embedding
-models, not a local chat model. Press `Enter` again to start step 2:
+The Lemonade step installs Lemonade and stops, downloading nothing — and so does
+every retry of it, and the key on a Lemonade row that is installed but not
+running. `p` still opens the full provider panel at any point, to pick a
+specific model rather than the default. Press `Enter` again to start the last
+step:
 
 ```
-  Setting up GAIA                                                    step 2 of 2
+  Setting up GAIA                                                    step 3 of 3
   ──────────────────────────────────────────────────────────────────────────────
     [ok]  GAIA agent          C:\Users\you\.gaia\bin\gaia-agent.exe
     [ok]  Lemonade            running at http://localhost:13305/api/v1
     [..]  Language model      ⣟  downloading Gemma-4-E4B-it-GGUF…
 
-  ⣟  Step 2 of 2 — downloading Gemma-4-E4B-it-GGUF · 0:05
+  ⣟  Step 3 of 3 — downloading Gemma-4-E4B-it-GGUF · 0:05
   Leaving this screen stops setup.
   ──────────────────────────────────────────────────────────────────────────────
   r re-check · d details · esc back
@@ -638,8 +680,8 @@ than reporting "no rate configured" — otherwise you would edit a file that is 
 being ignored.
 
 To run a turn somewhere other than this machine — Fireworks AI or your
-organisation's AMD LLM Gateway — press **p** at the readiness gate or type
-`/provider`. See [AI providers](/guides/ai-providers).
+organisation's AMD LLM Gateway — choose it at the first-run question, press **p**
+at the readiness gate, or type `/provider`. See [AI providers](/guides/ai-providers).
 
 ## When GAIA asks permission
 

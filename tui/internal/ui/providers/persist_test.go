@@ -382,3 +382,34 @@ func connectFireworks(t *testing.T, base, apiKey string) Model {
 	}
 	return m
 }
+
+// A provider chosen on the setup screen opens straight on its key form once
+// Lemonade answers; Local, an unknown name, or a failed read stay on the list.
+func TestWithConnectOpensTheKeyFormOnceTheReadLands(t *testing.T) {
+	m := New("http://127.0.0.1:1", 100, 30).WithConnect("fireworks")
+	next, _ := m.Update(loadedMsg{source: m.client, providers: nil, started: time.Now()})
+	got := next.(Model)
+	if got.stage != "setup" || got.chosen() != "fireworks" {
+		t.Errorf("stage %q on %q, want the Fireworks key form", got.stage, got.chosen())
+	}
+	next, _ = got.Update(loadedMsg{source: got.client, providers: nil, started: time.Now()})
+	if again := next.(Model); again.stage != "setup" || again.autoConnect {
+		t.Error("a second read re-opened the form")
+	}
+
+	for name, m := range map[string]Model{
+		"local":   New("http://127.0.0.1:1", 100, 30).WithConnect("local"),
+		"unknown": New("http://127.0.0.1:1", 100, 30).WithConnect("nope"),
+	} {
+		next, _ := m.Update(loadedMsg{source: m.client, providers: nil, started: time.Now()})
+		if got := next.(Model); got.stage != "providers" {
+			t.Errorf("%s: stage %q, want the provider list", name, got.stage)
+		}
+	}
+
+	m = New("http://127.0.0.1:1", 100, 30).WithConnect("amd")
+	next, _ = m.Update(loadedMsg{source: m.client, err: errors.New("HTTP 500"), started: time.Now()})
+	if got := next.(Model); got.stage != "providers" || !got.autoConnect {
+		t.Errorf("a failed read opened the form (stage %q) or forgot the request", got.stage)
+	}
+}
