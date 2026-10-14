@@ -1240,6 +1240,67 @@ def _claims_file_write(answer: str) -> bool:
     return False
 
 
+_PLACEHOLDER_TOKEN = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
+# Any arg may hold an ALL_CAPS constant (a search for MAX_VALUE), so outside
+# content args only these words mark a token as a stand-in.
+_PLACEHOLDER_MARKERS = frozenset(
+    {"PLACEHOLDER", "YOUR", "INSERT", "FILL", "HERE", "TODO", "TBD"}
+)
+_PLACEHOLDER_LITERALS = frozenset(
+    {"todo", "tbd", "...", "…", "placeholder", "fill in", "fill_in"}
+)
+_CONTENT_ARG_NAMES = frozenset(
+    {"content", "code", "script", "text", "body", "new_string", "new_content"}
+)
+_ANGLE_PLACEHOLDER = re.compile(r"<[^<>/=]+>")
+_UNRESOLVED_PLAN_REF = re.compile(r"\$(?:PREV|STEP_\d+)\.")
+
+
+def _placeholder_value(name: str, value: str) -> bool:
+    """True when *value* is a stand-in for a real argument, not the argument."""
+    text = value.strip()
+    if text.lower() in _PLACEHOLDER_LITERALS:
+        return True
+    if _ANGLE_PLACEHOLDER.fullmatch(text) or _UNRESOLVED_PLAN_REF.match(text):
+        return True
+    if _PLACEHOLDER_TOKEN.fullmatch(text):
+        return name.lower() in _CONTENT_ARG_NAMES or any(
+            part in _PLACEHOLDER_MARKERS for part in text.split("_")
+        )
+    return False
+
+
+def _plan_step_placeholder(
+    tool_name: str, tool_args: Any, _path: str = ""
+) -> Optional[Tuple[str, Any]]:
+    """Return ``(arg, value)`` for the first stand-in value in a plan step's args.
+
+    A plan is written before any step runs, so a model can park a stand-in
+    such as ``SCRIPT_PLACEHOLDER`` where real content belongs; executed
+    as-is, that stand-in is what lands on disk.
+    """
+    if not _path and tool_name == "write_file" and isinstance(tool_args, dict):
+        content = tool_args.get("content")
+        if content is None or (isinstance(content, str) and not content.strip()):
+            return "content", content
+    if isinstance(tool_args, dict):
+        items = tool_args.items()
+    elif isinstance(tool_args, list):
+        items = ((str(i), v) for i, v in enumerate(tool_args))
+    else:
+        return None
+    for key, value in items:
+        path = f"{_path}.{key}" if _path else str(key)
+        if isinstance(value, str):
+            if _placeholder_value(str(key), value):
+                return path, value
+        else:
+            found = _plan_step_placeholder(tool_name, value, path)
+            if found is not None:
+                return found
+    return None
+
+
 def _skill_tool_names(skill: Any) -> List[str]:
     """Every tool name *skill* needs: its recipe's plus its own namespaced ones."""
     return [
@@ -4802,6 +4863,69 @@ Do NOT wrap conversational replies in JSON.
         # Valid conversational response - wrap it in expected format
         return {"thought": "", "goal": "", "answer": response.strip()}
 
+    def _defer_placeholder_plan_step(
+        self,
+        step: Any,
+        step_results: List[Dict[str, Any]],
+        messages: List[Dict[str, Any]],
+    ) -> bool:
+        """Refuse a plan step whose args hold a stand-in; hand it to the model.
+
+        Returns True when the step was refused: the plan is dropped and
+        *messages* carries the instruction to make the call with real values.
+        """
+        if not isinstance(step, dict) or not step.get("tool"):
+            return False
+        tool_name = step["tool"]
+        tool_args = self._resolve_plan_parameters(
+            step.get("tool_args") or {}, step_results
+        )
+        found = _plan_step_placeholder(tool_name, tool_args)
+        if found is None:
+            return False
+        arg, value = found
+        step_number = self.current_step + 1
+        remaining = [
+            s.get("tool") if isinstance(s, dict) else str(s)
+            for s in self.current_plan[self.current_step + 1 :]
+        ]
+        logger.warning(
+            "Plan step %d (%s) not run: argument %r is a placeholder (%r)",
+            step_number,
+            tool_name,
+            arg,
+            value,
+        )
+        self.console.print_warning(
+            f"Plan step {step_number} ({tool_name}) not run: "
+            f"'{arg}' is a placeholder, asking for the real value"
+        )
+        then = (
+            f" Then continue with the remaining steps: {', '.join(remaining)}."
+            if remaining
+            else ""
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"Plan step {step_number} ({tool_name}) was NOT run: its "
+                    f"'{arg}' argument is a placeholder ({value!r}), not a real "
+                    "value. Plan steps run exactly as written, so a stand-in would "
+                    "be used literally. Call "
+                    f"{tool_name} now as a single tool call with the real, "
+                    "complete value — write large content such as a whole script "
+                    "out in full in that call, never as a stand-in inside a plan."
+                    f"{then}"
+                ),
+            }
+        )
+        self.current_plan = None
+        self.current_step = 0
+        self.total_plan_steps = 0
+        self.execution_state = self.STATE_PLANNING
+        return True
+
     def _resolve_plan_parameters(
         self, tool_args: Any, step_results: List[Dict[str, Any]], _depth: int = 0
     ) -> Any:
@@ -7578,7 +7702,10 @@ Do NOT wrap conversational replies in JSON.
                 # Extract next step from plan
                 next_step = self.current_plan[self.current_step]
 
-                if (
+                if self._defer_placeholder_plan_step(next_step, step_results, messages):
+                    # Falls through to a model turn that supplies the real value.
+                    step_results.clear()
+                elif (
                     isinstance(next_step, dict)
                     and next_step.get("tool")
                     and "tool_args" in next_step
@@ -7611,6 +7738,8 @@ Do NOT wrap conversational replies in JSON.
 
                     # Display the tool call in real-time
                     self.console.print_tool_usage(tool_name)
+                    if tool_args:
+                        self.console.pretty_print_json(tool_args, "Arguments")
 
                     # Start progress indicator for tool execution
                     self.console.start_progress(f"Executing {tool_name}")
@@ -8695,7 +8824,18 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 # Plan is valid - proceed with execution
-                self.current_plan = parsed["plan"]
+                plan = parsed["plan"]
+                top_args = parsed.get("tool_args")
+                if (
+                    plan
+                    and parsed.get("tool") == plan[0]["tool"]
+                    and isinstance(top_args, dict)
+                    and top_args
+                ):
+                    # The direct call is the one the model wrote out in full;
+                    # its plan copy is often a stand-in for the same content.
+                    plan[0] = {**plan[0], "tool_args": top_args}
+                self.current_plan = plan
                 self.current_step = 0
                 self.total_plan_steps = len(self.current_plan)
                 self.execution_state = self.STATE_EXECUTING_PLAN
