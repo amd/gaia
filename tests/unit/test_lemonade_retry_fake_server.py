@@ -70,7 +70,8 @@ COMPLETION = {
 
 class FakeServer:
     """Answers POST /api/v1/chat/completions from a script, one entry per
-    request. An entry is ``(status, body_bytes, content_type)`` or
+    request. An entry is ``(status, body_bytes, content_type)``,
+    ``("headers", status, json_body_bytes, {header: value})``, or
     ``("cut", body_bytes)``: send *body_bytes* as chunked SSE, then drop the
     connection without the terminating chunk."""
 
@@ -95,17 +96,26 @@ class FakeServer:
                     self.send_header("Transfer-Encoding", "chunked")
                     self.end_headers()
                     payload = entry[1]
-                    self.wfile.write(
-                        f"{len(payload):x}\r\n".encode() + payload + b"\r\n"
-                    )
+                    # An empty payload would be the terminating chunk itself.
+                    if payload:
+                        self.wfile.write(
+                            f"{len(payload):x}\r\n".encode() + payload + b"\r\n"
+                        )
                     self.wfile.flush()
                     # No terminating 0-length chunk: the client sees a
                     # connection that died mid-body.
                     self.close_connection = True
                     return
-                status, body, content_type = entry
+                extra = {}
+                if entry[0] == "headers":
+                    _, status, body, extra = entry
+                    content_type = "application/json"
+                else:
+                    status, body, content_type = entry
                 self.send_response(status)
                 self.send_header("Content-Type", content_type)
+                for name, value in extra.items():
+                    self.send_header(name, value)
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Connection", "close")
                 self.end_headers()
@@ -316,3 +326,155 @@ def test_streaming_sdk_does_not_retry_on_its_own(make_client, monkeypatch):
                 )
             )
     assert len(server.requests) == 1
+
+
+# ── the AMD LLM gateway's failures, as Lemonade relays them ──────────────
+#
+# kw-09 died on a gateway 429 and kw-03 on a 502 (#5087). A cloud failure that
+# arrives once the stream has opened comes as an SSE error frame inside an
+# HTTP 200 response, carrying the upstream status; this frame is the one
+# captured live from Lemonade 2026.40.0 (#4898).
+
+
+def _lemonade_error_frame(status):
+    frame = {
+        "error": {
+            "message": "cloud (amd) request failed",
+            "status_code": status,
+            "type": "backend_error",
+        }
+    }
+    return (200, _sse([frame], done=False), "text/event-stream")
+
+
+_GOOD_STREAM = (
+    200,
+    _sse([_delta_chunk(role="assistant"), _delta_chunk("Hello", finish="stop")]),
+    "text/event-stream",
+)
+
+
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+def test_streamed_gateway_failure_frame_is_retried(make_client, status):
+    script = [_lemonade_error_frame(status), _GOOD_STREAM]
+    with FakeServer(script) as server:
+        client = make_client(server)
+        chunks = list(
+            client.chat_completions(
+                model=MODEL, messages=[{"role": "user", "content": "hi"}], stream=True
+            )
+        )
+    assert _stream_text(chunks) == "Hello"
+    assert len(server.requests) == 2
+    assert client.last_request_retries == 1
+
+
+def test_streamed_rejection_frame_is_not_retried(make_client):
+    script = [_lemonade_error_frame(400)]
+    with FakeServer(script) as server:
+        client = make_client(server)
+        with pytest.raises(LemonadeClientError) as raised:
+            list(
+                client.chat_completions(
+                    model=MODEL,
+                    messages=[{"role": "user", "content": "hi"}],
+                    stream=True,
+                )
+            )
+    assert len(server.requests) == 1
+    assert client.sleeps == []
+    assert retry_state_of(raised.value) is None
+
+
+def test_cloud_rate_limit_gives_up_with_its_own_message_and_retry_state(
+    make_client, monkeypatch
+):
+    """A cloud model that stays rate-limited still ends with the existing
+    plain message, now carrying the retry record the agent loop acts on."""
+    monkeypatch.setenv("GAIA_LLM_RETRY_ATTEMPTS", "3")
+    script = [_lemonade_error_frame(429)] * 3
+    with FakeServer(script) as server:
+        client = make_client(server)
+        client.cloud_model_provider = lambda *a, **k: "amd"
+        with pytest.raises(LemonadeClientError, match="Cloud rate limit reached") as e:
+            list(
+                client.chat_completions(
+                    model=MODEL,
+                    messages=[{"role": "user", "content": "hi"}],
+                    stream=True,
+                )
+            )
+    assert len(server.requests) == 3
+    state = retry_state_of(e.value)
+    assert state is not None and state.attempts == 3
+    assert state.last_reason == "HTTP 429"
+    # Full jitter: retry n waits at most base * 2**n (base 2 s).
+    assert len(client.sleeps) == 2
+    assert 0.0 <= client.sleeps[0] <= 2.0
+    assert 0.0 <= client.sleeps[1] <= 4.0
+
+
+def _rate_limited(retry_after=None):
+    body = json.dumps({"error": {"message": "Too Many Requests"}}).encode()
+    headers = {"Retry-After": retry_after} if retry_after is not None else {}
+    return ("headers", 429, body, headers)
+
+
+def _complete(client, stream):
+    result = client.chat_completions(
+        model=MODEL, messages=[{"role": "user", "content": "hi"}], stream=stream
+    )
+    if stream:
+        return _stream_text(list(result))
+    return result["choices"][0]["message"]["content"]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize(
+    "retry_after, expected",
+    [("7", 7.0), ("600", 30.0)],
+    ids=["honoured", "capped-at-max-delay"],
+)
+def test_http_429_waits_as_long_as_retry_after_says(
+    make_client, stream, retry_after, expected
+):
+    script = [
+        _rate_limited(retry_after),
+        _GOOD_STREAM if stream else _json(200, COMPLETION),
+    ]
+    with FakeServer(script) as server:
+        client = make_client(server)
+        assert _complete(client, stream) == "Hello"
+    assert client.sleeps == [expected]
+    assert len(server.requests) == 2
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+def test_http_429_without_retry_after_backs_off_with_jitter(make_client, stream):
+    script = [
+        _rate_limited(),
+        _rate_limited(),
+        _GOOD_STREAM if stream else _json(200, COMPLETION),
+    ]
+    with FakeServer(script) as server:
+        client = make_client(server)
+        assert _complete(client, stream) == "Hello"
+    assert len(client.sleeps) == 2
+    assert 0.0 <= client.sleeps[0] <= 2.0
+    assert 0.0 <= client.sleeps[1] <= 4.0
+    assert len(server.requests) == 3
+
+
+def test_connection_reset_before_output_is_retried(make_client):
+    """A connection dropped before any token (right after the headers, or
+    after only the role frame) is resent; the text arrives exactly once."""
+    script = [
+        ("cut", b""),
+        ("cut", _sse([_delta_chunk(role="assistant")], done=False)),
+        _GOOD_STREAM,
+    ]
+    with FakeServer(script) as server:
+        client = make_client(server)
+        assert _complete(client, True) == "Hello"
+    assert len(server.requests) == 3
+    assert client.last_request_retries == 2

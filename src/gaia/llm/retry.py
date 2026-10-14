@@ -35,6 +35,8 @@ import os
 import random
 import ssl
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -320,8 +322,14 @@ def classify_exception(error: BaseException) -> Optional[str]:
     if isinstance(error, openai.APIStatusError):
         return classify_http_failure(error.status_code, _error_body_text(error))
     if isinstance(error, openai.APIError):
-        # An error event inside an SSE stream: no status, only a body.
-        return classify_http_failure(None, _error_body_text(error))
+        # An error event inside an SSE stream. Lemonade's carries the upstream
+        # status (``{"status_code": 429, ...}``): a cloud gateway's rate limit
+        # or 502 arrives this way once the stream has opened.
+        from gaia.llm.lemonade_client import _cloud_error_status
+
+        return classify_http_failure(
+            _cloud_error_status(error), _error_body_text(error)
+        )
     if _HTTPX_TRANSPORT_ERRORS and isinstance(error, _HTTPX_TRANSPORT_ERRORS):
         name = type(error).__name__
         if name == "UnsupportedProtocol":
@@ -451,6 +459,35 @@ def attach_retry_state(error: BaseException, state: RetryState) -> BaseException
     return error
 
 
+@dataclass(frozen=True)
+class RetryNotice:
+    """One client-level retry about to happen, for a front-end status line."""
+
+    #: Log-safe, body-free reason (``"HTTP 429"``, ``"connection error"``).
+    reason: str
+    #: Seconds until the next attempt.
+    delay: float
+    #: This retry's number, from 1, out of the retries the policy allows.
+    retry: int
+    max_retries: int
+
+
+_retry_listener: ContextVar[Optional[Callable[[RetryNotice], None]]] = ContextVar(
+    "gaia_model_retry_listener", default=None
+)
+
+
+@contextmanager
+def model_retry_notices(listener: Callable[[RetryNotice], None]) -> Iterator[None]:
+    """Call *listener* before every client-level retry made in this context,
+    so whoever drives the turn can tell the user why it went quiet."""
+    token = _retry_listener.set(listener)
+    try:
+        yield
+    finally:
+        _retry_listener.reset(token)
+
+
 class ModelCallRetrier:
     """Run a model call under a :class:`RetryPolicy`.
 
@@ -521,6 +558,16 @@ class ModelCallRetrier:
             state.attempts + 1,
             self.policy.max_attempts,
         )
+        listener = _retry_listener.get()
+        if listener is not None:
+            listener(
+                RetryNotice(
+                    reason=reason,
+                    delay=delay,
+                    retry=state.attempts,
+                    max_retries=self.policy.max_attempts - 1,
+                )
+            )
         if delay > 0:
             self._sleep(delay)
         state.waited += delay

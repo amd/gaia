@@ -26,6 +26,7 @@ from gaia.llm.retry import (
     backoff_delay,
     classify_exception,
     classify_http_failure,
+    model_retry_notices,
     parse_retry_after,
     retry_state_of,
     tag_http_failure,
@@ -127,6 +128,15 @@ def _request():
     return httpx.Request("POST", "http://test/v1/chat/completions")
 
 
+def _lemonade_frame(status, nested=False):
+    body = {"message": "cloud (amd) request failed", "type": "backend_error"}
+    if nested:
+        body["details"] = {"status_code": status}
+    else:
+        body["status_code"] = status
+    return openai.APIError("cloud (amd) request failed", request=_request(), body=body)
+
+
 @pytest.mark.parametrize(
     "make_error, retried",
     [
@@ -164,6 +174,13 @@ def _request():
             lambda: openai.APIError("bad", request=_request(), body={"message": "x"}),
             False,
         ),
+        # Lemonade's mid-stream cloud error frame carries the upstream status.
+        (lambda: _lemonade_frame(429), True),
+        (lambda: _lemonade_frame(502), True),
+        (lambda: _lemonade_frame(503), True),
+        (lambda: _lemonade_frame(400), False),
+        (lambda: _lemonade_frame(401), False),
+        (lambda: _lemonade_frame(429, nested=True), True),
         # httpx transport errors escaping a stream mid-read
         (lambda: httpx.RemoteProtocolError("peer closed"), True),
         (lambda: httpx.ReadError("reset"), True),
@@ -365,6 +382,35 @@ def test_transient_failures_are_retried_until_success():
     assert 0 <= clock.sleeps[0] <= 2 and 0 <= clock.sleeps[1] <= 4
     assert state.waited == pytest.approx(sum(clock.sleeps))
     assert not state.exhausted
+
+
+def test_each_retry_is_announced_before_its_wait():
+    clock = FakeClock()
+    fn, _ = _failing([_status_error(429), requests.exceptions.ConnectionError("x")])
+    notices = []
+
+    def listener(notice):
+        # Announced before the wait starts, so the user sees it during it.
+        assert len(clock.sleeps) == len(notices)
+        notices.append(notice)
+
+    with model_retry_notices(listener):
+        assert _retrier(clock).call(fn) == "ok"
+    assert [(n.reason, n.retry, n.max_retries) for n in notices] == [
+        ("HTTP 429", 1, 4),
+        ("connection error", 2, 4),
+    ]
+    assert [n.delay for n in notices] == clock.sleeps
+
+
+def test_no_listener_outside_the_context():
+    clock = FakeClock()
+    notices = []
+    with model_retry_notices(notices.append):
+        pass
+    fn, _ = _failing([_status_error(503)])
+    _retrier(clock).call(fn)
+    assert notices == []
 
 
 def test_sleeps_follow_the_seeded_jitter_exactly():
