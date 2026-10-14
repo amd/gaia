@@ -260,8 +260,10 @@ prints why, and records it as `default_model`. It loads with the largest window 
 memory holds, up to 262,144 tokens: 256K on a Strix Halo, about 88K on a 32 GB GPU
 (see [Context length follows memory](/guides/ai-providers#context-length-follows-memory)). Gemma is
 still downloaded, since vision and document-image extraction load it by name. Every
-smaller PC gets Gemma alone. A `default_model` you set yourself always wins, and
-`--check` asks for the same model `gaia init` would download.
+smaller PC gets Gemma alone. A `default_model` you set yourself always wins and is
+downloaded instead of Gemma; questions about images then download Gemma (~6 GB) the
+first time you ask one, and `gaia init` says so. `--check` asks for the same models
+`gaia init` would download.
 </Note>
 
 <Note>
@@ -1556,6 +1558,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
 | `profile` | `chat` | Last `gaia init` profile |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
+| `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, `rocm`, `metal`, `cpu`, or `auto` to let Lemonade choose. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
 | `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-tui`, restored on its next launch — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
 | `lemonade_idle_timeout_minutes` | `15` | Stop GAIA's own Lemonade Server once no GAIA app or command has used it for this many minutes; `0` keeps it running until `gaia daemon stop` — see [GAIA's Lemonade Server](#gaias-lemonade-server) |
 
@@ -3279,7 +3282,7 @@ gaia tui status                                # background service + what is in
 | `gaia tui` | Launch straight into the flagship agent's chat, behind its readiness gate. |
 | `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent by catalog id. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, and **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done. |
 | `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia tui run --query` is, `--timeout` included. |
-| `gaia tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
+| `gaia tui status` | Whether the background service is running, which Lemonade it uses (address, version, the chat model's backend and context window), which sidecars it knows, and what is installed. |
 | `gaia tui version` | Print the build version. |
 
 Options accepted by every `gaia tui` command:

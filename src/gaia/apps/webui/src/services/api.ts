@@ -4,6 +4,7 @@
 /** API client for GAIA Agent UI backend. */
 
 import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus } from '../types';
+import type { ModelServerInfo } from '../types/api.gen';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -138,6 +139,16 @@ export async function requestWarmUp(): Promise<WarmUpStatus> {
 
 export async function getWarmUp(): Promise<WarmUpStatus> {
     return apiFetch<WarmUpStatus>('GET', '/system/warm-up');
+}
+
+/** Which Lemonade GAIA uses, where, and the backend each loaded model runs on. */
+export async function getModelServer(): Promise<ModelServerInfo> {
+    return apiFetch<ModelServerInfo>('GET', '/system/model-server');
+}
+
+/** Save the llama.cpp backend for chat models (`auto` or a name Lemonade offers). */
+export async function setModelServerBackend(backend: string): Promise<ModelServerInfo> {
+    return apiFetch<ModelServerInfo>('PUT', '/system/model-server/backend', { backend });
 }
 
 // -- Settings ------------------------------------------------------------------

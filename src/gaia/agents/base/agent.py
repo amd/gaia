@@ -201,6 +201,24 @@ def _skill_prompt_body(agent, skill) -> str:
     return f"{body}\n\nOn this machine: {notes}"
 
 
+def _skill_folder_access(agent, skill, *, grant: bool) -> None:
+    """Make *skill*'s own folder readable (or not) through *agent*'s file tools.
+
+    Skill bodies point at bundled files by relative path; without this a skill
+    under ``~/.gaia/skills`` is outside a host-scoped allowlist and the read is
+    refused with no way to approve it. Read-only: writes there stay refused.
+    """
+    validator = getattr(agent, "path_validator", None) or getattr(
+        agent, "_path_validator", None
+    )
+    directory = getattr(skill, "directory", None)
+    if validator is None or directory is None:
+        return
+    method = "add_read_only_path" if grant else "remove_read_only_path"
+    if hasattr(validator, method):
+        getattr(validator, method)(str(directory))
+
+
 def effective_skill_body(agent, skill) -> str:
     """*skill*'s authored body with *agent*'s approved learned changes applied.
 
@@ -3180,6 +3198,7 @@ Do NOT wrap conversational replies in JSON.
                 )
 
             self.loaded_skills[name] = skill
+            _skill_folder_access(self, skill, grant=True)
             self._note_skill_active(name)
             self.rebuild_system_prompt()
             # Inside the guard: it recomposes the prompt and mutates loader
@@ -3189,6 +3208,7 @@ Do NOT wrap conversational replies in JSON.
             unregister_skill_tools(skill.name)
             self.granted_binaries.revoke_skill(skill.name)
             self.loaded_skills.pop(name, None)
+            _skill_folder_access(self, skill, grant=False)
             raise
 
         # tools_required names registry tools the skill CONSUMES. A name that is
@@ -3336,7 +3356,8 @@ Do NOT wrap conversational replies in JSON.
             for key in removed:
                 self._instance_tools.pop(key, None)
         revoked = self.granted_binaries.revoke_skill(name)
-        self.loaded_skills.pop(name, None)
+        skill = self.loaded_skills.pop(name, None)
+        _skill_folder_access(self, skill, grant=False)
         if self._active_skill_filter is not None:
             self._active_skill_filter = [
                 n for n in self._active_skill_filter if n != name

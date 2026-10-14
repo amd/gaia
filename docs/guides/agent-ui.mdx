@@ -299,6 +299,34 @@ The new value applies within seconds; no restart is needed.
 
 None of this applies to a Lemonade Server you run yourself and point GAIA at
 with `LEMONADE_BASE_URL`: GAIA never unloads its models or stops it.
+### Which server and which GPU backend
+
+**Settings → Advanced → Model server** shows what is actually running:
+
+- **Server**: GAIA's own Lemonade or yours (another Lemonade on this PC, or one
+  on another machine), with its version.
+- **Address**: the URL and port GAIA talks to.
+- **Chat model** and **Runs on**: the loaded model and its llama.cpp backend
+  (Vulkan, ROCm, CPU), NPU, or *Remote (cloud)*. "Lemonade's default" means the
+  load did not name a backend and Lemonade picked it. *unknown* means this
+  Lemonade does not report it.
+- **Context window** and the **Embedding model** with its backend.
+
+To choose the backend, pick **Auto**, **Vulkan**, **ROCm** or **CPU** under
+*llama.cpp backend for chat models*. Only backends Lemonade can run on this PC
+are listed; one marked "downloads on first use" is fetched by Lemonade the
+first time it loads (ROCm is about 4 GB). The choice applies the next time the
+chat model loads; **Reload chat model now** applies it at once. The embedding
+model keeps its own backend.
+
+The same setting from a terminal:
+
+```bash
+gaia config set llamacpp_backend rocm   # vulkan | rocm | metal | cpu | auto
+```
+
+**Change model** opens Settings → Model. To use a different server, set
+`LEMONADE_BASE_URL`.
 
 ## Permissions
 
@@ -324,8 +352,9 @@ error, so it never runs with full access you turned off.
 
 One window with General (appearance: Light, Dark, Match system; shortcuts),
 Model, Permissions, Skills (what GAIA can load, with **Use** to try one),
-Connectors, Memory, Privacy and Advanced (model server status, context size,
-custom model ID, beta options, MCP servers, version and roll back).
+Connectors, Memory, Privacy and Advanced (model server and llama.cpp backend,
+context size, custom model ID, beta options, MCP servers, version and roll
+back).
 
 ## Roll back to a previous version
 

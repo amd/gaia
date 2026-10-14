@@ -2845,6 +2845,58 @@ class TestHardwareChatModel(unittest.TestCase):
         client.get_system_info.assert_not_called()
         self.assertTrue(any("Qwen3-Coder" in r for r in status.reasons))
 
+    def test_a_chosen_default_model_replaces_gemma_in_the_download(self):
+        """default_model=Qwen3-0.6B must not pull the 6 GB Gemma as well."""
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+        cfg = GaiaConfig()
+        cfg.default_model = "Qwen3-0.6B-GGUF"
+        cfg.save()
+        cmd = InitCommand(profile="gaia", yes=True)
+        cmd._print = MagicMock()
+        client = self._client(SMALL_MACHINE)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            self.assertTrue(cmd._download_models())
+        pulled = [c.args[0] for c in client.ensure_model_downloaded.call_args_list]
+        self.assertIn("Qwen3-0.6B-GGUF", pulled)
+        self.assertNotIn(DEFAULT_MODEL_NAME, pulled)
+        said = " ".join(str(c.args[0]) for c in cmd._print.call_args_list)
+        self.assertIn(f"Not downloading {DEFAULT_MODEL_NAME}", said)
+        self.assertIn("images", said)
+
+    def test_check_does_not_require_gemma_beside_a_chosen_default(self):
+        """Otherwise the Agent UI's setup check would rerun setup forever."""
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
+
+        cfg = GaiaConfig()
+        cfg.default_model = "Qwen3-0.6B-GGUF"
+        cfg.save()
+        client = self._client(
+            SMALL_MACHINE, have={"Qwen3-0.6B-GGUF", DEFAULT_EMBEDDING_MODEL}
+        )
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            status = check_setup_status(profile="gaia")
+        self.assertFalse(any("Gemma" in r for r in status.reasons), status.reasons)
+
+    def test_choosing_gemma_itself_still_downloads_it(self):
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+        cfg = GaiaConfig()
+        cfg.default_model = DEFAULT_MODEL_NAME
+        cfg.save()
+        cmd = InitCommand(profile="gaia", yes=True)
+        client = self._client(SMALL_MACHINE)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            self.assertTrue(cmd._download_models())
+        pulled = [c.args[0] for c in client.ensure_model_downloaded.call_args_list]
+        self.assertEqual(pulled.count(DEFAULT_MODEL_NAME), 1)
+
     def test_download_registers_qwen_with_a_size_scaled_timeout(self):
         from gaia.installer.init_command import InitCommand
         from gaia.llm.lemonade_client import (

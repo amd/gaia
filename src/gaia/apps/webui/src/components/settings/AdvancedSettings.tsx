@@ -10,6 +10,7 @@ import { useModelActions } from '../../hooks/useModelActions';
 import { useUpdateStatus } from '../../hooks/useUpdateStatus';
 import type { SystemStatus, MCPServerStatus } from '../../types';
 import { VersionPicker } from '../VersionPicker';
+import { ModelServerPanel } from './ModelServerPanel';
 import '../SettingsModal.css';
 
 /** Model server status, context size, custom model id, beta flags, MCP status, version. */
@@ -171,6 +172,7 @@ export function AdvancedSettings() {
     return (
         <div className="settings-pane">
             <h2 className="settings-pane-title">Advanced</h2>
+                <ModelServerPanel />
                 <section className="settings-section">
                     <h4>Local model server</h4>
                     {loading ? (

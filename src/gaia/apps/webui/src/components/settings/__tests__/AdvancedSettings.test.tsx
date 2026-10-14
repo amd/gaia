@@ -34,6 +34,10 @@ function status(overrides: Partial<SystemStatus>): SystemStatus {
 beforeEach(() => {
     vi.clearAllMocks();
     mockedApi.getMCPRuntimeStatus.mockResolvedValue({ servers: [] } as never);
+    mockedApi.getModelServer.mockResolvedValue({
+        reachable: false, error: 'Lemonade is not answering at http://localhost:13305/api/v1.',
+        base_url: 'http://localhost:13305/api/v1', owner: 'user',
+    });
     mockedApi.getSettings.mockResolvedValue(
         { custom_model: null, dynamic_tools: false, dynamic_tools_locked: false } as never,
     );

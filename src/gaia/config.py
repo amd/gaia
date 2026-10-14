@@ -133,6 +133,10 @@ class GaiaConfig:
             memory goes back to the system. 0 keeps it running until
             ``gaia daemon stop``. Never applies to a server
             ``LEMONADE_BASE_URL`` names.
+        llamacpp_backend: The llama.cpp backend (``vulkan``, ``rocm``, ``metal``
+            or ``cpu``) GAIA asks Lemonade for when it loads a local chat
+            model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
+            Takes effect on the next load; the embedding model keeps its own.
     """
 
     profile: str = "chat"
@@ -142,6 +146,7 @@ class GaiaConfig:
     last_provider: Optional[str] = None
     last_model: Optional[str] = None
     lemonade_idle_timeout_minutes: int = 15
+    llamacpp_backend: Optional[str] = None
 
     #: Strings accepted for a boolean field, and what each means. Anything
     #: else raises — "false" silently meaning True is the exact accident this
@@ -207,6 +212,24 @@ class GaiaConfig:
                 f"{value!r}."
             )
         return number
+    #: Values ``llamacpp_backend`` accepts; ``auto`` (or empty) is stored as None.
+    LLAMACPP_BACKEND_CHOICES = ("auto", "vulkan", "rocm", "metal", "cpu")
+
+    @classmethod
+    def _check_llamacpp_backend(cls, value: Any, where: str) -> Optional[str]:
+        """Normalise a ``llamacpp_backend`` value, raising on anything else."""
+        if value is None:
+            return None
+        word = str(value).strip().lower()
+        if word in ("", "auto"):
+            return None
+        if word not in cls.LLAMACPP_BACKEND_CHOICES:
+            raise GaiaConfigError(
+                f"{where}: 'llamacpp_backend' must be one of "
+                f"{', '.join(cls.LLAMACPP_BACKEND_CHOICES)}, but it is {value!r}. "
+                "Run `gaia config set llamacpp_backend auto` to let Lemonade choose."
+            )
+        return word
 
     @classmethod
     def field_names(cls) -> List[str]:
@@ -277,6 +300,10 @@ class GaiaConfig:
                         "default."
                     )
         kwargs = {k: v for k, v in data.items() if k in known}
+        if "llamacpp_backend" in kwargs:
+            kwargs["llamacpp_backend"] = cls._check_llamacpp_backend(
+                kwargs["llamacpp_backend"], f"GAIA config at {config_file}"
+            )
         return cls(**kwargs)
 
     def save(self, path: Optional[Path] = None) -> None:
@@ -291,6 +318,28 @@ class GaiaConfig:
             encoding="utf-8",
         )
         log.info(f"Saved GAIA config to {config_file}")
+
+    @classmethod
+    def save_key(
+        cls, key: str, value: Any, path: Optional[Path] = None
+    ) -> "GaiaConfig":
+        """Set one key in the config file, keeping every other key in it.
+
+        Unlike :meth:`save`, keys this class does not declare (written by a
+        newer GAIA or by the TUI) survive. Returns the reloaded config.
+        """
+        config = cls.load(path)
+        config.set(key, value)
+        config_file = cls.config_path(path)
+        try:
+            doc = json.loads(config_file.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            doc = {}
+        doc[key] = getattr(config, key)
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        log.info(f"Saved {key} to GAIA config at {config_file}")
+        return config
 
     def get(self, key: str) -> Any:
         """Return the value of a config field, raising on an unknown key."""
@@ -308,6 +357,9 @@ class GaiaConfig:
                 f"Unknown config key '{key}'. "
                 f"Valid keys: {', '.join(self.field_names())}."
             )
+        if key == "llamacpp_backend":
+            setattr(self, key, self._check_llamacpp_backend(value, "gaia config"))
+            return
         setattr(self, key, self._coerce(key, value))
 
     def resolve_model(
