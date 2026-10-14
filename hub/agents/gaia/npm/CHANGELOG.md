@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Answers stream over `/query`, and gateway models that need streaming
+  work.** The HTTP sidecar ran its agent with streaming off, so a relayed turn
+  (the Agent UI, and the TUI's later sessions) got its whole answer at once,
+  Stop could not cut a model call short, and gateway models that refuse
+  unstreamed requests (gemini-3.x, GLM) failed every turn. Every `/query` turn
+  now streams its model calls and sends the answer as `token` events before
+  `final`, the same as the stdio transport. A run cancelled mid-answer now
+  stops within a token and ends with an empty `final`, as stdio does.
 - **The sidecar's start-up warm-up now makes the first question fast.** It
   primed only the agent's own instructions, without the tool list or the rest
   of the system prompt, so the first question re-read all ~19K prompt tokens
