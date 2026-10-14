@@ -272,6 +272,34 @@ Open **Settings → Model** (or the model chip in the message box):
   it can't be restored, a one-line notice says why and asks you to pick one.
 - Switching from a local model to a cloud one shows the privacy note first.
 
+### When GAIA's model server runs
+
+Local chat runs on GAIA's own Lemonade Server, the one `gaia init` installs.
+GAIA manages it for you, and it gives its memory back when you stop using GAIA:
+
+| When | What happens |
+|---|---|
+| You open the app (desktop, `npx @amd-gaia/agent-ui`, or `gaia-tui`) | GAIA's background service starts the server if it is not running |
+| You close the last GAIA app | Every model is unloaded, so your GPU memory is free again. The server itself stays up for a quick next launch |
+| Another GAIA app or a `gaia` command is still running | Nothing is unloaded until it closes too |
+| No GAIA app or command has used it for 15 minutes | The server stops entirely |
+| `gaia daemon stop` | The server stops, including the one first-time setup started |
+
+The server keeps the same port from one start to the next, and moves only if
+another program has taken it. Its API key still changes on every start; read
+the current one from `~/.gaia/lemonade/env.sh` (`env.ps1` on Windows).
+
+Change the 15 minutes, or turn the timeout off with `0`:
+
+```bash
+gaia config set lemonade_idle_timeout_minutes 30
+```
+
+The new value applies within seconds; no restart is needed.
+
+None of this applies to a Lemonade Server you run yourself and point GAIA at
+with `LEMONADE_BASE_URL`: GAIA never unloads its models or stops it.
+
 ## Permissions
 
 GAIA asks before it changes files, runs commands or uses tools that act for you.

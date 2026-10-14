@@ -561,11 +561,44 @@ class TestLemonadeReady(unittest.TestCase):
 
     def _run_embedded(self, embedded, **kwargs):
         cmd, buf = self._cmd(**kwargs)
-        with patch(
-            "gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded
+        with (
+            patch("gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded),
+            patch.object(cmd, "_hand_server_to_daemon") as hand_off,
         ):
             ok = cmd._ensure_lemonade_ready()
+        self.hand_off = hand_off
         return ok, buf.getvalue()
+
+    def test_the_started_server_is_handed_to_the_daemon(self):
+        """Otherwise the first-launch server belongs to nobody and outlives GAIA."""
+        embedded = self._embedded(self._status())
+        ok, _ = self._run_embedded(embedded)
+
+        self.assertTrue(ok)
+        self.hand_off.assert_called_once_with()
+
+    def test_hand_off_asks_the_daemon_and_holds_the_server_through_init(self):
+        cmd, _ = self._cmd()
+        with (
+            patch("gaia.daemon.client.ensure_lemonade") as ensure,
+            patch("gaia.llm.lemonade_service.hold_lemonade_open") as hold,
+        ):
+            cmd._hand_server_to_daemon()
+        ensure.assert_called_once_with()
+        hold.assert_called_once_with("cli", "gaia init")
+
+    def test_no_daemon_to_hand_to_says_how_to_stop_it(self):
+        from gaia.daemon.errors import DaemonStartError
+
+        cmd, buf = self._cmd()
+        with patch(
+            "gaia.daemon.client.ensure_lemonade",
+            side_effect=DaemonStartError("needs amd-gaia[api]"),
+        ):
+            cmd._hand_server_to_daemon()
+        out = buf.getvalue()
+        self.assertIn("gaia lemonade embedded stop", out)
+        self.assertIn("needs amd-gaia[api]", out)
 
     def test_fresh_machine_installs_then_starts(self):
         embedded = self._embedded(self._status(installed=False), installed=False)

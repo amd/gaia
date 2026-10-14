@@ -128,6 +128,11 @@ class GaiaConfig:
         last_model: Model id last chosen in the TUI, restored on its next
             launch. A restore that fails is reported, never replaced with
             another model. ``gaia config set last_model ""`` forgets it.
+        lemonade_idle_timeout_minutes: Stop GAIA's own Lemonade Server once no
+            GAIA app or command has used it for this many minutes, so its
+            memory goes back to the system. 0 keeps it running until
+            ``gaia daemon stop``. Never applies to a server
+            ``LEMONADE_BASE_URL`` names.
     """
 
     profile: str = "chat"
@@ -136,6 +141,7 @@ class GaiaConfig:
     full_access: bool = False
     last_provider: Optional[str] = None
     last_model: Optional[str] = None
+    lemonade_idle_timeout_minutes: int = 15
 
     #: Strings accepted for a boolean field, and what each means. Anything
     #: else raises — "false" silently meaning True is the exact accident this
@@ -158,6 +164,12 @@ class GaiaConfig:
         return declared is bool or declared == "bool"
 
     @classmethod
+    def _is_int_field(cls, key: str) -> bool:
+        """True when *key* is declared ``int``."""
+        declared = {f.name: f.type for f in fields(cls)}.get(key)
+        return declared is int or declared == "int"
+
+    @classmethod
     def _coerce(cls, key: str, value: Any) -> Any:
         """Convert a raw value to the type the field declares.
 
@@ -165,6 +177,8 @@ class GaiaConfig:
         given ``"false"`` would otherwise be stored truthy and read back as
         enabled.
         """
+        if cls._is_int_field(key):
+            return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
             return value
         word = str(value).strip().lower()
@@ -174,6 +188,25 @@ class GaiaConfig:
                 f"Use one of: {', '.join(sorted(cls._BOOL_WORDS))}."
             )
         return cls._BOOL_WORDS[word]
+
+    @staticmethod
+    def _whole_number(key: str, value: Any) -> int:
+        """*value* as a non-negative int, or a GaiaConfigError naming *key*."""
+        if isinstance(value, bool):
+            number = None
+        elif isinstance(value, int):
+            number = value
+        else:
+            try:
+                number = int(str(value).strip())
+            except ValueError:
+                number = None
+        if number is None or number < 0:
+            raise GaiaConfigError(
+                f"Config key '{key}' takes a whole number of 0 or more, but got "
+                f"{value!r}."
+            )
+        return number
 
     @classmethod
     def field_names(cls) -> List[str]:
@@ -234,6 +267,14 @@ class GaiaConfig:
                         f"GAIA config at {config_file}: '{key}' must be true or "
                         f"false (unquoted), but it is {value!r}. Fix it by hand, "
                         f"or delete the key to go back to the default."
+                    )
+            if key in known and cls._is_int_field(key):
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    raise GaiaConfigError(
+                        f"GAIA config at {config_file}: '{key}' must be a whole "
+                        f"number of 0 or more (unquoted), but it is {value!r}. "
+                        "Fix it by hand, or delete the key to go back to the "
+                        "default."
                     )
         kwargs = {k: v for k, v in data.items() if k in known}
         return cls(**kwargs)

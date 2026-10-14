@@ -8,11 +8,19 @@ after a reboot. Installing it stays ``gaia init``'s job: the daemon only starts
 what is already installed. A ``LEMONADE_BASE_URL`` means the user runs their
 own server, so the daemon leaves Lemonade alone.
 
-The daemon only ever stops a server it started itself. One that ``gaia init``,
-the user, or another daemon started is left running, and one that is slow to
-answer is reported rather than killed -- it may be loading a large model.
+The daemon owns every instance of GAIA's own server, whoever started it. One
+that ``gaia init`` or ``gaia lemonade embedded start`` brought up is claimed the
+first time the daemon finds it healthy, and stops with the daemon. One a
+crashed daemon left behind is adopted while it still answers on the right
+version, and reaped otherwise. Nothing is signalled until
+:meth:`~gaia.llm.lemonade_embedded.EmbeddedLemonade.stop` has confirmed the pid
+is GAIA's lemond, so a user's Lemonade or a recycled pid is never touched.
+
+A slow server whose owner is still alive is reported, never killed: it may be
+loading a large model.
 """
 
+import os
 import threading
 from dataclasses import asdict, dataclass
 from typing import Callable, Optional
@@ -49,6 +57,34 @@ def _embedded_factory():
     return EmbeddedLemonade()
 
 
+def _process_started(pid: int) -> Optional[float]:
+    """When *pid* started, or None when that cannot be read."""
+    import psutil
+
+    try:
+        return psutil.Process(pid).create_time()
+    except psutil.Error:
+        return None
+
+
+def _owner_alive(pid: int, started: Optional[float]) -> bool:
+    """Whether the daemon recorded as *pid* (started at *started*) still runs.
+
+    A process GAIA may not inspect counts as alive: an orphan is only reaped on
+    proof its owner is gone. A record without a start time can only be checked
+    by pid.
+    """
+    import psutil
+
+    try:
+        actual = psutil.Process(pid).create_time()
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.AccessDenied:
+        return True
+    return started is None or abs(actual - started) < 1.0
+
+
 class EmbeddedLemonadeOwner:
     """Starts GAIA's embedded Lemonade on demand and stops it with the daemon.
 
@@ -58,17 +94,28 @@ class EmbeddedLemonadeOwner:
     Args:
         factory: Builds the :class:`~gaia.llm.lemonade_embedded.EmbeddedLemonade`
             to manage. Called per operation so ``GAIA_HOME`` is read live.
+        owner_pid: This daemon's pid, recorded in the server's state as its
+            owner. Defaults to the current process.
+        owner_alive: Whether a recorded owner ``(pid, start time)`` still runs.
+            Injected so tests can stage a crashed daemon.
     """
 
-    def __init__(self, factory: Callable = _embedded_factory):
+    def __init__(
+        self,
+        factory: Callable = _embedded_factory,
+        owner_pid: Optional[int] = None,
+        owner_alive: Optional[Callable[[int, Optional[float]], bool]] = None,
+    ):
         self._factory = factory
         self._lock = threading.Lock()
-        self._started_pid: Optional[int] = None
+        self._owner_pid = owner_pid if owner_pid is not None else os.getpid()
+        self._owner_started = _process_started(self._owner_pid)
+        self._owner_alive = owner_alive or _owner_alive
 
     @property
-    def started_pid(self) -> Optional[int]:
-        """Pid of the server this daemon started and will stop, or None."""
-        return self._started_pid
+    def owner_pid(self) -> int:
+        """The pid this daemon records as the owner of GAIA's server."""
+        return self._owner_pid
 
     @staticmethod
     def configured_url() -> Optional[str]:
@@ -77,8 +124,21 @@ class EmbeddedLemonadeOwner:
 
         return configured_lemonade_url()
 
+    def _orphaned(self, current) -> bool:
+        """Whether *current* belonged to a daemon that is no longer running."""
+        owner = current.owner_pid
+        return (
+            owner is not None
+            and owner != self._owner_pid
+            and not self._owner_alive(owner, current.owner_started)
+        )
+
     def ensure(self) -> EnsuredLemonade:
         """Return the running embedded server, starting it if it is stopped.
+
+        A healthy server someone else started is claimed, so this daemon stops
+        it later. One a crashed daemon left that is not answering, or runs
+        another version, is reaped and replaced.
 
         Raises:
             LemonadeNotManaged: ``LEMONADE_BASE_URL`` names another server, or
@@ -103,28 +163,40 @@ class EmbeddedLemonadeOwner:
                     "install it."
                 )
             current = embedded.status()
-            if current.unresponsive_pid:
+            orphaned = self._orphaned(current)
+            if current.unresponsive_pid and not orphaned:
                 raise EmbeddedLemonadeError(
                     f"GAIA's Lemonade Server (pid {current.unresponsive_pid}) is "
                     "running but not answering; it may still be loading a model. "
                     f"Wait and retry, or run `gaia init` to restart it. Its log is "
                     f"{embedded.log_path}."
                 )
-            if current.running:
-                if current.version != embedded.version:
-                    raise EmbeddedLemonadeError(
-                        f"GAIA's Lemonade Server v{current.version} is running, "
-                        f"but this GAIA needs v{embedded.version}. Run `gaia init` "
-                        "to replace it."
-                    )
-                return EnsuredLemonade(
-                    base_url=current.base_url,
-                    port=current.port,
-                    version=current.version,
-                    started=False,
+            if current.running and current.version == embedded.version:
+                return self._claim(embedded, current)
+            if current.running and not orphaned:
+                raise EmbeddedLemonadeError(
+                    f"GAIA's Lemonade Server v{current.version} is running, "
+                    f"but this GAIA needs v{embedded.version}. Run `gaia init` "
+                    "to replace it."
                 )
-            status = embedded.start(install_if_missing=False)
-            self._started_pid = status.pid
+            if orphaned:
+                logger.warning(
+                    "daemon: reaping embedded Lemonade (pid %s) left by daemon "
+                    "pid %s, which exited; it was %s",
+                    current.pid or current.unresponsive_pid,
+                    current.owner_pid,
+                    (
+                        "not answering"
+                        if current.unresponsive_pid
+                        else f"running v{current.version}"
+                    ),
+                )
+                embedded.stop()
+            status = embedded.start(
+                install_if_missing=False,
+                owner_pid=self._owner_pid,
+                owner_started=self._owner_started,
+            )
             logger.info(
                 "daemon: started embedded Lemonade %s on port %s",
                 status.version,
@@ -137,8 +209,29 @@ class EmbeddedLemonadeOwner:
                 started=True,
             )
 
+    def _claim(self, embedded, current) -> EnsuredLemonade:
+        if current.owner_pid != self._owner_pid:
+            embedded.claim(self._owner_pid, self._owner_started)
+            logger.info(
+                "daemon: took ownership of embedded Lemonade (pid %s, port %s) "
+                "started by %s",
+                current.pid,
+                current.port,
+                (
+                    f"daemon pid {current.owner_pid}, which exited"
+                    if current.owner_pid
+                    else "gaia init or the CLI"
+                ),
+            )
+        return EnsuredLemonade(
+            base_url=current.base_url,
+            port=current.port,
+            version=current.version,
+            started=False,
+        )
+
     def ensure_in_background(self) -> threading.Thread:
-        """Start the server without holding up the daemon's own startup.
+        """Start the server without holding up the caller.
 
         A failure is logged; the next client to call :meth:`ensure` gets the
         same error raised to it, so it is never lost.
@@ -157,47 +250,70 @@ class EmbeddedLemonadeOwner:
         thread.start()
         return thread
 
-    def stop(self) -> bool:
-        """Stop the embedded server if this daemon started it.
+    def unload_models(self, still_wanted: Callable[[], bool] = lambda: True) -> bool:
+        """Unload every model from GAIA's own server; the server keeps running.
+
+        Never touches a server ``LEMONADE_BASE_URL`` names: that one is the
+        user's, and so are its models. Not under the start lock: an unload is
+        one quick request, and holding the lock would stall shutdown behind it.
+
+        Args:
+            still_wanted: Checked last, so a client that registered since the
+                caller decided keeps its models.
+
+        Returns:
+            True if models were unloaded, False if GAIA's server is not running
+            or *still_wanted* said no.
+
+        Raises:
+            EmbeddedLemonadeError: The server refused the unload.
+        """
+        if self.configured_url() or not still_wanted():
+            return False
+        return self._factory().unload_models()
+
+    def stop(
+        self,
+        reason: str = "the daemon is shutting down",
+        still_wanted: Callable[[], bool] = lambda: True,
+    ) -> bool:
+        """Stop GAIA's embedded server, whoever started it.
 
         Bounded so the daemon's shutdown fits `gaia daemon stop`'s wait: a
-        start still in flight is left to finish, and the server it brings up
-        keeps running like any other this daemon did not stop.
+        start still in flight is left to finish, and `gaia daemon stop` stops
+        what it brings up once the daemon has exited.
+
+        Args:
+            reason: Why, for the log.
+            still_wanted: Checked once the start lock is held, so a client that
+                registered since the caller decided keeps its server.
 
         Returns:
             True if a server was stopped.
 
         Raises:
-            EmbeddedLemonadeError: The server would not stop.
+            EmbeddedLemonadeError: The server would not stop, or its recorded
+                pid could not be confirmed as GAIA's server.
         """
+        if self.configured_url():
+            return False
         if not self._lock.acquire(timeout=STOP_LOCK_TIMEOUT):
             logger.warning(
                 "daemon: embedded Lemonade is still starting; leaving it running"
             )
             return False
         try:
-            if self._started_pid is None:
+            if not still_wanted():
                 return False
             embedded = self._factory()
             current = embedded.status()
-            recorded = current.pid or current.unresponsive_pid
-            if recorded is None:
-                logger.info(
-                    "daemon: embedded Lemonade (pid %s) had already exited",
-                    self._started_pid,
-                )
-                self._started_pid = None
+            if not (current.running or current.unresponsive_pid):
                 return False
-            if recorded != self._started_pid:
-                logger.info(
-                    "daemon: leaving embedded Lemonade (pid %s) running; this "
-                    "daemon started pid %s",
-                    recorded,
-                    self._started_pid,
-                )
-                return False
-            stopped = embedded.stop()
-            self._started_pid = None
-            return stopped
+            logger.info(
+                "daemon: stopping embedded Lemonade (pid %s) because %s",
+                current.pid or current.unresponsive_pid,
+                reason,
+            )
+            return embedded.stop()
         finally:
             self._lock.release()

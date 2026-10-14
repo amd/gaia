@@ -1342,7 +1342,28 @@ class InitCommand:
         self._print_success(
             f"Lemonade Server v{status.version} running on port {status.port}"
         )
+        self._hand_server_to_daemon()
         return True
+
+    def _hand_server_to_daemon(self) -> None:
+        """Make the GAIA daemon the owner of the server init just started.
+
+        The daemon then stops it with ``gaia daemon stop`` or after the idle
+        timeout, instead of it running until the next reboot. Init registers as
+        a client so the idle timeout cannot fire during a long model download.
+        """
+        from gaia.daemon import client as daemon_client
+        from gaia.daemon.errors import DaemonError
+        from gaia.llm.lemonade_service import hold_lemonade_open
+
+        try:
+            daemon_client.ensure_lemonade()
+            hold_lemonade_open("cli", "gaia init")
+        except DaemonError as e:
+            self._print_warning(
+                "The GAIA daemon could not take over Lemonade Server, so it keeps "
+                f"running until you run `gaia lemonade embedded stop`: {e}"
+            )
 
     def _server_problem_hint(self) -> str:
         """Where to look when the server misbehaves after it started."""
