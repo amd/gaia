@@ -18,23 +18,53 @@ const LINKS = [
   <div class="g-shell flex flex-col gap-6 py-12 sm:flex-row sm:items-center sm:justify-between">
     <div>
       <div class="flex items-baseline gap-2">
-        <span class="font-display text-[18px] font-semibold tracking-[-0.02em] text-g-text">GAIA</span>
-        <span class="mono text-[10px] text-g-faint">/ AMD</span>
+        <span class="font-display text-[24px] font-semibold uppercase leading-none tracking-[0.2em] text-g-text">GAIA</span>
+        <span class="mono text-[12.5px] text-g-faint">/ AMD</span>
       </div>
       <p class="mt-2 text-[12.5px] text-g-faint">
         MIT License &bull; &copy; 2024-{currentYear} Advanced Micro Devices, Inc.
       </p>
     </div>
 
-    <nav aria-label="Footer" class="flex flex-wrap gap-x-7 gap-y-2">
-      {LINKS.map((l) => (
-        <a
-          href={l.href}
-          target={l.external ? '_blank' : undefined}
-          rel={l.external ? 'noopener noreferrer' : undefined}
-          class="text-[13px] text-g-muted transition-colors hover:text-g-text"
-        >{l.label}</a>
-      ))}
-    </nav>
+    <div class="flex flex-wrap items-center gap-x-7 gap-y-2">
+      <nav aria-label="Footer" class="flex flex-wrap gap-x-7 gap-y-2">
+        {LINKS.map((l) => (
+          <a
+            href={l.href}
+            target={l.external ? '_blank' : undefined}
+            rel={l.external ? 'noopener noreferrer' : undefined}
+            class="text-[13px] text-g-muted transition-colors hover:text-g-text"
+          >{l.label}</a>
+        ))}
+      </nav>
+      {/* WCAG 2.2.2: motion that runs past five seconds needs a way to stop it.
+          Hidden under reduced motion, where the field is already still. */}
+      <button
+        id="motion-toggle"
+        type="button"
+        aria-pressed="false"
+        class="font-mono text-[12.5px] uppercase tracking-[0.1em] text-g-faint transition-colors hover:text-g-text motion-reduce:hidden"
+      >Pause background</button>
+    </div>
   </div>
 </footer>
+
+<script>
+  import type { MotionEventDetail } from '../scripts/starfield';
+
+  const btn = document.getElementById('motion-toggle');
+  const root = document.documentElement;
+  const render = (paused: boolean) => {
+    btn?.setAttribute('aria-pressed', String(paused));
+    if (btn) btn.textContent = paused ? 'Play background' : 'Pause background';
+  };
+  render(root.dataset.motion === 'paused');
+  btn?.addEventListener('click', () => {
+    const paused = root.dataset.motion !== 'paused';
+    if (paused) root.dataset.motion = 'paused';
+    else delete root.dataset.motion;
+    localStorage.setItem('gaia-motion', paused ? 'paused' : 'running');
+    document.dispatchEvent(new CustomEvent<MotionEventDetail>('gaia-motion', { detail: { paused } }));
+    render(paused);
+  });
+</script>

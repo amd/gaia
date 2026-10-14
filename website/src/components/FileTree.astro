@@ -28,7 +28,7 @@ const { nodes, depth = 0 } = Astro.props;
         ) : (
           <span class="truncate text-g-text/60" title={n.name}>{n.name}</span>
         )}
-        <span class="flex-none text-[11px] text-g-muted">{formatBytes(n.size)}</span>
+        <span class="flex-none text-[12.5px] text-g-muted">{formatBytes(n.size)}</span>
       </li>
     ) : (
       <li>
@@ -38,7 +38,7 @@ const { nodes, depth = 0 } = Astro.props;
               <svg class="file-tree-chevron h-3 w-3 flex-none text-g-muted" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
               <span class="truncate">{n.name}/</span>
             </span>
-            <span class="flex-none text-[11px] text-g-muted">{n.count} {n.count === 1 ? 'file' : 'files'} · {formatBytes(n.size)}</span>
+            <span class="flex-none text-[12.5px] text-g-muted">{n.count} {n.count === 1 ? 'file' : 'files'} · {formatBytes(n.size)}</span>
           </summary>
           <div class="ml-2 border-l border-g-border pl-3">
             <Self nodes={n.children} depth={depth + 1} />

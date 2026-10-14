@@ -78,7 +78,7 @@ const stats = [
       {categories.map((c) => (
         <button type="button" data-filter={c} class="g-pill">{categoryLabel(c)}</button>
       ))}
-      <label class="flex min-w-[250px] flex-1 items-center gap-2.5 rounded-g-btn border border-g-border bg-g-surface px-3.5 transition-colors focus-within:border-g-border2 hover:border-g-border2 sm:ml-auto sm:flex-none">
+      <label class="flex min-w-[250px] flex-1 items-center gap-2.5 rounded-g-btn border border-g-border bg-g-bg2/95 px-3.5 transition-colors focus-within:border-g-border2 hover:border-g-border2 sm:ml-auto sm:flex-none">
         <svg class="h-[15px] w-[15px] flex-none text-g-faint" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="11" cy="11" r="7"></circle>
           <path d="m20 20-4.3-4.3"></path>
@@ -99,7 +99,7 @@ const stats = [
 
     <!-- List. Both groups are real lists, so a screen reader announces how many
          agents there are instead of reading loose rows. -->
-    <div id="hub-list" class="mt-[22px] overflow-hidden rounded-g-card border border-g-border bg-g-surface">
+    <div id="hub-list" class="mt-[22px] overflow-hidden rounded-g-card border border-g-border bg-g-bg2/95">
       <ul aria-label="Published packages">
         {ordered.map((agent) => <li><AgentRow agent={agent} /></li>)}
       </ul>
@@ -115,18 +115,18 @@ const stats = [
       <section class="mt-14">
         <div class="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <h2 class="font-display text-[22px] font-semibold tracking-[-0.015em]">Skills</h2>
+            <h2 class="font-display text-[22px] font-semibold tracking-[0.02em]">Skills</h2>
             <p class="mt-2 max-w-[560px] text-[14px] leading-[1.6] text-g-muted">
               Tasks the GAIA agent can pick up while it runs. Install one with
               <code class="mono text-[12.5px] text-g-text">gaia skill install &lt;name&gt;</code>.
               Each carries a trust tier and the permissions it asks for.
             </p>
           </div>
-          <span class="mono text-[11px] uppercase tracking-[0.08em] text-g-faint">
+          <span class="mono text-[12.5px] uppercase tracking-[0.08em] text-g-faint">
             {skills.length === 1 ? '1 skill' : `${skills.length} skills`}
           </span>
         </div>
-        <div class="mt-[22px] overflow-hidden rounded-g-card border border-g-border bg-g-surface">
+        <div class="mt-[22px] overflow-hidden rounded-g-card border border-g-border bg-g-bg2/95">
           {skills.map((skill) => <AgentRow agent={skill} />)}
         </div>
       </section>
@@ -136,7 +136,7 @@ const stats = [
          someone else builds ships on its own, so this points at building. -->
     <div class="mt-11 flex flex-wrap items-center justify-between gap-6 rounded-g-card border border-dashed border-g-border2 p-[22px] sm:p-[30px]">
       <div>
-        <h2 class="font-display text-[20px] font-semibold tracking-[-0.015em]">Build your own agent harness.</h2>
+        <h2 class="font-display text-[20px] font-semibold tracking-[0.02em]">Build your own agent harness.</h2>
         <p class="mt-2 max-w-[520px] text-[14px] leading-[1.6] text-g-muted">
           Anyone can, with the same skills, evals and SDK that built the GAIA agent.
         </p>

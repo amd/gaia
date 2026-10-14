@@ -1,15 +1,18 @@
 /* Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved. */
 /* SPDX-License-Identifier: MIT */
 
-/* GAIA shared design tokens — the website's single source of truth.
-   Values implement docs/spec/gaia-design-language.mdx: graphite canvas, ivory
-   type, copper accent, shared with the Agent UI and the TUI. Dark overrides via
-   [data-theme="dark"], set pre-paint by the inline script in Layout.astro.
+/* GAIA website design tokens — the site's single source of truth.
+   The website is dark-only and carries AMD's brand palette: black ground, white
+   type, AMD red as the one accent, AMD orange for release candidates only. See
+   "The website" in docs/spec/gaia-design-language.mdx for why it departs from
+   the copper the Agent UI and the TUI share, and what it still shares with them
+   (the status hues inside a code panel).
 
-   Contrast floors (spec): text 4.5:1, recessive text 3.0:1, chrome 1.5:1, and
-   text on a filled button 4.5:1. tokens.contrast.test.ts asserts every one of
-   them against the flat canvas, the raised band, AND the translucent card
-   surfaces composited over both — edit a value here and that test is the gate.
+   Contrast floors (spec): text 4.5:1, recessive text 3.0:1, display-size type
+   3.0:1, chrome 1.5:1, and text on a filled button 4.5:1.
+   tokens.contrast.test.ts asserts every one of them against the flat canvas, the
+   raised band, AND the translucent surfaces composited over both — edit a value
+   here and that test is the gate.
 
    Two token shapes, deliberately:
      - RGB triplets  -> Tailwind opacity modifiers work (text-g-accent/40).
@@ -19,65 +22,64 @@
 
 :root {
   /* --- Ground --- */
-  --g-bg: 245 242 236;          /* #F5F2EC porcelain canvas */
-  --g-bg2: 234 229 220;         /* #EAE5DC pale stone — raised band, footer */
+  --g-bg: 0 0 0;                /* #000000 black — AMD's primary */
+  --g-bg2: 13 13 15;            /* #0D0D0F raised band, footer */
 
   /* --- Surfaces & hairlines (translucent) --- */
-  --g-surface: rgba(0, 0, 0, 0.022);
-  --g-surface2: rgba(0, 0, 0, 0.045);
-  /* Hairline alphas are set by the 1.5:1 chrome floor, not by taste: 0.10 (the
-     previous value) lands at 1.25:1 and is below it. */
-  --g-border: rgba(0, 0, 0, 0.19);
-  --g-border2: rgba(0, 0, 0, 0.28);
-  --g-hdr: rgba(245, 242, 236, 0.72);
+  --g-surface: rgba(255, 255, 255, 0.03);
+  --g-surface2: rgba(255, 255, 255, 0.05);
+  /* Set by the 1.5:1 chrome floor: 0.14 lands at 1.35:1 on the band. */
+  --g-border: rgba(255, 255, 255, 0.2);
+  --g-border2: rgba(255, 255, 255, 0.3);
+  --g-hdr: rgba(0, 0, 0, 0.72);
 
   /* --- Type --- */
-  --g-text: 36 33 41;           /* #242129 graphite */
-  --g-muted: 100 93 106;        /* #645D6A slate */
-  /* Recessive tier (3.0:1 floor) — 11–12.5px labels and metadata that always
-     sit beside something they repeat. There is no room for a third tier at
-     4.5:1: g-muted itself is only 4.58:1 on the darkest light ground. */
-  --g-faint: 107 100 114;       /* #6B6472 — 4.12:1 floor across light surfaces */
+  --g-text: 255 255 255;        /* #FFFFFF */
+  --g-muted: 189 189 189;       /* #BDBDBD — 9.3:1 floor */
+  --g-faint: 148 148 148;       /* #949494 — 5.8:1, so the smallest labels still read */
 
-  /* --- Accent --- */
-  --g-accent: 154 73 48;          /* #9A4930 burnished copper */
-  --g-accent2: 126 58 37;         /* #7E3A25 accent hover step (text and marks) */
-  --g-accent-text: 154 73 48;     /* #9A4930 — the accent is AA on light ground */
-  --g-accent-dim: rgba(154, 73, 48, 0.45);
+  /* --- Accent: AMD red, split by job ---------------------------------------- */
+  /* The brand red itself. 4.0:1 on the raised surfaces is below the text floor,
+     so it paints display-size type and graphics only (3:1, WCAG large text). */
+  --g-brand: 237 28 36;           /* #ED1C24 AMD red */
+  /* The same hue lifted to clear 4.5:1 everywhere: links, labels, small marks. */
+  --g-accent: 255 75 81;          /* #FF4B51 */
+  --g-accent2: 255 125 129;       /* #FF7D81 hover step */
+  --g-accent-text: 255 75 81;     /* #FF4B51 */
+  --g-accent-dim: rgba(237, 28, 36, 0.45);
+
+  /* Fill: the one filled primary action. Deepened so it carries white text. */
+  --g-accent-fill: 211 18 26;     /* #D3121A — white 5.42:1 */
+  --g-accent-fill2: 184 15 22;    /* #B80F16 hover — white rises to 6.74:1 */
+  --g-on-accent: 255 255 255;
+
+  /* Release candidates, and nothing else, wear AMD orange — so "pre-release"
+     reads at a glance without borrowing a status hue. */
+  --g-rc: 242 101 34;             /* #F26522 AMD orange — 5.6:1 */
+  --g-rc-dim: rgba(242, 101, 34, 0.45);
+
+  /* --- Starfield (StarField.astro) ------------------------------------------ */
+  --g-sky-star: 255 255 255;      /* most streaks */
+  --g-sky-hot: 237 28 36;         /* the occasional red one, and the haze */
 
   /* --- Elevation ------------------------------------------------------------ */
-  --g-shadow-card: 0 18px 40px -22px rgba(36, 33, 41, 0.22),
-                   0 0 0 1px rgba(154, 73, 48, 0.16);
-  --g-shadow-btn: 0 10px 24px -12px rgba(154, 73, 48, 0.45);
-  --g-shadow-terminal: 0 24px 60px -30px rgba(36, 33, 41, 0.35);
+  --g-shadow-card: 0 24px 60px -24px rgba(0, 0, 0, 0.8),
+                   0 0 0 1px rgba(237, 28, 36, 0.18);
+  --g-shadow-btn: 0 0 28px -4px rgba(237, 28, 36, 0.55);
+  --g-shadow-terminal: 0 30px 80px -30px rgba(0, 0, 0, 0.9);
 
   /* Focus ring — the accent, which clears 3:1 (SC 1.4.11) on every surface. */
-  --g-focus: 154 73 48;         /* #9A4930 */
-}
+  --g-focus: 255 75 81;           /* #FF4B51 */
 
-/* --- Mode-invariant roles -------------------------------------------------- */
-/* Declared once, outside the theme blocks, because they are the same value in
-   both themes. */
-:root {
-  /* Accent fill: the one filled primary action. Pinned to the light copper in
-     BOTH themes so the button carries white text either way (6.23:1) — the dark
-     accent #EBA474 is a text colour, not a fill, and white on it is ~1.9:1. */
-  --g-accent-fill: 154 73 48;     /* #9A4930 */
-  --g-accent-fill2: 122 56 36;    /* #7A3824 hover step — white rises to 8.68:1 */
-  --g-on-accent: 255 255 255;     /* white on either fill */
-
-  /* Code panels are dark in BOTH themes (terminal syntax colours are tuned for
-     a dark ground and re-theming them would break the log palette), so every
-     colour used inside one is pinned here rather than themed. */
+  /* --- Code panel ----------------------------------------------------------- */
   --g-code-bg: 11 11 13;        /* #0b0b0d */
   --g-code-text: 217 217 212;   /* #d9d9d4 — 13.88:1 */
   --g-code-faint: 138 138 146;  /* #8a8a92 — 5.74:1 */
-  --g-code-accent: 235 164 116; /* #EBA474 dark copper — 9.45:1 */
+  --g-code-accent: 255 75 81;   /* #FF4B51 the `$` prompt — the site's red */
   /* Status hues keep their conventional meaning inside a code panel (the design
      language's "status keeps its hue" rule). These four are the Agent UI's dark
-     semantic set verbatim — the code panel is that same dark ground, so sharing
-     the literals is what makes a green in the browser and a green in the app
-     the same green. */
+     semantic set verbatim — cross-surface.test.ts holds them equal, so a green in
+     the browser and a green in the app are the same green. */
   --g-code-green: 92 201 110;   /* #5CC96E success, strings — 9.40:1 */
   --g-code-blue: 111 180 255;   /* #6FB4FF information, numbers — 9.03:1 */
   --g-code-amber: 229 181 103;  /* #E5B567 warning, attention — 10.43:1 */
@@ -89,47 +91,19 @@
   --g-code-cyan: 69 200 222;    /* #45C8DE operators, URLs — 9.90:1 */
 }
 
-[data-theme='dark'] {
-  --g-bg: 23 22 28;             /* #17161C graphite canvas */
-  --g-bg2: 34 33 40;            /* #222128 warm slate — raised band, footer */
-
-  --g-surface: rgba(255, 255, 255, 0.024);
-  --g-surface2: rgba(255, 255, 255, 0.04);
-  --g-border: rgba(255, 255, 255, 0.15);
-  --g-border2: rgba(255, 255, 255, 0.24);
-  --g-hdr: rgba(23, 22, 28, 0.6);
-
-  --g-text: 240 237 231;        /* #F0EDE7 ivory */
-  --g-muted: 170 165 176;       /* #AAA5B0 ash */
-  --g-faint: 160 155 166;       /* #A09BA6 — 5.23:1 floor across dark surfaces */
-
-  --g-accent: 235 164 116;        /* #EBA474 copper */
-  --g-accent2: 243 193 160;       /* #F3C1A0 accent hover step */
-  --g-accent-text: 235 164 116;   /* #EBA474 — 6.83:1 floor on dark surfaces */
-  --g-accent-dim: rgba(235, 164, 116, 0.45);
-
-  --g-shadow-card: 0 24px 60px -24px rgba(0, 0, 0, 0.7),
-                   0 0 0 1px rgba(235, 164, 116, 0.14);
-  --g-shadow-btn: 0 10px 24px -12px rgba(0, 0, 0, 0.6);
-  --g-shadow-terminal: 0 30px 80px -30px rgba(0, 0, 0, 0.8);
-
-  --g-focus: 235 164 116;       /* #EBA474 */
-}
-
 /* Motion vocabulary */
 @keyframes g-pulse {
   0%   { box-shadow: 0 0 0 0 rgb(var(--g-accent) / 0.45); }
   100% { box-shadow: 0 0 0 14px rgb(var(--g-accent) / 0); }
 }
-/* Hero entrance — children stagger in. 0.7s on the design's easing curve. */
+/* Hero entrance — children rise out of a blur, staggered. */
 @keyframes g-rise {
-  from { opacity: 0; transform: translateY(14px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; filter: blur(10px); transform: translateY(14px) scale(0.985); }
+  to   { opacity: 1; filter: blur(0); transform: none; }
 }
-/* Capability marquee — the list is duplicated, so -50% is one seamless loop. */
-@keyframes g-marquee {
-  from { transform: translate3d(0, 0, 0); }
-  to   { transform: translate3d(-50%, 0, 0); }
+/* A status dot breathing: live, not urgent. */
+@keyframes g-breathe {
+  50% { opacity: 0.35; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -146,7 +120,6 @@
   html {
     scroll-behavior: auto !important;
   }
-  /* The marquee has no static resting state — stop it outright rather than
-     letting the 0.01ms override snap it to its end position. */
-  .g-marquee-track { animation: none !important; transform: none !important; }
+  /* Scroll reveals land in place rather than fading in. */
+  .g-reveal { opacity: 1 !important; filter: none !important; transform: none !important; }
 }
