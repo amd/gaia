@@ -331,6 +331,17 @@ EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
 
 
+def preferred_llamacpp_backend() -> Optional[str]:
+    """The llama.cpp backend the user chose for chat models, or None for auto.
+
+    ``llamacpp_backend`` in ``~/.gaia/config.json``, set from Settings →
+    Advanced or ``gaia config set llamacpp_backend <name>``.
+    """
+    from gaia.config import GaiaConfig
+
+    return GaiaConfig.load().llamacpp_backend
+
+
 def manages_embedder_backend(model_name: Optional[str]) -> bool:
     """Whether GAIA picks *model_name*'s llama.cpp backend and saves it.
 
@@ -1653,6 +1664,18 @@ def backend_crash_remedy(model: str) -> str:
 #: finished file (~2.5 min for the 22 GB Qwen3.6, ~9 min for 82 GB), and a
 #: client that hangs up then cancels the rest of the pull.
 PULL_IDLE_TIMEOUT_S = 30 * 60
+
+
+def _chosen_backend_hint(backend: Optional[str]) -> str:
+    """How to undo the user's backend choice, appended to a failed load."""
+    if not backend:
+        return ""
+    return (
+        f" GAIA asked for llama.cpp's {backend} backend, as set in Settings → "
+        "Advanced → Model server (llamacpp_backend in ~/.gaia/config.json). "
+        "Choose Auto there, or run `gaia config set llamacpp_backend auto`, to "
+        "let Lemonade pick."
+    )
 
 
 class LemonadeClientError(Exception):
@@ -3135,6 +3158,23 @@ class LemonadeClient:
             # Retries exhausted (or the error changed nature): surface the
             # latest error to the caller's handling. Fail-loudly is preserved.
             raise last_error
+
+    def chosen_backend_for(self, model_name: str) -> Optional[str]:
+        """The user's llama.cpp backend for *model_name*, if it is a llama.cpp model."""
+        backend = preferred_llamacpp_backend()
+        if not backend:
+            return None
+        try:
+            recipe = self._model_recipe(model_name)
+        except LemonadeAuthError:
+            raise
+        except LemonadeClientError as e:
+            raise LemonadeClientError(
+                f"Could not read the model catalog at {self.base_url}/models to "
+                f"check whether {model_name} runs on llama.cpp, so GAIA cannot "
+                f"apply your llama.cpp backend choice ({backend}): {e}"
+            ) from e
+        return backend if recipe == "llamacpp" else None
 
     def _default_llamacpp_backend(self) -> Optional[str]:
         """The llama.cpp backend Lemonade picks for this machine (``vulkan``...).
@@ -5613,6 +5653,14 @@ class LemonadeClient:
             llamacpp_args = EMBEDDER_LLAMACPP_ARGS
 
         request_data = {"model_name": model_name}
+        # The user's choice is for chat models; the embedder keeps its own.
+        chosen_backend = (
+            None
+            if model_name in EMBEDDER_MODELS
+            else self.chosen_backend_for(model_name)
+        )
+        if chosen_backend:
+            request_data["llamacpp_backend"] = chosen_backend
         if managed_embedder:
             with _PINNED_BACKENDS_LOCK:
                 fell_back = (self.base_url, model_name) in _CPU_FALLBACK_EMBEDDERS
@@ -5747,6 +5795,12 @@ class LemonadeClient:
                     raise LemonadeClientError(
                         f"Failed to load {model_name}: {original_error}. "
                         f"{backend_crash_remedy(model_name)}"
+                        f"{_chosen_backend_hint(chosen_backend)}"
+                    ) from e
+                if chosen_backend and not isinstance(e, LemonadeAuthError):
+                    raise LemonadeClientError(
+                        f"Failed to load {model_name}: {original_error}."
+                        f"{_chosen_backend_hint(chosen_backend)}"
                     ) from e
                 if isinstance(e, LemonadeClientError):
                     raise
