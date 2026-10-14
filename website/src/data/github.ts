@@ -30,11 +30,15 @@ export interface ReleaseSummary {
   tag: string;
   publishedAt: string;
   htmlUrl: string;
+  // 'rc' marks a release candidate for a version that has not shipped yet.
+  kind: 'stable' | 'rc';
 }
 
 export interface ReleaseStats {
-  // Main product releases only (tag matches isMainReleaseTag), newest first.
+  // Main product releases plus the release candidates for the next version
+  // (see streamReleases), newest first.
   releases: ReleaseSummary[];
+  // Main releases only: an RC is a preview of a release, not one.
   totalReleaseCount: number;
   // Sum of download_count across every release asset the API returns,
   // INCLUDING sub-package/prerelease tags — a download counts regardless of
@@ -128,28 +132,53 @@ export function isReleaseCandidateTag(tag: string): boolean {
   return RC_TAG_RE.test(tag);
 }
 
-// The release candidate worth offering, or null. Only a candidate for a
-// version NEWER than the latest stable release qualifies: once v0.25.0 ships,
-// v0.25.0-rc2 is history, not something to try.
-export function pickReleaseCandidate(releases: GithubRelease[]): ReleaseCandidate | null {
-  const live = releases.filter((r) => !r.draft);
-
-  const stable = live
+function latestStableParts(live: GithubRelease[]): number[] | undefined {
+  return live
     .filter((r) => !r.prerelease && isMainReleaseTag(r.tag_name))
     .map((r) => versionParts(r.tag_name.slice(1)))
     .sort(compareParts)
     .at(-1);
+}
 
-  const candidates = live
+// Release candidates still worth trying: marked pre-release, in the vX.Y.Z-rcN
+// form, and for a version NEWER than the latest stable release — once v0.25.0
+// ships, v0.25.0-rc2 is history, not something to try. Oldest first.
+function openCandidates(live: GithubRelease[]): { release: GithubRelease; parts: number[] }[] {
+  const stable = latestStableParts(live);
+  return live
     .filter((r) => r.prerelease)
     .flatMap((r) => {
       const m = RC_TAG_RE.exec(r.tag_name);
       return m ? [{ release: r, parts: [m[1], m[2], m[3], '0', m[4]].map(Number) }] : [];
     })
+    .filter((c) => !stable || compareParts(c.parts.slice(0, 4), stable) > 0)
     .sort((a, b) => compareParts(a.parts, b.parts));
-  const newest = candidates.at(-1);
+}
+
+// The release stream: every main release, plus the newest open release
+// candidate per upcoming version, newest first. Superseded RCs stay out — rc12
+// replaces rc11 for anyone trying it, and a run of rc1..rc12 would bury the
+// releases the stream exists to show.
+export function streamReleases(releases: GithubRelease[]): ReleaseSummary[] {
+  const live = releases.filter((r) => !r.draft);
+  const newestPerVersion = new Map<string, GithubRelease>();
+  for (const c of openCandidates(live)) newestPerVersion.set(c.parts.slice(0, 3).join('.'), c.release);
+  const summary = (r: GithubRelease, kind: ReleaseSummary['kind']): ReleaseSummary => ({
+    tag: r.tag_name,
+    publishedAt: r.published_at ?? '',
+    htmlUrl: r.html_url,
+    kind,
+  });
+  return [
+    ...live.filter((r) => isMainReleaseTag(r.tag_name)).map((r) => summary(r, 'stable')),
+    ...[...newestPerVersion.values()].map((r) => summary(r, 'rc')),
+  ].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
+}
+
+// The release candidate worth offering, or null: the newest open candidate.
+export function pickReleaseCandidate(releases: GithubRelease[]): ReleaseCandidate | null {
+  const newest = openCandidates(releases.filter((r) => !r.draft)).at(-1);
   if (!newest) return null;
-  if (stable && compareParts(newest.parts.slice(0, 4), stable) <= 0) return null;
 
   const { release } = newest;
   const downloads = RC_DOWNLOADS.flatMap(({ label, match }) => {
@@ -327,16 +356,9 @@ export async function getReleaseStats(): Promise<ReleaseStats> {
   releaseStatsPromise ??= (async () => {
     const all = await getAllReleases();
     const nonDraft = all.filter((r) => !r.draft);
-    const main = nonDraft
-      .filter((r) => isMainReleaseTag(r.tag_name))
-      .sort((a, b) => (b.published_at ?? "").localeCompare(a.published_at ?? ""));
     return {
-      releases: main.map((r) => ({
-        tag: r.tag_name,
-        publishedAt: r.published_at ?? "",
-        htmlUrl: r.html_url,
-      })),
-      totalReleaseCount: main.length,
+      releases: streamReleases(all),
+      totalReleaseCount: nonDraft.filter((r) => isMainReleaseTag(r.tag_name)).length,
       totalDownloadCount: sumAssetDownloads(nonDraft.flatMap((r) => r.assets)),
     };
   })();
