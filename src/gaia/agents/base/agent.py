@@ -84,6 +84,12 @@ from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
 from gaia.agents.base.task_lessons import attach as attach_task_lessons
 from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
+from gaia.agents.base.tool_markup import (
+    MalformedToolMarkup,
+    has_tool_markup,
+    parse_deepseek_tool_calls,
+    strip_tool_markup,
+)
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
@@ -971,6 +977,13 @@ _FENCED_BLOCK_PATTERN = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
 _TOOL_CALL_MARKUP_PATTERN = re.compile(
     r"<invoke\s+name\s*=|<parameter\s+name\s*=|\{\s*\"tool\"\s*:"
 )
+_ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
+# Broken tool-call markup gets one retry; after that the turn says so, never shows it.
+_MAX_MARKUP_RETRIES = 1
+_TOOL_MARKUP_FAILURE_ANSWER = (
+    "I could not finish this task: my last tool call came back as unreadable "
+    "tool-call markup instead of a call, so it never ran. Please try again."
+)
 _EMOJI_SHORTCODE_END_PATTERN = re.compile(r":[a-z0-9_+-]+:$", re.IGNORECASE)
 _NEXT_STEP_INTENT_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+)?"
@@ -984,6 +997,25 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
 _PLAN_HEADING_PATTERN = re.compile(
     r"^(?:corrected|new|updated|revised) plan\b", re.IGNORECASE
 )
+
+
+def _is_json(text: str) -> bool:
+    if not text.startswith("{"):
+        return False
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    return True
+
+
+def _without_tool_markup(answer: str) -> str:
+    """The answer with any tool-call markup removed: markup is never an answer."""
+    stripped = strip_tool_markup(answer)
+    if stripped == answer:
+        return answer
+    logger.warning("[WORKFLOW] Stripped tool-call markup from the final answer")
+    return stripped or _TOOL_MARKUP_FAILURE_ANSWER
 
 
 def _same_file(first: str, second: str) -> bool:
@@ -1006,7 +1038,7 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     """
     text = (answer or "").replace("\u2019", "'").strip()
     prose = _FENCED_BLOCK_PATTERN.sub("", text)
-    if _TOOL_CALL_MARKUP_PATTERN.search(prose):
+    if _TOOL_CALL_MARKUP_PATTERN.search(prose) or has_tool_markup(text):
         return "tool_markup"
     if not text or text.endswith("```"):
         return None
@@ -3818,6 +3850,17 @@ Do NOT wrap conversational replies in JSON.
                     "with edit_file in small pieces."
                 )
             return prompt
+        if isinstance(reason, MalformedToolMarkup):
+            shape = (
+                "a real tool call"
+                if self._uses_native_tool_calls()
+                else 'raw JSON ({"tool": ..., "tool_args": {...}})'
+            )
+            return (
+                "Your last tool call was written as tool-call markup in your reply "
+                f"and could not be used: {reason} Nothing ran. Send that one call "
+                f"again, complete, as {shape} — not as markup."
+            )
         return (
             f"Your last tool call could not be used: {reason}\n"
             "Please try again. Emit exactly ONE tool call as raw JSON — no code "
@@ -3825,6 +3868,52 @@ Do NOT wrap conversational replies in JSON.
             "for each argument (e.g. 'brief', 'detailed', 'bullets' — never a long "
             "sentence). If you don't need a tool, answer in plain text."
         )
+
+    def _parse_markup_tool_calls(self, response: str) -> Optional[Dict[str, Any]]:
+        """Tool calls the model wrote as DeepSeek markup, in parsed-response shape.
+
+        Raises ``MalformedToolMarkup`` (a ``ValueError``) for markup that is
+        there but cannot run, so the loop retries it instead of answering with it.
+        """
+        markup = parse_deepseek_tool_calls(response)
+        if markup is None:
+            return None
+        calls = []
+        thought = markup.prose
+        for call in markup.calls:
+            declared = (self._tools_registry.get(call.name) or {}).get("parameters")
+            args = dict(call.args)
+            # Models mixing in the JSON format add envelope keys as parameters.
+            for key in _ENVELOPE_KEYS:
+                if key in args and (declared is None or key not in declared):
+                    value = args.pop(key)
+                    if key == "thought" and isinstance(value, str) and not thought:
+                        thought = value
+            calls.append(
+                {
+                    "id": f"call_{len(calls)}_{uuid.uuid4().hex[:8]}",
+                    "name": call.name,
+                    "tool_args": args,
+                }
+            )
+        logger.info(
+            "[PARSE] tool_call_path=markup model_id=%s tools=%s",
+            self.model_id,
+            [c["name"] for c in calls],
+        )
+        if len(calls) == 1:
+            return {
+                "thought": thought,
+                "goal": "",
+                "tool": calls[0]["name"],
+                "tool_args": calls[0]["tool_args"],
+            }
+        return {
+            "thought": thought,
+            "goal": "",
+            "tool_calls": calls,
+            "content": thought or None,
+        }
 
     def _extract_embedded_tool_call(self, response: str) -> Optional[Dict[str, Any]]:
         """
@@ -4644,6 +4733,12 @@ Do NOT wrap conversational replies in JSON.
             }
 
         response = response.strip()
+
+        # A valid JSON reply may quote markup in an argument; it is not a call.
+        if not _is_json(response):
+            markup_call = self._parse_markup_tool_calls(response)
+            if markup_call is not None:
+                return markup_call
 
         # Log what we received for debugging (show more to see full JSON)
         if len(response) > 500:
@@ -7416,6 +7511,7 @@ Do NOT wrap conversational replies in JSON.
         error_count = 0
         # Malformed replies get their own budget: failed tool calls are ordinary work.
         parse_failures = 0
+        markup_retries = 0
         tool_call_history = []  # Recent tool calls, for loop detection
         loop_window = max(
             5, _MAX_LOOP_PERIOD * getattr(self, "max_consecutive_repeats", 4)
@@ -8337,6 +8433,7 @@ Do NOT wrap conversational replies in JSON.
                 parsed = self._parse_llm_response(response)
                 # Budget is consecutive: a clean parse gives the retries back.
                 parse_failures = 0
+                markup_retries = 0
             except ValueError as parse_exc:
                 logger.warning(
                     "Tool-call parse failed (step %d): %s — recovering with retry prompt",
@@ -8370,6 +8467,11 @@ Do NOT wrap conversational replies in JSON.
                     ),
                     None,
                 )
+                if isinstance(parse_exc, MalformedToolMarkup):
+                    if markup_retries >= _MAX_MARKUP_RETRIES:
+                        final_answer = _TOOL_MARKUP_FAILURE_ANSWER
+                        break
+                    markup_retries += 1
                 # If we've already retried several times, give up gracefully and
                 # answer in plain text rather than spamming the user.
                 if parse_failures >= 3:
@@ -9760,7 +9862,9 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     continue
 
-                answer_candidate = self.finalize_answer(answer_candidate, conversation)
+                answer_candidate = self.finalize_answer(
+                    _without_tool_markup(answer_candidate), conversation
+                )
                 soft_gaps: List[str] = []
                 self._check_extraction_sources()
                 artifact_gaps = self._completion_evidence.gaps(
@@ -9965,7 +10069,9 @@ Do NOT wrap conversational replies in JSON.
                     # mid-extraction still reports incomplete, it does not
                     # promote the closing reply to a verified one.
                     gated, completion_gaps = self._gate_unsealed_answer(
-                        self.finalize_answer(cap_answer, conversation)
+                        self.finalize_answer(
+                            _without_tool_markup(cap_answer), conversation
+                        )
                     )
                     final_answer = self._with_verification_scope(gated)
                     verification_scope_applied = True
@@ -10015,7 +10121,7 @@ Do NOT wrap conversational replies in JSON.
         # warning and the answer is never shown.
         if loop_break_answer_unprinted and final_answer is not None:
             final_answer = self._with_verification_scope(
-                self.finalize_answer(final_answer, conversation)
+                self.finalize_answer(_without_tool_markup(final_answer), conversation)
             )
             verification_scope_applied = True
             _break_input_tokens, break_output_tokens = _sum_conversation_tokens(
