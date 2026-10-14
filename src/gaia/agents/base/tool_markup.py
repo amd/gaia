@@ -25,6 +25,7 @@ Markup inside fenced or inline code is an example, not a call, and is left alone
 
 from __future__ import annotations
 
+import bisect
 import json
 import re
 from dataclasses import dataclass, field
@@ -95,8 +96,11 @@ def _outside_code(pattern: re.Pattern, text: str, pos: int = 0) -> Optional[int]
     """Index of the first *pattern* match at or after *pos* not inside code."""
     rest = text[pos:]
     code = [(m.start(), m.end()) for m in _CODE.finditer(rest)]
+    starts = [start for start, _ in code]
     for match in pattern.finditer(rest):
-        if not any(start <= match.start() < end for start, end in code):
+        # Spans are sorted and disjoint: only the last one starting before can hold it.
+        i = bisect.bisect_right(starts, match.start()) - 1
+        if i < 0 or match.start() >= code[i][1]:
             return pos + match.start()
     return None
 
