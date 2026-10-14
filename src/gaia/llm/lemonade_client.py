@@ -157,16 +157,25 @@ def _get_lemonade_config() -> tuple:
 
 
 def configured_lemonade_url() -> Optional[str]:
-    """The Lemonade server the user chose with ``LEMONADE_BASE_URL``, if any.
+    """The Lemonade server the user chose, if any.
+
+    ``LEMONADE_BASE_URL`` wins; otherwise the saved ``lemonade_mode:
+    external`` choice in ``~/.gaia/config.json`` (read on every call, so a
+    changed setting takes effect without a restart). None means GAIA runs its
+    own server.
 
     Values exported by GAIA's own credentials file (marked with
     ``GAIA_LEMONADE_EMBEDDED``) describe GAIA's server, whose port and key
     change on every restart, so they are not a choice: GAIA follows its
     recorded state instead.
     """
-    if os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() == "1":
-        return None
-    return os.getenv("LEMONADE_BASE_URL", "").strip() or None
+    from gaia.llm.lemonade_choice import external_lemonade_url
+
+    if os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() != "1":
+        env_url = os.getenv("LEMONADE_BASE_URL", "").strip()
+        if env_url:
+            return env_url
+    return external_lemonade_url()
 
 
 def resolve_lemonade_base_url(base_url: Optional[str] = None) -> str:
@@ -248,7 +257,7 @@ def _embedded_lemonade_api_key(base_url: Optional[str] = None) -> Optional[str]:
 def resolve_lemonade_api_key(
     api_key: Optional[str] = None, *, base_url: Optional[str] = None
 ) -> Optional[str]:
-    """Resolve the Lemonade API key: argument, env var, embedded server, None.
+    """Resolve the Lemonade API key: argument, env var, saved key, embedded, None.
 
     Empty or whitespace-only env values are treated as unset to avoid
     sending a malformed ``Bearer `` header to authenticated Lemonade
@@ -256,7 +265,9 @@ def resolve_lemonade_api_key(
 
     An explicit argument or env var always wins — a configured credential must
     never be overridden by whatever a local state file happens to hold.
-    The embedded key is restricted to its recorded local HTTP endpoint. Callers
+    The key saved with ``gaia lemonade connect`` is only sent to the server it
+    was saved for, and the embedded key only to its recorded local HTTP
+    endpoint. Callers
     with an explicit endpoint must pass ``base_url``; omitted uses the configured
     Lemonade URL. ``GAIA_HOME`` selects the embedded state directory.
     """
@@ -266,7 +277,10 @@ def resolve_lemonade_api_key(
     own_credentials = os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() == "1"
     if env_value is not None and env_value.strip() and not own_credentials:
         return env_value.strip()
-    return _embedded_lemonade_api_key(base_url)
+    from gaia.llm.lemonade_choice import external_api_key
+
+    target = resolve_lemonade_base_url(base_url)
+    return external_api_key(target) or _embedded_lemonade_api_key(base_url)
 
 
 def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
@@ -2498,6 +2512,13 @@ class LemonadeClient:
                 starts a local process), so it can only ever satisfy a local
                 client (#3558) — or the daemon could not start GAIA's own server.
         """
+        from gaia.llm.lemonade_choice import (
+            external_down_message,
+            external_mode_active,
+        )
+
+        if external_mode_active():
+            raise LemonadeClientError(external_down_message(self.base_url))
         if not self._targets_this_machine():
             raise LemonadeClientError(
                 f"Refusing to start a local Lemonade server: this client is "

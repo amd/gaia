@@ -5,12 +5,16 @@
 The daemon starts the server when it comes up and whenever a client asks, and
 stops it when the daemon shuts down, so nobody has to run ``gaia init`` again
 after a reboot. Installing it stays ``gaia init``'s job: the daemon only starts
-what is already installed. A ``LEMONADE_BASE_URL`` means the user runs their
-own server, so the daemon leaves Lemonade alone.
+what is already installed. A ``LEMONADE_BASE_URL``, or the saved
+``lemonade_mode: external`` choice, means the user runs their own server, so
+the daemon leaves Lemonade alone -- and :meth:`EmbeddedLemonadeOwner.reconfigure`
+stops GAIA's own when the user switches to theirs.
 
-The daemon only ever stops a server it started itself. One that ``gaia init``,
-the user, or another daemon started is left running, and one that is slow to
-answer is reported rather than killed -- it may be loading a large model.
+At shutdown the daemon only stops a server it started itself. One that ``gaia
+init``, the user, or another daemon started is left running, and one that is
+slow to answer is reported rather than killed -- it may be loading a large
+model. The exception is a switch to the user's own server, which stops GAIA's
+whoever started it.
 """
 
 import threading
@@ -72,7 +76,7 @@ class EmbeddedLemonadeOwner:
 
     @staticmethod
     def configured_url() -> Optional[str]:
-        """The server the user chose with ``LEMONADE_BASE_URL``, if any."""
+        """The server the user chose (env var or saved setting), if any."""
         from gaia.llm.lemonade_client import configured_lemonade_url
 
         return configured_lemonade_url()
@@ -81,21 +85,33 @@ class EmbeddedLemonadeOwner:
         """Return the running embedded server, starting it if it is stopped.
 
         Raises:
-            LemonadeNotManaged: ``LEMONADE_BASE_URL`` names another server, or
-                GAIA's own is not installed.
+            LemonadeNotManaged: ``LEMONADE_BASE_URL`` or the saved setting names
+                another server, or GAIA's own is not installed.
+            LemonadeChoiceError: The saved setting is unusable.
             EmbeddedLemonadeError: The server would not start, is running but
                 not answering, or runs a version this GAIA does not target.
         """
         from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
 
-        configured = self.configured_url()
-        if configured:
-            raise LemonadeNotManaged(
-                f"LEMONADE_BASE_URL is set to {configured}, so GAIA uses that "
-                "server and does not start its own. Start that server, or unset "
-                "LEMONADE_BASE_URL and restart the daemon (`gaia daemon restart`)."
-            )
+        # Under the lock, so a switch to the user's server that reconfigure()
+        # is applying can't be undone by a start already on its way.
         with self._lock:
+            configured = self.configured_url()
+            if configured:
+                from gaia.llm.lemonade_choice import (
+                    configured_source,
+                    switch_back_hint,
+                )
+
+                chosen_by = (
+                    "LEMONADE_BASE_URL is set to"
+                    if configured_source() == "env"
+                    else "GAIA is set to use your Lemonade Server at"
+                )
+                raise LemonadeNotManaged(
+                    f"{chosen_by} {configured}, so GAIA does not start its own. "
+                    f"Start that server, or {switch_back_hint()}."
+                )
             embedded = self._factory()
             if not embedded.is_installed():
                 raise LemonadeNotManaged(
@@ -143,6 +159,8 @@ class EmbeddedLemonadeOwner:
         A failure is logged; the next client to call :meth:`ensure` gets the
         same error raised to it, so it is never lost.
         """
+        from gaia.config import GaiaConfigError
+        from gaia.llm.lemonade_choice import LemonadeChoiceError
         from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
 
         def _run() -> None:
@@ -150,12 +168,47 @@ class EmbeddedLemonadeOwner:
                 self.ensure()
             except LemonadeNotManaged as e:
                 logger.info("daemon: not starting embedded Lemonade: %s", e)
-            except EmbeddedLemonadeError as e:
+            except (EmbeddedLemonadeError, LemonadeChoiceError, GaiaConfigError) as e:
                 logger.error("daemon: embedded Lemonade is not usable: %s", e)
 
         thread = threading.Thread(target=_run, name="embedded-lemonade", daemon=True)
         thread.start()
         return thread
+
+    def reconfigure(self) -> dict:
+        """Apply the current Lemonade choice, read afresh from config.
+
+        Switching to the user's server stops GAIA's own, whoever started it: it
+        is GAIA's private instance, nothing uses it any more, and leaving it up
+        is the doubled memory the switch exists to free. Switching back starts
+        GAIA's own in the background, as the daemon does at boot.
+
+        Returns:
+            The effective choice (:func:`gaia.llm.lemonade_choice.describe`)
+            plus ``action``: ``stopped_gaia_lemonade``, ``starting_gaia_lemonade``
+            or ``none``.
+
+        Raises:
+            EmbeddedLemonadeError: GAIA's own server would not stop.
+            LemonadeChoiceError: The saved choice is unusable.
+        """
+        from gaia.llm.lemonade_choice import describe
+
+        target = describe()
+        action = "none"
+        if target["mode"] == "external":
+            with self._lock:
+                if self._factory().stop():
+                    logger.info(
+                        "daemon: switched to the Lemonade at %s; stopped GAIA's own",
+                        target["base_url"],
+                    )
+                    action = "stopped_gaia_lemonade"
+                self._started_pid = None
+        elif self._factory().is_installed():
+            self.ensure_in_background()
+            action = "starting_gaia_lemonade"
+        return {**target, "action": action}
 
     def stop(self) -> bool:
         """Stop the embedded server if this daemon started it.

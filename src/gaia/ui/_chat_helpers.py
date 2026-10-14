@@ -1115,6 +1115,16 @@ def evict_session_agent(session_id: str) -> None:
             _disconnect_cached_agent(entry)
 
 
+def evict_all_session_agents() -> int:
+    """Drop every cached agent, e.g. when GAIA switches Lemonade servers."""
+    with _agent_cache_lock:
+        entries = list(_agent_cache.values())
+        _agent_cache.clear()
+    for entry in entries:
+        _disconnect_cached_agent(entry)
+    return len(entries)
+
+
 # ── Chat Helpers ─────────────────────────────────────────────────────────────
 
 
