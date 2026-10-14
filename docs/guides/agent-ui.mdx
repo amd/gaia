@@ -272,6 +272,35 @@ Open **Settings → Model** (or the model chip in the message box):
   it can't be restored, a one-line notice says why and asks you to pick one.
 - Switching from a local model to a cloud one shows the privacy note first.
 
+### Which server and which GPU backend
+
+**Settings → Advanced → Model server** shows what is actually running:
+
+- **Server**: GAIA's own Lemonade or yours (another Lemonade on this PC, or one
+  on another machine), with its version.
+- **Address**: the URL and port GAIA talks to.
+- **Chat model** and **Runs on**: the loaded model and its llama.cpp backend
+  (Vulkan, ROCm, CPU), NPU, or *Remote (cloud)*. "Lemonade's default" means the
+  load did not name a backend and Lemonade picked it. *unknown* means this
+  Lemonade does not report it.
+- **Context window** and the **Embedding model** with its backend.
+
+To choose the backend, pick **Auto**, **Vulkan**, **ROCm** or **CPU** under
+*llama.cpp backend for chat models*. Only backends Lemonade can run on this PC
+are listed; one marked "downloads on first use" is fetched by Lemonade the
+first time it loads (ROCm is about 4 GB). The choice applies the next time the
+chat model loads; **Reload chat model now** applies it at once. The embedding
+model keeps its own backend.
+
+The same setting from a terminal:
+
+```bash
+gaia config set llamacpp_backend rocm   # vulkan | rocm | metal | cpu | auto
+```
+
+**Change model** opens Settings → Model. The port of GAIA's own Lemonade is
+chosen when it starts; to use a different server, set `LEMONADE_BASE_URL`.
+
 ## Permissions
 
 GAIA asks before it changes files, runs commands or uses tools that act for you.
@@ -296,8 +325,9 @@ error, so it never runs with full access you turned off.
 
 One window with General (appearance: Light, Dark, Match system; shortcuts),
 Model, Permissions, Skills (what GAIA can load, with **Use** to try one),
-Connectors, Memory, Privacy and Advanced (model server status, context size,
-custom model ID, beta options, MCP servers, version and roll back).
+Connectors, Memory, Privacy and Advanced (model server and llama.cpp backend,
+context size, custom model ID, beta options, MCP servers, version and roll
+back).
 
 ## Roll back to a previous version
 
