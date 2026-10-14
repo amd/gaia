@@ -38,6 +38,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import timezone
 from typing import (
     Any,
     Callable,
@@ -406,6 +407,9 @@ def parse_retry_after(headers: Optional[Mapping[str, str]]) -> Optional[float]:
         return None
     if when is None:
         return None
+    if when.tzinfo is None:
+        # "-0000" parses naive; an HTTP-date is always UTC, never local time.
+        when = when.replace(tzinfo=timezone.utc)
     return max(0.0, when.timestamp() - time.time())
 
 
@@ -503,16 +507,32 @@ class RetryNotice:
 _retry_listener: ContextVar[Optional[Callable[[RetryNotice], None]]] = ContextVar(
     "gaia_model_retry_listener", default=None
 )
+_retry_cancelled: ContextVar[Optional[Callable[[], bool]]] = ContextVar(
+    "gaia_model_retry_cancelled", default=None
+)
+
+#: Longest stretch of a backoff wait between two checks of the cancel hook.
+_CANCEL_CHECK_INTERVAL = 0.5
 
 
 @contextmanager
-def model_retry_notices(listener: Callable[[RetryNotice], None]) -> Iterator[None]:
+def model_retry_notices(
+    listener: Callable[[RetryNotice], None],
+    is_cancelled: Optional[Callable[[], bool]] = None,
+) -> Iterator[None]:
     """Call *listener* before every client-level retry made in this context,
-    so whoever drives the turn can tell the user why it went quiet."""
+    so whoever drives the turn can tell the user why it went quiet.
+
+    When *is_cancelled* returns True during a backoff wait, the wait ends and
+    the failure is raised without another attempt, so Stop is never stuck
+    behind a ``Retry-After``.
+    """
     token = _retry_listener.set(listener)
+    cancel_token = _retry_cancelled.set(is_cancelled)
     try:
         yield
     finally:
+        _retry_cancelled.reset(cancel_token)
         _retry_listener.reset(token)
 
 
@@ -596,10 +616,26 @@ class ModelCallRetrier:
                     max_retries=self.policy.max_attempts - 1,
                 )
             )
-        if delay > 0:
-            self._sleep(delay)
-        state.waited += delay
-        return True
+        is_cancelled = _retry_cancelled.get()
+        if is_cancelled is None:
+            if delay > 0:
+                self._sleep(delay)
+            state.waited += delay
+            return True
+        remaining = delay
+        while not is_cancelled():
+            if remaining <= 0:
+                return True
+            pause = min(_CANCEL_CHECK_INTERVAL, remaining)
+            self._sleep(pause)
+            state.waited += pause
+            remaining -= pause
+        self._log.warning(
+            "%s failed (%s); cancelled during the retry wait, not retrying",
+            what,
+            reason,
+        )
+        return False
 
     def call(
         self,

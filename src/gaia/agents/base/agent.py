@@ -6586,6 +6586,9 @@ Do NOT wrap conversational replies in JSON.
         * ``(None, None)`` — not a transient model failure; the caller's
           existing handling applies unchanged.
         """
+        if self._console_cancelled():
+            # Stop pressed during the client's backoff: it gave up on purpose.
+            return "cancelled", None
         state = self._transient_model_failure(exc)
         if state is None:
             return None, None
@@ -7499,12 +7502,17 @@ Do NOT wrap conversational replies in JSON.
             Dict containing the final result and operation details
         """
         ns_id = self._namespaced_agent_id()
+        # Only a console with a Stop button can cancel a client backoff wait.
+        stoppable = getattr(self.console, "cancelled", None) is not None
         try:
             # Standby would stall a local model mid-turn until someone wakes the PC.
             with (
                 self._agent_identity_context(ns_id),
                 stay_awake(),
-                model_retry_notices(self._announce_model_retry),
+                model_retry_notices(
+                    self._announce_model_retry,
+                    self._console_cancelled if stoppable else None,
+                ),
             ):
                 return self._process_query_impl(user_input, max_steps, trace, filename)
         finally:

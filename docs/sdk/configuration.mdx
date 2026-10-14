@@ -163,7 +163,8 @@ GAIA_LLM_RETRY_ATTEMPTS=1 GAIA_AGENT_MODEL_RETRIES=0 gaia chat
 ```
 
 Invalid nonempty values fail with an actionable error; unset or blank values
-use the defaults. Stop cancels the agent's wait between step attempts.
+use the defaults. Stop cancels any retry wait, within half a second: the client's
+backoff as well as the agent's wait between step attempts.
 
 ## 16.2 Configuration in Code
 
