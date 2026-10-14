@@ -104,7 +104,8 @@ that stops early ends with `[Truncated: showing characters A-B of N. Call
 fetch_page('<url>', offset=B) for the next part ...]`. `find` returns each match
 with 300 characters either side, labelled `[at character N]`; matches that don't
 fit are counted with the offset to continue from, and no match at all says so
-explicitly. A page with almost no static text (rendered by JavaScript) is
+explicitly. With both `find` and `offset`, a passage the offset falls inside
+resumes at the offset, so following the markers always moves forward. A page with almost no static text (rendered by JavaScript) is
 flagged rather than returned as if it were the content.
 
 **Extract modes:**

@@ -57,7 +57,12 @@ def text_window(
     total = len(text)
     if find and find.strip():
         term = find.strip()
-        spans = [s for s in _find_spans(text, term) if s[1] > offset]
+        # A passage the offset falls inside resumes there, so paging moves on.
+        spans = [
+            (max(start, offset), end)
+            for start, end in _find_spans(text, term)
+            if end > offset
+        ]
         if not spans:
             where = f"after character {offset:,} of" if offset else "in"
             return (
