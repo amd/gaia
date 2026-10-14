@@ -260,8 +260,10 @@ prints why, and records it as `default_model`. It loads with the largest window 
 memory holds, up to 262,144 tokens: 256K on a Strix Halo, about 88K on a 32 GB GPU
 (see [Context length follows memory](/guides/ai-providers#context-length-follows-memory)). Gemma is
 still downloaded, since vision and document-image extraction load it by name. Every
-smaller PC gets Gemma alone. A `default_model` you set yourself always wins, and
-`--check` asks for the same model `gaia init` would download.
+smaller PC gets Gemma alone. A `default_model` you set yourself always wins and is
+downloaded instead of Gemma; questions about images then download Gemma (~6 GB) the
+first time you ask one, and `gaia init` says so. `--check` asks for the same models
+`gaia init` would download.
 </Note>
 
 <Note>

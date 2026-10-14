@@ -587,7 +587,7 @@ class AttachDocumentRequest(BaseModel):
   </Accordion>
 
   <Accordion title="POST /api/system/warm-up">
-    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. Returns the warm-up state. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
+    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, and on a PC with under 24 GB of RAM, where the model loads with the first message instead. Returns the warm-up state. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
 
     **Response:**
     ```json
