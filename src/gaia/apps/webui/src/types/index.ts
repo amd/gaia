@@ -544,6 +544,8 @@ export interface CommandOutput {
     stdout: string;
     stderr: string;
     returnCode: number;
+    /** Why a non-zero exit is an answer, not a failure (grep's 1: no match). */
+    expectedExit?: string | null;
     cwd?: string;
     durationSeconds?: number;
     truncated?: boolean;
@@ -661,6 +663,7 @@ export interface StreamEvent {
         stdout: string;
         stderr: string;
         return_code: number;
+        expected_exit?: string | null;
         cwd?: string;
         duration_seconds?: number;
         truncated?: boolean;

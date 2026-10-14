@@ -7691,13 +7691,7 @@ Do NOT wrap conversational replies in JSON.
                         break
 
                     # Check for error (support multiple error formats)
-                    is_error = isinstance(tool_result, dict) and (
-                        tool_result.get("status") == "error"  # Standard format
-                        or tool_result.get("success")
-                        is False  # Tools returning success: false
-                        or tool_result.get("has_errors") is True  # CLI tools
-                        or tool_result.get("return_code", 0) != 0  # Build failures
-                    )
+                    is_error = Agent._is_error_result(tool_result)
 
                     if is_error:
                         error_count += 1
@@ -8895,12 +8889,7 @@ Do NOT wrap conversational replies in JSON.
                     # Track errors but DON'T break early — drain all N
                     # tool calls first so conversation history reflects
                     # the full set, per #944 acceptance criterion (b).
-                    is_error = isinstance(tool_result, dict) and (
-                        tool_result.get("status") == "error"
-                        or tool_result.get("success") is False
-                        or tool_result.get("has_errors") is True
-                        or tool_result.get("return_code", 0) != 0
-                    )
+                    is_error = Agent._is_error_result(tool_result)
                     if is_error:
                         error_count += 1
                         last_error = (
@@ -9169,12 +9158,7 @@ Do NOT wrap conversational replies in JSON.
                     # will call the LLM with that result
 
                 # Check if tool execution resulted in an error (support multiple error formats)
-                is_error = isinstance(tool_result, dict) and (
-                    tool_result.get("status") == "error"
-                    or tool_result.get("success") is False
-                    or tool_result.get("has_errors") is True
-                    or tool_result.get("return_code", 0) != 0
-                )
+                is_error = Agent._is_error_result(tool_result)
                 if is_error:
                     error_count += 1
                     # Prefer error_brief for logging (avoids duplicate formatted output)
@@ -10145,16 +10129,14 @@ Do NOT wrap conversational replies in JSON.
     def _is_error_result(result: Any) -> bool:
         """Canonical predicate for 'tool returned an error result'.
 
-        Mirrors the error-recovery check used elsewhere in
-        ``_process_query_impl`` (around lines 2319-2325 / 3471-3477) so
-        subclass hooks and the framework's own error-recovery state
-        transition agree on what counts as an error.
+        A non-zero ``return_code`` is an error unless the tool marked it
+        ``expected_exit`` — grep's exit 1 is "no match", not a failure.
         """
         return isinstance(result, dict) and (
             result.get("status") == "error"
             or result.get("success") is False
             or result.get("has_errors") is True
-            or result.get("return_code", 0) != 0
+            or (result.get("return_code", 0) != 0 and not result.get("expected_exit"))
         )
 
     _RATE_LIMIT_WAIT_CAP_S = 15.0

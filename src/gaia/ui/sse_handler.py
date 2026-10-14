@@ -38,6 +38,26 @@ _SUMMARY_CHAR_CAP = 300
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = ("error", "denied")
 
+
+def tool_result_failed(data: Any) -> bool:
+    """Whether a tool result reports a failure.
+
+    A non-zero ``return_code`` counts even under ``status: "success"``, as it
+    does in the agent loop, unless the tool marked it ``expected_exit``.
+    """
+    if not isinstance(data, dict):
+        return False
+    if data.get("status") in FAILED_TOOL_STATUSES:
+        return True
+    code = data.get("return_code")
+    return (
+        isinstance(code, int)
+        and not isinstance(code, bool)
+        and code != 0
+        and not data.get("expected_exit")
+    )
+
+
 #: Seconds the agent thread waits for a tool-confirm response before denying.
 #: Matches the TUI's ``DeliverableConfirmationTimeout`` so a prompt waits as
 #: long on every surface.
@@ -431,11 +451,7 @@ class SSEOutputHandler(OutputHandler):
 
         # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
-        success = (
-            data.get("status") not in FAILED_TOOL_STATUSES
-            if isinstance(data, dict)
-            else True
-        )
+        success = not tool_result_failed(data)
         self._last_tool_success = success
         event = {
             "type": "tool_result",
@@ -467,6 +483,7 @@ class SSEOutputHandler(OutputHandler):
                 "stdout": data.get("stdout", ""),
                 "stderr": data.get("stderr", ""),
                 "return_code": data.get("return_code", 0),
+                "expected_exit": data.get("expected_exit"),
                 "cwd": data.get("cwd", ""),
                 "duration_seconds": data.get("duration_seconds"),
                 "truncated": data.get("output_truncated", False),
@@ -1549,6 +1566,8 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         stdout = data.get("stdout", "")
         rc = data.get("return_code", 0)
         lines = stdout.strip().split("\n") if stdout.strip() else []
+        if rc != 0 and data.get("expected_exit"):
+            return f"{data['expected_exit']} (exit {rc})"
         if rc != 0:
             stderr = data.get("stderr", "")
             return f"Command failed (exit {rc})" + (

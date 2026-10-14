@@ -726,11 +726,16 @@ class AttachDocumentRequest(BaseModel):
       "stdout": "total 42\n...",
       "stderr": "",
       "return_code": 0,
+      "expected_exit": null,
       "cwd": "/home/user/project",
       "duration_seconds": 0.15,
       "truncated": false
     }
     ```
+
+    `success` is `false` when the tool reports `status: "error"` or a non-zero
+    `return_code`. The exception is an exit the tool names in `expected_exit`,
+    such as grep's exit 1 for "no match": that result stays `success: true`.
 
     **Response Content**
 
