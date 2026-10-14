@@ -37,6 +37,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from gaia.agents.install_hints import agent_import_error_message
 from gaia.config import UnsafeGaiaHomeError
+from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
 # ── Backward-compatible re-exports ──────────────────────────────────────────
 # Tests use @patch("gaia.ui.server._get_chat_response") etc., so we must
@@ -273,6 +274,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     Returns:
         Configured FastAPI application.
     """
+    # A bad GAIA_ALLOWED_PATHS stops startup, not the first chat.
+    env_allowed_paths()
+
     # Initialize database early so lifespan can access it
     db = ChatDatabase(db_path)
 
@@ -985,9 +989,10 @@ def main():
     print(f"Starting GAIA Agent UI server on http://{args.host}:{args.port}")
     try:
         server_app = create_app(webui_dist=args.ui_dist)
-    except UnsafeGaiaHomeError as exc:
-        # A misconfigured GAIA_HOME is the user's to fix, so print the remedy
-        # rather than a traceback. 64 is EX_USAGE, as gaia uninstall uses.
+    except (UnsafeGaiaHomeError, AllowedPathsEnvError) as exc:
+        # A misconfigured GAIA_HOME or GAIA_ALLOWED_PATHS is the user's to fix,
+        # so print the remedy rather than a traceback. 64 is EX_USAGE, as gaia
+        # uninstall uses.
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(64) from exc
     if not lemonade_is_remote():

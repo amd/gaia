@@ -46,6 +46,27 @@ def path_validator_of(host: Any) -> Any:
     )
 
 
+def confine_roots(host: Any, roots: List[Any]) -> List[Path]:
+    """*roots* cut down to ``GAIA_ALLOWED_PATHS``, for walks wider than the allowlist.
+
+    A name search over Documents or Downloads returns only paths, which is why
+    it may look past the allowed folders; a run confined to one folder must
+    not learn the names of files outside it either.
+    """
+    validator = path_validator_of(host)
+    if validator is None or not hasattr(validator, "confine_roots"):
+        return [Path(r) for r in roots]
+    return validator.confine_roots(roots)
+
+
+def in_env_scope(host: Any, path: Any) -> bool:
+    """False only when ``GAIA_ALLOWED_PATHS`` excludes *path*."""
+    validator = path_validator_of(host)
+    if validator is None or not hasattr(validator, "in_env_scope"):
+        return True
+    return validator.in_env_scope(path)
+
+
 def is_broad_root(root: Path) -> bool:
     """The filesystem root or the user's home — a boundary, never a project.
 
@@ -102,6 +123,9 @@ def search_roots(host: Any) -> List[Path]:
         if Path(root).exists() and Path(root) != scratch_dir
     ]
     if not roots:
+        # Under GAIA_ALLOWED_PATHS an empty scope means nothing, not the cwd.
+        if isinstance(getattr(validator, "env_scope", None), list):
+            return []
         return [Path.cwd().resolve()]
     roots = sorted(roots, key=lambda p: (-len(p.parts), str(p)))
     workspace = session_workspace(host)
