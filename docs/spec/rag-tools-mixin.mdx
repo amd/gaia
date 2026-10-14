@@ -40,8 +40,8 @@ RAGToolsMixin provides comprehensive document retrieval and query capabilities f
 never initializes itself. A class mixing it in must set all five attributes
 below before `_register_tools()` runs, or every tool call hits an
 `AttributeError` internally the moment it touches `self.rag` — caught and
-turned into a "temporarily unavailable" fallback response rather than
-surfacing to the caller (see below):
+returned as a generic `status: "error"` rather than naming the missing
+attribute (see below):
 
 | Attribute | Type | Notes |
 |---|---|---|
@@ -67,7 +67,7 @@ Of the five, only `self.rag` is enforced at the point of use: `query_documents`
 and `query_specific_file` read it through a helper that raises a
 `MissingHostAttributeError` naming the host class, the attribute, and this
 section — instead of letting a bare `AttributeError` get swallowed into a
-"temporarily unavailable" fallback response. `None` remains a valid,
+generic error result. `None` remains a valid,
 intentional "RAG disabled" value and does not raise. The other four
 attributes (`indexed_files`, `max_chunks`, `current_session`,
 `session_manager`) are still enforced by convention, matching the reasoning
@@ -203,8 +203,12 @@ class RAGToolsMixin:
 
         Returns:
             {
-                "status": "success" | "no_documents" | "fallback",
+                "status": "success" | "no_documents" | "error",
                 "message": str,
+                "error": str,        # On error: what failed
+                "error_type": str,   # "embedding_unavailable" when the
+                                     # embedder or Lemonade could not run
+                "next_step": str,    # On embedding_unavailable: how to fix it
                 "chunks": List[{
                     "chunk_id": int,
                     "page": int | None,
@@ -231,7 +235,8 @@ class RAGToolsMixin:
             query: Question to ask about this file
 
         Returns:
-            Similar to query_documents, but file-scoped
+            Similar to query_documents, but file-scoped. An embedder that
+            cannot run is an error, never "no relevant information".
         """
         pass
 
@@ -309,7 +314,9 @@ class RAGToolsMixin:
                 "total_chunks": int,
                 "from_cache": bool,
                 "already_indexed": bool,
-                "reindexed": bool
+                "reindexed": bool,
+                "error_type": str,   # "embedding_unavailable" on an embedder
+                "next_step": str     # outage, with how to fix it
             }
         """
         pass
@@ -328,6 +335,10 @@ class RAGToolsMixin:
             directory_path: Path to directory
             recursive: Search subdirectories (default: False)
 
+        Returns "error" when no file could be indexed, and stops at the
+        first file the embedder could not run for (error_type
+        "embedding_unavailable"), since the rest would fail the same way.
+
         Returns:
             {
                 "status": "success" | "error",
@@ -336,6 +347,7 @@ class RAGToolsMixin:
                 "skipped_count": int,
                 "indexed_files": List[str],
                 "failed_files": List[str],
+                "failure_reasons": Dict[str, str],  # file name -> error
                 "message": str
             }
         """
