@@ -12,6 +12,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (cloud). Your messages, and anything read from files or memory, are sent
   there." The `/model` list drops "via Lemonade" from its headings and marks
   the configured default model with `(default)`.
+- **Single-file search results name their file.** `query_specific_file` put the
+  path only at the top of its result, so each chunk arrived with no source and
+  the chunk cards showed none. Every chunk now carries `source_file`, and the
+  result lists it in `source_files`, as `query_documents` already did.
 - **The sidecar's start-up warm-up now makes the first question fast.** It
   primed only the agent's own instructions, without the tool list or the rest
   of the system prompt, so the first question re-read all ~19K prompt tokens
