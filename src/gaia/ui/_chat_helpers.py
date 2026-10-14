@@ -1847,6 +1847,8 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
             _EVAL_PROVIDER_ENV,
         )
         return
+    from gaia.llm.lemonade_client import InsufficientMemoryError
+
     try:
         import httpx
 
@@ -1965,6 +1967,13 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                 ctx_size=required_ctx,
                 prompt=False,
                 timeout=_PREFLIGHT_LOAD_TIMEOUT_S,
+            )
+    except InsufficientMemoryError as exc:
+        # The fix is closing apps, not checking Lemonade: pass the reason on.
+        logger.error("Pre-flight model load refused: %s", exc)
+        if sse_handler is not None:
+            sse_handler._emit(
+                {"type": "status", "status": "warning", "message": str(exc)}
             )
     except BrokerUnavailableError as exc:
         # Do NOT report this as "check that Lemonade is running" — Lemonade is

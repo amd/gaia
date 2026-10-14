@@ -66,8 +66,13 @@ DAEMON_DEPS = (
 _REQUIRED_AGENTS_MINOR = 1
 # The MINOR that added /daemon/v1/lemonade/ensure.
 _REQUIRED_LEMONADE_MINOR = 2
+# The MINOR that added /daemon/v1/lemonade/clients.
+_REQUIRED_CLIENTS_MINOR = 4
 # The MINOR that added /daemon/v1/lemonade/reconfigure.
-_REQUIRED_RECONFIGURE_MINOR = 4
+_REQUIRED_RECONFIGURE_MINOR = 5
+# Registration and release are loopback bookkeeping; an exiting app must not
+# hang on them.
+_CLIENTS_TIMEOUT = (2.0, 10.0)
 
 # Ensure: connect fast; read generously — a first-run ensure may lazily fetch the
 # sidecar binary before answering (mirrors gaia.ui.email_sidecar.daemon_client).
@@ -76,8 +81,8 @@ _ENSURE_TIMEOUT = (5.0, 900.0)
 # gaiainit.CheckTimeout in the TUI above this plus daemon start (60s).
 _LEMONADE_ENSURE_TIMEOUT = (5.0, 80.0)
 
-# How long `gaia daemon stop` waits before tree-killing. Shutdown now stops the
-# Lemonade Server this daemon started, so this must outlast that teardown or a
+# How long `gaia daemon stop` waits before tree-killing. Shutdown now stops
+# GAIA's Lemonade Server, so this must outlast that teardown or a
 # routine stop kills the daemon before its custody store closes.
 # tests/unit/test_daemon_lemonade.py pins the margin.
 STOP_WAIT_TIMEOUT = 45.0
@@ -492,6 +497,105 @@ def reconfigure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> Optional[dict]:
             f"not the one GAIA is set to use. Check `gaia daemon logs`."
         )
     return {**applied, "restarted": True}
+
+
+def register_lemonade_client(
+    kind: str, pids: list, name: str = "", client_id: Optional[str] = None
+) -> str:
+    """Tell the running daemon this process is using GAIA's Lemonade.
+
+    The registration lasts until :func:`release_lemonade_client`, or until any
+    of *pids* exits. While one is held the daemon keeps the server's models
+    loaded and its idle timeout paused.
+
+    Args:
+        kind: ``"app"`` (Agent UI, TUI) or ``"cli"`` (a ``gaia`` command).
+        pids: Processes the registration lives as long as.
+        name: Shown in the daemon log.
+        client_id: Repeat an earlier registration, so a daemon that restarted
+            since learns of this client too. A no-op on the daemon that has it.
+
+    Returns:
+        The client id to release with.
+
+    Raises:
+        DaemonError: No daemon is running, it predates client registration, or
+            it refused the registration.
+    """
+    import requests
+
+    inst = attach()
+    if inst is None:
+        raise DaemonError(
+            "the GAIA daemon is not running, so there is nothing to register "
+            "with. Start it with `gaia daemon start`."
+        )
+    if _minor(inst) < _REQUIRED_CLIENTS_MINOR:
+        raise DaemonVersionError(
+            f"the running daemon (host API v{inst.api_version}) cannot tell when "
+            "GAIA apps close, so it will not free Lemonade's memory for them. "
+            "Restart it with `gaia daemon restart` so the current version takes "
+            "over."
+        )
+    url = f"{inst.base_url}{API_PREFIX}/lemonade/clients"
+    try:
+        r = requests.post(
+            url,
+            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
+            json={
+                "kind": kind,
+                "pids": list(pids),
+                "name": name,
+                "client_id": client_id,
+            },
+            timeout=_CLIENTS_TIMEOUT,
+        )
+    except requests.exceptions.RequestException as e:
+        raise DaemonError(
+            f"could not reach the daemon at {inst.base_url} to register this "
+            f"{kind}: {e}. Check `gaia daemon status`."
+        ) from e
+    if r.status_code != 200:
+        raise DaemonError(
+            f"the daemon refused to register this {kind}: {_error_detail(r)}"
+        )
+    return r.json()["client_id"]
+
+
+def release_lemonade_client(client_id: str) -> Optional[dict]:
+    """Release a registration from :func:`register_lemonade_client`.
+
+    Returns:
+        The daemon's answer (``clients`` left, whether it ``unloaded``), or None
+        when there was nothing to release: the daemon has exited, or already
+        dropped the registration.
+
+    Raises:
+        DaemonError: The daemon could not be reached or refused the release.
+    """
+    import requests
+
+    inst = attach()
+    if inst is None:
+        return None
+    url = f"{inst.base_url}{API_PREFIX}/lemonade/clients/{client_id}"
+    try:
+        r = requests.delete(
+            url,
+            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
+            timeout=_CLIENTS_TIMEOUT,
+        )
+    except requests.exceptions.RequestException as e:
+        raise DaemonError(
+            f"could not reach the daemon at {inst.base_url} to release client "
+            f"{client_id}: {e}. It drops the registration once this process "
+            "exits."
+        ) from e
+    if r.status_code == 404:
+        return None
+    if r.status_code != 200:
+        raise DaemonError(f"the daemon refused the release: {_error_detail(r)}")
+    return r.json()
 
 
 def request_shutdown(inst: DaemonInstance, timeout: float = 5.0) -> bool:

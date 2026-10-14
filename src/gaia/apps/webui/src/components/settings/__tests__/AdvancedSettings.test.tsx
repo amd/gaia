@@ -38,6 +38,10 @@ beforeEach(() => {
         mode: 'gaia', saved_mode: null, source: 'gaia', base_url: null, saved_base_url: null,
         api_key_stored: false, gaia_installed: true, offer: false, what_gaia_does: '',
     });
+    mockedApi.getModelServer.mockResolvedValue({
+        reachable: false, error: 'Lemonade is not answering at http://localhost:13305/api/v1.',
+        base_url: 'http://localhost:13305/api/v1', owner: 'user',
+    });
     mockedApi.getSettings.mockResolvedValue(
         { custom_model: null, dynamic_tools: false, dynamic_tools_locked: false } as never,
     );

@@ -556,7 +556,7 @@ class TestDaemonReconfigure:
         embedded.stop.assert_not_called()
         assert result["action"] == "starting_gaia_lemonade"
 
-    def _inst(self, api_version="1.4"):
+    def _inst(self, api_version="1.5"):
         from gaia.daemon.instance import DaemonInstance
 
         return DaemonInstance(
@@ -630,7 +630,7 @@ class TestDaemonReconfigure:
         fresh = mock.Mock(status_code=200)
         fresh.json.return_value = {"mode": "gaia", "base_url": None}
         with (
-            mock.patch.object(client, "attach", return_value=self._inst("1.3")),
+            mock.patch.object(client, "attach", return_value=self._inst("1.4")),
             mock.patch("requests.post", return_value=fresh) as post,
             mock.patch.object(
                 client, "request_shutdown", return_value=True
@@ -648,7 +648,7 @@ class TestDaemonReconfigure:
         from gaia.daemon.errors import DaemonError
 
         with (
-            mock.patch.object(client, "attach", return_value=self._inst("1.3")),
+            mock.patch.object(client, "attach", return_value=self._inst("1.4")),
             mock.patch.object(client, "request_shutdown", return_value=True),
             mock.patch.object(client, "wait_until_gone", return_value=False),
         ):
@@ -689,7 +689,7 @@ class TestReviewRegressions:
             token="t",
             host="127.0.0.1",
             started_at=0.0,
-            api_version="1.4",
+            api_version="1.5",
         )
         ok = mock.Mock(status_code=200)
         ok.json.return_value = {
@@ -716,7 +716,7 @@ class TestReviewRegressions:
             token="t",
             host="127.0.0.1",
             started_at=0.0,
-            api_version="1.4",
+            api_version="1.5",
         )
         pinned = mock.Mock(status_code=200)
         pinned.json.return_value = {
@@ -750,7 +750,7 @@ class TestReviewRegressions:
             token="t",
             host="127.0.0.1",
             started_at=0.0,
-            api_version="1.4",
+            api_version="1.5",
         )
         wrong = mock.Mock(status_code=200)
         wrong.json.return_value = {"mode": "gaia", "base_url": None}

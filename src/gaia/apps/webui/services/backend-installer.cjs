@@ -1375,6 +1375,51 @@ function toPep440(version) {
   return version.replace(/^(\d+\.\d+\.\d+)-rc\.(\d+)$/, "$1rc$2");
 }
 
+function shouldSkipGaiaInit(opts) {
+  return Boolean(opts.skipGaiaInit) || isTruthyEnv(process.env.GAIA_SKIP_GAIA_INIT);
+}
+
+/**
+ * Run `gaia init` for the profile the app's own setup check asks about
+ * (setup_runner.PROFILE), so the first launch finds setup done instead of
+ * running it a second time.
+ *
+ * `chooseLemonade` is asked about a Lemonade Server already running here; see
+ * lemonadeInitArgs.
+ *
+ * Returns "done", "failed" or "skipped". The state file records it: a backend
+ * whose setup never finished is not installed, and the next launch runs it.
+ */
+async function runGaiaInit(gaiaBin, report, version, skipGaiaInit, chooseLemonade) {
+  if (skipGaiaInit) {
+    log("Skipping gaia init (skipGaiaInit=true or GAIA_SKIP_GAIA_INIT set)");
+    return "skipped";
+  }
+  setState(STATES.INSTALLING, { stage: STAGES.GAIA_INIT, version });
+  report(
+    STAGES.GAIA_INIT,
+    0,
+    "Setting up Lemonade Server and downloading models (this can take several minutes)"
+  );
+  const lemonadeArgs = await lemonadeInitArgs(gaiaBin, chooseLemonade);
+  const initResult = await runCommand(
+    gaiaBin,
+    ["init", "--profile", "gaia", "--yes", "--skip-webui-build", ...lemonadeArgs],
+    { stageLabel: "gaia-init" }
+  );
+  if (initResult.code !== 0) {
+    // Non-fatal: the app opens and its setup screen retries, and so does the
+    // next launch, because the state file records that setup did not finish.
+    log(
+      `Warning: gaia init exited with code ${initResult.code}. Continuing; setup runs again next launch.`
+    );
+    report(STAGES.GAIA_INIT, 100, "Lemonade Server setup did not finish");
+    return "failed";
+  }
+  report(STAGES.GAIA_INIT, 100, "Lemonade Server setup complete");
+  return "done";
+}
+
 /**
  * Run a `gaia ... --json` command and parse what it printed.
  * Returns undefined after logging a warning that names the failure.
@@ -1462,8 +1507,7 @@ async function installBackend(opts = {}) {
   const pipPackage = localWheel
     ? `${localWheel}[ui]`
     : `amd-gaia[ui]==${toPep440(version)}`;
-  const skipGaiaInit =
-    Boolean(opts.skipGaiaInit) || isTruthyEnv(process.env.GAIA_SKIP_GAIA_INIT);
+  const skipGaiaInit = shouldSkipGaiaInit(opts);
 
   log("================================================");
   log("  Installing GAIA backend");
@@ -1664,32 +1708,13 @@ async function installBackend(opts = {}) {
   report(STAGES.INSTALL_PACKAGE, 100, "GAIA package installed");
 
   // Stage 4: gaia init
-  if (!skipGaiaInit) {
-    setState(STATES.INSTALLING, { stage: STAGES.GAIA_INIT, version });
-    report(
-      STAGES.GAIA_INIT,
-      0,
-      "Setting up Lemonade Server and downloading models (this can take several minutes)"
-    );
-
-    const lemonadeArgs = await lemonadeInitArgs(GAIA_BIN, opts.chooseLemonade);
-    const initResult = await runCommand(
-      GAIA_BIN,
-      ["init", "--profile", "minimal", "--yes", ...lemonadeArgs],
-      { stageLabel: "gaia-init" }
-    );
-
-    if (initResult.code !== 0) {
-      // gaia init failure is non-fatal (user can retry later), but we still
-      // log it and treat the rest of the install as successful.
-      log(
-        `Warning: gaia init exited with code ${initResult.code}. Continuing anyway.`
-      );
-    }
-    report(STAGES.GAIA_INIT, 100, "Lemonade Server setup complete");
-  } else {
-    log("Skipping gaia init (skipGaiaInit=true or GAIA_SKIP_GAIA_INIT set)");
-  }
+  const init = await runGaiaInit(
+    GAIA_BIN,
+    report,
+    version,
+    skipGaiaInit,
+    opts.chooseLemonade
+  );
 
   // Stage 5: verify
   setState(STATES.INSTALLING, { stage: STAGES.VERIFY, version });
@@ -1749,7 +1774,7 @@ async function installBackend(opts = {}) {
     log(`Shim creation check failed: ${err.message}`);
   }
 
-  setState(STATES.READY, { stage: null, version, installedVersion });
+  setState(STATES.READY, { stage: null, version, installedVersion, init });
   log("Backend install complete");
 }
 
@@ -1806,11 +1831,11 @@ async function ensureBackend(opts = {}) {
         // The previous run never finished. Record this and proceed with a
         // fresh restart (per §10.4 recommendation A).
         log(
-          `Previous install was interrupted at stage=${prev.stage || "?"} — restarting from scratch`
+          `Previous install was interrupted at stage=${prev.stage || "?"} — finishing it`
         );
         setState(STATES.PARTIAL, { stage: prev.stage, message: "Previous install interrupted" });
       } else if (prev.state === STATES.PARTIAL) {
-        log("Previous launch detected a partial install — restarting from scratch");
+        log("Previous launch detected a partial install — finishing it");
       } else if (prev.state === STATES.FAILED) {
         log(`Previous install failed: ${prev.message || "(no detail)"} — retrying`);
       } else if (prev.state === STATES.READY) {
@@ -1868,15 +1893,46 @@ async function ensureBackend(opts = {}) {
     // reinstall from the local wheel so CI gets a fresh install each run.
     const expectedVersion = resolveBackendVersion(opts);
     const existingBin = findGaiaBin();
+    // Installed means setup finished too, not just that the package is there.
+    // No state file at all is an install from before it existed.
+    const prev = preChecks.previousState;
+    const setupFinished =
+      !prev || (prev.state === STATES.READY && prev.init !== "failed");
+    const packageFinished =
+      setupFinished ||
+      (prev &&
+        (prev.state === STATES.READY ||
+          prev.stage === STAGES.GAIA_INIT ||
+          prev.stage === STAGES.VERIFY));
     if (existingBin) {
       const installedVersion = getInstalledVersion(existingBin);
-      if (expectedVersion !== null && installedVersion === toPep440(expectedVersion)) {
+      const versionMatches =
+        expectedVersion !== null && installedVersion === toPep440(expectedVersion);
+      if (versionMatches && !setupFinished && packageFinished) {
+        log(
+          `GAIA ${installedVersion} is installed but its setup did not finish ` +
+            `(state=${prev.state}, stage=${prev.stage || "-"}) — running gaia init`
+        );
+        const report = makeProgressReporter(opts.onProgress);
+        const init = await runGaiaInit(
+          existingBin,
+          report,
+          expectedVersion,
+          shouldSkipGaiaInit(opts),
+          opts.chooseLemonade
+        );
+        setState(STATES.READY, { version: expectedVersion, installedVersion, init });
+        report(STAGES.VERIFY, 100, `GAIA ${installedVersion} ready`);
+        return existingBin;
+      }
+      if (versionMatches && setupFinished) {
         log(
           `GAIA backend already installed at version ${installedVersion} — nothing to do`
         );
         setState(STATES.READY, {
           version: expectedVersion,
           installedVersion,
+          init: prev ? prev.init : undefined,
         });
         // Tell the UI we are instantly ready.
         const report = makeProgressReporter(opts.onProgress);
@@ -1884,7 +1940,9 @@ async function ensureBackend(opts = {}) {
         return existingBin;
       }
       log(
-        `Version mismatch: expected=${expectedVersion} installed=${installedVersion || "unknown"} — upgrading`
+        versionMatches
+          ? `An earlier install stopped at stage=${prev.stage || "?"} — reinstalling`
+          : `Version mismatch: expected=${expectedVersion} installed=${installedVersion || "unknown"} — upgrading`
       );
     } else {
       log("GAIA backend not found — installing from scratch");

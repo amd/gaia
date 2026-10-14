@@ -34,7 +34,10 @@
       "id": "Gemma-4-E4B-it-GGUF",
       "provider": "local",
       "label": "Gemma 4 E4B",
-      "note": "default on CPU-only PCs and GPUs below ~27 GB for models"
+      "note": "default on CPU-only PCs and GPUs below ~27 GB for models",
+      "size_gb": 5.97,
+      "min_ctx_size": 65536,
+      "kv_bytes_per_token": 16384
     },
     {
       "id": "Qwen3-Coder-30B-A3B-Instruct-GGUF",

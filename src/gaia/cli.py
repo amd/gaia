@@ -8629,7 +8629,7 @@ def _handle_daemon_stop_agent(args):
     print(f"✅ agent '{args.agent_id}' sidecar stopped (daemon still running)")
 
 
-def _handle_daemon_stop():
+def _handle_daemon_stop(exit_on_lemonade_error: bool = True):
     from gaia.daemon import client
     from gaia.daemon.errors import DaemonError
     from gaia.daemon.instance import (
@@ -8641,32 +8641,61 @@ def _handle_daemon_stop():
 
     inst = read_instance()
     if inst is None:
-        print("GAIA daemon: not running (nothing to stop)")
-        return
-    if not pid_alive(inst.pid):
+        print("GAIA daemon: not running")
+    elif not pid_alive(inst.pid):
         remove_instance(only_pid=inst.pid)
         print(f"GAIA daemon: cleared stale registry (pid {inst.pid} was already dead)")
-        return
-    # Prefer a graceful, authed shutdown; escalate to terminate if it won't answer.
-    try:
-        client.request_shutdown(inst)
-    except DaemonError as e:
-        print(f"⚠️  graceful shutdown failed ({e}); terminating pid {inst.pid}")
-        terminate_instance(inst)
-    # Shutdown drains requests, waits out a Lemonade start in flight and stops
-    # the Lemonade Server it started — see client.STOP_WAIT_TIMEOUT.
-    if client.wait_until_gone(inst, timeout=client.STOP_WAIT_TIMEOUT):
-        remove_instance(only_pid=inst.pid)
-        print(f"✅ GAIA daemon stopped (pid {inst.pid})")
     else:
-        print(f"⚠️  daemon pid {inst.pid} did not exit; terminating")
-        terminate_instance(inst)
-        remove_instance(only_pid=inst.pid)
-        print(f"✅ GAIA daemon terminated (pid {inst.pid})")
+        # Prefer a graceful, authed shutdown; escalate to terminate if it won't
+        # answer.
+        try:
+            client.request_shutdown(inst)
+        except DaemonError as e:
+            print(f"⚠️  graceful shutdown failed ({e}); terminating pid {inst.pid}")
+            terminate_instance(inst)
+        # Shutdown drains requests, waits out a Lemonade start in flight and
+        # stops GAIA's Lemonade Server — see client.STOP_WAIT_TIMEOUT.
+        if client.wait_until_gone(inst, timeout=client.STOP_WAIT_TIMEOUT):
+            remove_instance(only_pid=inst.pid)
+            print(f"✅ GAIA daemon stopped (pid {inst.pid})")
+        else:
+            print(f"⚠️  daemon pid {inst.pid} did not exit; terminating")
+            terminate_instance(inst)
+            remove_instance(only_pid=inst.pid)
+            print(f"✅ GAIA daemon terminated (pid {inst.pid})")
+    _stop_gaia_lemonade_left_running(exit_on_error=exit_on_lemonade_error)
+
+
+def _stop_gaia_lemonade_left_running(exit_on_error: bool = True):
+    """Stop GAIA's own Lemonade Server if the daemon did not.
+
+    Covers one ``gaia init`` started with no daemon to hand it to, a daemon
+    that was killed rather than shut down, and a start still in flight when the
+    daemon exited. A server ``LEMONADE_BASE_URL`` names is the user's and is
+    never touched.
+
+    Args:
+        exit_on_error: Exit 1 when it will not stop. ``restart`` passes False:
+            the error is printed, and the new daemon still starts.
+    """
+    from gaia.llm.lemonade_client import configured_lemonade_url
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
+
+    if configured_lemonade_url():
+        return
+    try:
+        stopped = EmbeddedLemonade().stop()
+    except EmbeddedLemonadeError as e:
+        print(f"❌ {e}")
+        if exit_on_error:
+            sys.exit(1)
+        return
+    if stopped:
+        print("✅ GAIA's Lemonade Server stopped")
 
 
 def _handle_daemon_restart():
-    _handle_daemon_stop()
+    _handle_daemon_stop(exit_on_lemonade_error=False)
     _handle_daemon_start()
 
 

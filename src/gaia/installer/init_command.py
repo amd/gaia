@@ -433,19 +433,36 @@ HARDWARE_CHAT_PROFILES = frozenset({"gaia", "chat", "rag", "all"})
 def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     """``model_ids`` plus the chat model ``profile`` needs on this machine.
 
-    The chat model is added, never swapped in for Gemma: the vision and
-    document-image paths still load Gemma by name. ``resolve_chat`` is only
-    called for hardware-chosen profiles, so the others never probe Lemonade.
+    ``resolve_chat`` returns a :class:`ChatModelChoice`, and is only called for
+    hardware-chosen profiles, so the others never probe Lemonade. A chat model
+    the hardware picked is added beside Gemma, which the image tools load by
+    name. A ``default_model`` the user chose replaces Gemma: the image tools
+    then download Gemma the first time they are used (:func:`skipped_gemma`).
     """
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, _model_ids_match
 
     ids = list(model_ids)
     if profile in ("sd", "npu"):
         return ids
-    chat = resolve_chat() if profile in HARDWARE_CHAT_PROFILES else DEFAULT_MODEL_NAME
+    if profile not in HARDWARE_CHAT_PROFILES:
+        chat = DEFAULT_MODEL_NAME
+    else:
+        choice = resolve_chat()
+        chat = choice.model_id
+        if choice.user_set and not _model_ids_match(chat, DEFAULT_MODEL_NAME):
+            ids = [m for m in ids if not _model_ids_match(m, DEFAULT_MODEL_NAME)]
     if chat not in ids:
         ids.append(chat)
     return ids
+
+
+def skipped_gemma(profile: str, model_ids) -> bool:
+    """Whether *profile* lists Gemma but *model_ids* left it to download on use."""
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    return DEFAULT_MODEL_NAME in INIT_PROFILES[profile]["models"] and (
+        DEFAULT_MODEL_NAME not in model_ids
+    )
 
 
 def configured_server_too_old(health: object, profile: str, url: str) -> Optional[str]:
@@ -610,7 +627,7 @@ def check_setup_status(
             model_ids,
             lambda: resolve_init_chat_model(
                 client, reset_corrupt=False, enforce_fit=False
-            ).model_id,
+            ),
         )
 
     if skip_chat_model:
@@ -1488,7 +1505,28 @@ class InitCommand:
         self._print_success(
             f"Lemonade Server v{status.version} running on port {status.port}"
         )
+        self._hand_server_to_daemon()
         return True
+
+    def _hand_server_to_daemon(self) -> None:
+        """Make the GAIA daemon the owner of the server init just started.
+
+        The daemon then stops it with ``gaia daemon stop`` or after the idle
+        timeout, instead of it running until the next reboot. Init registers as
+        a client so the idle timeout cannot fire during a long model download.
+        """
+        from gaia.daemon import client as daemon_client
+        from gaia.daemon.errors import DaemonError
+        from gaia.llm.lemonade_service import hold_lemonade_open
+
+        try:
+            daemon_client.ensure_lemonade()
+            hold_lemonade_open("cli", "gaia init")
+        except DaemonError as e:
+            self._print_warning(
+                "The GAIA daemon could not take over Lemonade Server, so it keeps "
+                f"running until you run `gaia lemonade embedded stop`: {e}"
+            )
 
     def _server_problem_hint(self) -> str:
         """Where to look when the server misbehaves after it started."""
@@ -1631,6 +1669,11 @@ class InitCommand:
         if choice.model_id != DEFAULT_MODEL_NAME:
             config.default_model = choice.model_id
 
+    def _chat_model_choice(self, client) -> "ChatModelChoice":
+        """This machine's :class:`ChatModelChoice`; says why on first resolution."""
+        self._chat_model(client)
+        return self._chat_choice
+
     def _chat_model(self, client) -> str:
         """This machine's chat model; says why on first resolution."""
         if self._chat_choice is None:
@@ -1697,8 +1740,16 @@ class InitCommand:
             # NPU profile uses FLM models exclusively — don't append GGUF model.
             if not self.skip_chat_model:
                 model_ids = with_chat_model(
-                    self.profile, model_ids, lambda: self._chat_model(client)
+                    self.profile, model_ids, lambda: self._chat_model_choice(client)
                 )
+                if skipped_gemma(self.profile, model_ids):
+                    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+                    self._print(
+                        f"   Not downloading {DEFAULT_MODEL_NAME}: your "
+                        f"default_model is {self._chat_choice.model_id}. Questions "
+                        "about images download it (~6 GB) the first time you ask one."
+                    )
 
             # A Claude-backed session never calls the local chat LLM — only
             # RAG/memory/code-index embeddings still need Lemonade (Anthropic has
@@ -1830,15 +1881,27 @@ class InitCommand:
             )
 
             if is_llm and min_ctx:
-                from gaia.llm.lemonade_client import resolve_ctx_size
+                from gaia.llm.lemonade_client import (
+                    PIN_UNLOAD_SETTLE_DEADLINE_S,
+                    resolve_ctx_size,
+                )
 
                 min_ctx = resolve_ctx_size(
                     model=model_id, device="npu" if self.profile == "npu" else "gpu"
                 )
                 # A user's own server keeps its other models and saved options.
                 users_server = bool(self._lemonade_base_url)
+                # Unload just this model so its recipe_options are saved; the
+                # embedder stays loaded instead of being reloaded after it.
+                # Wait until it is gone, or the load's free-memory check would
+                # count its memory as neither free nor its own.
                 if client.check_model_loaded(model_id):
-                    client.unload_model(model_id if users_server else None)
+                    client.unload_model(model_id)
+                    client._wait_model_state(
+                        model_id,
+                        present=False,
+                        deadline_s=PIN_UNLOAD_SETTLE_DEADLINE_S,
+                    )
 
                 client.load_model(
                     model_id,
@@ -1980,11 +2043,17 @@ class InitCommand:
             min_ctx = profile_config.get("min_context_size")
             # Loading an undownloaded model makes Lemonade pull it, unannounced.
             if min_ctx and not self.skip_chat_model and not self.skip_models:
-                from gaia.llm.lemonade_client import resolve_ctx_size
+                from gaia.llm.lemonade_client import (
+                    fit_ctx_to_free_memory,
+                    resolve_ctx_size,
+                )
                 from gaia.llm.lemonade_manager import LemonadeManager
 
-                min_ctx = resolve_ctx_size(
-                    device="npu" if self.profile == "npu" else "gpu"
+                # The window the chat model gets in the memory free right now.
+                min_ctx = fit_ctx_to_free_memory(
+                    self._chat_model(client),
+                    resolve_ctx_size(device="npu" if self.profile == "npu" else "gpu"),
+                    client.base_url,
                 )
 
                 self.console.print()
@@ -2016,7 +2085,7 @@ class InitCommand:
             # Same chat model the download step set up (NPU and SD bring their own).
             if not self.skip_chat_model:
                 model_ids = with_chat_model(
-                    self.profile, model_ids, lambda: self._chat_model(client)
+                    self.profile, model_ids, lambda: self._chat_model_choice(client)
                 )
 
             if self.skip_chat_model:

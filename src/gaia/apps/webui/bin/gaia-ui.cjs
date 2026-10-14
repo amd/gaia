@@ -162,6 +162,9 @@ function startBackend(gaiaBin, port, exit = process.exit) {
     ],
     {
       stdio: ["ignore", "pipe", "pipe"],
+      // GAIA_APP_PID: GAIA's daemon unloads its models once this launcher
+      // exits and no other GAIA client is using them.
+      env: { ...process.env, GAIA_APP_PID: String(process.pid) },
       detached: false,
     }
   );

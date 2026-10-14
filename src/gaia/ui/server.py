@@ -201,12 +201,16 @@ def start_model_server_owner() -> threading.Thread:
 
     What the CLI does for its front-ends; a library ``create_app`` must not, so
     only the runners that serve the UI call this. Off the main thread so the
-    page loads while the daemon starts.
+    page loads while the daemon starts. Registers the UI as an app, so closing
+    it unloads GAIA's models when no other GAIA client is using them.
     """
     from gaia.llm.lemonade_service import ensure_daemon_owns_lemonade
 
     thread = threading.Thread(
-        target=ensure_daemon_owns_lemonade, name="gaia-daemon-start", daemon=True
+        target=ensure_daemon_owns_lemonade,
+        kwargs={"kind": "app", "name": "agent-ui"},
+        name="gaia-daemon-start",
+        daemon=True,
     )
     thread.start()
     return thread
@@ -391,6 +395,12 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             )
             from gaia.llm.lemonade_manager import LemonadeManager
             from gaia.ui._chat_helpers import model_load_lock
+            from gaia.ui.warmup import preload_skip_reason
+
+            low_memory = preload_skip_reason()
+            if low_memory:
+                logger.info("Model preload skipped: %s", low_memory)
+                return
 
             base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
             _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))

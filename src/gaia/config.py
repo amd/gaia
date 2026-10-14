@@ -135,6 +135,15 @@ class GaiaConfig:
         lemonade_base_url: The user's Lemonade Server, for ``external`` mode.
         lemonade_api_key_stored: Its API key is in the OS credential store.
             The key itself is never written here.
+        lemonade_idle_timeout_minutes: Stop GAIA's own Lemonade Server once no
+            GAIA app or command has used it for this many minutes, so its
+            memory goes back to the system. 0 keeps it running until
+            ``gaia daemon stop``. Never applies to a server
+            ``LEMONADE_BASE_URL`` names.
+        llamacpp_backend: The llama.cpp backend (``vulkan``, ``rocm``, ``metal``
+            or ``cpu``) GAIA asks Lemonade for when it loads a local chat
+            model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
+            Takes effect on the next load; the embedding model keeps its own.
     """
 
     profile: str = "chat"
@@ -146,6 +155,8 @@ class GaiaConfig:
     lemonade_mode: Optional[str] = None
     lemonade_base_url: Optional[str] = None
     lemonade_api_key_stored: bool = False
+    lemonade_idle_timeout_minutes: int = 15
+    llamacpp_backend: Optional[str] = None
 
     #: Strings accepted for a boolean field, and what each means. Anything
     #: else raises — "false" silently meaning True is the exact accident this
@@ -168,6 +179,12 @@ class GaiaConfig:
         return declared is bool or declared == "bool"
 
     @classmethod
+    def _is_int_field(cls, key: str) -> bool:
+        """True when *key* is declared ``int``."""
+        declared = {f.name: f.type for f in fields(cls)}.get(key)
+        return declared is int or declared == "int"
+
+    @classmethod
     def _coerce(cls, key: str, value: Any) -> Any:
         """Convert a raw value to the type the field declares.
 
@@ -179,6 +196,8 @@ class GaiaConfig:
             return cls._coerce_lemonade_mode(value)
         if key == "lemonade_base_url":
             return cls._coerce_lemonade_url(value)
+        if cls._is_int_field(key):
+            return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
             return value
         word = str(value).strip().lower()
@@ -217,6 +236,44 @@ class GaiaConfig:
             return normalize_external_url(str(value))
         except LemonadeChoiceError as e:
             raise GaiaConfigError(f"lemonade_base_url: {e}") from e
+
+    @staticmethod
+    def _whole_number(key: str, value: Any) -> int:
+        """*value* as a non-negative int, or a GaiaConfigError naming *key*."""
+        if isinstance(value, bool):
+            number = None
+        elif isinstance(value, int):
+            number = value
+        else:
+            try:
+                number = int(str(value).strip())
+            except ValueError:
+                number = None
+        if number is None or number < 0:
+            raise GaiaConfigError(
+                f"Config key '{key}' takes a whole number of 0 or more, but got "
+                f"{value!r}."
+            )
+        return number
+
+    #: Values ``llamacpp_backend`` accepts; ``auto`` (or empty) is stored as None.
+    LLAMACPP_BACKEND_CHOICES = ("auto", "vulkan", "rocm", "metal", "cpu")
+
+    @classmethod
+    def _check_llamacpp_backend(cls, value: Any, where: str) -> Optional[str]:
+        """Normalise a ``llamacpp_backend`` value, raising on anything else."""
+        if value is None:
+            return None
+        word = str(value).strip().lower()
+        if word in ("", "auto"):
+            return None
+        if word not in cls.LLAMACPP_BACKEND_CHOICES:
+            raise GaiaConfigError(
+                f"{where}: 'llamacpp_backend' must be one of "
+                f"{', '.join(cls.LLAMACPP_BACKEND_CHOICES)}, but it is {value!r}. "
+                "Run `gaia config set llamacpp_backend auto` to let Lemonade choose."
+            )
+        return word
 
     @classmethod
     def field_names(cls) -> List[str]:
@@ -285,7 +342,19 @@ class GaiaConfig:
                 f'or "external", but it is {mode!r}. Fix or delete that key in '
                 "the file, then retry."
             )
+            if key in known and cls._is_int_field(key):
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    raise GaiaConfigError(
+                        f"GAIA config at {config_file}: '{key}' must be a whole "
+                        f"number of 0 or more (unquoted), but it is {value!r}. "
+                        "Fix it by hand, or delete the key to go back to the "
+                        "default."
+                    )
         kwargs = {k: v for k, v in data.items() if k in known}
+        if "llamacpp_backend" in kwargs:
+            kwargs["llamacpp_backend"] = cls._check_llamacpp_backend(
+                kwargs["llamacpp_backend"], f"GAIA config at {config_file}"
+            )
         return cls(**kwargs)
 
     def save(self, path: Optional[Path] = None) -> None:
@@ -300,6 +369,28 @@ class GaiaConfig:
             encoding="utf-8",
         )
         log.info(f"Saved GAIA config to {config_file}")
+
+    @classmethod
+    def save_key(
+        cls, key: str, value: Any, path: Optional[Path] = None
+    ) -> "GaiaConfig":
+        """Set one key in the config file, keeping every other key in it.
+
+        Unlike :meth:`save`, keys this class does not declare (written by a
+        newer GAIA or by the TUI) survive. Returns the reloaded config.
+        """
+        config = cls.load(path)
+        config.set(key, value)
+        config_file = cls.config_path(path)
+        try:
+            doc = json.loads(config_file.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            doc = {}
+        doc[key] = getattr(config, key)
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        log.info(f"Saved {key} to GAIA config at {config_file}")
+        return config
 
     def get(self, key: str) -> Any:
         """Return the value of a config field, raising on an unknown key."""
@@ -317,6 +408,9 @@ class GaiaConfig:
                 f"Unknown config key '{key}'. "
                 f"Valid keys: {', '.join(self.field_names())}."
             )
+        if key == "llamacpp_backend":
+            setattr(self, key, self._check_llamacpp_backend(value, "gaia config"))
+            return
         setattr(self, key, self._coerce(key, value))
 
     def resolve_model(

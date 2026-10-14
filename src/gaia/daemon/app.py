@@ -86,6 +86,7 @@ def create_app(
     clock=None,
     lemonade=None,
     lemonade_owner=None,
+    lemonade_clients=None,
 ):
     """Build the FastAPI app bound to this daemon's identity.
 
@@ -123,6 +124,10 @@ def create_app(
     *lemonade_owner* (a :class:`gaia.daemon.lemonade.EmbeddedLemonadeOwner`)
     mounts ``POST /daemon/v1/lemonade/ensure``, which starts GAIA's embedded
     Lemonade Server if it is stopped and returns where it listens.
+
+    *lemonade_clients* (a :class:`gaia.daemon.lemonade_clients.LemonadeClients`,
+    given with *lemonade_owner*) mounts ``/daemon/v1/lemonade/clients``, where
+    front ends register while they use GAIA's Lemonade and release on exit.
     """
     from fastapi import Depends, FastAPI, HTTPException
 
@@ -250,6 +255,13 @@ def create_app(
             except (LemonadeChoiceError, GaiaConfigError) as e:
                 raise HTTPException(status_code=409, detail=str(e)) from e
             return {**target, "api_key": key}
+
+        if lemonade_clients is not None:
+            from gaia.daemon.lemonade_routes import build_clients_router
+
+            app.include_router(
+                build_clients_router(token, lemonade_clients, lemonade_owner)
+            )
 
     # The Go TUI cannot reach the Python credential store, and the two keyring
     # libraries do not interoperate, so it persists a gateway token through
