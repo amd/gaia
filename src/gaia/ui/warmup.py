@@ -156,7 +156,8 @@ def _warm_new_chat_prefix(db) -> Optional[Dict[str, Any]]:
 
     Returns None when there is nothing to warm locally: a cloud model, a model
     not downloaded yet (loading it would start a download nobody asked for),
-    no flagship registered, or a PC small enough to load on demand.
+    no flagship registered, a flagship that runs in its daemon sidecar, or a
+    PC small enough to load on demand.
     """
     from gaia.llm.lemonade_client import LemonadeClient
     from gaia.ui import _chat_helpers as chat
@@ -172,6 +173,13 @@ def _warm_new_chat_prefix(db) -> Optional[Dict[str, Any]]:
     registry = chat.get_agent_registry()
     if registry is None or registry.get(NEW_CHAT_AGENT) is None:
         logger.info("Warm-up skipped: the %s agent is not registered", NEW_CHAT_AGENT)
+        return None
+    if chat._should_relay_to_sidecar(NEW_CHAT_AGENT, registry):
+        # Chat relays to the sidecar, which cannot be built here and warms its
+        # own prompt when the daemon starts it.
+        logger.info(
+            "Warm-up skipped: the %s agent runs in its daemon sidecar", NEW_CHAT_AGENT
+        )
         return None
     client = LemonadeClient(verbose=False)
 
