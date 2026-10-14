@@ -242,8 +242,7 @@
     @apply overflow-hidden rounded-g-panel border border-g-border bg-g-code-bg;
   }
   /* Window chrome strip above a terminal / code panel. The divider sits between
-     two --g-code-bg areas, so it is drawn from the code palette — the themed
-     --g-border is a light-on-dark/dark-on-light value and vanishes on one of them. */
+     two --g-code-bg areas, so it is drawn from the code palette, not --g-border. */
   .g-code-chrome {
     @apply flex items-center gap-2 border-b px-3.5 py-2.5;
     border-bottom-color: rgb(var(--g-code-text) / 0.14);
