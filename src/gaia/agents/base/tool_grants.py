@@ -40,7 +40,7 @@ import posixpath
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from gaia.agents.base.call_risk import DESTRUCTIVE, shell_command_risk
+from gaia.agents.base.call_risk import DESTRUCTIVE, RISK_NOTE_ARG, shell_command_risk
 from gaia.agents.base.command_facts import (
     PYTHON_BINARIES,
     binary_name,
@@ -192,7 +192,7 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
     ``None`` means the UI must not offer "always" for this call.
     """
     args = tool_args if isinstance(tool_args, dict) else {}
-    if tool_name in _UNGRANTABLE_TOOLS:
+    if tool_name in _UNGRANTABLE_TOOLS or args.get(RISK_NOTE_ARG):
         return None
     if tool_name in _SHELL_TOOLS:
         return _shell_scope(tool_name, args)
@@ -322,6 +322,7 @@ __all__ = [
     "GrantScope",
     "PATH_ACCESS_PROMPT_TOOL",
     "PATH_TOOLS",
+    "RISK_NOTE_ARG",
     "grant_scope",
     "path_argument",
 ]

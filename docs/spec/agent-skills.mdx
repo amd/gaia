@@ -418,8 +418,10 @@ user's question.
 A CLI granted through `shell:execute:<binary>` is not refused before its skill
 is loaded: each call goes to the user's approval prompt instead. The grant is
 pre-approval — loading the skill lets the policy's reads run without a prompt.
-A call the policy refuses outright (`git push`, `gh auth token`) stays refused
-either way. With nobody to answer the prompt, the call is refused.
+A call outside the policy (`git push`, `gh auth token`) is not covered by any
+grant: it is shown verbatim with a risk note for a one-time approval, with or
+without the skill loaded, and one that deletes or discards work stays refused.
+With nobody to answer the prompt, the call is refused.
 
 Tunable: `GAIA_SKILL_DISCOVERY` (`0` hides the list).
 

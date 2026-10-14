@@ -539,9 +539,33 @@ A command GAIA doesn't run unasked — `python script.py`, `git commit`, `npm te
 with no skill loaded for it — gets this prompt rather than an error. `a` covers
 that one command family (`git commit`, `python (any script)`) for the session and
 nothing wider. If you deny it, the agent is told not to get the same result
-another way, and stops to explain. A few commands are refused even with your
-approval, such as `git push` or Python code passed with `-c`; the agent says what
-it would have run so you can run it yourself.
+another way, and stops to explain.
+
+A command GAIA's own checks don't cover — `git push`, `git fetch`, Python passed
+with `-c`, a PowerShell command it can't read, a line with `$(…)`, a path outside
+the project — is asked about too, with three differences. The prompt shows the
+exact line the shell will run, unshortened, and the full folder it runs in. A
+risk line says what it can do: "Sends your commits to the remote repository.",
+"Reads or changes files outside this project: …", or "Can run any code with your
+permissions — GAIA can't inspect this command." And only `y` and `n` are offered:
+approving runs that exact line once, and the next one asks again.
+
+```
+ WRITE  Run this command?
+ git push
+ in ~/work/proj
+ Sends your commits to the remote repository.
+ y once · n/esc deny
+```
+
+A few stay refused with no prompt: a PowerShell `-EncodedCommand` or a line
+with invisible or line-break characters (the prompt couldn't show what runs), a
+line whose quoting GAIA can't split the way the shell would, a line its checks
+don't cover that also deletes or discards work (`git push --force`, `git reset
+--hard`, `git clean`, `rm` outside the project), and folders no approval can
+open (credential folders, the system temp folder, a whole drive or your home
+folder). The agent
+says what it would have run, so you can run it yourself.
 
 | Key | What it does |
 |---|---|
@@ -570,10 +594,11 @@ reaches it in a session, GAIA explains what it does and stays in `ask`; type
 straight to it. Turning it off is never gated. While it is on, a banner says so
 on every frame.
 
-Commands GAIA refuses outright — printing a credential (`gh auth token`), an
-encoded PowerShell command, a `git` option that hides a script — stay refused in
-`ask` and `accept edits`, and no `a` answer unlocks them. Only full access lifts
-the shell guardrails; see [Full access](/reference/cli#full-access).
+Commands GAIA's checks don't cover — printing a credential (`gh auth token`), a
+`git` option that hides a script — ask once in `ask` and `accept edits`, showing
+the exact line, and no `a` answer covers them. An encoded PowerShell command, or
+one that deletes or discards work on such a line, stays refused. Only full
+access lifts the shell guardrails; see [Full access](/reference/cli#full-access).
 
 A session launched with `--use-claude` skips first-boot setup entirely and does not
 start the local server — that flag exists to avoid the local backend, so running an
@@ -675,6 +700,9 @@ this command?`, `Write this file?`, `Install this skill?`); any other tool reads
 error — the agent is told you said no, doesn't try another way to do the same
 thing, and carries on with whatever doesn't need it. When nobody can answer — a
 scheduled or background run, or a prompt that expires — the command doesn't run.
+A command GAIA's own checks don't cover offers no `a`: it shows the exact line
+and a risk line, and runs once if you say yes (see
+[When the agent asks first](#when-the-agent-asks-first)).
 
 The prompt names the tool *and its arguments*, because the argument is usually
 the part that matters. An "always allow" answer, where offered, is scoped to

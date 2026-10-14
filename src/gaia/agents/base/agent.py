@@ -40,6 +40,7 @@ from typing import (
     Union,
 )
 
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.completion import CompletionEvidence, incomplete_answer
 from gaia.agents.base.console import (
     AgentConsole,
@@ -5529,17 +5530,22 @@ Do NOT wrap conversational replies in JSON.
         # Consoles that cannot reach a human deny rather than answer for them
         # (#2210): AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
         # frontend modal, everything else denies with an actionable message.
-        if not asked_and_allowed and self._tool_requires_confirmation(
+        # A host may add what the arguments leave out, such as where a shell
+        # call runs. Display only: the tool runs with tool_args.
+        shows = getattr(self, "confirmation_args_for_call", None)
+        prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
+        # A one-time call is approved on its own prompt, which carries its
+        # risk note — never through the reroute question above.
+        one_time = isinstance(prompt_args, dict) and bool(
+            prompt_args.get(RISK_NOTE_ARG)
+        )
+        if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
             # Blocking on a human is not tool cost. Timed separately so a turn
             # where approval took five minutes does not report the tool as
             # having taken five minutes.
             _confirm_started = time.perf_counter()
-            # A host may add what the arguments leave out, such as where a
-            # shell call runs. Display only: the tool runs with tool_args.
-            shows = getattr(self, "confirmation_args_for_call", None)
-            prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
             try:
                 approved = self.console.confirm_tool_execution(tool_name, prompt_args)
             finally:
@@ -5561,6 +5567,10 @@ Do NOT wrap conversational replies in JSON.
                     if ledger is not None:
                         ledger.record(tool_name, tool_args, denied_error)
                 return denied
+            # A call approved once runs against this record, and only once.
+            noted = getattr(self, "note_confirmed_call", None)
+            if callable(noted):
+                noted(tool_name, tool_args)
 
         # Dynamic tool loader (#1449): record use for LRU recency. The name is
         # fully resolved and confirmed in the registry here. Execution stays on

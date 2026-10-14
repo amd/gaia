@@ -290,7 +290,7 @@ def test_a_value_outside_the_allowed_paths_is_refused(tmp_path):
 
     class _Validator:
         @staticmethod
-        def is_path_allowed(path):
+        def is_path_allowed(path, prompt_user=True):
             return str(path).startswith(str(tmp_path))
 
     from gaia.agents.base.tools import get_tool_metadata

@@ -142,3 +142,26 @@ def test_other_tools_keep_the_labelled_summary():
         {"type": "permission_request", "tool": "send_now", "args": {"to": "a@b.c"}}
     )
     assert event["summary"].startswith("Run 'send_now'")
+
+
+def test_a_one_time_command_is_shown_verbatim_with_its_folder_and_note():
+    """GAIA's checks did not vouch for it, so nothing in it is shortened."""
+    command = f"cd {FAR} &&  echo " + "x" * 600 + " | sort"
+    translator = CanonicalTranslator(run_id="r1", agent_id="gaia", debug=False)
+    [event] = translator.translate(
+        {
+            "type": "permission_request",
+            "tool": "run_shell_command",
+            "args": {
+                "command": command,
+                "working_directory": WS,
+                "_risk_note": "Can run any code with your permissions.",
+            },
+            "risk": "execute",
+        }
+    )
+    shown, folder, note = event["summary"].split("\n")
+    assert shown == command
+    assert folder == f"in {WS}"
+    assert note == "Can run any code with your permissions."
+    assert "always_scope" not in event

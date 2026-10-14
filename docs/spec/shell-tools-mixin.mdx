@@ -29,8 +29,9 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 - `run_shell_command` is confirmation-gated, so interactively every call is shown to the user
 - Read-only list (`ALLOWED_COMMANDS`): what a blanket pre-approval (`GAIA_AUTO_APPROVE_TOOLS`, `auto_approve_gated_tools`) may run
 - Anything else is `TIER_CONFIRM`: it runs once the user approves it (`git commit`, `npm test`, `rm notes.txt`), and is refused under a blanket pre-approval unless the console's `full_access` is on
-- `TIER_REFUSE` for what a yes/no can't describe honestly (`gh auth token`, encoded PowerShell, `git -c`), however the program is spelled, and for shapes the runner can't execute (stray operators, broken quoting)
-- Every command on a line validated before any of it runs, so one `TIER_REFUSE` segment stops the whole line
+- `TIER_CONFIRM_ONCE` for what GAIA's own checks don't cover (`git push`, `git -c`, `python -c`, uninspectable PowerShell, shell operators, a path outside the allowed folders): the prompt shows the exact line and its full folder with a risk note, offers no "always", and an approval runs that line once through the shell. It is refused under a blanket pre-approval, and `wait_for_condition` never polls one
+- `TIER_REFUSE` for text a prompt can't show honestly (encoded PowerShell, invisible or line-break characters, broken quoting), for anything that deletes or discards work on a line GAIA can't fully check (`git push --force`, `git reset --hard`, also inside `$(…)` or behind a `-c`), and for folders no approval may open
+- Every command on a line validated before any of it runs, and the strictest segment decides the line: one `TIER_REFUSE` segment stops it, one `TIER_CONFIRM_ONCE` segment makes the whole line a one-time approval
 - Path validation for all file-like arguments
 - Git subcommand filtering (write subcommands are `TIER_CONFIRM`)
 - Rate limits prevent DOS attacks
@@ -490,12 +491,12 @@ Global-flag classes (`_git_policy_argv` in `shell_tools.py`):
 | `GIT_GLOBAL_FLAGS_WITH_VALUE` | `-C`, `--git-dir`, `--work-tree`, `--namespace` | Skipped with their value (`--opt=v` or `--opt v`); the paths then get the same allowed-paths check as `working_directory` |
 | `GIT_GLOBAL_FLAGS_NO_VALUE` | `-P`, `--no-pager`, `--bare`, `--literal-pathspecs`, … | Skipped |
 | `GIT_TERMINAL_FLAGS` | `--version`, `--help`, `-h`, `--man-path`, … | Are the whole command; nothing follows |
-| `GIT_FORBIDDEN_GLOBAL_FLAGS` | `-c`, `--config-env`, `--exec-path` | Always refused — each hands git arbitrary config or a different binary to execute, no matter how read-only the subcommand behind it looks |
+| `GIT_FORBIDDEN_GLOBAL_FLAGS` | `-c`, `--config-env`, `--exec-path` | Never stepped over — each hands git arbitrary config or a different binary to execute, no matter how read-only the subcommand behind it looks — so the call is a one-time approval (`TIER_CONFIRM_ONCE`), and refused if it also deletes or discards work |
 
 Matching on the subcommand alone, as the old allowlist did, let
 `git branch -D main` and `git remote add` through unprompted; the policy table
 reads the flags too. `git config` is outside the read-only floor for the same
-reason `-c` is refused: it writes values (`core.pager`, `alias.*`) that execute
+reason `-c` is never stepped over: it writes values (`core.pager`, `alias.*`) that execute
 commands.
 
 ### Path Traversal Prevention

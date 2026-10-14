@@ -25,12 +25,16 @@ from unittest.mock import patch
 import pytest
 
 from gaia.agents.base.agent import DECLINED_HINT, Agent
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.denied_effects import DeniedEffects
 from gaia.agents.tools.shell_tools import (
+    NOTE_PUSH,
+    NOTE_UNINSPECTABLE,
     TIER_CONFIRM,
     TIER_REFUSE,
     ShellToolsMixin,
+    outside_note,
 )
 from gaia.skills.binaries import BinaryGrants
 from gaia.ui.sse_handler import SSEOutputHandler
@@ -384,28 +388,232 @@ def test_an_answer_to_a_different_prompt_is_not_consent(repo):
 
 
 # ---------------------------------------------------------------------------
-# Hard refusals stay hard: refused before the prompt, never asked about
+# What GAIA's checks would refuse is asked about once, never "always"
+# ---------------------------------------------------------------------------
+
+
+def _python() -> str:
+    for name in ("python", "python3"):
+        if shutil.which(name):
+            return name
+    pytest.skip("needs a python on PATH")
+
+
+ONCE_CASES = [
+    # (command, the risk note the prompt must carry)
+    ("git push", NOTE_PUSH),
+    ("git fetch origin", NOTE_UNINSPECTABLE),
+    ("git worktree add wt", NOTE_UNINSPECTABLE),
+    ("git -c core.pager=cat log", NOTE_UNINSPECTABLE),
+    ('python -c "print(1)"', NOTE_UNINSPECTABLE),
+    ("python ../outside.py", outside_note("../outside.py")),
+    ("powershell -Command \"[IO.File]::Exists('x')\"", NOTE_UNINSPECTABLE),
+    ("echo $(whoami)", NOTE_UNINSPECTABLE),
+]
+
+
+@pytest.mark.parametrize("command,note", ONCE_CASES)
+def test_a_policy_refusal_becomes_a_one_time_prompt(repo, command, note):
+    if command.startswith("python "):
+        # A missing interpreter is refused as not installed, before any policy.
+        command = _python() + command[len("python") :]
+    handler = SSEOutputHandler()
+    agent = _agent(handler)
+
+    result, events = _drive(
+        agent,
+        handler,
+        _shell(command, repo),
+        on_prompt=_answer(handler, approved=False),
+    )
+
+    [request] = _prompts(events)
+    assert request["args"]["command"] == command
+    assert request["args"][RISK_NOTE_ARG] == note
+    assert os.path.samefile(request["args"]["working_directory"], repo)
+    # Approved once or not at all: "always" is never on offer.
+    assert "always_scope" not in request
+    assert request["risk"] in ("write", "execute", "destructive")
+
+    [wire] = CanonicalTranslator(run_id="r", agent_id="gaia").translate(request)
+    assert wire["type"] == "needs_confirmation"
+    assert "always_scope" not in wire
+    shown, folder, risk_line = wire["summary"].split("\n")
+    assert shown == command  # byte for byte what the shell receives
+    assert folder == f"in {request['args']['working_directory']}"
+    assert risk_line == note
+
+    assert result["status"] == "denied"
+    assert result["hint"] == DECLINED_HINT
+
+
+def test_an_outside_path_is_named_and_approved_before_the_run(repo, monkeypatch):
+    """The prompt names the outside path, and the run does not refuse it after."""
+    from gaia.security import PathValidator
+
+    monkeypatch.setattr("gaia.security._system_temp_roots", lambda: set())
+    project = repo / "project"
+    project.mkdir()
+    (repo / "notes.txt").write_text("outside\n")
+    handler = SSEOutputHandler()
+    agent = _agent(handler)
+    agent.path_validator = PathValidator(allowed_paths=[str(project)])
+    target = str((repo / "notes.txt").resolve())
+
+    result, events = _drive(
+        agent,
+        handler,
+        {"command": f'cat "{target}"', "working_directory": str(project)},
+        on_prompt=_answer(handler),
+    )
+
+    [request] = _prompts(events)
+    assert request["args"][RISK_NOTE_ARG] == outside_note(target)
+    assert "always_scope" not in request
+    assert result["status"] == "success", result
+    assert "outside" in result["stdout"]
+    assert result["approved_once"] is True
+
+
+def test_approve_once_runs_the_exact_line_once(repo):
+    python = _python()
+    command = f"{python} -c \"open('ran.txt', 'a').write('x')\""
+    handler = SSEOutputHandler()
+    agent = _agent(handler)
+
+    first, first_events = _drive(
+        agent, handler, _shell(command, repo), on_prompt=_answer(handler)
+    )
+    second, second_events = _drive(
+        agent,
+        handler,
+        _shell(command, repo),
+        on_prompt=_answer(handler, approved=False),
+    )
+
+    assert first["status"] == "success", first
+    assert first["approved_once"] is True
+    assert first["steps"] == [{"command": command, "return_code": 0}]
+    assert len(_prompts(first_events)) == 1
+    # The approval was spent: the same line is asked about again.
+    assert len(_prompts(second_events)) == 1
+    assert second["status"] == "denied"
+    assert (repo / "ran.txt").read_text() == "x"
+
+
+def test_an_always_answer_to_a_one_time_prompt_grants_nothing(repo):
+    """A client that sends "always" anyway gets one run, not a standing grant."""
+    python = _python()
+    command = f"{python} -c \"open('ran.txt', 'a').write('x')\""
+    handler = SSEOutputHandler()
+    agent = _agent(handler)
+
+    _drive(
+        agent, handler, _shell(command, repo), on_prompt=_answer(handler, always=True)
+    )
+    again, events = _drive(
+        agent,
+        handler,
+        _shell(command, repo),
+        on_prompt=_answer(handler, approved=False),
+    )
+
+    assert len(_prompts(events)) == 1
+    assert again["status"] == "denied"
+    assert handler.session_grants() == set()
+    assert (repo / "ran.txt").read_text() == "x"
+
+
+def test_a_one_time_line_fails_closed_when_nobody_can_answer(repo, monkeypatch):
+    python = _python()
+    command = f"{python} -c \"open('ran.txt', 'a').write('x')\""
+
+    silent = _agent(SilentConsole())
+    assert (
+        silent._execute_tool("run_shell_command", _shell(command, repo))["status"]
+        == "denied"
+    )
+
+    background = SSEOutputHandler(background_mode=True)
+    result, events = _drive(_agent(background), background, _shell(command, repo))
+    assert result["status"] == "denied" and _prompts(events) == []
+
+    timed = SSEOutputHandler()
+    timed.confirm_timeout_seconds = 0.3
+    result, _ = _drive(_agent(timed), timed, _shell(command, repo))
+    assert result["timed_out"] is True
+
+    monkeypatch.setattr(
+        "gaia.agents.base.console.auto_approve_env_enabled", lambda: True
+    )
+    auto = SSEOutputHandler()
+    result, events = _drive(_agent(auto), auto, _shell(command, repo))
+    assert result["status"] == "error" and _prompts(events) == []
+    assert "needs your approval" in result["error"]
+
+    assert not (repo / "ran.txt").exists()
+
+
+def test_a_direct_call_never_runs_a_one_time_line_unapproved(repo):
+    """Reaching the tool without the prompt — no console, or no approval — refuses."""
+    from gaia.agents.base.tools import get_tool_metadata
+
+    handler = SSEOutputHandler()
+    agent = _agent(handler)
+    run = get_tool_metadata("run_shell_command")["function"]
+
+    result = run(command="git push", working_directory=str(repo))
+
+    assert result["status"] == "error"
+    assert result["executed"] is False
+    assert "needs your approval" in result["error"]
+
+
+def test_a_one_time_line_cannot_be_polled(repo):
+    handler = SSEOutputHandler()
+    agent = _agent(handler)
+
+    result = agent._execute_tool(
+        "wait_for_condition", {"command": "git fetch origin", "timeout": 5}
+    )
+
+    assert result["status"] == "error"
+    assert result["executed"] is False
+    assert "can't be polled" in result["error"]
+    assert handler.event_queue.empty()
+
+
+# ---------------------------------------------------------------------------
+# Hard refusals that stay hard: never asked about
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "command",
     [
-        # The guard cannot inspect what this would run.
+        # What runs could not be shown: an encoded script, malformed quoting.
         "powershell -EncodedCommand ZQBjAGgAbwA=",
-        "powershell -Command \"[IO.File]::Delete('x')\"",
-        "git -c core.pager=sh log",
-        # Code in no file, or a path outside the project.
-        'python -c "print(1)"',
-        "python ../outside.py",
-        # Refused even under a grant: publishes, or reaches the network.
-        "git push",
-        "git fetch origin",
-        # Operators only a shell could act on.
-        "ls $(whoami)",
+        'echo "unterminated',
+        # Destroys work, so it is never offered.
+        "git push --force",
+        "git reset --hard",
+        "git clean -fd",
+        "git push origin +main",
+        "git push origin :main",
+        "git push -fu origin main",
+        "git push --mirror",
+        "gh repo delete amd/gaia",
+        # Behind an option or inside another command's text, still never offered.
+        "git -c core.pager=cat reset --hard",
+        "echo $(git reset --hard)",
+        "cmd /c 'x & powershell -enc ZQBjAGgAbwA='",
+        # Text that would not read on screen the way it runs.
+        "git fetch origin\u202e",
+        # The strictest segment decides the whole line.
+        "git add a.txt && powershell -EncodedCommand ZQBjAGgAbwA=",
     ],
 )
-def test_inspection_and_danger_refusals_never_prompt(repo, command):
+def test_the_remaining_hard_refusals_never_prompt(repo, command):
     handler = SSEOutputHandler()
     agent = _agent(handler)
 
@@ -415,8 +623,129 @@ def test_inspection_and_danger_refusals_never_prompt(repo, command):
     assert result["status"] == "error"
     assert result["executed"] is False
     assert result.get("tier", TIER_REFUSE) == TIER_REFUSE
-    for jargon in ("SKILL.md", "skill grant"):
-        assert jargon not in result["error"], jargon
+    assert _staged(repo) == {"tracked.txt"}
+
+
+def test_a_delete_outside_the_project_is_never_offered(repo, monkeypatch):
+    from gaia.security import PathValidator
+
+    monkeypatch.setattr("gaia.security._system_temp_roots", lambda: set())
+    project = repo / "project"
+    project.mkdir()
+    (repo / "sibling").mkdir()
+    handler = SSEOutputHandler()
+    agent = _agent(handler)
+    agent.path_validator = PathValidator(allowed_paths=[str(project)])
+
+    result, events = _drive(
+        agent,
+        handler,
+        {"command": "rm -rf ../sibling", "working_directory": str(project)},
+    )
+
+    assert _prompts(events) == []
+    assert result["tier"] == TIER_REFUSE
+    assert (repo / "sibling").is_dir()
+
+
+def test_a_granted_remote_cli_still_cannot_reach_a_credential_folder(repo):
+    """A grant exempts a remote CLI's operands from the path scan; a one-time
+    line runs as raw shell text, so it is scanned anyway."""
+    from gaia.security import SECRET_DIRECTORIES, PathValidator
+
+    handler = SSEOutputHandler()
+    agent = _agent(handler, "gh")
+    agent.path_validator = PathValidator(allowed_paths=[str(repo)])
+    secret = os.path.join(sorted(SECRET_DIRECTORIES)[0], "id_rsa")
+
+    result, events = _drive(
+        agent,
+        handler,
+        _shell(f'gh issue create --title x --body-file "{secret}"', repo),
+    )
+
+    assert _prompts(events) == []
+    assert result["tier"] == TIER_REFUSE
+
+
+def test_allow_once_on_the_reroute_question_still_shows_the_one_time_prompt(repo):
+    """The reroute question carries no risk note, so a one-time line is put to
+    its own prompt as well — and runs only if that is approved."""
+    handler = SSEOutputHandler()
+    agent = _agent(handler)
+    _drive(
+        agent,
+        handler,
+        _shell("git fetch origin", repo),
+        on_prompt=_answer(handler, approved=False),
+    )
+
+    def allow(event):
+        handler.resolve_user_input(event["request_id"], Agent.ALLOW_DENIED_EFFECT)
+
+    result, events = _drive(
+        agent,
+        handler,
+        _shell("git fetch origin main", repo),
+        on_prompt=_answer(handler, approved=False),
+        on_question=allow,
+    )
+
+    [request] = _prompts(events)
+    assert request["args"][RISK_NOTE_ARG] == NOTE_UNINSPECTABLE
+    assert result["status"] == "denied"
+
+
+def test_an_approval_left_by_a_failed_call_is_never_reused(repo):
+    """An approval is spent by the call it was given for, even one that never
+    reached the shell; the next call asks again."""
+    python = _python()
+    command = f"{python} -c \"open('ran.txt', 'a').write('x')\""
+    handler = SSEOutputHandler()
+    agent = _agent(handler)
+
+    failed, _ = _drive(
+        agent,
+        handler,
+        {**_shell(command, repo), "timeout": "soon"},
+        on_prompt=_answer(handler),
+    )
+    again, events = _drive(
+        agent,
+        handler,
+        _shell(command, repo),
+        on_prompt=_answer(handler, approved=False),
+    )
+
+    assert failed["status"] == "error"
+    assert len(_prompts(events)) == 1
+    assert again["status"] == "denied"
+    assert not (repo / "ran.txt").exists()
+
+
+def test_the_terminal_prompt_shows_a_long_one_time_line_whole():
+    from gaia.agents.base.console import format_confirmation_args
+
+    command = "echo " + "x" * 2000
+    shown = format_confirmation_args({"command": command, RISK_NOTE_ARG: "note"})
+    assert command in shown
+    # An ordinary call still gets the head+tail shortening.
+    assert "chars]" in format_confirmation_args({"command": command})
+
+
+def test_a_credential_folder_is_never_offered(repo, tmp_path):
+    from gaia.security import SECRET_DIRECTORIES, PathValidator
+
+    handler = SSEOutputHandler()
+    agent = _agent(handler)
+    agent.path_validator = PathValidator(allowed_paths=[str(repo)])
+    secret = os.path.join(sorted(SECRET_DIRECTORIES)[0], "id_rsa")
+
+    result, events = _drive(agent, handler, _shell(f'cat "{secret}"', repo))
+
+    assert _prompts(events) == []
+    assert result["status"] == "error"
+    assert result["tier"] == TIER_REFUSE
 
 
 # ---------------------------------------------------------------------------

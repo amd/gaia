@@ -49,7 +49,7 @@ class _RootValidator:
     def __init__(self, root):
         self.root = str(root)
 
-    def is_path_allowed(self, path: str) -> bool:
+    def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         root = os.path.realpath(self.root)
         real = os.path.realpath(path)
         return real == root or real.startswith(root + os.sep)
@@ -305,8 +305,11 @@ def test_cd_outside_the_allowed_paths_is_refused(tmp_path):
 
     result = _run("cd ../outside && ls", root, host=_Confined(root))
 
+    # Outside the allowed folders is a one-time approval naming the folder;
+    # with nobody here to give it, nothing runs.
     assert result["status"] == "error", result
-    assert "denied" in result["error"].lower()
+    assert "needs your approval" in result["error"]
+    assert str((tmp_path / "outside").resolve()) in result["error"]
     assert result["executed"] is False
 
 
@@ -523,14 +526,25 @@ def test_a_confirm_tier_segment_makes_the_whole_line_one_prompt():
     assert _needs_modal(host, line) is True
 
 
+def test_a_segment_outside_the_policy_makes_the_line_a_one_time_prompt():
+    host = _Gated("gh")
+    line = "gh issue list && gh auth token"
+
+    assert host.policy_refusal_for_call("run_shell_command", {"command": line}) is None
+    error, _ = host._validate_shell_command(line)
+    assert error["tier"] == "confirm_once"
+    assert "auth token" in error["error"]
+
+
 def test_a_refused_segment_is_refused_before_the_prompt():
     host = _Gated("gh")
     error = host.policy_refusal_for_call(
-        "run_shell_command", {"command": "gh issue list && gh auth token"}
+        "run_shell_command",
+        {"command": "gh issue list && powershell -EncodedCommand ZQBjAGgAbwA="},
     )
 
     assert error is not None
-    assert "auth token" in error["error"]
+    assert "EncodedCommand" in error["error"]
 
 
 # ---------------------------------------------------------------------------

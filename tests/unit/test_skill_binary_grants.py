@@ -24,6 +24,7 @@ import pytest
 from gaia.agents.tools.shell_tools import (
     ALLOWED_COMMANDS,
     TIER_CONFIRM,
+    TIER_CONFIRM_ONCE,
     TIER_REFUSE,
     ShellToolsMixin,
     skill_granted_binaries,
@@ -566,16 +567,17 @@ def test_a_missing_grant_asks_the_user_instead_of_naming_a_grant(gh_on_path):
         assert jargon not in error["error"] + error["hint"], jargon
 
 
-def test_a_call_a_grant_would_refuse_too_keeps_its_real_reason(gh_on_path):
-    """A fetch is refused under a git grant as well, so blaming the missing
-    grant sent the model hunting for a skill that could not help (#5086)."""
+def test_a_call_outside_the_policy_is_asked_once_not_blamed_on_a_grant(gh_on_path):
+    """A fetch is outside the git policy with or without a grant, so blaming a
+    missing grant sent the model hunting for a skill that could not help
+    (#5086). The user is asked once instead."""
     error = ShellToolsMixin._validate_command(
         "git", ["git", "fetch", "origin"], "git fetch origin"
     )
     assert error is not None
-    assert error["tier"] == TIER_REFUSE
+    assert error["tier"] == TIER_CONFIRM_ONCE
     assert "'git fetch' is not allowed" in error["error"]
-    assert "even with the user's approval" in error["hint"]
+    assert "exact command once" in error["hint"]
     for jargon in _GRANT_JARGON:
         assert jargon not in error["error"] + error["hint"], jargon
 
@@ -718,7 +720,7 @@ class _Validating(ShellToolsMixin):
 
     class _Validator:
         @staticmethod
-        def is_path_allowed(path: str) -> bool:
+        def is_path_allowed(path: str, prompt_user: bool = True) -> bool:
             return False
 
     path_validator = _Validator()
@@ -737,9 +739,15 @@ def test_the_granted_binary_exemption_does_not_cover_the_rest_of_the_pipeline():
     host._granted_binaries = BinaryGrants()
     host._granted_binaries.grant("gh", skill_name="github-triage")
 
-    result = _run(host, "gh issue list --repo amd/gaia | cat ../../secret.txt")
+    command = "gh issue list --repo amd/gaia | cat ../../secret.txt"
+    # The `cat` segment's path is outside the allowed folders, so the line is
+    # a one-time approval naming it — and unapproved, it never runs.
+    verdict, _ = host._line_verdict(command)
+    assert verdict["tier"] == TIER_CONFIRM_ONCE
+    assert "secret.txt" in verdict["risk_note"]
+    result = _run(host, command)
     assert result["status"] == "error"
-    assert "Access denied" in result["error"]
+    assert "needs your approval" in result["error"]
 
 
 def test_a_query_string_ampersand_is_not_a_command_separator():
@@ -921,25 +929,33 @@ def _refusal(host, command: str):
 
 
 @pytest.mark.parametrize(
-    "command,expected",
+    "command",
     [
-        # The captured bug: a modal appeared for a command already refused.
-        ("gh auth token", "Allowed auth actions: status"),
-        ("gh issue close 2975", "Allowed issue actions"),
-        ("gh api -X POST repos/amd/gaia/issues", "-X may only be GET"),
-        ("gh alias set x", "is not allowed"),
-        # Chaining is allowed; a REFUSE-tier segment anywhere on the line is
-        # still refused before anyone is asked to approve any of it.
-        ("gh issue list && gh auth token", "Allowed auth actions: status"),
-        ("gh auth token && gh issue list", "Allowed auth actions: status"),
-        ("gh issue list; gh alias set x", "is not allowed"),
-        ("gh issue list 'unterminated", "Invalid command syntax"),
+        "gh auth token",
+        "gh issue close 2975",
+        "gh api -X POST repos/amd/gaia/issues",
+        "gh alias set x",
+        # A segment outside the policy anywhere on the line makes the whole
+        # line a one-time approval of its exact text.
+        "gh issue list && gh auth token",
+        "gh auth token && gh issue list",
+        "gh issue list; gh alias set x",
     ],
 )
-def test_a_call_the_policy_refuses_is_refused_before_any_prompt(command, expected):
-    error = _refusal(_Gated("gh"), command)
-    assert error is not None, f"{command!r} reached the confirmation prompt"
-    assert expected in error["error"]
+def test_a_call_outside_the_policy_is_asked_about_once(command):
+    host = _Gated("gh")
+    assert _refusal(host, command) is None
+    error, _ = host._validate_shell_command(command)
+    assert error["tier"] == TIER_CONFIRM_ONCE
+    assert (
+        host.skill_grant_covers_call("run_shell_command", {"command": command}) is False
+    )
+
+
+def test_a_line_the_runner_cannot_parse_is_refused_before_any_prompt():
+    error = _refusal(_Gated("gh"), "gh issue list 'unterminated")
+    assert error is not None
+    assert "Invalid command syntax" in error["error"]
 
 
 @pytest.mark.parametrize(
@@ -1035,12 +1051,25 @@ class _ExecutingAgent(_Gated):
 def test_the_refused_call_emits_no_confirmation_event():
     """End to end through `_execute_tool`: a refusal, and nothing was asked."""
     agent = _ExecutingAgent("gh")
-    result = agent._execute_tool("run_shell_command", {"command": "gh auth token"})
+    result = agent._execute_tool(
+        "run_shell_command", {"command": "powershell -EncodedCommand ZQBjAGgAbwA="}
+    )
     assert agent.ran == [], "a pre-refused command still reached the tool"
 
     assert result["status"] == "error"
-    assert "Allowed auth actions: status" in result["error"]
+    assert "EncodedCommand" in result["error"]
     assert agent.console.asked == [], "a refused call raised a confirmation prompt"
+
+
+def test_a_call_outside_the_policy_is_asked_with_its_risk_note():
+    agent = _ExecutingAgent("gh")
+    agent._execute_tool("run_shell_command", {"command": "gh auth token"})
+    [(name, shown)] = agent.console.asked
+    assert name == "run_shell_command"
+    assert shown["command"] == "gh auth token"
+    assert shown["_risk_note"] == (
+        "Prints your GitHub sign-in token into the conversation."
+    )
 
 
 def test_a_permitted_ungranted_call_still_reaches_the_prompt():
@@ -1314,24 +1343,20 @@ def test_a_write_is_never_pre_authorized_by_the_grant_alone():
         "gh alias set x",
     ],
 )
-def test_a_refused_invocation_stays_refused_without_a_grant(command):
-    """REFUSE is about what the command does, not who may run it.
-
-    With no grant at all these must still be refused. Gating on the grant
-    first sent them to the confirmation prompt instead — a weaker outcome for
-    an ungranted agent than for a granted one.
-    """
-    error = _refusal(_Gated(), command)
-    assert error is not None, f"{command!r} reached the prompt with no grant"
-    assert error["tier"] == TIER_REFUSE
+def test_a_call_outside_the_policy_gets_the_same_tier_without_a_grant(command):
+    """The tier is about what the command does, not who may run it: with no
+    grant these are the same one-time approval as with one, never the
+    family-wide prompt a missing grant alone earns."""
+    without, _ = _Gated()._validate_shell_command(command)
+    with_grant, _ = _Gated("gh")._validate_shell_command(command)
+    assert without["tier"] == with_grant["tier"] == TIER_CONFIRM_ONCE
 
 
-def test_a_refused_call_says_it_cannot_be_approved():
-    """Fail loudly, and accurately: the model must not retry a REFUSE by asking
-    the user, nor tell them approval is available when it is not."""
-    error = _refusal(_Gated("gh"), "gh auth token")
-    assert error is not None
-    assert "refused outright" in error["hint"]
+def test_a_one_time_call_says_how_it_may_run():
+    """Accurate to the model: approved once by the user, or not at all."""
+    error, _ = _Gated("gh")._validate_shell_command("gh auth token")
+    assert "exact command once" in error["hint"]
+    assert "do not reach the same result another way" in error["hint"]
 
 
 def test_the_always_grant_is_scoped_to_the_command_class_not_the_tool():

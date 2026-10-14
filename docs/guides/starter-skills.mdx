@@ -193,11 +193,12 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
   Reads run without a per-call approval prompt — loading the skill is the consent.
   The useful writes (`gh issue create|comment|edit`, `gh pr comment`,
   `gh label create|edit`) show you the exact command and wait for a yes, a no, or
-  an "always" scoped to that one command class for the session. Escalations are
-  refused by the runtime and never offered as a prompt at all: `gh auth token`
-  prints a credential, `gh alias`/`gh extension` run arbitrary code, and
-  `gh api -X POST` is an unbounded write. Any command outside the grant still
-  asks.
+  an "always" scoped to that one command class for the session. Commands the
+  grant doesn't cover — `gh auth token` prints a credential, `gh alias`/`gh
+  extension` run arbitrary code, `gh api -X POST` is an unbounded write — are
+  never pre-approved: each shows its exact text and a risk line and runs only
+  on a one-time yes, with no "always". Deletes (`gh repo delete`, `gh api -X
+  DELETE`) are refused outright.
 
 ### rss-digest
 

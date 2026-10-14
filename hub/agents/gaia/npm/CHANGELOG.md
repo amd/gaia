@@ -13,10 +13,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   skill grant still skips it for reads. A prompt's `summary` for a write or
   code-running command ends with one plain line on what it can do, and the
   `in <folder>` line also appears when an earlier `cd` moved the session. A
-  call you decline tells the agent not to reach the same result another way.
-  Commands refused even with approval (`git push`, `git fetch`, `python -c`, a
-  path outside the project) now give their real reason, not a missing grant,
+  call you decline tells the agent not to reach the same result another way,
   and a run nobody can answer refuses in one plain sentence.
+- **Commands GAIA's checks don't cover ask once instead of failing.** `git
+  push`, `git fetch`, `python -c`, PowerShell the checks can't read, a line with
+  shell operators, or a path outside the allowed folders used to be refused
+  outright. They now raise a prompt whose `summary` is the exact line the shell
+  will run, its full folder and a risk sentence, with no `always_scope`; an
+  approval runs that line once. Still refused with no prompt: an encoded
+  PowerShell command or invisible characters, a line whose quoting can't be
+  split the way the shell would, such a line that also deletes or discards work
+  (`git push --force`, `git reset --hard`, `rm` outside the project), and
+  folders no approval can open.
 - **The sidecar's start-up warm-up now makes the first question fast.** It
   primed only the agent's own instructions, without the tool list or the rest
   of the system prompt, so the first question re-read all ~19K prompt tokens

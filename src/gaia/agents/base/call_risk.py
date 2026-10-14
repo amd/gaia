@@ -32,6 +32,11 @@ DESTRUCTIVE = "destructive"
 
 _ORDER = {READ: 0, WRITE: 1, EXECUTE: 2, DESTRUCTIVE: 3}
 
+#: Display-only prompt argument carrying the risk note of a call GAIA's own
+#: checks would otherwise refuse. Such a call is approved once or not at all,
+#: so no "always" is offered for it and none can cover it.
+RISK_NOTE_ARG = "_risk_note"
+
 SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
 
 _FILE_WRITE_TOOLS = frozenset(
@@ -308,9 +313,11 @@ def call_risk(tool_name: str, tool_args: Any) -> Optional[str]:
     args: Dict[str, Any] = tool_args if isinstance(tool_args, dict) else {}
     if tool_name in SHELL_TOOLS:
         command = args.get("command")
-        if isinstance(command, str) and command.strip():
-            return shell_command_risk(command)
-        return EXECUTE
+        if not isinstance(command, str) or not command.strip():
+            return EXECUTE
+        risk = shell_command_risk(command)
+        # A call GAIA's checks would refuse is never labelled a mere read.
+        return _stricter(risk, WRITE) if args.get(RISK_NOTE_ARG) else risk
     if tool_name in _CODE_TOOLS:
         return EXECUTE
     if tool_name in _FILE_WRITE_TOOLS:
@@ -335,6 +342,7 @@ __all__ = [
     "DESTRUCTIVE",
     "EXECUTE",
     "READ",
+    "RISK_NOTE_ARG",
     "SHELL_TOOLS",
     "WRITE",
     "call_risk",

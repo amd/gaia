@@ -488,7 +488,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 | `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail`/`mcp_server` dropped (host derives its own label). |
 | `chunk` | `token` | `content` → `delta`. |
 | `answer` | `final` | `content` → `answer`; `elapsed`/`steps`/`tools_used`/`tokens`/`ttft`/`tok_per_s` → `usage`. |
-| `permission_request` | `needs_confirmation` | `tool` → `action`; render `args` as `summary` (for a shell command whose `risk` is `write` or `execute`, plus one plain line on what it can do); carry `run_id`; `confirm_url` per §5. |
+| `permission_request` | `needs_confirmation` | `tool` → `action`; render `args` as `summary` (for a shell command whose `risk` is `write` or `execute`, plus one plain line on what it can do; for a call GAIA's checks don't cover — `args._risk_note` set — the exact command unshortened, `in <folder>`, then that note, and no `always_scope`); carry `run_id`; `confirm_url` per §5. |
 
 ### 6.2 Every remaining top-level source event
 

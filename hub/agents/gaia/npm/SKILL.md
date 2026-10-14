@@ -402,7 +402,11 @@ question. For a shell command it can carry two more lines: `in <folder>` when
 the command runs outside the workspace, and one plain sentence on what a `write`
 or `execute` command can do. Show it as-is. A CLI a skill would grant (`git
 commit`, `python script.py`) with no such skill loaded arrives here as a prompt,
-not a refusal. `risk` says what the call does (`read`, `write`, `execute`,
+not a refusal. So does a command GAIA's own checks don't cover (`git push`,
+`python -c`, a path outside the project): its `summary` is the exact line the
+shell will run, unshortened, then `in <folder>`, then a risk sentence, and it
+carries no `always_scope` — offer allow-once and deny only. `allow` runs that
+line once; the next call asks again. `risk` says what the call does (`read`, `write`, `execute`,
 `destructive`); label by it rather than by tool name, since `run_shell_command`
 is `pytest` on one call and `rm -rf` on the next. `always` grants the family
 named in `always_scope` for the rest of the session (`pytest` covers every

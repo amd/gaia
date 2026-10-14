@@ -23,6 +23,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from gaia.agents.base.call_risk import (
+    DESTRUCTIVE,
+    RISK_NOTE_ARG,
+    shell_command_risk,
+)
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
@@ -203,10 +208,182 @@ DANGEROUS_FIND_ACTIONS = {
 TIER_CONFIRM = "confirm"
 TIER_REFUSE = "refuse"
 
+# CONFIRM_ONCE is what GAIA's own checks would otherwise refuse: a command they
+# cannot inspect, one that publishes, one that reaches outside the project.
+# The user is shown the exact line and a risk note, may approve it once (never
+# "always"), and the line then runs exactly as shown through the shell. REFUSE
+# is left for what a prompt cannot show honestly — text that runs as something
+# other than what it reads as — and for destructive or never-grantable targets.
+TIER_CONFIRM_ONCE = "confirm_once"
+
+#: The risk notes a CONFIRM_ONCE prompt carries, chosen by what tripped it.
+NOTE_UNINSPECTABLE = (
+    "Can run any code with your permissions — GAIA can't inspect this command."
+)
+NOTE_PUSH = "Sends your commits to the remote repository."
+NOTE_CREDENTIAL = "Prints your GitHub sign-in token into the conversation."
+
+
+def outside_note(path: str) -> str:
+    """The risk note for a command that reaches *path*, outside the project."""
+    return f"Reads or changes files outside this project: {path}."
+
+
+_DRIVE_PATH_RE = re.compile(r"^[a-zA-Z]:[\\/]")
+
+
+def _escapes_project(token: str) -> bool:
+    """True when *token* names a path that can leave the project, read lexically."""
+    if token.startswith(("/", "\\")) or _DRIVE_PATH_RE.match(token):
+        return True
+    return ".." in re.split(r"[\\/]", token)
+
+
+def _policy_note(policy: Any, argv: list) -> str:
+    """The risk note for a call *policy* refuses, by what that call does."""
+    words = [token.lower() for token in argv[1:] if not token.startswith("-")]
+    if policy.binary == "git" and words[:1] == ["push"]:
+        return NOTE_PUSH
+    if policy.binary == "gh" and words[:1] == ["auth"]:
+        return NOTE_CREDENTIAL
+    if not policy.remote_operands:
+        for token in argv[1:]:
+            value = token.split("=", 1)[-1] if token.startswith("-") else token
+            if value and _escapes_project(value):
+                return outside_note(value)
+    return NOTE_UNINSPECTABLE
+
+
+#: ``git push`` spellings that overwrite or delete what is on the remote.
+_GIT_PUSH_DESTROYS = frozenset(
+    {"--force", "--force-with-lease", "--mirror", "--delete", "--prune"}
+)
+
+
+def _destroys(argv: list) -> bool:
+    """True when *argv* deletes or discards work — never offered, even once."""
+    if not argv:
+        return False
+    if shell_command_risk(shlex.join(argv)) == DESTRUCTIVE:
+        return True
+    program = os.path.basename(argv[0]).lower().removesuffix(".exe")
+    words = [token.lower() for token in argv[1:] if not token.startswith("-")]
+    flags = [token.lower() for token in argv[1:] if token.startswith("-")]
+    if program == "git" and "push" in words:
+        if any(flag.split("=", 1)[0] in _GIT_PUSH_DESTROYS for flag in flags):
+            return True
+        # A short cluster carrying -f or -d (``-fu``) forces or deletes.
+        if any(
+            not flag.startswith("--") and ("f" in flag[1:] or "d" in flag[1:])
+            for flag in flags
+        ):
+            return True
+        # ``+ref`` forces; ``:ref`` deletes the remote ref.
+        return any(word.startswith(("+", ":")) for word in words)
+    if program == "gh":
+        if "delete" in words:
+            return True
+        joined = " ".join(token.lower() for token in argv[1:])
+        return bool(re.search(r"(?:-x|--method)[ =]?delete\b", joined))
+    return False
+
+
+#: Characters that make text read differently from what it runs: control
+#: characters, bidirectional overrides, and zero-width marks.
+_MISLEADING_CHARS_RE = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]"
+)
+
+#: Where one command can sit inside another's text: separators, quotes,
+#: substitutions. Splitting on all of them over-reads a line, which is the
+#: safe direction for finding something that must never run.
+_EMBEDDED_SPLIT_RE = re.compile(r"\$\(|[;&|`()'\"\r\n]")
+
+_ENCODED_PS_RE = re.compile(
+    r"(?:^|\s)[-/](?:e|ec|ea|enc|encod\w*)(?=$|[\s:=])", re.IGNORECASE
+)
+
+
+def _hard_if_unofferable(error: Dict[str, Any], command: str) -> Dict[str, Any]:
+    """*error* as a hard refusal when its one-time line may not be offered."""
+    reason = _one_time_hard_reason(command)
+    if not reason:
+        return error
+    return {
+        **error,
+        "tier": TIER_REFUSE,
+        "error": f"Not offered: `{command}` cannot be approved, because {reason}.",
+        "hint": (
+            "Tell the user the exact command and why it is blocked, so they can "
+            "run it themselves if they want to."
+        ),
+    }
+
+
+def _one_time_hard_reason(command: str) -> str:
+    """Why a line that would run as raw shell text must still be refused, or "".
+
+    A one-time line runs exactly as shown, so what it says is what it does —
+    unless its characters display as something else, or it carries a step that
+    is never offered: an encoded script, or one that deletes or discards work.
+    The text is over-read on purpose, quotes and substitutions included.
+    """
+    if "\n" in command or "\r" in command or _MISLEADING_CHARS_RE.search(command):
+        return (
+            "it contains line breaks or invisible characters, so it would not "
+            "read on screen the way it runs"
+        )
+    lowered = command.lower()
+    if re.search(r"\b(?:powershell|pwsh)\b", lowered) and _ENCODED_PS_RE.search(
+        command
+    ):
+        return "it runs an encoded PowerShell script, which cannot be shown"
+    for piece in _EMBEDDED_SPLIT_RE.split(command):
+        piece = piece.strip()
+        if not piece:
+            continue
+        try:
+            argv = shlex.split(piece)
+        except ValueError:
+            argv = piece.split()
+        if _destroys(argv):
+            return f"part of it deletes or discards work (`{piece}`)"
+    return ""
+
+
+#: How strict each tier is; a line takes its strictest segment's.
+_TIER_RANK = {TIER_CONFIRM: 1, TIER_CONFIRM_ONCE: 2, TIER_REFUSE: 3}
+
+
+def _tier_rank(error: Dict[str, Any]) -> int:
+    """A block with no tier is refused, so a guard that forgets one fails closed."""
+    return _TIER_RANK.get(error.get("tier"), _TIER_RANK[TIER_REFUSE])
+
+
+def _confirm_once(error: Dict[str, Any], note: str) -> Dict[str, Any]:
+    """*error* re-tiered as a one-time approval carrying *note*.
+
+    A hint the block already carries (how to write the line so it needs no
+    approval) is kept; otherwise the model is told how this one may run.
+    """
+    return {
+        **error,
+        "tier": TIER_CONFIRM_ONCE,
+        "risk_note": note,
+        "hint": error.get("hint")
+        or (
+            "It runs only if the user approves this exact command once. If "
+            "they decline, do not reach the same result another way."
+        ),
+    }
+
 
 def _reaches_the_prompt(error: Optional[Dict[str, Any]]) -> bool:
     """True when *error* is a block the user may approve at the prompt."""
-    return error is not None and error.get("tier") == TIER_CONFIRM
+    return error is not None and error.get("tier") in (
+        TIER_CONFIRM,
+        TIER_CONFIRM_ONCE,
+    )
 
 
 # The binaries a developer session needs and a read-only session must not have
@@ -605,6 +782,23 @@ def _is_blocked_ps_flag(token: str) -> bool:
     if f"-{name}" in BLOCKED_PS_FLAGS:
         return True
     return any(param.startswith(name) for param in PREFIX_BLOCKED_PS_PARAMS)
+
+
+#: PowerShell parameters whose value is the script itself, base64-encoded.
+_ENCODED_PS_PARAMS = ("encodedcommand", "encodedarguments")
+_ENCODED_PS_ALIASES = frozenset({"enc", "ec", "ea"})
+
+
+def _is_encoded_ps_flag(token: str) -> bool:
+    """True when *token* hands PowerShell an encoded script nobody can read."""
+    if not token or token[0] not in "-/":
+        return False
+    name = token[1:].split(":", 1)[0].split("=", 1)[0].lower()
+    if not name:
+        return False
+    return name in _ENCODED_PS_ALIASES or any(
+        param.startswith(name) for param in _ENCODED_PS_PARAMS
+    )
 
 
 def _powershell_body_escape(ps_cmd: str) -> Optional[str]:
@@ -1850,6 +2044,7 @@ def _parse_line(command: str, bypass_gates: bool = False) -> tuple:
         ):
             return [], {
                 "status": "error",
+                "shell_operators": True,
                 "error": (
                     "Shell operators (&, >, >>, <, `, $(), newline) are not "
                     "allowed for security reasons. The only redirections "
@@ -2452,9 +2647,9 @@ class ShellToolsMixin:
         before the confirmation prompt, once on the real execution path. Sharing
         one implementation is what keeps those two from ever disagreeing.
 
-        A chained line is refused whole: one REFUSE-tier segment anywhere means
-        no part of it runs, so the model cannot learn to smuggle a refused
-        command in behind a permitted one.
+        A chained line takes its strictest segment's tier: one REFUSE-tier
+        segment anywhere means no part of it runs, and one CONFIRM_ONCE segment
+        makes the whole line a one-time approval of the exact text.
 
         Returns:
             ``(error, steps)`` — ``error`` is None when nothing here refuses
@@ -2464,16 +2659,32 @@ class ShellToolsMixin:
         """
         bypass = self.full_access_active()
         steps, error = _parse_line(command, bypass_gates=bypass)
+        once_note = ""
         if error is not None:
-            # A shape the runner cannot execute is never approvable.
-            return {"tier": TIER_REFUSE, **error}, []
+            if bypass or not error.get("shell_operators"):
+                # A shape the runner cannot execute is never approvable.
+                return {"tier": TIER_REFUSE, **error}, []
+            # Shell operators: the line can only run as the shell reads it.
+            # Read it the way full access does, so every command on it is
+            # still checked for what may never run.
+            steps, reread_error = _parse_line(command, bypass_gates=True)
+            if reread_error is not None:
+                return {"tier": TIER_REFUSE, **reread_error}, []
+            error = {
+                key: value for key, value in error.items() if key != "shell_operators"
+            }
+            once_note = NOTE_UNINSPECTABLE
 
         granted = skill_granted_binaries(self)
 
         # A granted CLI is handed argv, never a shell, so a redirect would reach
         # it as a literal argument. Refuse instead of answering wrongly.
         segments = [seg for step in steps for seg in step.segments]
-        if _is_lone_granted_segment(segments, granted) and _redirects(steps[0].text):
+        if (
+            not once_note
+            and _is_lone_granted_segment(segments, granted)
+            and _redirects(steps[0].text)
+        ):
             return (
                 {
                     "status": "error",
@@ -2492,21 +2703,27 @@ class ShellToolsMixin:
                 [],
             )
 
+        # Every segment is judged, and the strictest verdict stands — a
+        # confirmable first command must not stand in for a later one.
+        worst = _confirm_once(error, once_note) if once_note else None
         for step in steps:
             for segment in step.segments:
-                error = self._validate_command(
+                verdict = self._validate_command(
                     segment[0].lower(),
                     segment,
                     step.text if len(step.segments) == 1 else " ".join(segment),
                     granted_binaries=granted,
                     bypass_gates=bypass,
                 )
-                if error:
-                    # Steps travel with the block: a TIER_CONFIRM one still has
-                    # to run once approved, and it can only run what was parsed.
-                    return error, steps
-
-        return None, steps
+                if verdict and (
+                    worst is None or _tier_rank(verdict) > _tier_rank(worst)
+                ):
+                    worst = verdict
+        if worst is not None and worst.get("tier") == TIER_CONFIRM_ONCE:
+            worst = _hard_if_unofferable(worst, command)
+        # Steps travel with the block: a TIER_CONFIRM one still has to run once
+        # approved, and it can only run what was parsed.
+        return worst, steps
 
     def full_access_active(self) -> bool:
         """Whether this session is running under full access (#3373).
@@ -2537,27 +2754,41 @@ class ShellToolsMixin:
         """The refusal this call has already earned, before anyone is asked.
 
         Read by ``Agent._policy_refusal``, which runs *before* the confirmation
-        prompt. ``TIER_REFUSE`` always stops here: an escalation a yes/no cannot
-        honestly describe (``gh auth token``, base64 PowerShell, ``git -c``
-        behind ``status``), or a shape the runner cannot execute at all.
+        prompt. ``TIER_REFUSE`` always stops here: text a prompt cannot show
+        honestly (base64 PowerShell, a pipe the quoting hides), a destructive or
+        never-grantable target, or a shape the runner cannot execute at all.
 
-        ``TIER_CONFIRM`` (``git commit``, ``npm test``, ``rm notes.txt``) falls
-        through to the prompt: refusing a command that would run on approval is
-        the dead end this tier removes. The exception is a run where only a
-        blanket pre-approval would answer the prompt; see
-        :meth:`_approval_is_blanket_only`.
+        ``TIER_CONFIRM`` (``git commit``, ``npm test``) and ``TIER_CONFIRM_ONCE``
+        (``git push``, ``python -c``, a path outside the project) fall through
+        to the prompt. The exception is a run where only a blanket pre-approval
+        would answer it; see :meth:`_approval_is_blanket_only`.
 
         Duck-typed rather than an override: ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
         """
         if tool_name not in (_POLICY_GATED_SHELL_TOOL, _WAIT_TOOL):
             return None
+        # Every shell call starts with no approval on record; only this call's
+        # own prompt can write one.
+        self._approved_once = None
         command = (tool_args or {}).get("command")
         if not isinstance(command, str):
             return None
-        error, _ = self._validate_shell_command(command)
+        error, _ = self._line_verdict(
+            command, (tool_args or {}).get("working_directory")
+        )
         if error is None:
             return None
+        if tool_name == _WAIT_TOOL and error.get("tier") == TIER_CONFIRM_ONCE:
+            # A one-time approval covers one run, never a polling loop.
+            error = {
+                **error,
+                "tier": TIER_REFUSE,
+                "error": (
+                    f"`{command}` needs a one-time approval, so it can't be "
+                    "polled. Run it once with run_shell_command instead."
+                ),
+            }
         if _reaches_the_prompt(error):
             if not self._approval_is_blanket_only():
                 return None
@@ -2611,10 +2842,12 @@ class ShellToolsMixin:
         user-facing text is one plain sentence naming what they can do; which
         switch made the run unattended goes to the log.
         """
+        note = str(error.get("risk_note") or "").rstrip(".")
+        needs = f"`{command}` needs your approval" + (f" ({note})" if note else "")
         if getattr(self, "console", None) is None:
             why = "this run has no console to show the confirmation prompt on"
             plain = (
-                f"Not run: `{command}` needs your approval, and nothing in this "
+                f"Not run: {needs}, and nothing in this "
                 "run can ask you — start the request from the GAIA terminal UI "
                 "or Agent UI to approve it there."
             )
@@ -2625,17 +2858,17 @@ class ShellToolsMixin:
                 "outside the no-prompt list"
             )
             plain = (
-                f"Not run: `{command}` needs your approval, and this run "
+                f"Not run: {needs}, and this run "
                 "approves automatically only commands that are safe unattended "
                 "— run the request interactively to approve it, or turn on full "
                 "access."
             )
         logger.info("Refused %r because %s: %s", command, why, error.get("error"))
-        unasked = {
-            key: value
-            for key, value in error.items()
-            if key not in ("hint", "examples")
-        }
+        # A missing-grant hint assumes a prompt; a one-time line's hint says
+        # how to write it so that it needs none, which still holds here.
+        once = error.get("tier") == TIER_CONFIRM_ONCE
+        dropped = ("examples",) if once else ("hint", "examples")
+        unasked = {key: value for key, value in error.items() if key not in dropped}
         return {**unasked, "tier": TIER_REFUSE, "error": plain}
 
     def skill_grant_covers_call(
@@ -2708,6 +2941,14 @@ class ShellToolsMixin:
             if policy is None or validate_invocation(policy, segment) is not None:
                 return False
 
+        # A grant covers its reads where they are allowed to run; a path past
+        # the allowed folders is asked about, whoever holds a grant.
+        verdict, _ = self._line_verdict(
+            command, (tool_args or {}).get("working_directory")
+        )
+        if verdict is not None:
+            return False
+
         logger.info(
             "Skipping the confirmation prompt for '%s': %r is covered by an active "
             "skill grant (read-only %s).",
@@ -2728,10 +2969,24 @@ class ShellToolsMixin:
         approves a ``git commit`` believing it lands in a different repository.
         Display only — the call itself still runs with its own arguments.
 
+        A call GAIA's checks would otherwise refuse (``TIER_CONFIRM_ONCE``)
+        always names its folder and carries ``RISK_NOTE_ARG``: the prompt shows
+        the line verbatim with that note, and offers no "always".
+
         Duck-typed, like :meth:`skill_grant_covers_call`.
         """
         if tool_name != _POLICY_GATED_SHELL_TOOL or not isinstance(tool_args, dict):
             return tool_args
+        command = tool_args.get("command")
+        if isinstance(command, str):
+            verdict, _ = self._line_verdict(command, tool_args.get("working_directory"))
+            if verdict is not None and verdict.get("tier") == TIER_CONFIRM_ONCE:
+                located = self._call_cwd(tool_args.get("working_directory"))
+                return {
+                    **tool_args,
+                    "working_directory": located[0] if located else "",
+                    RISK_NOTE_ARG: verdict["risk_note"],
+                }
         if tool_args.get("working_directory"):
             return tool_args
         session = getattr(self, "_shell_session", None)
@@ -2743,6 +2998,111 @@ class ShellToolsMixin:
         if os.path.normcase(str(Path(session.cwd).resolve())) == here:
             return tool_args
         return {**tool_args, "working_directory": session.cwd}
+
+    def note_confirmed_call(self, tool_name: str, tool_args: Dict[str, Any]) -> None:
+        """Remember the one shell call a person just approved.
+
+        Called by ``Agent._execute_tool`` after an approval. A
+        ``TIER_CONFIRM_ONCE`` line runs only against this record, and running
+        consumes it — so the approval covers that exact text, once.
+        """
+        if tool_name != _POLICY_GATED_SHELL_TOOL or not isinstance(tool_args, dict):
+            return
+        self._approved_once = (
+            tool_args.get("command"),
+            tool_args.get("working_directory") or None,
+        )
+
+    def _take_once_approval(self, command: str, working_directory: Any) -> bool:
+        """Consume the approval for exactly this call; False when there is none."""
+        approved = getattr(self, "_approved_once", None)
+        self._approved_once = None
+        return approved == (command, working_directory or None)
+
+    def _call_cwd(self, working_directory: Any) -> Optional[Tuple[str, bool]]:
+        """``(folder, explicit)`` a call runs in, or None when it names no real one."""
+        if working_directory:
+            if not isinstance(working_directory, str) or not os.path.isdir(
+                working_directory
+            ):
+                return None
+            return str(Path(working_directory).resolve()), True
+        return self.shell_session.cwd, False
+
+    def _line_verdict(self, command: str, working_directory: Any = None) -> tuple:
+        """``(error, steps)`` for this call, path scope included.
+
+        :meth:`_validate_shell_command` judges the text; this also judges the
+        folders it reaches, before anyone is asked. A path past the allowed
+        folders makes the line ``TIER_CONFIRM_ONCE`` naming that path, so the
+        prompt says where it goes and the run does not refuse what was approved.
+        A credential folder, or one no approval may grant, is refused outright.
+
+        Full access keeps its own rules: its path checks run at execution.
+        """
+        error, steps = self._validate_shell_command(command)
+        if self.full_access_active():
+            return error, steps
+        if error is not None and not _reaches_the_prompt(error):
+            return error, steps
+        located = self._call_cwd(working_directory)
+        if located is None:
+            return error, steps
+        cwd, explicit = located
+        outside: list = []
+        refusal = None
+        if explicit and not self._path_allowed(cwd, prompt_user=False):
+            refusal = self._outside_scope(
+                cwd,
+                {
+                    "status": "error",
+                    "error": f"Access denied: {cwd} is not in allowed paths",
+                    "has_errors": True,
+                },
+                outside,
+            )
+        granted = skill_granted_binaries(self)
+        walk_cwd = cwd
+        for step in steps:
+            if refusal is not None:
+                break
+            step_cwd = walk_cwd
+            if step.is_cd:
+                walk_cwd, refusal = self._resolve_cd_target(
+                    step.cd_target, walk_cwd, outside
+                )
+                if refusal is not None:
+                    break
+            refusal = self._path_traversal_refusal(
+                step, step_cwd, granted, outside
+            ) or self._git_path_refusal(step.segments, step_cwd, outside)
+        if refusal is not None:
+            return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
+        if outside and not (
+            error is not None and error.get("tier") == TIER_CONFIRM_ONCE
+        ):
+            block = error or {
+                "status": "error",
+                "error": "This command reaches files outside the allowed folders.",
+                "has_errors": True,
+            }
+            error = _hard_if_unofferable(
+                {
+                    **_confirm_once(block, outside_note(", ".join(outside))),
+                    **NOT_EXECUTED,
+                },
+                command,
+            )
+        if error is None or error.get("tier") != TIER_CONFIRM_ONCE:
+            return error, steps
+        # A one-time line runs as raw shell text, which no grant exempts from
+        # the folders no approval may open.
+        unscanned: list = []
+        for step in steps:
+            refusal = self._path_traversal_refusal(step, cwd, frozenset(), unscanned)
+            if refusal is not None:
+                return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
+        return error, steps
 
     #: Slice length for the pacing wait. Short enough that a Stop lands
     #: promptly, long enough not to spin.
@@ -2774,23 +3134,56 @@ class ShellToolsMixin:
                 remaining -= slice_s
                 waited += slice_s
 
-    def _path_allowed(self, path: str) -> bool:
+    def _path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         """Whether *path* is inside this agent's allowed paths.
 
         A host with neither validator is unconstrained, which is what a bare
-        mixin and every pre-validator agent already were.
+        mixin and every pre-validator agent already were. *prompt_user* False
+        only reads the scope; the pre-flight must not raise a second prompt.
         """
         if hasattr(self, "path_validator"):
-            return bool(self.path_validator.is_path_allowed(path))
+            if prompt_user:
+                return bool(self.path_validator.is_path_allowed(path))
+            return bool(self.path_validator.is_path_allowed(path, prompt_user=False))
         if hasattr(self, "_is_path_allowed"):
             return bool(self._is_path_allowed(path))
         return True
 
-    def _resolve_cd_target(self, target: str, cwd: str) -> tuple:
+    def _outside_scope(
+        self, path: str, refusal: Dict[str, Any], outside: Optional[list]
+    ) -> Optional[Dict[str, Any]]:
+        """Note *path* as one the user may approve, or keep *refusal* when none may.
+
+        With *outside* None (the execution path) the refusal stands, as before.
+        """
+        if outside is None:
+            return refusal
+        unaskable = getattr(
+            getattr(self, "path_validator", None), "_unaskable_reason", None
+        )
+        reason = unaskable(Path(path)) if callable(unaskable) else ""
+        if reason:
+            scratch = getattr(self.path_validator, "scratch_hint", None)
+            return {
+                **refusal,
+                "tier": TIER_REFUSE,
+                "error": (
+                    f"{refusal['error']}. No approval can grant it: {reason}."
+                    f"{scratch(path) if callable(scratch) else ''}"
+                ),
+            }
+        if path not in outside:
+            outside.append(path)
+        return None
+
+    def _resolve_cd_target(
+        self, target: str, cwd: str, outside: Optional[list] = None
+    ) -> tuple:
         """``(directory, None)`` for ``cd <target>``, or ``(cwd, refusal)``.
 
         Held to the same bar as ``working_directory``: it is the same thing,
-        chosen mid-line instead of up front.
+        chosen mid-line instead of up front. With *outside*, a directory past
+        the allowed paths is collected for the prompt instead of refused.
         """
         try:
             resolved = str(Path(cwd).joinpath(target).resolve())
@@ -2809,17 +3202,23 @@ class ShellToolsMixin:
                 "has_errors": True,
                 "hint": f"Nothing on this line ran. '{target}' is relative to {cwd}.",
             }
-        if not self._path_allowed(resolved):
-            return cwd, {
-                **NOT_EXECUTED,
-                "status": "error",
-                "error": f"Access denied: {resolved} is not in allowed paths",
-                "has_errors": True,
-            }
+        if not self._path_allowed(resolved, prompt_user=outside is None):
+            refusal = self._outside_scope(
+                resolved,
+                {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": f"Access denied: {resolved} is not in allowed paths",
+                    "has_errors": True,
+                },
+                outside,
+            )
+            if refusal is not None:
+                return cwd, refusal
         return resolved, None
 
     def _path_traversal_refusal(
-        self, step: _Step, cwd: str, granted: frozenset
+        self, step: _Step, cwd: str, granted: frozenset, outside: Optional[list] = None
     ) -> Optional[Dict[str, Any]]:
         """Refuse an argument that resolves outside the allowed paths.
 
@@ -2859,13 +3258,20 @@ class ShellToolsMixin:
         ]
         for label, arg in candidates:
             for candidate_path in _flag_path_values(arg):
-                refusal = self._path_candidate_refusal(label, arg, candidate_path, cwd)
+                refusal = self._path_candidate_refusal(
+                    label, arg, candidate_path, cwd, outside
+                )
                 if refusal:
                     return refusal
         return None
 
     def _path_candidate_refusal(
-        self, label: str, arg: str, candidate_path: str, cwd: str
+        self,
+        label: str,
+        arg: str,
+        candidate_path: str,
+        cwd: str,
+        outside: Optional[list] = None,
     ) -> Optional[Dict[str, Any]]:
         """Refuse *candidate_path* (read from *arg*) when it leaves the allowed paths."""
         # A lone '/x' is a Windows switch there (/i, /format:list), not a path.
@@ -2881,13 +3287,18 @@ class ShellToolsMixin:
         # A shell or script may expand '~' and '$HOME'; check both readings.
         expanded = os.path.expandvars(os.path.expanduser(candidate_path))
         for path in dict.fromkeys((candidate_path, expanded)):
-            refusal = self._resolved_path_refusal(label, arg, path, cwd)
+            refusal = self._resolved_path_refusal(label, arg, path, cwd, outside)
             if refusal:
                 return refusal
         return None
 
     def _resolved_path_refusal(
-        self, label: str, arg: str, candidate_path: str, cwd: str
+        self,
+        label: str,
+        arg: str,
+        candidate_path: str,
+        cwd: str,
+        outside: Optional[list] = None,
     ) -> Optional[Dict[str, Any]]:
         """Refuse *candidate_path* when it resolves outside the allowed paths."""
         try:
@@ -2918,13 +3329,17 @@ class ShellToolsMixin:
                 ),
                 "has_errors": True,
             }
-        if not self.path_validator.is_path_allowed(resolved_path):
-            return {
-                **NOT_EXECUTED,
-                "status": "error",
-                "error": f"Access denied: {label} '{arg}' resolves to forbidden path '{resolved_path}'",
-                "has_errors": True,
-            }
+        if not self._path_allowed(resolved_path, prompt_user=outside is None):
+            return self._outside_scope(
+                resolved_path,
+                {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": f"Access denied: {label} '{arg}' resolves to forbidden path '{resolved_path}'",
+                    "has_errors": True,
+                },
+                outside,
+            )
         return None
 
     def _check_rate_limit(self) -> tuple:
@@ -3068,7 +3483,9 @@ class ShellToolsMixin:
             return  # already charged once, when the wait started
         self.shell_command_times.append(time.time())
 
-    def _git_path_refusal(self, segments: list, cwd: str) -> Optional[Dict[str, Any]]:
+    def _git_path_refusal(
+        self, segments: list, cwd: str, outside: Optional[list] = None
+    ) -> Optional[Dict[str, Any]]:
         """Refuse a git ``-C``/``--git-dir``/``--work-tree`` outside allowed paths.
 
         The same allowed-paths check ``working_directory`` gets.
@@ -3077,19 +3494,23 @@ class ShellToolsMixin:
             if segment[0].lower() != "git":
                 continue
             for flag, path in _git_path_flag_values(segment, cwd):
-                if hasattr(self, "path_validator"):
-                    allowed = self.path_validator.is_path_allowed(path)
-                elif hasattr(self, "_is_path_allowed"):
-                    allowed = self._is_path_allowed(path)
-                else:
+                if not hasattr(self, "path_validator") and not hasattr(
+                    self, "_is_path_allowed"
+                ):
                     continue
-                if not allowed:
-                    return {
-                        **NOT_EXECUTED,
-                        "status": "error",
-                        "error": f"Access denied: git {flag} {path} is not in allowed paths",
-                        "has_errors": True,
-                    }
+                if not self._path_allowed(path, prompt_user=outside is None):
+                    refusal = self._outside_scope(
+                        path,
+                        {
+                            **NOT_EXECUTED,
+                            "status": "error",
+                            "error": f"Access denied: git {flag} {path} is not in allowed paths",
+                            "has_errors": True,
+                        },
+                        outside,
+                    )
+                    if refusal is not None:
+                        return refusal
         return None
 
     @staticmethod
@@ -3134,21 +3555,19 @@ class ShellToolsMixin:
             behind = ShellToolsMixin._validate_command(
                 program, [program, *cmd_parts[1:]], command
             )
-            if behind is not None and not _reaches_the_prompt(behind):
+            if behind is not None and behind.get("tier") != TIER_CONFIRM:
                 return behind
 
         # Git's global options sit before the subcommand, so every check below
-        # has to read the call with them stepped over. The options that hand git
-        # arbitrary code are refused here rather than stepped over.
+        # has to read the call with them stepped over. An option that hands git
+        # arbitrary code cannot be stepped over, so the user is asked instead.
         if cmd_base == "git" and len(cmd_parts) > 1:
             cmd_parts, resolve_error = _git_policy_argv(cmd_parts)
             if resolve_error is not None:
-                return {
-                    "status": "error",
-                    "tier": TIER_REFUSE,
-                    "error": resolve_error,
-                    "has_errors": True,
-                }
+                return _confirm_once(
+                    {"status": "error", "error": resolve_error, "has_errors": True},
+                    NOTE_UNINSPECTABLE,
+                )
 
         # A read subcommand still writes a caller-chosen path when it is handed
         # an output flag, and no policy table judges the destination. Checked
@@ -3158,16 +3577,17 @@ class ShellToolsMixin:
                 if cmd_parts[1].lower() == "ls-files" and part == "-o":
                     continue
                 if _is_file_write_flag(part):
-                    return {
-                        "status": "error",
-                        "tier": TIER_REFUSE,
-                        "error": (
-                            f"git '{part}' writes to a file, which is not allowed "
-                            "under the read-only command policy."
-                        ),
-                        "has_errors": True,
-                        "hint": "Drop the output flag and read git's result from stdout.",
-                    }
+                    return _confirm_once(
+                        {
+                            "status": "error",
+                            "error": (
+                                f"git '{part}' writes to a file, which GAIA's "
+                                "read-only checks do not cover."
+                            ),
+                            "has_errors": True,
+                        },
+                        NOTE_UNINSPECTABLE,
+                    )
 
         # Skill-granted CLIs are gated by their own policy table instead of
         # ALLOWED_COMMANDS; an ungranted one that only lacks the grant is
@@ -3199,19 +3619,32 @@ class ShellToolsMixin:
             if decision.outcome != REFUSE:
                 return None
             tier = TIER_REFUSE
-            if granted:
-                message = decision.message
-                hint = (
-                    f"This one is refused outright, not gated — the '{binary}' "
-                    "grant will not run it even with the user's approval. "
-                    "Use an allowed command, or tell the user what you would "
-                    "have run and why it is blocked."
-                )
-            elif shutil.which(policy.binary) is None:
+            if not granted and shutil.which(policy.binary) is None:
                 # Not installed is not "load the skill": reloading cannot fix it.
                 message = f"Command '{binary}' cannot run: {policy.unavailable_note()}"
                 hint = "Do not retry this command or reload the skill."
-            elif granted_decision.outcome != REFUSE:
+            elif granted_decision.outcome == REFUSE:
+                # Outside what GAIA's checks cover, grant or no grant. The user
+                # may still approve it once, unless it destroys work.
+                logger.debug("%r is outside the %s policy", command, binary)
+                refusal = {
+                    "status": "error",
+                    "error": granted_decision.message,
+                    "has_errors": True,
+                }
+                if _destroys(policy_parts):
+                    return {
+                        **refusal,
+                        "tier": TIER_REFUSE,
+                        "hint": (
+                            "GAIA will not run this, even with the user's "
+                            "approval: it deletes or discards work. Tell the "
+                            "user the exact command so they can run it "
+                            "themselves if they want to."
+                        ),
+                    }
+                return _confirm_once(refusal, _policy_note(policy, policy_parts))
+            else:
                 # Only the missing grant is in the way, and a grant is only
                 # pre-approval: the user at the prompt can approve it instead.
                 logger.debug(
@@ -3226,20 +3659,6 @@ class ShellToolsMixin:
                     "It runs once the user approves it at the prompt. If they "
                     "decline, do not reach the same result another way."
                 )
-            else:
-                # A grant would not run it either, so blaming the missing grant
-                # would send the model hunting for a skill that cannot help.
-                logger.debug(
-                    "Refusing %r: refused even under a shell:execute:%s grant",
-                    command,
-                    binary,
-                )
-                message = granted_decision.message
-                hint = (
-                    "GAIA will not run this, even with the user's approval. "
-                    "Tell the user the exact command and why it is blocked, so "
-                    "they can run it themselves if they want to."
-                )
             return {
                 "status": "error",
                 "tier": tier,
@@ -3252,16 +3671,17 @@ class ShellToolsMixin:
         if cmd_base == "wmic":
             for part in cmd_parts[1:]:
                 if _is_file_write_flag(part):
-                    return {
-                        "status": "error",
-                        "tier": TIER_REFUSE,
-                        "error": (
-                            f"wmic '{part}' writes to a file, which is not allowed "
-                            "under the read-only command policy."
-                        ),
-                        "has_errors": True,
-                        "hint": "Drop /output: and /append: and read the query result from stdout.",
-                    }
+                    return _confirm_once(
+                        {
+                            "status": "error",
+                            "error": (
+                                f"wmic '{part}' writes to a file, which GAIA's "
+                                "read-only checks do not cover."
+                            ),
+                            "has_errors": True,
+                        },
+                        NOTE_UNINSPECTABLE,
+                    )
             cmd_lower = command.lower()
             dangerous_wmic_ops = {"call", "create", "delete", "set"}
             cmd_words = set(cmd_lower.split())
@@ -3276,15 +3696,25 @@ class ShellToolsMixin:
                 }
         # Special handling for powershell - only allow read-only cmdlets
         elif cmd_base in ("powershell", "powershell.exe"):
-            if any(_is_blocked_ps_flag(part) for part in cmd_parts[1:]):
+            if any(_is_encoded_ps_flag(part) for part in cmd_parts[1:]):
+                # The prompt would show base64, not the script that runs.
                 return {
                     "status": "error",
                     "tier": TIER_REFUSE,
-                    "error": "PowerShell execution flags like -EncodedCommand, -File, and -ExecutionPolicy are not allowed.",
+                    "error": "PowerShell -EncodedCommand is not allowed: the command it runs cannot be shown to you.",
                     "has_errors": True,
                     "hint": "Use -Command to pass a readable cmdlet string",
                     "examples": 'powershell -Command "Get-WmiObject Win32_Processor | Select-Object Name"',
                 }
+            if any(_is_blocked_ps_flag(part) for part in cmd_parts[1:]):
+                return _confirm_once(
+                    {
+                        "status": "error",
+                        "error": "PowerShell execution flags like -File and -ExecutionPolicy are outside GAIA's read-only checks.",
+                        "has_errors": True,
+                    },
+                    NOTE_UNINSPECTABLE,
+                )
             body_start = 1
             while body_start < len(cmd_parts):
                 part = cmd_parts[body_start]
@@ -3295,13 +3725,14 @@ class ShellToolsMixin:
                     body_start += 1
                     break
                 if name not in _SAFE_PS_LEADING_SWITCHES:
-                    return {
-                        "status": "error",
-                        "tier": TIER_REFUSE,
-                        "error": f"PowerShell switch '{part}' has not been reviewed and is not allowed.",
-                        "has_errors": True,
-                        "hint": "Use -Command with plain read-only cmdlets.",
-                    }
+                    return _confirm_once(
+                        {
+                            "status": "error",
+                            "error": f"PowerShell switch '{part}' is outside GAIA's read-only checks.",
+                            "has_errors": True,
+                        },
+                        NOTE_UNINSPECTABLE,
+                    )
                 body_start += 1
             ps_cmd = " ".join(cmd_parts[body_start:]).lower()
             if not ps_cmd:
@@ -3314,23 +3745,17 @@ class ShellToolsMixin:
 
             escape = _powershell_body_escape(ps_cmd)
             if escape is not None:
-                return {
-                    "status": "error",
-                    "tier": TIER_REFUSE,
-                    "error": (
-                        f"PowerShell {escape} is not allowed: it runs code the "
-                        "read-only cmdlet allowlist cannot inspect."
-                    ),
-                    "has_errors": True,
-                    "hint": (
-                        "Use plain Get-* cmdlets and parameters only — no $variables, "
-                        "no [Type]::Member, no .Method(), no &, no redirection, no ';'."
-                    ),
-                    "examples": (
-                        'powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name", '
-                        'powershell -Command "Get-Process | Sort-Object WS -Descending | Select-Object -First 15 Name, Id, WS"'
-                    ),
-                }
+                return _confirm_once(
+                    {
+                        "status": "error",
+                        "error": (
+                            f"PowerShell {escape} runs code the read-only cmdlet "
+                            "allowlist cannot inspect."
+                        ),
+                        "has_errors": True,
+                    },
+                    NOTE_UNINSPECTABLE,
+                )
 
             if any(pat in ps_cmd for pat in DANGEROUS_PS_PATTERNS):
                 return {
@@ -3349,13 +3774,14 @@ class ShellToolsMixin:
             for segment in ps_cmd.split("|"):
                 head = re.match(r"\s*([a-z]+-[a-z]+)\b", segment)
                 if not head or not head[1].startswith(SAFE_PS_CMDLET_PREFIXES):
-                    return {
+                    block = {
                         "status": "error",
-                        # A segment that is not a cmdlet at all runs a file.
-                        "tier": TIER_CONFIRM if head else TIER_REFUSE,
+                        "tier": TIER_CONFIRM,
                         "error": "Each PowerShell pipeline command must be a read-only cmdlet.",
                         "has_errors": True,
                     }
+                    # A segment that is not a cmdlet at all runs a file.
+                    return block if head else _confirm_once(block, NOTE_UNINSPECTABLE)
             cmdlets = re.findall(r"[a-z]+-[a-z]+", ps_cmd)
             for cmdlet in cmdlets:
                 if not any(
@@ -3513,6 +3939,118 @@ class ShellToolsMixin:
 
         return None  # Command is allowed
 
+    def _run_approved_once(
+        self,
+        command: str,
+        cwd: str,
+        steps: list,
+        timeout: float,
+        timeout_class: str,
+        waited: float,
+    ) -> Dict[str, Any]:
+        """Run *command* exactly as approved: the whole line, to the shell, once.
+
+        The shell gets the same string the prompt showed, byte for byte, so
+        what ran is what was approved. It never moves the session's folder.
+        """
+        from gaia.security import audit_shell_command
+
+        segments = [seg for st in steps for seg in st.segments]
+        audit_shell_command(
+            command=command, cwd=cwd, segments=segments, mode="approved-once"
+        )
+        if self._cancel_requested():
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": f"Stopped before running, so nothing was changed: {command}",
+                "command": command,
+                "has_errors": True,
+                "cancelled": True,
+                "cwd": cwd,
+            }
+        start_time = time.monotonic()
+        process = subprocess.Popen(  # pylint: disable=consider-using-with
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            encoding="utf-8",
+            errors="replace",
+            env=_segment_env({}),
+            start_new_session=os.name != "nt",
+            shell=True,  # nosec B602 - the user approved this exact string
+        )
+        self._record_command_execution()
+        try:
+            stdout, stderr, cancelled = self._communicate_or_cancel(process, timeout)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = terminate_process_tree(process)
+            return {
+                "status": "error",
+                "error": (
+                    f"Command timed out after {timeout} seconds and was killed, "
+                    f"so its work is incomplete: {command}"
+                ),
+                "command": command,
+                "stdout": _truncate(_as_text(stdout), "stdout"),
+                "stderr": _truncate(_as_text(stderr), "stderr"),
+                "has_errors": True,
+                "timed_out": True,
+                "timeout": timeout,
+                "timeout_class": timeout_class,
+                "duration_seconds": time.monotonic() - start_time,
+                "cwd": cwd,
+                "steps": [{"command": command, "return_code": None}],
+            }
+        except BaseException:
+            terminate_process_tree(process)
+            raise
+        duration = time.monotonic() - start_time
+        if cancelled:
+            return {
+                "status": "error",
+                "error": (
+                    f"Command was stopped after {duration:.1f}s and killed, so "
+                    f"its work is incomplete: {command}"
+                ),
+                "command": command,
+                "stdout": _truncate(_as_text(stdout), "stdout"),
+                "stderr": _truncate(_as_text(stderr), "stderr"),
+                "has_errors": True,
+                "cancelled": True,
+                "duration_seconds": duration,
+                "cwd": cwd,
+                "steps": [{"command": command, "return_code": None}],
+            }
+
+        from gaia.agents.base.artifacts import retain_excerpt
+
+        raw_out, raw_err = _as_text(stdout), _as_text(stderr)
+        code = process.returncode
+        outcome = {
+            "status": "success",
+            "command": command,
+            "stdout": retain_excerpt(self, raw_out, MAX_OUTPUT_CHARS),
+            "stderr": retain_excerpt(self, raw_err, MAX_OUTPUT_CHARS),
+            "return_code": code,
+            "has_errors": code != 0,
+            "duration_seconds": duration,
+            "timeout": timeout,
+            "timeout_class": timeout_class,
+            "cwd": cwd,
+            "output_truncated": len(raw_out) > MAX_OUTPUT_CHARS
+            or len(raw_err) > MAX_OUTPUT_CHARS,
+            "steps": [{"command": command, "return_code": code}],
+            "approved_once": True,
+        }
+        if waited:
+            outcome["waited_seconds"] = round(waited, 1)
+        return attach_check(
+            outcome, check_from_command(command, segments, code, raw_out, raw_err)
+        )
+
     @staticmethod
     def _validate_bypass_command(cmd_base: str) -> Optional[Dict[str, Any]]:
         """The whole binary policy under full access.
@@ -3665,7 +4203,9 @@ class ShellToolsMixin:
                             "has_errors": True,
                         }
 
-                    if not self._path_allowed(working_directory):
+                    # Outside full access the line's verdict judges the
+                    # folder, before the prompt, so it can be approved there.
+                    if bypass and not self._path_allowed(working_directory):
                         hint = (
                             self.path_validator.scratch_hint(working_directory)
                             if hasattr(self, "path_validator")
@@ -3696,11 +4236,30 @@ class ShellToolsMixin:
                 # ``Agent._execute_tool``'s gate, so it runs here unless the
                 # only approval was a blanket pre-approval.
                 unconfirmed = self._nothing_could_have_confirmed()
-                error, steps = self._validate_shell_command(command)
+                # Spent by every run, so an approval reaches only the call it
+                # was given for and never a later one.
+                approved_once = self._take_once_approval(command, working_directory)
+                error, steps = self._line_verdict(command, working_directory)
                 if error and not _reaches_the_prompt(error):
                     return error
                 if error and unconfirmed:
                     return self._blanket_approval_refusal(error, command)
+                if error and error.get("tier") == TIER_CONFIRM_ONCE:
+                    # Runs only as the exact line a person approved, once.
+                    if not approved_once:
+                        return {
+                            **NOT_EXECUTED,
+                            "status": "error",
+                            "tier": TIER_REFUSE,
+                            "error": (
+                                f"Not run: `{command}` needs your approval of "
+                                "this exact command first."
+                            ),
+                            "has_errors": True,
+                        }
+                    return self._run_approved_once(
+                        command, cwd, steps, timeout, timeout_class, waited
+                    )
 
                 granted = skill_granted_binaries(self)
 
