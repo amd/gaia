@@ -70,7 +70,7 @@ class InferenceLocation:
         name = (
             self.model[len(prefix) :] if self.model.startswith(prefix) else self.model
         )
-        return name.rsplit("/", 1)[-1] or self.model
+        return name.rstrip("/").rsplit("/", 1)[-1] or self.model
 
     def placement(self) -> str:
         """Where the model runs and what leaves the machine, after its name.
