@@ -295,28 +295,29 @@ def effective_skill_body(agent, skill) -> str:
         return base
 
 
-def default_max_steps() -> int:
-    """Resolve the global default agent step limit.
+def default_max_steps(default: int = DEFAULT_MAX_STEPS) -> int:
+    """Resolve the default agent step limit.
 
     Reads ``GAIA_AGENT_MAX_STEPS`` at call time (not import) so the env var can
     be set after this module is imported and still take effect. Returns
-    ``DEFAULT_MAX_STEPS`` when the var is unset; raises on a present-but-invalid
-    value so a typo surfaces immediately instead of silently capping agents.
+    *default* (``DEFAULT_MAX_STEPS`` unless an agent passes its own) when the
+    var is unset; raises on a present-but-invalid value so a typo surfaces
+    immediately instead of silently capping agents.
     """
     raw = os.environ.get("GAIA_AGENT_MAX_STEPS")
     if raw is None or raw == "":
-        return DEFAULT_MAX_STEPS
+        return default
     try:
         value = int(raw)
     except ValueError as e:
         raise ValueError(
             f"GAIA_AGENT_MAX_STEPS must be a positive integer, got {raw!r}. "
-            f"Unset it to use the default ({DEFAULT_MAX_STEPS})."
+            f"Unset it to use the default ({default})."
         ) from e
     if value <= 0:
         raise ValueError(
             f"GAIA_AGENT_MAX_STEPS must be a positive integer, got {value}. "
-            f"Unset it to use the default ({DEFAULT_MAX_STEPS})."
+            f"Unset it to use the default ({default})."
         )
     return value
 
@@ -574,9 +575,9 @@ _STEP_CAP_ANSWER_PROMPT = (
 # its budget cannot manage it: it has no way to answer "have I read enough to
 # start?" because it does not know how much reading it can still afford.
 #
-# Deliberately short and deliberately not task-specific. This is a fact about
-# the loop, not advice about the work, and the model is better placed than the
-# framework to decide what the fact means for the job in hand.
+# The facts alone did not move a model that was still researching: a
+# deliverable task then ends with nothing written. So each notice also says to
+# produce the deliverables from what is already known, flagging gaps.
 # Each level is (steps_left, small_cap_fraction_left, text).
 #
 # The trigger is STEPS REMAINING, not fraction consumed. What a model can act
@@ -596,24 +597,36 @@ _BUDGET_NOTICES = (
     (
         20,
         0.50,
-        "Step budget: {used} of {total} used, {left} left. If the part of "
-        "this task that changes something has not started yet, start it now "
-        "rather than gathering more context.",
+        "Step budget: {used} of {total} used, {left} left. Stop gathering "
+        "context. If the task asks for files or other deliverables, start "
+        "producing them now from what you already have, and mark any value "
+        "you could not verify as unverified. If the part of this task that "
+        "changes something has not started yet, start it now.",
     ),
     (
         10,
         0.25,
-        "Step budget: {left} of {total} steps left. Do the most important "
-        "remaining action now and refine it afterwards if there is room — a "
-        "finished smaller change is worth more than an unfinished larger one.",
+        "Step budget: {left} of {total} steps left. Write the requested "
+        "deliverables now with what you have, marking unverified values as "
+        "unverified. A finished deliverable with its gaps flagged is worth "
+        "more than a better one never written; refine afterwards if there "
+        "is room.",
     ),
     (
         5,
         0.10,
-        "Step budget: {left} of {total} steps left. Finish what you can in "
-        "them, then answer. After the last one no tool can be called and "
-        "anything not already done is lost.",
+        "Step budget: {left} of {total} steps left. Do not research further. "
+        "Write anything requested that does not exist yet, then answer with "
+        "your findings and what is still missing. After the last step no tool "
+        "can be called and anything not already written is lost.",
     ),
+)
+
+# What any forced wrap-up asks for, so a stop still yields the deliverables.
+_DELIVER_NOW = (
+    "If the task asks for files or other deliverables that do not exist yet, "
+    "write them now from what you already have, marking any value you could "
+    "not verify as unverified."
 )
 
 # Below this many steps the notices are noise: there is no room to act on
@@ -1704,7 +1717,7 @@ Do NOT wrap conversational replies in JSON.
             silent_mode: If True, suppresses all console output for JSON-only usage (default: False)
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
-            max_plan_iterations: Maximum number of plan-execute-replan cycles (default: 3, 0 = unlimited)
+            max_plan_iterations: Plan-execute-replan cycles before a final answer is forced (default: 3, 0 = unlimited); binds only once half the step budget is spent
             max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError).
                           The first time the limit is hit the model gets one correction and the call is not run;
                           a repeat after that ends the turn. When the repeats that ran worked, the agent makes one
@@ -5785,7 +5798,11 @@ Do NOT wrap conversational replies in JSON.
             }
 
     def _generate_max_steps_message(
-        self, conversation: List[Dict], steps_taken: int, steps_limit: int
+        self,
+        conversation: List[Dict],
+        steps_taken: int,
+        steps_limit: int,
+        findings: bool = False,
     ) -> str:
         """Generate informative message when max steps is reached.
 
@@ -5793,6 +5810,8 @@ Do NOT wrap conversational replies in JSON.
             conversation: The conversation history
             steps_taken: Number of steps actually taken
             steps_limit: Maximum steps allowed
+            findings: Include the model's latest write-up, for the final
+                answer when no closing summary could be produced
 
         Returns:
             Informative message about what was accomplished
@@ -5817,12 +5836,44 @@ Do NOT wrap conversational replies in JSON.
                 message += f"  - {tool}: {count}x\n"
             message += "\n"
 
+        latest = self._latest_findings(conversation) if findings else ""
+        if latest:
+            message += f"Where I'd got to:\n\n{latest}\n\n"
+
         message += (
             "Ask me to continue and I'll pick up from here. From the command "
             f"line, `--max-steps {steps_limit + 50}` gives me more room.\n"
         )
 
         return message
+
+    _LATEST_FINDINGS_CHARS = 4000
+
+    def _latest_findings(self, conversation: List[Dict]) -> str:
+        """The model's most recent prose this turn, or ``""``."""
+        for msg in reversed(conversation):
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if isinstance(content, dict):
+                text = next(
+                    (
+                        content[key]
+                        for key in ("answer", "thought")
+                        if isinstance(content.get(key), str) and content[key].strip()
+                    ),
+                    "",
+                )
+            elif isinstance(content, str) and not content.lstrip().startswith("{"):
+                text = content
+            else:
+                text = ""
+            text = text.strip()
+            if text:
+                if len(text) > self._LATEST_FINDINGS_CHARS:
+                    text = text[: self._LATEST_FINDINGS_CHARS].rstrip() + "…"
+                return text
+        return ""
 
     def _unanswered_tool_call_messages(
         self, messages: List[Dict[str, Any]]
@@ -7235,7 +7286,7 @@ Do NOT wrap conversational replies in JSON.
         return f"{body.rstrip()}\n\n{statement}"
 
     def _gate_unsealed_answer(
-        self, answer: Optional[str]
+        self, answer: Optional[str], keep_answer: bool = False
     ) -> Tuple[Optional[str], List[str]]:
         """Judge an answer that never passed the loop's own completion gate.
 
@@ -7243,6 +7294,10 @@ Do NOT wrap conversational replies in JSON.
         cap — lands here, so an unverified save or an unfinished extraction is
         reported as incomplete on those paths too. ``None`` stays ``None`` when
         nothing is unverified: the caller's max-steps fallback owns that text.
+
+        ``keep_answer`` keeps *answer* ahead of the report instead of replacing
+        it: the step-cap reply was asked for what was found and what is
+        missing, and is often the only place the turn's findings exist.
         """
         self._check_extraction_sources()
         gaps = self._completion_evidence.gaps(answer or "", _claims_file_write)
@@ -7253,9 +7308,10 @@ Do NOT wrap conversational replies in JSON.
         if gaps:
             report = incomplete_answer(gaps)
             # Keep the error that ended the turn; add what stays unverified.
-            answer = (
-                f"{answer}\n\n{report}" if answer and self.error_history else report
+            keep = bool(answer and answer.strip()) and (
+                keep_answer or bool(self.error_history)
             )
+            answer = f"{answer}\n\n{report}" if keep else report
         elif answer and answer.strip() and not self.error_history:
             self._note_ungrounded(answer, getattr(self, "_current_query", ""))
         # Items already extracted stay visible when the turn runs out.
@@ -7371,6 +7427,20 @@ Do NOT wrap conversational replies in JSON.
         pending.put(text)
         return True
 
+    def _plan_cap_reached(self, steps_taken: int, steps_limit: int) -> bool:
+        """Whether finishing this plan must force the final answer.
+
+        The plan count alone stopped a 300-line audit after three short plans
+        with most of its steps unspent, so the cap binds only once at least
+        half the step budget is gone. Below that, the step budget, repetition
+        detection and timeouts still bound the turn.
+        """
+        if self.max_plan_iterations <= 0:
+            return False
+        if self.plan_iterations < self.max_plan_iterations:
+            return False
+        return steps_limit - steps_taken <= steps_limit // 2
+
     def _announce_step_budget(
         self,
         messages: List[Dict],
@@ -7409,10 +7479,18 @@ Do NOT wrap conversational replies in JSON.
                 level for level, _, _ in _BUDGET_NOTICES if level >= steps_level
             )
             notice = template.format(used=steps_taken, total=steps_limit, left=left)
-            for sink in (messages, conversation):
-                # Two dicts, not one shared object: downstream code edits
-                # entries in this list in place.
-                sink.append({"role": "user", "content": notice})
+            evidence = getattr(self, "_completion_evidence", None)
+            pending = evidence.unwritten_requests() if evidence is not None else []
+            if pending:
+                named = ", ".join(f"`{path}`" for path in pending)
+                notice += f" Requested but not written yet: {named}."
+            # Per-turn guidance: in this turn's request, never in saved history,
+            # or the next turn opens with a stale "5 steps left".
+            transient = getattr(messages, "append_transient", messages.append)
+            # Two dicts, not one shared object: downstream code edits
+            # entries in this list in place.
+            transient({"role": "user", "content": notice})
+            conversation.append({"role": "user", "content": notice})
             logger.debug(
                 "Budget notice at %d step(s) left: step %d/%d",
                 left,
@@ -7900,9 +7978,8 @@ Do NOT wrap conversational replies in JSON.
                             )
 
                             # Check if we've reached max plan iterations
-                            reached_max_iterations = (
-                                self.max_plan_iterations > 0
-                                and self.plan_iterations >= self.max_plan_iterations
+                            reached_max_iterations = self._plan_cap_reached(
+                                steps_taken, steps_limit
                             )
 
                             # Prepare message for final answer with the completed plan context
@@ -7931,18 +8008,20 @@ Do NOT wrap conversational replies in JSON.
                                     f"Maximum plan iterations ({self.max_plan_iterations}) reached for task: {user_input}\n"
                                     f"Task: {user_input}\n"
                                     f"Plan information:\n{plan_context_str}\n\n"
-                                    f"IMPORTANT: You MUST now provide a final answer with an honest assessment:\n"
+                                    f"IMPORTANT: Stop planning and researching. {_DELIVER_NOW}\n"
+                                    f"Then give a final answer with an honest assessment:\n"
                                     f"- Summarize what was successfully accomplished\n"
                                     f"- Clearly state if anything remains incomplete or if errors occurred\n"
                                     f"- If the task is fully complete, state that clearly\n\n"
-                                    f'Provide {{"thought": "...", "goal": "...", "answer": "..."}}'
+                                    f'Answer with {{"thought": "...", "goal": "...", "answer": "..."}}'
                                 )
                             else:
                                 completion_message = (
                                     "You have successfully completed all steps in the plan.\n"
                                     f"Task: {user_input}\n"
                                     f"Plan information:\n{plan_context_str}\n\n"
-                                    f"Plan iteration: {self.plan_iterations}/{self.max_plan_iterations if self.max_plan_iterations > 0 else 'unlimited'}\n"
+                                    f"Plan iteration: {self.plan_iterations}; "
+                                    f"{steps_limit - steps_taken} of {steps_limit} steps left\n"
                                     "Check if more work is needed:\n"
                                     "- If the task is complete and verified, provide a final answer\n"
                                     "- If critical validation/testing is needed, you may create ONE more plan\n"
@@ -10067,6 +10146,8 @@ Do NOT wrap conversational replies in JSON.
                         )
                         if response in ["y", "yes"]:
                             steps_limit += 50
+                            # A new budget: its 20/10/5 notices are due again.
+                            self._budget_notices_sent = set()
                             self.console.print_info(
                                 f"✓ Continuing with {steps_limit} total steps...\n"
                             )
@@ -10104,7 +10185,7 @@ Do NOT wrap conversational replies in JSON.
                 logger.warning("Could not write the step-limit summary: %s", e)
                 final_answer = (
                     self._generate_max_steps_message(
-                        conversation, tool_steps, steps_limit
+                        conversation, tool_steps, steps_limit, findings=True
                     ).rstrip()
                     + f"\n\nThe summary of what I found couldn't be written: {e}"
                 )
@@ -10116,7 +10197,8 @@ Do NOT wrap conversational replies in JSON.
                     # mid-extraction still reports incomplete, it does not
                     # promote the closing reply to a verified one.
                     gated, completion_gaps = self._gate_unsealed_answer(
-                        self.finalize_answer(cap_answer, conversation)
+                        self.finalize_answer(cap_answer, conversation),
+                        keep_answer=True,
                     )
                     final_answer = self._with_verification_scope(gated)
                     verification_scope_applied = True
@@ -10200,7 +10282,9 @@ Do NOT wrap conversational replies in JSON.
         )
 
         if not verification_scope_applied and not account_refused:
-            final_answer, completion_gaps = self._gate_unsealed_answer(final_answer)
+            final_answer, completion_gaps = self._gate_unsealed_answer(
+                final_answer, keep_answer=max_steps_reached
+            )
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context
@@ -10234,7 +10318,7 @@ Do NOT wrap conversational replies in JSON.
                 if final_answer
                 else self._with_verification_scope(
                     self._generate_max_steps_message(
-                        conversation, steps_taken, steps_limit
+                        conversation, steps_taken, steps_limit, findings=True
                     )
                     + (
                         "\n\n" + self._extraction_ledger.render()

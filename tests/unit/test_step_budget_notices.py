@@ -258,3 +258,67 @@ def test_an_agent_that_never_ran_init_does_not_crash(agent):
     bare = _Host.__new__(_Host)
 
     assert bare._announce_step_budget([], [], 30, 60) is None
+
+
+# ------------------------------------------------------ per-turn, not persisted
+
+
+def test_the_notice_is_sent_but_not_recorded_for_later_turns(agent):
+    """The notice is true for this turn only. Saved, the next turn would open
+    with a stale "5 of 60 steps left" while holding a fresh budget."""
+    from gaia.agents.base.history import TurnMessages
+
+    messages, conversation = TurnMessages(), []
+    messages.append({"role": "user", "content": "price the BOM"})
+
+    notice = agent._announce_step_budget(messages, conversation, 40, 60)
+
+    assert {"role": "user", "content": notice} in list(messages)
+    assert all("Step budget" not in str(m) for m in messages.recorded)
+    saved = messages.finish("Here is the BOM.")
+    assert all("Step budget" not in str(m.get("content")) for m in saved)
+    # The turn's trace still shows it.
+    assert conversation == [{"role": "user", "content": notice}]
+
+
+# ------------------------------------------------------------------- wording
+
+
+def test_every_notice_says_to_deliver_now_and_flag_unverified_values(agent):
+    sent, _ = _run(agent, 60)
+
+    for _step, notice in sent:
+        assert "deliverable" in notice or "Write anything requested" in notice
+        assert "unverified" in notice or "still missing" in notice
+    assert "Do not research further" in sent[-1][1]
+
+
+def test_the_notice_names_requested_files_not_written_yet(agent):
+    from gaia.agents.base.completion import CompletionEvidence
+
+    agent._completion_evidence = CompletionEvidence(
+        "Save the recommendation as recommendation.md", os.getcwd()
+    )
+
+    notice = agent._announce_step_budget([], [], 50, 60)
+
+    assert "Requested but not written yet: `recommendation.md`." in notice
+
+
+def test_a_written_request_is_not_named(agent, tmp_path):
+    from gaia.agents.base.completion import CompletionEvidence
+
+    evidence = CompletionEvidence(
+        "Save the recommendation as recommendation.md", str(tmp_path)
+    )
+    evidence.record(
+        "write_file",
+        {"file_path": str(tmp_path / "recommendation.md")},
+        {"status": "success"},
+        True,
+    )
+    agent._completion_evidence = evidence
+
+    notice = agent._announce_step_budget([], [], 50, 60)
+
+    assert "not written yet" not in notice
