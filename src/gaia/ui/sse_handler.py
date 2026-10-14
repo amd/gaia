@@ -44,10 +44,17 @@ def tool_result_failed(data: Any) -> bool:
 
     A non-zero ``return_code`` counts even under ``status: "success"``, as it
     does in the agent loop, unless the tool marked it ``expected_exit``.
+    Tools that return a JSON string (the email agent's ``{"ok": false, ...}``
+    envelope) are read the same way.
     """
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except ValueError:
+            return False
     if not isinstance(data, dict):
         return False
-    if data.get("status") in FAILED_TOOL_STATUSES:
+    if data.get("status") in FAILED_TOOL_STATUSES or data.get("ok") is False:
         return True
     code = data.get("return_code")
     return (

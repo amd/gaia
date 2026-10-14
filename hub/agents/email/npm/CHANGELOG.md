@@ -6,6 +6,11 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **A bulk archive, label, star or mark-read that changed nothing now says it
+  failed.** When every message in the batch failed, the agent used to report
+  the action as done. It now reports the failure with each message's reason,
+  and a batch where only some messages failed says how many and which.
+
 - **Gmail and Outlook work behind a corporate TLS-inspecting proxy.** The agent
   now trusts the operating system's certificate store, as pip does, so a proxy
   root such as Zscaler's no longer fails every mailbox request with
