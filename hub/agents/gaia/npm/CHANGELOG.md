@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Exploring data no longer asks twice per step.** Each step wrote a helper
+  script into the agent's own scratch folder and ran it, so a data task asked
+  for approval about 30 times. Writes inside that folder now run unasked
+  (writes anywhere else still ask), and running a script from it offers
+  `always_scope` "Python scripts in GAIA's scratch folder", so one answer
+  covers the next script for the session.
 - **A command no loaded skill grants asks you instead of failing.** `python
   script.py`, `git commit` or `pip install` with no skill granting them used to
   come back as "needs a skill grant … declares 'shell:execute:git' in its

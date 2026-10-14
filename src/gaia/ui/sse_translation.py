@@ -72,7 +72,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG, plain_risk_note
-from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
+from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, SCRATCH_ARG
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
     derive_narration,
@@ -745,7 +745,14 @@ def render_command_summary(
     and its folder follow in brackets — a hidden key is a hidden side effect.
     """
     workspace = workspace if workspace is not None else os.getcwd()
-    shown_keys = {"command", "working_directory", "code", "file_path", RISK_NOTE_ARG}
+    shown_keys = {
+        "command",
+        "working_directory",
+        "code",
+        "file_path",
+        RISK_NOTE_ARG,
+        SCRATCH_ARG,
+    }
     if args.get(RISK_NOTE_ARG) and tool in COMMAND_SUMMARY_TOOLS:
         # GAIA's checks did not vouch for this line, so the user approves the
         # exact text the shell receives: never shortened, never reflowed.

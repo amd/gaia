@@ -372,7 +372,10 @@ land is additionally **code-inert**: its instructions load, but any
 `tools.py`/scripts stay unregistered until a human runs
 `gaia skill promote <name>` in a terminal. Everything else — reading,
 indexing, querying, web fetching, memory, and the read-only `check_cli_setup`
-— runs without asking.
+— runs without asking. A write or edit inside the agent's own scratch
+folder (`gaia-scratch-…` under the system temp folder) runs without asking too,
+and running a script from it carries `always_scope` "Python scripts in GAIA's
+scratch folder".
 
 The eight live-browser tools are gated by a **hook**, not a set, so a name
 alone does not tell you whether a call will ask. `browser_login` always asks.

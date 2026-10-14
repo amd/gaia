@@ -36,6 +36,7 @@ it. Scoping keeps the affordance and takes away the blast radius.
 
 from __future__ import annotations
 
+import os
 import posixpath
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -158,6 +159,10 @@ PATH_ACCESS_PROMPT_TOOL = "allow_path_access"
 
 _UNGRANTABLE_TOOLS = frozenset({"capture_skill", PATH_ACCESS_PROMPT_TOOL})
 
+#: Display-only prompt argument: the agent's own scratch folder, set by the
+#: agent when a script it runs sits inside it.
+SCRATCH_ARG = "_scratch_dir"
+
 #: Tools whose every call is the same kind of action, so the family IS the
 #: tool. The label says how wide that is.
 _FAMILY_TOOLS = {
@@ -200,9 +205,35 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
         return _path_scope(tool_name, args)
     if tool_name in _SKILL_TOOLS:
         return _named_scope(tool_name, args, _SKILL_ARG_NAMES)
+    scratch = _scratch_scope(tool_name, args)
+    if scratch is not None:
+        return scratch
     if tool_name in _FAMILY_TOOLS:
         return GrantScope(keys=(tool_name,), label=_FAMILY_TOOLS[tool_name])
     return None
+
+
+def _scratch_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
+    """The grant for running a script in the agent's own scratch folder, or None.
+
+    Narrower than "running Python files": it covers that one folder, which the
+    agent owns and the user's files are not in. Offered only when the agent
+    marked the call (``SCRATCH_ARG``) and the path really is inside it.
+    """
+    scratch = args.get(SCRATCH_ARG)
+    if tool_name != "execute_python_file" or not isinstance(scratch, str):
+        return None
+    target = path_argument(args)
+    if not target or not scratch:
+        return None
+    root = os.path.normcase(os.path.normpath(scratch))
+    inside = os.path.normcase(os.path.normpath(target))
+    if not inside.startswith(root.rstrip("\\/") + os.sep):
+        return None
+    return GrantScope(
+        keys=(f"{tool_name}:scratch:{root}",),
+        label="Python scripts in GAIA's scratch folder",
+    )
 
 
 def _first_str(args: Dict[str, Any], names: Sequence[str]) -> str:
@@ -323,6 +354,7 @@ __all__ = [
     "PATH_ACCESS_PROMPT_TOOL",
     "PATH_TOOLS",
     "RISK_NOTE_ARG",
+    "SCRATCH_ARG",
     "grant_scope",
     "path_argument",
 ]

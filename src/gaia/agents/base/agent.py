@@ -45,6 +45,8 @@ from gaia.agents.base.completion import CompletionEvidence, incomplete_answer
 from gaia.agents.base.console import (
     AgentConsole,
     SilentConsole,
+    edit_is_inside,
+    edit_target,
     user_denial_message,
 )
 from gaia.agents.base.context_eviction import (
@@ -88,7 +90,11 @@ from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
 from gaia.agents.base.task_lessons import attach as attach_task_lessons
-from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
+from gaia.agents.base.tool_grants import (
+    PATH_ACCESS_PROMPT_TOOL,
+    PATH_TOOLS,
+    SCRATCH_ARG,
+)
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
@@ -5227,6 +5233,17 @@ Do NOT wrap conversational replies in JSON.
         insists = getattr(getattr(self, "console", None), "insists_on_asking", None)
         if callable(insists) and insists(tool_name, tool_args) is True:
             return False
+        # The agent's own scratch folder holds no user data: writing a helper
+        # script there is not a change to anything the user owns.
+        if tool_name in PATH_TOOLS:
+            reader = getattr(self, "_read_validator", None)
+            scratch = getattr(
+                reader() if callable(reader) else None, "scratch_dir", None
+            )
+            target = edit_target(tool_args)
+            if scratch and target and edit_is_inside(target, (str(scratch),)):
+                logger.info("Writing %s in the agent's scratch folder unasked", target)
+                return True
         covers = getattr(self, "skill_grant_covers_call", None)
         if not callable(covers):
             return False
@@ -5534,6 +5551,16 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
+        # A script in the agent's own scratch folder can be granted as such —
+        # narrower than "running Python files", and it covers the next one.
+        if tool_name == "execute_python_file" and isinstance(prompt_args, dict):
+            reader = getattr(self, "_read_validator", None)
+            scratch = getattr(
+                reader() if callable(reader) else None, "scratch_dir", None
+            )
+            target = edit_target(prompt_args)
+            if scratch and target and edit_is_inside(target, (str(scratch),)):
+                prompt_args = {**prompt_args, SCRATCH_ARG: str(scratch)}
         # A one-time call is approved on its own prompt, which carries its
         # risk note — never through the reroute question above.
         one_time = isinstance(prompt_args, dict) and bool(
