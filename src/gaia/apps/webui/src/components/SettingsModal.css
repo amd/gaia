@@ -44,6 +44,9 @@
 .status-value { font-size: 13px; font-weight: 600; font-family: var(--font-mono); }
 .status-value.ok { color: var(--accent-green); }
 .status-value.warn { color: var(--accent-yellow); }
+/* Model names can be very long; clip them and keep the full name in the tooltip. */
+.model-server-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.model-server-backend { margin-top: 12px; }
 .status-hint {
     font-size: 11px;
     color: var(--text-muted);

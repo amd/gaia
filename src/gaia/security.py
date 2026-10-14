@@ -641,6 +641,8 @@ class PathValidator:
         """
         self._env_scope: Optional[List[Path]] = env_allowed_paths()
         self.allowed_paths: Set[Path] = set()
+        # Readable but never writable, e.g. a loaded skill's own folder.
+        self.read_only_paths: Set[Path] = set()
         self.scratch_dir: Optional[Path] = None
 
         # A host-supplied scope must not union with the machine-global grants the
@@ -847,6 +849,40 @@ class PathValidator:
             return
         self.allowed_paths.add(Path(path).resolve())
         logger.debug(f"Added allowed path: {path}")
+
+    def add_read_only_path(self, path: str) -> None:
+        """Let reads under *path* through without widening the write scope.
+
+        ``validate_read`` accepts anything inside *path* (secret files are
+        still refused); ``is_path_allowed`` and every write check ignore it.
+
+        Args:
+            path: A directory or file to make readable.
+
+        Raises:
+            ValueError: *path* resolves to a drive root or covers the home folder.
+        """
+        real = Path(_real_path(path))
+        if real == Path(real.anchor) or _path_is_within(Path.home().resolve(), real):
+            raise ValueError(
+                f"Refusing read-only access to '{path}' (resolves to '{real}'): it "
+                "covers the drive or home folder. Grant a narrower folder."
+            )
+        self.read_only_paths.add(real)
+        logger.debug("Added read-only path: %s", path)
+
+    def remove_read_only_path(self, path: str) -> None:
+        """Withdraw a grant made by :meth:`add_read_only_path`.
+
+        Args:
+            path: The path that was granted.
+        """
+        self.read_only_paths.discard(Path(_real_path(path)))
+
+    def _in_read_only_scope(self, path: str) -> bool:
+        """Whether *path*, symlinks and ``..`` resolved, is under a read-only grant."""
+        real = Path(_real_path(path))
+        return any(_path_is_within(real, root) for root in self.read_only_paths)
 
     def set_access_prompt(self, prompt: Optional[Callable[[Path], bool]]) -> None:
         """Ask through *prompt* instead of stdin when a path is out of scope.
@@ -1182,7 +1218,9 @@ class PathValidator:
         Returns:
             Tuple of (is_allowed, reason). If not allowed, reason explains why.
         """
-        if not self.is_path_allowed(path, prompt_user=prompt_user):
+        if not self._in_read_only_scope(path) and not self.is_path_allowed(
+            path, prompt_user=prompt_user
+        ):
             return (False, self.access_denied_message(path))
 
         is_blocked, reason = self.is_read_blocked(path)

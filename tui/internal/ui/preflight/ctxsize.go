@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // Why a start command has to carry the context window.
@@ -104,17 +105,7 @@ func readDefaultDevice(p hostProbe) string {
 }
 
 func configPath(p hostProbe) string {
-	if file := strings.TrimSpace(p.getenv(configFileEnv)); file != "" {
-		return file
-	}
-	if dir := strings.TrimSpace(p.getenv(configDirEnv)); dir != "" {
-		return filepath.Join(dir, "config.json")
-	}
-	home, err := p.homeDir()
-	if err != nil || home == "" {
-		return ""
-	}
-	return filepath.Join(home, ".gaia", "config.json")
+	return lemonade.ConfigPathFrom(p.getenv, p.homeDir)
 }
 
 // --- attaching it to a command ----------------------------------------------
