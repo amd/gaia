@@ -1250,7 +1250,29 @@ _PLACEHOLDER_LITERALS = frozenset(
     {"todo", "tbd", "...", "…", "placeholder", "fill in", "fill_in"}
 )
 _CONTENT_ARG_NAMES = frozenset(
-    {"content", "code", "script", "text", "body", "new_string", "new_content"}
+    {
+        "content",
+        "code",
+        "script",
+        "text",
+        "body",
+        "new_string",
+        "new_content",
+        "new_implementation",
+    }
+)
+_WHOLE_FILE_WRITE_TOOLS = frozenset(
+    {"write_file", "write_markdown_file", "write_python_file"}
+)
+# Empty is a legitimate edit (it deletes), so only a stand-in is refused here.
+_REPLACEMENT_ARGS = {
+    "edit_file": "new_content",
+    "edit_python_file": "new_content",
+    "replace_function": "new_implementation",
+}
+# The only files a write may leave empty: their emptiness is the content.
+EMPTY_BY_DESIGN_FILES = frozenset(
+    {"__init__.py", "__init__.pyi", "py.typed", ".gitkeep", ".keep", ".nojekyll"}
 )
 # What to look for, not a value to fill in: searching for "TODO" is real work.
 _SEARCH_ARG_NAMES = frozenset(
@@ -1276,6 +1298,36 @@ def _placeholder_value(name: str, value: str) -> bool:
     return False
 
 
+def _empty_by_design(file_path: Any) -> bool:
+    if not isinstance(file_path, str):
+        return False
+    return os.path.basename(file_path.replace("\\", "/")) in EMPTY_BY_DESIGN_FILES
+
+
+def _write_stand_in(tool_name: str, tool_args: Any) -> Optional[Tuple[str, Any]]:
+    """``(arg, value)`` when a file write would put a stand-in on disk, else None.
+
+    The whole content must be the stand-in: a document that merely contains
+    "TODO" or "<placeholder>" is real content. Empty content is a stand-in
+    except for :data:`EMPTY_BY_DESIGN_FILES`.
+    """
+    if not isinstance(tool_args, dict):
+        return None
+    if tool_name in _WHOLE_FILE_WRITE_TOOLS and "content" in tool_args:
+        content = tool_args["content"]
+        if content is None or (isinstance(content, str) and not content.strip()):
+            if _empty_by_design(tool_args.get("file_path")):
+                return None
+            return "content", content
+        if isinstance(content, str) and _placeholder_value("content", content):
+            return "content", content
+    arg = _REPLACEMENT_ARGS.get(tool_name)
+    value = tool_args.get(arg) if arg else None
+    if isinstance(value, str) and value.strip() and _placeholder_value(arg, value):
+        return arg, value
+    return None
+
+
 def _plan_step_placeholder(
     tool_name: str, tool_args: Any, _path: str = ""
 ) -> Optional[Tuple[str, Any]]:
@@ -1285,10 +1337,12 @@ def _plan_step_placeholder(
     such as ``SCRIPT_PLACEHOLDER`` where real content belongs; executed
     as-is, that stand-in is what lands on disk.
     """
-    if not _path and tool_name == "write_file" and isinstance(tool_args, dict):
-        content = tool_args.get("content")
-        if content is None or (isinstance(content, str) and not content.strip()):
-            return "content", content
+    if not _path and isinstance(tool_args, dict):
+        if tool_name in _WHOLE_FILE_WRITE_TOOLS and "content" not in tool_args:
+            return "content", None
+        found = _write_stand_in(tool_name, tool_args)
+        if found is not None:
+            return found
     if isinstance(tool_args, dict):
         items = tool_args.items()
     elif isinstance(tool_args, list):
@@ -5617,6 +5671,32 @@ Do NOT wrap conversational replies in JSON.
                     err = "Unknown tool name. Use only the tools you were given."
                 logger.error(err)
                 return {**NOT_EXECUTED, "status": "error", "error": err}
+
+        # A stand-in written to disk replaces the real file with that word.
+        stand_in = _write_stand_in(tool_name, tool_args)
+        if stand_in is not None:
+            arg, value = stand_in
+            logger.warning(
+                "%s not run: argument %r is a placeholder (%r)", tool_name, arg, value
+            )
+            empty = value is None or not str(value).strip()
+            why = (
+                "is empty. Only files that are empty by design ("
+                + ", ".join(sorted(EMPTY_BY_DESIGN_FILES))
+                + ") are written empty"
+                if empty
+                else f"is a placeholder ({value!r}), not the real content"
+            )
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error_type": "invalid_arguments",
+                "error": (
+                    f"{tool_name} was NOT run: its '{arg}' argument {why}. Writing "
+                    "it would replace the file's content with that. Call "
+                    f"{tool_name} again with the complete, real content."
+                ),
+            }
 
         # Validate first, confirm second: a call the guardrails already refuse
         # must never reach a prompt.
