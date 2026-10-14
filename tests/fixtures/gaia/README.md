@@ -21,6 +21,7 @@ carry `# FIXTURE-SYNC:` comments naming the fixture).
 | `prepare_fixture_hub.py` | per-run hub build | ephemeral `eval-test-publisher` keypair, signs + trust-adds; no key committed |
 | `serve_fixtures.py` | HTTP for web/rss/hub | routed layout (below) |
 | `quality_gate_thresholds.json` / `perf_gate_thresholds.json` | eval gates | quality: `enforce: true` (0.60 judged pass rate, 5.0 average score); perf: `enforce: false` until the first runner baseline |
+| `flagship_regression_gate.json` | `eval_flagship.yml` regression gate | re-runs per flip, category/aggregate thresholds, and the quarantine of unstable scenarios (each with its measured pass rate and tracking issue) |
 
 ## Serving (routed layout — matches the scenario URLs exactly)
 

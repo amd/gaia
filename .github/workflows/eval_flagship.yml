@@ -52,65 +52,68 @@
 # text-processing assumptions bash invites — the eval prints an `Output:` line
 # containing a backslash path, which bash test/`[ -f ]` cannot consume.
 #
-# WHY THIS REPORTS BY DEFAULT INSTEAD OF HARD-FAILING (`enforce`, default false)
+# WHY THIS BLOCKS ON CONFIRMED REGRESSIONS, NOT ON EVERY FLIP (`enforce`, default true)
 # ---------------------------------------------------------------------------
-# `gaia eval agent --compare BASELINE CURRENT` already exits 2 on any status /
-# score / time regression and 0 otherwise (src/gaia/cli.py). Wiring that exit
-# code straight to the step result would make this job PERMANENTLY RED, because
-# some regressions here are EXPECTED and accepted: code-generation and
-# data-analysis scenarios are dropping from a 35B MoE to a ~4B dense model. A
-# gate that is always red gates nothing — people stop reading it.
+# A single run is a noisy measurement. Across the 11 runs on main with
+# scorecards (2026-09-30..10-11, Gemma-4-E4B, claude-sonnet-4-6), a third of
+# the scenarios passed somewhere between 20% and 80% of the time, and every run
+# flipped 8-16 baseline passes to FAIL. `gaia eval agent --compare` exits 2 on
+# any one flip, so wiring it to the step result made this job red on every run,
+# and a gate that is always red gates nothing. That is why this used to report
+# only - which let real regressions through as warnings nobody read.
 #
-# So the default posture is REPORT: every category is compared, the full diff is
-# printed, the scorecards are uploaded as an artifact, and a regression surfaces
-# as a `::warning::` annotation. Make it blocking either by dispatching with
-# `enforce: true`, or — since workflow_dispatch is only offered for workflows
-# already on the default branch — by putting `[eval-enforce]` in the PR TITLE,
-# which works on a branch before this file has merged.
+# The verdict now comes from src/gaia/eval/regression_gate.py, configured by
+# tests/fixtures/gaia/flagship_regression_gate.json (the one source of its
+# thresholds and quarantine):
 #
-# This mirrors how intentional regressions are handled elsewhere: the
-# `--allow-regression` flag in src/gaia/eval/scorecard_gate.py prints a
-# `::warning::` and returns 0 rather than pretending the regression did not
-# happen, and test_email_agent_eval.yml ships its gates in report mode until the
-# bars are trustworthy. Same idea, inverted default: report unless asked to
-# enforce.
+#   - CONFIRM BEFORE COUNTING. A PASS->FAIL flip is re-run on the same machine,
+#     in the eval step while the backend is still up, up to `confirm_reruns`
+#     times. It is a regression only if a re-run fails and none passes; re-runs
+#     that only time out or error leave it unresolved (a ::warning::, no
+#     verdict). Re-run scorecards and logs land in eval-out/<category>/reruns/
+#     and the verdict lists each re-run's result.
+#   - CATEGORY THRESHOLDS. A category fails on K confirmed regressions or a
+#     pass-rate drop over P points (with 6 or fewer gated scenarios, one
+#     confirmed loss is already over P=15); the whole run (the aggregate job)
+#     fails when its judged passes fall below the baseline's.
+#   - VISIBLE QUARANTINE. Scenarios measured as unstable still run and every
+#     failure is a ::warning:: with its measured rate and tracking issue, but they
+#     never gate.
 #
-# REPORT MODE COVERS "WORSE" AND "DIDN'T MEASURE" ALIKE — VISIBLY. `--compare`
-# scores only scenarios present on BOTH sides: scenarios that vanish from the
-# current run land in an `only_in_baseline` bucket that is NOT part of its exit-2
-# verdict (runner.py::compare_scorecards). Verified: dropping 6 of 7 rag_quality
-# scenarios still exits 0. So a broken harness would otherwise sail through as "no
-# regression". The integrity gate below is what refuses that: it fails if a
-# baseline scenario is missing or any scenario produced no measurement
-# (infra_error / errored / timeout / blocked / budget_exceeded / skipped).
+# Replaying the other 10 of those runs against the baseline through these rules,
+# with each re-run passing at the scenario's measured rate, leaves about 5% of
+# them red instead of all of them. So this enforces by default
+# on every trigger. `enforce: false` on a dispatch reports instead. An
+# intentional regression is called out in the PR and its category's baseline
+# replaced from the next nightly, never by switching the gate off.
 #
-# That gate used to ignore `enforce` and fail unconditionally, on the reasoning
-# that report mode may soften "worse" but never "did not measure". The reasoning
-# is sound and the outcome was not: the embedder cannot load on this runner
-# (#3016), which is an environment defect no PR can fix, so the gate was red on
-# every PR touching the path filter — including seven whose diffs never went near
-# the eval — while this same job printed "report mode ... build stays green". A
-# check that is always red gates nothing, and one that advertises non-blocking
-# while blocking is worse than either honest posture.
+# Score-only drops and >2x wall-clock deltas are still printed by `--compare` in
+# the compare step, but they do not gate: both come from one run and the time
+# baseline from one machine. Read them as a prompt to look.
 #
-# So `enforce` now decides the EXIT CODE for an incomplete run as well as a worse
-# one. It never decides VISIBILITY: in report mode every finding is still a
-# `::warning::` annotation AND a block in the job summary, so an incomplete run
-# cannot be mistaken for a complete one. `enforce: true` restores blocking for
-# both.
+# COMPLETENESS IS A SEPARATE SWITCH (`enforce_integrity`, default false). The
+# regression gate only judges scenarios both sides measured. `--compare` scores
+# only scenarios present on BOTH sides, so a broken harness would otherwise sail
+# through as "no regression" (verified: dropping 6 of 7 rag_quality scenarios
+# still exits 0). The integrity gate below refuses that: it fails if a baseline
+# scenario is missing or any scenario produced no measurement (infra_error /
+# errored / timeout / blocked / budget_exceeded / skipped).
+#
+# It does not block by default because every one of those 11 runs had such a
+# scenario (media_transcribe_planted_fact skips for want of a model on every run,
+# and 2-16 scenarios time out per run), so it would be red on every run again.
+# It always reports - a ::warning:: per finding and a job-summary block - and it
+# blocks under `enforce_integrity: true` or `[eval-enforce]` in the PR TITLE
+# (the title tag works before this file is on the default branch, where
+# workflow_dispatch is not offered). A category the regression gate was asked to
+# judge that produced no scorecard at all still fails the regression gate.
 #
 # ONE EXCEPTION, AND IT IS ABOUT BLAME, NOT CONVENIENCE: when the RAG embedder
 # will not load on the runner at all (#3016, EMBEDDER_OK=false), rag_quality and
-# context_retention warn instead of failing. Every other non-measurement says
-# something about the PR under test; #3016 says only that this SoC cannot serve
-# the embedder for ANY commit, so failing on it made the gate permanently red
-# and unread. Nothing else is softened — tool_selection's own non-measurements
-# still fail. Remove the exception when #3016 closes. See the gate step below.
-#
-# TIME REGRESSIONS. `--compare` folds a >2x per-scenario wall-clock delta into
-# the same exit 2 as a quality regression. The baseline was captured on this
-# pool, so a time regression is comparable, but it comes from one run: re-run a
-# lone time-only flip before treating it as a defect.
+# context_retention are reported NOT MEASURED instead of failing. Every other
+# non-measurement says something about the PR under test; #3016 says only that
+# this SoC cannot serve the embedder for ANY commit. Remove the exception when
+# #3016 closes. See the gate step below.
 #
 # SEQUENCING. `--compare` only DIFFS two scorecards — it does NOT run an eval.
 # So each category is evaluated first, the ABSOLUTE run directory is parsed from
@@ -180,10 +183,19 @@ on:
   workflow_dispatch:
     inputs:
       enforce:
-        description: 'Fail the build on a regression (false = report as ::warning:: only)'
+        description: 'Fail the build on a confirmed regression (false = report as ::warning:: only)'
+        required: false
+        type: boolean
+        default: true
+      enforce_integrity:
+        description: 'Also fail the build when a scenario produced no measurement (default: report only)'
         required: false
         type: boolean
         default: false
+      confirm_reruns:
+        description: 'Re-runs per PASS->FAIL flip before it counts (blank = confirm_reruns in tests/fixtures/gaia/flagship_regression_gate.json)'
+        required: false
+        default: ''
       eval_model:
         description: 'Driver + judge model for the eval harness (must match the baseline)'
         required: false
@@ -223,6 +235,9 @@ on:
       - 'hub/agents/*/python/**'
       - 'tests/fixtures/eval_baselines/**'
       - '.github/workflows/eval_flagship.yml'
+      # The regression gate and its thresholds/quarantine decide the verdict.
+      - 'src/gaia/eval/regression_gate.py'
+      - 'tests/fixtures/gaia/flagship_regression_gate.json'
       # The lane map decides which categories run at all, so an edit that orphans
       # one has to be able to trigger the gate that would notice.
       - 'eval/ci_lanes.json'
@@ -294,22 +309,29 @@ env:
   # `setup.index_documents` block 403s and scores as a failure (#3585).
   # Declares the checkout's corpus, nothing wider.
   GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
-  # A dispatch input always wins. Otherwise `[eval-enforce]` in the PR TITLE opts
-  # in — workflow_dispatch is not offered until this file is on the default
-  # branch, so without this there is no way to enforce pre-merge. Reads the PR
-  # title, not `head_commit.message`: that context exists only on `push`, so it
-  # is permanently null now that this triggers on `pull_request`.
+  # The regression verdict blocks on every trigger; only a dispatch with
+  # `enforce: false` turns it into a report. See the header for why.
+  ENFORCE: ${{ github.event.inputs.enforce || 'true' }}
+  # Completeness (the integrity gate, missing per-category baselines, a dead
+  # embedder) reports unless asked. A dispatch input wins; otherwise
+  # `[eval-enforce]` in the PR TITLE opts in - workflow_dispatch is not offered
+  # until this file is on the default branch. Reads the PR title, not
+  # `head_commit.message`: that context exists only on `push`.
   #
   # `edited` is deliberately NOT in the `types:` above — a title tweak must not
   # be able to launch a multi-hour run on the shared slot. So retitling alone
   # does not re-run the gate: add the tag, then push (or close/reopen).
-  ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.pull_request.title, '[eval-enforce]') && 'true') || 'false' }}
+  ENFORCE_INTEGRITY: ${{ github.event.inputs.enforce_integrity || (contains(github.event.pull_request.title, '[eval-enforce]') && 'true') || 'false' }}
+  # Thresholds, quarantine and the default re-run count for the regression gate.
+  GATE_CONFIG: tests/fixtures/gaia/flagship_regression_gate.json
+  # Blank unless a dispatch overrides the config's confirm_reruns for one run.
+  CONFIRM_RERUNS: ${{ github.event.inputs.confirm_reruns }}
   # PINNED, and that is not a stale value to bump. `--model` is not a judge-only
   # knob: runner.py passes it to `claude -p`, which DRIVES every scenario as well
   # as scoring it. So the driver is part of the agent under test, and the
   # committed baseline was recorded under this value. Changing it compares two
-  # different agents and folds the new driver's wall clock into the same >2x
-  # time verdict, so change it only together with a re-captured baseline.
+  # different agents and makes the new driver's wall clock read as >2x time
+  # regressions, so change it only together with a re-captured baseline.
   # #2859 moved every other Claude workflow to Opus 5. Override per-run via the
   # dispatch input above.
   EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
@@ -979,7 +1001,7 @@ jobs:
           $categories = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
           if (-not (Test-Path $env:BASELINE_DIR)) {
             if ($env:ENFORCE -eq 'true') {
-              Write-Host "::error::enforce=true but no baseline exists at $env:BASELINE_DIR, so there is nothing to enforce against and every category would pass by default. Land a flagship baseline first (run the eval on this hardware and commit the scorecards as $env:BASELINE_DIR\scorecard_<category>.json), or re-run without [eval-enforce]."
+              Write-Host "::error::enforce=true but no baseline exists at $env:BASELINE_DIR, so there is nothing to enforce against and every category would pass by default. Land a flagship baseline first (copy a nightly's lane scorecards from this pool unedited as $env:BASELINE_DIR\scorecard_<category>.json), or re-dispatch with enforce: false."
               exit 1
             }
             Write-Host "::warning::NO BASELINE COMMITTED. Regression detection is OFF for this run: the eval still measures every category and uploads its scorecards, but nothing compares them to a known-good run. Restore the flagship baseline in $env:BASELINE_DIR."
@@ -989,9 +1011,10 @@ jobs:
               $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
               if (-not (Test-Path $baseline)) {
                 # A category added since the baseline was captured has none until
-                # its first nightly; that is reported, and never enforced against.
-                if ($env:ENFORCE -eq 'true') {
-                  Write-Host "::error::enforce=true but there is no baseline at $baseline, so '$category' would pass by default. Commit its scorecard from a nightly on this hardware first, or re-run without [eval-enforce]."
+                # its first nightly. The regression gate reports it "not
+                # compared"; refusing to run at all is a completeness call.
+                if ($env:ENFORCE_INTEGRITY -eq 'true') {
+                  Write-Host "::error::enforce_integrity=true but there is no baseline at $baseline, so '$category' would pass by default. Commit its scorecard from a nightly on this hardware first, or re-run without [eval-enforce]."
                   exit 1
                 }
                 Write-Host "::warning::${category}: NOT COMPARED - no baseline at $baseline yet. The category still runs and its scorecard is uploaded; commit that scorecard as the baseline."
@@ -1200,14 +1223,14 @@ jobs:
           # never measured either and the gate blocked PRs while reporting nothing
           # (run 33286140041: 12 min of preflight, every category skipped).
           #
-          # The annotation level tracks `enforce` for the same reason the integrity
-          # gate's does: #3016 is an environment defect, so on a report-mode PR run
-          # a red ::error:: on a green job is noise that trains people to ignore the
-          # check. The text is identical either way - only its severity moves.
+          # The annotation level tracks `enforce_integrity` for the same reason the
+          # integrity gate's does: #3016 is an environment defect, so a red
+          # ::error:: on a job it does not fail is noise that trains people to
+          # ignore the check. The text is identical either way - only its severity moves.
           if (-not $embedOk -and $env:DEEP_DIAG -ne 'true') {
             Show-LemonadeTaskLog | Out-Null
             "EMBEDDER_OK=false" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-            $level = if ($env:ENFORCE -eq 'true') { 'error' } else { 'warning' }
+            $level = if ($env:ENFORCE_INTEGRITY -eq 'true') { 'error' } else { 'warning' }
             Write-Host "::${level}::The RAG embedder $embeddingModel will not load on this runner - a known Strix Halo limitation tracked in #3016, NOT a fault in this PR. The chat model loaded and served over the same llama-server binary earlier in this step, and the same embedder loads fine on the Strix Point boxes, so llama-server works here and the gap is specific to the embeddings path on this SoC. Re-running this gate will not clear it. rag_quality and context_retention cannot be measured at all; tool_selection WILL still run, but only its two corpus-free scenarios (no_tools_needed, smart_discovery) can produce a measurement - the other three index documents and need the same embedder. The deeper rungs (purge the model from disk, load without --ubatch-size 2048, load with everything else unloaded) are skipped on PR runs on purpose because they disturb other jobs on this shared box - re-dispatch with deep_diagnostics: true if you need the full elimination ladder."
             exit 0
           }
@@ -1511,7 +1534,7 @@ jobs:
             # `gaia eval agent --category X` exits 0 whatever the scenarios score -
             # it writes the scorecard and returns. So a non-zero exit here is a real
             # harness crash, never a regression; the regression verdict comes from
-            # the --compare step below.
+            # the regression gate step below.
             #
             # No --agent-type: the eval already defaults to the flagship
             # (gaia.eval.config.DEFAULT_AGENT_TYPE) and every scenario scores it,
@@ -1536,7 +1559,7 @@ jobs:
                 Write-Host "::error::Lane '$env:EVAL_LANE' measured NOTHING. The RAG embedder will not load on this runner (#3016), the run is cut to EVAL_CATEGORIES_NO_EMBEDDER, and none of this lane's categories ($($all -join ', ')) are on that list. This lane's green/red says nothing about quality. Fix the embedder on the devlab-dispatch image, or re-dispatch once #3016 is resolved; the embedder ladder output is in the preflight step above."
                 exit 1
               }
-              Write-Host "::warning::Embedder unavailable (#3016) - measuring $($categories -join ', ') only. The run is cut to the categories listed in EVAL_CATEGORIES_NO_EMBEDDER; the rest of this lane is not run and the integrity gate below reports it as NOT MEASURED (and fails the job when enforce=true). Not every skipped category needs the embedder - the list is what this runner has been shown to measure without it, not a claim about the others."
+              Write-Host "::warning::Embedder unavailable (#3016) - measuring $($categories -join ', ') only. The run is cut to the categories listed in EVAL_CATEGORIES_NO_EMBEDDER; the rest of this lane is not run and the integrity gate below reports it as NOT MEASURED (and fails the job when enforce_integrity=true). Not every skipped category needs the embedder - the list is what this runner has been shown to measure without it, not a claim about the others."
             }
             Write-Host "Lane '$env:EVAL_LANE' categories this run: $($categories -join ', ') ($($categories.Count) of $($all.Count))"
             foreach ($category in $categories) {
@@ -1565,6 +1588,22 @@ jobs:
               # Write-Host leave $LASTEXITCODE alone, but reading it first keeps
               # that from being a thing a later edit has to remember.
               $code = $LASTEXITCODE
+              # Confirm each PASS->FAIL flip by re-running it HERE: the backend
+              # (and, for gaia_mcp, the stub) only lives for this step. Each
+              # re-run is one `gaia eval agent --scenario`, so this stays serial.
+              $confirmCode = 0
+              if ($code -eq 0) {
+                $confirmArgs = @(
+                  "--config", $env:GATE_CONFIG, "confirm", "--category", $category,
+                  "--eval-log", "eval-out\$category.log", "--results-dir", "eval-out",
+                  "--baseline-dir", $env:BASELINE_DIR,
+                  "--backend", $env:BACKEND_URL, "--model", $env:EVAL_MODEL
+                )
+                if ($env:CONFIRM_RERUNS) { $confirmArgs += @("--reruns", $env:CONFIRM_RERUNS) }
+                $global:LASTEXITCODE = 0
+                python -m gaia.eval.regression_gate @confirmArgs
+                $confirmCode = $LASTEXITCODE
+              }
               $swCat.Stop()
               if ($category -eq 'gaia_mcp') {
                 python $stub remove
@@ -1580,6 +1619,10 @@ jobs:
                 # which PowerShell turns into exit 0 and the step passes GREEN
                 # having measured nothing.
                 Write-Host "::error::gaia eval agent --category $category crashed with exit $code (a harness failure, not a regression verdict)."
+                exit 1
+              }
+              if ($confirmCode -ne 0) {
+                Write-Host "::error::Re-running ${category}'s PASS->FAIL flips failed with exit $confirmCode (a harness failure, not a regression verdict). The error above names the re-run and its log under eval-out\$category\reruns."
                 exit 1
               }
             }
@@ -1619,11 +1662,10 @@ jobs:
           $ErrorActionPreference = "Stop"
           # This step COLLECTS; it does not judge. A category with no scorecard is
           # reported here and lands in the integrity gate below as "no scorecard
-          # produced", which is where the enforce policy is applied - once, in one
-          # place. Exiting non-zero here as well would re-introduce a second,
-          # enforce-blind blocking decision, which is exactly the bug being fixed.
-          # A genuine harness crash still fails at the eval step itself.
-          $level = if ($env:ENFORCE -eq 'true') { 'error' } else { 'warning' }
+          # produced", which is where the enforce_integrity policy is applied -
+          # once, in one place (the regression gate also refuses to call it
+          # clean). A genuine harness crash still fails at the eval step itself.
+          $level = if ($env:ENFORCE_INTEGRITY -eq 'true') { 'error' } else { 'warning' }
 
           $all = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
           $categories = $all
@@ -1687,20 +1729,14 @@ jobs:
           # tested (tests/unit/eval/test_integrity_gate.py) rather than being
           # seventy lines of untestable PowerShell.
           #
-          # IT HONORS `enforce`, and that is the fix for the state this gate was in.
-          # An earlier revision failed UNCONDITIONALLY on the reasoning that report
-          # mode may soften "worse" but never "did not measure". Sound in principle;
-          # in practice the embedder cannot load on this runner (#3016, an
-          # environment defect no PR can fix), so the gate went red on every PR
-          # touching its path filter while the job's own summary printed "report
-          # mode ... build stays green". A workflow that advertises non-blocking and
-          # blocks anyway is worse than either posture: it blocked 7 PRs whose diffs
-          # had nothing to do with the eval, and people stop reading a check that is
-          # always red. So `enforce` now decides the EXIT CODE for both incomplete
-          # and worse-than-baseline; it never decides VISIBILITY. In report mode
-          # every finding is still a ::warning:: annotation and still lands in the
-          # job summary, so an incomplete run is impossible to mistake for a
-          # complete one - it just does not veto an unrelated PR.
+          # IT HONORS `enforce_integrity`, not `enforce`. An earlier revision
+          # failed UNCONDITIONALLY ("report mode may soften worse, never did not
+          # measure"); in practice the embedder cannot load on this runner (#3016)
+          # and every run has scenarios that time out or skip, so it was red on
+          # every PR touching its path filter and people stopped reading it. The
+          # switch decides the EXIT CODE only, never VISIBILITY: every finding is
+          # still a ::warning:: annotation and lands in the job summary, so an
+          # incomplete run is impossible to mistake for a complete one.
           #
           # `skipped` (SKIPPED_NO_DOCUMENT) counts as unmeasured for a subtle reason
           # documented in the module: those scenarios keep their ids, so the
@@ -1728,7 +1764,7 @@ jobs:
           } else {
             foreach ($c in $all) { $gateArgs += @("--category", $c) }
           }
-          if ($env:ENFORCE -eq 'true') { $gateArgs += "--enforce" }
+          if ($env:ENFORCE_INTEGRITY -eq 'true') { $gateArgs += "--enforce" }
 
           # Reset first: a command that fails to LAUNCH leaves $LASTEXITCODE at its
           # previous value, so a stale 0 would read as a complete run.
@@ -1736,14 +1772,13 @@ jobs:
           python -m gaia.eval.integrity_gate @gateArgs
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE for lane '$env:EVAL_LANE'. Download this run's 'eval-$env:EVAL_LANE' artifact: it carries the traces, the backend log (backend.err.log) and the Lemonade task logs from this machine, which no longer exists."
+            Write-Host "::error::Integrity gate failed (exit $code) with enforce_integrity=$env:ENFORCE_INTEGRITY for lane '$env:EVAL_LANE'. Download this run's 'eval-$env:EVAL_LANE' artifact: it carries the traces, the backend log (backend.err.log) and the Lemonade task logs from this machine, which no longer exists."
             exit 1
           }
 
-      - name: Compare each category against its committed flagship baseline
+      - name: Regression gate - compare each category against its committed flagship baseline
         if: ${{ !cancelled() }}
         run: |
-          $regressed = @()
           $failedCompare = $false
 
           # Say it, do not skip quietly. With nothing to compare against, this
@@ -1766,6 +1801,10 @@ jobs:
             $ok = ($env:EVAL_CATEGORIES_NO_EMBEDDER -split '\s+') | Where-Object { $_ }
             $categories = @($all | Where-Object { $ok -contains $_ })
           }
+          # The full per-scenario diff, for the reader. `--compare` exits 2 on
+          # ANY status, score or time change, so its exit code is NOT the verdict
+          # any more - the regression gate below is. Only a tool failure (any
+          # other exit) is fatal here.
           foreach ($category in $categories) {
             $current = "eval-out\$category\scorecard.json"
             $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
@@ -1774,58 +1813,40 @@ jobs:
             Write-Host "  ${category}: $baseline  ->  $current"
             Write-Host "=================================================================="
             if (-not (Test-Path $current)) {
-              # NOT $failedCompare: "we did not measure" is the integrity gate's
-              # verdict and it has already rendered it under the enforce policy.
-              # Counting it again here would fail the job regardless of enforce.
-              Write-Host "::warning::${category}: no scorecard produced - nothing to compare (already reported by the integrity gate)."
+              Write-Host "${category}: no scorecard produced - nothing to diff (the integrity and regression gates report it)."
               continue
             }
             if (-not (Test-Path $baseline)) {
-              # Preflight already refused this under enforce=true.
               Write-Host "::warning::${category}: NOT COMPARED - no baseline at $baseline yet (reported at preflight)."
               continue
             }
-            # `--compare` exits 2 on status/score/time regressions, 0 otherwise
-            # (src/gaia/cli.py). It only DIFFS - the eval above already ran.
             # Reset first: a launch failure would otherwise inherit the PREVIOUS
-            # category's 2 and be misreported as this category regressing.
+            # category's exit code.
             $global:LASTEXITCODE = 0
             gaia eval agent --compare "$baseline" "$current"
-            switch ($LASTEXITCODE) {
-              0 { Write-Host "${category}: no regression vs baseline." }
-              2 {
-                Write-Host "::warning::${category}: regression detected vs $baseline (see the diff above)."
-                $regressed += $category
-              }
-              default {
-                Write-Host "::error::${category}: compare failed with exit $LASTEXITCODE (not a regression verdict - a harness/IO error)."
-                $failedCompare = $true
-              }
+            if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 2) {
+              Write-Host "::error::${category}: compare failed with exit $LASTEXITCODE (not a regression verdict - a harness/IO error)."
+              $failedCompare = $true
             }
           }
 
           Write-Host ""
           Write-Host "=================================================================="
-          Write-Host "  SUMMARY - enforce=$env:ENFORCE"
+          Write-Host "  REGRESSION GATE - lane $env:EVAL_LANE, enforce=$env:ENFORCE"
           Write-Host "=================================================================="
-          if ($regressed.Count -gt 0) {
-            Write-Host "Regressed categories: $($regressed -join ' ')"
-          } else {
-            Write-Host "Regressed categories: none"
-          }
-          Write-Host "Baselines: $env:BASELINE_DIR"
-          Write-Host "Scorecards, traces and logs uploaded as the 'eval-$env:EVAL_LANE' artifact."
-          Write-Host ""
-          Write-Host "Code-generation and data-analysis scenarios are EXPECTED to regress on"
-          Write-Host "this consolidation (35B MoE -> ~4B dense) and that tradeoff is accepted."
-          Write-Host "Read the per-scenario diff above before treating a regression as a bug."
-          Write-Host ""
-          Write-Host "TIME regressions (>2x per-scenario wall clock) count toward the same"
-          Write-Host "verdict, and are the weakest signal here. Each lane runs on a freshly"
-          Write-Host "provisioned devlab-dispatch machine, so a baseline captured on a"
-          Write-Host "different box of the same SoC carries that box's noise. Read a time"
-          Write-Host "verdict as a prompt to look, not as a result."
-          Write-Host "=================================================================="
+          # Confirmed PASS->FAIL flips only (re-runs in eval-out\<category>\reruns),
+          # quarantine excluded, thresholds from $env:GATE_CONFIG. Score-only and
+          # time-only changes in the diff above do not count.
+          $gateArgs = @(
+            "--config", $env:GATE_CONFIG, "gate",
+            "--baseline-dir", $env:BASELINE_DIR, "--results-dir", "eval-out",
+            "--lane", $env:EVAL_LANE
+          )
+          foreach ($c in $categories) { $gateArgs += @("--category", $c) }
+          if ($env:ENFORCE -eq 'true') { $gateArgs += "--enforce" }
+          $global:LASTEXITCODE = 0
+          python -m gaia.eval.regression_gate @gateArgs
+          $gateCode = $LASTEXITCODE
 
           # A compare that exits with something other than 0 or 2 is the TOOL
           # failing, not a verdict - `enforce` governs what a measurement is
@@ -1834,21 +1855,14 @@ jobs:
             Write-Host "::error::One or more comparisons could not be performed - 'gaia eval agent --compare' itself failed. This is a harness/IO error, not a regression verdict, so it fails regardless of enforce."
             exit 1
           }
-          if ($regressed.Count -gt 0) {
-            if ($env:ENFORCE -eq "true") {
-              Write-Host "::error::Regressions in: $($regressed -join ' '). enforce=true - failing the build. Fix the prompt/tooling and re-run, or (if the regression is intentional) regenerate the baseline with --save-baseline and call it out in the PR description."
-              exit 1
-            }
-            Write-Host "Report mode (enforce=false): regressions logged as warnings, build stays green."
-            Write-Host "Re-dispatch this workflow with enforce=true to make them blocking."
+          if ($gateCode -ne 0) {
+            Write-Host "::error::Confirmed regression in lane '$env:EVAL_LANE' (or a category with no scorecard), enforce=$env:ENFORCE. The CONFIRMED lines above name each scenario and its re-runs; their traces are in the 'eval-$env:EVAL_LANE' artifact. If the regression is intentional, say so in the PR and replace that category's baseline from the next nightly on this pool."
+            exit 1
           }
 
-          # THIS LINE IS THE REPORT MODE. GitHub appends
+          # Do not let the last `--compare` exit code (2) leak out: GitHub appends
           # `if (Test-Path variable:\LASTEXITCODE) { exit $LASTEXITCODE }` to every
-          # PowerShell step, so falling off the end here would re-export the LAST
-          # `--compare` exit code: a report-mode regression in the final category
-          # would fail the build anyway, and whether it did would depend on which
-          # category regressed. Same guard as install-lemonade/action.yml.
+          # PowerShell step. Same guard as install-lemonade/action.yml.
           $global:LASTEXITCODE = 0
 
       # Runs LAST of the run steps, and scans EVERY file under eval-out - the same
@@ -1905,6 +1919,7 @@ jobs:
             embedder_ok = ($env:EMBEDDER_OK -ne 'false')
             runner = $env:COMPUTERNAME
             enforce = ($env:ENFORCE -eq 'true')
+            enforce_integrity = ($env:ENFORCE_INTEGRITY -eq 'true')
             # Whether the agent under test could remember anything, recorded next
             # to the scores so a memory result is never read without it.
             memory_enabled = ($env:GAIA_MEMORY_DISABLED -ne '1')
@@ -1929,8 +1944,10 @@ jobs:
   # were never measured". This job is the one place the run is described as a
   # whole.
   #
-  # It REPORTS; it does not judge. Every lane already applied the enforce policy
-  # to its own result, and re-deciding here would make one regression read as two.
+  # It judges exactly one thing no lane can: the whole run's judged passes
+  # against the baseline's (src/gaia/eval/regression_gate.py `aggregate`). Every
+  # per-category verdict stays with its lane; re-deciding those here would make
+  # one regression read as two.
   aggregate:
     name: Scenario eval - all lanes
     needs: [lanes, agent-eval, flagship-tasks]
@@ -1977,6 +1994,18 @@ jobs:
             echo "are the only copy - download them before they expire (14 days)."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Regression gate - whole-run floor
+        run: |
+          set -euo pipefail
+          # Same reason as above: a file, stdlib-only, no gaia install. It reads
+          # each lane's scorecards and re-runs (reruns.json) from the artifacts.
+          args=(--config "$GATE_CONFIG" aggregate
+            --lanes-file eval/ci_lanes.json
+            --artifacts-dir lane-artifacts
+            --baseline-dir "$BASELINE_DIR")
+          if [ "$ENFORCE" = "true" ]; then args+=(--enforce); fi
+          python src/gaia/eval/regression_gate.py "${args[@]}"
+
   # Environment drift is the whole reason the nightly exists: PR runs are
   # path-filtered, so a Lemonade version bump, a model re-quantisation, a driver
   # or a runner-image change alters nothing in the repo and therefore triggers
@@ -1997,7 +2026,8 @@ jobs:
     needs: [agent-eval, flagship-tasks, aggregate]
     if: >-
       always() && github.event_name == 'schedule' &&
-      (needs.agent-eval.result != 'success' || needs.flagship-tasks.result != 'success')
+      (needs.agent-eval.result != 'success' || needs.flagship-tasks.result != 'success' ||
+      needs.aggregate.result == 'failure')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -2010,6 +2040,7 @@ jobs:
           LANES_RESULT: ${{ needs.agent-eval.result }}
           OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
           OUTCOMES_FAILED: ${{ needs.flagship-tasks.outputs.failed_suites }}
+          AGGREGATE_RESULT: ${{ needs.aggregate.result }}
         run: |
           set -euo pipefail
           # This job has no checkout, so every gh call names the repo; without it gh
@@ -2024,6 +2055,7 @@ jobs:
 
           - Run: ${RUN_URL}
           - Scenario lanes: \`${LANES_RESULT}\`
+          - Whole-run regression floor: \`${AGGREGATE_RESULT}\`
           - Outcomes (\`gaia eval tasks\`): \`${OUTCOMES_RESULT}\`${OUTCOMES_FAILED:+ - gate failed for: ${OUTCOMES_FAILED}}
 
           Start with the run's summary page: it names which lanes measured, which measured nothing, and
