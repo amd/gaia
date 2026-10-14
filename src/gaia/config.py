@@ -212,6 +212,7 @@ class GaiaConfig:
                 f"{value!r}."
             )
         return number
+
     #: Values ``llamacpp_backend`` accepts; ``auto`` (or empty) is stored as None.
     LLAMACPP_BACKEND_CHOICES = ("auto", "vulkan", "rocm", "metal", "cpu")
 
