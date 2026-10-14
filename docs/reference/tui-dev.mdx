@@ -166,6 +166,27 @@ drive (`GAIA_DAEMON_HOME` set) and relaunch.
 composer on an idle `chat`. With the `d` details pane open, it closes the pane
 first.
 
+## Copy and selection keys
+
+The terminal owns the mouse by default, so a plain drag is the terminal's own
+selection and the app never sees it. That selection can't scroll the
+transcript, which is why the app has its own.
+
+| Input | What happens | Code (`internal/ui/chat/`) |
+|---|---|---|
+| `Ctrl+T` | Toggles the app mouse (Cell-Motion capture); the status bar names the current owner | `selectmode.go`, `mousecapture.go` |
+| Drag, app mouse | In-app selection by content row, so it survives scrolling. Past the top or bottom edge a 50 ms tick scrolls up to 5 lines and extends it. Release copies over OSC 52 | `selection.go` |
+| `Shift`+click, app mouse | Extends the current selection and copies it | `selection.go` |
+| `Enter` / `Esc`, with a selection | Copies it again / clears it | `model.go` (`handleKey`) |
+| `/copy`, `/copy all` | Message picker (`↑`/`↓`, `Enter`, `Esc`) / whole transcript as markdown. Both run mid-turn | `copycmd.go` |
+| `Ctrl+Y`, `Ctrl+B` | Last answer / its last code block | `clipboard.go` |
+
+Copied text is plain: each message's span records its chrome (`msgSpan.gutter`,
+`bodyStart`/`bodyEnd`), and a message covered end to end is copied from its
+source markdown. The control API's `mouse` actions are single-point gestures, so
+a drag can't be driven through it; `selection_test.go` covers it, decoding the
+OSC 52 payload. OSC 52 is write-only, so a screen capture can't confirm a copy.
+
 ## Giving it a terminal
 
 The TUI queries terminal size and colour support at startup, so it needs a real

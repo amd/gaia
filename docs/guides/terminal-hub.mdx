@@ -438,14 +438,20 @@ By default the mouse belongs to your terminal, so you drag to select text and
 copy and paste with your terminal's own keys (`Ctrl+Shift+C` / `Ctrl+Shift+V`,
 `Cmd+C` / `Cmd+V`, or right-click). The wheel still scrolls the conversation:
 GAIA turns on your terminal's alternate scroll mode, which sends each wheel tick
-as `↑` / `↓`. Press `Ctrl+T` to hand the mouse to GAIA instead, for clickable
-links and double-click copy.
+as `↑` / `↓`. Your terminal's selection only covers what is on screen, though:
+dragging past the top or bottom of the conversation doesn't scroll it. To select
+something longer, press `Ctrl+T` to hand the mouse to GAIA, or copy without the
+mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
+`Ctrl+T` hint either way.
 
 | Mouse | What it does |
 |---|---|
 | Wheel | Scrolls the conversation |
 | Drag | Selects text, for your terminal's own copy |
-| `Ctrl+T` | Hands the mouse to GAIA: a printed `http(s)` link opens in your browser on click, and a double-click copies a whole message. Drag-select then needs `Shift` held (`Option` in iTerm2). `Ctrl+T` again gives the mouse back. Printed links are also real terminal hyperlinks, so terminals that support them (iTerm2, WezTerm, kitty, Windows Terminal, GNOME Terminal, foot, recent Alacritty) open them with their own gesture either way |
+| `Ctrl+T` | Hands the mouse to GAIA (the rows below). `Ctrl+T` again gives it back to your terminal |
+| Drag, after `Ctrl+T` | Selects inside GAIA. Drag past the top or bottom edge and the conversation scrolls, extending the selection. Releasing copies it as plain text: no `▶ You:` label, padding, borders or timings, and a message selected end to end is copied as its original markdown, so code blocks come out exactly. `Enter` copies it again, `Esc` clears it |
+| `Shift`+click, after `Ctrl+T` | Extends the selection to the click and copies it, in terminals that pass `Shift`+click to the app. Some, Windows Terminal among them, keep it for their own selection instead |
+| Click / double-click, after `Ctrl+T` | A printed `http(s)` link opens in your browser; a double-click copies the whole message. Printed links are also real terminal hyperlinks, so terminals that support them (iTerm2, WezTerm, kitty, Windows Terminal, GNOME Terminal, foot, recent Alacritty) open them with their own gesture either way |
 | Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. The palette takes the mouse only while it is open |
 
 | Command | What it does |
@@ -464,6 +470,8 @@ links and double-click copy.
 | `/full-access never` | Stop it coming back on future launches |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
 | `/cost help` | Where the rates come from, and how to set your own |
+| `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
+| `/copy all` | Copy the whole conversation as markdown |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
