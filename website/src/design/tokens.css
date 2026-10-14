@@ -77,9 +77,10 @@
   --g-code-faint: 138 138 146;  /* #8a8a92 — 5.74:1 */
   --g-code-accent: 255 75 81;   /* #FF4B51 the `$` prompt — the site's red */
   /* Status hues keep their conventional meaning inside a code panel (the design
-     language's "status keeps its hue" rule). These four are the Agent UI's dark
-     semantic set verbatim — cross-surface.test.ts holds them equal, so a green in
-     the browser and a green in the app are the same green. */
+     language's "status keeps its hue" rule). Green, amber and danger are the Agent
+     UI's dark semantic set verbatim — cross-surface.test.ts holds them equal, so a
+     green in the browser and a green in the app are the same green. Blue is
+     site-only: the app has no terminal pane to paint info lines in. */
   --g-code-green: 92 201 110;   /* #5CC96E success, strings — 9.40:1 */
   --g-code-blue: 111 180 255;   /* #6FB4FF information, numbers — 9.03:1 */
   --g-code-amber: 229 181 103;  /* #E5B567 warning, attention — 10.43:1 */

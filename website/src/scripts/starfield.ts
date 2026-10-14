@@ -183,12 +183,17 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
     raf = requestAnimationFrame(frame);
   };
 
+  // A still field has no loop to pick up the dimming, so scrolling redraws it —
+  // at most once per frame, however many scroll events arrive.
+  let stillRedraw = 0;
   const onScroll = () => {
     if (moving()) {
       boost = Math.min(1.8, boost + Math.abs(scrollY - lastScroll) * 0.004);
-    } else {
-      // A still field has no loop to pick up the dimming, so redraw it once.
-      draw(0);
+    } else if (!stillRedraw) {
+      stillRedraw = requestAnimationFrame(() => {
+        stillRedraw = 0;
+        draw(0);
+      });
     }
     lastScroll = scrollY;
   };
@@ -225,6 +230,7 @@ export function mountStarField(canvas: HTMLCanvasElement, opts: StarFieldOptions
 
   return () => {
     cancelAnimationFrame(raf);
+    cancelAnimationFrame(stillRedraw);
     ro.disconnect();
     removeEventListener('scroll', onScroll);
     removeEventListener('pointermove', onMove);
