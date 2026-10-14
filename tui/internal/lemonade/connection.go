@@ -4,6 +4,7 @@
 package lemonade
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -74,13 +75,15 @@ func embeddedDir() (string, bool) {
 	return filepath.Join(dir, "lemonade"), true
 }
 
-// ResolveBaseURL keeps an explicitly selected endpoint, then checks the
-// environment, the private runtime, and finally Lemonade's standard port.
+// ResolveBaseURL keeps an explicitly selected endpoint, then the user's choice
+// (LEMONADE_BASE_URL, else the saved external server), the private runtime,
+// and finally Lemonade's standard port. Mirrors Python's
+// resolve_lemonade_base_url.
 func ResolveBaseURL(base string) string {
 	if base = strings.TrimSpace(base); base != "" {
 		return normalizeBaseURL(base)
 	}
-	if base = strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")); base != "" {
+	if base = configuredURL(); base != "" {
 		return normalizeBaseURL(base)
 	}
 	if state := ReadEmbedded(); state != nil {
@@ -101,26 +104,34 @@ func normalizeBaseURL(base string) string {
 	return base
 }
 
-// APIKeyFor scopes automatically discovered credentials to the private
-// endpoint that issued them. A user-supplied environment key is an explicit
-// override and remains available for other configured Lemonade servers.
-func APIKeyFor(base string) string {
-	if key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY")); key != "" {
-		return key
+// APIKeyFor is the key to send to base: LEMONADE_API_KEY, else the key saved
+// for the user's own server (only to that server), else GAIA's own server's
+// key (only to its recorded endpoint). An error means a key was saved for base
+// but could not be fetched; sending none would only earn a confusing 401.
+func APIKeyFor(ctx context.Context, base string) (string, error) {
+	if key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY")); key != "" && !ownCredentials() {
+		return key, nil
+	}
+	if err := ChoiceError(); err != nil {
+		return "", err
+	}
+	target := ResolveBaseURL(base)
+	if key, ok, err := savedExternalKey(ctx, target); err != nil || ok {
+		return key, err
 	}
 	state := ReadEmbedded()
 	if state == nil || state.APIKey == "" {
-		return ""
+		return "", nil
 	}
-	u, err := url.Parse(ResolveBaseURL(base))
+	u, err := url.Parse(target)
 	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Port() != strconv.Itoa(state.Port) {
-		return ""
+		return "", nil
 	}
 	// lemond binds localhost. Treat its IPv4/IPv6 spellings as the same
 	// endpoint, without extending that trust to arbitrary 127/8 addresses.
 	switch strings.ToLower(u.Hostname()) {
 	case "localhost", "127.0.0.1", "::1":
-		return state.APIKey
+		return state.APIKey, nil
 	}
-	return ""
+	return "", nil
 }
