@@ -178,6 +178,8 @@ def _python_script_run_context(
     """
     script = Path(script).resolve()
     env = child_env()
+    # The tools decode the output as UTF-8; the locale codec can't print a ✓.
+    env["PYTHONIOENCODING"] = "utf-8"
     if project_dir is None:
         return script.parent, env
     project = Path(project_dir).resolve()
@@ -1862,6 +1864,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "has_errors": True,
                     }
                 env = child_env()
+                env["PYTHONIOENCODING"] = "utf-8"
                 if project:
                     existing = env.get("PYTHONPATH")
                     env["PYTHONPATH"] = (

@@ -22,6 +22,10 @@
 - A Python run that exits non-zero now returns `status: "error"` with an
   `error` naming the exit code and the last stderr line, instead of
   `status: "success"`.
+- A script that prints a character outside the Windows console codec (`✓`,
+  CJK, emoji) no longer crashes with `UnicodeEncodeError` when the agent runs
+  from source: both tools ask the child for UTF-8 output, which is what they
+  decode.
 - Every file tool now checks the same allowed-folders rule as `read_file`:
   listing and searching folders (`list_files` included), indexing documents,
   watching folders, and the files `text_to_speech` and the export tools save. A folder you
