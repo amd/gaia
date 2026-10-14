@@ -7,7 +7,6 @@ was deleted or re-indexed, and every provider/model combination the notice
 can be asked to describe.
 """
 
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -224,6 +223,7 @@ def test_local_notice_promises_nothing_leaves_and_cloud_says_what_does():
 
 
 def test_session_response_notice_is_clean_for_cloud_sessions():
+    pytest.importorskip("fastapi", reason="the sessions router needs fastapi")
     from gaia.ui.routers.sessions import _resolved_session_response
 
     assert callable(_resolved_session_response)
