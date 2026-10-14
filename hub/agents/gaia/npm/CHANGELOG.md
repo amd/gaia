@@ -22,6 +22,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   respond" while chat worked. With a local or cloud chat model the ping now
   reports the port the agent talks to, and it still never starts a stopped
   server. A Claude session still reports the port it started with.
+- **Long commands no longer hold the conversation hostage.** The agent can start
+  a dev server, build, test suite, download or export in the background
+  (`start_process`), keep working, and check on it in the same turn or a later
+  one (`process_status`, `read_process_output`, `wait_for_process`,
+  `stop_process`). A background command passes the same allowlist and approval
+  as `run_shell_command` and starts only when a person approves it or full
+  access is on; at most 8 run at once, each keeps at most 4 MiB of
+  output on disk, and stopping one — or closing the session — kills everything
+  it spawned. When one finishes mid-turn, the agent is told at its next step.
+  Tools: 95 → 100.
 - **The Agent UI's Skills settings list this agent's skills.** With the agent
   installed from the Hub, the page said the agent package was not installed
   and to run `gaia init`, which changed nothing: the bundled skills live

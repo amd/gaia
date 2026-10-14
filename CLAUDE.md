@@ -656,6 +656,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `file_search` | `gaia.agents.tools.file_tools.FileSearchToolsMixin` | Fuzzy/glob file search |
 | `file_io` | `gaia.agents.tools.file_io_tools.FileIOToolsMixin` | Read/write/edit files |
 | `shell` | `gaia.agents.tools.shell_tools.ShellToolsMixin` | Sandboxed shell commands |
+| `process` | `gaia.agents.tools.process_tools.ProcessToolsMixin` | Run long commands in the background, check on them later (needs `shell`) |
 | `cli_setup` | `gaia.agents.tools.cli_setup_tools.CliSetupToolsMixin` | Install and sign in to a skill's CLI |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | Screen capture |
 | `filesystem` | `gaia.agents.tools.filesystem_tools.FileSystemToolsMixin` | File system navigation |

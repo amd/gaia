@@ -63,8 +63,9 @@ _spec.loader.exec_module(capability_matrix)
 # `wait_for_condition`, plus `sleep`, the three cli_setup tools, and the
 # persistent shell session's `get_shell_state` / `reset_shell_session`), plus
 # the eight live-browser tools. 95 since per-turn tool selection went off by
-# default: `load_tools` registers only while it is on.
-_EXPECTED_TOOLS_TOTAL = 95
+# default: `load_tools` registers only while it is on. 100 with the five
+# background-process tools.
+_EXPECTED_TOOLS_TOTAL = 100
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
 # 16 with `sleep`, which joins the core set rather than a bundle: waiting out a
@@ -73,7 +74,8 @@ _EXPECTED_CORE_COUNT = 16
 # 25: the `cli_setup` bundle, `shell_session` (get_shell_state,
 # reset_shell_session), plus `browser_nav` and `browser_use` — the browser
 # tools arrive as two bundles so one pull-in cannot exhaust the dynamic slots.
-_EXPECTED_BUNDLE_COUNT = 25
+# 26 with `background_processes`.
+_EXPECTED_BUNDLE_COUNT = 26
 
 _EXPECTED_SKILL_LIBRARY_TOOLS = frozenset(
     {

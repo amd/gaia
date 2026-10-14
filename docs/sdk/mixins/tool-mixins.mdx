@@ -38,6 +38,7 @@ mixin and calling its `register_*_tools()` method. Each row is the exact
 | `file_search` | `from gaia.agents.tools.file_tools import FileSearchToolsMixin` | Fuzzy/glob file search |
 | `file_io` | `from gaia.agents.tools.file_io_tools import FileIOToolsMixin` | Read/write/edit files |
 | `shell` | `from gaia.agents.tools.shell_tools import ShellToolsMixin` | Sandboxed shell commands |
+| `process` | `from gaia.agents.tools.process_tools import ProcessToolsMixin` | Long commands in the background, checked on later ([spec](/spec/process-tools-mixin)); needs `shell` |
 | `cli_setup` | `from gaia.agents.tools.cli_setup_tools import CliSetupToolsMixin` | Install and sign in to a skill's CLI ([how it works](/guides/gaia#setting-up-a-cli-a-skill-needs)) |
 | `screenshot` | `from gaia.agents.tools.screenshot_tools import ScreenshotToolsMixin` | Screen capture |
 | `filesystem` | `from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin` | File system navigation |
@@ -129,6 +130,13 @@ class MyAgent(Agent, ShellToolsMixin):
         # - wait_for_condition(command, working_directory=None,
         #                      timeout=120, poll_interval=5)
 ```
+
+To run a command without holding the turn — a dev server, a build, a test
+suite — add `ProcessToolsMixin` alongside it and call
+`self.register_process_tools()`. `start_process` passes the same policy as
+`run_shell_command` and returns an id at once; `process_status`,
+`wait_for_process`, `read_process_output` and `stop_process` check on it later.
+See [ProcessToolsMixin](/spec/process-tools-mixin).
 
 ---
 

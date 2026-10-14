@@ -1,0 +1,158 @@
+---
+title: "ProcessToolsMixin"
+description: "Run long commands in the background, keep working, and check on them later"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/tools/process_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/process_tools.py) · [`background_process.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/background_process.py)
+</Info>
+
+<Note>
+**Component:** ProcessToolsMixin
+**Module:** `gaia.agents.tools.process_tools`
+**Import:** `from gaia.agents.tools.process_tools import ProcessToolsMixin`
+**Registry name:** `process` (needs `shell` on the same agent)
+</Note>
+---
+
+## Overview
+
+`run_shell_command` holds the turn until its command exits. ProcessToolsMixin
+starts a command — a dev server, a build, a test suite, a download, a data
+export — and returns at once, so the agent keeps working and looks in on it
+later, in the same turn or a later one.
+
+| Tool | What it does |
+|------|--------------|
+| `start_process(command, working_directory=None, name="")` | Launch a command line in the background; returns its id (`p1`, `p2`, …) |
+| `process_status(process_id="", tail_lines=20)` | State, exit code, runtime and output the model has not seen yet. With no id, lists every process |
+| `read_process_output(process_id, offset=0, limit=8000)` | Page through the full output by byte offset; a negative offset counts back from the end |
+| `wait_for_process(process_id, timeout=120, pattern="")` | Wait for exit, or until the output matches a regex (`"Listening on"`); at most 600s, ends early on Stop |
+| `stop_process(process_id)` | Kill the process and everything it started |
+
+`start_process` watches a new process for two seconds before returning, so a
+command that fails at once — a typo, a missing script — comes back with its exit
+code and output instead of a `running` that is already false.
+
+## Same policy as `run_shell_command`
+
+There is no separate background policy. `start_process` and `run_shell_command`
+both clear a line through `ShellToolsMixin._prepare_shell_line`, so a background
+launch gets, for every segment of every pipeline on the line:
+
+- the allowlist, the confirmation tiers and the `TIER_REFUSE` list — `gh auth token`
+  or `echo x > f` is refused before anyone is asked, with the same error;
+- the skill grants and the path checks on arguments, `cd` targets and
+  `working_directory`;
+- the rate limit (a launch costs one slot) and, under full access, the audit record.
+
+`start_process` is in `TOOLS_REQUIRING_CONFIRMATION`, so a person approves each
+launch. A run that only pre-approves prompts (`GAIA_AUTO_APPROVE_TOOLS`,
+`auto_approve_gated_tools`) or has nobody to ask starts nothing in the
+background, not even a read-only command: in the foreground that command still
+ends at its timeout, and a background process has none. Full access is the
+exception, as it is for the shell. A read-only skill grant that waives the prompt for `run_shell_command`
+does **not** waive it here: consent to read with `gh` is not consent to leave it
+running. "Always allow" is scoped to the command, as it is for the other shell
+tools. Each step launches the way `run_shell_command` would launch it — argv or
+shell — so a skill-granted CLI is never handed to `cmd.exe` here either.
+
+## Lifecycle
+
+Processes belong to the agent, not to the turn that started them. An agent
+cached per session — the TUI sidecar, the Agent UI, an interactive `gaia chat` —
+can start a build in one turn and read its result in the next.
+
+The model learns about a finish two ways:
+
+- **When it looks**: any status, wait or stop result after the exit carries the
+  exit code and the final output.
+- **When it does not**: at the next step boundary of a running turn (the first
+  step of the next turn included), the loop adds one message per process that
+  finished unobserved, framed as an automatic notice rather than something the
+  user said. Each finish is reported once.
+
+A finished check runner — `pytest`, `npm test`, `cargo build`, … — carries the
+same `check_result` `run_shell_command` attaches, so a background test run
+counts as a test run for the verification footer. A process still running
+declares no check.
+
+## Bounds
+
+| Limit | Value | When reached |
+|-------|-------|--------------|
+| Running at once, per agent | 8 | `start_process` refuses and lists what is running |
+| Finished processes kept | 32 | the oldest finished one is dropped, with its log |
+| Output kept on disk, per process | 4 MiB | the log rotates at half; the newest output is kept, and offsets stay absolute |
+| Shown per status | last 20 lines (max 200), at most 4000 chars | the result names the offset the unshown output starts at |
+| One wait | 600s | still running at the deadline is reported, not an error |
+
+Logs live under the agent's scratch directory (`<scratch>/processes/`), which the
+path policy already allows, so `run_shell_command` can `grep` a log by the
+`log_file` path a status returns. A `\r`-redrawn progress bar is shown as its
+last frame.
+
+## Stopping, and nothing outliving the agent
+
+| | Windows | Linux / macOS |
+|--|--|--|
+| Containment | every process is created suspended, placed in a kill-on-close **job object**, then resumed | every process leads its own **process group** |
+| `stop_process` | `TerminateJobObject` — the whole tree, including children whose parent already exited | `SIGTERM` to each group, `SIGKILL` after 3s |
+| Agent closes (`close()`, session eviction, `atexit`) | every process stopped, logs deleted | same |
+| Agent is hard-killed | the OS closes the job handle; kill-on-close takes every member | a `/bin/sh` guardian holding a pipe from the agent sees it close and `SIGKILL`s every registered group |
+| Ctrl+C at the agent's console | not delivered: each process gets its own process group | not delivered: each process gets its own session |
+
+If a process cannot be placed under that control — the job object cannot be
+created, or the guardian cannot be reached — it is killed and `start_process`
+fails with an error saying so, rather than starting something nothing could stop.
+
+A line that has finished may leave a child running. On Windows it stays in the
+job, so `stop_process` and agent exit still reach it. On POSIX it stays reachable
+only while it is in its process group: a child that calls `setsid` (a classic
+daemon) has left the group and is out of reach, as it would be from any shell.
+
+The guardian is a shell script rather than Python because the flagship ships as
+a frozen binary. Groups are unregistered within seconds of emptying, so a
+process-group id the OS reuses is not one the guardian, `stop_process` or agent
+close would kill.
+
+If the log cannot rotate — on Windows, while something else holds it open —
+output keeps flowing to it up to the cap and anything past that is discarded;
+the status reports `output_problem` with the byte count and the reason.
+
+## Adding it to an agent
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.tools.process_tools import ProcessToolsMixin
+from gaia.agents.tools.shell_tools import ShellToolsMixin
+
+
+class BuildAgent(Agent, ShellToolsMixin, ProcessToolsMixin):
+    def _register_tools(self):
+        self.register_shell_tools()
+        self.register_process_tools()
+
+    def close(self):
+        self.close_background_processes()
+```
+
+`close_background_processes()` is idempotent. Without `ShellToolsMixin` on the
+host, `start_process` raises a `TypeError` naming it rather than launching
+anything unchecked.
+
+The flagship gets the five tools as the `background_processes` tool bundle, so
+they reach the model on turns that ask for long-running work.
+
+## Testing
+
+`tests/unit/test_process_tools.py` uses real processes on both platforms: policy
+parity with `run_shell_command` (refusals, pre-prompt refusals, grants, paths,
+rate limit, audit), connectors, paging and rotation, pattern waits, Stop, the
+running limit, notices, a grandchild killed by `stop_process` and by agent
+close, and a grandchild killed when its agent is hard-killed.
+
+## Related
+
+- [ShellToolsMixin](/spec/shell-tools-mixin) — the policy every launch passes
+- [Tool mixins](/sdk/mixins/tool-mixins) — composing mixins into an agent

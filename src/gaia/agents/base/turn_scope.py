@@ -49,6 +49,11 @@ _ALWAYS_RELATED = frozenset(
         "load_skill",
         "list_skills",
         "skill_status",
+        # A process the agent itself started; stopping one is cleanup, not work.
+        "process_status",
+        "read_process_output",
+        "wait_for_process",
+        "stop_process",
     }
 )
 #: Tools whose arguments hold code or a command line rather than a path.

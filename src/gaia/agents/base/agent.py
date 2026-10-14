@@ -472,6 +472,8 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # Re-runs a shell command until it succeeds; gated for the same reason as
     # the command it polls with.
     "wait_for_condition",
+    # Runs a shell command in the background; gated like run_shell_command.
+    "start_process",
     # Runs a .py file in a subprocess — arbitrary code execution, and unlike
     # run_shell_command there is no read-only allowlist behind it.
     "execute_python_file",
@@ -7309,6 +7311,42 @@ Do NOT wrap conversational replies in JSON.
             logger.info("Folded a mid-turn follow-up into the running turn")
         return taken
 
+    #: Frames a background-process notice so the model does not take it for
+    #: something the user said.
+    BACKGROUND_NOTICE_PREAMBLE = (
+        "Automatic notice, not from the user — background processes you "
+        "started have finished. Take them into account if they matter to the "
+        "current request:\n"
+    )
+
+    def _drain_background_notices(
+        self, messages: List[Dict], conversation: List[Dict]
+    ) -> int:
+        """Tell the model about background processes that finished since it last looked.
+
+        Nothing can interrupt a model call, so the step boundary is where a
+        finish is surfaced — the same place a mid-turn follow-up is. A host
+        without background processes has no ``take_background_process_notices``
+        and this does nothing. Returns how many notices were folded in.
+        """
+        take = getattr(self, "take_background_process_notices", None)
+        if not callable(take):
+            return 0
+        notices = take()  # pylint: disable=not-callable
+        if not notices:
+            return 0
+        text = self.BACKGROUND_NOTICE_PREAMBLE + "\n".join(
+            f"- {notice}" for notice in notices
+        )
+        messages.append({"role": "user", "content": text})
+        conversation.append({"role": "user", "content": text})
+        for notice in notices:
+            self.console.print_info(notice)
+        logger.info(
+            "Folded %d background-process notice(s) into the turn", len(notices)
+        )
+        return len(notices)
+
     def _process_query_impl(
         self,
         user_input: str,
@@ -7538,6 +7576,7 @@ Do NOT wrap conversational replies in JSON.
             # without running another step, and draining first would consume a
             # message this turn can no longer answer.
             self._drain_followups(messages, conversation)
+            self._drain_background_notices(messages, conversation)
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array

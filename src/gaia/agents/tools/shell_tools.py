@@ -677,6 +677,12 @@ _POLICY_GATED_SHELL_TOOL = "run_shell_command"
 #: NOT grant-exempt: consent for a binary is not consent to poll with it.
 _WAIT_TOOL = "wait_for_condition"
 
+#: Launches its command through the same checks as ``run_shell_command`` and
+#: returns while it runs. Refused before the prompt like the others, and NOT
+#: grant-exempt: consent to read with a binary is not consent to leave it
+#: running.
+_BACKGROUND_TOOL = "start_process"
+
 
 #: Output past this many characters is cut before it reaches the model.
 MAX_OUTPUT_CHARS = 10_000
@@ -1973,6 +1979,21 @@ def _wait_plain(process: "subprocess.Popen", timeout: float) -> Tuple[Any, Any, 
     return stdout, stderr, False
 
 
+def _pipefail_code(codes: list) -> int:
+    """A pipeline's status: its rightmost failing stage, SIGPIPE upstream excused.
+
+    An upstream stage killed by SIGPIPE is how ``| head`` ends a pipeline, not
+    a failure.
+    """
+    sigpipe = -getattr(signal, "SIGPIPE", 0)
+    failed = [
+        code
+        for i, code in enumerate(codes)
+        if code != 0 and not (i < len(codes) - 1 and sigpipe and code == sigpipe)
+    ]
+    return failed[-1] if failed else 0
+
+
 def _run_pipeline(
     segments: list,
     modes: tuple,
@@ -2056,16 +2077,9 @@ def _run_pipeline(
         for err in errs:
             err.close()
 
-    sigpipe = -getattr(signal, "SIGPIPE", 0)
-    codes = [proc.returncode for proc in procs]
-    failed = [
-        code
-        for i, code in enumerate(codes)
-        if code != 0 and not (i < len(codes) - 1 and sigpipe and code == sigpipe)
-    ]
     return subprocess.CompletedProcess(
         args=segments,
-        returncode=failed[-1] if failed else 0,
+        returncode=_pipefail_code([proc.returncode for proc in procs]),
         stdout=(out or b"").decode("utf-8", errors="replace"),
         stderr=stderr,
     )
@@ -2223,18 +2237,24 @@ def _pin_windows_tools(shell_text: str, segments: list) -> str:
     return "|".join(pinned)
 
 
-def _run_step(
-    step: _Step,
-    cwd: str,
-    timeout: float,
-    granted: frozenset,
-    waiter: Optional[Callable] = None,
-    bypass: bool = False,
-) -> subprocess.CompletedProcess:
-    """Run one validated pipeline in *cwd*, and return what it produced.
+@dataclass(frozen=True)
+class StepLaunch:
+    """How one validated step is handed to the OS.
 
-    Raises ``subprocess.TimeoutExpired`` with whatever it had produced by then,
-    or ``_CommandCancelled`` if *waiter* reports a Stop while it was running.
+    ``chained`` means run ``step.segments`` as separately spawned, piped
+    processes (no shell); otherwise ``argv`` is one process, a shell string
+    when ``shell`` is set. ``stderr_mode`` is the redirection this process
+    must apply itself — empty when the shell owns it.
+    """
+
+    argv: Any
+    shell: bool
+    chained: bool
+    stderr_mode: str
+
+
+def _launch_for(step: _Step, granted: frozenset, bypass: bool) -> StepLaunch:
+    """How *step* runs — the one rule ``run_shell_command`` and ``start_process`` share.
 
     On Windows a step goes through cmd.exe as its own string — never the whole
     line, whose connectors cmd.exe would act on without any of the per-segment
@@ -2293,17 +2313,39 @@ def _run_step(
                 )
                 exec_cmd = win_cmd + exec_cmd[len(cmd_base) :]
 
-    if len(segments) > 1 and not use_shell:
-        return _run_pipeline(
-            segments, step.stderr_modes, step.envs, cwd, timeout, waiter
-        )
-
     # cmd.exe was handed the redirection in its string; sh was not, and a
     # pipeline it owns routes per-segment stderr this process cannot reach.
     shell_owns_redirection = use_shell and (os.name == "nt" or len(segments) > 1)
     mode = (
         "" if shell_owns_redirection or not step.stderr_modes else step.stderr_modes[0]
     )
+    return StepLaunch(
+        argv=exec_cmd,
+        shell=use_shell,
+        chained=len(segments) > 1 and not use_shell,
+        stderr_mode=mode,
+    )
+
+
+def _run_step(
+    step: _Step,
+    cwd: str,
+    timeout: float,
+    granted: frozenset,
+    waiter: Optional[Callable] = None,
+    bypass: bool = False,
+) -> subprocess.CompletedProcess:
+    """Run one validated pipeline in *cwd*, and return what it produced.
+
+    Raises ``subprocess.TimeoutExpired`` with whatever it had produced by then,
+    or ``_CommandCancelled`` if *waiter* reports a Stop while it was running.
+    """
+    launch = _launch_for(step, granted, bypass)
+    if launch.chained:
+        return _run_pipeline(
+            step.segments, step.stderr_modes, step.envs, cwd, timeout, waiter
+        )
+    exec_cmd, use_shell, mode = launch.argv, launch.shell, launch.stderr_mode
 
     # encoding/errors are explicit, and load-bearing. Bare ``text=True``
     # decodes with the locale codec — cp1252 on a default Windows box — and
@@ -2396,6 +2438,24 @@ def _read_all(files: list) -> str:
     return b"".join(chunks).decode("utf-8", errors="replace")
 
 
+@dataclass(frozen=True)
+class ShellLinePlan:
+    """A command line that cleared every check, ready to launch.
+
+    ``step_cwds`` is each step's directory after the ``cd`` walk; ``end_cwd``
+    is where the line leaves the session if every ``cd`` on it runs.
+    """
+
+    cwd: str
+    session_scoped: bool
+    steps: list
+    step_cwds: list
+    end_cwd: str
+    granted: frozenset
+    waited: float
+    bypass: bool
+
+
 class ShellToolsMixin:
     """
     Mixin providing shell command execution tools with rate limiting.
@@ -2461,6 +2521,15 @@ class ShellToolsMixin:
             session.close()
             self._shell_session = None
 
+    def _background_hint(self) -> str:
+        """A pointer to ``start_process``, when this agent has it; else ``""``."""
+        if "start_process" not in (getattr(self, "_tools_registry", None) or {}):
+            return ""
+        return (
+            "To keep working while it runs, start it with start_process and "
+            "check on it with process_status or wait_for_process."
+        )
+
     def _validate_shell_command(self, command: str) -> tuple:
         """Every refusal ``command`` earns on its text alone, plus its steps.
 
@@ -2471,6 +2540,14 @@ class ShellToolsMixin:
         error, steps = self._shell_command_refusal(command)
         if error is not None:
             error = {**error, **NOT_EXECUTED}
+            stripped = command.rstrip()
+            background = self._background_hint()
+            if background and stripped.endswith("&") and not stripped.endswith("&&"):
+                # The model reaching for `cmd &` wants exactly this tool.
+                error["hint"] = (
+                    "A trailing '&' is refused. " + background + " Pass the "
+                    "command without the '&'."
+                )
         return error, steps
 
     def _shell_command_refusal(self, command: str) -> tuple:
@@ -2579,11 +2656,15 @@ class ShellToolsMixin:
         Duck-typed rather than an override: ``Agent`` precedes this mixin in
         ``ChatAgent``'s MRO, so a same-named method here would never be reached.
         """
-        if tool_name not in (_POLICY_GATED_SHELL_TOOL, _WAIT_TOOL):
+        if tool_name not in (_POLICY_GATED_SHELL_TOOL, _WAIT_TOOL, _BACKGROUND_TOOL):
             return None
         command = (tool_args or {}).get("command")
         if not isinstance(command, str):
             return None
+        if tool_name == _BACKGROUND_TOOL and self._approval_is_blanket_only():
+            from gaia.agents.tools.process_tools import unattended_refusal
+
+            return unattended_refusal()
         error, _ = self._validate_shell_command(command)
         if error is None:
             return None
@@ -3550,6 +3631,125 @@ class ShellToolsMixin:
 
         audit_shell_command(command=command, cwd=cwd, segments=segments, mode="bypass")
 
+    def _prepare_shell_line(
+        self, command: str, working_directory: Optional[str], bypass: bool
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[ShellLinePlan]]:
+        """Every check a command line must pass before anything is spawned.
+
+        The one gate in front of every process the shell tools start —
+        ``run_shell_command`` and ``start_process`` alike — so a background
+        launch can never be a way around the policy a foreground one enforces.
+        Paces the rate limit, so call it once per launch.
+
+        Returns:
+            ``(refusal, None)``, or ``(None, plan)`` for a line cleared to run.
+        """
+        allowed, reason, wait_time, waited = (
+            (True, "", 0.0, 0.0) if bypass else self._pace_rate_limit()
+        )
+        if not allowed:
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": f"{reason}. Please wait {wait_time:.1f} seconds.",
+                "has_errors": True,
+                "rate_limited": True,
+                "wait_time_seconds": wait_time,
+                "hint": "Rate limiting prevents excessive command execution",
+            }, None
+
+        if working_directory:
+            if not os.path.exists(working_directory):
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": f"Working directory not found: {working_directory}",
+                    "has_errors": True,
+                }, None
+
+            if not os.path.isdir(working_directory):
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": f"Path is not a directory: {working_directory}",
+                    "has_errors": True,
+                }, None
+
+            if not self._path_allowed(working_directory):
+                hint = (
+                    self.path_validator.scratch_hint(working_directory)
+                    if hasattr(self, "path_validator")
+                    else ""
+                )
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": f"Access denied: {working_directory} is not in allowed paths.{hint}",
+                    "has_errors": True,
+                }, None
+
+            cwd = str(Path(working_directory).resolve())
+            session_scoped = False
+        else:
+            # An explicit working_directory is a one-shot override that never
+            # touches the session; with none, resume where the last call's cd
+            # left off.
+            cwd = self.shell_session.cwd
+            session_scoped = True
+
+        # Operators, syntax, and the per-command whitelist, for every segment
+        # of every pipeline on the line. Shared with the pre-flight that runs
+        # before the confirmation prompt, so a command refused there is
+        # refused here for the same reason.
+        #
+        # A CONFIRM-tier command has already been through
+        # ``Agent._execute_tool``'s gate, so it runs here unless the only
+        # approval was a blanket pre-approval.
+        unconfirmed = self._nothing_could_have_confirmed()
+        error, steps = self._validate_shell_command(command)
+        if error and not _reaches_the_prompt(error):
+            return error, None
+        if error and unconfirmed:
+            return self._blanket_approval_refusal(error), None
+
+        granted = skill_granted_binaries(self)
+
+        # A `cd` step moves the steps after it, so each step's directory — and
+        # what its arguments resolve against — is settled here, before
+        # anything runs.
+        step_cwds: list = []
+        walk_cwd = cwd
+        for step in steps:
+            step_cwds.append(walk_cwd)
+            if step.is_cd:
+                walk_cwd, error = self._resolve_cd_target(step.cd_target, walk_cwd)
+                if error:
+                    return error, None
+
+        for step, step_cwd in zip(steps, step_cwds):
+            error = self._path_traversal_refusal(step, step_cwd, granted)
+            if error:
+                return error, None
+            error = self._git_path_refusal(step.segments, step_cwd)
+            if error:
+                return error, None
+
+        if bypass:
+            self._audit_shell_execution(
+                command, cwd, [seg for st in steps for seg in st.segments]
+            )
+
+        return None, ShellLinePlan(
+            cwd=cwd,
+            session_scoped=session_scoped,
+            steps=steps,
+            step_cwds=step_cwds,
+            end_cwd=walk_cwd,
+            granted=granted,
+            waited=waited,
+            bypass=bypass,
+        )
+
     def register_shell_tools(self) -> None:
         """Register shell command execution tools."""
         from gaia.agents.base.tools import tool
@@ -3599,112 +3799,29 @@ class ShellToolsMixin:
                 try:
                     timeout, timeout_class = resolve_timeout(command, timeout)
                 except ValueError as exc:
-                    return {
+                    refusal = {
                         **NOT_EXECUTED,
                         "status": "error",
                         "error": str(exc),
                         "command": command,
                         "has_errors": True,
                     }
+                    if self._background_hint():
+                        refusal["hint"] = self._background_hint()
+                    return refusal
 
-                # Check rate limits first to prevent DOS
-                allowed, reason, wait_time, waited = (
-                    (True, "", 0.0, 0.0) if bypass else self._pace_rate_limit()
+                error, plan = self._prepare_shell_line(
+                    command, working_directory, bypass
                 )
-                if not allowed:
-                    return {
-                        **NOT_EXECUTED,
-                        "status": "error",
-                        "error": f"{reason}. Please wait {wait_time:.1f} seconds.",
-                        "has_errors": True,
-                        "rate_limited": True,
-                        "wait_time_seconds": wait_time,
-                        "hint": "Rate limiting prevents excessive command execution",
-                    }
-
-                # Validate working directory if specified
-                if working_directory:
-                    if not os.path.exists(working_directory):
-                        return {
-                            **NOT_EXECUTED,
-                            "status": "error",
-                            "error": f"Working directory not found: {working_directory}",
-                            "has_errors": True,
-                        }
-
-                    if not os.path.isdir(working_directory):
-                        return {
-                            **NOT_EXECUTED,
-                            "status": "error",
-                            "error": f"Path is not a directory: {working_directory}",
-                            "has_errors": True,
-                        }
-
-                    if not self._path_allowed(working_directory):
-                        hint = (
-                            self.path_validator.scratch_hint(working_directory)
-                            if hasattr(self, "path_validator")
-                            else ""
-                        )
-                        return {
-                            **NOT_EXECUTED,
-                            "status": "error",
-                            "error": f"Access denied: {working_directory} is not in allowed paths.{hint}",
-                            "has_errors": True,
-                        }
-
-                    cwd = str(Path(working_directory).resolve())
-                    session_scoped = False
-                else:
-                    # An explicit working_directory is a one-shot override that
-                    # never touches the session; with none, resume where the
-                    # last call's cd left off.
-                    cwd = self.shell_session.cwd
-                    session_scoped = True
-
-                # Operators, syntax, and the per-command whitelist, for every
-                # segment of every pipeline on the line. Shared with the
-                # pre-flight that runs before the confirmation prompt, so a
-                # command refused there is refused here for the same reason.
-                #
-                # A CONFIRM-tier command has already been through
-                # ``Agent._execute_tool``'s gate, so it runs here unless the
-                # only approval was a blanket pre-approval.
-                unconfirmed = self._nothing_could_have_confirmed()
-                error, steps = self._validate_shell_command(command)
-                if error and not _reaches_the_prompt(error):
+                if error is not None:
                     return error
-                if error and unconfirmed:
-                    return self._blanket_approval_refusal(error)
-
-                granted = skill_granted_binaries(self)
-
-                # A `cd` step moves the steps after it, so each step's directory
-                # — and what its arguments resolve against — is settled here,
-                # before anything runs.
-                step_cwds: list = []
-                walk_cwd = cwd
-                for step in steps:
-                    step_cwds.append(walk_cwd)
-                    if step.is_cd:
-                        walk_cwd, error = self._resolve_cd_target(
-                            step.cd_target, walk_cwd
-                        )
-                        if error:
-                            return error
-
-                for step, step_cwd in zip(steps, step_cwds):
-                    error = self._path_traversal_refusal(step, step_cwd, granted)
-                    if error:
-                        return error
-                    error = self._git_path_refusal(step.segments, step_cwd)
-                    if error:
-                        return error
-
-                if bypass:
-                    self._audit_shell_execution(
-                        command, cwd, [seg for st in steps for seg in st.segments]
-                    )
+                cwd = plan.cwd
+                session_scoped = plan.session_scoped
+                steps = plan.steps
+                step_cwds = plan.step_cwds
+                walk_cwd = plan.end_cwd
+                granted = plan.granted
+                waited = plan.waited
 
                 # Log command execution (debug mode)
                 if hasattr(self, "debug") and self.debug:
@@ -3800,8 +3917,9 @@ class ShellToolsMixin:
                                     "in 'stdout'/'stderr' above. Either narrow the "
                                     "command (one test file rather than the whole "
                                     "suite) or re-run it with a larger timeout, up to "
-                                    f"{MAX_COMMAND_TIMEOUT}s."
-                                ),
+                                    f"{MAX_COMMAND_TIMEOUT}s. "
+                                    + self._background_hint()
+                                ).strip(),
                             },
                             check_from_command(
                                 command,

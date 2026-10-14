@@ -357,10 +357,11 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Twelve of the agent's 95 tools mutate the machine and need explicit approval
-before they run. Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+Thirteen of the agent's 100 tools mutate the machine and need explicit approval
+before they run. Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
+**`start_process`**, which runs one in the background,
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
 a PowerShell child on Windows to draw the notification, and **`install_cli`** /
 **`sign_in_cli`**, which install software and sign a CLI in to the user's

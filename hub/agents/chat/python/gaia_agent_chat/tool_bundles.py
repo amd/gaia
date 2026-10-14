@@ -190,9 +190,9 @@ DOC_BUNDLES = [
 
 # -- "full" profile (the flagship GaiaAgent) ---------------------------------
 #
-# Same contract as the DOC_* pair above, sized for the ``full`` registry: 66
-# tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
-# tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
+# Same contract as the DOC_* pair above, sized for the ``full`` registry: 71
+# tools instead of 37. At 66 the un-trimmed native ``tools=`` payload measured
+# ~10.2K tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
 # Always-on set (16 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
@@ -448,6 +448,23 @@ FULL_BUNDLES = [
         description=(
             "Read the directory earlier shell commands left the session in, "
             "or return it to where the task started."
+        ),
+    ),
+    ToolBundle(
+        name="background_processes",
+        members=frozenset(
+            {
+                "start_process",
+                "process_status",
+                "read_process_output",
+                "wait_for_process",
+                "stop_process",
+            }
+        ),
+        description=(
+            "Run a long command in the background — a dev server, build, test "
+            "suite, download or data export — keep working, and check its "
+            "progress, wait for it, read its output, or stop it."
         ),
     ),
     ToolBundle(
