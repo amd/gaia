@@ -33,6 +33,7 @@ from gaia.config import GAIA_CONFIG_DIR
 from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     LemonadeClient,
+    LemonadeClientError,
     lemonade_auth_headers,
     resolve_lemonade_api_key,
 )
@@ -71,15 +72,16 @@ DEFAULT_AUTH_HEADER_PREFIX = ""
 # Ordered preference for the picker, best first. The first match is what GAIA
 # selects automatically when a gateway is connected with nothing chosen yet.
 #
-# `Gemma-4-31B` leads deliberately: it is currently the ONLY gateway model that
-# streams. The others return zero tokens on a streaming request while
-# non-streaming works, and GAIA's agent path streams by default — so any other
-# default hands a new user an agent that produces nothing. It is also on-prem,
-# so it carries no per-token cost.
+# `DeepSeek-V4.1-Flash` leads: it streams on the gateway (checked live) and is
+# the fastest model in the agent benchmark. A default must stream — GAIA's agent
+# path streams, and a model that returns zero tokens on a stream hands a new user
+# an agent that produces nothing. `Gemma-4-31B` is the fallback: on-prem, no
+# per-token cost. `deepseek-v4.1-flash` does not match `DeepSeek-V4-Flash`.
 #
 # Matching is lowercase-substring: the gateway mixes casing across its
 # catalogue (`Claude-Opus-5` sits next to `claude-opus-4.8`).
 PREFERRED_MODEL_HINTS = (
+    "deepseek-v4.1-flash",
     "gemma-4-31b",
     "claude-opus-5",
     "claude-sonnet-5",
@@ -376,13 +378,22 @@ class GatewayManager:
 
     @property
     def base_url(self) -> str:
-        """Lemonade's own base URL (already ends in ``/api/v1``)."""
-        return self.client.base_url
+        """Lemonade's own base URL (already ends in ``/api/v1``).
 
-    def _headers(self) -> Dict[str, str]:
+        Raises:
+            GatewayError: GAIA's Lemonade is restarting, or the client points
+                at a server that is not GAIA's; a token must not go there.
+        """
+        try:
+            return self.client.credential_base_url()
+        except LemonadeClientError as e:
+            raise GatewayError(str(e)) from e
+
+    @staticmethod
+    def _headers(base_url: str) -> Dict[str, str]:
         return {
             "Content-Type": "application/json",
-            **lemonade_auth_headers(resolve_lemonade_api_key()),
+            **lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url)),
         }
 
     def _request(
@@ -394,15 +405,20 @@ class GatewayManager:
         timeout: int = _REQUEST_TIMEOUT,
         redact: bool = False,
     ) -> Dict[str, Any]:
-        url = f"{self.base_url}/{path.lstrip('/')}"
+        base_url = self.base_url
+        url = f"{base_url}/{path.lstrip('/')}"
         self.log.debug(f"{method} {url}" + ("" if redact else f" {payload or ''}"))
         try:
             response = requests.request(
-                method, url, json=payload, headers=self._headers(), timeout=timeout
+                method,
+                url,
+                json=payload,
+                headers=self._headers(base_url),
+                timeout=timeout,
             )
         except requests.exceptions.RequestException as e:
             raise GatewayError(
-                f"Lemonade Server is not reachable at {self.base_url}: {e}. "
+                f"Lemonade Server is not reachable at {base_url}: {e}. "
                 f"{describe_start_hint().instruction} "
                 f"Or point LEMONADE_BASE_URL at a server already running."
             ) from e

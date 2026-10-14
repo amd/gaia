@@ -13,6 +13,7 @@ from ..lemonade_client import (
     CONTEXT_OVERFLOW_PHRASES,
     CONVERSATION_SLOT,
     DEFAULT_MODEL_NAME,
+    LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
     active_profile_ctx_size,
@@ -284,6 +285,20 @@ class LemonadeCloudAccountError(LemonadeError):
     )
 
 
+class LemonadeAuthRejectedError(LemonadeError):
+    """The key was rejected (HTTP 401/403) by the cloud provider or Lemonade.
+
+    A wrong key or missing model access never recovers on retry; the message
+    raised by the client already names the fix, so it is carried verbatim.
+    """
+
+    retryable = False
+    user_message = (
+        "The request was rejected as unauthorized. Run /provider in the TUI "
+        "to reconnect the provider, or verify LEMONADE_API_KEY."
+    )
+
+
 def _classify_lemonade_response(
     response: dict, model: Optional[str] = None
 ) -> Tuple[Optional[LemonadeError], bool]:
@@ -397,10 +412,14 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     # exception graphs where ``a.__cause__ = b`` and ``b.__cause__ = a``.
     cur: Optional[BaseException] = exc
     seen: set = set()
+    chain_text: List[str] = []
     while cur is not None and id(cur) not in seen:
         seen.add(id(cur))
         if isinstance(cur, LemonadeError):
             return cur
+        if isinstance(cur, LemonadeAuthError):
+            return LemonadeAuthRejectedError(user_message=str(cur))
+        chain_text.append(str(cur))
         cur = cur.__cause__ or cur.__context__
 
     raw = str(exc)
@@ -412,6 +431,18 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     )
     if refused:
         return LemonadeCloudAccountError(user_message=refused.group(0).strip())
+    # A ``LemonadeAuthError`` flattened to text by a wrapper; stop at the sentence
+    # naming LEMONADE_API_KEY so a wrapper's own trailing advice is dropped.
+    rejected = re.search(
+        r"(?:cloud authentication or access was denied \(http 40[13]\)"
+        r"|lemonade returned 401 unauthorized"
+        r"|lemonade rejected the api key \(401 unauthorized\))"
+        r"[^\n]*?lemonade_api_key[^\n.]*\.",
+        "\n".join(chain_text),
+        re.IGNORECASE,
+    )
+    if rejected:
+        return LemonadeAuthRejectedError(user_message=rejected.group(0).strip())
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
     # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
@@ -538,6 +569,10 @@ class LemonadeProvider(LLMClient):
         return self._backend.cloud_model_provider(
             model or self._last_model or self._model or DEFAULT_MODEL_NAME
         )
+
+    def current_base_url(self) -> str:
+        """The Lemonade URL this client talks to now (see ``LemonadeClient``)."""
+        return self._backend.current_base_url()
 
     def refresh_model_catalog(self, show_all: bool = True) -> None:
         """Read the Lemonade catalog once so ``cloud_model_provider`` can

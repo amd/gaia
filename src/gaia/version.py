@@ -5,10 +5,11 @@ import logging
 import os
 import re
 import subprocess
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as get_package_version_metadata
 from typing import Optional, Tuple
 
-__version__ = "0.24.1"
+__version__ = "0.25.0"
 
 # Lemonade version used across CI and installer
 LEMONADE_VERSION = "2026.40.0"
@@ -43,16 +44,20 @@ def parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
 
 
 def get_package_version() -> str:
-    """Get the installed package version from importlib.metadata.
+    """Return the installed ``amd-gaia`` version, else this tree's ``__version__``.
 
-    Returns:
-        str: The package version string
+    A source checkout or frozen binary has no package metadata; ``setup.py``
+    builds the wheel version from ``__version__``, so it is the same answer.
     """
     try:
         return get_package_version_metadata("amd-gaia")
-    except Exception as e:
-        logging.warning(f"Failed to get package version: {e}")
-        return ""
+    except PackageNotFoundError:
+        # stdlib logger on purpose: importing gaia.logger here installs handlers.
+        logging.getLogger(__name__).debug(
+            "amd-gaia package metadata not found; using source version %s",
+            __version__,
+        )
+        return __version__
 
 
 def get_git_hash(hash_length: int = 8) -> str:

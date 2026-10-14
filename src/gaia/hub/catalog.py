@@ -34,10 +34,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.logger import get_logger
 
@@ -60,6 +61,9 @@ CACHE_STALE_AFTER_SECONDS = 7 * 24 * 60 * 60
 # When the disk cache was last refreshed from the network, stamped into the
 # cached document. Underscore-prefixed so it cannot collide with a hub field.
 CACHE_STAMP_KEY = "_gaia_cached_at"
+
+# Request header carrying this GAIA core's version on every hub fetch.
+CORE_VERSION_HEADER = "X-GAIA-Core-Version"
 
 # HTTP timeout for catalog fetches (seconds). Short — the catalog is small and
 # the offline cache covers a slow/absent network.
@@ -121,7 +125,10 @@ def fetch_bytes(url: str, timeout: int = _HTTP_TIMEOUT) -> bytes:
 
     import requests
 
-    resp = requests.get(url, timeout=timeout)
+    # Lets the hub tell this client from a GAIA 0.24.1-or-older one, which
+    # sends no version and installs whatever latest_version says.
+    headers = {CORE_VERSION_HEADER: _running_core_version()}
+    resp = requests.get(url, timeout=timeout, headers=headers)
     resp.raise_for_status()
     return resp.content
 
@@ -482,6 +489,164 @@ def compare_versions(a: str, b: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Core-version gate (min_gaia_version)
+# ---------------------------------------------------------------------------
+
+#: What a user runs to get a newer GAIA core.
+CORE_UPGRADE_COMMAND = "pip install --upgrade amd-gaia"
+
+# The core's own version is PEP 440 (0.25.0, 0.25.0rc3, 0.25.0.dev1, ...).
+_CORE_VERSION_RE = re.compile(
+    r"^v?(\d+)\.(\d+)\.(\d+)"
+    r"(?P<pre>(?:a|b|rc)\d+)?(?:\.post\d+)?(?P<dev>\.dev\d+)?(?:\+\S*)?$",
+    re.IGNORECASE,
+)
+# min_gaia_version is SemVer, which the hub worker validates on publish.
+_FLOOR_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?P<pre>-[0-9A-Za-z.-]+)?(?:\+\S*)?$")
+
+
+def _running_core_version() -> str:
+    from gaia.version import __version__
+
+    return __version__
+
+
+def core_satisfies(min_gaia_version: Optional[str], core_version: str) -> bool:
+    """Whether *core_version* is at least *min_gaia_version*.
+
+    A release candidate or dev build ranks BELOW its release (PEP 440), so
+    ``0.25.0rc3`` does not satisfy ``0.25.0``: an agent built for a final core
+    is not offered to a candidate that may lack what it needs. A candidate
+    installs the flagship from its own pre-release instead (see
+    :mod:`gaia.hub.prerelease`). A floor that is itself a prerelease
+    (``0.25.0-rc.1``) is met by every build of ``0.25.0``.
+
+    Raises:
+        ValueError: either version is not in a form this check can compare.
+    """
+    if not min_gaia_version:
+        return True
+    floor = _FLOOR_RE.match(min_gaia_version.strip())
+    if floor is None:
+        raise ValueError(
+            f"min_gaia_version {min_gaia_version!r} is not a SemVer version "
+            f"(MAJOR.MINOR.PATCH)."
+        )
+    core = _CORE_VERSION_RE.match(core_version.strip())
+    if core is None:
+        raise ValueError(
+            f"GAIA core version {core_version!r} is not a PEP 440 release, "
+            f"candidate, or dev version."
+        )
+    floor_release = tuple(int(floor.group(i)) for i in (1, 2, 3))
+    core_release = tuple(int(core.group(i)) for i in (1, 2, 3))
+    if core_release != floor_release:
+        return core_release > floor_release
+    core_is_final = not (core.group("pre") or core.group("dev"))
+    return core_is_final or bool(floor.group("pre"))
+
+
+def version_floors(document: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """Each published version of *document* mapped to its ``min_gaia_version``.
+
+    *document* is a per-agent manifest (``versions[v].min_gaia_version``) or an
+    ``index.json`` entry (``min_gaia_versions``). The top-level
+    ``min_gaia_version`` is the latest version's own, so it fills in the latest
+    when the per-version value was never recorded. An older version with no
+    recorded floor is ``None``: it was published before the hub kept one, and
+    every GAIA client before this check installed it without one.
+    """
+    latest = document.get("latest_version")
+    versions = document.get("versions")
+    if isinstance(versions, dict):
+        # A manifest lists exactly what is published; a latest_version it does
+        # not publish is not installable, so it gets no entry.
+        floors = {
+            v: (e.get("min_gaia_version") if isinstance(e, dict) else None) or None
+            for v, e in versions.items()
+        }
+    else:
+        mapped = document.get("min_gaia_versions")
+        floors = (
+            {v: m or None for v, m in mapped.items()}
+            if isinstance(mapped, dict)
+            else {}
+        )
+        if latest:
+            floors.setdefault(latest, None)
+    if latest in floors and floors[latest] is None:
+        floors[latest] = document.get("min_gaia_version") or None
+    return floors
+
+
+@dataclass(frozen=True)
+class CoreGate:
+    """Which version of an agent this core can install.
+
+    ``installable_version`` is the newest published version whose
+    ``min_gaia_version`` this core satisfies (``None`` when there is none).
+    ``requires_gaia_version`` is set when the latest version needs a newer core:
+    it names the core version to upgrade to.
+    """
+
+    installable_version: Optional[str]
+    requires_gaia_version: Optional[str]
+
+
+def core_gate(document: Dict[str, Any], core_version: Optional[str] = None) -> CoreGate:
+    """Resolve *document* (manifest or index entry) against this GAIA core.
+
+    Raises:
+        CatalogError: the hub published a ``min_gaia_version`` that is not SemVer.
+        ValueError: *core_version* is not a version this check can compare.
+    """
+    core_version = core_version or _running_core_version()
+    core_satisfies("0.0.0", core_version)  # reject a malformed core up front
+    agent_id = document.get("id", "?")
+    floors = version_floors(document)
+    blocked: Dict[str, str] = {}
+    for version, floor in floors.items():
+        try:
+            if not core_satisfies(floor, core_version):
+                blocked[version] = floor
+        except ValueError as exc:
+            raise CatalogError(
+                f"Agent Hub entry for '{agent_id}' version {version}: {exc} "
+                f"Report it at https://github.com/amd/gaia/issues."
+            ) from exc
+    runnable = [v for v in floors if v not in blocked]
+    installable = max(runnable, key=_parse_version) if runnable else None
+    requires = blocked.get(document.get("latest_version") or "")
+    return CoreGate(installable_version=installable, requires_gaia_version=requires)
+
+
+def listing_core_gate(
+    entry: Dict[str, Any], core_version: Optional[str] = None
+) -> Tuple[CoreGate, Optional[str]]:
+    """:func:`core_gate` for one row of a listing, plus the error that row hit.
+
+    One malformed entry is reported on its own row (logged, and returned as the
+    error) and offers nothing to install, instead of failing the whole listing.
+    A release candidate's flagship installs from its own pre-release, so the
+    hub's floor does not apply to it (see :mod:`gaia.hub.prerelease`).
+    """
+    from gaia.hub import prerelease
+
+    core = core_version or _running_core_version()
+    if entry.get("id") == prerelease.FLAGSHIP_AGENT_ID and (
+        prerelease.release_candidate_tag(core) is not None
+    ):
+        return CoreGate(entry.get("latest_version"), None), None
+    try:
+        return core_gate(entry, core), None
+    except (CatalogError, ValueError) as exc:
+        logger.error(
+            "catalog: cannot check '%s' against this core: %s", entry.get("id"), exc
+        )
+        return CoreGate(None, None), str(exc)
+
+
+# ---------------------------------------------------------------------------
 # Merge with local registry
 # ---------------------------------------------------------------------------
 
@@ -546,6 +711,7 @@ def merge_with_registry(
     installed_versions: Optional[Dict[str, str]] = None,
     *,
     include_deprecated: bool = False,
+    core_version: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Merge the remote catalog with the live registry into a unified list.
 
@@ -560,12 +726,19 @@ def merge_with_registry(
         include_deprecated: When False (default), deprecated agents that are not
             already installed are excluded from the listing. Installed agents are
             always shown so a user can still see/manage what they have.
+        core_version: GAIA core version to gate ``min_gaia_version`` against;
+            defaults to the running core.
 
     Returns:
         One dict per agent (union of registry + catalog), each carrying a
         ``status``, ``installed_version`` / ``latest_version``, and a
-        ``requires_trust`` flag. Skills-lane entries (#2467) are excluded — they
-        are not agent packages and install through ``gaia skill install``; read
+        ``requires_trust`` flag, plus ``installable_version`` and
+        ``requires_gaia_version`` (see :class:`CoreGate`; both ``None`` for an
+        agent the hub does not list), and ``core_gate_error`` on a row whose
+        published floor is unreadable. ``update_available`` means an update
+        this core can run, never one whose ``min_gaia_version`` it does not
+        meet. Skills-lane entries (#2467) are excluded — they are not agent
+        packages and install through ``gaia skill install``; read
         them with :func:`skill_entries`. Registry-only agents marked ``hidden``
         are excluded too, for the same reason the UI picker drops them.
     """
@@ -586,9 +759,12 @@ def merge_with_registry(
         latest = entry.get("latest_version")
         reg = registered.get(agent_id)
         installed_ver = installed_versions.get(agent_id)
+        gate, gate_error = listing_core_gate(entry, core_version)
+        installable = gate.installable_version
 
         if installed_ver:
-            if latest and compare_versions(latest, installed_ver) > 0:
+            # Only an update this core can run counts as one.
+            if installable and compare_versions(installable, installed_ver) > 0:
                 status = STATUS_UPDATE_AVAILABLE
             else:
                 status = STATUS_INSTALLED
@@ -620,10 +796,16 @@ def merge_with_registry(
             "requirements": entry.get("requirements", {"platforms": []}),
             "deprecated": entry.get("deprecated", False),
             "latest_version": latest,
+            # Newest version this core can install, and the core the latest
+            # needs when it is newer than this one (None when it is not).
+            "installable_version": installable,
+            "requires_gaia_version": gate.requires_gaia_version,
             "installed_version": installed_ver,
             "status": status,
             "source": (reg.source if reg is not None else "hub"),
         }
+        if gate_error:
+            merged["core_gate_error"] = gate_error
         # Optional eval scorecard fields — absent from older catalog entries and
         # from builtin/custom agents that haven't run a benchmark yet.
         if "eval_score" in entry:
@@ -662,6 +844,8 @@ def merge_with_registry(
             "requirements": {"platforms": []},
             "deprecated": False,
             "latest_version": installed_versions.get(agent_id),
+            "installable_version": None,
+            "requires_gaia_version": None,
             "installed_version": installed_versions.get(agent_id),
             "status": STATUS_INSTALLED,
             "source": reg.source,

@@ -221,7 +221,8 @@ class MCPClientManager:
     def load_from_config(self) -> None:
         """Load and connect to all servers from configuration.
 
-        Skips servers that fail to connect but logs errors.
+        Skips servers that fail to connect but logs errors. A server that
+        already failed is not retried until ``reload()``.
         Only stdio transport is supported - other types are skipped with a warning.
         """
         servers = self.config.get_servers()
@@ -237,6 +238,10 @@ class MCPClientManager:
         for name, server_config in servers.items():
             if name in self._clients:
                 logger.debug(f"Skipping already-connected server: {name}")
+                continue
+            # Agents call this every turn; reload() clears _failed to retry.
+            if name in self._failed:
+                logger.debug(f"Skipping server that already failed: {name}")
                 continue
             if server_config.get("disabled", False):
                 logger.debug(f"Skipping disabled server: {name}")

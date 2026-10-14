@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,7 +66,7 @@ func TestOneShotReadinessRefusesAndNamesTheRemedy(t *testing.T) {
 	for _, want := range []string{
 		"Lemonade",                            // which precondition
 		"not running at",                      // what is wrong with it
-		"run: ",                               // how to fix it
+		"run",                                 // how to fix it
 		"Nothing was sent to the Email agent", // and that nothing half-ran
 	} {
 		if !strings.Contains(msg, want) {
@@ -98,7 +99,11 @@ func TestOneShotRefusalMatchesTheInteractiveGate(t *testing.T) {
 	if !ok {
 		t.Fatal("the check reported no blocker for an unreachable model server")
 	}
-	for _, want := range []string{blocker.Line, blocker.Detail, blocker.Remedy.Command} {
+	wants := []string{blocker.Line, blocker.Detail, blocker.Remedy.Command}
+	if ps := blocker.Remedy.PowerShell; ps != "" {
+		wants = append(wants, ps)
+	}
+	for _, want := range wants {
 		if want == "" {
 			t.Fatalf("the blocker row is missing a field the user needs: %+v", blocker)
 		}
@@ -340,7 +345,7 @@ func TestRunQueryRefusesInSecondsWhenAPreconditionIsUnmet(t *testing.T) {
 	if stdout.String() != "" {
 		t.Errorf("stdout must stay empty so `> answer.txt` never captures a failure, got %q", stdout.String())
 	}
-	for _, want := range []string{"not ready", "Lemonade", "run: "} {
+	for _, want := range []string{"not ready", "Lemonade", "run"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("stderr is missing %q:\n%s", want, stderr.String())
 		}
@@ -445,12 +450,12 @@ func assertRefusalCommandRunnable(t *testing.T, stderr string) {
 	t.Helper()
 	found := false
 	for _, line := range strings.Split(stderr, "\n") {
-		_, cmd, ok := strings.Cut(strings.TrimSpace(line), "run: ")
-		if !ok {
+		m := runLine.FindStringSubmatch(strings.TrimSpace(line))
+		if m == nil {
 			continue
 		}
 		found = true
-		program := commandProgram(cmd)
+		program := commandProgram(m[1])
 		if program == "gaia" {
 			continue
 		}
@@ -469,6 +474,10 @@ func assertRefusalCommandRunnable(t *testing.T, stderr string) {
 	}
 }
 
+// runLine matches a remedy's command line: `run: X`, or on Windows
+// `run in Command Prompt: X` / `run in PowerShell: X`.
+var runLine = regexp.MustCompile(`^(?:.*\s)?run(?: in [A-Za-z ]+)?: (.+)$`)
+
 // commandProgram is the program a command line invokes, honouring the quoting the
 // gate applies to a path containing a space and stepping over the
 // context-window prefix — otherwise this would only ever check that `env`
@@ -478,6 +487,15 @@ func commandProgram(cmd string) string {
 	if rest, ok := strings.CutPrefix(cmd, `set "`); ok {
 		if _, after, found := strings.Cut(rest, "&&"); found {
 			cmd = strings.TrimSpace(after)
+		}
+	}
+	for strings.HasPrefix(cmd, "$env:") {
+		_, after, _ := strings.Cut(cmd, ";")
+		cmd = strings.TrimSpace(after)
+	}
+	if rest, ok := strings.CutPrefix(cmd, "& '"); ok {
+		if end := strings.Index(rest, "'"); end >= 0 {
+			return rest[:end]
 		}
 	}
 	for {

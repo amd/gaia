@@ -6,8 +6,6 @@
 // the real GAIA mark (public/gaia-icon.png) is a detailed illustration that
 // turns to mush at 22-26px, and inventing a substitute would put a fabricated
 // brand mark in the most identity-critical position on the site.
-import ThemeToggle from './ThemeToggle.astro';
-
 // Section anchors live on the landing page, so they are absolute — the header
 // is shared with /hub and /hub/[id] where those sections don't exist.
 const NAV = [
@@ -23,11 +21,10 @@ const NAV = [
 >
   <nav aria-label="Main" class="g-shell flex h-[66px] items-center justify-between">
     <!-- Wordmark -->
-    <a href="/" class="flex items-baseline gap-2">
-      <span class="font-display text-[18px] font-semibold tracking-[-0.02em] text-g-text">GAIA</span>
-      <span class="mono text-[10px] text-g-faint">/ AMD</span>
-      {/* Site-wide, not per page: the whole thing is in beta, not one feature. */}
-      <span class="g-badge">Beta</span>
+    <a href="/" class="flex items-center gap-2.5">
+      <span class="h-2 w-2 flex-none bg-g-brand" aria-hidden="true"></span>
+      <span class="font-display text-[24px] font-semibold uppercase leading-none tracking-[0.2em] text-g-text">GAIA</span>
+      <span class="mono text-[12.5px] text-g-faint">/ AMD</span>
     </a>
 
     <div class="flex items-center gap-1">
@@ -54,7 +51,6 @@ const NAV = [
         </svg>
       </a>
 
-      <ThemeToggle />
       <a href="/#install" class="g-btn g-btn-primary ml-1 hidden px-3.5 py-1.5 text-[13px] sm:inline-flex">
         Install
       </a>

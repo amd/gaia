@@ -227,6 +227,10 @@ def run(host: str = HOST) -> None:
     """Start the daemon and serve until shutdown. Blocks."""
     import uvicorn
 
+    from gaia.tls import use_os_trust_store
+
+    use_os_trust_store()
+
     from gaia.daemon.custody.auth import CustodyAuth
     from gaia.daemon.custody.store import CustodyStore
     from gaia.daemon.migrate import run_migrations

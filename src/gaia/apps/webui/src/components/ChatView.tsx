@@ -73,6 +73,27 @@ function stripStreamingEnvelope(text: string): string {
     return content.replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
 }
 
+/**
+ * A recoverable error right after a failed tool repeats that tool's error, which
+ * its card already shows; the agent retries, so it isn't a turn-level error.
+ * A tool that raises or times out reports the error before its result lands, so a
+ * still-running tool counts too — its result always follows as failed.
+ */
+export function isEchoOfFailedTool(event: StreamEvent, steps: AgentStep[]): boolean {
+    if (event.type !== 'agent_error' || event.recoverable !== true) return false;
+    const last = steps[steps.length - 1];
+    if (!last || last.type !== 'tool') return false;
+    return last.success === false || (!!last.active && last.success == null);
+}
+
+/** Notices by server message id: a refetch replaces messages, so they cannot live on them alone. */
+const historyNotices = new Map<number, string>();
+
+/** One quiet line saying older turns left the model's view. */
+function HistoryNotice({ text }: { text: string }) {
+    return <div className="history-notice" role="note">{text}</div>;
+}
+
 /** Map an SSE agent event to an AgentStep for the UI. */
 function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<number>): AgentStep | null {
     const id = ++stepIdRef.current;
@@ -180,6 +201,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
     const pendingPrompt = useChatStore((s) => s.pendingPrompt);
     const liveStatus = useChatStore((s) => s.liveStatus);
+    const awaitingUser = useChatStore((s) => s.awaitingUser);
 
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
@@ -199,6 +221,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Smooth streaming exit — snapshot last content so fade-out shows real text
     const [streamEnding, setStreamEnding] = useState(false);
+    const [liveHistoryNotice, setLiveHistoryNotice] = useState<string | null>(null);
     const lastStreamContentRef = useRef('');
     const lastAgentStepsRef = useRef<AgentStep[]>([]);
     const lastCardsRef = useRef<RenderCardData[]>([]);
@@ -536,6 +559,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const streamStart = log.stream.time();
 
         let fullContent = '';
+        let historyNotice: string | undefined;
+        setLiveHistoryNotice(null);
         let doneHandled = false;
         streamBufferRef.current = '';
         stopRequestedRef.current = false;
@@ -595,6 +620,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const streamCallbacks: api.StreamCallbacks = {
             onChunk: (event) => {
                 if (isStale()) return; // stop writing after a session switch (#1580)
+                if (useChatStore.getState().awaitingUser) useChatStore.getState().setAwaitingUser(false);
                 const content = event.content || '';
                 if (content) {
                     // 'answer' events carry the full final text (not a delta),
@@ -640,6 +666,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // Ignore events from a stream the user navigated away from so its
                 // steps don't leak into the new session's view (#1580).
                 if (isStale()) return;
+                // The agent emits nothing while it blocks on the user, so the next event ends the wait.
+                const waitsOnUser = event.type === 'permission_request' || event.type === 'needs_input';
+                if (useChatStore.getState().awaitingUser !== waitsOnUser) {
+                    useChatStore.getState().setAwaitingUser(waitsOnUser);
+                }
                 // Permission request — shown inline above the composer. Calls the
                 // user already allowed "always" never get here: the backend skips them.
                 if (event.type === 'permission_request') {
@@ -665,6 +696,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         toolArgs: event.args as Record<string, unknown> | undefined,
                         confirmId: event.confirm_id,
                         alwaysScope: typeof event.always_scope === 'string' ? event.always_scope : undefined,
+                        // A relayed agent sends a summary of the call instead of its args.
+                        summary: typeof event.summary === 'string' && event.summary ? event.summary : undefined,
                         // No timeout from the backend means it waits; don't invent one.
                         timeoutSeconds: event.timeout_seconds,
                     });
@@ -831,6 +864,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (event.type === 'status') {
                     const status = event.status;
                     const msg = (event.message || '').trim();
+                    if (status === 'history_cut') {
+                        historyNotice = msg || undefined;
+                        setLiveHistoryNotice(historyNotice ?? null);
+                        return;
+                    }
                     if (event.phase && msg) useChatStore.getState().setLiveStatus(msg);
                     // Skip "Executing <tool>" messages - redundant with tool_start
                     if (msg.toLowerCase().startsWith('executing ')) return;
@@ -864,6 +902,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return; // Step headers are redundant with actual tool/thinking steps
                 }
 
+                if (event.type === 'agent_error' && isEchoOfFailedTool(event, useChatStore.getState().agentSteps)) {
+                    return;
+                }
                 const step = agentEventToStep(event, stepIdRef);
                 if (step) {
                     addAgentStep(step);
@@ -922,7 +963,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         stats: event.stats || undefined,
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
                         stopState,
+                        historyNotice,
                     };
+                    if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     addMessage(assistantMsg);
                 }
 
@@ -1446,8 +1489,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             && msg.role === 'assistant'
                             && idx === messages.length - 1;
                         if (isStreamEndingMsg) return null;
+                        const notice = msg.role === 'assistant'
+                            ? msg.historyNotice ?? historyNotices.get(msg.id)
+                            : undefined;
                         return (
                             <div key={msg.id} className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}>
+                                {notice && <HistoryNotice text={notice} />}
                                 <MessageBubble
                                     message={msg}
                                     agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
@@ -1459,6 +1506,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         );
                     })}
 
+                    {(isStreaming || streamEnding) && liveHistoryNotice && <HistoryNotice text={liveHistoryNotice} />}
                     {(isStreaming || streamEnding) && (
                         <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
                             <MessageBubble
@@ -1475,6 +1523,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
                                 cards={isStreaming ? cards : lastCardsRef.current}
                                 liveStatus={isStreaming ? liveStatus : null}
+                                awaitingUser={isStreaming && awaitingUser}
                             />
                         </div>
                     )}

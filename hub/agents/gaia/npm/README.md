@@ -39,9 +39,9 @@ however you arrive at the terminal UI, it behaves identically.
 - **Node.js 18+** (for the built-in `fetch`).
 - **[Lemonade Server](https://amd-gaia.ai/docs/reference/dev)** running locally —
   it hosts the model the agent thinks with. GAIA tells you if it isn't up.
-- The `gaia` Python CLI **0.24.1 or newer** on `PATH` for the daemon the terminal
-  UI starts. Earlier cores start a daemon that has no entry for this agent, so the
-  UI comes up with nothing behind it. Install it with
+- The `gaia` Python CLI **0.25.0 or newer** on `PATH` for the daemon the terminal
+  UI starts. An earlier core cannot run this agent, so the UI comes up with
+  nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
   `irm https://amd-gaia.ai/install.ps1 | iex`).
 
@@ -188,6 +188,11 @@ answers, but it forgets everything from the previous turn. An id must be 1–128
 characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a 400. See
 [`SPEC.md` §5.2](./SPEC.md#52-session_id-and-agent-retention) for the retry
 and eviction behavior.
+
+**Attaching files to a conversation? Send them in `documents`** (contract ≥
+2.16): the absolute paths, the whole set on every turn. The agent indexes any it
+has not read yet before answering, and can read those exact files and nothing
+else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message

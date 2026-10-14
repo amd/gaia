@@ -35,7 +35,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from gaia.agents.install_hints import agent_not_installed_message
+from gaia.agents.install_hints import agent_import_error_message
 from gaia.config import UnsafeGaiaHomeError
 
 # ── Backward-compatible re-exports ──────────────────────────────────────────
@@ -227,7 +227,8 @@ def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
     except ImportError as e:
         raise RuntimeError(
-            agent_not_installed_message(
+            agent_import_error_message(
+                e,
                 "The GAIA agent is not installed",
                 "gaia-agent-gaia",
                 next_step="Then re-run the scheduled task.",
@@ -337,6 +338,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 min_context_size=0,  # Only check reachability — don't trigger model reloads
                 # The selected model, so a cloud pick never seeds a local one.
                 model=db.get_setting("custom_model") or _default_model_name(),
+                # Seeding here would download the model before setup runs.
+                preload=False,
             )
 
         def _import_modules():
@@ -404,6 +407,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             from gaia.ui.routers.system import _default_model_name
 
             model_id = db.get_setting("custom_model") or _default_model_name()
+            # Before the lease: waiting on a sidecar's local load for a cloud
+            # model held the whole UI at "starting" for nothing.
+            if cloud_model_provider(model_id, None):
+                return
 
             # model_load_lock guards other threads in THIS process; the broker
             # lease guards other processes sharing Lemonade's single slot
@@ -430,9 +437,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                         model_id,
                     )
 
-                if cloud_model_provider(model_id, None):
-                    return  # cloud models are never loaded locally
-                LemonadeClient(verbose=False).load_model(
+                client = LemonadeClient(verbose=False)
+                # A boot preload must never start a multi-GB download the
+                # user did not ask for (setup may be about to pick a cloud model).
+                if not client.get_model_info(model_id)["downloaded"]:
+                    logger.info(
+                        "Model preload: %s is not downloaded; skipping the boot "
+                        "preload (setup or the first chat downloads it)",
+                        model_id,
+                    )
+                    return
+                client.load_model(
                     model_id, ctx_size=resolve_ctx_size(model_id), prompt=False
                 )
 
@@ -442,11 +457,25 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             "Checking LLM server", _check_lemonade, visible=True
         )
         queue.dispatch("Loading ML libraries", _import_modules, visible=True)
-        queue.dispatch(
+        model_job = queue.dispatch(
             "Loading AI model",
             _load_model,
             visible=True,
             depends_on=lemonade_id,
+        )
+        from gaia.ui import warmup
+        from gaia.ui.dispatch import JobStatus
+
+        warmup.configure(db)
+
+        def _prime_first_prompt():
+            # A failed model load already explains a slow first turn.
+            if queue.get_job(model_job).status == JobStatus.DONE:
+                warmup.request_warm_up("startup")
+
+        # Not visible: priming the prompt must never hold the composer.
+        queue.dispatch(
+            "Priming the first prompt", _prime_first_prompt, depends_on=model_job
         )
 
         # Start autonomous agent loop
@@ -932,6 +961,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 def main():
     """Run the Agent UI server."""
     import argparse
+
+    from gaia.tls import use_os_trust_store
+
+    use_os_trust_store()
 
     import uvicorn
 

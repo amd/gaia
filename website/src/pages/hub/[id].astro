@@ -131,7 +131,7 @@ const requirementRows = [
   <Header />
   <main id="main-content" class="g-shell pb-24 pt-[110px]">
 
-    <nav class="mono mb-[30px] flex items-center gap-2.5 text-[12px] text-g-faint" aria-label="Breadcrumb">
+    <nav class="mono mb-[30px] flex items-center gap-2.5 text-[12.5px] text-g-faint" aria-label="Breadcrumb">
       <a href="/hub" class="text-g-muted transition-colors hover:text-g-accent-text">Agent Hub</a>
       <span aria-hidden="true">/</span>
       <span class="text-g-text">{agent.id}</span>
@@ -259,7 +259,7 @@ const requirementRows = [
                   <p class="text-[13px] text-g-faint">
                     {packageFiles.length} files across {topLevelFolders} {topLevelFolders === 1 ? 'folder' : 'folders'}{previewBase ? ' — click a text file to preview it.' : '.'}
                   </p>
-                  <div class="flex flex-none gap-1.5 text-[11px]" data-file-tree-controls>
+                  <div class="flex flex-none gap-1.5 text-[12.5px]" data-file-tree-controls>
                     <button type="button" data-files-expand class="rounded-g-badge border border-g-border px-2 py-1 text-g-muted transition-colors hover:border-g-accent-dim hover:text-g-text">Expand all</button>
                     <button type="button" data-files-collapse class="rounded-g-badge border border-g-border px-2 py-1 text-g-muted transition-colors hover:border-g-accent-dim hover:text-g-text">Collapse all</button>
                   </div>
@@ -282,12 +282,12 @@ const requirementRows = [
             <ul class="flex flex-col gap-2.5">
               {agent.permissions.map((p) => (
                 <li class="grid grid-cols-[auto_1fr] items-baseline gap-2.5">
-                  <span class="text-[11px] text-g-accent-text" aria-hidden="true">◆</span>
-                  <span class="mono text-[12px] leading-[1.5] text-g-muted">{p}</span>
+                  <span class="text-[12.5px] text-g-accent-text" aria-hidden="true">◆</span>
+                  <span class="mono text-[12.5px] leading-[1.5] text-g-muted">{p}</span>
                 </li>
               ))}
             </ul>
-            <p class="mt-4 text-[12px] leading-[1.55] text-g-faint">
+            <p class="mt-4 text-[12.5px] leading-[1.55] text-g-faint">
               Declared in the agent's manifest for v{agent.latest_version} — the full set it can request.
             </p>
           </SidebarCard>
@@ -300,7 +300,7 @@ const requirementRows = [
 
         {agent.models.length > 0 && (
           <SidebarCard title="Models">
-            <ul class="mono flex flex-col gap-1.5 text-[12px] text-g-muted">
+            <ul class="mono flex flex-col gap-1.5 text-[12.5px] text-g-muted">
               {agent.models.map((m) => <li>{m}</li>)}
             </ul>
           </SidebarCard>
@@ -333,7 +333,7 @@ const requirementRows = [
               >
                 <span class="select-none text-g-code-accent" aria-hidden="true">$</span>
                 <span data-pg-cmd class="min-w-0 flex-1 truncate">npx {agent.npm_package} playground</span>
-                <span class="pg-copy-label flex-none select-none text-[11px] text-g-code-text/70 group-hover:text-g-code-accent">copy</span>
+                <span class="pg-copy-label flex-none select-none text-[12.5px] text-g-code-text/70 group-hover:text-g-code-accent">copy</span>
               </button>
               <p data-pg-copy-status class="sr-only" role="status"></p>
               <a
@@ -350,7 +350,7 @@ const requirementRows = [
               {/* role="status": the sidecar coming up, and a blocked click, are
                   both silent otherwise. aria-describedby ties the reason the
                   link is disabled to the link itself. */}
-              <p id="pg-status" data-pg-status role="status" class="mt-2.5 text-[11px] text-g-faint">Checking if it's running…</p>
+              <p id="pg-status" data-pg-status role="status" class="mt-2.5 text-[12.5px] text-g-faint">Checking if it's running…</p>
             </SidebarCard>
           </div>
         )}
@@ -386,7 +386,7 @@ const requirementRows = [
       <div class="flex flex-none items-center justify-between gap-3 border-b border-g-border bg-g-surface px-4 py-2.5">
         <span id="file-preview-name" class="truncate font-mono text-[13px] text-g-text"></span>
         <div class="flex flex-none items-center gap-3">
-          <a id="file-preview-raw" href="#" target="_blank" rel="noopener" class="text-[11px] text-g-muted hover:text-g-accent-text">Raw ↗</a>
+          <a id="file-preview-raw" href="#" target="_blank" rel="noopener" class="text-[12.5px] text-g-muted hover:text-g-accent-text">Raw ↗</a>
           <button type="button" id="file-preview-close" aria-label="Close preview" class="text-g-muted hover:text-g-text">✕</button>
         </div>
       </div>
@@ -480,16 +480,23 @@ const requirementRows = [
       });
     });
 
-    // Cross-links elsewhere on the page (the score card, the Package card) that
-    // jump to a specific doc tab and scroll it into view.
+    // Cross-links elsewhere on the page (the score card, the Package card) and
+    // links between the docs themselves (`./SPEC.md#…`) that jump to a specific
+    // doc tab and scroll it into view.
     const docsCard = document.getElementById('docs') ?? tabRoot;
     document.querySelectorAll<HTMLElement>('[data-doc-goto]').forEach((btn) => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', (e) => {
         const key = btn.getAttribute('data-doc-goto');
+        const panel = panels.find((p) => p.getAttribute('data-doc-panel') === key);
+        // A doc this package did not publish has no tab; the #docs href still lands on the docs.
+        if (!panel) return;
+        e.preventDefault();
         select(key);
+        const anchor = btn.getAttribute('data-doc-anchor');
+        const target = (anchor && panel.querySelector<HTMLElement>(`#${CSS.escape(anchor)}`)) || docsCard;
         const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-        docsCard.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
-        tabs.find((t) => t.getAttribute('data-doc-tab') === key)?.focus();
+        target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+        tabs.find((t) => t.getAttribute('data-doc-tab') === key)?.focus({ preventScroll: target !== docsCard });
       });
     });
   }
@@ -690,10 +697,12 @@ const requirementRows = [
 
   /* Shifted one level to match renderMarkdown's demotion (doc `#` emits <h2>), so
      the visual hierarchy is unchanged while the outline stays valid. */
-  .doc h2 { @apply mt-0 mb-4 font-display text-[28px] font-semibold tracking-[-0.025em] text-g-text; }
-  .doc h3 { @apply mt-10 mb-4 border-b border-g-border pb-2 font-display text-[20px] font-semibold tracking-[-0.015em] text-g-text; }
-  .doc h4 { @apply mt-8 mb-3 font-display text-[16px] font-semibold text-g-text; }
-  .doc h5 { @apply mt-6 mb-2 font-display text-[15px] font-semibold text-g-text; }
+  .doc h2 { @apply mt-0 mb-4 font-display text-[28px] font-semibold tracking-[0.02em] text-g-text; }
+  .doc h3 { @apply mt-10 mb-4 border-b border-g-border pb-2 font-display text-[20px] font-semibold tracking-[0.02em] text-g-text; }
+  .doc h4 { @apply mt-8 mb-3 font-sans text-[16px] font-semibold text-g-text; }
+  .doc h5 { @apply mt-6 mb-2 font-sans text-[15px] font-semibold text-g-text; }
+  /* An anchor jump lands below the fixed header, like #docs does. */
+  .doc :is(h2, h3, h4, h5) { @apply scroll-mt-[86px]; }
 
   .doc p { @apply my-4 leading-[1.75] text-g-text/90; }
   .doc strong { @apply font-semibold text-g-text; }
@@ -705,7 +714,7 @@ const requirementRows = [
   .doc li { @apply leading-[1.7] text-g-text/90; }
   .doc li > ul, .doc li > ol { @apply my-2; }
 
-  .doc code { @apply rounded-g-badge border border-g-border bg-g-surface2 px-1.5 py-0.5 font-mono text-[0.85em] text-g-text; }
+  .doc code { @apply rounded-g-badge border border-g-border bg-g-surface2 px-1.5 py-0.5 font-mono text-[0.9em] text-g-text; }
   .doc pre { @apply my-5 overflow-x-auto rounded-g-panel border border-g-border bg-g-code-bg p-4; }
   .doc pre code { @apply border-0 bg-transparent p-0 font-mono text-[12.5px] leading-[1.8] text-g-code-text; }
 

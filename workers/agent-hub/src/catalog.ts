@@ -45,6 +45,22 @@ export function latestVersion(versions: string[]): string {
 }
 
 /**
+ * The existing versions, with the current latest stamped with the top-level
+ * `min_gaia_version` when it predates per-version records. The top-level value
+ * is the latest version's own (see {@link upsertVersion}), so this records it
+ * before a newer publish overwrites it.
+ */
+function withRecordedMinGaia(existing: AgentManifest | null): Record<string, VersionEntry> {
+  const versions = { ...(existing?.versions ?? {}) };
+  const latest = existing?.latest_version;
+  const min = existing?.min_gaia_version;
+  if (latest && min && versions[latest] && versions[latest].min_gaia_version === undefined) {
+    versions[latest] = { ...versions[latest], min_gaia_version: min };
+  }
+  return versions;
+}
+
+/**
  * Produce an updated per-agent manifest with `newVersion` added.
  *
  * A version's artifact set is append-only per distinct filename: if the version
@@ -61,17 +77,24 @@ export function upsertVersion(
   // If the version already exists, this publish adds another platform binary to
   // it: append the new artifact(s), keep the original published_at/publisher and
   // the primary artifact. The caller has already rejected duplicate filenames.
-  const prior = existing?.versions?.[version.version];
+  const priorVersions = withRecordedMinGaia(existing);
+  const prior = priorVersions[version.version];
   // Back-compat: a manifest written before `artifacts[]` existed has only the
   // singular `artifact`. Treat that as the starting set so appending never
   // dereferences an undefined array.
   const priorArtifacts = prior ? (prior.artifacts ?? [prior.artifact]) : [];
   const merged: VersionEntry = prior
-    ? { ...prior, artifacts: [...priorArtifacts, ...version.artifacts] }
+    ? {
+        ...prior,
+        ...(prior.min_gaia_version === undefined && version.min_gaia_version !== undefined
+          ? { min_gaia_version: version.min_gaia_version }
+          : {}),
+        artifacts: [...priorArtifacts, ...version.artifacts],
+      }
     : version;
 
   const versions: Record<string, VersionEntry> = {
-    ...(existing?.versions ?? {}),
+    ...priorVersions,
     [version.version]: merged,
   };
   const latest = latestVersion(Object.keys(versions));
@@ -96,7 +119,9 @@ export function upsertVersion(
     tags: base?.tags ?? existing?.tags ?? manifest.tags,
     icon: base?.icon ?? existing?.icon ?? manifest.icon,
     security_tier: base?.security_tier ?? existing?.security_tier ?? manifest.security_tier,
-    min_gaia_version: base?.min_gaia_version ?? existing?.min_gaia_version,
+    // Exactly the latest version's own floor: clients read it as that
+    // version's, so an older version's must not carry over.
+    min_gaia_version: useNew ? manifest.min_gaia_version : existing?.min_gaia_version,
     models: base?.models ?? existing?.models ?? manifest.models,
     tools_count: base?.tools_count ?? existing?.tools_count ?? manifest.tools_count,
     permissions: base?.permissions ?? existing?.permissions ?? manifest.permissions,
@@ -198,6 +223,14 @@ export interface ToIndexEntryOptions {
   baseUrl?: string;
 }
 
+/** Each published version's oldest supported core; "" when it was never recorded. */
+function minGaiaVersions(agent: AgentManifest): Record<string, string> {
+  const versions = withRecordedMinGaia(agent);
+  return Object.fromEntries(
+    Object.entries(versions).map(([v, entry]) => [v, entry.min_gaia_version ?? ""])
+  );
+}
+
 /**
  * Build the catalog entry for one agent manifest. `readme`/`changelog` are the
  * latest version's markdown ("" if none was published); `packageFiles` is the
@@ -248,6 +281,7 @@ export function toIndexEntry(
     tools_count: agent.tools_count,
     models: agent.models,
     min_gaia_version: agent.min_gaia_version ?? "",
+    min_gaia_versions: minGaiaVersions(agent),
     permissions: agent.permissions,
     deprecated: agent.deprecated,
     // undefined serializes to "key absent" — only present when set.
@@ -470,6 +504,9 @@ export function makeVersionEntry(
     published_at: publishedAt,
     publisher,
     deprecated: manifest.deprecated,
+    ...(manifest.min_gaia_version !== undefined
+      ? { min_gaia_version: manifest.min_gaia_version }
+      : {}),
     artifact,
     artifacts: [artifact],
   };

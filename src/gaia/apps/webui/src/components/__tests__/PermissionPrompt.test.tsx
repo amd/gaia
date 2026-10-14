@@ -43,6 +43,20 @@ describe('PermissionPrompt', () => {
         expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument();
     });
 
+    it("shows a relayed agent's summary when the call came without args", () => {
+        const summary = `Run 'write_file' with file_path="notes.md"?`;
+        useNotificationStore.getState().addNotification(request({ tool: 'write_file', toolArgs: undefined, summary }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByRole('alertdialog')).toHaveTextContent(summary);
+    });
+
+    it('prefers the args over the summary when both are present', () => {
+        useNotificationStore.getState().addNotification(request({ summary: 'should not show' }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByRole('alertdialog')).toHaveTextContent('git status');
+        expect(screen.getByRole('alertdialog')).not.toHaveTextContent('should not show');
+    });
+
     it('offers no always option without a scope', () => {
         useNotificationStore.getState().addNotification(request());
         render(<PermissionPrompt sessionId="chat-1" />);

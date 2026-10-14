@@ -173,7 +173,18 @@ def test_system_hoisted_out_of_messages(fake_anthropic):
     call = provider._client.messages.create.call_args.kwargs
     assert call["system"][0]["text"] == "You are GAIA."
     assert all(m["role"] != "system" for m in call["messages"])
-    assert call["messages"] == [{"role": "user", "content": "hello"}]
+    assert call["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "hello",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
 
 
 def test_tools_translated_to_anthropic_shape(fake_anthropic):
@@ -318,6 +329,7 @@ def test_tool_history_translated_to_anthropic_blocks(fake_anthropic):
                     "type": "tool_result",
                     "tool_use_id": "toolu_b",
                     "content": "beta",
+                    "cache_control": {"type": "ephemeral"},
                 },
             ],
         },
@@ -377,7 +389,13 @@ def test_unmatched_tool_result_remains_plain_user_text(fake_anthropic):
     call = provider._client.messages.create.call_args.kwargs
     assert call["messages"][-1] == {
         "role": "user",
-        "content": "[Tool result: plan_step] complete",
+        "content": [
+            {
+                "type": "text",
+                "text": "[Tool result: plan_step] complete",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
     }
 
 
@@ -499,7 +517,16 @@ def test_no_call_request_keeps_tool_history_and_tools(fake_anthropic, stream):
                 {"type": "tool_result", "tool_use_id": "toolu_1", "content": "alpha"}
             ],
         },
-        {"role": "user", "content": "Give the user your final answer now."},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Give the user your final answer now.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
     ]
 
 
@@ -629,12 +656,363 @@ def test_breakpoint_never_mutates_the_caller_tool_list(fake_anthropic):
     assert tools == OPENAI_TOOLS, "the agent reuses this list on every call"
 
 
-def test_no_breakpoint_when_there_is_nothing_stable_to_cache(fake_anthropic):
+def test_no_prefill_breakpoint_without_system_or_tools(fake_anthropic):
     provider = _provider(fake_anthropic)
     provider._client.messages.create.return_value = _response([_text_block("ok")])
     provider.chat([{"role": "user", "content": "hi"}])
     call = provider._client.messages.create.call_args.kwargs
     assert "system" not in call and "tools" not in call
+
+
+# ── rolling history breakpoint ──────────────────────────────────────────
+#
+# Without a marker on the conversation itself, every call of an agent loop
+# re-bills the whole growing history as fresh input. The rolling marker on the
+# last message lets call N+1 read what call N wrote.
+
+_EPHEMERAL = {"type": "ephemeral"}
+
+
+def _breakpoints(call: dict) -> int:
+    """Every ``cache_control`` in the outgoing request, wherever it sits."""
+
+    def count(node) -> int:
+        if isinstance(node, dict):
+            return ("cache_control" in node) + sum(count(v) for v in node.values())
+        if isinstance(node, list):
+            return sum(count(v) for v in node)
+        return 0
+
+    return (
+        count(call.get("tools")) + count(call.get("system")) + count(call["messages"])
+    )
+
+
+def _run(provider, messages, stream, **kwargs):
+    provider._client.messages.create.return_value = (
+        iter([]) if stream else _response([_text_block("ok")])
+    )
+    result = provider.chat(messages, stream=stream, **kwargs)
+    if stream:
+        list(result)
+    return provider._client.messages.create.call_args.kwargs
+
+
+_MULTI_TURN = [
+    {"role": "system", "content": "You are GAIA."},
+    {"role": "user", "content": "first question"},
+    {"role": "assistant", "content": "first answer"},
+    {"role": "user", "content": "second question"},
+]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_last_message_carries_the_rolling_breakpoint(fake_anthropic, stream):
+    provider = _provider(fake_anthropic)
+    call = _run(provider, _MULTI_TURN, stream, tools=OPENAI_TOOLS)
+
+    assert call["messages"][-1] == {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "second question", "cache_control": _EPHEMERAL}
+        ],
+    }
+    # Only the newest message is marked; older ones stay plain so the marker
+    # rolls forward instead of piling up.
+    assert call["messages"][:-1] == [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+    ]
+    # tools + system + last message.
+    assert _breakpoints(call) == 3
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_rolling_breakpoint_marks_the_last_block_of_list_content(
+    fake_anthropic, stream
+):
+    provider = _provider(fake_anthropic)
+    image = {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"},
+    }
+    call = _run(
+        provider,
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {
+                "role": "user",
+                "content": [image, {"type": "text", "text": "what is this?"}],
+            },
+        ],
+        stream,
+    )
+    last = call["messages"][-1]["content"]
+    assert last[0] == image
+    assert last[1] == {
+        "type": "text",
+        "text": "what is this?",
+        "cache_control": _EPHEMERAL,
+    }
+    assert _breakpoints(call) == 1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_rolling_breakpoint_lands_on_a_trailing_tool_result(fake_anthropic, stream):
+    """The agent loop's usual shape: the newest message is a tool result.
+    Anthropic accepts ``cache_control`` on ``tool_result`` blocks."""
+    provider = _provider(fake_anthropic)
+    call = _run(
+        provider,
+        [
+            {"role": "system", "content": "You are GAIA."},
+            {"role": "user", "content": "compare a and b"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": tid,
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": json.dumps({"path": path}),
+                        },
+                    }
+                    for tid, path in (("toolu_a", "a.txt"), ("toolu_b", "b.txt"))
+                ],
+            },
+            {"role": "tool", "tool_call_id": "toolu_a", "content": "alpha"},
+            {"role": "tool", "tool_call_id": "toolu_b", "content": "beta"},
+        ],
+        stream,
+        tools=OPENAI_TOOLS,
+    )
+    results = call["messages"][-1]["content"]
+    assert results == [
+        {"type": "tool_result", "tool_use_id": "toolu_a", "content": "alpha"},
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_b",
+            "content": "beta",
+            "cache_control": _EPHEMERAL,
+        },
+    ]
+    assert not any("cache_control" in str(m) for m in call["messages"][:-1])
+    assert _breakpoints(call) == 3
+
+
+@pytest.mark.parametrize(
+    "trailing",
+    [
+        {"type": "thinking", "thinking": "hmm", "signature": "sig"},
+        {"type": "redacted_thinking", "data": "opaque"},
+        {"type": "text", "text": ""},
+    ],
+    ids=["thinking", "redacted_thinking", "empty_text"],
+)
+def test_rolling_breakpoint_skips_blocks_that_cannot_carry_it(fake_anthropic, trailing):
+    provider = _provider(fake_anthropic)
+    call = _run(
+        provider,
+        [
+            {"role": "user", "content": "go on"},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Partial answer"}, trailing],
+            },
+        ],
+        stream=False,
+    )
+    last = call["messages"][-1]["content"]
+    assert last[0] == {
+        "type": "text",
+        "text": "Partial answer",
+        "cache_control": _EPHEMERAL,
+    }
+    assert last[1] == trailing
+    assert _breakpoints(call) == 1
+
+
+def test_no_rolling_breakpoint_when_no_block_can_carry_it(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    call = _run(
+        provider,
+        [
+            {"role": "user", "content": "go on"},
+            {
+                "role": "assistant",
+                "content": [{"type": "redacted_thinking", "data": "opaque"}],
+            },
+        ],
+        stream=False,
+    )
+    assert _breakpoints(call) == 0
+
+
+def test_no_rolling_breakpoint_on_empty_list_content(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    call = _run(
+        provider,
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": []},
+        ],
+        stream=False,
+    )
+    assert call["messages"][-1] == {"role": "assistant", "content": []}
+    assert _breakpoints(call) == 0
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_rolling_breakpoint_never_mutates_the_caller_messages(fake_anthropic, stream):
+    """The agent appends to and resends this list every call; a marker left in
+    it would pile up a new breakpoint per turn."""
+    provider = _provider(fake_anthropic)
+    messages = [
+        {"role": "system", "content": "You are GAIA."},
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "answer"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look"},
+                {"type": "text", "text": "here"},
+            ],
+        },
+    ]
+    snapshot = json.loads(json.dumps(messages))
+    call = _run(provider, messages, stream, tools=OPENAI_TOOLS)
+    assert call["messages"][-1]["content"][-1]["cache_control"] == _EPHEMERAL
+    assert messages == snapshot
+
+
+def test_breakpoints_over_the_api_limit_fail_loudly(fake_anthropic):
+    """Anthropic rejects more than 4 breakpoints. Caller-supplied markers on
+    older messages plus GAIA's three would exceed it."""
+    provider = _provider(fake_anthropic)
+    marked = [
+        {
+            "role": role,
+            "content": [{"type": "text", "text": text, "cache_control": _EPHEMERAL}],
+        }
+        for role, text in (("user", "q1"), ("assistant", "a1"))
+    ]
+    with pytest.raises(ValueError, match="at most 4"):
+        provider.chat(
+            [{"role": "system", "content": "You are GAIA."}]
+            + marked
+            + [{"role": "user", "content": "q2"}],
+            tools=OPENAI_TOOLS,
+        )
+    provider._client.messages.create.assert_not_called()
+
+
+def _tool_round(call_id, arguments, result_content):
+    return [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": json.dumps(arguments),
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": call_id, "content": result_content},
+    ]
+
+
+def test_tool_argument_named_cache_control_is_not_a_breakpoint(fake_anthropic):
+    """Tool inputs are arbitrary JSON; a key that happens to be called
+    ``cache_control`` is data, not a marker, and must not trip the limit."""
+    provider = _provider(fake_anthropic)
+    messages = (
+        [
+            {"role": "system", "content": "You are GAIA."},
+            {"role": "user", "content": "read both configs"},
+        ]
+        + _tool_round("toolu_a", {"path": "a.yml", "cache_control": "off"}, "x: 1")
+        + _tool_round("toolu_b", {"path": "b.yml", "cache_control": "on"}, "y: 2")
+    )
+    call = _run(provider, messages, stream=False, tools=OPENAI_TOOLS)
+    assert _breakpoints(call) == 5  # 3 markers + 2 look-alike argument keys
+    assert call["messages"][-1]["content"][-1]["cache_control"] == _EPHEMERAL
+
+
+def test_markers_nested_in_tool_results_count_toward_the_limit(fake_anthropic):
+    """Anthropic counts a marker inside a tool_result's own content blocks."""
+    provider = _provider(fake_anthropic)
+    nested = [{"type": "text", "text": "cached output", "cache_control": _EPHEMERAL}]
+    messages = (
+        [
+            {"role": "system", "content": "You are GAIA."},
+            {"role": "user", "content": "read both files"},
+        ]
+        + _tool_round("toolu_a", {"path": "a.txt"}, nested)
+        + _tool_round("toolu_b", {"path": "b.txt"}, nested)
+        + [{"role": "user", "content": "now summarise"}]
+    )
+    with pytest.raises(ValueError, match="at most 4"):
+        provider.chat(messages, tools=OPENAI_TOOLS)
+    provider._client.messages.create.assert_not_called()
+
+
+class _MarkingClient:
+    """A client wrapper that adds its own marker on the newest message's last
+    block and an effort setting, then forwards — copying or editing in place."""
+
+    def __init__(self, inner, copy_request):
+        self._inner = inner
+        self._copy = copy_request
+        self.sent = []
+        self.messages = SimpleNamespace(create=self._create)
+
+    def _create(self, **kwargs):
+        request = json.loads(json.dumps(kwargs)) if self._copy else kwargs
+        last = request["messages"][-1]
+        if isinstance(last["content"], str):
+            last["content"] = [{"type": "text", "text": last["content"]}]
+        last["content"][-1]["cache_control"] = {"type": "ephemeral"}
+        request["output_config"] = {"effort": "high"}
+        self.sent.append(json.loads(json.dumps(request)))
+        return self._inner.messages.create(**request)
+
+
+@pytest.mark.parametrize("copy_request", [True, False], ids=["copies", "in_place"])
+def test_a_client_wrapper_that_marks_the_last_block_stays_within_the_limit(
+    fake_anthropic, copy_request
+):
+    """The wrapper re-marks the block GAIA already marked, so the count stays at
+    3; and GAIA never writes a marker into the caller's history, so a wrapper
+    editing in place can't pile markers up across calls."""
+    provider = _provider(fake_anthropic)
+    wrapper = _MarkingClient(provider._client, copy_request)
+    provider._client = wrapper
+    history = [{"role": "system", "content": "You are GAIA."}]
+    for step in range(4):
+        # Caller-owned block list as the newest message: the one place a
+        # marker written in place could leak into history.
+        history.append(
+            {"role": "user", "content": [{"type": "text", "text": f"Part {step}."}]}
+        )
+        wrapper._inner.messages.create.return_value = _response(
+            [_text_block(f"Done with part {step}.")]
+        )
+        reply = provider.chat(history, tools=OPENAI_TOOLS)
+        history.append({"role": "assistant", "content": reply})
+
+    assert len(wrapper.sent) == 4
+    for request in wrapper.sent:
+        assert _breakpoints(request) == 3
+        assert request["output_config"] == {"effort": "high"}
+    assert "cache_control" not in json.dumps(history)
 
 
 def test_usage_reads_both_cache_counters(fake_anthropic):

@@ -46,6 +46,7 @@ from gaia.ports import (
     listeners_on_port,
     terminate_pid,
 )
+from gaia.utils.terminal import windows_hidden_popen_kwargs
 from gaia.version import parse_version
 
 # For the module-level helpers; the client class keeps its own ``self.log``.
@@ -116,6 +117,14 @@ def _read_embedded_lemonade_state() -> Optional[Dict[str, Any]]:
         if not pid_exists(pid):
             return None
     return state
+
+
+def running_embedded_lemonade_url() -> Optional[str]:
+    """Base URL of GAIA's own server while it runs, else None."""
+    state = _read_embedded_lemonade_state()
+    if state is None:
+        return None
+    return resolve_lemonade_base_url(f"http://{DEFAULT_HOST}:{state['port']}")
 
 
 def _get_lemonade_config() -> tuple:
@@ -310,10 +319,9 @@ def resolve_default_chat_model() -> str:
 DEFAULT_EMBEDDING_MODEL = "user.embeddinggemma-300m-GGUF"
 DEFAULT_EMBEDDING_CHECKPOINT = "ggml-org/embeddinggemma-300M-GGUF:Q8_0"
 
-#: llama.cpp's Vulkan cooperative-matrix path crashes llama-server as it loads
-#: an embedding model on AMD Radeon iGPUs (#1831). The embedder is small, so it
-#: runs on the CPU backend and chat models keep the fast GPU path.
-CPU_BACKEND_MODELS = frozenset(
+#: Embedders whose llama.cpp backend GAIA chooses: the GPU, falling back to the
+#: CPU only when the GPU load fails (#5049).
+EMBEDDER_MODELS = frozenset(
     {DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_MODEL.removeprefix("user.")}
 )
 
@@ -323,15 +331,19 @@ EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
 
 
-def llamacpp_backend_for(model_name: Optional[str]) -> Optional[str]:
-    """The llama.cpp backend *model_name* must load on, or None for the default."""
-    if platform.system() == "Darwin" or model_name not in CPU_BACKEND_MODELS:
-        return None
-    return "cpu"
+def manages_embedder_backend(model_name: Optional[str]) -> bool:
+    """Whether GAIA picks *model_name*'s llama.cpp backend and saves it.
+
+    macOS is left to Lemonade, which runs everything on Metal.
+    """
+    return platform.system() != "Darwin" and model_name in EMBEDDER_MODELS
 
 
 #: ``(base_url, model)`` pairs whose backend this process has saved on the server.
 _PINNED_BACKENDS: set = set()
+#: ``(base_url, model)`` pairs whose GPU load failed in this process; they go
+#: straight to the CPU backend instead of crashing the GPU one again.
+_CPU_FALLBACK_EMBEDDERS: set = set()
 _PINNED_BACKENDS_LOCK = threading.Lock()
 
 
@@ -505,16 +517,15 @@ def machine_capacity(base_url: Optional[str] = None):
 CO_RESIDENT_MODELS = (DEFAULT_EMBEDDING_MODEL,)
 
 
-def co_resident_reserve_gb(capacity) -> float:
+def co_resident_reserve_gb(_capacity) -> float:
     """Memory the ``CO_RESIDENT_MODELS`` take from *capacity*'s pool.
 
-    They run on the CPU backend (``llamacpp_backend_for``), so they only draw on
-    a pool that shares system RAM; a discrete GPU's VRAM is not theirs.
+    They load on the GPU (or system RAM on a CPU-only PC), the same pool the
+    chat model's window is sized from.
+    Every pool pays it, so the capacity itself does not change the amount.
     """
     from gaia.llm.model_fit import required_memory_gb
 
-    if not capacity.shares_system_ram:
-        return 0.0
     total = 0.0
     for model_id in CO_RESIDENT_MODELS:
         mr = find_model_requirement(model_id)
@@ -1416,8 +1427,8 @@ _CLOUD_PROVIDERS: frozenset = frozenset()
 _CLOUD_LOCK = threading.Lock()
 
 # Gateway models observed to answer a streaming request with no tokens at all.
-# The AMD gateway currently does this for every model except Gemma-4-31B: a
-# stream returns 200 and then nothing, while the same prompt non-streaming
+# The AMD gateway does this for some models (Gemma-4-31B and DeepSeek-V4.1-Flash
+# stream): a stream returns 200 and then nothing, while the same prompt non-streaming
 # works. Nothing in the catalogue advertises this, so it can only be learned by
 # trying. Remembered so the empty stream is paid once per model, not per turn.
 _CLOUD_NON_STREAMING: set = set()
@@ -1630,13 +1641,11 @@ def backend_crash_remedy(model: str) -> str:
     """What to do when Lemonade is up but llama-server dies loading ``model``."""
     return (
         f"Lemonade is running, but llama.cpp exited while loading '{model}'. "
-        "On an AMD Radeon GPU with the Vulkan backend, the likely cause is "
-        "llama.cpp's cooperative-matrix crash. GAIA loads its embedding model on "
-        "the CPU backend to avoid it: run `gaia lemonade embedded stop`, then "
-        "`gaia lemonade embedded start`, so GAIA's server picks that up. For "
-        "another model, load it with llamacpp_backend=cpu, or start Lemonade "
-        "with GGML_VK_DISABLE_COOPMAT=1 (every model then runs slower). "
-        "Otherwise, Lemonade's server log has llama-server's own output."
+        "On an AMD Radeon GPU with the Vulkan backend, a possible cause is "
+        "llama.cpp's cooperative-matrix crash: load the model with "
+        "llamacpp_backend=cpu, or start Lemonade with GGML_VK_DISABLE_COOPMAT=1 "
+        "(every model then runs slower). Otherwise, Lemonade's server log has "
+        "llama-server's own output."
     )
 
 
@@ -1689,8 +1698,12 @@ def _cloud_error_status(error: openai.APIError) -> Optional[int]:
         envelope = body.get("error", body)
         if isinstance(envelope, dict):
             details = envelope.get("details")
+            # Lemonade's mid-stream error frame puts status_code on the
+            # envelope itself; its HTTP error body nests it under details.
+            candidates = [envelope.get("status_code")]
             if isinstance(details, dict):
-                status = details.get("status_code")
+                candidates.insert(0, details.get("status_code"))
+            for status in candidates:
                 if (
                     isinstance(status, int)
                     and not isinstance(status, bool)
@@ -1711,7 +1724,7 @@ def _cloud_request_error(
     if status in {401, 403}:
         return LemonadeAuthError(
             f"Cloud authentication or access was denied (HTTP {status}). "
-            "Reconnect the provider in the TUI provider settings and check "
+            "Run /provider in the TUI to reconnect the provider, and check "
             "your account's model access. If Lemonade itself requires "
             "authentication, verify LEMONADE_API_KEY."
         )
@@ -2119,6 +2132,10 @@ def _check_disk_space(size_gb: float, free_bytes: int, path: str) -> bool:
 class LemonadeClient:
     """Client for interacting with the Lemonade server REST API."""
 
+    #: True while this client is aimed at GAIA's own server, so it follows that
+    #: server to whatever port and key the daemon last started it with.
+    follows_gaia_lemonade: bool = False
+
     def __init__(
         self,
         model: Optional[str] = None,
@@ -2184,6 +2201,23 @@ class LemonadeClient:
         self.keep_alive = keep_alive
         self._log_file = None
         self.api_key = resolve_lemonade_api_key(api_key, base_url=self.base_url)
+        # GAIA's own server gets a new port and key each time the daemon
+        # (re)starts it. A client aimed at it -- running, or stopped at the
+        # default address -- follows it there.
+        if api_key is not None or configured_lemonade_url() is not None:
+            self.follows_gaia_lemonade = False
+        elif self.api_key is not None:
+            embedded_key = _embedded_lemonade_api_key(self.base_url)
+            self.follows_gaia_lemonade = self.api_key == embedded_key
+        else:
+            # A resolved default URL dates from a restart; the server may be
+            # back on another port already, so it no longer compares equal.
+            self.follows_gaia_lemonade = gaia_runs_lemonade(self.base_url) or (
+                host is None
+                and port is None
+                and self.base_url == DEFAULT_LEMONADE_URL
+                and gaia_runs_lemonade()
+            )
         # Instance-scoped exact-pin ctx override (#1892). Never a class-level
         # default or MODELS mutation — chat/RAG clients sharing this process
         # must keep their own floor semantics.
@@ -2299,6 +2333,49 @@ class LemonadeClient:
         self._stop_listeners(stoppable)
         return foreign
 
+    def current_base_url(self) -> str:
+        """Where this client sends requests now.
+
+        Follows GAIA's own server to the port the daemon last started it on,
+        as every request does; any other server is returned as configured.
+
+        Raises:
+            LemonadeClientError: GAIA's server is gone and the daemon could not
+                start it.
+        """
+        self._follow_gaia_lemonade()
+        return self.base_url
+
+    def credential_base_url(self) -> str:
+        """Where this client may send a cloud provider key.
+
+        While GAIA runs Lemonade itself, only its own running server qualifies:
+        a client resolved during a restart sits at the default port, where some
+        other Lemonade may be listening. Follows GAIA's server first, so a
+        restart in progress is waited out through the daemon.
+
+        Raises:
+            LemonadeClientError: GAIA's server is restarting and is not back
+                yet, or this client points at a server that is not GAIA's.
+        """
+        base_url = self.current_base_url()
+        if not gaia_runs_lemonade():
+            return base_url
+        own = running_embedded_lemonade_url()
+        if base_url == own:
+            return base_url
+        if own is None:
+            raise LemonadeClientError(
+                "GAIA's Lemonade Server is restarting and is not back yet. Try "
+                "again in a moment; if this persists, run `gaia daemon status` "
+                "and check the daemon log."
+            )
+        raise LemonadeClientError(
+            f"{base_url} is not GAIA's Lemonade Server (that runs at {own}), so "
+            "GAIA did not send it a cloud key. To use that server instead, set "
+            "LEMONADE_BASE_URL to it."
+        )
+
     def _start_gaia_lemonade(self) -> None:
         """Have the daemon start GAIA's own server, then point this client at it.
 
@@ -2306,8 +2383,6 @@ class LemonadeClient:
             LemonadeClientError: the daemon could not start it. There is no
                 retry against a system install.
         """
-        from urllib.parse import urlparse
-
         from gaia.daemon.client import ensure_lemonade
         from gaia.daemon.errors import DaemonError
 
@@ -2318,11 +2393,83 @@ class LemonadeClient:
             raise LemonadeClientError(
                 f"Could not start GAIA's Lemonade Server: {e}"
             ) from e
-        self.base_url = served["base_url"]
+        self._point_at_gaia_lemonade(served["base_url"])
+
+    def _point_at_gaia_lemonade(self, base_url: str) -> None:
+        """Talk to GAIA's own server at *base_url*, with the key it recorded."""
+        from urllib.parse import urlparse
+
+        self.base_url = resolve_lemonade_base_url(base_url)
         parsed = urlparse(self.base_url)
         self.host = parsed.hostname or DEFAULT_HOST
         self.port = parsed.port or DEFAULT_PORT
         self.api_key = _embedded_lemonade_api_key(self.base_url)
+        self.follows_gaia_lemonade = True
+
+    def _follow_gaia_lemonade(self, model: Optional[str] = None) -> None:
+        """Re-point at GAIA's own server if the daemon restarted it elsewhere.
+
+        A long-lived client (a cached chat agent, a sidecar) otherwise keeps
+        calling the port and key of a server that no longer exists. Clients
+        configured for any other server are left alone. When *model* is a
+        cloud model, the restarted server also gets the kept provider key back.
+
+        Raises:
+            LemonadeClientError: the server is gone and the daemon could not
+                start it; the message names why.
+        """
+        if not self.follows_gaia_lemonade:
+            return
+        state = _read_embedded_lemonade_state()
+        if state is None:
+            self.log.warning(
+                f"GAIA's Lemonade Server at {self.base_url} has stopped; asking "
+                "the GAIA daemon for the server it runs now."
+            )
+            self._start_gaia_lemonade()
+            self.log.info(f"Now using GAIA's Lemonade Server at {self.base_url}")
+            self._replay_cloud_key(model)
+            return
+        recorded_key = state.get("api_key")
+        if isinstance(recorded_key, str):
+            recorded_key = recorded_key.strip()
+        if state["port"] == self.port and recorded_key == self.api_key:
+            return
+        previous = self.base_url
+        self._point_at_gaia_lemonade(f"http://{DEFAULT_HOST}:{state['port']}")
+        self.log.warning(
+            f"GAIA's Lemonade Server moved from {previous} to {self.base_url} "
+            "(the daemon restarted it); following it."
+        )
+        self._replay_cloud_key(model)
+
+    def _replay_cloud_key(self, model: Optional[str]) -> None:
+        """Give a restarted server the kept key for *model*'s cloud provider.
+
+        Lemonade holds cloud keys in memory only, so without this every cloud
+        model 404s until the user relaunches. A failed replay is logged and the
+        turn goes ahead: its own error then names the unavailable model.
+        """
+        from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+        from gaia.llm.gateway import GatewayError
+
+        provider = self.cloud_model_provider(model or self.model or "")
+        if provider not in PROVIDERS:
+            return
+        try:
+            usable = ensure_authenticated(provider, client=self)
+        except (CloudKeyError, GatewayError, requests.RequestException) as e:
+            self.log.warning(
+                f"Could not give the restarted Lemonade Server the kept {provider} "
+                f"key: {e}"
+            )
+            return
+        if not usable:
+            self.log.warning(
+                f"The restarted Lemonade Server still lists no {provider} models; "
+                f"reconnect {provider} in the TUI's /provider panel or the Agent "
+                "UI's Settings > Model."
+            )
 
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
@@ -2420,6 +2567,7 @@ class LemonadeClient:
         popen_env = child_env(spec.env)
         # Own process group, so terminate_server's group kill can't reach the caller.
         session = {} if sys.platform.startswith("win") else {"start_new_session": True}
+        hidden = windows_hidden_popen_kwargs()
 
         if background == "terminal":
             # New console window on Windows; argv-only — a resolved path must
@@ -2442,6 +2590,7 @@ class LemonadeClient:
                     bufsize=1,
                     env=popen_env,
                     **session,
+                    **hidden,
                 )
             except Exception:
                 self._log_file.close()
@@ -2457,6 +2606,7 @@ class LemonadeClient:
                 bufsize=1,
                 env=popen_env,
                 **session,
+                **hidden,
             )
 
             # Print stdout and stderr in real-time only for foreground mode
@@ -2530,6 +2680,7 @@ class LemonadeClient:
                         ],
                         shell=False,
                         check=False,
+                        **windows_hidden_popen_kwargs(),
                     )
                 elif self.server_process.pid:
                     # The server leads its own group, so its pid is the group id;
@@ -2985,6 +3136,63 @@ class LemonadeClient:
             # latest error to the caller's handling. Fail-loudly is preserved.
             raise last_error
 
+    def _default_llamacpp_backend(self) -> Optional[str]:
+        """The llama.cpp backend Lemonade picks for this machine (``vulkan``...).
+
+        Named explicitly in an embedder load so it replaces a saved CPU pin.
+        None when the server does not say; the load then omits the backend.
+        """
+        try:
+            info = self.get_system_info(timeout=15)
+        except LemonadeAuthError:
+            raise
+        except LemonadeClientError as e:
+            self.log.warning(
+                f"Could not read {self.base_url}/system-info to pick the embedding "
+                f"model's llama.cpp backend ({e}); letting Lemonade choose it."
+            )
+            return None
+        llamacpp = (info.get("recipes") or {}).get("llamacpp") or {}
+        backend = llamacpp.get("default_backend")
+        return backend if isinstance(backend, str) and backend else None
+
+    def _post_embedder_load(
+        self,
+        url: str,
+        request_data: Dict[str, Any],
+        timeout: int,
+        model_name: str,
+        load_retries: int,
+    ) -> Dict[str, Any]:
+        """Load an embedder on the GPU, falling back to the CPU when it won't start.
+
+        Only a backend-startup failure falls back — a missing or corrupt model
+        is raised for the caller's download/repair handling. The fallback is
+        logged as a warning and saved in Lemonade like any embedder load.
+        """
+        try:
+            return self._post_load_with_transient_retry(
+                url, request_data, timeout, model_name, min(load_retries, 1)
+            )
+        except Exception as e:
+            if not self._is_transient_load_error(e):
+                raise
+            backend = request_data.get("llamacpp_backend") or "default"
+            self.log.warning(
+                f"Embedding model '{model_name}' failed to load on llama.cpp's "
+                f"{backend} backend ({e}). Loading it on the CPU backend instead: "
+                "memory and document search keep working, but indexing uses the "
+                "CPU. GAIA tries the GPU again next time it starts; see "
+                "https://amd-gaia.ai/docs/reference/troubleshooting if it keeps "
+                "failing."
+            )
+            with _PINNED_BACKENDS_LOCK:
+                _CPU_FALLBACK_EMBEDDERS.add((self.base_url, model_name))
+            request_data["llamacpp_backend"] = "cpu"
+            return self._post_load_with_transient_retry(
+                url, request_data, timeout, model_name, load_retries
+            )
+
     def _execute_with_auto_download(
         self,
         api_call: Callable,
@@ -3111,6 +3319,7 @@ class LemonadeClient:
           }]
         }
         """
+        self._follow_gaia_lemonade(model)
         if timeout is None:
             # Resolved per call, not as a default argument: GAIA_CTX_SIZE and the
             # device profile can change between calls, and the budget follows them.
@@ -3819,6 +4028,7 @@ class LemonadeClient:
         Returns:
             Dict with 'data' containing list of embedding vectors
         """
+        self._follow_gaia_lemonade()
         try:
             # Ensure input is a list
             if isinstance(input_texts, str):
@@ -3840,12 +4050,13 @@ class LemonadeClient:
             raise LemonadeClientError(f"Error generating embeddings: {str(e)}")
 
     def _pin_llamacpp_backend(self, model_name: str) -> None:
-        """Load *model_name* once on its required backend, saving the choice.
+        """Load *model_name* once per process on its backend, saving the choice.
 
-        ``/embeddings`` makes Lemonade load the model itself on its default
-        backend; the saved option makes those auto-loads use the right one.
+        ``/embeddings`` makes Lemonade load the model itself from its saved
+        options, so the saved backend must be one that loads on this machine —
+        and a CPU pin saved by an older GAIA is replaced by the GPU here.
         """
-        if llamacpp_backend_for(model_name) is None:
+        if not manages_embedder_backend(model_name):
             return
         with _PINNED_BACKENDS_LOCK:
             if (self.base_url, model_name) in _PINNED_BACKENDS:
@@ -5316,7 +5527,7 @@ class LemonadeClient:
                 prompt=prompt,
                 load_retries=load_retries,
             )
-        if llamacpp_backend_for(model_name) is not None:
+        if manages_embedder_backend(model_name):
             with _PINNED_BACKENDS_LOCK:
                 _PINNED_BACKENDS.add((self.base_url, model_name))
         return response
@@ -5355,8 +5566,8 @@ class LemonadeClient:
                      Overrides the default value for this model.
             save_options: If True, persists ctx_size and llamacpp_args to config file.
                          Model will use these settings on future loads.
-                         Always on for a model with a forced llama.cpp backend
-                         (:func:`llamacpp_backend_for`).
+                         Always on for an embedder whose backend GAIA picks
+                         (:func:`manages_embedder_backend`).
             prompt: If True, prompt user before downloading (default: True).
                    Set to False to download automatically without user confirmation.
             load_retries: Number of times to retry on a TRANSIENT backend-startup
@@ -5379,12 +5590,9 @@ class LemonadeClient:
         """
         self.log.debug(f"Loading {model_name}")
 
-        # A forced-backend load saves its options; never save the chat flags.
-        if (
-            llamacpp_args is None
-            and ctx_size is not None
-            and llamacpp_backend_for(model_name) is None
-        ):
+        managed_embedder = manages_embedder_backend(model_name)
+        # An embedder load saves its options; never save the chat flags.
+        if llamacpp_args is None and ctx_size is not None and not managed_embedder:
             # The chat flags are a speed-up; an unreadable catalog must not
             # block the load itself, which only needs POST /load.
             try:
@@ -5401,13 +5609,16 @@ class LemonadeClient:
                 )
             if recipe == "llamacpp":
                 llamacpp_args = CHAT_LLAMACPP_ARGS
-        if llamacpp_args is None and model_name in CPU_BACKEND_MODELS:
+        if llamacpp_args is None and model_name in EMBEDDER_MODELS:
             llamacpp_args = EMBEDDER_LLAMACPP_ARGS
 
         request_data = {"model_name": model_name}
-        backend = llamacpp_backend_for(model_name)
-        if backend:
-            request_data["llamacpp_backend"] = backend
+        if managed_embedder:
+            with _PINNED_BACKENDS_LOCK:
+                fell_back = (self.base_url, model_name) in _CPU_FALLBACK_EMBEDDERS
+            backend = "cpu" if fell_back else self._default_llamacpp_backend()
+            if backend:
+                request_data["llamacpp_backend"] = backend
             # Saved so Lemonade's own auto-loads (``/embeddings``) use it too.
             save_options = True
         if llamacpp_args:
@@ -5419,9 +5630,14 @@ class LemonadeClient:
         url = f"{self.base_url}/load"
 
         try:
-            response = self._post_load_with_transient_retry(
-                url, request_data, timeout, model_name, load_retries
-            )
+            if managed_embedder and request_data.get("llamacpp_backend") != "cpu":
+                response = self._post_embedder_load(
+                    url, request_data, timeout, model_name, load_retries
+                )
+            else:
+                response = self._post_load_with_transient_retry(
+                    url, request_data, timeout, model_name, load_retries
+                )
             self.log.debug(f"Loaded {model_name} successfully: response={response}")
             self.model = model_name
             return response

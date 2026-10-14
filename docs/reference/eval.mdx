@@ -548,7 +548,7 @@ Each run writes `results.json` and `report.md` to `--out` (default `eval/results
 | `nightly` | A seeded 20 of Verified plus 6 of SWE-rebench 2026, skipping repos over 20K chunks (named in the report). Incremental replay of 30 flask commits. Robustness. | Yes |
 | `scale` | Fresh index of requests, TheRock, llama.cpp, django and GAIA itself, all pinned. | No, reported |
 
-Indexing runs at about 10 chunks/s because the embedder is pinned to the CPU backend. That is why the suites are sized by repository, and why `scale` is weekly. Every repository and sample is pinned to a commit and seed, so two runs of a suite score the same queries over the same trees.
+Indexing throughput bounds every suite. That is why the suites are sized by repository, and why `scale` is weekly. Every repository and sample is pinned to a commit and seed, so two runs of a suite score the same queries over the same trees.
 
 ### Incremental re-index and robustness
 

@@ -20,6 +20,23 @@ import (
 
 const FireworksURL = "https://api.fireworks.ai/inference/v1"
 
+// AMD's LLM gateway authenticates on Azure API Management's subscription-key
+// header; `Authorization: Bearer` gets 401 "missing subscription key" there.
+const (
+	AMDGatewayURL        = "https://llm-api.amd.com/Unified/v1"
+	AMDGatewayAuthHeader = "Ocp-Apim-Subscription-Key"
+)
+
+// IsAMDGateway reports whether base is AMD's own gateway host.
+func IsAMDGateway(base string) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil {
+		return false
+	}
+	host, _ := url.Parse(AMDGatewayURL)
+	return strings.EqualFold(u.Hostname(), host.Hostname())
+}
+
 // Recommendation is a Fireworks model worth steering users to, with the reason.
 type Recommendation struct {
 	ID   string
@@ -42,14 +59,14 @@ type Recommendation struct {
 // fails when a figure here drifts from it.
 var RecommendedModels = []Recommendation{
 	{
-		ID:       "fireworks.glm-5p3-flash",
-		Note:     "best overall, cheapest",
-		Evidence: "14/14 tasks · quality 4.89/5 · $0.09 per 14-task run",
+		ID:       "fireworks.deepseek-v4p1-flash",
+		Note:     "best overall, fastest",
+		Evidence: "14/14 tasks · quality 4.92/5 · $0.10 per 14-task run",
 	},
 	{
-		ID:       "fireworks.deepseek-v4p1-flash",
-		Note:     "fastest",
-		Evidence: "14/14 tasks · quality 4.92/5 · $0.10 per 14-task run",
+		ID:       "fireworks.glm-5p3-flash",
+		Note:     "cheapest",
+		Evidence: "14/14 tasks · quality 4.89/5 · $0.09 per 14-task run",
 	},
 	{ID: "fireworks.deepseek-v4-pro-0813", Note: "most truthful"},
 }
@@ -81,6 +98,12 @@ func rankKey(id string) string {
 	return provider + "." + name[strings.LastIndex(name, "/")+1:]
 }
 
+// SameCloudModel reports whether two cloud ids name the same model, in either
+// form Lemonade reports and regardless of case.
+func SameCloudModel(a, b string) bool {
+	return strings.EqualFold(rankKey(a), rankKey(b))
+}
+
 // Evidence returns the measured line behind a recommended model, or "".
 func Evidence(id string) string {
 	key := rankKey(id)
@@ -110,7 +133,16 @@ type Provider struct {
 	Prefix     string `json:"auth_header_prefix"`
 	EnvKey     bool   `json:"env_var_set"`
 	RuntimeKey bool   `json:"runtime_key_set"`
+	// ModelsDiscovered is nil when this Lemonade does not report it.
+	ModelsDiscovered *int `json:"models_discovered"`
 }
+
+// KeyFindsNoModels is true when a key is held but discovered nothing, which is
+// how Lemonade reports a key the provider rejected: it stores keys unchecked.
+func (p Provider) KeyFindsNoModels() bool {
+	return (p.EnvKey || p.RuntimeKey) && p.ModelsDiscovered != nil && *p.ModelsDiscovered == 0
+}
+
 type Model struct {
 	ID            string   `json:"id"`
 	ContextLength int      `json:"context_length"`
@@ -165,7 +197,8 @@ func validateURL(raw string, loopback bool) error {
 func (c *Client) request(ctx context.Context, method, path string, data any, result any) error {
 	// Configuration changes are local administrative operations. Never send a
 	// pasted key to an arbitrary remote Lemonade address or follow a redirect.
-	if err := validateURL(c.BaseURL, true); err != nil {
+	base := c.current()
+	if err := validateURL(base, true); err != nil {
 		return err
 	}
 	var body io.Reader
@@ -176,12 +209,12 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, base+path, body)
 	if err != nil {
 		return fmt.Errorf("Invalid Lemonade address")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := APIKeyFor(c.BaseURL); key != "" {
+	if key := APIKeyFor(base); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	resp, err := c.HTTP.Do(req)
@@ -251,18 +284,30 @@ func (c *Client) Configure(ctx context.Context, p Provider, key string) error {
 	if p.Name == "fireworks" && p.BaseURL != FireworksURL {
 		return fmt.Errorf("Fireworks must use its official API endpoint")
 	}
+	if p.Name == "amd" && IsAMDGateway(p.BaseURL) && (p.Header != AMDGatewayAuthHeader || p.Prefix != "") {
+		return fmt.Errorf("AMD's gateway authenticates with the %s header and no prefix", AMDGatewayAuthHeader)
+	}
 	if err := validateURL(p.BaseURL, false); err != nil {
 		return err
 	}
 	if strings.TrimSpace(p.Header) == "" || strings.ContainsAny(p.Header+p.Prefix, "\r\n") {
 		return fmt.Errorf("Enter a valid authentication header and prefix")
 	}
+	target := c
+	if key != "" {
+		// Registration and key must land on the same server, and only one a key may reach.
+		base, err := CredentialBaseURL(ctx, c.BaseURL)
+		if err != nil {
+			return err
+		}
+		target = &Client{BaseURL: base, HTTP: c.HTTP}
+	}
 	data := map[string]any{"backend": "cloud", "provider": p.Name, "base_url": p.BaseURL, "auth_header_name": p.Header, "auth_header_prefix": p.Prefix, "wire_format": "openai"}
-	if err := c.request(ctx, "POST", "/install", data, nil); err != nil {
+	if err := target.request(ctx, "POST", "/install", data, nil); err != nil {
 		return err
 	}
 	if key != "" {
-		return c.request(ctx, "POST", "/cloud/auth", map[string]string{"provider": p.Name, "api_key": key}, nil)
+		return target.request(ctx, "POST", "/cloud/auth", map[string]string{"provider": p.Name, "api_key": key}, nil)
 	}
 	return nil
 }

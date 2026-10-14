@@ -220,6 +220,19 @@ class TestRunContext:
         assert run_dir == project
         assert env["PYTHONPATH"].split(os.pathsep)[0] == str(project)
 
+    @pytest.mark.parametrize("inside", [True, False])
+    def test_gaia_internal_credentials_stay_out_of_the_script(
+        self, project, tmp_path, monkeypatch, inside
+    ):
+        monkeypatch.setenv("GAIA_MODEL_BROKER_TOKEN", "secret")
+        monkeypatch.setenv("SOME_USER_SETTING", "kept")
+        script = project / "tests" / "test_x.py" if inside else tmp_path / "s.py"
+
+        _, env = _python_script_run_context(script, project)
+
+        assert "GAIA_MODEL_BROKER_TOKEN" not in env
+        assert env["SOME_USER_SETTING"] == "kept"
+
     def test_an_existing_pythonpath_is_kept(self, project, monkeypatch):
         monkeypatch.setenv("PYTHONPATH", "/somewhere/else")
 

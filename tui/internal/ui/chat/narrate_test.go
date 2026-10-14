@@ -28,6 +28,8 @@ func TestToolNarration(t *testing.T) {
 		{"unknown verb stays honest", "pre_scan_inbox2", `{}`, "", "Running pre_scan_inbox2"},
 		{"no args at all", "read_file", ``, "", "Reading a file"},
 		{"numeric id is not scientific", "get_message", `{"message_id":2924}`, "", "Opening message 2924"},
+		// Asked before a write as well as a read, so it must not say "open".
+		{"path access is not opening", "allow_path_access", `{}`, "", "Asking for access to a location"},
 		{"nested args are not pasted as JSON", "index_document", `{"opts":{"deep":true}}`, "", "Indexing a document"},
 		// The tool name reaches a Sprintf FORMAT string, so an unescaped "%" used
 		// to come out as "Getting 100%!d(string=arg)one".

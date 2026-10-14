@@ -34,7 +34,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Version stamped into the binaries and the installer filenames (x.y.z).'
+        description: 'Version stamped into the binaries and the installer filenames (x.y.z; x.y.z-rc.N needs installers: false).'
         required: true
         type: string
       sidecar:
@@ -42,6 +42,13 @@ on:
         required: false
         default: pinned
         type: string
+      installers:
+        description: >-
+          Also build and smoke-test the macOS and Linux packages. A release
+          candidate builds only the binaries: an rpm Version cannot carry -rc.N.
+        required: false
+        default: true
+        type: boolean
     outputs:
       binaries_ok:
         description: 'true when all six targets built and the Windows icon check passed.'
@@ -166,6 +173,7 @@ jobs:
   tui-installers:
     name: Build installers (${{ matrix.label }})
     needs: tui-build
+    if: inputs.installers
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:

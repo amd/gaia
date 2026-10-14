@@ -87,6 +87,7 @@ export interface ApiSchemas {
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
+  WarmUpStatus: WarmUpStatus;
 }
 /**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
@@ -790,6 +791,7 @@ export interface SystemStatus {
   active_profile?: string;
   config_error?: string | null;
   context_size_sufficient?: boolean;
+  default_model_is_cloud?: boolean;
   default_model_name?: string | null;
   default_model_size_gb?: number | null;
   detected_devices?: string[];
@@ -820,6 +822,17 @@ export interface SystemStatus {
   time_to_first_token?: number | null;
   tokens_per_second?: number | null;
   version?: string;
+  warm_up?: WarmUpStatus | null;
+}
+/**
+ * Whether a new chat's first turn will find its prompt already read.
+ */
+export interface WarmUpStatus {
+  cached_tokens?: number | null;
+  elapsed_seconds?: number | null;
+  error?: string | null;
+  prompt_tokens?: number | null;
+  state: string;
 }
 export interface TaskCreate {
   description: string;

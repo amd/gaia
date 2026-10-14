@@ -66,6 +66,18 @@ describe('PermissionModeChip on an existing chat', () => {
         expect(await within(menu).findByText('Chat not found')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Permission mode: ask before acting' })).toBeInTheDocument();
     });
+
+    it('shows the saved mode when a running agent could not be told', async () => {
+        mockedApi.getPermissions.mockResolvedValueOnce({ session_id: 'chat-1', mode: 'full_access', grants: [] });
+        render(<PermissionModeChip sessionId="chat-1" />);
+        await screen.findByRole('button', { name: 'Permission mode: full access' });
+        mockedApi.setPermissionMode.mockRejectedValue(new Error('Ask is saved, but the running agent couldn\'t be told'));
+        mockedApi.getPermissions.mockResolvedValue({ session_id: 'chat-1', mode: 'ask', grants: [] });
+        const menu = openMenu();
+        fireEvent.click(within(menu).getByRole('button', { name: /Ask before acting/ }));
+        expect(await within(menu).findByText(/Ask is saved/)).toBeInTheDocument();
+        expect(await screen.findByRole('button', { name: 'Permission mode: ask before acting' })).toBeInTheDocument();
+    });
 });
 
 describe('PermissionModeChip before the chat exists', () => {

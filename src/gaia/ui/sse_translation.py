@@ -98,6 +98,16 @@ def _debug_enabled_by_env() -> bool:
 #: the same stream once the answer arrives (spec §5.1).
 TERMINAL_TYPES = frozenset({"final", "error"})
 
+#: What a ``tool_result``'s ``data`` carries when the tool gave no structured
+#: ``result_data``: the handler's own summary view of the result.
+SUMMARY_VIEW_KEYS = (
+    "summary",
+    "success",
+    "summary_truncated",
+    "command_output",
+    "latency_ms",
+)
+
 #: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
 #: words so far, or characters of a tool call's arguments so far.
 _PHASE_COUNT_FIELDS = ("words", "chars")
@@ -352,13 +362,7 @@ class CanonicalTranslator:
             # The handler's tool_result event is a summary view; carry the
             # available structured bits so the generic result card has content.
             data = {}
-            for key in (
-                "summary",
-                "success",
-                "summary_truncated",
-                "command_output",
-                "latency_ms",
-            ):
+            for key in SUMMARY_VIEW_KEYS:
                 if key in event:
                     data[key] = event[key]
         tool = self._last_tool or "unknown"
@@ -540,7 +544,10 @@ class CanonicalTranslator:
         detail = render_invocation(args)
         if not detail:
             return f"{label}?"
-        return f"{label} with {detail}?"
+        inline, newline, blocks = detail.partition("\n")
+        if not inline:
+            return f"{label}?\n{blocks}"
+        return f"{label} with {inline}?{newline}{blocks}"
 
     # Dispatch table: every top-level source type sse_handler.py emits.
     _DISPATCH = {
@@ -788,6 +795,21 @@ INVOCATION_VALUE_CHARS = 600
 #: Longest the whole rendered argument clause may be.
 INVOCATION_TOTAL_CHARS = 1200
 
+#: A multi-line value (file content, an edit's old/new text) keeps its line
+#: breaks; flattened, "line 1 line 2" hides the structure being approved.
+INVOCATION_BLOCK_LINES = 12
+INVOCATION_BLOCK_LINE_CHARS = 200
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _quote_value(text: str) -> str:
+    """Quote a value so its own quotes cannot be read as the value's end."""
+    if '"' not in text:
+        return f'"{text}"'
+    if "'" not in text:
+        return f"'{text}'"
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
 
 def render_invocation(args: Dict[str, Any]) -> str:
     """Render a tool call's arguments as one compact, readable clause.
@@ -800,8 +822,12 @@ def render_invocation(args: Dict[str, Any]) -> str:
     if not isinstance(args, dict) or not args:
         return ""
     parts = []
+    blocks = []
     for key in sorted(args):
         value = args[key]
+        if isinstance(value, str) and "\n" in value.strip():
+            blocks.append(_render_block(key, value))
+            continue
         text = value if isinstance(value, str) else json.dumps(value, default=str)
         text = " ".join(text.split())
         if len(text) > INVOCATION_VALUE_CHARS:
@@ -809,7 +835,7 @@ def render_invocation(args: Dict[str, Any]) -> str:
             # Never a bare "…". A silent cut reads as the whole value, so the
             # user approves text they were never shown and does not know it.
             text = f"{text[:INVOCATION_VALUE_CHARS]}… [+{hidden:,} more characters not shown]"
-        parts.append(f'{key}="{text}"')
+        parts.append(f"{key}={_quote_value(text)}")
     clause = ", ".join(parts)
     if len(clause) > INVOCATION_TOTAL_CHARS:
         hidden = len(clause) - INVOCATION_TOTAL_CHARS
@@ -817,7 +843,26 @@ def render_invocation(args: Dict[str, Any]) -> str:
             clause[:INVOCATION_TOTAL_CHARS]
             + f"… [+{hidden:,} more characters not shown]"
         )
-    return clause
+    return clause + "".join(blocks)
+
+
+def _render_block(key: str, value: str) -> str:
+    """Render a multi-line value as an indented block, so its lines stay lines."""
+    lines = value.strip("\n").splitlines()
+    shown = []
+    for line in lines[:INVOCATION_BLOCK_LINES]:
+        # Tabs as spaces so indentation survives; other controls shown, not obeyed.
+        line = _CONTROL_CHARS.sub(
+            lambda c: f"\\x{ord(c.group()):02x}", line.expandtabs(4)
+        )
+        if len(line) > INVOCATION_BLOCK_LINE_CHARS:
+            hidden = len(line) - INVOCATION_BLOCK_LINE_CHARS
+            line = f"{line[:INVOCATION_BLOCK_LINE_CHARS]}… [+{hidden:,} more characters not shown]"
+        shown.append(f"    {line}")
+    if len(lines) > INVOCATION_BLOCK_LINES:
+        hidden = len(lines) - INVOCATION_BLOCK_LINES
+        shown.append(f"    … [+{hidden:,} more lines not shown]")
+    return f"\n{key}:\n" + "\n".join(shown)
 
 
 __all__ = [

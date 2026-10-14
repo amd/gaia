@@ -617,13 +617,13 @@ def test_cloud_models_are_prefixed_and_ranked_first(client, lemonade):
     lemonade.models = _CATALOG
     models = client.get("/api/providers/fireworks/models").json()["models"]
     assert [m["id"] for m in models] == [
-        "fireworks.glm-5p3-flash",
         "fireworks.accounts/fireworks/models/deepseek-v4p1-flash",
+        "fireworks.glm-5p3-flash",
         "fireworks.aa-model",
         "fireworks.zz-model",
     ]
     top = models[0]
-    assert (top["rank"], top["note"]) == (1, "best overall, cheapest")
+    assert (top["rank"], top["note"]) == (1, "best overall, fastest")
     assert top["evidence"] == RECOMMENDED_MODELS[0].evidence
     assert top["downloaded"] is True
     assert models[1]["rank"] == 2
@@ -634,6 +634,20 @@ def test_amd_models_only(client, lemonade):
     lemonade.models = _CATALOG
     models = client.get("/api/providers/amd/models").json()["models"]
     assert [m["id"] for m in models] == ["amd.gpt-oss"]
+
+
+def test_amd_models_rank_the_gateway_preference_first(client, lemonade):
+    lemonade.models = [
+        {"id": f"amd.{name}", "recipe": "cloud", "labels": ["cloud", "chat"]}
+        for name in ("Claude-Haiku-4.5", "Gemma-4-31B", "DeepSeek-V4.1-Flash")
+    ]
+    models = client.get("/api/providers/amd/models").json()["models"]
+    assert [(m["id"], m["rank"]) for m in models] == [
+        ("amd.DeepSeek-V4.1-Flash", 1),
+        ("amd.Gemma-4-31B", 2),
+        ("amd.Claude-Haiku-4.5", None),
+    ]
+    assert models[0]["note"] == "recommended" and models[2]["note"] is None
 
 
 def test_models_lemonade_error_is_502(client, lemonade):
@@ -737,10 +751,10 @@ def test_provider_of_and_label(model_id, provider, label):
 
 
 def test_rank_matches_both_cloud_id_forms():
-    assert rank("fireworks.accounts/fireworks/models/glm-5p3-flash")[0] == 1
-    assert rank("fireworks.glm-5p3-flash")[0] == 1
-    assert rank("amd.glm-5p3-flash") is None
-    assert rank("glm-5p3-flash") is None
+    assert rank("fireworks.accounts/fireworks/models/deepseek-v4p1-flash")[0] == 1
+    assert rank("fireworks.deepseek-v4p1-flash")[0] == 1
+    assert rank("amd.deepseek-v4p1-flash") is None
+    assert rank("deepseek-v4p1-flash") is None
 
 
 # ── Drift against the TUI ──────────────────────────────────────────────────
@@ -800,6 +814,19 @@ def test_restore_waits_for_a_starting_server_instead_of_failing(
     second = client.get("/api/providers/active").json()
     assert second["restore"]["status"] == "restored"
     assert db.get_setting("custom_model") == DEFAULT_MODEL_NAME
+    # The default was going to run anyway, so there is nothing to announce.
+    assert second["restore"]["message"] is None
+
+
+def test_restoring_a_different_model_says_so(client, lemonade, keys, db):
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+    body = client.get("/api/providers/active").json()
+    assert body["restore"] == {
+        "status": "restored",
+        "message": "Restored your last model.",
+    }
 
 
 def test_restore_of_a_cloud_model_never_goes_to_a_remote_lemonade(

@@ -43,6 +43,23 @@ icon: "bug"
     Then retry the activation command.
   </Accordion>
 
+  <Accordion title="CERTIFICATE_VERIFY_FAILED on a corporate network" icon="shield-halved">
+    GAIA verifies HTTPS against your operating system's certificate store, the same one
+    your browser and pip use, so a TLS-inspecting proxy (Zscaler and similar) works
+    without extra setup as long as its root certificate is installed in the OS store.
+
+    If GAIA still fails with `CERTIFICATE_VERIFY_FAILED`:
+
+    - **A warning says GAIA "could not switch HTTPS verification to the system
+      certificate store"** — the `truststore` package is missing or broken. Run
+      `pip install --upgrade "truststore>=0.10.0"` in GAIA's environment. The warning
+      appears in the terminal, or in `gaia daemon logs` (add `--agent <id>` for an
+      agent's own requests).
+    - **No such warning in either place** — the proxy's root certificate is not in the OS
+      store. Ask IT to install it there; opening the failing URL in a browser on the same
+      machine tells you whether the OS trusts it.
+  </Accordion>
+
   <Accordion title="Python version issues" icon="python">
     GAIA requires Python 3.10-3.12. If `uv venv` fails:
     ```bash
@@ -102,6 +119,19 @@ icon: "bug"
       error is in `~/.gaia/lemonade/lemond.log`.
 
     To start over with a fresh copy, run `gaia init --force-reinstall`.
+  </Accordion>
+
+  <Accordion title="gaia init can't install the GAIA agent from the Agent Hub" icon="store">
+    `gaia init` installs the GAIA agent from the Agent Hub (`https://hub.amd-gaia.ai`, or
+    `GAIA_HUB_URL`). If the hub can't be reached, setup finishes everything else, then
+    reports the setup incomplete and exits with code 1. The Agent UI setup shows the same
+    error instead of "GAIA is ready".
+
+    - **`CERTIFICATE_VERIFY_FAILED`**: your network inspects HTTPS. Install the proxy's
+      root certificate in the system certificate store (IT usually can).
+    - **Anything else**: check your internet connection, proxy settings, or `GAIA_HUB_URL`.
+
+    Then run `gaia hub install gaia`. The full error is in `~/.gaia/gaia.log`.
   </Accordion>
 </AccordionGroup>
 
@@ -456,7 +486,13 @@ icon: "bug"
   <Accordion title="Embedding model downloaded but won't load (memory and document search off)" icon="triangle-exclamation">
     You see `Memory is unavailable this session: the embedding model ... is downloaded but would not load`, or indexing fails with `model_load_error` / `llama-server failed to start`.
 
-    On AMD Radeon GPUs using the Vulkan backend (seen on the Radeon 8060S in Ryzen AI MAX+ 395), llama.cpp's cooperative-matrix path crashes as it loads an embedding model. GAIA avoids it by running its small embedding model on llama.cpp's CPU backend while chat models stay on the GPU. GAIA's own server records that choice when it starts, so a server started by an older GAIA needs a restart:
+    GAIA loads its embedding model on the GPU, using the llama.cpp backend Lemonade picks for your machine (Vulkan on most Windows and Linux PCs, Metal on a Mac). If that load fails to start, GAIA loads the embedding model on the CPU backend instead and logs a warning naming the model, the backend that failed, and the error:
+
+    ```
+    Embedding model 'user.embeddinggemma-300m-GGUF' failed to load on llama.cpp's vulkan backend (...). Loading it on the CPU backend instead
+    ```
+
+    Memory and document search keep working on the CPU, but indexing is slower and keeps several CPU cores busy. GAIA saves the CPU choice in Lemonade, so Lemonade's own later loads of the embedding model use the CPU too. Each time GAIA starts, it tries the GPU again and saves it back if the load works, so after a driver update you only need to restart GAIA. To retry without waiting, restart GAIA's server:
 
     ```bash
     gaia lemonade embedded stop
@@ -466,9 +502,9 @@ icon: "bug"
     gaia lemonade embedded start
     ```
 
-    If you run Lemonade yourself, GAIA loads the embedder on the CPU backend before its first embedding request and saves that choice in Lemonade, so Lemonade's own later loads of it use the CPU too. Other tools that embed with it should load it the same way (`POST /api/v1/load` with `llamacpp_backend` set to `cpu` and `save_options` set to `true`). Starting Lemonade with `GGML_VK_DISABLE_COOPMAT=1` also avoids the crash, but it slows prompt processing for every model: Qwen3 30B A3B on the 8060S drops from about 1,290 to 680 tokens/s. Generation speed is unchanged.
+    The first GPU failure seen was llama.cpp's Vulkan cooperative-matrix path crashing on AMD Radeon GPUs ([#1831](https://github.com/amd/gaia/issues/1831)). Starting Lemonade with `GGML_VK_DISABLE_COOPMAT=1` also avoids that crash, but it slows prompt processing for every model: Qwen3 30B A3B on a Radeon 8060S drops from about 1,290 to 680 tokens/s. Generation speed is unchanged.
 
-    `llama-server failed to start` has other causes too (out of memory, a context size the model can't take). If you're not on a Radeon GPU with Vulkan, Lemonade's server log has llama-server's own error.
+    If the CPU load fails too, the cause is something else: out of memory, or a context size the model can't take. Lemonade's server log has llama-server's own error.
   </Accordion>
 </AccordionGroup>
 

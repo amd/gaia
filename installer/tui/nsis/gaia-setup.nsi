@@ -36,7 +36,8 @@
 ; needs the network once.
 ;
 ; Build:
-;   makensis -DVERSION=<__version__ from src/gaia/version.py> \
+;   makensis -DVERSION=<x.y.z, or x.y.z-rc.N for a release candidate> \
+;            -DVERSION_QUAD=<x.y.z.0, VERSION's four-integer form> \
 ;            -DPAYLOAD_DIR=<dir with gaia-tui.exe, gaia-agent.exe, LICENSE.md> \
 ;            -DLEMONADE_MSI=<path to lemonade-server-minimal.msi> \
 ;            -DLEMONADE_VERSION=<LEMONADE_VERSION from src/gaia/version.py> \
@@ -54,6 +55,9 @@ Unicode true
 ; installer that ships nothing or ships it under the wrong name.
 !ifndef VERSION
   !error "VERSION is required: -DVERSION=<__version__ from src/gaia/version.py>"
+!endif
+!ifndef VERSION_QUAD
+  !error "VERSION_QUAD is required: -DVERSION_QUAD=<x.y.z.0>, the four integers Windows stores the version as"
 !endif
 !ifndef PAYLOAD_DIR
   !error "PAYLOAD_DIR is required: the directory holding gaia-tui.exe, gaia-agent.exe and LICENSE.md"
@@ -139,8 +143,8 @@ ShowUnInstDetails show
 SetCompressor /SOLID lzma
 
 ; Explorer sorts on this binary field, so a literal 0.0.0.0 would make every
-; build report as older than the last. build-setup.sh enforces x.y.z.
-VIProductVersion "${VERSION}.0"
+; build report as older than the last. build-setup.sh derives it from VERSION.
+VIProductVersion "${VERSION_QUAD}"
 VIAddVersionKey "ProductName"     "${SETUP_NAME}"
 VIAddVersionKey "CompanyName"     "${PRODUCT_PUBLISHER}"
 VIAddVersionKey "FileDescription" "${SETUP_NAME} Setup"

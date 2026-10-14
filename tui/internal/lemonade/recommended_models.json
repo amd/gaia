@@ -47,22 +47,28 @@
       "label": "Qwen3 Coder Next"
     },
     {
-      "id": "fireworks.glm-5p3-flash",
-      "provider": "fireworks",
-      "label": "GLM-5.3 Flash",
-      "note": "best overall, cheapest"
-    },
-    {
       "id": "fireworks.deepseek-v4p1-flash",
       "provider": "fireworks",
       "label": "DeepSeek V4.1 Flash",
-      "note": "fastest"
+      "note": "best overall, fastest"
+    },
+    {
+      "id": "fireworks.glm-5p3-flash",
+      "provider": "fireworks",
+      "label": "GLM-5.3 Flash",
+      "note": "cheapest"
     },
     {
       "id": "fireworks.deepseek-v4-pro-0813",
       "provider": "fireworks",
       "label": "DeepSeek V4 Pro",
       "note": "most truthful"
+    },
+    {
+      "id": "amd.DeepSeek-V4.1-Flash",
+      "provider": "amd",
+      "label": "DeepSeek V4.1 Flash",
+      "note": "default · fastest, streams"
     }
   ]
 }
