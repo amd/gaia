@@ -582,6 +582,29 @@ class CompletionEvidence:
         self.files[key] = FileEvidence(key, self.sequence, True, inferred=True)
         return self.files[key]
 
+    def written_files(self) -> list[str]:
+        """Files this turn wrote that are still on disk, outside the scratch folder.
+
+        A requested file a script wrote without naming it counts too; it is
+        not recorded, so the completion gate's view of the turn is unchanged.
+        """
+        keys = [key for key, item in self.files.items() if item.written]
+        for path in self.requested:
+            key = self.key(path)
+            stamp = None if key in self.files else self._stamp(key)
+            if isinstance(stamp, tuple) and any(
+                ok and start <= stamp[3] <= end for start, end, ok in self.exec_windows
+            ):
+                keys.append(key)
+        scratch = (self.scratch or "").rstrip("/\\")
+        return [
+            key
+            for key in dict.fromkeys(keys)
+            if key not in self.removed
+            and not (scratch and key.startswith((scratch + "/", scratch + "\\")))
+            and os.path.isfile(key)
+        ]
+
     def delivered(self, tool: str, args: dict, original: Any, delivered: Any) -> None:
         data = _payload(delivered)
         if tool == "read_tool_output":

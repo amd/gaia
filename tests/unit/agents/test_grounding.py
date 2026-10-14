@@ -338,7 +338,8 @@ def test_rows_read_back_after_the_correction_are_grounded():
     assert content_findings(PRINTED_ROWS, records, REPORT_QUERY) == []
 
 
-def test_rows_the_model_itself_wrote_to_the_file_are_grounded():
+def test_rows_the_model_only_wrote_are_not_grounded_by_its_own_write():
+    # A tool's arguments are what the model sent, not what any tool showed.
     write = _rec(
         "write_file",
         {"file_path": "weekly_build_times.csv", "content": WEEKLY},
@@ -347,7 +348,11 @@ def test_rows_the_model_itself_wrote_to_the_file_are_grounded():
 
     records = [_read("build_times.csv", BUILD_TIMES), write]
 
-    assert content_findings(PRINTED_ROWS, records, REPORT_QUERY) == []
+    findings = content_findings(PRINTED_ROWS, records, REPORT_QUERY)
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "201.0" in findings[0].correction
+    read_back = records + [_read("weekly_build_times.csv", WEEKLY)]
+    assert content_findings(PRINTED_ROWS, read_back, REPORT_QUERY) == []
 
 
 def test_a_value_one_step_from_two_shown_values_is_grounded():
