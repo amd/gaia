@@ -1848,9 +1848,12 @@ All three routes need the `X-Gaia-UI: 1` header (**403** without it).
     saved unless the user's server checks out. A running daemon is told to
     stop (or start) GAIA's own server, and cached agents are dropped. Returns
     the `GET` shape plus `daemon`. **422** when the server can't be used
-    (`detail.message`, `detail.status`), **409** for an unreadable config,
-    **403** over mobile access, **502** when it saved but the daemon did not
-    switch.
+    (`detail.message`, `detail.status`), including `status: "not_installed"`
+    when switching from the user's server to GAIA's own before it is
+    installed; nothing is saved. **409** for an unreadable config, **403** over
+    mobile access, **502** when the daemon did not switch. A failed switch to
+    GAIA's own puts the previous mode back; a failed switch to the user's
+    server stays saved.
   </Accordion>
 </AccordionGroup>
 
@@ -1885,15 +1888,21 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     "auth_header_prefix"}`; the last three apply to `amd` only. A blank
     `api_key` keeps the current key.
 
+    While GAIA uses the user's own Lemonade (`lemonade_mode` `external`) it
+    sends that server nothing: it succeeds only when the server already has
+    the provider working, and a pasted key is not sent anywhere.
+
     **Errors:** **401** when the provider rejects the key or discovers no
     models (a key that discovers nothing is removed from Lemonade again);
     **403** when a key is sent through the mobile tunnel; **409** when an
-    environment key takes precedence or Lemonade is not on this PC.
+    environment key takes precedence, Lemonade is not on this PC, or the
+    user's own server has no working provider.
   </Accordion>
 
   <Accordion title="DELETE /api/providers/{provider}/key">
     Clear the key from Lemonade and from the OS credential store. Returns
-    `{"removed": bool}`.
+    `{"removed": bool}`. On the user's own Lemonade only GAIA's stored copy is
+    removed; the server keeps its key.
   </Accordion>
 
   <Accordion title="GET /api/providers/{provider}/models">

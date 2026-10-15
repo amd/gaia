@@ -220,7 +220,11 @@ class TestAgentUiRouter:
         )
         assert r.status_code == 403
 
-    def test_back_to_gaias_own(self, client):
+    def test_back_to_gaias_own(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
+            lambda self: True,
+        )
         _save(lemonade_mode="external", lemonade_base_url=USER_URL)
         r = client.post("/api/lemonade/target", json={"mode": "gaia"}, headers=self.H)
         assert r.status_code == 200
@@ -233,7 +237,8 @@ class TestAgentUiRouter:
         self.applied.side_effect = DaemonError("boom")
         r = client.post("/api/lemonade/target", json={"mode": "gaia"}, headers=self.H)
         assert r.status_code == 502
-        assert "did not switch" in r.json()["detail"]
+        assert "could not switch" in r.json()["detail"]
+        assert GaiaConfig.load().lemonade_mode is None
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +324,7 @@ class TestInit:
             InitCommand(lemonade_url=USER_URL, gaia_lemonade=True)
 
     def test_init_does_not_clobber_the_users_server(self):
-        """No global unload and no saved per-model options on someone else's server."""
+        """No unload and no saved per-model options on someone else's server."""
         _save(lemonade_mode="external", lemonade_base_url=USER_URL)
         cmd = self._cmd(yes=True)
         cmd.profile = "chat"
@@ -327,7 +332,7 @@ class TestInit:
         client.check_model_loaded.return_value = True
         client.list_models.return_value = {"data": []}
         cmd._test_model_inference(client, "Gemma-4-E4B-it-GGUF")
-        client.unload_model.assert_called_once_with("Gemma-4-E4B-it-GGUF")
+        client.unload_model.assert_not_called()
         assert client.load_model.call_args.kwargs["save_options"] is False
 
 
@@ -345,6 +350,10 @@ class TestConfigSet:
         )
 
     def test_back_to_gaia_tells_the_daemon(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
+            lambda self: True,
+        )
         _save(lemonade_mode="external", lemonade_base_url=USER_URL)
         applied = mock.Mock(return_value={"action": "starting_gaia_lemonade"})
         monkeypatch.setattr(choice, "apply_to_daemon", applied)

@@ -1852,6 +1852,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
     try:
         import httpx
 
+        from gaia.llm.lemonade_choice import is_users_server
         from gaia.llm.lemonade_client import (
             cloud_model_provider,
             lemonade_auth_headers,
@@ -1959,9 +1960,11 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
             client = LemonadeClient(verbose=False)
             # Lemonade does not evict the resident model on a new /load, so
             # unload the stale local chat models first — by name, so the
-            # embedder that memory and RAG need stays resident.
-            for stale in resident_chat_models:
-                client.unload_model(stale["model_name"], ignore_if_not_loaded=True)
+            # embedder that memory and RAG need stays resident. A server the
+            # user runs keeps its models: GAIA only loads there.
+            if not is_users_server(base_url):
+                for stale in resident_chat_models:
+                    client.unload_model(stale["model_name"], ignore_if_not_loaded=True)
             client.load_model(
                 model_id,
                 ctx_size=required_ctx,

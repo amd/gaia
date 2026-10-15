@@ -1855,8 +1855,12 @@ GAIA agents find the embedded instance on their own through its state file. The
 
 Point GAIA at a Lemonade Server you run yourself instead of its own. GAIA then
 installs and starts no Lemonade at all; if yours is down, the error says so and how
-to start it. The [install guide](/guides/install#use-a-lemonade-you-already-run)
-covers what GAIA does on your server.
+to start it. GAIA never changes that server's setup: no cloud providers or keys, no
+backends, no saved load options, and no unloading or deleting your models. The
+[install guide](/guides/install#use-a-lemonade-you-already-run) covers what GAIA
+does on your server. `gaia config set lemonade_mode gaia` is refused, with nothing
+changed, until GAIA's own server is installed; `gaia init --gaia-lemonade` installs
+it and switches.
 
 ```bash
 gaia lemonade detect                           # is one running on this PC's default ports?

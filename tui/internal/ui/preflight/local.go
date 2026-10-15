@@ -782,8 +782,23 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 	row.FirstRun = true
 	row.Disposition = status.DispositionHalt
 	row.Line = "not downloaded yet"
-	row.Step = l.downloadStep(st.Models)
+	// Only what the server lacks: a model it already has is never offered again.
+	missing := st.Missing()
+	if len(missing) > 0 && len(missing) < len(st.Models) {
+		var ids []string
+		for _, m := range missing {
+			ids = append(ids, m.ID)
+		}
+		row.Line = strings.Join(ids, ", ") + " not downloaded yet"
+	}
+	row.Step = l.downloadStep(missing)
 	row.Detail = "Downloaded once, then reused by every GAIA session."
+	remedy := "Setup downloads what is missing and starts the local server."
+	if base, active, err := lemonade.SavedExternal(); active && err == nil {
+		row.Detail = "Setup downloads what is missing onto your Lemonade Server at " + base +
+			"; models it already has are not downloaded again."
+		remedy = "Setup downloads what is missing."
+	}
 	if l.skipChatModel() {
 		row.Line = "embedding models not downloaded"
 		row.Detail = "Chat uses your selected remote provider. Setup downloads local embedding models for document search and memory."
@@ -793,7 +808,7 @@ func (l localRunner) verifyModels(ctx context.Context, _ Config) (Row, string, s
 	}
 	row.Fix = FixRunSetup
 	row.Remedy = Remedy{
-		Action:  "Setup downloads what is missing and starts the local server.",
+		Action:  remedy,
 		Command: gaiainit.RunCommand(l.skipChatModel()),
 		Where:   installDocs,
 	}

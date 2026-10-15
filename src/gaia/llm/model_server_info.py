@@ -24,8 +24,32 @@ _USABLE_STATES = frozenset({"installed", "installable", "update_required"})
 
 #: Model types that are never the chat model.
 _NON_CHAT_TYPES = frozenset(
-    {"embedding", "reranking", "transcription", "image", "tts", "audio"}
+    {
+        "embedding",
+        "embed",
+        "reranking",
+        "rerank",
+        "transcription",
+        "asr",
+        "stt",
+        "image",
+        "tts",
+        "speech",
+        "audio",
+    }
 )
+
+
+def is_chat_model_entry(entry: Any) -> bool:
+    """True for an ``all_models_loaded`` entry that can be the chat model.
+
+    Speech, transcription, embedding, reranking and image models never are,
+    whatever loaded last.
+    """
+    return (
+        isinstance(entry, dict)
+        and str(entry.get("type") or "").lower() not in _NON_CHAT_TYPES
+    )
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -127,9 +151,7 @@ def describe_loaded_model(
 def _chat_entry(health: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The loaded chat model: the root ``model_loaded`` if it is one, else the first."""
     loaded = [
-        m
-        for m in health.get("all_models_loaded") or []
-        if isinstance(m, dict) and m.get("type") not in _NON_CHAT_TYPES
+        m for m in health.get("all_models_loaded") or [] if is_chat_model_entry(m)
     ]
     root = str(health.get("model_loaded") or "").lower()
     for m in loaded:

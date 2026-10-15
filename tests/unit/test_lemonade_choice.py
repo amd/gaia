@@ -215,13 +215,13 @@ class TestPrecedence:
         from gaia.llm.lemonade_launcher import gaia_runs_lemonade
 
         _save(lemonade_mode="external", lemonade_base_url=USER_URL)
-        choice.set_mode("gaia")
-        assert GaiaConfig.load().lemonade_mode == "gaia"
-        assert configured_lemonade_url() is None
         with mock.patch(
             "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
             return_value=True,
         ):
+            choice.set_mode("gaia")
+            assert GaiaConfig.load().lemonade_mode == "gaia"
+            assert configured_lemonade_url() is None
             assert gaia_runs_lemonade() is True
 
 
@@ -430,7 +430,11 @@ class TestUseExternal:
             else FakeResponse(401)
         )
         choice.use_external(USER_URL, "s3cret")
-        choice.set_mode("gaia")
+        with mock.patch(
+            "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
+            return_value=True,
+        ):
+            choice.set_mode("gaia")
         choice.use_external(USER_URL)
         assert GaiaConfig.load().lemonade_mode == "external"
 

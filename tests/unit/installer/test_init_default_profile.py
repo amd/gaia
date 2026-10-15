@@ -258,6 +258,7 @@ class TestGoTuiContract:
             "size_gb": 0.3,
             "loaded": False,
             "error": "boom",
+            "downloaded": None,
         }
 
     def test_load_failed_exit_code_is_three(self):

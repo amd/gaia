@@ -1983,6 +1983,13 @@ class InsufficientMemoryError(LemonadeClientError):
     """Raised instead of a load that would run this machine out of memory."""
 
 
+class UsersServerUnchangedError(LemonadeClientError):
+    """A request would change the setup of the user's own Lemonade Server.
+
+    Raised before anything is sent, in saved ``external`` mode only.
+    """
+
+
 def _cloud_error_status(error: openai.APIError) -> Optional[int]:
     """Read numeric status fields; never interpret or display upstream text."""
     status = getattr(error, "status_code", None)
@@ -4585,13 +4592,21 @@ class LemonadeClient:
 
         ``/embeddings`` makes Lemonade load the model itself from its saved
         options, so the saved backend must be one that loads on this machine —
-        and a CPU pin saved by an older GAIA is replaced by the GPU here.
+        and a CPU pin saved by an older GAIA is replaced by the GPU here. On
+        the user's own server, where nothing is saved, it is loaded whenever
+        it isn't resident.
         """
         if not manages_embedder_backend(model_name):
             return
-        with _PINNED_BACKENDS_LOCK:
-            if (self.base_url, model_name) in _PINNED_BACKENDS:
+        if self.is_users_server():
+            # Nothing is saved on a server the user runs, so a reload Lemonade
+            # does on its own would drop GAIA's options: load it here instead.
+            if self.check_model_loaded(model_name):
                 return
+        else:
+            with _PINNED_BACKENDS_LOCK:
+                if (self.base_url, model_name) in _PINNED_BACKENDS:
+                    return
         active_model = self.model
         try:
             self.load_model(model_name, prompt=False)
@@ -6228,8 +6243,9 @@ class LemonadeClient:
             backend = "cpu" if fell_back else self._default_llamacpp_backend()
             if backend:
                 request_data["llamacpp_backend"] = backend
-            # Saved so Lemonade's own auto-loads (``/embeddings``) use it too.
-            save_options = True
+            # Saved so Lemonade's own auto-loads (``/embeddings``) use it too;
+            # never into the config of a server the user runs.
+            save_options = not self.is_users_server()
         if llamacpp_args:
             request_data["llamacpp_args"] = llamacpp_args
         if ctx_size is not None:
@@ -7225,6 +7241,16 @@ class LemonadeClient:
 
         return status
 
+    def is_users_server(self) -> bool:
+        """True when this client talks to the user's own server ("Use mine").
+
+        GAIA uses that server but never changes its setup: see
+        :func:`gaia.llm.lemonade_choice.setup_change_refusal`.
+        """
+        from gaia.llm.lemonade_choice import is_users_server
+
+        return is_users_server(self.base_url)
+
     def _auth_headers(self) -> Dict[str, str]:
         """Authorization headers for this client's configured API key."""
         return lemonade_auth_headers(self.api_key)
@@ -7251,6 +7277,11 @@ class LemonadeClient:
         Raises:
             LemonadeClientError: If the request fails
         """
+        from gaia.llm.lemonade_choice import setup_change_refusal
+
+        refusal = setup_change_refusal(url, method, data)
+        if refusal:
+            raise UsersServerUnchangedError(refusal)
         try:
             headers = {"Content-Type": "application/json", **self._auth_headers()}
 

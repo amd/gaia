@@ -28,8 +28,9 @@ router = APIRouter(tags=["lemonade"])
 WHAT_GAIA_DOES = (
     "GAIA registers its embedding model (user.embeddinggemma-300m-GGUF) on "
     "your server and loads its chat and embedding models there. It does not "
-    "change your server's own settings, and it never starts a Lemonade while "
-    "set to use yours."
+    "change your server's own setup: no cloud providers or keys, no backends, "
+    "no saved load options, and it never unloads or deletes your models. It "
+    "never starts a Lemonade while set to use yours."
 )
 
 
@@ -97,6 +98,7 @@ def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
             "mobile access.",
         )
     try:
+        previous_mode = choice.saved_mode()
         if body.mode == choice.MODE_EXTERNAL:
             if not (body.base_url or "").strip():
                 raise choice.LemonadeChoiceError(
@@ -118,9 +120,19 @@ def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
     try:
         applied = choice.apply_to_daemon()
     except DaemonError as e:
+        if body.mode != choice.MODE_GAIA:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Saved, but the GAIA daemon did not switch: {e}",
+            ) from e
+        # Saying "GAIA's own" while the daemon stays on the user's server is
+        # the false success this switch must never report.
+        choice.restore_mode(previous_mode)
+        _drop_cached_agents()
         raise HTTPException(
             status_code=502,
-            detail=f"Saved, but the GAIA daemon did not switch: {e}",
+            detail=f"GAIA could not switch to its own Lemonade Server: {e} "
+            "Nothing was changed.",
         ) from e
     return {**_target(), "daemon": applied}
 
