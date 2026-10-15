@@ -31,6 +31,7 @@ _SUPPORTED_TOOL_KWARGS = (
     "atomic",
     "display_label",
     "timeout",
+    "timeout_arg",
     "preflight",
     "registry",
 )
@@ -223,6 +224,7 @@ def tool(
     atomic: bool = False,
     display_label: str | None = None,
     timeout: float | None = None,
+    timeout_arg: str | None = None,
     preflight: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]] | None = None,
     registry: dict[str, dict] | None = None,
     **unexpected_kwargs: object,
@@ -242,6 +244,10 @@ def tool(
             this on tools that legitimately run long (e.g. image generation that
             may download a model) so they aren't capped by the global default.
             ``None`` (the default) means "use the global default".
+        timeout_arg: Name of the tool's own parameter that sets how long the
+            call may run (e.g. ``"timeout"``). The agent then waits at least
+            that long plus a grace period before abandoning the call, so a
+            tool asked to run for 15 minutes is not cut off at the default.
         preflight: Called with the call's arguments before the confirmation
             prompt; returns the refusal the call has already earned, or
             ``None``. The tool body must enforce the same rule itself, since
@@ -267,6 +273,11 @@ def tool(
         # Extract function name and signature for the tool registry
         tool_name = f.__name__
         sig = inspect.signature(f)
+        if timeout_arg is not None and timeout_arg not in sig.parameters:
+            raise TypeError(
+                f"@tool(timeout_arg={timeout_arg!r}) names no parameter of tool "
+                f"{tool_name!r}. Parameters: {', '.join(sig.parameters) or 'none'}."
+            )
         arg_descriptions = _parse_arg_descriptions(f.__doc__)
         hints = _resolve_hints(f)
         params = {}
@@ -299,6 +310,7 @@ def tool(
             "atomic": atomic,
             "display_label": display_label,
             "timeout": timeout,
+            "timeout_arg": timeout_arg,
             "preflight": preflight,
         }
 

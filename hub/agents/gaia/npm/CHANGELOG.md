@@ -31,6 +31,30 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   split the way the shell would, such a line that also deletes or discards work
   (`git push --force`, `git reset --hard`, `rm` outside the project), and
   folders no approval can open.
+- **`run_python` and `execute_python_file` work in the released binary.** The
+  binary has no Python interpreter, so it handed every script to its own
+  argument parser, which rejected it, and no calculation, chart or `.xlsx`
+  could be produced. It now runs scripts itself, with openpyxl, python-docx,
+  python-pptx, reportlab, pypdf, pandas, numpy, matplotlib and the full
+  standard library bundled for them. The Windows binary grows from 147 MB to
+  168 MB.
+- **Long Python data jobs can finish.** `run_python` gave up after 60 s and
+  the agent abandoned `execute_python_file` at 180 s even when it had asked
+  for 15 minutes, while the script kept running and left a corrupt workbook
+  behind. Python runs now get 120 s by default and up to 1800 s on request,
+  the agent waits that long, and a run that runs out of time is killed with
+  every process it started; the result names the files that changed while it
+  ran so the agent checks them instead of reporting them finished.
+- **Document search says when it could not search.** With the embedding
+  model or Lemonade Server down, `query_documents` and `query_specific_file`
+  answered "no relevant information found", so the agent told the user their
+  documents held nothing on the topic. They now return an error naming the
+  cause (Lemonade unreachable, or the embedding model failing) and how to fix
+  it. `index_document` and `index_directory` report the same cause, and
+  `index_directory` stops at the first such file and reports an error when no
+  file could be indexed. Hints for a missing optional package (RAG, PDF, Excel,
+  HTML parsing) say in a frozen build that it isn't bundled, and from source
+  give the install command for the running Python.
 - **A failed tool call is reported as a failure.** `run_shell_command` returned
   `status: success` for a command that exited non-zero, so the TUI and Agent UI
   showed a failed build or test run as a passed step. It is now `status: error`

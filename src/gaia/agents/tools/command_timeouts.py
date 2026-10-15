@@ -459,6 +459,9 @@ def resolve_timeout(command: str, requested: Optional[int]) -> Tuple[int, str]:
 #: How long the kill itself may take before the output is written off.
 _KILL_GRACE_SECONDS = 5.0
 
+#: ``taskkill /T`` walks the whole process table; on a busy box it takes over 5 s.
+_TREE_KILL_SECONDS = 15.0
+
 
 def terminate_process_tree(process: "subprocess.Popen") -> Tuple[str, str]:
     """Kill *process* and every descendant, then collect what it printed.
@@ -479,7 +482,7 @@ def terminate_process_tree(process: "subprocess.Popen") -> Tuple[str, str]:
                 ["taskkill", "/F", "/T", "/PID", str(process.pid)],
                 capture_output=True,
                 check=False,
-                timeout=_KILL_GRACE_SECONDS,
+                timeout=_TREE_KILL_SECONDS,
             )
         else:
             os.killpg(os.getpgid(process.pid), 9)

@@ -112,6 +112,12 @@ from gaia.agents.base.tool_markup import (
     parse_deepseek_tool_calls,
     strip_tool_markup,
 )
+from gaia.agents.base.tool_outcome import (
+    FAILED_STATUSES,
+    tool_result_dict,
+    tool_result_error_fields,
+    tool_result_failed,
+)
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
@@ -385,6 +391,13 @@ def default_max_steps(default: int = DEFAULT_MAX_STEPS) -> int:
 # Tools that legitimately run longer (e.g. ``generate_image``, which may
 # download a model) opt out via ``@tool(timeout=...)``.
 DEFAULT_TOOL_TIMEOUT = 180.0
+
+# Ceiling on the run time a call may ask for through its ``@tool(timeout_arg=)``
+# parameter — the longest single shell command (``MAX_COMMAND_TIMEOUT``).
+MAX_REQUESTED_TOOL_TIMEOUT = 3600.0
+
+# Room past a requested run time for the tool to kill its work and report.
+REQUESTED_TIMEOUT_GRACE = 30.0
 
 
 def tool_execution_timeout() -> float:
@@ -5474,6 +5487,41 @@ Do NOT wrap conversational replies in JSON.
             return float(override)
         return tool_execution_timeout()
 
+    def _requested_tool_timeout(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> Optional[float]:
+        """Seconds this call asked to run for via its ``timeout_arg``, if any."""
+        entry = self._tools_registry.get(tool_name) or {}
+        arg = entry.get("timeout_arg")
+        if not arg:
+            return None
+        requested = tool_args.get(arg)
+        if requested is None:
+            func = entry.get("function")
+            param = inspect.signature(func).parameters.get(arg) if func else None
+            if param is None or param.default is inspect.Parameter.empty:
+                return None
+            requested = param.default
+        try:
+            seconds = float(requested)
+        except (TypeError, ValueError):
+            return None  # the tool body refuses the bad value itself
+        if seconds <= 0:
+            return None
+        return min(seconds, MAX_REQUESTED_TOOL_TIMEOUT)
+
+    def _bounded_tool_timeout(self, tool_name: str, tool_args: Dict[str, Any]) -> float:
+        """How long to wait for this call before abandoning it.
+
+        Never less than the run time the call itself was given plus
+        ``REQUESTED_TIMEOUT_GRACE``, so the tool's own timeout fires first.
+        """
+        timeout = self._resolve_tool_timeout(tool_name)
+        requested = self._requested_tool_timeout(tool_name, tool_args)
+        if requested is None:
+            return timeout
+        return max(timeout, requested + REQUESTED_TIMEOUT_GRACE)
+
     def _call_tool_bounded(
         self, tool: Callable, tool_args: Dict[str, Any], tool_name: str
     ) -> Any:
@@ -5504,7 +5552,7 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.agents.base.tools import set_tool_cancel_event
 
-        timeout = self._resolve_tool_timeout(tool_name)
+        timeout = self._bounded_tool_timeout(tool_name, tool_args)
         holder: Dict[str, Any] = {}
         cancel = threading.Event()
         user_wait = _UserWaitClock()
@@ -6262,12 +6310,22 @@ Do NOT wrap conversational replies in JSON.
             # Bounded-execution guard fired: the tool body blocked past its
             # limit. Fail loud with an actionable message — name the tool, the
             # window, and the override knob — instead of hanging the agent loop.
+            timeout_arg = (self._tools_registry.get(tool_name) or {}).get("timeout_arg")
+            if timeout_arg:
+                remedy = (
+                    f"If the work legitimately needs longer, retry with a "
+                    f"larger `{timeout_arg}` argument or split it into smaller "
+                    f"steps; check any files it was writing before using them."
+                )
+            else:
+                remedy = (
+                    "It may be waiting on a service or connection that does "
+                    "not respond. Check the tool/connector, or raise "
+                    "GAIA_AGENT_TOOL_TIMEOUT if it legitimately needs longer."
+                )
             error_msg = (
                 f"Tool '{tool_name}' did not return within {e.timeout:g}s and "
-                f"was abandoned. The call may be hung (e.g. an unreachable "
-                f"service or stuck network request). Check the tool/connector, "
-                f"or raise GAIA_AGENT_TOOL_TIMEOUT if it legitimately needs "
-                f"longer."
+                f"was abandoned, so its result is unknown. {remedy}"
             )
             logger.error(error_msg)
             self.error_history.append(error_msg)
@@ -8664,9 +8722,8 @@ Do NOT wrap conversational replies in JSON.
                     self.console.stop_progress()
 
                     if _is_image_tool(tool_name):
-                        capability_tool_last_succeeded = not (
-                            isinstance(tool_result, dict)
-                            and tool_result.get("status") in ("error", "denied")
+                        capability_tool_last_succeeded = not tool_result_failed(
+                            tool_result, FAILED_STATUSES
                         )
 
                     # Handle domain-specific post-processing.
@@ -8736,24 +8793,25 @@ Do NOT wrap conversational replies in JSON.
                     is_error = Agent._is_error_result(tool_result)
 
                     if is_error:
+                        failed = tool_result_error_fields(tool_result)
                         error_count += 1
                         # Extract error message from various formats
                         # Prefer error_brief for logging (avoids duplicate formatted output)
                         last_error = (
-                            tool_result.get("error_brief")
-                            or tool_result.get("error")
-                            or tool_result.get("stderr")
-                            or tool_result.get("hint")  # Many tools provide hints
-                            or tool_result.get(
+                            failed.get("error_brief")
+                            or failed.get("error")
+                            or failed.get("stderr")
+                            or failed.get("hint")  # Many tools provide hints
+                            or failed.get(
                                 "suggested_fix"
                             )  # Some tools provide fix suggestions
-                            or f"Command failed with return code {tool_result.get('return_code')}"
+                            or f"Command failed with return code {failed.get('return_code')}"
                         )
                         logger.warning(
                             f"Tool execution error in plan (count: {error_count}): {last_error}"
                         )
                         # Only print if error wasn't already displayed by _execute_tool
-                        if not tool_result.get("error_displayed"):
+                        if not failed.get("error_displayed"):
                             # STATE_ERROR_RECOVERY below retries this — not a
                             # fatal top-level failure (#2515).
                             self.console.print_error(last_error, recoverable=True)
@@ -10065,16 +10123,17 @@ Do NOT wrap conversational replies in JSON.
                     # the full set, per #944 acceptance criterion (b).
                     is_error = Agent._is_error_result(tool_result)
                     if is_error:
+                        failed = tool_result_error_fields(tool_result)
                         error_count += 1
                         last_error = (
-                            tool_result.get("error_brief")
-                            or tool_result.get("error")
-                            or tool_result.get("stderr")
-                            or tool_result.get("hint")
-                            or tool_result.get("suggested_fix")
+                            failed.get("error_brief")
+                            or failed.get("error")
+                            or failed.get("stderr")
+                            or failed.get("hint")
+                            or failed.get("suggested_fix")
                             or (
                                 "Command failed with return code "
-                                f"{tool_result.get('return_code')}"
+                                f"{failed.get('return_code')}"
                             )
                         )
                         logger.warning(
@@ -10085,7 +10144,7 @@ Do NOT wrap conversational replies in JSON.
                             error_count,
                             last_error,
                         )
-                        if not tool_result.get("error_displayed"):
+                        if not failed.get("error_displayed"):
                             # any_error below switches to STATE_ERROR_RECOVERY
                             # and retries — not a fatal top-level failure
                             # (#2515, the archive_message_batch repro).
@@ -10217,9 +10276,8 @@ Do NOT wrap conversational replies in JSON.
                     self._wait_out_rate_limit(tool_result)
 
                 if _is_image_tool(tool_name):
-                    capability_tool_last_succeeded = not (
-                        isinstance(tool_result, dict)
-                        and tool_result.get("status") in ("error", "denied")
+                    capability_tool_last_succeeded = not tool_result_failed(
+                        tool_result, FAILED_STATUSES
                     )
 
                 # Issue #1023: mirror the plan-execution branch (L2330) so
@@ -10334,21 +10392,22 @@ Do NOT wrap conversational replies in JSON.
                 # Check if tool execution resulted in an error (support multiple error formats)
                 is_error = Agent._is_error_result(tool_result)
                 if is_error:
+                    failed = tool_result_error_fields(tool_result)
                     error_count += 1
                     # Prefer error_brief for logging (avoids duplicate formatted output)
                     last_error = (
-                        tool_result.get("error_brief")
-                        or tool_result.get("error")
-                        or tool_result.get("stderr")
-                        or tool_result.get("hint")
-                        or tool_result.get("suggested_fix")
-                        or f"Command failed with return code {tool_result.get('return_code')}"
+                        failed.get("error_brief")
+                        or failed.get("error")
+                        or failed.get("stderr")
+                        or failed.get("hint")
+                        or failed.get("suggested_fix")
+                        or f"Command failed with return code {failed.get('return_code')}"
                     )
                     logger.warning(
                         f"Tool execution error in plan (count: {error_count}): {last_error}"
                     )
                     # Only print if error wasn't already displayed by _execute_tool
-                    if not tool_result.get("error_displayed"):
+                    if not failed.get("error_displayed"):
                         # STATE_ERROR_RECOVERY below retries this — not a
                         # fatal top-level failure (#2515).
                         self.console.print_error(last_error, recoverable=True)
@@ -11329,15 +11388,9 @@ Do NOT wrap conversational replies in JSON.
     def _is_error_result(result: Any) -> bool:
         """Canonical predicate for 'tool returned an error result'.
 
-        A non-zero ``return_code`` is an error unless the tool marked it
-        ``expected_exit`` — grep's exit 1 is "no match", not a failure.
+        Reads dicts and JSON-string results alike; see ``tool_result_failed``.
         """
-        return isinstance(result, dict) and (
-            result.get("status") == "error"
-            or result.get("success") is False
-            or result.get("has_errors") is True
-            or (result.get("return_code", 0) != 0 and not result.get("expected_exit"))
-        )
+        return tool_result_failed(result)
 
     _RATE_LIMIT_WAIT_CAP_S = 15.0
     # Without the Windows wordings in here a dead service reads as a
@@ -11395,7 +11448,8 @@ Do NOT wrap conversational replies in JSON.
     @staticmethod
     def _loop_error_brief(result: Any) -> str:
         """The error a failed result reports: ``error``, else last stderr line."""
-        if isinstance(result, dict):
+        result = tool_result_error_fields(result)
+        if result:
             err = result.get("error")
             if err:
                 return str(err).strip()
@@ -11437,7 +11491,7 @@ Do NOT wrap conversational replies in JSON.
     ) -> str:
         """Final-answer text when the loop breaks on repeats; names the real cause."""
         last = recent_results[-1] if recent_results else None
-        denied = isinstance(last, dict) and last.get("status") == "denied"
+        denied = (tool_result_dict(last) or {}).get("status") == "denied"
         if not self._repeats_carry_a_failure(recent_results):
             # A loop break is evidence of neither outcome: the work may be done
             # (the model kept re-verifying it) or never started (it had no tool
@@ -11478,9 +11532,7 @@ Do NOT wrap conversational replies in JSON.
     def _repeats_carry_a_failure(recent_results: list) -> bool:
         """Did the repeated calls fail or get refused? Then that IS the answer."""
         last = recent_results[-1] if recent_results else None
-        return Agent._is_error_result(last) or (
-            isinstance(last, dict) and last.get("status") == "denied"
-        )
+        return tool_result_failed(last, FAILED_STATUSES)
 
     def _answer_after_repeated_calls(
         self,
