@@ -178,6 +178,9 @@ func (m Model) footer(w int) string {
 	case fix != FixNone:
 		keys = append(keys, [2]string{"f", fix.Label()})
 	}
+	if row, ok := m.focusedRow(); ok && !m.Busy() && row.DeclineFix != FixNone {
+		keys = append(keys, [2]string{"g", row.DeclineFix.Label()})
+	}
 	if m.cfg.AgentID == "gaia" && !m.Busy() {
 		keys = append(keys, [2]string{"p", "AI provider"})
 	}
@@ -440,6 +443,9 @@ func (m Model) remedyLines(row Row, w int) []string {
 	// ("or run:") whenever pressing f would do the same work.
 	if row.Fix != FixNone {
 		out = append(out, keyStyle.Render("f")+" "+dimStyle.Render(row.Fix.Label()))
+	}
+	if row.DeclineFix != FixNone {
+		out = append(out, keyStyle.Render("g")+" "+dimStyle.Render(row.DeclineFix.Label()))
 	}
 	for _, c := range row.Remedy.Commands() {
 		label := c.Label()

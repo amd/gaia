@@ -356,9 +356,10 @@ def _generate_search_keys(self, query: str) -> List[str]:
     name = "doc-qa-agent"
     version = "1.0.0"
     # ChatAgent is installed from source while PyPI publishing is paused.
+    # Pin it to the tag of the amd-gaia release you depend on.
     dependencies = [
-        "amd-gaia[rag]",
-        "gaia-agent-chat @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/chat/python",
+        "amd-gaia[rag]==0.24.1",
+        "gaia-agent-chat @ git+https://github.com/amd/gaia.git@v0.24.1#subdirectory=hub/agents/chat/python",
     ]
 
     [project.scripts]

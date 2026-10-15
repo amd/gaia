@@ -610,6 +610,25 @@ class CompletionEvidence:
             return
         self.summaries.append((self.sequence, os.path.normcase(text)))
 
+    def unwritten_requests(self) -> list[str]:
+        """Files the user asked for that no successful write has produced yet.
+
+        A bare name ("bom.xlsx") counts as written wherever it landed, matching
+        how :meth:`gaps` judges it.
+        """
+        written = {key for key, item in self.files.items() if item.written}
+        written_names = {os.path.normcase(ntpath.basename(key)) for key in written}
+        pending = []
+        for path in self.requested:
+            if self.key(path) in written:
+                continue
+            if ntpath.basename(path) == path and (
+                os.path.normcase(path) in written_names
+            ):
+                continue
+            pending.append(path)
+        return pending
+
     def _record_refusal(self, tool: str, args: dict, result: Any) -> None:
         """Remember a write the user or the path allowlist turned down."""
         if tool not in WRITE_TOOLS:
