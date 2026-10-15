@@ -724,7 +724,7 @@ def test_a_50mb_script_output_checked_by_row_count_is_complete(big_output):
 
 
 @pytest.mark.parametrize(
-    "command", ["wc -l out/clean.csv", "tail -n 3 out\clean.csv", "head clean.csv"]
+    "command", ["wc -l out/clean.csv", r"tail -n 3 out\clean.csv", "head clean.csv"]
 )
 def test_a_shell_head_tail_or_count_checks_a_large_output(big_output, command):
     ledger, _ = big_output

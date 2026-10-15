@@ -22,9 +22,10 @@ than doing a direct load that would race-evict another process's model.
 
 from __future__ import annotations
 
+import contextvars
 import os
-import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -364,12 +365,28 @@ def _acquire_with_reattach(model: str, priority: Optional[str]) -> Optional[dict
         return acquire_lease(model, priority=priority)
 
 
-_held = threading.local()
+@dataclass
+class _HeldLease:
+    model: str
+    live: bool = True
+
+
+# A context variable, not a thread-local, so a thread started with a copy of the
+# holder's context (the stream watchdog's reader) shares the lease. ``live`` is
+# shared by every copy, so ending the lease ends it in all of them at once.
+_held: contextvars.ContextVar[Optional[_HeldLease]] = contextvars.ContextVar(
+    "gaia_model_slot_lease", default=None
+)
+
+
+def _current_hold() -> Optional[_HeldLease]:
+    hold = _held.get()
+    return hold if hold is not None and hold.live else None
 
 
 def holding_lease() -> bool:
-    """True when this thread already owns the model slot (see :func:`model_lease`)."""
-    return getattr(_held, "depth", 0) > 0
+    """True when this context already owns the model slot (see :func:`model_lease`)."""
+    return _current_hold() is not None
 
 
 @contextmanager
@@ -385,8 +402,8 @@ def model_lease(
     yields ``None``. Otherwise it acquires a lease (blocking until the slot is
     free), yields the lease dict, and releases on exit — even on exception.
 
-    **Re-entrant per thread.** The broker grants exactly one lease at a time, so
-    a nested acquire on a thread that already holds the slot would block forever
+    **Re-entrant per context.** The broker grants exactly one lease at a time, so
+    a nested acquire in a context that already holds the slot would block forever
     waiting for itself. Nesting is normal now that the lease lives at the
     ``load_model`` chokepoint (#2248): a caller wrapping a multi-step
     unload→load sequence in an outer lease reaches an inner one on the load. The
@@ -409,22 +426,23 @@ def model_lease(
         if not (_discovery_enabled and attach_broker_env()):
             yield None
             return
-    if holding_lease():
-        held_model = getattr(_held, "model", None)
-        if held_model is not None and held_model != model:
+    hold = _current_hold()
+    if hold is not None:
+        held_model = hold.model
+        if held_model != model:
             # The outer holder leased a DIFFERENT model. Folding silently would
             # let this load happen under a lease the broker booked against
             # another model, desyncing its slot bookkeeping — loud, because the
             # quiet version is a race the broker thinks it prevented.
             raise BrokerUnavailableError(
-                f"nested model-slot lease for '{model}' on a thread already "
+                f"nested model-slot lease for '{model}' in a context already "
                 f"holding the slot for '{held_model}'. A nested load must "
                 "target the same model as the enclosing lease; leasing a "
                 "second model would corrupt the broker's slot accounting. "
                 "Move the inner load outside the enclosing lease."
             )
         logger.debug(
-            "broker client: already holding the model slot on this thread; "
+            "broker client: already holding the model slot in this context; "
             "nested lease for '%s' is a no-op",
             model,
         )
@@ -441,11 +459,11 @@ def model_lease(
             else "waiting for the model slot…"
         )
         on_wait(reason)
-    _held.depth = 1
-    _held.model = model
+    hold = _HeldLease(model)
+    _held.set(hold)
     try:
         yield lease
     finally:
-        _held.depth = 0
-        _held.model = None
+        hold.live = False
+        _held.set(None)
         release_lease(lease["lease_id"])
