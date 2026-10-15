@@ -303,3 +303,234 @@ def test_a_passing_check_piped_into_a_grep_that_finds_nothing_passes(
     assert seen["return_code"] == 0
     assert result["status"] == "success", result
     assert result["expected_exit"] == "grep exits 1 when nothing matches"
+
+
+# ---------------------------------------------------------------------------
+# Adversarial: the verdict follows the shell's rules, not the output's words
+# ---------------------------------------------------------------------------
+
+ANSWER_PROGRAMS = ["grep", "egrep", "fgrep", "rg", "findstr", "diff", "cmp", "fc"]
+
+
+@pytest.mark.parametrize("program", ANSWER_PROGRAMS)
+def test_every_answer_program_is_a_success_at_1_and_an_error_at_2(program):
+    assert _answer_exit([program, "x", "y"], 1) is not None
+    for code in (2, 3, 127, 255, -9):
+        assert _answer_exit([program, "x", "y"], code) is None, (program, code)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["grepx", "x"],
+        ["mygrep", "x"],
+        ["grep2", "x"],
+        ["/opt/grep-wrapper", "x"],
+        ["diffstat", "x"],
+        ["git", "log"],
+        ["git", "diff", "--stat"],
+        ["git", "show"],
+        ["python", "-c", "import sys; sys.exit(1)"],
+        ["pytest"],
+        ["make"],
+    ],
+)
+def test_lookalike_or_ordinary_programs_exiting_1_are_failures(argv):
+    assert _answer_exit(argv, 1) is None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [r"C:\Program Files\Git\usr\bin\GREP.EXE", "x"],
+        ["/usr/local/bin/rg", "x"],
+        ["git", "diff", "--stat", "--exit-code"],
+        ["git", "--no-pager", "grep", "x"],
+    ],
+)
+def test_answer_programs_are_recognised_however_they_are_spelled(argv):
+    assert _answer_exit(argv, 1) is not None
+
+
+@pytest.mark.parametrize(
+    "line, outcomes, status, names",
+    [
+        # && skips the rest once a command fails.
+        (
+            "ls missing && echo x",
+            {"ls missing": (2, "", "nope\n")},
+            "error",
+            "ls missing",
+        ),
+        # || handles only the failure it follows; the next one stands.
+        (
+            "ls missing || ls missing2",
+            {"ls missing": (2, "", "a\n"), "ls missing2": (2, "", "b\n")},
+            "error",
+            "ls missing2",
+        ),
+        (
+            "ls missing || echo x ; ls missing2",
+            {
+                "ls missing": (2, "", "a\n"),
+                "echo x": (0, "x\n", ""),
+                "ls missing2": (2, "", "b\n"),
+            },
+            "error",
+            "ls missing2",
+        ),
+        (
+            "ls missing || echo x && ls missing2",
+            {
+                "ls missing": (2, "", "a\n"),
+                "echo x": (0, "x\n", ""),
+                "ls missing2": (2, "", "b\n"),
+            },
+            "error",
+            "ls missing2",
+        ),
+        (
+            "ls a ; ls missing || echo x",
+            {
+                "ls a": (0, "a\n", ""),
+                "ls missing": (2, "", "a\n"),
+                "echo x": (0, "x\n", ""),
+            },
+            "success",
+            None,
+        ),
+        (
+            "ls missing ; ls a ; echo x",
+            {
+                "ls missing": (2, "", "first\n"),
+                "ls a": (0, "a\n", ""),
+                "echo x": (0, "x\n", ""),
+            },
+            "error",
+            "ls missing",
+        ),
+        (
+            "ls m1 ; ls m2 ; ls m3",
+            {
+                "ls m1": (1, "", "one\n"),
+                "ls m2": (2, "", "two\n"),
+                "ls m3": (0, "", ""),
+            },
+            "error",
+            "ls m1",
+        ),
+    ],
+)
+def test_connectors_decide_which_failure_stands(
+    fake_steps, tmp_path, line, outcomes, status, names
+):
+    fake_steps.update(outcomes)
+
+    result = _run(line, tmp_path)
+
+    assert result["status"] == status, result
+    if names:
+        assert result["error"].startswith(f"'{names}' exited with code")
+    else:
+        assert "error" not in result
+
+
+def test_and_skips_the_command_after_a_failure(fake_steps, tmp_path):
+    fake_steps["ls missing"] = (2, "", "nope\n")
+
+    result = _run("ls missing && echo x", tmp_path)
+
+    assert [s["command"] for s in result["steps"]] == ["ls missing"]
+
+
+@pytest.fixture
+def fake_pipeline(monkeypatch):
+    """Like ``fake_steps``, but each outcome also carries every stage's exit code."""
+    outcomes = {}
+
+    def fake_run_step(step, cwd, timeout, granted, waiter=None, bypass=False):
+        code, stages = outcomes[step.text]
+        completed = subprocess.CompletedProcess(step.text, code, "", "")
+        completed.stage_codes = stages
+        return completed
+
+    monkeypatch.setattr(shell_tools, "_run_step", fake_run_step)
+    return outcomes
+
+
+@pytest.mark.parametrize(
+    "line, code, stages, status",
+    [
+        ("ls | grep x", 1, [0, 1], "success"),  # grep found nothing
+        ("ls | grep x", 1, [2, 1], "error"),  # ls failed upstream
+        ("ls | grep x", 1, [1, 1], "error"),
+        ("ls | grep x", 2, [0, 2], "error"),  # grep itself failed
+        ("ls | sort", 2, [0, 2], "error"),
+        ("ls | sort", 1, [0, 1], "error"),  # sort has no answer exit
+        ("grep x f.txt | sort", 0, [1, 0], "success"),  # upstream no-match
+        ("ls | grep x | sort", 1, [0, 0, 1], "error"),
+        ("ls | sort | grep x", 1, [0, 0, 1], "success"),
+        ("ls | sort | grep x", 1, [0, 3, 1], "error"),
+    ],
+)
+def test_in_a_pipeline_an_answer_exit_counts_only_from_the_last_stage(
+    fake_pipeline, tmp_path, line, code, stages, status
+):
+    fake_pipeline[line] = (code, stages)
+
+    result = _run(line, tmp_path)
+
+    assert result["status"] == status, result
+
+
+@pytest.mark.parametrize(
+    "stdout, stderr",
+    [
+        ("ERROR: disk almost full\n", ""),
+        ("", "error: this is only a warning\n"),
+        ("FAILED\nTraceback (most recent call last):\n", "fatal: but not really\n"),
+        ("exit code 1\nreturn_code: 2\n", "status: error\n"),
+    ],
+)
+def test_output_that_says_error_at_exit_zero_stays_a_success(
+    fake_steps, tmp_path, stdout, stderr
+):
+    fake_steps["ls"] = (0, stdout, stderr)
+
+    result = _run("ls", tmp_path)
+
+    assert result["status"] == "success", result
+    assert result["has_errors"] is False
+    assert "error" not in result
+    assert not Agent._is_error_result(result)
+
+
+@pytest.mark.parametrize("code", [1, 2, 126, 127, 255, -9, -15, 3221225477])
+def test_any_other_non_zero_exit_is_an_error_naming_the_code(
+    fake_steps, tmp_path, code
+):
+    fake_steps["ls"] = (code, "", "")
+
+    result = _run("ls", tmp_path)
+
+    assert result["status"] == "error"
+    assert f"exited with code {code}" in result["error"]
+    assert Agent._is_error_result(result)
+
+
+@pytest.mark.parametrize(
+    "result, is_error",
+    [
+        ({"status": "success", "return_code": 1, "expected_exit": ""}, True),
+        ({"status": "success", "return_code": 1, "expected_exit": None}, True),
+        ({"status": "success", "return_code": "1"}, True),
+        ({"status": "success", "return_code": 0, "has_errors": True}, True),
+        ({"status": "success", "success": False}, True),
+        ({"status": "error", "return_code": 0}, True),
+        ({"status": "error", "return_code": 1, "expected_exit": "grep"}, True),
+        ({"status": "success", "return_code": 0}, False),
+        ({"status": "success"}, False),
+    ],
+)
+def test_the_agent_loop_predicate_cannot_be_talked_out_of_an_error(result, is_error):
+    assert Agent._is_error_result(result) is is_error

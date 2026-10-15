@@ -302,6 +302,18 @@ def missing_package_hint(*packages: str) -> str:
     return f"Install with: {pip_install_hint(*packages)}"
 
 
+def missing_extra_hint(*extras: str) -> str:
+    """How to add GAIA's optional *extras* (e.g. ``rag``), true for this install.
+
+    From source this is the install command for this interpreter; a frozen
+    build says the feature isn't bundled instead.
+    """
+    if _frozen():
+        names = ", ".join(f"GAIA[{e}]" for e in extras)
+        return f"{names} isn't bundled in this GAIA build. {FROZEN_NO_INSTALL}"
+    return f"Install with: {pip_install_hint(*gaia_extras_install_args(extras))}"
+
+
 def source_install_command(wheel: str, *, force_reinstall: bool = False) -> str:
     """Return the command that installs ``wheel`` straight from source.
 

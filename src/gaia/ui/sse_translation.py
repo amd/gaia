@@ -71,7 +71,8 @@ import os
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
+from gaia.agents.base.call_risk import RISK_NOTE_ARG, plain_risk_note
+from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, SCRATCH_ARG
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
     derive_narration,
@@ -465,6 +466,14 @@ class CanonicalTranslator:
         if not isinstance(args, dict):
             args = {}
         summary = self._render_args_summary(tool, args)
+        # The command, where it runs, then one plain line on what it can do.
+        note = (
+            str(args.get(RISK_NOTE_ARG) or "") or plain_risk_note(event.get("risk"))
+            if tool in COMMAND_SUMMARY_TOOLS
+            else ""
+        )
+        if note:
+            summary = f"{summary}\n{note}"
         # confirm_url omitted: stateless stop-and-hand-off (D1, spec §5 / Q4).
         canonical: Dict[str, Any] = {
             "type": "needs_confirmation",
@@ -740,7 +749,25 @@ def render_command_summary(
     and its folder follow in brackets — a hidden key is a hidden side effect.
     """
     workspace = workspace if workspace is not None else os.getcwd()
-    shown_keys = {"command", "working_directory", "code", "file_path"}
+    shown_keys = {
+        "command",
+        "working_directory",
+        "code",
+        "file_path",
+        RISK_NOTE_ARG,
+        SCRATCH_ARG,
+    }
+    if args.get(RISK_NOTE_ARG) and tool in COMMAND_SUMMARY_TOOLS:
+        # GAIA's checks did not vouch for this line, so the user approves the
+        # exact text the shell receives: never shortened, never reflowed.
+        folder = str(args.get("working_directory") or workspace)
+        others = [
+            f"{key}={args[key]}"
+            for key in sorted(args)
+            if key not in shown_keys and args[key] not in (None, "")
+        ]
+        tail = f"\n({', '.join(others)})" if others else ""
+        return f"{args.get('command') or ''}\nin {folder}{tail}"
     if tool in CODE_SUMMARY_TOOLS:
         if isinstance(args.get("code"), str):
             lines = args["code"].strip("\n").splitlines() or [""]

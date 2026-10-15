@@ -70,6 +70,11 @@ from gaia.agents.base.memory_store import (
     VALID_CATEGORIES,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
+from gaia.agents.base.tool_outcome import (
+    FAILED_STATUSES,
+    tool_result_error_fields,
+    tool_result_failed,
+)
 from gaia.agents.base.verification import check_was_executed
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
@@ -3139,14 +3144,11 @@ class MemoryMixin(ProceduralMemoryMixin):
             result = super()._execute_tool(tool_name, tool_args)
             duration_ms = int((time.time() - start) * 1000)
 
-            # Determine success from result dict
-            is_error = isinstance(result, dict) and result.get("status") in (
-                "error",
-                "denied",
-            )
+            is_error = tool_result_failed(result, FAILED_STATUSES)
             if is_error:
+                failed = tool_result_error_fields(result)
                 error_msg = str(
-                    result.get("error_brief") or result.get("error") or "Unknown error"
+                    failed.get("error_brief") or failed.get("error") or "Unknown error"
                 )
         except Exception as exc:
             # Tool raised an exception — log it, then re-raise
