@@ -44,9 +44,12 @@ jobs:
                       print(f"--- {label}: alive {th.name}", flush=True)
                       traceback.print_stack(frames[th.ident], file=sys.stdout)
           print("threads before:", [x.name for x in threading.enumerate()])
-          with t.StallServer([t.stall_after_headers, t.good]) as server:
+          with t.StallServer([t.stall_mid_stream, t.good]) as server:
               c = mk(server)
-              print(t._run(c))
+              try:
+                  print(t._run(c))
+              except Exception as e:
+                  print("raised", type(e).__name__)
               for i in range(6):
                   time.sleep(0.5)
                   dump(f"inside server +{(i+1)*0.5}s")
@@ -55,6 +58,13 @@ jobs:
               dump(f"after server close +{(i+1)*0.5}s")
           print("done", [x.name for x in threading.enumerate()])
           PY
-          python /tmp/probe.py 2>&1 | tail -120
+          echo "=== NEW CODE ==="
+          python /tmp/probe.py 2>&1 | tail -60
+          git show origin/main:src/gaia/llm/stream_watchdog.py > /tmp/old_wd.py || git fetch origin main && git show FETCH_HEAD:src/gaia/llm/stream_watchdog.py > /tmp/old_wd.py
+          cp src/gaia/llm/stream_watchdog.py /tmp/new_wd.py
+          cp /tmp/old_wd.py src/gaia/llm/stream_watchdog.py
+          echo "=== OLD CODE ==="
+          python /tmp/probe.py 2>&1 | tail -80
+          cp /tmp/new_wd.py src/gaia/llm/stream_watchdog.py
       - name: test file alone
-        run: pytest tests/unit/test_stream_stall_watchdog.py --timeout=120 -v --tb=short -k "stall or stop"
+        run: pytest tests/unit/test_stream_stall_watchdog.py tests/unit/test_stream_reader_abandon.py --timeout=120 -v --tb=short
