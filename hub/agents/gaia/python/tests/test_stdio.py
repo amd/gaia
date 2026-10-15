@@ -1343,11 +1343,16 @@ def test_cloud_model_switch_preserves_session_and_reports_remote(
     assert [event["type"] for event in events] == ["status", "final"]
     assert events[0]["model_backend"] == provider
     assert events[0]["model_remote"] is True
-    assert name in events[1]["answer"]
-    # The switch message is built from the shared inference-location helper
-    # (#3674), so it says where the conversation goes and what stays here.
-    assert "a cloud provider" in events[1]["answer"]
-    assert "sent there to be answered" in events[1]["answer"]
+    answer = events[1]["answer"]
+    assert name in answer
+    # One line (#5080): the model once, without its routing prefix, the
+    # provider, and what is sent there — never the internal "via Lemonade".
+    assert answer.startswith("Switched to **gemma-4-31b-it** on ")
+    assert "(cloud)" in answer
+    assert "anything read from files or memory, are sent there" in answer
+    assert "via Lemonade" not in answer
+    assert model not in answer
+    assert "\n" not in answer
     assert agent.chat.history is history
     assert agent.embedder is embedder
     assert agent.chat.llm_client is client
@@ -1421,8 +1426,7 @@ def test_switch_message_classifies_from_the_client_not_the_id_prefix(
     answer = _events(_model_run(_ModelSwitchAgent(), f"/model {model}"))[-1]["answer"]
 
     assert created[0].refresh_calls == 1
-    assert "Fireworks AI" in answer
-    assert "a cloud provider" in answer
+    assert "Fireworks AI (cloud)" in answer
     assert "not sending this conversation to any cloud provider" not in answer
 
 
@@ -1473,11 +1477,32 @@ def test_model_list_groups_discovered_cloud_without_downloads(stub_lemonade):
         ]
     }
     answer = _events(_model_run(_ModelSwitchAgent(), "/model"))[0]["answer"]
-    assert answer.index("Local (Lemonade") < answer.index("Gemma-4-E4B-it-GGUF")
+    assert answer.index("On this machine") < answer.index("Gemma-4-E4B-it-GGUF")
     assert answer.index("Fireworks AI") < answer.index("fireworks.gemma-4-31b-it")
     assert answer.index("AMD LLM Gateway") < answer.index("amd.gemma")
     assert "fireworks.embedding" not in answer
     assert "other.gemma" not in answer
+
+
+def test_model_list_marks_the_default_and_never_says_via_lemonade(
+    monkeypatch, stub_lemonade
+):
+    """#5081: the list shows provider, model and which one is the default."""
+    stub_lemonade.catalog = {
+        "data": [
+            {"id": "Gemma-4-E4B-it-GGUF", "downloaded": True},
+            {"id": "amd.DeepSeek-V4.1-Flash", "downloaded": False},
+        ]
+    }
+    monkeypatch.setattr(
+        stdio, "resolve_default_chat_model", lambda: "amd.DeepSeek-V4.1-Flash"
+    )
+    answer = _events(_model_run(_ModelSwitchAgent(), "/model"))[0]["answer"]
+    assert "- `amd.DeepSeek-V4.1-Flash` (default)" in answer
+    assert "`Gemma-4-E4B-it-GGUF` (default)" not in answer
+    assert answer.count("(default)") == 1
+    assert "via Lemonade" not in answer
+    assert "AMD LLM Gateway (cloud)" in answer
 
 
 def test_model_list_names_the_command_that_connects_a_missing_provider(

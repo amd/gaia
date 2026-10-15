@@ -142,6 +142,16 @@
     align-self: flex-start;
 }
 
+.setup-lemonade {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--accent-light);
+    border-radius: var(--radius-lg);
+    background: var(--accent-dim);
+}
+
 .setup-hint {
     color: var(--text-secondary);
     font-size: 13px;
