@@ -252,7 +252,11 @@ func (c *Client) Pull(ctx context.Context, e Entry, progress func(PullProgress))
 		return fmt.Errorf("invalid Lemonade address")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := APIKeyFor(base); key != "" {
+	key, err := APIKeyFor(ctx, base)
+	if err != nil {
+		return err
+	}
+	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	// A download runs for as long as it takes; ctx is the only bound.

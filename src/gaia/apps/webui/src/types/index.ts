@@ -393,7 +393,7 @@ export interface SystemStatus {
      * the actual default — replaces the previously hard-coded "~25 GB".
      */
     default_model_size_gb: number | null;
-    lemonade_url: string;
+    lemonade_url: string | null;
     expected_model_loaded: boolean;
     /** Live progress while a model pull is in flight. ``null`` otherwise. */
     download_progress: DownloadProgress | null;
@@ -762,6 +762,43 @@ export interface SetupRunStatus {
     command?: string;
     log_tail?: string[];
     skip_chat_model?: boolean;
+}
+
+// ── Which Lemonade Server GAIA uses (/api/lemonade/*) ─────────────────────
+
+export type LemonadeMode = 'gaia' | 'external';
+
+/** GET /api/lemonade/target: the server GAIA uses now and who chose it. */
+export interface LemonadeTarget {
+    mode: LemonadeMode;
+    /** null until the user (or `gaia init`) has chosen. */
+    saved_mode: LemonadeMode | null;
+    /** `env` means LEMONADE_BASE_URL chose it, so the UI cannot change it. */
+    source: 'env' | 'config' | 'gaia';
+    base_url: string | null;
+    saved_base_url: string | null;
+    api_key_stored: boolean;
+    gaia_installed: boolean;
+    /** Nobody has chosen yet: offer a Lemonade found running. */
+    offer: boolean;
+    what_gaia_does: string;
+}
+
+export type LemonadeProbeStatus = 'ok' | 'needs_key' | 'bad_key' | 'too_old' | 'not_lemonade' | 'unreachable';
+
+/** A Lemonade the user already runs, from GET /api/lemonade/detect. */
+export interface LemonadeFound {
+    url: string;
+    status: LemonadeProbeStatus;
+    version: string | null;
+    minimum: string | null;
+    message: string;
+}
+
+export interface LemonadeTargetBody {
+    mode: LemonadeMode;
+    base_url?: string;
+    api_key?: string;
 }
 
 // ── AI providers (GET /api/providers) ─────────────────────────────────────

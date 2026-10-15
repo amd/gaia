@@ -18,6 +18,7 @@ import (
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
@@ -64,6 +65,16 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 	if err != nil {
 		return err
 	}
+	// Closing the TUI unloads GAIA's models unless another GAIA client is still
+	// using them. Released after run() has closed the agent.
+	if !useClaude && lemonade.GAIARunsLemonade() {
+		hold := lemonade.HoldForApp("tui")
+		defer func() {
+			if err := hold.Release(releaseWait); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+			}
+		}()
+	}
 	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
@@ -106,6 +117,9 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 
 // slowCloseNotice is how long quit runs before it says what it is waiting on.
 const slowCloseNotice = time.Second
+
+// releaseWait bounds the exit-time release of GAIA's Lemonade Server.
+const releaseWait = 5 * time.Second
 
 // savingMemoriesNotice explains a quit that lingers: the agent saves the last
 // turns' memories before it exits, bounded by the client's exit grace.

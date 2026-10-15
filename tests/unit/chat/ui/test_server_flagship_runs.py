@@ -32,8 +32,9 @@ def test_start_model_server_owner_runs_the_daemon_start_in_a_daemon_thread(
     called = threading.Event()
     seen = {}
 
-    def ensure():
+    def ensure(**kwargs):
         seen["thread"] = threading.current_thread()
+        seen["kwargs"] = kwargs
         called.set()
 
     monkeypatch.setattr(lemonade_service, "ensure_daemon_owns_lemonade", ensure)
@@ -44,6 +45,8 @@ def test_start_model_server_owner_runs_the_daemon_start_in_a_daemon_thread(
     assert thread.name == "gaia-daemon-start"
     assert seen["thread"] is thread
     assert seen["thread"] is not threading.main_thread()
+    # Registered as an app: closing it unloads GAIA's models.
+    assert seen["kwargs"] == {"kind": "app", "name": "agent-ui"}
 
 
 def test_create_app_never_starts_the_daemon(monkeypatch):

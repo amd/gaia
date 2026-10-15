@@ -440,7 +440,7 @@ class TestStatus:
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
         monkeypatch.setattr(
-            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda p: False)
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "other"
         )
         assert manager.status().running is False
         assert not manager.state_path.exists(), "dead instance left a stale state file"
@@ -453,7 +453,7 @@ class TestStatus:
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
         monkeypatch.setattr(
-            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda p: True)
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "own"
         )
 
         status = manager.status()
@@ -490,7 +490,7 @@ class TestStatus:
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
         monkeypatch.setattr(
-            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda p: True)
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "own"
         )
 
         with pytest.raises(EmbeddedLemonadeError) as exc:
@@ -506,8 +506,8 @@ class TestStatus:
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
         monkeypatch.setattr(
             EmbeddedLemonade,
-            "_daemon_alive",
-            staticmethod(lambda p: not killed),
+            "_identify",
+            lambda self, pid, port, key: "other" if killed else "own",
         )
         monkeypatch.setattr(EmbeddedLemonade, "_kill_tree", staticmethod(killed.append))
 
@@ -570,7 +570,7 @@ class TestUninstall:
         )
         monkeypatch.setattr(manager, "_health", lambda *args, **kwargs: None)
         monkeypatch.setattr(
-            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda pid: True)
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "own"
         )
 
         with pytest.raises(EmbeddedLemonadeError, match="embedded Lemonade.*running"):

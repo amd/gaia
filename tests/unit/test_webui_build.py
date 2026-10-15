@@ -738,6 +738,7 @@ class TestInitCommandWebuiBuild(unittest.TestCase):
             patch.object(InitCommand, "_print_step"),
             patch.object(InitCommand, "_print_success"),
             patch.object(InitCommand, "_print_completion"),
+            patch.object(InitCommand, "_choose_lemonade", return_value=True),
             patch.object(InitCommand, "_ensure_lemonade_ready", return_value=True),
             patch.object(InitCommand, "_verify_setup", return_value=True),
             # Never touch the real ~/.gaia/config.json during a test.
