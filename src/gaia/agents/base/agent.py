@@ -7580,7 +7580,11 @@ Do NOT wrap conversational replies in JSON.
             self._turn_scope = TurnScopeGuard(
                 getattr(self, "max_consecutive_repeats", 4)
             )
-        self._turn_scope.begin_turn(user_input, os.getcwd())
+        self._turn_scope.begin_turn(
+            user_input,
+            os.getcwd(),
+            scratch=getattr(self._read_validator(), "scratch_dir", None),
+        )
         if getattr(self, "_task_lessons", None) is None:
             self._task_lessons = TaskLessons()
         self._task_lessons.begin_turn()
@@ -7692,6 +7696,8 @@ Do NOT wrap conversational replies in JSON.
         self.current_step = 0
         self.total_plan_steps = 0
         self.plan_iterations = 0  # Reset plan iteration counter
+        # The reply to a plan-budget stop is forced, not the user's answer.
+        budget_stop_pending = False
         # Tool-reported LLM usage this turn (see _fold_tool_usage / #2899) —
         # reset per-turn since an Agent instance persists across queries in
         # an interactive session.
@@ -8024,6 +8030,7 @@ Do NOT wrap conversational replies in JSON.
                                 plan_context_str = plan_context_raw
 
                             if reached_max_iterations:
+                                budget_stop_pending = True
                                 # Force final answer after max iterations
                                 completion_message = (
                                     f"Maximum plan iterations ({self.max_plan_iterations}) reached for task: {user_input}\n"
@@ -9928,7 +9935,10 @@ Do NOT wrap conversational replies in JSON.
 
                 # An answer, not a plan or a narrated step: from here on, calls
                 # must serve the request rather than start new work.
-                if not self._turn_scope.answered:
+                if budget_stop_pending:
+                    # Running out of plan budget is not finishing the request.
+                    budget_stop_pending = False
+                elif not self._turn_scope.answered:
                     self._turn_scope.mark_answered()
                     conversation.append(
                         {
@@ -10621,7 +10631,9 @@ Do NOT wrap conversational replies in JSON.
         guard's failure summary.
         """
         scope = self._turn_scope
-        self.console.print_repeated_tool_warning()
+        # Drift refusals are the guard's own doing, not the model repeating itself.
+        if scope.end_reason == "failures":
+            self.console.print_repeated_tool_warning()
         if not scope.answered:
             return self._answer_after_repeated_calls(
                 tool_name,
