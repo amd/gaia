@@ -99,11 +99,11 @@ def test_is_loaded_ctx_too_small_uses_active_device_profile(
 
     agent = _DeviceAgent(skip_lemonade=True, silent_mode=True, device=device)
     if device is None:
-        from types import SimpleNamespace
+        from gaia.config import GaiaConfig
 
         monkeypatch.setattr(
             "gaia.config.GaiaConfig.load",
-            lambda: SimpleNamespace(default_device="npu"),
+            lambda: GaiaConfig(default_device="npu"),
         )
     mock_get_base_url.return_value = "http://localhost:13305/api/v1"
     mock_resp = MagicMock()

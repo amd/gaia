@@ -84,6 +84,17 @@ memory) and 10% headroom, up to that maximum and never below its default. NPU
 does not cap a GPU model. Invalid nonempty values fail with an actionable error;
 unset or blank values use the default.
 
+That window is then checked against the memory free right now, for a model GAIA
+knows the size of on a Lemonade on this machine. When other apps leave too
+little, the window shrinks in 8,192-token steps, keeping 1 GB free and room for
+the embedder, to no less than 32,768 tokens, and a warning names the free memory.
+The choice holds until the process restarts, so a loaded model is not reloaded
+as free memory moves. A load that would not fit even then is refused with how
+much memory it needs; see
+[Not enough free memory](/reference/troubleshooting#not-enough-free-memory).
+`GAIA_CTX_SIZE` is never shrunk, but its load is still refused when it would run
+the machine out of memory.
+
 ## Per-request time budget
 
 A long document arrives as one large prefill, and the bigger the context window

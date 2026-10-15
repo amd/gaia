@@ -12,6 +12,20 @@
 - `run_python`, `execute_python_file` and the Windows notification fallback start
   their child process without GAIA's internal credentials, as core's shell and
   MCP children already do.
+- `run_python` and `execute_python_file` run inside a frozen (PyInstaller)
+  agent. There `sys.executable` is the agent binary, so they now re-launch it
+  with `--gaia-run-python-file`, which its entry point must hand to
+  `gaia_agent_chat.python_runner.dispatch` before parsing argv. `dispatch`
+  also runs the `python -m/-c/<file>` forms a script uses to start
+  `sys.executable`, and refuses `-m pip` with the bundled-library list. Both
+  tool descriptions name the bundled libraries.
+- A Python run that exits non-zero now returns `status: "error"` with an
+  `error` naming the exit code and the last stderr line, instead of
+  `status: "success"`.
+- A script that prints a character outside the Windows console codec (`✓`,
+  CJK, emoji) no longer crashes with `UnicodeEncodeError` when the agent runs
+  from source: both tools ask the child for UTF-8 output, which is what they
+  decode.
 - Every file tool now checks the same allowed-folders rule as `read_file`:
   listing and searching folders (`list_files` included), indexing documents,
   watching folders, and the files `text_to_speech` and the export tools save. A folder you

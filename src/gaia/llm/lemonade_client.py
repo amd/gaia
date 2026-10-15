@@ -165,16 +165,25 @@ def _get_lemonade_config() -> tuple:
 
 
 def configured_lemonade_url() -> Optional[str]:
-    """The Lemonade server the user chose with ``LEMONADE_BASE_URL``, if any.
+    """The Lemonade server the user chose, if any.
+
+    ``LEMONADE_BASE_URL`` wins; otherwise the saved ``lemonade_mode:
+    external`` choice in ``~/.gaia/config.json`` (read on every call, so a
+    changed setting takes effect without a restart). None means GAIA runs its
+    own server.
 
     Values exported by GAIA's own credentials file (marked with
     ``GAIA_LEMONADE_EMBEDDED``) describe GAIA's server, whose port and key
     change on every restart, so they are not a choice: GAIA follows its
     recorded state instead.
     """
-    if os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() == "1":
-        return None
-    return os.getenv("LEMONADE_BASE_URL", "").strip() or None
+    from gaia.llm.lemonade_choice import external_lemonade_url
+
+    if os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() != "1":
+        env_url = os.getenv("LEMONADE_BASE_URL", "").strip()
+        if env_url:
+            return env_url
+    return external_lemonade_url()
 
 
 def resolve_lemonade_base_url(base_url: Optional[str] = None) -> str:
@@ -256,7 +265,7 @@ def _embedded_lemonade_api_key(base_url: Optional[str] = None) -> Optional[str]:
 def resolve_lemonade_api_key(
     api_key: Optional[str] = None, *, base_url: Optional[str] = None
 ) -> Optional[str]:
-    """Resolve the Lemonade API key: argument, env var, embedded server, None.
+    """Resolve the Lemonade API key: argument, env var, saved key, embedded, None.
 
     Empty or whitespace-only env values are treated as unset to avoid
     sending a malformed ``Bearer `` header to authenticated Lemonade
@@ -264,7 +273,9 @@ def resolve_lemonade_api_key(
 
     An explicit argument or env var always wins — a configured credential must
     never be overridden by whatever a local state file happens to hold.
-    The embedded key is restricted to its recorded local HTTP endpoint. Callers
+    The key saved with ``gaia lemonade connect`` is only sent to the server it
+    was saved for, and the embedded key only to its recorded local HTTP
+    endpoint. Callers
     with an explicit endpoint must pass ``base_url``; omitted uses the configured
     Lemonade URL. ``GAIA_HOME`` selects the embedded state directory.
     """
@@ -274,7 +285,10 @@ def resolve_lemonade_api_key(
     own_credentials = os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() == "1"
     if env_value is not None and env_value.strip() and not own_credentials:
         return env_value.strip()
-    return _embedded_lemonade_api_key(base_url)
+    from gaia.llm.lemonade_choice import external_api_key
+
+    target = resolve_lemonade_base_url(base_url)
+    return external_api_key(target) or _embedded_lemonade_api_key(base_url)
 
 
 def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
@@ -337,6 +351,17 @@ EMBEDDER_MODELS = frozenset(
 #: than its ubatch (default 512), so every embedder load carries this one.
 EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
+
+
+def preferred_llamacpp_backend() -> Optional[str]:
+    """The llama.cpp backend the user chose for chat models, or None for auto.
+
+    ``llamacpp_backend`` in ``~/.gaia/config.json``, set from Settings →
+    Advanced or ``gaia config set llamacpp_backend <name>``.
+    """
+    from gaia.config import GaiaConfig
+
+    return GaiaConfig.load().llamacpp_backend
 
 
 def manages_embedder_backend(model_name: Optional[str]) -> bool:
@@ -496,7 +521,20 @@ def runs_on_npu(model: Optional[str]) -> bool:
 
 #: (base_url, capacity) pairs already read from Lemonade in this process.
 _CAPACITY_CACHE: Dict[str, Any] = {}
+#: (base_url, /system-info body) pairs already read in this process.
+_SYSTEM_INFO_CACHE: Dict[str, Any] = {}
 _CAPACITY_LOCK = threading.Lock()
+
+
+def _system_info(url: str) -> Dict[str, Any]:
+    """Lemonade's ``/system-info`` at *url*, read once per process."""
+    with _CAPACITY_LOCK:
+        if url in _SYSTEM_INFO_CACHE:
+            return _SYSTEM_INFO_CACHE[url]
+    info = LemonadeClient(base_url=url, verbose=False).get_system_info(timeout=15)
+    with _CAPACITY_LOCK:
+        _SYSTEM_INFO_CACHE[url] = info
+    return info
 
 
 def machine_capacity(base_url: Optional[str] = None):
@@ -513,11 +551,160 @@ def machine_capacity(base_url: Optional[str] = None):
     with _CAPACITY_LOCK:
         if url in _CAPACITY_CACHE:
             return _CAPACITY_CACHE[url]
-    info = LemonadeClient(base_url=url, verbose=False).get_system_info(timeout=15)
-    capacity = capacity_from_system_info(info)
+    capacity = capacity_from_system_info(_system_info(url))
     with _CAPACITY_LOCK:
         _CAPACITY_CACHE[url] = capacity
     return capacity
+
+
+#: Where the "not enough free memory" error sends a user.
+FREE_MEMORY_HELP_URL = (
+    "https://amd-gaia.ai/docs/reference/troubleshooting#not-enough-free-memory"
+)
+#: (base_url, model_id, requested ctx) -> the window free memory allowed.
+_FITTED_CTX_CACHE: Dict[Tuple[str, str, int], int] = {}
+
+
+def _is_local_url(url: str) -> bool:
+    """Whether *url* is a Lemonade on this machine, whose memory the OS reports."""
+    from urllib.parse import urlparse
+
+    if not isinstance(url, str):
+        return False
+    host = (urlparse(url).hostname or "").lower()
+    return host in ("localhost", "::1", "0.0.0.0") or host.startswith("127.")
+
+
+def _free_memory_snapshot(url: str):
+    """``(FreeMemory or None, {loaded model: ctx})`` for the Lemonade at *url*.
+
+    Raises :class:`LemonadeClientError` when Lemonade does not answer and
+    :class:`~gaia.llm.model_fit.ModelFitError` when its ``/system-info`` is
+    unusable.
+    """
+    from gaia.llm.model_fit import free_memory, read_os_memory
+
+    free = free_memory(_system_info(url), read_os_memory())
+    health = LemonadeClient(base_url=url, verbose=False).health_check(timeout=10)
+    resident = {}
+    for entry in health.get("all_models_loaded") or []:
+        name = entry.get("model_name") or entry.get("id")
+        if name:
+            options = entry.get("recipe_options") or {}
+            resident[name] = int(options.get("ctx_size") or 0)
+    return free, resident
+
+
+def _footprint_gb(requirement: "ModelRequirement", ctx: int) -> float:
+    """Memory *requirement*'s model holds when loaded with a *ctx* window."""
+    from gaia.llm.model_fit import kv_cache_gb, required_memory_gb
+
+    return required_memory_gb(
+        requirement.size_gb or 0.0,
+        kv_cache_gb(requirement.kv_bytes_per_token, ctx),
+    )
+
+
+def _with_own_memory(free, resident, requirement: "ModelRequirement"):
+    """*free* plus what *requirement*'s model already holds: a reload replaces it."""
+    from gaia.llm.model_fit import FreeMemory
+
+    for name, ctx in resident.items():
+        if _model_ids_match(name, requirement.model_id):
+            own = _footprint_gb(requirement, ctx or requirement.min_ctx_size)
+            return FreeMemory(free.free_gb + own, free.limit_gb + own)
+    return free
+
+
+def _forget_fitted_ctx(url: str, model_id: str) -> None:
+    """Drop the windows decided for *model_id* at *url*, so they are re-measured."""
+    url = url.rstrip("/")
+    with _CAPACITY_LOCK:
+        for key in [k for k in _FITTED_CTX_CACHE if k[:2] == (url, model_id)]:
+            del _FITTED_CTX_CACHE[key]
+
+
+def fit_ctx_to_free_memory(
+    model: Optional[str], ctx: int, base_url: Optional[str] = None
+) -> int:
+    """*ctx*, shrunk to the largest window the memory free right now holds.
+
+    Only for a model GAIA knows the size of, on a Lemonade on this machine, and
+    never when ``GAIA_CTX_SIZE`` pins the window. The answer is kept for the
+    process, so a loaded model is not reloaded as free memory moves; a load
+    refused for memory forgets it, so the next try measures again. When not
+    even ``MIN_CONTEXT_TOKENS`` fits, that floor is returned and the load
+    decides (``LemonadeClient._check_free_memory``).
+    """
+    from gaia.llm.model_fit import (
+        MIN_CONTEXT_TOKENS,
+        ModelFitError,
+        context_for_free_memory,
+        required_memory_gb,
+    )
+
+    requirement = find_model_requirement(model)
+    if (
+        requirement is None
+        or not requirement.size_gb
+        or os.environ.get("GAIA_CTX_SIZE", "").strip()
+    ):
+        return ctx
+    url = (base_url or resolve_lemonade_base_url()).rstrip("/")
+    if not _is_local_url(url):
+        return ctx
+    key = (url, requirement.model_id, ctx)
+    with _CAPACITY_LOCK:
+        if key in _FITTED_CTX_CACHE:
+            return _FITTED_CTX_CACHE[key]
+    log = get_logger(__name__)
+    try:
+        free, resident = _free_memory_snapshot(url)
+    except (LemonadeClientError, ModelFitError) as e:
+        # Not a guess: the load re-reads free memory and refuses if it cannot.
+        log.warning(
+            "Cannot read free memory (%s); asking for a %d-token window for %s.",
+            e,
+            ctx,
+            requirement.model_id,
+        )
+        return ctx
+    if free is not None:
+        free = _with_own_memory(free, resident, requirement)
+        reserve = 0.0
+        for co_id in CO_RESIDENT_MODELS:
+            co = find_model_requirement(co_id)
+            if (
+                co is not None
+                and co.size_gb
+                and not _model_ids_match(co.model_id, requirement.model_id)
+                and not any(_model_ids_match(n, co.model_id) for n in resident)
+            ):
+                reserve += required_memory_gb(co.size_gb)
+        fitted = context_for_free_memory(
+            size_gb=requirement.size_gb,
+            kv_bytes_per_token=requirement.kv_bytes_per_token,
+            ctx=ctx,
+            free_gb=free.free_gb,
+            reserve_gb=reserve,
+        )
+        if fitted is None:
+            # The load decides at this floor; a refusal forgets it (below).
+            fitted = min(MIN_CONTEXT_TOKENS, ctx)
+        elif fitted < ctx:
+            log.warning(
+                "Only %.1f GB of memory is free, so %s loads with a %d-token "
+                "window instead of %d. Close other apps and restart GAIA for "
+                "the full window.",
+                free.free_gb,
+                requirement.model_id,
+                fitted,
+                ctx,
+            )
+        ctx = fitted
+    with _CAPACITY_LOCK:
+        _FITTED_CTX_CACHE[key] = ctx
+    return ctx
 
 
 #: Models GAIA keeps loaded beside the chat model in a normal session, so a
@@ -609,7 +796,8 @@ def resolve_ctx_size(
     """Resolve the requested local window for startup and subsequent reloads.
 
     With *model*: its MODELS entry decides, sized to this machine's memory when
-    the entry opts in (``context_for_capacity``); an unregistered model gets
+    the entry opts in (``context_for_capacity``) and shrunk to the memory free
+    now (``fit_ctx_to_free_memory``); an unregistered model gets
     ``NPU_CTX_SIZE`` on the NPU and ``GPU_CTX_SIZE`` elsewhere. *device* is not
     consulted then: where a model runs is a property of the model, and a GGUF
     model on an NPU-profile machine still runs on llama.cpp. Without a model,
@@ -624,7 +812,9 @@ def resolve_ctx_size(
         on_npu = runs_on_npu(model)
         requirement = find_model_requirement(model)
         if requirement is not None:
-            ctx = _model_ctx_size(requirement, base_url)
+            ctx = fit_ctx_to_free_memory(
+                model, _model_ctx_size(requirement, base_url), base_url
+            )
         else:
             ctx = NPU_CTX_SIZE if on_npu else GPU_CTX_SIZE
     else:
@@ -964,15 +1154,21 @@ MODELS = {
     # (RAG retrieval results + history + tool result + system prompt)
     # routinely cross 32K — `summarize_document` was hitting context
     # overflow on 1–2 MB PDFs (#1030 follow-up). Gemma 4 E4B supports up
-    # to 128K natively; 64K is the compromise that fits comfortably on
-    # 16 GB shared-memory iGPUs while still removing the doc-Q&A ceiling.
-    # Low-memory users can dial down via the ``GAIA_CTX_SIZE`` env var.
+    # to 128K natively; 64K is where the eval baseline was captured, so it
+    # never grows past it. With too little free memory the window shrinks
+    # (``fit_ctx_to_free_memory``); ``GAIA_CTX_SIZE`` pins it.
     "gemma-4-e4b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="Gemma-4-E4B-it-GGUF",
         display_name="Gemma 4 E4B (Multimodal)",
         min_ctx_size=GPU_CTX_SIZE,
         tool_calling=True,
+        # Q4_K_M weights (4.98 GB) plus the F16 vision projector (0.99 GB).
+        size_gb=5.97,
+        # 24 of 42 layers keep their own KV (the last 18 reuse it); 4 of those
+        # are full attention: 2 KV heads x 512 dims x K+V x f16 = 16 KiB/token,
+        # 1.1 GB at 64K. The sliding-window layers hold 512 tokens each.
+        kv_bytes_per_token=16384,
     ),
     # --- Qwen3.8-Flash-Next: opt-in on a 128 GB Strix Halo, never a default ---
     # 125B MoE (6B active) + 51B n-gram embedding; needs llama.cpp's qwen4exp
@@ -1689,6 +1885,18 @@ def backend_crash_remedy(model: str) -> str:
 PULL_IDLE_TIMEOUT_S = 30 * 60
 
 
+def _chosen_backend_hint(backend: Optional[str]) -> str:
+    """How to undo the user's backend choice, appended to a failed load."""
+    if not backend:
+        return ""
+    return (
+        f" GAIA asked for llama.cpp's {backend} backend, as set in Settings → "
+        "Advanced → Model server (llamacpp_backend in ~/.gaia/config.json). "
+        "Choose Auto there, or run `gaia config set llamacpp_backend auto`, to "
+        "let Lemonade pick."
+    )
+
+
 class LemonadeClientError(Exception):
     """Base exception for Lemonade client errors."""
 
@@ -1716,6 +1924,10 @@ class ModelDownloadCancelledError(LemonadeClientError):
 
 class InsufficientDiskSpaceError(LemonadeClientError):
     """Raised when there's not enough disk space for model download."""
+
+
+class InsufficientMemoryError(LemonadeClientError):
+    """Raised instead of a load that would run this machine out of memory."""
 
 
 def _cloud_error_status(error: openai.APIError) -> Optional[int]:
@@ -2269,9 +2481,9 @@ class LemonadeClient:
         self.keep_alive = keep_alive
         self._log_file = None
         self.api_key = resolve_lemonade_api_key(api_key, base_url=self.base_url)
-        # GAIA's own server gets a new port and key each time the daemon
-        # (re)starts it. A client aimed at it -- running, or stopped at the
-        # default address -- follows it there.
+        # GAIA's own server gets a new key, and a new port if its last one was
+        # taken, each time the daemon (re)starts it. A client aimed at it --
+        # running, or stopped at the default address -- follows it there.
         if api_key is not None or configured_lemonade_url() is not None:
             self.follows_gaia_lemonade = False
         elif self.api_key is not None:
@@ -2566,6 +2778,13 @@ class LemonadeClient:
                 starts a local process), so it can only ever satisfy a local
                 client (#3558) — or the daemon could not start GAIA's own server.
         """
+        from gaia.llm.lemonade_choice import (
+            external_down_message,
+            external_mode_active,
+        )
+
+        if external_mode_active():
+            raise LemonadeClientError(external_down_message(self.base_url))
         if not self._targets_this_machine():
             raise LemonadeClientError(
                 f"Refusing to start a local Lemonade server: this client is "
@@ -3239,6 +3458,23 @@ class LemonadeClient:
             return self._model_retrier().call(api_call, what=what, state=state)
         finally:
             self._record_retries(state)
+
+    def chosen_backend_for(self, model_name: str) -> Optional[str]:
+        """The user's llama.cpp backend for *model_name*, if it is a llama.cpp model."""
+        backend = preferred_llamacpp_backend()
+        if not backend:
+            return None
+        try:
+            recipe = self._model_recipe(model_name)
+        except LemonadeAuthError:
+            raise
+        except LemonadeClientError as e:
+            raise LemonadeClientError(
+                f"Could not read the model catalog at {self.base_url}/models to "
+                f"check whether {model_name} runs on llama.cpp, so GAIA cannot "
+                f"apply your llama.cpp backend choice ({backend}): {e}"
+            ) from e
+        return backend if recipe == "llamacpp" else None
 
     def _default_llamacpp_backend(self) -> Optional[str]:
         """The llama.cpp backend Lemonade picks for this machine (``vulkan``...).
@@ -5600,7 +5836,11 @@ class LemonadeClient:
             self.load_model(
                 model, auto_download=True, prompt=False, ctx_size=expected_ctx
             )
-        except (ModelDownloadCancelledError, InsufficientDiskSpaceError):
+        except (
+            ModelDownloadCancelledError,
+            InsufficientDiskSpaceError,
+            InsufficientMemoryError,
+        ):
             # Already specific + actionable — propagate unchanged.
             raise
         except LemonadeClientError as e:
@@ -5670,6 +5910,60 @@ class LemonadeClient:
             elif event_type == "error":
                 raise LemonadeClientError(event.get("error", "Unknown"))
         return download_complete
+
+    def _check_free_memory(self, model_name: str, ctx_size: Optional[int]) -> None:
+        """Refuse a load that would run this machine out of memory.
+
+        Only for a model GAIA knows the size of, on a Lemonade on this machine.
+        Raises :class:`InsufficientMemoryError` with what to close, and
+        :class:`LemonadeClientError` when free memory cannot be read: loading
+        blind is what let the kernel kill the app on a 16 GB PC.
+        """
+        requirement = find_model_requirement(model_name)
+        if (
+            requirement is None
+            or not requirement.size_gb
+            or not _is_local_url(self.base_url)
+        ):
+            return
+        from gaia.llm.model_fit import ModelFitError, check_free_memory, kv_cache_gb
+
+        try:
+            free, resident = _free_memory_snapshot(self.base_url)
+        except ModelFitError as e:
+            raise LemonadeClientError(
+                f"Cannot tell whether {model_name} fits in memory, so it was not "
+                f"loaded: {e}"
+            ) from e
+        except LemonadeClientError as e:
+            raise LemonadeClientError(
+                f"Cannot read free memory from Lemonade at {self.base_url} before "
+                f"loading {model_name}: {e} Check that Lemonade is running "
+                "(`gaia init --check`)."
+            ) from e
+        if free is None:
+            self.log.debug(
+                f"Free GPU memory is not reported here; loading {model_name} "
+                "without a free-memory check (Lemonade fails a load that does "
+                "not fit the GPU)."
+            )
+            return
+        free = _with_own_memory(free, resident, requirement)
+        window = ctx_size or requirement.min_ctx_size
+        verdict = check_free_memory(
+            requirement.size_gb,
+            kv_cache_gb(requirement.kv_bytes_per_token, window),
+            free.limit_gb,
+        )
+        if not verdict.fits:
+            _forget_fitted_ctx(self.base_url, requirement.model_id)
+            raise InsufficientMemoryError(
+                f"Not enough free memory to load {model_name} with a "
+                f"{window:,}-token window: {verdict.reason}. Close apps that use "
+                "a lot of memory (web browsers, games, other AI apps, or another "
+                "Lemonade server and the models it holds), then try again. "
+                f"See {FREE_MEMORY_HELP_URL}"
+            )
 
     def load_model(
         self,
@@ -5779,6 +6073,7 @@ class LemonadeClient:
             LemonadeClientError: If model loading fails
         """
         self.log.debug(f"Loading {model_name}")
+        self._check_free_memory(model_name, ctx_size)
 
         managed_embedder = manages_embedder_backend(model_name)
         # An embedder load saves its options; never save the chat flags.
@@ -5803,6 +6098,14 @@ class LemonadeClient:
             llamacpp_args = EMBEDDER_LLAMACPP_ARGS
 
         request_data = {"model_name": model_name}
+        # The user's choice is for chat models; the embedder keeps its own.
+        chosen_backend = (
+            None
+            if model_name in EMBEDDER_MODELS
+            else self.chosen_backend_for(model_name)
+        )
+        if chosen_backend:
+            request_data["llamacpp_backend"] = chosen_backend
         if managed_embedder:
             with _PINNED_BACKENDS_LOCK:
                 fell_back = (self.base_url, model_name) in _CPU_FALLBACK_EMBEDDERS
@@ -5937,6 +6240,12 @@ class LemonadeClient:
                     raise LemonadeClientError(
                         f"Failed to load {model_name}: {original_error}. "
                         f"{backend_crash_remedy(model_name)}"
+                        f"{_chosen_backend_hint(chosen_backend)}"
+                    ) from e
+                if chosen_backend and not isinstance(e, LemonadeAuthError):
+                    raise LemonadeClientError(
+                        f"Failed to load {model_name}: {original_error}."
+                        f"{_chosen_backend_hint(chosen_backend)}"
                     ) from e
                 if isinstance(e, LemonadeClientError):
                     raise

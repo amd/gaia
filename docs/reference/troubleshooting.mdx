@@ -103,6 +103,15 @@ icon: "bug"
     pass `--skip-webui-build` or set `GAIA_SKIP_WEBUI_BUILD=1`.
   </Accordion>
 
+  <Accordion title="GAIA runs a second Lemonade next to mine" icon="clone">
+    GAIA runs its own private Lemonade Server unless you tell it to use yours, so a
+    PC that already runs Lemonade can end up with two servers and two copies of each
+    model. Point GAIA at yours with `gaia lemonade connect http://localhost:13305`, or
+    in the Agent UI under **Settings → Advanced → Model server**. Switching stops
+    GAIA's own server. See
+    [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
+  </Accordion>
+
   <Accordion title="gaia init can't download or start Lemonade Server" icon="cloud-slash">
     `gaia init` downloads GAIA's own Lemonade Server from GitHub into `~/.gaia/lemonade`
     and starts it on a private port. It needs no admin rights and never uses a package
@@ -361,6 +370,44 @@ icon: "bug"
     ```
   </Accordion>
 </AccordionGroup>
+
+---
+
+## Not enough free memory
+
+GAIA checks free memory before it loads a model, so a PC that is short on memory
+gets a message instead of a crash. The message says how much the model needs and
+how much is free:
+
+```
+Not enough free memory to load Gemma-4-E4B-it-GGUF with a 32,768-token window:
+it needs about 7.8 GB and only 6.0 GB is free.
+```
+
+**Fix:** close apps that use a lot of memory, then send your message again.
+Web browsers, games, other AI apps and another Lemonade server with models loaded
+are the usual ones. On a 16 GB PC, about 8 GB free is the least Gemma-4-E4B loads
+in, and about 11 GB free when GAIA starts gets it the full window.
+
+What GAIA does on a small PC:
+
+- **The context window shrinks to fit.** Gemma-4-E4B loads with a 65,536-token
+  window when there is room, and otherwise steps down in 8,192-token steps to no
+  less than 32,768. The log says so. Restart GAIA after freeing memory to get the
+  full window back.
+- **Below 32,768 tokens, GAIA refuses.** The flagship's prompt and tools alone
+  take about 20,000 tokens, so a smaller window could not answer.
+- **Under 24 GB of RAM, the Agent UI loads the model with your first message**,
+  not at startup. That first answer takes longer.
+- **Another Lemonade counts as used memory.** GAIA runs its own Lemonade, so a
+  server you started yourself keeps its models loaded beside GAIA's. To have GAIA
+  use that server instead, set `LEMONADE_BASE_URL` (see
+  [`gaia init`](/reference/cli#init-command), "Another Lemonade Server").
+
+On a graphics card, GAIA reads free memory only for an AMD card on Linux.
+Elsewhere a model that does not fit the card fails in Lemonade with its own
+error. To run the chat model in the cloud instead, see
+[AI providers](/guides/ai-providers).
 
 ---
 
