@@ -1463,9 +1463,12 @@ backend (`gaia chat --ui`) must already be running.
 | `--port` | `8766` | Port for the MCP server |
 | `--backend` | `http://localhost:4200` | GAIA Agent UI backend URL |
 | `--stdio` | off | Use stdio transport instead of HTTP (Claude Code / eval runner integration) |
+| `--allow-remote` | off | Allow a non-loopback `--host`. Requires a bearer token of 32+ characters in `GAIA_AGENT_UI_MCP_TOKEN` |
 
 Over HTTP, any request carrying a browser `Origin` header is refused with 403,
-so a web page can't drive the server. See
+so a web page can't drive the server. A non-loopback `--host` is refused unless
+`--allow-remote` is given with a token, sent by clients as
+`Authorization: Bearer <token>`. See
 [Agent UI MCP Server](/guides/mcp/agent-ui#drive-a-turn-without-a-browser) for
 the tools that run a turn unattended.
 

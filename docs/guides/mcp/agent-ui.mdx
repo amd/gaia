@@ -259,6 +259,18 @@ own origin. A web page you visit therefore can't drive it. MCP clients send no
 `Origin` and are unaffected. The backend's own `X-Gaia-UI` header and origin
 checks still apply to every call this server makes.
 
+It listens on loopback only. A `--host` that other machines can reach, such as
+`0.0.0.0` or a LAN IP, is refused at startup unless you pass `--allow-remote`
+and put a bearer token of at least 32 characters in `GAIA_AGENT_UI_MCP_TOKEN`.
+Clients then send `Authorization: Bearer <token>` on every request. A missing or
+wrong token gets 401. The token is read from the environment, not the command
+line, and is never logged or echoed.
+
+```bash
+export GAIA_AGENT_UI_MCP_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+uv run python -m gaia.mcp.servers.agent_ui_mcp --host 0.0.0.0 --allow-remote
+```
+
 ---
 
 ## Architecture
@@ -294,6 +306,7 @@ The MCP server is a thin wrapper around the Agent UI REST API. When you call `se
 | `--stdio` | off | Use stdio transport (for Claude Code) |
 | `--port` | `8766` | HTTP MCP server port |
 | `--host` | `localhost` | HTTP MCP server host |
+| `--allow-remote` | off | Allow a non-loopback `--host`; requires a 32+ character token in `GAIA_AGENT_UI_MCP_TOKEN` |
 | `--backend` | `http://localhost:4200` | Agent UI backend URL |
 
 ---

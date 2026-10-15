@@ -26,7 +26,11 @@ import requests
 from gaia.logger import route_console_logging_to_stderr
 from gaia.mcp.ports import AGENT_UI_MCP_PORT
 from gaia.mcp.servers.agent_ui_control import (
+    REMOTE_TOKEN_ENV,
+    RemoteBindError,
     TurnRegistry,
+    remote_app,
+    remote_token,
     transport_security_settings,
 )
 from gaia.ui.sse_handler import (
@@ -1059,12 +1063,30 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     return mcp
 
 
-def run_http(mcp: "MCPServer", host: str, port: int) -> None:
+def http_bind_token(host: str, allow_remote: bool) -> Optional[str]:
+    """Check an HTTP bind up front; the bearer token a remote bind needs.
+
+    Raises :class:`RemoteBindError` for a non-loopback host without
+    ``--allow-remote`` and a token in ``GAIA_AGENT_UI_MCP_TOKEN``.
+    """
+    return remote_token(host, allow_remote, os.environ.get(REMOTE_TOKEN_ENV))
+
+
+def run_http(
+    mcp: "MCPServer", host: str, port: int, token: Optional[str] = None
+) -> None:
     """Serve over streamable HTTP, refusing any request a web page sends.
 
     This server can answer permission prompts, so the SDK's default -- which
-    trusts any ``http://localhost:*`` origin -- is too loose.
+    trusts any ``http://localhost:*`` origin -- is too loose, and a
+    non-loopback bind is served only with a bearer token.
     """
+    if token:
+        import uvicorn
+
+        uvicorn.run(remote_app(mcp, host, token), host=host, port=port)
+        return
+    remote_token(host, False, None)  # loopback only without a token
     mcp.run(
         transport="streamable-http",
         host=host,
@@ -1096,7 +1118,20 @@ def main():
         action="store_true",
         help="Use stdio transport instead of HTTP (for Claude Code integration)",
     )
+    parser.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help=f"Allow a non-loopback --host; requires a token in {REMOTE_TOKEN_ENV}",
+    )
     args = parser.parse_args()
+
+    token = None
+    if not args.stdio:
+        try:
+            token = http_bind_token(args.host, args.allow_remote)
+        except RemoteBindError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise SystemExit(2) from e
 
     mcp = create_agent_ui_mcp(backend_url=args.backend)
 
@@ -1116,7 +1151,7 @@ def main():
             print(f"   Tools: {tool_count} registered\n")
         except AttributeError:
             logger.debug("MCPServer tool registry layout changed; skipping tool count")
-        run_http(mcp, args.host, args.port)
+        run_http(mcp, args.host, args.port, token)
 
 
 if __name__ == "__main__":

@@ -856,3 +856,151 @@ def test_an_mcp_client_without_origin_is_served(monkeypatch):
     with TestClient(_http_app(monkeypatch), base_url="http://localhost:8766") as client:
         r = client.post("/mcp", json=INIT, headers=MCP_HEADERS)
     assert r.status_code == 200
+
+
+# ── Non-loopback binds: opt-in plus bearer token ───────────────────────────
+
+TOKEN = "s3cr3t-" + "k" * 40
+NETWORK_HOSTS = ["0.0.0.0", "192.168.1.20", "10.0.0.5", "::", "my-pc.local"]
+
+
+@pytest.mark.parametrize("host", NETWORK_HOSTS)
+def test_network_bind_refused_without_opt_in(host):
+    from gaia.mcp.servers.agent_ui_control import RemoteBindError, remote_token
+
+    with pytest.raises(RemoteBindError) as exc:
+        remote_token(host, allow_remote=False, token=TOKEN)
+    assert TOKEN not in str(exc.value)
+
+
+@pytest.mark.parametrize("token", [None, "", "   ", "short-token", "x" * 31])
+def test_opt_in_without_a_real_token_is_refused(token):
+    from gaia.mcp.servers.agent_ui_control import RemoteBindError, remote_token
+
+    with pytest.raises(RemoteBindError) as exc:
+        remote_token("0.0.0.0", allow_remote=True, token=token)
+    if token and token.strip():
+        assert token not in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "host", ["localhost", "127.0.0.1", "127.0.0.5", "::1", "[::1]"]
+)
+def test_loopback_needs_no_token(host):
+    from gaia.mcp.servers.agent_ui_control import remote_token
+
+    assert remote_token(host, allow_remote=False, token=None) is None
+
+
+def test_run_http_cannot_be_called_around_the_check(monkeypatch):
+    from gaia.mcp.servers.agent_ui_control import RemoteBindError
+    from gaia.mcp.servers.agent_ui_mcp import run_http
+
+    mcp = _server(monkeypatch)
+    from unittest.mock import patch
+
+    with patch.object(mcp, "run") as run, pytest.raises(RemoteBindError):
+        run_http(mcp, "0.0.0.0", 9999)
+    run.assert_not_called()
+
+
+def _remote_client(monkeypatch):
+    from starlette.testclient import TestClient
+
+    from gaia.mcp.servers.agent_ui_control import remote_app
+
+    app = remote_app(_server(monkeypatch), "0.0.0.0", TOKEN)
+    return TestClient(app, base_url="http://192.168.1.20:8766")
+
+
+@pytest.mark.parametrize(
+    "auth",
+    [
+        None,
+        "",
+        "Bearer ",
+        "Bearer wrong-token",
+        f"Bearer {TOKEN[:-1]}",
+        f"Bearer {TOKEN}x",
+        TOKEN,  # no scheme
+        f"Basic {TOKEN}",
+        f"bearer {TOKEN}",
+    ],
+)
+def test_missing_wrong_or_empty_token_is_refused(monkeypatch, caplog, auth):
+    caplog.set_level("DEBUG")
+    headers = dict(MCP_HEADERS)
+    if auth is not None:
+        headers["Authorization"] = auth
+    with _remote_client(monkeypatch) as client:
+        r = client.post("/mcp", json=INIT, headers=headers)
+    assert r.status_code == 401
+    assert r.headers.get("www-authenticate") == "Bearer"
+    assert TOKEN not in r.text and TOKEN not in caplog.text
+
+
+def test_right_token_is_served_and_never_logged(monkeypatch, caplog, capsys):
+    caplog.set_level("DEBUG")
+    headers = {**MCP_HEADERS, "Authorization": f"Bearer {TOKEN}"}
+    with _remote_client(monkeypatch) as client:
+        ok = client.post("/mcp", json=INIT, headers=headers)
+        browser = client.post(
+            "/mcp", json=INIT, headers={**headers, "Origin": "http://192.168.1.20"}
+        )
+    assert ok.status_code == 200
+    assert browser.status_code == 403  # a token does not let a web page in
+    out = capsys.readouterr()
+    for text in (caplog.text, out.out, out.err, ok.text, browser.text):
+        assert TOKEN not in text
+
+
+def test_main_serves_a_network_bind_only_with_opt_in_and_token(monkeypatch, capsys):
+    from unittest.mock import patch
+
+    from gaia.mcp.servers import agent_ui_mcp
+    from gaia.mcp.servers.agent_ui_control import BearerTokenMiddleware
+
+    server = _server(monkeypatch)
+    monkeypatch.setenv("GAIA_AGENT_UI_MCP_TOKEN", TOKEN)
+    argv = ["agent_ui_mcp", "--host", "0.0.0.0", "--port", "9877", "--allow-remote"]
+    with (
+        patch.object(agent_ui_mcp, "create_agent_ui_mcp", return_value=server),
+        patch.object(server, "run") as sdk_run,
+        patch("uvicorn.run") as uv_run,
+        patch.object(agent_ui_mcp.sys, "argv", argv),
+    ):
+        agent_ui_mcp.main()
+    sdk_run.assert_not_called()
+    app = uv_run.call_args.args[0]
+    assert isinstance(app, BearerTokenMiddleware)
+    assert uv_run.call_args.kwargs == {"host": "0.0.0.0", "port": 9877}
+    out = capsys.readouterr()
+    assert TOKEN not in out.out and TOKEN not in out.err
+
+
+@pytest.mark.parametrize("allow_remote", [False, True])
+def test_cli_refusal_never_echoes_the_token(monkeypatch, capsys, allow_remote):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from gaia import cli
+
+    secret = "abc123-not-long-enough" if allow_remote else TOKEN
+    monkeypatch.setenv("GAIA_AGENT_UI_MCP_TOKEN", secret)
+    args = SimpleNamespace(
+        backend="http://backend",
+        stdio=False,
+        host="192.168.1.20",
+        port=9879,
+        allow_remote=allow_remote,
+    )
+    with (
+        patch("gaia.mcp.servers.agent_ui_mcp.create_agent_ui_mcp") as create,
+        pytest.raises(SystemExit) as exc,
+    ):
+        cli.handle_mcp_serve(args)
+    assert exc.value.code == 2
+    create.assert_not_called()
+    out = capsys.readouterr()
+    assert secret not in out.out and secret not in out.err
+    assert "GAIA_AGENT_UI_MCP_TOKEN" in out.err

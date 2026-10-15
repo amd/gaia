@@ -18,6 +18,8 @@ Kept free of the optional ``mcp`` dependency so it is unit-testable on its own.
 
 from __future__ import annotations
 
+import hmac
+import ipaddress
 import json
 import math
 import re
@@ -1042,24 +1044,117 @@ class TurnRegistry:
 
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
+#: Bearer token a non-loopback bind requires. Read from the environment only,
+#: so it never sits in argv, where other local users can read it.
+REMOTE_TOKEN_ENV = "GAIA_AGENT_UI_MCP_TOKEN"
+MIN_TOKEN_CHARS = 32
+
+
+class RemoteBindError(ValueError):
+    """A non-loopback bind without the opt-in and token it requires."""
+
+
+def is_loopback_host(host: str) -> bool:
+    host = (host or "").strip().strip("[]").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def remote_token(host: str, allow_remote: bool, token: Optional[str]) -> Optional[str]:
+    """The token a bind to *host* requires, or None for loopback.
+
+    This server can approve tool calls, so anything reachable from the
+    network must be both explicitly opted into and authenticated.
+    """
+    if is_loopback_host(host):
+        return None
+    if not allow_remote:
+        raise RemoteBindError(
+            f"Refusing to listen on {host!r}: it is reachable from the network, "
+            "and this server can approve tool calls. Bind to localhost, or pass "
+            f"--allow-remote with a token of at least {MIN_TOKEN_CHARS} "
+            f"characters in {REMOTE_TOKEN_ENV}."
+        )
+    token = (token or "").strip()
+    if len(token) < MIN_TOKEN_CHARS:
+        raise RemoteBindError(
+            f"--allow-remote needs a bearer token of at least {MIN_TOKEN_CHARS} "
+            f"characters in {REMOTE_TOKEN_ENV} (it is missing or too short). "
+            'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(32))"'
+        )
+    return token
+
+
+class BearerTokenMiddleware:
+    """ASGI guard for a remote bind: no browser origin, and the right token.
+
+    The token is compared in constant time and never echoed: the refusal
+    bodies are fixed strings.
+    """
+
+    def __init__(self, app, token: str) -> None:
+        self.app = app
+        self._expected = f"Bearer {token}".encode("utf-8")
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        if b"origin" in headers:
+            await _plain(send, 403, b"Browser requests are refused.")
+            return
+        given = headers.get(b"authorization", b"")
+        if not given or not hmac.compare_digest(given, self._expected):
+            await _plain(send, 401, b"Missing or invalid bearer token.", bearer=True)
+            return
+        await self.app(scope, receive, send)
+
+
+async def _plain(send, status: int, body: bytes, bearer: bool = False) -> None:
+    headers = [
+        (b"content-type", b"text/plain"),
+        (b"content-length", str(len(body)).encode()),
+    ]
+    if bearer:
+        headers.append((b"www-authenticate", b"Bearer"))
+    await send({"type": "http.response.start", "status": status, "headers": headers})
+    await send({"type": "http.response.body", "body": body})
+
 
 def transport_security_settings(host: str):
-    """Transport settings that refuse every browser-originated request.
+    """Loopback transport settings that refuse every browser-originated request.
 
     MCP clients send no ``Origin``; browsers always do on a cross-origin
     ``POST``. With no allowed origins, any page -- including one served from
     another localhost port -- is refused, so a site the user visits cannot
-    answer a prompt. ``Host`` is pinned to loopback (plus an explicitly bound
-    host) against DNS rebinding.
+    answer a prompt. ``Host`` is pinned to loopback against DNS rebinding.
     """
     from mcp.server.transport_security import TransportSecuritySettings
 
-    hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
-    if host and host not in LOOPBACK_HOSTS:
-        bracketed = f"[{host}]" if ":" in host else host
-        hosts.append(f"{bracketed}:*")
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=hosts,
+        allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
         allowed_origins=[],
     )
+
+
+def remote_app(mcp, host: str, token: str):
+    """The streamable-HTTP app for an opted-in remote bind, token-guarded.
+
+    Host pinning is off because LAN clients address the machine by its own
+    name or IP; the bearer token and the Origin refusal carry the guard.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    app = mcp.streamable_http_app(
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=False
+        ),
+        host=host,
+    )
+    return BearerTokenMiddleware(app, token)
