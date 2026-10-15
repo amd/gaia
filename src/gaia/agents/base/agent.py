@@ -7593,9 +7593,7 @@ Do NOT wrap conversational replies in JSON.
             keep = bool(answer and answer.strip()) and (
                 keep_answer or bool(self._unrecovered_errors())
             )
-            answer = f"{answer}
-
-{report}" if keep else report
+            answer = f"{answer}\n\n{report}" if keep else report
         elif answer and answer.strip() and not self._unrecovered_errors():
             self._note_ungrounded(answer, getattr(self, "_current_query", ""))
         # Items already extracted stay visible when the turn runs out.
