@@ -349,6 +349,33 @@ func (l localRunner) checkBinary(_ context.Context, cfg Config) Row {
 func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	row := Row{Key: KeyLemonade}
 
+	choice, err := lemonade.ReadChoice()
+	if err != nil {
+		row.State = StateFailed
+		row.Disposition = status.DispositionHalt
+		row.Line = "GAIA's config cannot be read"
+		row.Detail = err.Error() + "."
+		row.Raw = err.Error()
+		return row
+	}
+	if external, active, err := lemonade.SavedExternal(); active {
+		if err != nil {
+			row.State = StateFailed
+			row.Disposition = status.DispositionHalt
+			row.Line = "your Lemonade Server is not set"
+			row.Detail = err.Error() + "."
+			row.Raw = err.Error()
+			return row
+		}
+		// The user's own server: GAIA starts nothing for it, whatever it finds.
+		return l.checkExternalLemonade(ctx, row, external)
+	}
+	if offersRunningLemonade(choice) {
+		if found, ok := detectRunningLemonade(ctx); ok {
+			return offerRow(found)
+		}
+	}
+
 	base, reachable, probe := probeLemonade(ctx)
 	row.Raw = probe
 
@@ -480,8 +507,8 @@ func readEmbeddedLemonade() *embeddedLemonade {
 //
 // LEMONADE_API_KEY wins when set, so an explicitly configured credential is
 // never overridden by whatever a local state file happens to hold.
-func lemonadeAPIKey() string {
-	return lemonade.APIKeyFor(lemonade.ResolveBaseURL(""))
+func lemonadeAPIKey() (string, error) {
+	return lemonade.APIKeyFor(context.Background(), lemonade.ResolveBaseURL(""))
 }
 
 // It returns the base URL it settled on, whether it answered, and a trace for
@@ -524,7 +551,12 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 			traces = append(traces, fmt.Sprintf("GET %s/models -> %v", b, err))
 			continue
 		}
-		if key := lemonade.APIKeyFor(b); key != "" {
+		key, err := lemonade.APIKeyFor(ctx, b)
+		if err != nil {
+			traces = append(traces, err.Error())
+			continue
+		}
+		if key != "" {
 			req.Header.Set("Authorization", "Bearer "+key)
 		}
 		resp, err := probeClient.Do(req)
@@ -952,6 +984,12 @@ var lemonadeNotInstalled = func() bool {
 }
 
 func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress func(Progress)) FixResult {
+	switch kind {
+	case FixUseRunningLemonade:
+		return l.useRunningLemonade(ctx)
+	case FixUseGAIALemonade:
+		return l.useGAIALemonade()
+	}
 	if !runsSetup(kind) {
 		return FixResult{Err: errNoFix}
 	}

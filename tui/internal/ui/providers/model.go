@@ -30,6 +30,8 @@ type loadedMsg struct {
 	restoreErr error
 	// started is when the read was sent, so a slow one cannot undo a newer one.
 	started time.Time
+	// server is the one-line Model server summary; empty when unreadable.
+	server string
 }
 type modelsMsg struct {
 	source   *lemonade.Client
@@ -94,6 +96,8 @@ type Model struct {
 	// autoConnect opens the chosen provider's key form once the first
 	// provider read lands (see WithConnect).
 	autoConnect bool
+	// server names the Lemonade in use and the backend its chat model runs on.
+	server string
 }
 
 var names = lemonade.ChatProviders
@@ -124,7 +128,13 @@ func (m Model) Init() tea.Cmd {
 		}
 		started := time.Now()
 		p, e := c.Providers(m.ctx)
-		return loadedMsg{source: c, providers: p, err: e, restoreErr: restoreErr, started: started}
+		msg := loadedMsg{source: c, providers: p, err: e, restoreErr: restoreErr, started: started}
+		if e == nil {
+			if info, err := c.ServerInfo(m.ctx); err == nil {
+				msg.server = info.StatusLine()
+			}
+		}
+		return msg
 	}
 }
 
@@ -405,6 +415,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.readAt = v.started
 		m.read = true
+		m.server = v.server
 		// A failed read keeps what is known rather than forgetting every key.
 		if v.err == nil || v.providers != nil {
 			m.providers = v.providers
@@ -746,7 +757,11 @@ func (m Model) View() string {
 			if i == m.selected {
 				label = title.Render(label)
 			}
-			lines = append(lines, label, lipgloss.NewStyle().Foreground(theme.Dim).Render("    "+desc), "")
+			lines = append(lines, label, lipgloss.NewStyle().Foreground(theme.Dim).Render("    "+desc))
+			if name == "local" && m.server != "" {
+				lines = append(lines, lipgloss.NewStyle().Foreground(theme.Dim).Render("    "+ansi.Truncate(m.server, max(1, w-4), "…")))
+			}
+			lines = append(lines, "")
 		}
 	case "setup":
 		lines = append(lines, title.Render(lemonade.Label(m.chosen())))

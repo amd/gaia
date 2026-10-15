@@ -1,0 +1,191 @@
+---
+title: "Skills SDK"
+description: "Find, load, and read GAIA skills from Python — including the reference files and scripts a skill ships beside its SKILL.md."
+---
+
+<Info>
+  **Source Code:** [`src/gaia/skills/`](https://github.com/amd/gaia/blob/main/src/gaia/skills/) ·
+  **Runnable example:** [`examples/skill_references_example.py`](https://github.com/amd/gaia/blob/main/examples/skill_references_example.py)
+</Info>
+
+A skill is a folder with a `SKILL.md` in it. `SkillManager` finds skills and
+parses them; `Agent.load_skill` puts one into an agent. For the format and the
+discovery rules, see the [Agent Skills spec](/spec/agent-skills); for ready-made
+skills to try, see [Starter Skills](/guides/starter-skills).
+
+## Find and load a skill
+
+```python
+from gaia.skills import SkillManager
+
+manager = SkillManager()                 # ~/.gaia/skills, .claude/skills
+for skill in manager.list_skills():
+    print(skill.name, "-", skill.description)
+
+skill = manager.load("research-report")  # frontmatter + body, validated
+print(skill.body)                        # the Markdown instructions
+print(skill.directory)                   # the skill's folder on disk
+```
+
+With no arguments, `SkillManager` searches `~/.gaia/skills` (moved by
+`GAIA_CONFIG_DIR`) and the read-only `./.claude/skills` and `~/.claude/skills`.
+Pass `user_skills_root=` to search another folder instead of `~/.gaia/skills`,
+`agent_skill_dirs=` to add higher-precedence folders, and
+`include_claude_roots=False` to skip the Claude Code folders.
+
+| `Skill` attribute | What it holds |
+|---|---|
+| `name`, `description` | The two required frontmatter fields |
+| `body` | The Markdown after the frontmatter — what the agent is told |
+| `directory` | The skill's folder (`None` only for a skill parsed from a string) |
+| `path` | The `SKILL.md` file itself |
+| `root` | Which search location it came from: `agent-bundled`, `user`, or `claude-import` |
+
+## Reference files and scripts
+
+A skill can ship more than its `SKILL.md`: reference documents, scripts,
+templates. Long material belongs in those files rather than in the body, because
+the body joins the agent's prompt when the skill is used and the extra files
+don't — the agent opens one only when the instructions send it there.
+
+### Folder layout
+
+```
+query-helper/
+├── SKILL.md
+├── references/
+│   └── query-syntax.md
+└── scripts/
+    └── build_query.py
+```
+
+`references/` and `scripts/` are the [Agent Skills](https://agentskills.io)
+standard's conventional names. GAIA does not treat them specially, so any folder
+name works — `reference/`, `docs/`, `templates/` — as long as the body uses the
+same path.
+
+### Point at a file from the body
+
+Write the path relative to the skill folder, and say when to read it:
+
+```markdown
+---
+name: query-helper
+description: Write search queries using our query syntax. Use when the user asks for a search query.
+---
+
+# Query helper
+
+Before writing a query, read `references/query-syntax.md` for the operators
+we support, then build the query from them.
+```
+
+### How the agent loads them
+
+1. **Listed.** Every installed skill's name and description is in the prompt.
+2. **Activated.** Loading the skill adds its body to the prompt and registers any
+   tools it provides. Nothing in `references/` or `scripts/` is read at this point.
+3. **Opened on demand.** When the instructions point at a file, the agent reads it
+   with its file tools. The `load_skill` tool tells the model the skill's folder
+   and that the paths in the instructions are relative to it.
+
+Loading a skill also lets the agent's file tools **read** that skill's folder,
+even when the session's allowed folders don't include it — a skill installed in
+`~/.gaia/skills` is not in an Agent UI session's scope otherwise. It is
+read-only: the agent still cannot write there, a path that uses `..` to leave
+the folder is refused, files that look like secrets (`.env`, keys) stay blocked,
+and `unload_skill` takes the access back.
+
+### Read a reference file from Python
+
+`skill.directory` is the folder the body's paths are relative to. This excerpt is
+from the runnable example, which builds the `query-helper` skill above in a
+temporary folder so your own skills are untouched:
+
+{/* source: examples/skill_references_example.py */}
+```python
+manager = SkillManager(user_skills_root=skills_root, include_claude_roots=False)
+
+skill = manager.load("query-helper")
+print("Skill:", skill.name)
+print("Folder:", skill.directory)
+print("\nInstructions (SKILL.md body):\n" + skill.body)
+
+# Paths in the instructions are relative to the skill's folder.
+ref = skill.directory / "references" / "query-syntax.md"
+print("Reference file:", ref.relative_to(skill.directory))
+print(ref.read_text(encoding="utf-8"))
+
+# List everything the skill ships alongside SKILL.md.
+bundled = sorted(
+    p.relative_to(skill.directory).as_posix()
+    for p in skill.directory.rglob("*")
+    if p.is_file() and p.name != "SKILL.md"
+)
+print("Bundled files:", bundled)
+```
+
+```bash
+python examples/skill_references_example.py
+```
+
+When the relative path comes from somewhere you don't control — the body, a user,
+a model — use `resource_path` instead of joining it yourself. It refuses a path
+that leaves the skill folder and names the missing file when there is none:
+
+```python
+from gaia.skills import SkillValidationError
+
+ref = manager.resource_path("query-helper", "references/query-syntax.md")
+
+try:
+    manager.resource_path("query-helper", "../other-skill/SKILL.md")
+except SkillValidationError as exc:
+    print(exc)   # Resource '../other-skill/SKILL.md' escapes skill 'query-helper' ...
+```
+
+### Use a skill inside your own agent
+
+Call `self.load_skill(name)` in `_register_tools`. The body goes into the system
+prompt, any tools the skill provides register under `<skill-name>/<tool>`, and
+the skill's folder becomes readable by the agent's file tools. `SKILL_DIRS` adds
+folders to search ahead of `~/.gaia/skills`:
+
+{/* doc-test: agent */}
+```python
+from gaia import Agent
+from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.security import PathValidator
+
+
+class QueryAgent(Agent, FileIOToolsMixin):
+    SKILL_DIRS = ["./skills"]            # holds query-helper/
+
+    def __init__(self, **kwargs):
+        self.path_validator = PathValidator(allowed_paths=["./workspace"])
+        super().__init__(**kwargs)
+
+    def _get_system_prompt(self) -> str:
+        return "You write search queries."
+
+    def _register_tools(self):
+        self.register_file_io_tools()    # read_file, write_file, ...
+        self.load_skill("query-helper")  # ./skills/query-helper is now readable
+```
+
+<Note>
+`self.load_skill()` puts the body in the prompt but not the folder's location,
+so the model sees `references/query-syntax.md` without knowing where that is.
+When the model activates a skill itself — through the `load_skill` tool from the
+`skills` tool mixin, which the flagship `gaia` agent has — the tool's result
+carries the folder. For a skill your code loads, either give the agent that mixin
+or have your prompt say where the skill lives (`skill.directory`, returned by
+`load_skill`).
+</Note>
+
+## Related
+
+- [Agent Skills spec](/spec/agent-skills) — discovery roots, precedence, permissions, tiers
+- [Starter Skills](/guides/starter-skills) — ready-made skills to install and fork
+- [Composing Skills](/guides/composing-skills) — bundle skills with an agent and pick a set at runtime
+- [CLI Reference → Skills](/reference/cli#skills) — `gaia skill list|info|create|import|export`

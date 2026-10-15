@@ -481,6 +481,58 @@ class AttachDocumentRequest(BaseModel):
     ```
   </Accordion>
 
+  <Accordion title="GET /api/system/model-server">
+    Which Lemonade GAIA talks to and what it runs, read from Lemonade's `/health` and `/system-info`. Always `200`: an unreachable server comes back as `reachable: false` with a one-line `error`. A field Lemonade did not report is `null`.
+
+    **Response:**
+    ```json
+    {
+      "reachable": true,
+      "error": null,
+      "base_url": "http://localhost:13305/api/v1",
+      "port": 13305,
+      "owner": "gaia",
+      "version": "2026.41.1",
+      "chat_model": {
+        "name": "Qwen3.6-35B-A3B-GGUF",
+        "recipe": "llamacpp",
+        "device": "gpu",
+        "backend": "vulkan",
+        "backend_source": "lemonade_default",
+        "ctx_size": 65536
+      },
+      "embedding_model": { "name": "embeddinggemma-300m-GGUF", "backend": "vulkan", "...": "..." },
+      "default_backend": "vulkan",
+      "available_backends": [
+        { "name": "vulkan", "state": "installed" },
+        { "name": "rocm", "state": "installable" },
+        { "name": "cpu", "state": "installed" }
+      ],
+      "preferred_backend": null,
+      "system_info_error": null
+    }
+    ```
+
+    | Field | Description |
+    |-------|-------------|
+    | `owner` | `gaia` (GAIA's own Lemonade), `user` (another Lemonade on this PC), or `remote` |
+    | `backend` | `vulkan`, `rocm`, `metal`, `cpu`, `npu`, `remote` (a cloud model), or `null` when Lemonade did not say |
+    | `backend_source` | `requested` (named by the load), `launch` (read from the llama-server path), or `lemonade_default` |
+    | `available_backends` | llama.cpp backends Lemonade can run here; `unsupported` ones are never listed |
+    | `preferred_backend` | The saved choice; `null` means Auto |
+  </Accordion>
+
+  <Accordion title="PUT /api/system/model-server/backend">
+    Save the llama.cpp backend for chat models as `llamacpp_backend` in `~/.gaia/config.json`. It applies the next time a chat model loads; the embedding model keeps its own backend.
+
+    **Request:**
+    ```json
+    { "backend": "rocm" }
+    ```
+
+    `backend` is `auto` or one of the names in `available_backends`. Returns the refreshed `GET /api/system/model-server` body. `400` when the backend is not available on this machine, `503` when Lemonade is not answering.
+  </Accordion>
+
   <Accordion title="POST /api/system/load-model">
     Trigger loading a model on the Lemonade server. Returns `202` immediately; loading proceeds in the background. Poll `GET /api/system/status` to detect when loading completes.
 
@@ -496,6 +548,8 @@ class AttachDocumentRequest(BaseModel):
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to load. |
     | `ctx_size` | number | No | Context window size in tokens. Defaults to `32768`. |
+
+    When `llamacpp_backend` is set in `~/.gaia/config.json` and the model runs on llama.cpp, the load asks Lemonade for that backend.
 
     **Response (202):**
     ```json
@@ -533,7 +587,7 @@ class AttachDocumentRequest(BaseModel):
   </Accordion>
 
   <Accordion title="POST /api/system/warm-up">
-    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. Returns the warm-up state. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
+    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, and on a PC with under 24 GB of RAM, where the model loads with the first message instead. Returns the warm-up state. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
 
     **Response:**
     ```json
@@ -726,11 +780,16 @@ class AttachDocumentRequest(BaseModel):
       "stdout": "total 42\n...",
       "stderr": "",
       "return_code": 0,
+      "expected_exit": null,
       "cwd": "/home/user/project",
       "duration_seconds": 0.15,
       "truncated": false
     }
     ```
+
+    `success` is `false` when the tool reports `status: "error"` or a non-zero
+    `return_code`. The exception is an exit the tool names in `expected_exit`,
+    such as grep's exit 1 for "no match": that result stays `success: true`.
 
     **Response Content**
 
@@ -1756,6 +1815,42 @@ so the two can never disagree about whether GAIA is set up.
   <Accordion title="POST /api/setup/cancel">
     Stop a running setup. Anything already downloaded is kept. Returns
     `{"cancelled": bool}`.
+  </Accordion>
+</AccordionGroup>
+
+### Lemonade server
+
+Which Lemonade Server GAIA uses: its own, or one the user already runs. Same
+choice and checks as `gaia lemonade connect` and `gaia config set lemonade_mode`.
+All three routes need the `X-Gaia-UI: 1` header (**403** without it).
+
+<AccordionGroup>
+  <Accordion title="GET /api/lemonade/target">
+    The server GAIA uses now and who chose it: `mode` (`gaia` or `external`),
+    `saved_mode` (`null` until someone chooses), `source`, `base_url`,
+    `saved_base_url`, `api_key_stored`, `env_override` (a warning when
+    `LEMONADE_BASE_URL` overrides the setting), `gaia_installed`, `offer` (no
+    choice saved and the environment isn't choosing, so the UI should offer the
+    switch), and `what_gaia_does`. **409** when the config is unreadable or the
+    saved choice is unusable; `detail` names the fix.
+  </Accordion>
+
+  <Accordion title="GET /api/lemonade/detect">
+    A Lemonade the user already runs on this PC's default ports:
+    `{"found": {"url", "status", "version", "minimum", "message"}}`, or
+    `{"found": null}` when none answers. `status` is `ok`, `needs_key`,
+    `bad_key`, `too_old`, `not_lemonade`, or `unreachable`.
+  </Accordion>
+
+  <Accordion title="POST /api/lemonade/target">
+    Switch servers. Body: `{"mode": "gaia" | "external", "base_url": "...",
+    "api_key": "..."}`; the URL and key are only for `external`. Nothing is
+    saved unless the user's server checks out. A running daemon is told to
+    stop (or start) GAIA's own server, and cached agents are dropped. Returns
+    the `GET` shape plus `daemon`. **422** when the server can't be used
+    (`detail.message`, `detail.status`), **409** for an unreadable config,
+    **403** over mobile access, **502** when it saved but the daemon did not
+    switch.
   </Accordion>
 </AccordionGroup>
 

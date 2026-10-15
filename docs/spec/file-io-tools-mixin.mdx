@@ -131,6 +131,38 @@ see [Read before edit](#read-before-edit).
 }
 ```
 
+**Word, PDF and Excel files** (`.docx`, `.pdf`, `.xlsx`) return their extracted
+text instead of `[Binary file]`, one part at a time. A part is at most the
+model's tool-result budget (`limit` can shrink it) and ends on a line break:
+
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "file_type": "docx" | "pdf" | "xlsx",
+    "content": str,             # PDF text carries [Page N], Excel [Sheet: name]
+    "offset": int,
+    "total_chars": int,
+    "next_offset": int | None,  # None once the end is reached
+    "pages": int,               # PDF only
+    "sheets": int,              # Excel only
+    "warning": str,             # Excel formulas with no saved value, which read as blank
+    "note": str,                # present while more remains: where to continue
+    "hint": str,                # first part of a document over 3 reads: retrieval is cheaper
+}
+```
+
+`start_line`/`end_line` work on the extracted text too. Extraction is cached
+per file while it is unchanged, so paging does not re-parse it. A scanned PDF
+with no text layer, an encrypted one, or a corrupt file is an error naming the
+file; `.doc`, `.pptx`, `.xls` and the OpenDocument formats are an error pointing
+at `index_document`.
+
+When the agent also has `index_document`, the mixin adds a short
+`READING DOCUMENTS` prompt fragment: to review, compare, reconcile, audit or
+summarise a few documents, read each in full with `read_file`; index and query
+only a large collection or a single fact.
+
 ### 2. write_python_file
 
 Write Python code to a file with syntax validation.

@@ -142,6 +142,10 @@ const (
 	// FixConnectProvider — hand off to the provider panel to connect the cloud
 	// provider the user chose and pick one of its models.
 	FixConnectProvider
+	// FixUseRunningLemonade — save the Lemonade already running here as GAIA's.
+	FixUseRunningLemonade
+	// FixUseGAIALemonade — save that GAIA uses its own Lemonade.
+	FixUseGAIALemonade
 )
 
 // Label is the key hint shown next to `f`.
@@ -163,6 +167,10 @@ func (k FixKind) Label() string {
 		return "choose"
 	case FixConnectProvider:
 		return "connect it now"
+	case FixUseRunningLemonade:
+		return "use this Lemonade"
+	case FixUseGAIALemonade:
+		return "use GAIA's own"
 	default:
 		return ""
 	}
@@ -232,6 +240,8 @@ type Row struct {
 	Remedy Remedy
 	// Fix is what `f` does on this row, FixNone when nothing is safe.
 	Fix FixKind
+	// DeclineFix is what `g` does: the other answer to a choice `f` offers.
+	DeclineFix FixKind
 	// AutoFix marks a Fix the screen applies once on its own, without a
 	// keypress: starting a local daemon or agent that is simply not running.
 	AutoFix bool

@@ -936,6 +936,14 @@ class WebClient:
             "https://html.duckduckgo.com/html/",
             data={"q": query, "b": ""},
         )
+        # A blocked or challenged search is not "no results" (DDG answers an
+        # automated-traffic check with 202 and a page that holds none).
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"DuckDuckGo answered HTTP {response.status_code}, so no results "
+                "were read. It may be rate-limiting automated searches; wait a "
+                "minute before searching again."
+            )
 
         soup = self.parse_html(response.text)
         results = []

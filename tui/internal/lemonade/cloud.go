@@ -221,7 +221,11 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 		return fmt.Errorf("Invalid Lemonade address")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := APIKeyFor(base); key != "" {
+	key, err := APIKeyFor(ctx, base)
+	if err != nil {
+		return err
+	}
+	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	resp, err := c.HTTP.Do(req)

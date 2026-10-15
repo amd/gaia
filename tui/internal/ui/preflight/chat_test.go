@@ -199,7 +199,7 @@ func TestTheLocalOptionSaysWhetherItFitsThisPC(t *testing.T) {
 		want     string
 	}{
 		"fits":    {lemonade.Capacity{MemoryGB: 16, MemorySource: "System RAM", DiskFreeGB: -1}, nil, "Gemma-4-E4B-it-GGUF fits: this PC has 16 GB for models (System RAM)."},
-		"too big": {lemonade.Capacity{MemoryGB: 2, MemorySource: "System RAM", DiskFreeGB: -1}, nil, "Gemma-4-E4B-it-GGUF will not fit: needs ~4 GB of memory; this PC has 2 GB (System RAM)."},
+		"too big": {lemonade.Capacity{MemoryGB: 2, MemorySource: "System RAM", DiskFreeGB: -1}, nil, "Gemma-4-E4B-it-GGUF will not fit: needs ~5 GB of memory; this PC has 2 GB (System RAM)."},
 		"unknown": {lemonade.Capacity{}, errors.New("no system-info"), "Setup picks the model that fits this PC's memory."},
 	} {
 		t.Run(name, func(t *testing.T) {

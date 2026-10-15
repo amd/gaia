@@ -262,6 +262,14 @@ step:
 `esc` cancels it. If setup stops, the screen says why and `d` shows its full
 output; `gaia init` does the same work from a terminal.
 
+If this PC already runs a Lemonade Server (v10.9.0 or newer) on its default
+port, the Lemonade row offers it instead of step 1: press `f` to use it, or `g`
+to install GAIA's own. Using yours keeps one server and one copy of each model
+on the PC. A server that needs an API key shows the `gaia lemonade connect`
+command that saves the key. The choice is remembered. To switch back, run
+`gaia config set lemonade_mode gaia`. See
+[Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
+
 When setup finishes, the gate checks the models by **loading** them once — the
 chat model, and the embedding model that document search and memory use — and
 only then says it is ready, naming the chat model and its size:
@@ -761,6 +769,19 @@ number. A cloud provider trades that for network latency and privacy.
 
 **It quit with no message.** `gaia-tui status` shows the background service and
 what is installed.
+
+**Is it running on Vulkan, ROCm or the CPU?** `gaia-tui status` prints a
+**Model server** line, and `/provider` shows the same under **Local**:
+
+```text
+Model server:        Lemonade 2026.41.1 (GAIA's own) at localhost:51234 · Qwen3.6-35B-A3B-GGUF on Vulkan (default), 64K ctx
+```
+
+`(default)` means Lemonade picked the backend; `unknown` means this Lemonade
+does not report it. To choose one, run `gaia config set llamacpp_backend rocm`
+(or `vulkan`, `cpu`, `auto`), or use Settings → Advanced → Model server in the
+Agent UI, which lists only the backends this PC can run. It applies the next
+time the chat model loads.
 
 ## Next steps
 
