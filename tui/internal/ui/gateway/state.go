@@ -23,6 +23,35 @@ type State struct {
 	// them. The Python side records learned model capabilities here; a
 	// round-trip through the TUI must not cost that.
 	extra map[string]json.RawMessage
+
+	// unavailable is read from extra["unavailable_models"], which the Python
+	// client writes when the gateway answers 404 for a model. Read-only here.
+	unavailable map[string]Unavailability
+}
+
+// Unavailability is a model's last recorded "not found" from the gateway.
+type Unavailability struct {
+	Status int    `json:"status"`
+	At     string `json:"at"`
+}
+
+// Describe says when the model failed, in one short clause.
+func (u Unavailability) Describe() string {
+	status := u.Status
+	if status == 0 {
+		status = 404
+	}
+	when := strings.TrimSuffix(strings.Replace(u.At, "T", " ", 1), "Z")
+	if when == "" {
+		return fmt.Sprintf("answered HTTP %d", status)
+	}
+	return fmt.Sprintf("answered HTTP %d on %s UTC", status, when)
+}
+
+// Unavailable reports the recorded failure for a model, if any.
+func (s State) Unavailable(id string) (Unavailability, bool) {
+	u, ok := s.unavailable[id]
+	return u, ok
 }
 
 // ownedKeys are the fields State models itself; everything else in the file
@@ -73,6 +102,13 @@ func LoadState() (State, error) {
 	}
 	for _, own := range ownedKeys {
 		delete(state.extra, own)
+	}
+	if raw, ok := state.extra["unavailable_models"]; ok {
+		if err := json.Unmarshal(raw, &state.unavailable); err != nil {
+			return State{}, fmt.Errorf(
+				"gateway settings at %s have an unreadable unavailable_models entry: %w\n"+
+					"Delete that key to start fresh", path, err)
+		}
 	}
 	if state.BaseURL == "" {
 		state.BaseURL = DefaultBaseURL

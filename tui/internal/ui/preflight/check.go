@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/daemon"
+	gaiaLemonade "github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
@@ -675,6 +676,19 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 		// automatically before the user ever sees it, and once that has failed
 		// pressing f would only repeat it.
 		lemonade.Fix = FixNone
+		if gaiaLemonade.ExternalModeActive() {
+			// The user's own server: GAIA asks no one to start anything for it.
+			down := gaiaLemonade.ProbeResult{URL: body.Lemonade.BaseURL, Status: gaiaLemonade.ProbeUnreachable}
+			lemonade.Line = "your server at " + body.Lemonade.BaseURL + " is not answering"
+			lemonade.Detail = down.Message()
+			if err := gaiaLemonade.ChoiceError(); err != nil {
+				lemonade.Line = "GAIA's Lemonade setting is unusable"
+				lemonade.Detail = err.Error() + "."
+			}
+			lemonade.Remedy = Remedy{Action: "Then press r to re-check.", Where: lemonadeDocs}
+			setRow(rep, lemonade)
+			return StateFailed, false
+		}
 		if !isLoopback(body.Lemonade.BaseURL) {
 			// The agent is pointed at another machine, so a server started here
 			// is one nothing would talk to. Not startable — by us or the daemon.
@@ -723,6 +737,14 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 			Action:  "Upgrade the local model server, then re-check.",
 			Command: "gaia init",
 			Where:   "https://lemonade-server.ai",
+		}
+		if gaiaLemonade.ExternalModeActive() {
+			old := gaiaLemonade.ProbeResult{
+				URL: body.Lemonade.BaseURL, Status: gaiaLemonade.ProbeTooOld,
+				Version: versionOr(body.Lemonade.Version, "?"), Minimum: body.Lemonade.MinVersion,
+			}
+			lemonade.Detail = old.Message()
+			lemonade.Remedy = Remedy{Action: "Then press r to re-check.", Where: "https://lemonade-server.ai"}
 		}
 		setRow(rep, lemonade)
 		return StateFailed, false
