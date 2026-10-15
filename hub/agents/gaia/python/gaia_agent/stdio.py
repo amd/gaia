@@ -85,6 +85,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     cloud_model_provider,
+    resolve_default_chat_model,
     resolve_lemonade_base_url,
     running_embedded_lemonade_url,
 )
@@ -823,22 +824,28 @@ def _format_model_list(agent: Any) -> str:
     """The ``/model`` (no-arg) answer: every switchable id, current one marked."""
     chat = agent.chat
     current = chat.effective_model
-    lines = ["**Claude (remote — sent to Anthropic):**"]
+    default = resolve_default_chat_model()
+
+    def marker(model_id: str) -> str:
+        return (" (default)" if model_id == default else "") + (
+            " ← current" if model_id == current else ""
+        )
+
+    lines = ["**Claude (cloud — sent to Anthropic):**"]
     for model_id, label in CLAUDE_MODELS.items():
-        marker = " ← current" if model_id == current else ""
-        lines.append(f"- `{model_id}` — {label}{marker}")
+        lines.append(f"- `{model_id}` — {label}{marker(model_id)}")
 
     lines.append("")
     try:
         models = _lemonade_models(_lemonade_url(agent))
     except RuntimeError as exc:
-        lines.append("**Local (Lemonade — downloaded, chat-capable models):**")
+        lines.append("**On this machine (downloaded, chat-capable models):**")
         lines.append(f"- {exc}")
     else:
         for provider, heading in (
-            (None, "Local (Lemonade — downloaded, chat-capable models)"),
-            ("fireworks", "Fireworks AI (remote — via Lemonade)"),
-            ("amd", "AMD LLM Gateway (remote — via Lemonade)"),
+            (None, "On this machine (downloaded, chat-capable models)"),
+            ("fireworks", "Fireworks AI (cloud)"),
+            ("amd", "AMD LLM Gateway (cloud)"),
         ):
             lines.append(f"**{heading}:**")
             group = [m for m in models if cloud_model_provider(m) == provider]
@@ -849,8 +856,7 @@ def _format_model_list(agent: Any) -> str:
                     else "- (not connected — run `/provider` to connect it)"
                 )
             for model_id in group:
-                marker = " ← current" if model_id == current else ""
-                lines.append(f"- `{model_id}`{marker}")
+                lines.append(f"- `{model_id}`{marker(model_id)}")
             lines.append("")
 
     lines.append("")
@@ -892,10 +898,11 @@ def run_model_command(agent: Any, query: str, out) -> None:
         use_claude=bool(agent._use_claude),
         cloud_provider_lookup=lookup if callable(lookup) else None,
     )
+    name = display if location.provider == "claude" else location.model_name
     _write(
         {
             "type": "final",
-            "answer": f"Switched to **{display}**. {location.describe()}",
+            "answer": f"Switched to **{name}** {location.placement()}",
         },
         out,
     )

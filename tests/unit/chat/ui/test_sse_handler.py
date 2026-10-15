@@ -491,6 +491,40 @@ class TestPrettyPrintJsonToolResults:
         events = _drain(handler)
         assert events[0]["success"] is False
 
+    def test_a_non_zero_exit_marks_success_false(self, handler):
+        data = {"status": "success", "command": "make", "stdout": "", "return_code": 2}
+        handler.pretty_print_json(data, title="Result")
+        assert _drain(handler)[0]["success"] is False
+
+    def test_a_failed_command_reported_as_an_error_marks_success_false(self, handler):
+        data = {
+            "status": "error",
+            "error": "'make' exited with code 2: boom",
+            "command": "make",
+            "stdout": "",
+            "stderr": "boom\n",
+            "return_code": 2,
+        }
+        handler.pretty_print_json(data, title="Result")
+        event = _drain(handler)[0]
+        assert event["success"] is False
+        assert event["command_output"]["return_code"] == 2
+
+    def test_an_expected_exit_stays_a_success(self, handler):
+        reason = "grep exits 1 when nothing matches"
+        data = {
+            "status": "success",
+            "command": "grep x f",
+            "stdout": "",
+            "return_code": 1,
+            "expected_exit": reason,
+        }
+        handler.pretty_print_json(data, title="Result")
+        event = _drain(handler)[0]
+        assert event["success"] is True
+        assert event["command_output"]["expected_exit"] == reason
+        assert event["summary"] == f"{reason} (exit 1)"
+
     def test_non_dict_data_success_is_true(self, handler):
         handler.pretty_print_json("some string", title="Result")
         events = _drain(handler)
