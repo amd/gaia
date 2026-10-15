@@ -1050,14 +1050,15 @@ rerun of the same command replaces an earlier run: if `pytest tests/` failed and
 
 ### Grounding checks
 
-Three more checks compare the answer with the turn's tool record
-(`gaia.agents.base.grounding`). They exist because small local models answer
+Four more checks compare the answer, and the files the turn wrote, with the
+turn's tool record (`gaia.agents.base.grounding`, `gaia.agents.base.deliverables`). They exist because small local models answer
 without looking and report work they never did:
 
 | Check | Fires when |
 |-------|------------|
 | look | The request names a file (that exists) or a lowercase snake_case symbol such as `parse_updated()`, and no successful read named it — a failed read, or the name appearing in a directory listing, does not count; the correction says where the file is on disk. A symbol only counts in a turn about the project (a named file exists or a tool ran), so "what does `max_tokens` do?" is not a lookup request. Or, in such a turn, the answer says something "does not exist" with no search, listing or read on record. |
-| content | The answer presents data — a table or an untagged/CSV/JSON code block — and its values (with any decimals, dates and percentages in the surrounding prose) appear in no tool output, tool argument, or earlier user or tool message. A value one arithmetic step from two grounded values the answer shows (a sum, a difference, an average of two, a ratio) counts as grounded; small whole numbers, versions and estimates are not judged. |
+| content | The answer presents data — a table or an untagged/CSV/JSON code block — and its values (with any decimals, dates and percentages in the surrounding prose) appear in no tool output or earlier user or tool message. A tool's own arguments are not evidence: a search that repeats its query does not confirm the query. A value one arithmetic step from two grounded values the answer shows (a sum, a difference, an average of two, a ratio) counts as grounded; small whole numbers, versions and estimates are not judged. |
+| file | A file the turn wrote (`.md`, `.txt`, `.csv`, `.tsv`, `.json`, and the text and table cells of `.xlsx`, `.docx`, `.pptx`; up to 5 MB) holds money, percentages or unit quantities (`27 W`, `8 GB`) that no tool result this turn, input file the tools were pointed at, or user message shows. Prices only count when the evidence shows them as prices — beside a currency, on a price line, or in a data row — so a datasheet's "60 Hz" is not a source for "$60". A scale or spelling the source doesn't use still matches: "$14.5M", "$14.5 million" and "$14,500,000" are one figure, as are "$500k" and "$500,000", "12%", "0.12" and "twelve percent", and a range like "$3–5M" and its two ends. Totals, line amounts, per-unit splits, taxes and shares computed from sourced figures pass, and a figure computed from an unsourced one is not listed beside it. Reading the file back, and the numbers a script hard-codes, are not sources. A figure the file marks as an estimate ("est.", "~", "unverified", or "all prices are estimates") is not flagged. An answer that calls the figures unverified and names them is not corrected. The correction names the file and figures and asks for any still unverified in one short line, so the answer stays about the work; the file is never edited. |
 | action | The answer says it searched, read, ran, tested, verified or documented something, and no tool of that kind ran. Negated clauses ("I did not run the tests"), advice ("once you have run it") and descriptions ("it is tested on every pull request") are not claims. |
 
 Each check asks for at most one correction per turn, before the answer is

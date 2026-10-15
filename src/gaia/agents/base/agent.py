@@ -40,7 +40,11 @@ from typing import (
     Union,
 )
 
-from gaia.agents.base.completion import CompletionEvidence, incomplete_answer
+from gaia.agents.base.completion import (
+    CompletionEvidence,
+    incomplete_answer,
+    mentioned_paths,
+)
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_KEEP_STEPS,
@@ -52,6 +56,13 @@ from gaia.agents.base.context_eviction import (
     evict_min_batch_from_env,
     evict_threshold_from_env,
     resolve_context_eviction,
+)
+from gaia.agents.base.deliverables import (
+    DELIVERABLE_SUFFIXES,
+    blocks_text,
+    file_findings,
+    input_paths,
+    read_blocks,
 )
 from gaia.agents.base.denied_effects import (
     NETWORK,
@@ -1322,6 +1333,8 @@ _LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 # Fabricated-save guard (#4010): a final answer that asserts a file was
 # written when no write tool ran this turn.
 _MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
+#: Written files whose figures are checked, and input files read as evidence.
+_MAX_CHECKED_DELIVERABLES = 8
 # Tools that could hand-edit a file save_extracted_items exported this turn.
 _INVENTORY_HAND_EDITS = frozenset(
     {
@@ -2046,6 +2059,7 @@ Do NOT wrap conversational replies in JSON.
         self._grounding_history = ""
         # Grounding gaps that survived their correction, for the scope note.
         self._turn_ungrounded: List[str] = []
+        self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
         self._budget_notices_on = budget_notices_enabled()
@@ -7841,13 +7855,65 @@ Do NOT wrap conversational replies in JSON.
         if not answer or not answer.strip():
             return []
         roots = [os.getcwd(), self._verification_project_root()]
+        answer = strip_verification_scope(answer)
         return ungrounded(
-            strip_verification_scope(answer),
+            answer,
             query or "",
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
             locate=path_locator(roots),
+        ) + self._deliverable_findings(answer, query or "", history, roots)
+
+    def _deliverable_findings(
+        self, answer: str, query: str, history: str, roots: list
+    ) -> list:
+        """Figures in files this turn wrote that no tool result supports."""
+        evidence = getattr(self, "_completion_evidence", None)
+        if evidence is None:
+            return []
+        written = [
+            path
+            for path in evidence.written_files()
+            if os.path.splitext(path)[1].lower() in DELIVERABLE_SUFFIXES
+        ][:_MAX_CHECKED_DELIVERABLES]
+        if not written:
+            return []
+        records = getattr(self, "_turn_tool_executions", None) or []
+        written_keys = {evidence.key(p) for p in written}
+        inputs = []
+        for raw in input_paths(records) + mentioned_paths(query):
+            path = path_locator(roots)(raw)
+            if path is None or evidence.key(path) in written_keys:
+                continue
+            validator = self._read_validator()
+            if (
+                validator is not None
+                and not validator.validate_read(path, prompt_user=False)[0]
+            ):
+                continue
+            inputs.append(blocks_text(self._deliverable_blocks(path)))
+            if len(inputs) >= _MAX_CHECKED_DELIVERABLES:
+                break
+        return file_findings(
+            {path: self._deliverable_blocks(path) for path in written},
+            records,
+            query=query,
+            context=history,
+            inputs=inputs,
+            answer=answer,
         )
+
+    def _deliverable_blocks(self, path: str) -> list:
+        """``read_blocks``, cached per turn by the file's size and mtime."""
+        try:
+            stat_result = os.stat(path)
+        except OSError:
+            return []
+        stamp = (path, stat_result.st_size, stat_result.st_mtime_ns)
+        cache = self._deliverable_cache
+        if stamp not in cache:
+            cache[stamp] = read_blocks(path)
+        return cache[stamp]
 
     def _note_ungrounded(self, answer: Optional[str], query: str) -> None:
         """Record what *answer* still outruns, for this turn's scope note."""
@@ -8341,6 +8407,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_tool_executions: List[Dict[str, Any]] = []
         self._has_tests_cache = {}
         self._turn_ungrounded = []
+        self._deliverable_cache = {}
         self._completion_evidence = CompletionEvidence(
             user_input,
             os.getcwd(),

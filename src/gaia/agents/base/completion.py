@@ -673,6 +673,30 @@ class CompletionEvidence:
         )
         return self.files[key]
 
+    def written_files(self) -> list[str]:
+        """Files this turn wrote that are still on disk, outside the scratch folder.
+
+        A requested file a script wrote without naming it counts too; it is
+        not recorded, so the completion gate's view of the turn is unchanged.
+        """
+        keys = [key for key, item in self.files.items() if item.written]
+        for path in self.requested:
+            key = self.key(path)
+            stamp = None if key in self.files else self._stamp(key)
+            if isinstance(stamp, tuple) and any(
+                ok and start <= stamp[3] <= end
+                for start, end, ok, _ in self.exec_windows
+            ):
+                keys.append(key)
+        scratch = (self.scratch or "").rstrip("/\\")
+        return [
+            key
+            for key in dict.fromkeys(keys)
+            if key not in self.removed
+            and not (scratch and key.startswith((scratch + "/", scratch + "\\")))
+            and os.path.isfile(key)
+        ]
+
     def _find_executor_writes(self, key: str) -> None:
         """Record what a script wrote at *key*, or inside it when it is a folder.
 

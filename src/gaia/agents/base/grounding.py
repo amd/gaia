@@ -7,10 +7,13 @@ Three checks, each comparing the answer's prose with the turn's tool record:
 * **look** — the request names a file or symbol and no tool touched it, or the
   answer says something does not exist with no lookup on record.
 * **content** — values the answer presents as data (table cells, rows of a
-  data block, decimals, dates) that appear in no tool output, argument, or
-  earlier message.
+  data block, decimals, dates) that appear in no tool output or earlier
+  message. A tool's own arguments are not evidence for what it returned.
 * **action** — the answer says it searched, read, ran, tested, verified or
   documented something, and no tool of that kind ran.
+
+Figures in the files the turn wrote are checked by
+:mod:`gaia.agents.base.deliverables`.
 
 Each returns :class:`Finding` objects; the agent loop turns them into one
 correction, then — if the next answer still has them — reasons for the
@@ -114,6 +117,62 @@ def _args_text(record: Dict[str, Any]) -> str:
 
 def _slashed(text: str) -> str:
     return text.replace("\\", "/").lower()
+
+
+def _arg_strings(value: Any) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for sub in value.values():
+            yield from _arg_strings(sub)
+    elif isinstance(value, (list, tuple)):
+        for sub in value:
+            yield from _arg_strings(sub)
+
+
+#: Arguments that hold code a tool runs: its literals are not findings.
+_CODE_ARGS = ("code", "script", "command", "cmd")
+_CODE_NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w]|\.\d)")
+_OUTPUT_NUMBER = re.compile(
+    r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?"
+)
+
+
+def evidence_text(record: Dict[str, Any], code_literals: bool = False) -> str:
+    """What *record*'s result shows, minus what the call itself put there.
+
+    A search result that repeats its query, or a "no occurrence of '$12'"
+    reply, would otherwise make the call's own arguments look confirmed.
+    With *code_literals*, numbers a script hard-codes are also dropped from
+    what it printed: ``print(95)`` is not a source for 95.
+    """
+    text = record.get("observed") or ""
+    args = record.get("args") or {}
+    for value in _arg_strings(args):
+        if not any(ch.isdigit() for ch in value):
+            continue
+        for quote in ("'", '"', "“"):
+            close = "”" if quote == "“" else quote
+            text = text.replace(f"{quote}{value}{close}", " ")
+        if len(value) >= 8:
+            text = text.replace(value, " ")
+    if code_literals:
+        literals: Set[float] = set()
+        for key in _CODE_ARGS:
+            code = args.get(key) if isinstance(args, dict) else None
+            if isinstance(code, str):
+                literals.update(float(m) for m in _CODE_NUMBER.findall(code))
+        literals -= {0.0, 1.0}
+        if literals:
+            text = _OUTPUT_NUMBER.sub(
+                lambda m: (
+                    " "
+                    if float(m.group(0).replace(",", "")) in literals
+                    else m.group(0)
+                ),
+                text,
+            )
+    return text
 
 
 def _looked(record: Dict[str, Any]) -> bool:
@@ -597,7 +656,7 @@ def _derived(value: _Value, operands: Sequence[Set[float]]) -> bool:
 def content_findings(
     answer: str, records: Sequence[Dict[str, Any]], context: str = ""
 ) -> List[Finding]:
-    """Values the answer presents that no tool output, argument or message holds.
+    """Values the answer presents that no tool output or message holds.
 
     *context* is everything else the model was given this turn — the request
     and earlier messages. A value one arithmetic step from two grounded
@@ -612,13 +671,7 @@ def content_findings(
     values = presented_values(answer)
     if not values:
         return []
-    corpus = _Corpus(
-        "\n".join(
-            [context]
-            + [observed_text(r.get("args") or {}) for r in records]
-            + [r.get("observed") or "" for r in records]
-        )
-    )
+    corpus = _Corpus("\n".join([context] + [evidence_text(r) for r in records]))
     grounded = [v for v in values if corpus.holds(v)]
     stated = grounded + [
         v
