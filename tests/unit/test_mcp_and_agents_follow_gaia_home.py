@@ -115,9 +115,10 @@ def test_connectors_handler_reads_and_writes_isolated_list(isolated, fake_home):
     assert json.loads((isolated / "mcp_servers.json").read_text("utf-8")) == {
         "mcpServers": {"new": {"command": "y"}}
     }
-    assert json.loads(
-        (fake_home / ".gaia" / "mcp_servers.json").read_text("utf-8")
-    ) == _REAL_SERVER
+    assert (
+        json.loads((fake_home / ".gaia" / "mcp_servers.json").read_text("utf-8"))
+        == _REAL_SERVER
+    )
 
 
 def test_ui_router_reads_isolated_list(isolated):
@@ -136,9 +137,10 @@ def test_mcp_init_creates_list_under_gaia_home(isolated, fake_home):
     assert json.loads((isolated / "mcp_servers.json").read_text("utf-8")) == {
         "mcpServers": {}
     }
-    assert json.loads(
-        (fake_home / ".gaia" / "mcp_servers.json").read_text("utf-8")
-    ) == _REAL_SERVER
+    assert (
+        json.loads((fake_home / ".gaia" / "mcp_servers.json").read_text("utf-8"))
+        == _REAL_SERVER
+    )
 
 
 def test_chat_agent_mcp_gate_uses_gaia_home():
