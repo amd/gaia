@@ -41,7 +41,7 @@ no_inherited_project_root = _base.no_inherited_project_root
 project = _base.project
 tools = _base.tools
 
-_REAL_RUN = subprocess.run
+_REAL_POPEN = subprocess.Popen
 #: The real interpreter; the ``frozen`` fixture points sys.executable elsewhere.
 _PYTHON = sys.executable
 _RUNNER_ROOT = os.path.dirname(os.path.dirname(python_runner.__file__))
@@ -62,17 +62,19 @@ def relay():
     entry point is the real ``dispatch``. Records each relayed argv."""
     seen = []
 
-    def run(argv, **kwargs):
-        assert argv[0] == FAKE_BINARY, argv
+    def spawn(argv, *args, **kwargs):
+        if list(argv)[:1] != [FAKE_BINARY]:
+            return _REAL_POPEN(argv, *args, **kwargs)
         seen.append(list(argv))
         env = dict(kwargs.get("env") or os.environ)
         env["PYTHONPATH"] = os.pathsep.join(
             p for p in (env.get("PYTHONPATH"), _RUNNER_ROOT) if p
         )
         kwargs["env"] = env
-        return _REAL_RUN([_PYTHON, "-c", _DISPATCH, *argv[1:]], **kwargs)
+        return _REAL_POPEN([_PYTHON, "-c", _DISPATCH, *argv[1:]], *args, **kwargs)
 
-    with patch("subprocess.run", side_effect=run):
+    # Python jobs start through Popen so a timeout can kill the whole tree.
+    with patch("gaia_agent_chat.python_jobs.subprocess.Popen", side_effect=spawn):
         yield seen
 
 

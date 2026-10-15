@@ -215,16 +215,22 @@ def _skip_ws(text: str, i: int) -> int:
     return i
 
 
-def _json_object_end(
-    text: str, start: int, resume: "Optional[tuple[int, int, bool, bool]]" = None
-) -> "tuple[Optional[int], tuple[int, int, bool, bool]]":
+def _json_object_end(text: str, start: int, resume: Optional[tuple] = None) -> tuple:
     """Index just past the ``{...}`` opening at *start*, or None if unclosed.
 
     String-aware, so a brace or an escaped quote inside a value never ends it.
     Also returns the scan state, so a caller whose text only grew can pass it
-    back as *resume* instead of rescanning a long envelope on every token.
+    back as *resume* instead of rescanning a long envelope on every token. The
+    state's last item is where a top-level ``"answer"`` string value begins
+    (just past its opening quote), unless a ``tool`` key came before it.
     """
-    pos, depth, in_str, esc = resume if resume else (start, 0, False, False)
+    if resume:
+        pos, depth, in_str, esc, expect_key, key_start, last_key, tool_seen, ans = (
+            resume
+        )
+    else:
+        pos, depth, in_str, esc = start, 0, False, False
+        expect_key, key_start, last_key, tool_seen, ans = False, 0, "", False, None
     for j in range(pos, len(text)):
         c = text[j]
         if in_str:
@@ -234,15 +240,29 @@ def _json_object_end(
                 esc = True
             elif c == '"':
                 in_str = False
+                if depth == 1 and expect_key:
+                    last_key = text[key_start:j]
+                    expect_key = False
+                    tool_seen = tool_seen or last_key in ("tool", "tool_args")
         elif c == '"':
             in_str = True
+            if depth == 1:
+                if expect_key:
+                    key_start = j + 1
+                elif last_key == "answer" and not tool_seen and ans is None:
+                    ans = j + 1
         elif c == "{":
             depth += 1
+            expect_key = depth == 1
+        elif c == "," and depth == 1:
+            expect_key = True
         elif c == "}":
             depth -= 1
             if depth == 0:
-                return j + 1, (j + 1, depth, in_str, esc)
-    return None, (len(text), depth, in_str, esc)
+                state = (j + 1, depth, in_str, esc, expect_key, key_start)
+                return j + 1, state + (last_key, tool_seen, ans)
+    state = (len(text), depth, in_str, esc, expect_key, key_start)
+    return None, state + (last_key, tool_seen, ans)
 
 
 def _leading_envelope(
@@ -1121,6 +1141,19 @@ class SSEOutputHandler(OutputHandler):
             if state == _ENV_PENDING:
                 return not end_of_stream
             if state == _ENV_OPEN:
+                answer_start = scan[1][-1] if scan else None
+                if answer_start is not None:
+                    # The answer streams as it arrives; the thought before it
+                    # is dropped and the structure after it is the decoder's tail.
+                    raw_value = self._stream_buffer[answer_start:]
+                    self._stream_buffer = ""
+                    self._envelope_scan = None
+                    self._json_filtered = True
+                    self._answer_stream = JsonStringStreamDecoder()
+                    self._emit_answer_text(self._answer_stream.feed(raw_value))
+                    if end_of_stream:
+                        self._answer_stream = None
+                    return True
                 if not end_of_stream:
                     self._report_envelope_progress()
                     return True
