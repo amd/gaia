@@ -222,9 +222,9 @@ def _path_is_within(candidate: Path, parent: Path) -> bool:
     norm_parent = os.path.normpath(_normalize_macos_symlinks(str(parent)))
     if is_windows:
         norm_candidate, norm_parent = norm_candidate.lower(), norm_parent.lower()
-    return norm_candidate == norm_parent or norm_candidate.startswith(
-        norm_parent + os.sep
-    )
+    # A drive root or "/" already ends in a separator.
+    prefix = norm_parent if norm_parent.endswith(os.sep) else norm_parent + os.sep
+    return norm_candidate == norm_parent or norm_candidate.startswith(prefix)
 
 
 def _startup_execution_reason(real_path: Path) -> Optional[str]:
@@ -462,6 +462,130 @@ def stable_scratch_dir(anchor: str) -> Path:
     return path
 
 
+#: Narrows every agent's file scope for one run; see :func:`env_allowed_paths`.
+ALLOWED_PATHS_ENV = "GAIA_ALLOWED_PATHS"
+
+_ALLOWED_PATHS_DOCS = "https://amd-gaia.ai/docs/reference/cli#narrowing-file-access"
+
+_warned_scope_entries: Set[Tuple[str, Tuple[str, ...]]] = set()
+
+
+class AllowedPathsEnvError(ValueError):
+    """``GAIA_ALLOWED_PATHS`` holds a value that cannot be used as a scope."""
+
+
+def env_allowed_paths() -> Optional[List[Path]]:
+    """The folders ``GAIA_ALLOWED_PATHS`` confines this process's agents to.
+
+    The variable holds absolute paths separated by ``os.pathsep`` (``;`` on
+    Windows, ``:`` elsewhere). It can only narrow: every ``PathValidator``
+    intersects its own scope with this list, so an entry outside the agent's
+    default scope adds nothing. The agent's scratch directory stays allowed.
+
+    It confines GAIA's file tools and the path checks on shell commands. It
+    does not confine code those tools run — a ``run_python`` script or shell
+    command can still open any file the OS user can read. Isolation from that
+    needs OS-level separation (another user account, a container or a VM).
+
+    Returns:
+        The resolved entries, or None when the variable is unset.
+
+    Raises:
+        AllowedPathsEnvError: When the value is empty, or an entry is empty,
+            relative, or does not exist.
+    """
+    raw = os.environ.get(ALLOWED_PATHS_ENV)
+    if raw is None:
+        return None
+    problems: List[str] = []
+    roots: List[Path] = []
+    for position, entry in enumerate(raw.split(os.pathsep), start=1):
+        entry = entry.strip()
+        if not entry:
+            problems.append(f"entry {position} is empty")
+        elif not Path(entry).is_absolute():
+            problems.append(f"'{entry}' is not an absolute path")
+        elif not os.path.exists(entry):
+            problems.append(f"'{entry}' does not exist")
+        else:
+            roots.append(Path(os.path.realpath(entry)))
+    if problems:
+        raise AllowedPathsEnvError(
+            f"{ALLOWED_PATHS_ENV}={raw!r} cannot be used: {'; '.join(problems)}. "
+            f"Set it to existing absolute folders separated by '{os.pathsep}', or "
+            f"unset it to use the agent's default scope. See {_ALLOWED_PATHS_DOCS}"
+        )
+    return roots
+
+
+def _dedupe_paths(paths: List[Path]) -> List[Path]:
+    seen: Set[str] = set()
+    unique: List[Path] = []
+    for path in paths:
+        key = os.path.normcase(str(path))
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
+
+
+def _intersect_scopes(
+    scope: Any, ceiling: List[Path], *, warn: bool = True
+) -> List[Path]:
+    """The part of *scope* that also lies inside *ceiling*.
+
+    Each pair keeps the narrower of the two when one contains the other, and
+    nothing when they are disjoint. Ceiling entries that meet no scope entry
+    are logged once: they can never widen what the agent may touch.
+    """
+    granted = [Path(_real_path(p)) for p in scope]
+    kept: List[Path] = []
+    for limit in ceiling:
+        met = False
+        for root in granted:
+            if _path_is_within(root, limit):
+                kept.append(root)
+                met = True
+            elif _path_is_within(limit, root):
+                kept.append(limit)
+                met = True
+        if not met and warn:
+            key = (str(limit), tuple(sorted(str(g) for g in granted)))
+            if key not in _warned_scope_entries:
+                _warned_scope_entries.add(key)
+                logger.warning(
+                    "%s entry '%s' is outside the agent's scope %s and is "
+                    "ignored: the setting can only narrow file access, never widen it.",
+                    ALLOWED_PATHS_ENV,
+                    limit,
+                    [str(g) for g in granted],
+                )
+    return _dedupe_paths(kept)
+
+
+def narrow_allowed_paths(paths: Optional[List[Any]]) -> Optional[List[str]]:
+    """*paths* narrowed by ``GAIA_ALLOWED_PATHS``, or unchanged when it is unset.
+
+    ``None`` stands for the validator default, the working directory; once
+    narrowed, the result is an explicit scope, so grants persisted by the
+    interactive CLI are no longer merged in.
+
+    Args:
+        paths: An agent's configured ``allowed_paths``.
+
+    Returns:
+        The narrowed list, or *paths* itself when the variable is unset.
+
+    Raises:
+        AllowedPathsEnvError: When the variable holds an invalid value.
+    """
+    ceiling = env_allowed_paths()
+    if ceiling is None:
+        return paths
+    base = [Path.cwd()] if paths is None else paths
+    return [str(p) for p in _intersect_scopes(base, ceiling)]
+
+
 class PathValidator:
     """
     Validates file paths against an allowed list, with user prompting for exceptions.
@@ -508,7 +632,14 @@ class PathValidator:
                 yes — a server launched from a terminal has one, but its users
                 are on HTTP. Evaluated per prompt, so a host that swaps the
                 agent's console mid-session is honoured.
+
+        Raises:
+            AllowedPathsEnvError: When ``GAIA_ALLOWED_PATHS`` is set to an
+                invalid value. When it is valid, the scope is intersected with
+                it and every later grant is held to it (see
+                :func:`env_allowed_paths`).
         """
+        self._env_scope: Optional[List[Path]] = env_allowed_paths()
         self.allowed_paths: Set[Path] = set()
         # Readable but never writable, e.g. a loaded skill's own folder.
         self.read_only_paths: Set[Path] = set()
@@ -544,6 +675,57 @@ class PathValidator:
 
         # Load persisted paths
         self._load_persisted_paths()
+
+        if self._env_scope is not None:
+            self.allowed_paths = set(
+                _intersect_scopes(self.allowed_paths, self._env_scope)
+            )
+            logger.info(
+                "%s confines file access to %s",
+                ALLOWED_PATHS_ENV,
+                sorted(str(p) for p in self.allowed_paths),
+            )
+
+    @property
+    def env_scope(self) -> Optional[List[Path]]:
+        """The ``GAIA_ALLOWED_PATHS`` entries, or None when it is unset."""
+        return self._env_scope
+
+    def in_env_scope(self, path: Any) -> bool:
+        """Whether *path* is inside ``GAIA_ALLOWED_PATHS`` or the scratch dir.
+
+        Always True when the variable is unset.
+
+        Args:
+            path: Any path; ``~``, ``..`` and symlinks are resolved first.
+
+        Returns:
+            True when the narrowing setting does not exclude *path*.
+        """
+        if self._env_scope is None:
+            return True
+        real_path = Path(_real_path(path))
+        if self.scratch_dir is not None and _path_is_within(
+            real_path, self.scratch_dir
+        ):
+            return True
+        return any(_path_is_within(real_path, limit) for limit in self._env_scope)
+
+    def confine_roots(self, roots: Any) -> List[Path]:
+        """Search roots cut down to ``GAIA_ALLOWED_PATHS``.
+
+        For tools that walk folders wider than the allowlist on purpose (name
+        searches over Documents, Downloads, ...). Unchanged when unset.
+
+        Args:
+            roots: Folders a tool is about to walk.
+
+        Returns:
+            The roots, each replaced by the part of it the setting allows.
+        """
+        if self._env_scope is None:
+            return [Path(r) for r in roots]
+        return _intersect_scopes(roots, self._env_scope, warn=False)
 
     def _setup_audit_logging(self):
         """Configure audit logging to file for write operations."""
@@ -652,9 +834,19 @@ class PathValidator:
         """
         Add a path to the allowed paths set.
 
+        Under ``GAIA_ALLOWED_PATHS`` only the part of *path* inside it is added.
+
         Args:
             path: Path to add to allowed paths
         """
+        if self._env_scope is not None:
+            kept = _intersect_scopes([path], self._env_scope, warn=False)
+            if not kept:
+                logger.warning(
+                    "Not granting %s: it is outside %s", path, ALLOWED_PATHS_ENV
+                )
+            self.allowed_paths.update(kept)
+            return
         self.allowed_paths.add(Path(path).resolve())
         logger.debug(f"Added allowed path: {path}")
 
@@ -716,6 +908,11 @@ class PathValidator:
         Returns:
             A reason when no approval may grant *path*, else "".
         """
+        if not self.in_env_scope(path):
+            return (
+                f"'{path}' is outside {ALLOWED_PATHS_ENV}, which confines this "
+                f"session to {sorted(str(p) for p in self._env_scope)}"
+            )
         read_blocked, reason = self.is_read_blocked(str(path))
         if read_blocked:
             return reason
@@ -835,6 +1032,10 @@ class PathValidator:
             # This prevents TOCTOU attacks by resolving at check time
             real_path = Path(_real_path(path)).resolve()
             real_path_str = str(real_path)
+
+            # Held to the env scope even if something added a wider grant directly.
+            if not self.in_env_scope(real_path):
+                return False
 
             # macOS /var symlink handling: normalize by removing /private prefix.
             # Use the module-level helper so is_write_blocked applies the same

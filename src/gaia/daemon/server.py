@@ -146,7 +146,17 @@ def _build_clock(
 
 
 def _build_register(
-    *, specs, pid, port, token, host, started_at, refresher, clock, lemonade_owner
+    *,
+    specs,
+    pid,
+    port,
+    token,
+    host,
+    started_at,
+    refresher,
+    clock,
+    lemonade_owner,
+    lemonade_clients,
 ) -> Callable[[], None]:
     """The daemon's ``on_startup`` hook: reap stale sidecars, publish
     instance.json, then start the connector-token refresher and the job clock.
@@ -188,12 +198,21 @@ def _build_register(
         logger.info("daemon: registered instance pid=%s port=%s", pid, port)
         # Up by the time anything needs a model, without delaying registration.
         lemonade_owner.ensure_in_background()
+        lemonade_clients.start()
 
     return _register
 
 
 def _build_deregister(
-    *, registry, custody_store, pid, refresher, clock, lemonade, lemonade_owner
+    *,
+    registry,
+    custody_store,
+    pid,
+    refresher,
+    clock,
+    lemonade,
+    lemonade_owner,
+    lemonade_clients,
 ) -> Callable[[], None]:
     """The daemon's ``on_shutdown`` hook: stop the refresher and the clock
     BEFORE tearing down sidecars, so neither races a sidecar mid-teardown, and
@@ -201,14 +220,15 @@ def _build_deregister(
     from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
 
     def _deregister() -> None:
+        lemonade_clients.stop()
         refresher.stop()
         clock.stop()
         registry.shutdown_all()
         # After the sidecars, never before: an agent mid-teardown may still be
         # finishing a model call, and pulling the server out from under it
         # would turn a clean shutdown into a wave of connection errors in the
-        # logs. Only a server THIS daemon started is reaped — one the user
-        # launched from the tray is left running.
+        # logs. The supervisor reaps only a system server THIS daemon started;
+        # GAIA's own embedded server is stopped whoever started it.
         lemonade.shutdown()
         install_supervisor(None)
         try:
@@ -296,7 +316,15 @@ def run(host: str = HOST) -> None:
     # daemon starts at boot and stops at shutdown.
     from gaia.daemon.lemonade import EmbeddedLemonadeOwner
 
-    lemonade_owner = EmbeddedLemonadeOwner()
+    lemonade_owner = EmbeddedLemonadeOwner(owner_pid=pid)
+
+    # The front ends using it: unload its models when the last app closes, and
+    # stop it after the configured idle time with nobody connected.
+    from gaia.daemon.lemonade_clients import LemonadeClients
+
+    lemonade_clients = LemonadeClients(
+        lemonade_owner, busy=lambda: bool(registry.running_connections())
+    )
 
     # The machine's model server. The daemon owns the process: front-ends ask
     # for it over /daemon/v1/lemonade/start and never spawn one, which is what
@@ -318,6 +346,7 @@ def run(host: str = HOST) -> None:
         refresher=refresher,
         clock=clock,
         lemonade_owner=lemonade_owner,
+        lemonade_clients=lemonade_clients,
     )
     _deregister = _build_deregister(
         registry=registry,
@@ -327,6 +356,7 @@ def run(host: str = HOST) -> None:
         clock=clock,
         lemonade=lemonade,
         lemonade_owner=lemonade_owner,
+        lemonade_clients=lemonade_clients,
     )
 
     app = create_app(
@@ -344,6 +374,7 @@ def run(host: str = HOST) -> None:
         clock=clock,
         lemonade=lemonade,
         lemonade_owner=lemonade_owner,
+        lemonade_clients=lemonade_clients,
     )
 
     config = uvicorn.Config(

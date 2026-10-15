@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, SetupCheck, SetupRunStatus, ProvidersResponse, ProviderInfo, ProviderModel, ActiveModel, ConnectProviderBody, SessionPermissions, PermissionMode, SkillInfo, PreflightReport, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
@@ -25,11 +25,37 @@ function parseErrorDetail(errorText: string): string {
         if (Array.isArray(parsed)) {
             return parsed.map((e) => e?.msg ?? JSON.stringify(e)).join('; ') || errorText;
         }
+        if (parsed && typeof parsed === 'object' && typeof parsed.message === 'string') return parsed.message;
         if (parsed && typeof parsed !== 'string') return JSON.stringify(parsed);
         return parsed || errorText;
     } catch {
         // Body isn't JSON (proxy HTML, empty response) — the raw text is the useful thing.
         return errorText;
+    }
+}
+
+/** `detail.status` from a structured error body, e.g. `needs_key`; null otherwise. */
+function parseErrorStatus(errorText: string): string | null {
+    try {
+        const status = JSON.parse(errorText).detail?.status;
+        return typeof status === 'string' ? status : null;
+    } catch {
+        return null;
+    }
+}
+
+/** A non-2xx answer: the message to show, the backend's own words, and its machine-readable reason. */
+export class ApiError extends Error {
+    readonly httpStatus: number;
+    readonly detail: string;
+    readonly reason: string | null;
+
+    constructor(message: string, httpStatus: number, detail: string, reason: string | null) {
+        super(message);
+        this.name = 'ApiError';
+        this.httpStatus = httpStatus;
+        this.detail = detail;
+        this.reason = reason;
     }
 }
 
@@ -60,6 +86,17 @@ function getFriendlyError(status: number, detail: string): string {
  */
 export const UI_HEADER = { 'x-gaia-ui': '1', 'x-gaia-client': 'agent-ui' };
 
+const SECRET_FIELD = /key|token|secret|password/i;
+
+/** A copy of a request body safe to log: credential-looking fields are masked. */
+export function redactSecrets(body: unknown): unknown {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+    return Object.fromEntries(
+        Object.entries(body as Record<string, unknown>).map(([k, v]) =>
+            [k, SECRET_FIELD.test(k) && typeof v === 'string' && v ? '***' : v]),
+    );
+}
+
 /** Fetch wrapper with logging, timing, and error handling. */
 async function apiFetch<T>(
     method: string,
@@ -70,7 +107,7 @@ async function apiFetch<T>(
     const url = `${API_BASE}${path}`;
     const t = log.api.time();
 
-    log.api.info(`${method} ${url}`, body !== undefined ? { body } : '');
+    log.api.info(`${method} ${url}`, body !== undefined ? { body: redactSecrets(body) } : '');
 
     const baseHeaders: Record<string, string> = body !== undefined
         ? { 'Content-Type': 'application/json' }
@@ -94,7 +131,8 @@ async function apiFetch<T>(
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`${method} ${url} - HTTP ${res.status}`, { errorText });
-        throw new Error(getFriendlyError(res.status, parseErrorDetail(errorText)));
+        const detail = parseErrorDetail(errorText);
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
     }
 
     // Some endpoints (DELETE, fire-and-forget POSTs) intentionally return no
@@ -192,6 +230,33 @@ export async function startSetup(skipChatModel: boolean): Promise<SetupRunStatus
 
 export async function getSetupStatus(): Promise<SetupRunStatus> {
     return apiFetch('GET', '/setup/status');
+}
+
+// -- Which Lemonade Server GAIA uses ---------------------------------------------
+
+export async function getLemonadeTarget(): Promise<LemonadeTarget> {
+    return apiFetch('GET', '/lemonade/target');
+}
+
+/** A Lemonade the user already runs on this PC, or null. */
+export async function detectLemonade(): Promise<{ found: LemonadeFound | null }> {
+    return apiFetch('GET', '/lemonade/detect');
+}
+
+/**
+ * Switch servers. Nothing is saved unless the user's server checks out; a
+ * rejection is an `ApiError` whose `reason` says why (`needs_key`, `bad_key`, …).
+ */
+export async function setLemonadeTarget(body: LemonadeTargetBody): Promise<LemonadeTarget & { daemon: unknown }> {
+    try {
+        return await apiFetch('POST', '/lemonade/target', body);
+    } catch (err) {
+        // A 502 here is "saved, but the daemon did not switch" — keep those words.
+        if (err instanceof ApiError && err.httpStatus === 502 && err.detail) {
+            throw new ApiError(err.detail, err.httpStatus, err.detail, err.reason);
+        }
+        throw err;
+    }
 }
 
 // -- AI providers and models (the TUI's /provider) -------------------------------

@@ -23,7 +23,17 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from threading import Event, Thread
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import openai  # For exception types
 import requests
@@ -38,6 +48,25 @@ from gaia.llm.lemonade_launcher import (
     gaia_runs_lemonade,
     get_installed_version,
     resolve_lemonade,
+)
+from gaia.llm.retry import (
+    HOSTED_REPLY_TIMEOUT_ENV,
+    ModelCallRetrier,
+    RetryPolicy,
+    RetryState,
+    StreamStalledError,
+    attach_retry_state,
+    classify_exception,
+    hosted_reply_timeout,
+    retry_state_of,
+    tag_http_failure,
+)
+from gaia.llm.stream_watchdog import (
+    STREAM_READ_BACKSTOP,
+    ByteActivity,
+    activity_http_client,
+    stall_limits,
+    watch_stream,
 )
 from gaia.logger import get_logger
 from gaia.ports import (
@@ -157,16 +186,25 @@ def _get_lemonade_config() -> tuple:
 
 
 def configured_lemonade_url() -> Optional[str]:
-    """The Lemonade server the user chose with ``LEMONADE_BASE_URL``, if any.
+    """The Lemonade server the user chose, if any.
+
+    ``LEMONADE_BASE_URL`` wins; otherwise the saved ``lemonade_mode:
+    external`` choice in ``~/.gaia/config.json`` (read on every call, so a
+    changed setting takes effect without a restart). None means GAIA runs its
+    own server.
 
     Values exported by GAIA's own credentials file (marked with
     ``GAIA_LEMONADE_EMBEDDED``) describe GAIA's server, whose port and key
     change on every restart, so they are not a choice: GAIA follows its
     recorded state instead.
     """
-    if os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() == "1":
-        return None
-    return os.getenv("LEMONADE_BASE_URL", "").strip() or None
+    from gaia.llm.lemonade_choice import external_lemonade_url
+
+    if os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() != "1":
+        env_url = os.getenv("LEMONADE_BASE_URL", "").strip()
+        if env_url:
+            return env_url
+    return external_lemonade_url()
 
 
 def resolve_lemonade_base_url(base_url: Optional[str] = None) -> str:
@@ -248,7 +286,7 @@ def _embedded_lemonade_api_key(base_url: Optional[str] = None) -> Optional[str]:
 def resolve_lemonade_api_key(
     api_key: Optional[str] = None, *, base_url: Optional[str] = None
 ) -> Optional[str]:
-    """Resolve the Lemonade API key: argument, env var, embedded server, None.
+    """Resolve the Lemonade API key: argument, env var, saved key, embedded, None.
 
     Empty or whitespace-only env values are treated as unset to avoid
     sending a malformed ``Bearer `` header to authenticated Lemonade
@@ -256,7 +294,9 @@ def resolve_lemonade_api_key(
 
     An explicit argument or env var always wins — a configured credential must
     never be overridden by whatever a local state file happens to hold.
-    The embedded key is restricted to its recorded local HTTP endpoint. Callers
+    The key saved with ``gaia lemonade connect`` is only sent to the server it
+    was saved for, and the embedded key only to its recorded local HTTP
+    endpoint. Callers
     with an explicit endpoint must pass ``base_url``; omitted uses the configured
     Lemonade URL. ``GAIA_HOME`` selects the embedded state directory.
     """
@@ -266,7 +306,10 @@ def resolve_lemonade_api_key(
     own_credentials = os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() == "1"
     if env_value is not None and env_value.strip() and not own_credentials:
         return env_value.strip()
-    return _embedded_lemonade_api_key(base_url)
+    from gaia.llm.lemonade_choice import external_api_key
+
+    target = resolve_lemonade_base_url(base_url)
+    return external_api_key(target) or _embedded_lemonade_api_key(base_url)
 
 
 def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
@@ -1668,6 +1711,25 @@ def streams_ok(model_id: Optional[str]) -> bool:
     return model_id not in _CLOUD_NON_STREAMING
 
 
+def _remember_cloud_availability(model_id: Optional[str], ok: bool) -> None:
+    """Record a cloud model's 404 in ``gateway.json``, or clear it on success.
+
+    A bookkeeping failure must not replace the call's own outcome, so it is
+    logged as a warning rather than raised.
+    """
+    if not model_id:
+        return
+    try:
+        from gaia.llm.gateway import clear_model_unavailable, mark_model_unavailable
+
+        if ok:
+            clear_model_unavailable(model_id)
+        else:
+            mark_model_unavailable(model_id, 404)
+    except Exception as e:  # noqa: BLE001 - the request's result still stands
+        log.warning(f"Could not record availability of {model_id}: {e}")
+
+
 def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
     """Remember which ids in a ``/api/v1/models`` payload are cloud-routed.
 
@@ -1799,6 +1861,32 @@ def _tool_call_deltas(delta: Any) -> Optional[List[Dict[str, Any]]]:
     return [tc.model_dump() if hasattr(tc, "model_dump") else dict(tc) for tc in raw]
 
 
+def _chunk_carries_output(chunk: Any) -> bool:
+    """Whether a converted stream chunk hands the caller anything to show or
+    act on: answer text, reasoning, a tool-call fragment, or completion text.
+
+    A role-only opening frame or a usage frame does not, so a stream that dies
+    after only those can still be retried without duplicating output.
+    """
+    if not isinstance(chunk, dict):
+        return True
+    for choice in chunk.get("choices") or ():
+        if not isinstance(choice, dict):
+            return True
+        if choice.get("text"):
+            return True
+        delta = choice.get("delta") or {}
+        if not isinstance(delta, dict):
+            return True
+        if (
+            delta.get("content")
+            or delta.get("reasoning_content")
+            or delta.get("tool_calls")
+        ):
+            return True
+    return False
+
+
 def _validate_profile_model_registry() -> None:
     """Fail loudly at import time if AGENT_PROFILES references an undeclared model."""
     for agent_name, profile in AGENT_PROFILES.items():
@@ -1855,6 +1943,19 @@ class LemonadeClientError(Exception):
 
 class LemonadeAuthError(LemonadeClientError):
     """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
+
+
+class CloudModelUnavailableError(LemonadeClientError):
+    """A cloud provider answered 404 for the requested model.
+
+    The model is not deployed, was renamed, or the account has no access to it.
+    Distinct from an auth failure (401/403), which says nothing about the model.
+    """
+
+    def __init__(self, message: str, model_id: Optional[str] = None):
+        super().__init__(message)
+        self.model_id = model_id
+        self.status = 404
 
 
 class LemonadeVersionError(LemonadeClientError):
@@ -1916,9 +2017,16 @@ _CLOUD_BILLING = {"fireworks": ("Fireworks AI", "https://fireworks.ai/account/bi
 
 
 def _cloud_request_error(
-    status: Optional[int], provider: Optional[str] = None
+    status: Optional[int],
+    provider: Optional[str] = None,
+    reason: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> LemonadeClientError:
-    """Actionable cloud failures without reflecting provider response bodies."""
+    """Actionable cloud failures without reflecting provider response bodies.
+
+    *reason* is the retry classifier's verdict (``gaia.llm.retry``); it tells a
+    status-less hop failure apart from an unexplained one.
+    """
     if status in {401, 403}:
         return LemonadeAuthError(
             f"Cloud authentication or access was denied (HTTP {status}). "
@@ -1927,10 +2035,11 @@ def _cloud_request_error(
             "authentication, verify LEMONADE_API_KEY."
         )
     if status == 404:
-        return LemonadeClientError(
+        return CloudModelUnavailableError(
             "The selected cloud model is unavailable (HTTP 404). It may need "
             "deployment or access for your account. Choose a deployed model "
-            "or router in the TUI provider settings."
+            "or router in the TUI provider settings.",
+            model_id=model,
         )
     if status == 429:
         return LemonadeClientError(
@@ -1952,10 +2061,27 @@ def _cloud_request_error(
             "message again, or switch to a local model in the TUI provider "
             "settings to keep working now."
         )
-    code = f" (HTTP {status})" if status is not None else ""
+    if status is None:
+        if reason == "upstream timeout":
+            return LemonadeClientError(
+                "The cloud model did not answer within Lemonade's time limit. "
+                "Send your message again; if it keeps happening the provider "
+                "is overloaded, so wait a few minutes or pick another model."
+            )
+        if reason in ("connection dropped", "upstream failure"):
+            return LemonadeClientError(
+                "The cloud provider dropped the connection before the model "
+                "finished answering; no error code came back. This is usually "
+                "momentary, so send your message again."
+            )
+        return LemonadeClientError(
+            "The cloud request failed without an error code from the provider. "
+            "Send your message again; if it fails the same way, check the "
+            "provider connection in the TUI provider settings."
+        )
     return LemonadeClientError(
-        f"Cloud request through Lemonade failed{code}. Check the provider "
-        "connection and selected model in the TUI provider settings."
+        f"Cloud request through Lemonade failed (HTTP {status}). Check the "
+        "provider connection and selected model in the TUI provider settings."
     )
 
 
@@ -2330,6 +2456,17 @@ def _check_disk_space(size_gb: float, free_bytes: int, path: str) -> bool:
 class LemonadeClient:
     """Client for interacting with the Lemonade server REST API."""
 
+    #: Retries the most recent chat/text completion needed (0 when the first
+    #: attempt succeeded), and the running total for this client. A request is
+    #: retried only on a transient failure; see :mod:`gaia.llm.retry`.
+    last_request_retries: int = 0
+    total_request_retries: int = 0
+
+    #: Injection points for tests; ``None`` means the real clock and sleep.
+    _retry_sleep: Optional[Callable[[float], None]] = None
+    _retry_clock: Optional[Callable[[], float]] = None
+    _retry_rng: Any = None
+
     #: True while this client is aimed at GAIA's own server, so it follows that
     #: server to whatever port and key the daemon last started it with.
     follows_gaia_lemonade: bool = False
@@ -2399,9 +2536,9 @@ class LemonadeClient:
         self.keep_alive = keep_alive
         self._log_file = None
         self.api_key = resolve_lemonade_api_key(api_key, base_url=self.base_url)
-        # GAIA's own server gets a new port and key each time the daemon
-        # (re)starts it. A client aimed at it -- running, or stopped at the
-        # default address -- follows it there.
+        # GAIA's own server gets a new key, and a new port if its last one was
+        # taken, each time the daemon (re)starts it. A client aimed at it --
+        # running, or stopped at the default address -- follows it there.
         if api_key is not None or configured_lemonade_url() is not None:
             self.follows_gaia_lemonade = False
         elif self.api_key is not None:
@@ -2696,6 +2833,13 @@ class LemonadeClient:
                 starts a local process), so it can only ever satisfy a local
                 client (#3558) — or the daemon could not start GAIA's own server.
         """
+        from gaia.llm.lemonade_choice import (
+            external_down_message,
+            external_mode_active,
+        )
+
+        if external_mode_active():
+            raise LemonadeClientError(external_down_message(self.base_url))
         if not self._targets_this_machine():
             raise LemonadeClientError(
                 f"Refusing to start a local Lemonade server: this client is "
@@ -3334,6 +3478,42 @@ class LemonadeClient:
             # latest error to the caller's handling. Fail-loudly is preserved.
             raise last_error
 
+    def _model_retrier(self) -> ModelCallRetrier:
+        """The retry runner every completion path goes through.
+
+        The policy is read per request (``GAIA_LLM_RETRY_*``), like the request
+        budget. A missing-model error is never retried here: it has its own
+        recovery (:meth:`_execute_with_auto_download`), which must see it at
+        once rather than after a round of backoff.
+        """
+
+        def classify(error: BaseException) -> Optional[str]:
+            if self._is_model_error(error):
+                return None
+            return classify_exception(error)
+
+        return ModelCallRetrier(
+            RetryPolicy.from_env(),
+            sleep=self._retry_sleep or time.sleep,
+            clock=self._retry_clock or time.monotonic,
+            rng=self._retry_rng,
+            log=self.log,
+            classify=classify,
+        )
+
+    def _record_retries(self, state: RetryState) -> None:
+        self.last_request_retries = state.retries
+        self.total_request_retries += state.retries
+
+    def _call_with_retry(self, api_call: Callable[[], Any], what: str) -> Any:
+        """``api_call()`` with transient failures retried (see
+        :class:`gaia.llm.retry.ModelCallRetrier`)."""
+        state = RetryState()
+        try:
+            return self._model_retrier().call(api_call, what=what, state=state)
+        finally:
+            self._record_retries(state)
+
     def chosen_backend_for(self, model_name: str) -> Optional[str]:
         """The user's llama.cpp backend for *model_name*, if it is a llama.cpp model."""
         backend = preferred_llamacpp_backend()
@@ -3616,15 +3796,36 @@ class LemonadeClient:
         if tools:
             data["tools"] = tools
 
+        # A hosted reply needs no local prefill budget: bound it by its length.
+        hosted = bool(self.cloud_model_provider(model) or is_cloud_model(model))
+        read_limit = (
+            min(hosted_reply_timeout(max_completion_tokens), timeout)
+            if hosted
+            else timeout
+        )
+
         # Helper function for the actual API call
         def _make_request():
             self.log.debug(f"Sending chat completion request to model: {model}")
-            response = requests.post(
-                url,
-                json=data,
-                headers={"Content-Type": "application/json", **self._auth_headers()},
-                timeout=timeout,
-            )
+            try:
+                response = requests.post(
+                    url,
+                    json=data,
+                    headers={
+                        "Content-Type": "application/json",
+                        **self._auth_headers(),
+                    },
+                    timeout=read_limit,
+                )
+            except requests.exceptions.ReadTimeout as e:
+                if not hosted:
+                    raise
+                raise StreamStalledError(
+                    limit=read_limit,
+                    remote=True,
+                    before_output=True,
+                    setting=HOSTED_REPLY_TIMEOUT_ENV,
+                ) from e
 
             if response.status_code == 401:
                 if self.cloud_model_provider(model):
@@ -3638,16 +3839,26 @@ class LemonadeClient:
                 )
 
             if response.status_code != 200:
+                # The retry verdict is read from the body here, before the
+                # cloud branch drops it (provider bodies are never reflected).
                 if self.cloud_model_provider(model):
-                    raise _cloud_request_error(
-                        response.status_code, self.cloud_model_provider(model)
+                    raise tag_http_failure(
+                        self._cloud_failure(response.status_code, model),
+                        response.status_code,
+                        response.text,
+                        response.headers,
                     )
                 error_msg = (
                     f"Error in chat completions "
                     f"(status {response.status_code}): {response.text}"
                 )
                 self.log.error(error_msg)
-                raise LemonadeClientError(error_msg)
+                raise tag_http_failure(
+                    LemonadeClientError(error_msg),
+                    response.status_code,
+                    response.text,
+                    response.headers,
+                )
 
             result = response.json()
             if "choices" in result and len(result["choices"]) > 0:
@@ -3658,6 +3869,8 @@ class LemonadeClient:
                     f"Chat completion successful. "
                     f"Approximate response length: {token_count} characters"
                 )
+            if self.cloud_model_provider(model):
+                _remember_cloud_availability(model, ok=True)
 
             return result
 
@@ -3676,16 +3889,28 @@ class LemonadeClient:
             if auto_download:
                 self._ensure_model_loaded(model, auto_download=True)
 
-            # Execute with auto-download retry logic
+            # Transient failures (dropped connection, 429/502/503/504, a 500
+            # that isn't a verdict on the request) are retried with backoff;
+            # a missing model goes to the auto-download recovery instead.
+            def _request_with_retry():
+                return self._call_with_retry(_make_request, "Chat completion")
+
             try:
-                return _make_request()
+                return _request_with_retry()
+            except StreamStalledError as e:
+                state = retry_state_of(e)
+                message = e.describe(state.attempts if state else 1)
+                self.log.error(message)
+                if state is None:
+                    raise LemonadeClientError(message) from e
+                raise attach_retry_state(LemonadeClientError(message), state) from e
             except (requests.exceptions.RequestException, LemonadeClientError) as e:
                 # Use helper to handle auto-download and retry. Passing the
                 # already-caught error lets it skip the retry entirely for
                 # non-missing-model failures (#2513) instead of repeating
                 # the identical request first.
                 return self._execute_with_auto_download(
-                    _make_request, model, auto_download, error=e
+                    _request_with_retry, model, auto_download, error=e
                 )
 
     def _stream_chat_completions_with_openai(
@@ -3868,16 +4093,6 @@ class LemonadeClient:
         model-slot lease across the whole iteration so the model cannot be
         evicted mid-stream (#2380).
         """
-        # Create a client just for this request.
-        # ``api_key`` is required by the OpenAI SDK (rejects None/"" with
-        # OpenAIError); when no real key is configured the placeholder is
-        # ignored by Lemonade itself on unauthenticated servers.
-        client = OpenAI(
-            base_url=self.base_url,
-            api_key=self.api_key or "lemonade",
-            timeout=timeout,
-        )
-
         # Separate OpenAI-standard params from llama.cpp-specific params.
         # The OpenAI client validates parameters strictly, so non-standard
         # ones (repeat_penalty, repeat_last_n, etc.) must go via extra_body.
@@ -3929,15 +4144,52 @@ class LemonadeClient:
         if tools:
             request_params["tools"] = tools
 
-        try:
-            # Use the client to stream responses
-            self.log.debug(f"Starting streaming chat completion with model: {model}")
-            stream = client.chat.completions.create(**request_params)
+        limits = stall_limits(
+            remote=bool(self.cloud_model_provider(model) or is_cloud_model(model)),
+            request_budget=timeout,
+        )
 
-            # Convert OpenAI client responses to our format
-            tokens_generated = 0
+        def _open_stream() -> Iterator[Dict[str, Any]]:
+            """One attempt: open the stream and convert its chunks, ending it
+            once it has been silent longer than *limits* allow."""
+            activity = ByteActivity()
+            http_client = activity_http_client(activity)
+            # ``api_key`` is required by the OpenAI SDK (rejects None/""); the
+            # placeholder is ignored by an unauthenticated Lemonade.
+            # ``max_retries=0``: transient failures are retried by
+            # ``_model_retrier`` (classified, with backoff and a deadline). The
+            # SDK's own retries would run inside each of those attempts and
+            # multiply them.
+            client = OpenAI(
+                base_url=self.base_url,
+                api_key=self.api_key or "lemonade",
+                # A backstop only: the watchdog ends a silent stream first.
+                timeout=timeout + STREAM_READ_BACKSTOP,
+                max_retries=0,
+                http_client=http_client,
+            )
+
+            def produce() -> Generator[Dict[str, Any], None, None]:
+                try:
+                    stream = client.chat.completions.create(**request_params)
+                    try:
+                        yield from _convert(stream)
+                    finally:
+                        close = getattr(stream, "close", None)
+                        if callable(close):
+                            close()
+                finally:
+                    http_client.close()
+
+            return watch_stream(
+                produce,
+                limits=limits,
+                activity=activity,
+                is_output=_chunk_carries_output,
+            )
+
+        def _convert(stream) -> Generator[Dict[str, Any], None, None]:
             for chunk in stream:
-                tokens_generated += 1
                 # The usage chunk is the last one and carries no choices:
                 # forward it as its own frame rather than dropping it on the
                 # floor with the rest of the non-choice chunks.
@@ -3996,9 +4248,29 @@ class LemonadeClient:
                     ),
                 }
 
+        # A transient failure before the first token is retried with backoff;
+        # one after it is not, because the caller already has that output.
+        # The give-up error carries the retry state (gaia.llm.retry) through
+        # the translations below, which deliberately cut the cause chain.
+        state = RetryState()
+        try:
+            # Use the client to stream responses
+            self.log.debug(f"Starting streaming chat completion with model: {model}")
+            tokens_generated = 0
+            for chunk in self._model_retrier().stream(
+                _open_stream,
+                is_output=_chunk_carries_output,
+                what="Streaming chat completion",
+                state=state,
+            ):
+                tokens_generated += 1
+                yield chunk
+
             self.log.debug(
                 f"Completed streaming chat completion. Generated {tokens_generated} tokens."
             )
+            if tokens_generated and self.cloud_model_provider(model):
+                _remember_cloud_availability(model, ok=True)
 
         except openai.AuthenticationError:
             if self.cloud_model_provider(model):
@@ -4010,18 +4282,31 @@ class LemonadeClient:
                 "Lemonade rejected the API key (401 Unauthorized) on "
                 "streaming chat completions. Verify LEMONADE_API_KEY is correct."
             )
+        except StreamStalledError as e:
+            message = e.describe(state.attempts)
+            self.log.error(message)
+            raise attach_retry_state(LemonadeClientError(message), state) from e
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
             if self.cloud_model_provider(model):
-                raise _cloud_request_error(
-                    _cloud_error_status(e), self.cloud_model_provider(model)
+                raise attach_retry_state(
+                    self._cloud_failure(
+                        _cloud_error_status(e), model, classify_exception(e)
+                    ),
+                    state,
                 ) from None
             error_type = e.__class__.__name__
             error_msg = str(e)
             self.log.error(f"OpenAI {error_type}: {error_msg}")
-            raise LemonadeClientError(f"OpenAI {error_type}: {error_msg}")
+            raise attach_retry_state(
+                LemonadeClientError(f"OpenAI {error_type}: {error_msg}"), state
+            )
         except Exception as e:
             self.log.error(f"Error using OpenAI client for streaming: {str(e)}")
-            raise LemonadeClientError(f"Streaming request failed: {str(e)}")
+            raise attach_retry_state(
+                LemonadeClientError(f"Streaming request failed: {str(e)}"), state
+            )
+        finally:
+            self._record_retries(state)
 
     def completions(
         self,
@@ -4125,7 +4410,12 @@ class LemonadeClient:
             if response.status_code != 200:
                 error_msg = f"Error in completions (status {response.status_code}): {response.text}"
                 self.log.error(error_msg)
-                raise LemonadeClientError(error_msg)
+                raise tag_http_failure(
+                    LemonadeClientError(error_msg),
+                    response.status_code,
+                    response.text,
+                    response.headers,
+                )
 
             result = response.json()
             if "choices" in result and len(result["choices"]) > 0:
@@ -4137,14 +4427,17 @@ class LemonadeClient:
 
             return result
 
+        def _request_with_retry():
+            return self._call_with_retry(_make_request, "Text completion")
+
         # Execute with auto-download retry logic
         try:
-            return _make_request()
+            return _request_with_retry()
         except (requests.exceptions.RequestException, LemonadeClientError) as e:
             # Use helper to handle auto-download and retry (#2513: only
             # when *e* is actually the missing-model condition).
             return self._execute_with_auto_download(
-                _make_request, model, auto_download, error=e
+                _request_with_retry, model, auto_download, error=e
             )
 
     def _stream_completions_with_openai(
@@ -4179,12 +4472,15 @@ class LemonadeClient:
         # Proactively ensure model is loaded before making request
         self._ensure_model_loaded(model, auto_download)
 
+        # max_retries=0: retried by _model_retrier, as in _stream_chat_chunks.
         client = OpenAI(
             base_url=self.base_url,
             api_key=self.api_key or "lemonade",
             timeout=timeout,
+            max_retries=0,
         )
 
+        state = RetryState()
         try:
             self.log.debug(f"Starting streaming text completion with model: {model}")
             # Create request parameters
@@ -4202,12 +4498,25 @@ class LemonadeClient:
             if logprobs is not None:
                 request_params["logprobs"] = logprobs
 
-            response = client.completions.create(**request_params)
+            def _open_stream() -> Generator[Dict[str, Any], None, None]:
+                response = client.completions.create(**request_params)
+                try:
+                    for chunk in response:
+                        yield chunk.model_dump()
+                finally:
+                    close = getattr(response, "close", None)
+                    if callable(close):
+                        close()
 
             tokens_generated = 0
-            for chunk in response:
+            for chunk in self._model_retrier().stream(
+                _open_stream,
+                is_output=_chunk_carries_output,
+                what="Streaming text completion",
+                state=state,
+            ):
                 tokens_generated += 1
-                yield chunk.model_dump()
+                yield chunk
 
             self.log.debug(
                 f"Completed streaming text completion. Generated {tokens_generated} tokens."
@@ -4221,10 +4530,17 @@ class LemonadeClient:
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
             error_type = e.__class__.__name__
             self.log.error(f"OpenAI {error_type}: {str(e)}")
-            raise LemonadeClientError(f"OpenAI {error_type}: {str(e)}")
+            raise attach_retry_state(
+                LemonadeClientError(f"OpenAI {error_type}: {str(e)}"), state
+            )
         except Exception as e:
             self.log.error(f"Error in OpenAI completion streaming: {str(e)}")
-            raise LemonadeClientError(f"Error in OpenAI completion streaming: {str(e)}")
+            raise attach_retry_state(
+                LemonadeClientError(f"Error in OpenAI completion streaming: {str(e)}"),
+                state,
+            )
+        finally:
+            self._record_retries(state)
 
     def embeddings(
         self,
@@ -4451,6 +4767,17 @@ class LemonadeClient:
     def cloud_model_provider(self, model: str) -> Optional[str]:
         """Return the provider for a built-in or previously discovered cloud model."""
         return cloud_model_provider(model, self._model_metadata.get(model))
+
+    def _cloud_failure(
+        self, status: Optional[int], model: str, reason: Optional[str] = None
+    ) -> LemonadeClientError:
+        """The error for a failed cloud call; a 404 is also recorded per model."""
+        error = _cloud_request_error(
+            status, self.cloud_model_provider(model), reason, model
+        )
+        if isinstance(error, CloudModelUnavailableError):
+            _remember_cloud_availability(model, ok=False)
+        return error
 
     def refresh_cloud_models(self) -> Dict[str, Dict[str, Any]]:
         """Re-read the catalog so cloud-model classification is current.

@@ -146,6 +146,59 @@ The full install log is at `~/.gaia/electron-install.log` — attach it when rep
 
 See the [installation troubleshooting guide](/reference/install-troubleshooting) for common failure modes.
 
+## Use a Lemonade you already run
+
+GAIA normally runs its own private Lemonade Server. If you already run Lemonade,
+point GAIA at yours instead: the PC then runs one server and keeps one copy of each
+model, and your own launch flags and backend stay in charge. On a 16 GB machine,
+two servers side by side can run it out of memory.
+
+GAIA asks the first time it finds one, and remembers the answer:
+
+- **Desktop app and `npx @amd-gaia/agent-ui`:** the first install asks before it
+  downloads anything. The Agent UI's setup screen asks too.
+- **Terminal UI:** the first-run checks offer it.
+- **Command line:** `gaia init` asks; `gaia init --yes` never switches on its own and
+  prints the command to run instead.
+
+To switch at any time:
+
+<CodeGroup>
+```bash Use yours
+gaia lemonade connect http://localhost:13305
+```
+
+```bash Back to GAIA's own
+gaia config set lemonade_mode gaia
+```
+
+```bash Which one is in use
+gaia lemonade status
+```
+</CodeGroup>
+
+In the Agent UI, use **Settings → Advanced → Model server**. `gaia lemonade connect`
+with no address uses the one `gaia lemonade detect` finds on this PC.
+
+- **Version:** your Lemonade must be v10.9.0 or newer. An older one is refused, and
+  the message names both versions.
+- **API key:** if your server was started with `LEMONADE_API_KEY`, GAIA asks for it
+  (`--api-key-stdin` reads it from a pipe). It's kept in the OS credential store,
+  never in GAIA's config file.
+- **Down:** if your server isn't answering, GAIA says so and how to start it. It
+  never starts its own instead.
+- **What GAIA does on your server:** registers its embedding model
+  (`user.embeddinggemma-300m-GGUF`), downloads the models it needs and loads them.
+  Its chat model loads with GAIA's context size for that load. It doesn't change
+  your server's settings, and setup leaves your other loaded models alone.
+- **Long documents:** if answers about long documents time out, raise your server's
+  request timeout (`global_timeout` in its config).
+
+`LEMONADE_BASE_URL` (and `LEMONADE_API_KEY`) still work and win over this setting.
+The choice is stored as `lemonade_mode` and `lemonade_base_url` in
+`~/.gaia/config.json`. Switching tells a running GAIA daemon right away. It stops
+GAIA's own server when you switch to yours, and starts it again when you switch back.
+
 ## Updating GAIA
 
 GAIA checks for updates automatically:

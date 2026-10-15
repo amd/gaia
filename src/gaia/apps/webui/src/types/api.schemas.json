@@ -3317,8 +3317,15 @@
         "type": "boolean"
       },
       "lemonade_url": {
-        "title": "Lemonade Url",
-        "type": "string"
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Lemonade Url"
       },
       "lemonade_version": {
         "anyOf": [
@@ -3489,6 +3496,42 @@
       }
     },
     "title": "SystemStatus",
+    "type": "object"
+  },
+  "TargetRequest": {
+    "description": "``mode`` \"gaia\" or \"external\"; the URL and key only for \"external\".",
+    "properties": {
+      "api_key": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Api Key"
+      },
+      "base_url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Base Url"
+      },
+      "mode": {
+        "title": "Mode",
+        "type": "string"
+      }
+    },
+    "required": [
+      "mode"
+    ],
+    "title": "TargetRequest",
     "type": "object"
   },
   "TaskCreate": {
