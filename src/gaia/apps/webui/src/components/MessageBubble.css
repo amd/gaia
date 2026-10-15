@@ -558,7 +558,7 @@
 .thinking-indicator-hint {
     display: block;
     margin-top: 4px;
-    font-family: var(--font-sans, inherit);
+    font-family: var(--font-sans);
     font-size: 12px;
     color: var(--text-secondary);
     white-space: normal;
