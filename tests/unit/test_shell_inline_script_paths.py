@@ -29,7 +29,7 @@ class _RecordingValidator:
         self.root = str(Path(root).resolve())
         self.asked = []
 
-    def is_path_allowed(self, path):
+    def is_path_allowed(self, path, prompt_user=True):
         self.asked.append(str(path))
         return str(path).startswith(self.root)
 

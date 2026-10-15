@@ -525,6 +525,19 @@ class TestPrettyPrintJsonToolResults:
         assert event["command_output"]["expected_exit"] == reason
         assert event["summary"] == f"{reason} (exit 1)"
 
+    @pytest.mark.parametrize(
+        "data, success",
+        [
+            ('{"ok": false, "error": "Could not archive 3 of 3 messages"}', False),
+            ({"ok": False, "error": "boom"}, False),
+            ('{"ok": true, "data": {"failed_count": 1, "partial": true}}', True),
+            ('{"status": "error", "error": "boom"}', False),
+        ],
+    )
+    def test_an_ok_false_envelope_marks_success_false(self, handler, data, success):
+        handler.pretty_print_json(data, title="Result")
+        assert _drain(handler)[0]["success"] is success
+
     def test_non_dict_data_success_is_true(self, handler):
         handler.pretty_print_json("some string", title="Result")
         events = _drain(handler)
@@ -1147,13 +1160,12 @@ class TestPrintStreamingText:
         assert handler._stream_buffer == "{"
 
     def test_answer_json_token_by_token_filtered(self, handler):
-        """Token-by-token {"answer": "..."} should extract and emit as answer."""
+        """Token-by-token {"answer": "..."} streams only the decoded value."""
         handler.print_streaming_text("{")
         handler.print_streaming_text('"answer": "Hello world"}')
         events = _drain(handler)
-        # The answer JSON should be parsed and emitted as an "answer" event
         assert len(events) == 1
-        assert events[0]["type"] == "answer"
+        assert events[0]["type"] == "chunk"
         assert events[0]["content"] == "Hello world"
         assert handler._stream_buffer == ""
 

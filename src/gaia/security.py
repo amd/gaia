@@ -448,7 +448,11 @@ def stable_scratch_dir(anchor: str) -> Path:
         info = path.lstat()
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
             raise OSError("not a directory")
-        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+        # getuid is POSIX-only; the hasattr guard keeps Windows off this path.
+        if (
+            hasattr(os, "getuid")
+            and info.st_uid != os.getuid()  # pylint: disable=no-member
+        ):
             raise OSError("owned by another user")
     except OSError as exc:
         fallback = Path(tempfile.mkdtemp(prefix="gaia-scratch-"))
