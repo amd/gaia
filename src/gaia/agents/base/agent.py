@@ -8025,7 +8025,8 @@ Do NOT wrap conversational replies in JSON.
         """
         ns_id = self._namespaced_agent_id()
         # Only a console with a Stop button can cancel a client backoff wait.
-        stoppable = getattr(self.console, "cancelled", None) is not None
+        console = getattr(self, "console", None)
+        stoppable = getattr(console, "cancelled", None) is not None
         try:
             # Standby would stall a local model mid-turn until someone wakes the PC.
             with (
