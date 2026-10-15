@@ -499,7 +499,10 @@ class SSEOutputHandler(OutputHandler):
             if isinstance(files, list):
                 # Keep the UI contract honest: "total" should never claim more accessible
                 # files than we actually include in the event payload.
-                limited_files = files[:20]
+                # list_files reports bare names; the UI renders entries.
+                limited_files = [
+                    {"name": f} if isinstance(f, str) else f for f in files[:20]
+                ]
                 event["result_data"] = {
                     "type": "file_list",
                     "files": limited_files,  # Limit to 20 files

@@ -6991,18 +6991,22 @@ Do NOT wrap conversational replies in JSON.
         return None
 
     def _cloud_account_refusal(self, exc: BaseException) -> Optional[str]:
-        """The user's message when a cloud provider refused the account itself.
+        """The user's message when a cloud provider refused the account or model.
 
-        Out of funds or suspended: no retry can succeed, so the turn ends as an
-        error instead of an answer.
+        Out of funds or suspended, or the model is not served there (HTTP
+        404): no retry can succeed, so the turn ends as an error instead of an
+        answer.
         """
         from gaia.llm.providers.lemonade import (
             LemonadeCloudAccountError,
+            LemonadeCloudModelUnavailableError,
             classify_lemonade_exception,
         )
 
         classified = classify_lemonade_exception(exc)
-        if isinstance(classified, LemonadeCloudAccountError):
+        if isinstance(
+            classified, (LemonadeCloudAccountError, LemonadeCloudModelUnavailableError)
+        ):
             return classified.user_message
         return None
 

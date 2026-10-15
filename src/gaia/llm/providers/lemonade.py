@@ -9,10 +9,12 @@ import time
 from typing import Callable, Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
+from ..inference_location import provider_phrase
 from ..lemonade_client import (
     CONTEXT_OVERFLOW_PHRASES,
     CONVERSATION_SLOT,
     DEFAULT_MODEL_NAME,
+    CloudModelUnavailableError,
     LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
@@ -300,6 +302,42 @@ class LemonadeCloudAccountError(LemonadeError):
     )
 
 
+#: How a TUI user picks another model. The Agent UI swaps this exact sentence
+#: for :data:`AGENT_UI_MODEL_SWITCH_HINT` (``gaia.ui._chat_helpers``).
+TUI_MODEL_SWITCH_HINT = "Pick another model with /model in the TUI."
+AGENT_UI_MODEL_SWITCH_HINT = (
+    "Pick another model from the model menu next to the Send button. If you "
+    "typed this model ID yourself, clear it under Settings > Advanced > "
+    "Custom model ID."
+)
+
+
+class LemonadeCloudModelUnavailableError(LemonadeError):
+    """The cloud provider answered 404 for the model (not deployed, renamed,
+    or no access). Retrying the same model can never succeed."""
+
+    retryable = False
+
+    def __init__(
+        self,
+        model_id: Optional[str] = None,
+        provider: Optional[str] = None,
+        payload: Optional[dict] = None,
+    ):
+        self.model_id = model_id
+        self.provider = provider
+        model = f"`{model_id}`" if model_id else "The selected cloud model"
+        where = provider_phrase(provider) if provider else "its cloud provider"
+        super().__init__(
+            user_message=(
+                f"{model} isn't available on {where} (HTTP 404): it isn't "
+                "deployed there, was renamed, or your account has no access "
+                f"to it. Trying again won't help. {TUI_MODEL_SWITCH_HINT}"
+            ),
+            payload=payload,
+        )
+
+
 class LemonadeAuthRejectedError(LemonadeError):
     """The key was rejected (HTTP 401/403) by the cloud provider or Lemonade.
 
@@ -434,6 +472,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             return cur
         if isinstance(cur, LemonadeAuthError):
             return LemonadeAuthRejectedError(user_message=str(cur))
+        if isinstance(cur, CloudModelUnavailableError):
+            return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
         chain_text.append(str(cur))
         cur = cur.__cause__ or cur.__context__
 
@@ -446,6 +486,9 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     )
     if refused:
         return LemonadeCloudAccountError(user_message=refused.group(0).strip())
+    # ``CloudModelUnavailableError`` flattened to text by a wrapper.
+    if "selected cloud model is unavailable (http 404)" in " ".join(chain_text).lower():
+        return LemonadeCloudModelUnavailableError()
     # A ``LemonadeAuthError`` flattened to text by a wrapper; stop at the sentence
     # naming LEMONADE_API_KEY so a wrapper's own trailing advice is dropped.
     rejected = re.search(
