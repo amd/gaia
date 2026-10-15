@@ -324,6 +324,9 @@ def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
     return sock if isinstance(sock, socket.socket) else None
 
 
+# An envelope whose first key is "answer".
+_ANSWER_FIRST_RE = re.compile(r'\s*\{\s*"answer"\s*:')
+
 class SSEOutputHandler(OutputHandler):
     """
     OutputHandler that queues agent events as JSON for SSE streaming.
@@ -923,6 +926,11 @@ class SSEOutputHandler(OutputHandler):
             # The gap after a dropped envelope separates it from nothing.
             self._stream_buffer = self._stream_buffer.lstrip()
         while self._stream_buffer:
+            # A reply that opens with its answer streams that answer as it
+            # arrives (case 1b in print_streaming_text), not once it closes.
+            if _ANSWER_FIRST_RE.match(self._stream_buffer):
+                self._envelope_scan = None
+                return False
             resume = self._envelope_scan
             if resume is not None and (
                 len(self._stream_buffer) < resume[1][0]
