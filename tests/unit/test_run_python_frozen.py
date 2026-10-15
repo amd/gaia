@@ -22,6 +22,7 @@ pytest.importorskip("gaia_agent_chat")
 
 from gaia_agent_chat import python_runner  # noqa: E402
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent_chat.python_jobs import PythonJob  # noqa: E402
 from gaia_agent_chat.python_runner import (  # noqa: E402
     RUN_PYTHON_FILE_FLAG,
     python_command,
@@ -78,6 +79,14 @@ def _completed(argv, returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
 
 
+def _spawn(**finished):
+    """Stand in for the child: a job that ran to completion."""
+    return patch(
+        "gaia_agent_chat.agent.run_python_job",
+        return_value=PythonJob(_completed([], **finished), None, []),
+    )
+
+
 # ---------------------------------------------------------------------------
 # The command each tool builds
 # ---------------------------------------------------------------------------
@@ -96,7 +105,7 @@ def test_frozen_the_binary_is_asked_for_its_runner_mode(frozen):
 def test_frozen_run_python_never_hands_the_script_to_the_agent_parser(
     frozen, tools, project
 ):
-    with patch("subprocess.run", return_value=_completed([], stdout="42\n")) as spawn:
+    with _spawn(stdout="42\n") as spawn:
         result = tools["run_python"](code="print(6 * 7)")
 
     argv = spawn.call_args.args[0]
@@ -112,7 +121,7 @@ def test_frozen_execute_python_file_passes_its_args_after_the_script(
     script = project / "job.py"
     script.write_text("print('hi')\n", encoding="utf-8")
 
-    with patch("subprocess.run", return_value=_completed([])) as spawn:
+    with _spawn() as spawn:
         tools["execute_python_file"](file_path=str(script), args="--rows 3")
 
     assert spawn.call_args.args[0] == [
@@ -154,9 +163,7 @@ def test_the_agent_parser_rejecting_the_script_is_an_error(tool, tools, project)
     stderr = "gaia-agent-gaia-stdio: error: unrecognized arguments: C:/t.py\n"
     script = project / "t.py"
     script.write_text("print(1)\n", encoding="utf-8")
-    with patch(
-        "subprocess.run", return_value=_completed([], returncode=2, stderr=stderr)
-    ):
+    with _spawn(returncode=2, stderr=stderr):
         if tool == "run_python":
             result = tools[tool](code="print(1)")
         else:
@@ -170,7 +177,10 @@ def test_the_agent_parser_rejecting_the_script_is_an_error(tool, tools, project)
 def test_a_start_failure_is_an_error_naming_the_program(tool, frozen, tools, project):
     script = project / "t.py"
     script.write_text("print(1)\n", encoding="utf-8")
-    with patch("subprocess.run", side_effect=FileNotFoundError(2, "not found")):
+    with patch(
+        "gaia_agent_chat.agent.run_python_job",
+        side_effect=FileNotFoundError(2, "not found"),
+    ):
         if tool == "run_python":
             result = tools[tool](code="print(1)")
         else:
@@ -318,7 +328,7 @@ def test_the_runner_module_imports_only_the_stdlib():
 def test_frozen_the_child_keeps_pyinstallers_environment(frozen, tools, monkeypatch):
     """Without ``_PYI_*`` a one-file child unpacks the whole binary again."""
     monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", "/tmp/_MEI1234")
-    with patch("subprocess.run", return_value=_completed([])) as spawn:
+    with _spawn() as spawn:
         tools["run_python"](code="print(1)")
 
     env = spawn.call_args.kwargs["env"]

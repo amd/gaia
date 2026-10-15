@@ -55,6 +55,20 @@ var restoreKey = func(provider string) error {
 	return err
 }
 
+// keptCopyError is a key cleared from Lemonade whose saved copy survived.
+type keptCopyError struct{ err error }
+
+func (e keptCopyError) Error() string {
+	return "Cleared for this session, but the saved copy could not be removed: " + e.err.Error()
+}
+
+func (e keptCopyError) Unwrap() error { return e.err }
+
+// Brief implements daemon.Briefer.
+func (e keptCopyError) Brief() string {
+	return "Cleared for this session, but the saved copy wasn't removed. " + daemon.Brief(e.err)
+}
+
 // daemonUnreachable reports that err is the daemon itself failing to come up
 // or answer, not one provider's restore being refused.
 func daemonUnreachable(err error) bool {
