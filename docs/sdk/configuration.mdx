@@ -141,6 +141,17 @@ never repeats output. Each retry shows a status line such as
 | `GAIA_LLM_RETRY_BASE_DELAY` | `2` | Backoff base in seconds: retry *n* waits up to `base × 2ⁿ`. |
 | `GAIA_LLM_RETRY_MAX_DELAY` | `30` | Longest single wait in seconds, `Retry-After` included. |
 | `GAIA_LLM_RETRY_DEADLINE` | `120` | Seconds one request may spend across all its attempts and waits. |
+| `GAIA_LLM_STREAM_IDLE_TIMEOUT` | `120` | Seconds a stream may send nothing before it counts as stalled. |
+
+**A stalled stream** is one that stops sending data. A hosted model gets the
+idle limit above from the moment it accepts the request; a local model gets the
+whole request budget (`GAIA_LEMONADE_REQUEST_BUDGET`) for its first token,
+because prefilling a long prompt legitimately sends nothing for minutes, and
+the idle limit after that. Any byte, a keep-alive included, resets the clock.
+A stall before the first token of a hosted model is retried once; the time it
+spent does not count against `GAIA_LLM_RETRY_DEADLINE`. A stall after the first
+token, or a local model that used its whole prefill budget, ends the request
+with a message saying so. Stop ends a stalled stream at once.
 
 **An agent step** whose request still fails after that is not the end of the
 run. The agent waits, then asks again with its conversation and tool history

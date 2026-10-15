@@ -23,7 +23,17 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from threading import Event, Thread
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import openai  # For exception types
 import requests
@@ -43,9 +53,17 @@ from gaia.llm.retry import (
     ModelCallRetrier,
     RetryPolicy,
     RetryState,
+    StreamStalledError,
     attach_retry_state,
     classify_exception,
     tag_http_failure,
+)
+from gaia.llm.stream_watchdog import (
+    STREAM_READ_BACKSTOP,
+    ByteActivity,
+    activity_http_client,
+    stall_limits,
+    watch_stream,
 )
 from gaia.logger import get_logger
 from gaia.ports import (
@@ -3774,22 +3792,6 @@ class LemonadeClient:
         model-slot lease across the whole iteration so the model cannot be
         evicted mid-stream (#2380).
         """
-        # Create a client just for this request.
-        # ``api_key`` is required by the OpenAI SDK (rejects None/"" with
-        # OpenAIError); when no real key is configured the placeholder is
-        # ignored by Lemonade itself on unauthenticated servers.
-        #
-        # ``max_retries=0``: transient failures are retried by
-        # ``_model_retrier`` (classified, with backoff and a deadline). The
-        # SDK's own retries would run inside each of those attempts and
-        # multiply them.
-        client = OpenAI(
-            base_url=self.base_url,
-            api_key=self.api_key or "lemonade",
-            timeout=timeout,
-            max_retries=0,
-        )
-
         # Separate OpenAI-standard params from llama.cpp-specific params.
         # The OpenAI client validates parameters strictly, so non-standard
         # ones (repeat_penalty, repeat_last_n, etc.) must go via extra_body.
@@ -3841,15 +3843,49 @@ class LemonadeClient:
         if tools:
             request_params["tools"] = tools
 
-        def _open_stream() -> Generator[Dict[str, Any], None, None]:
-            """One attempt: open the stream and convert its chunks."""
-            stream = client.chat.completions.create(**request_params)
-            try:
-                yield from _convert(stream)
-            finally:
-                close = getattr(stream, "close", None)
-                if callable(close):
-                    close()
+        limits = stall_limits(
+            remote=bool(self.cloud_model_provider(model) or is_cloud_model(model)),
+            request_budget=timeout,
+        )
+
+        def _open_stream() -> Iterator[Dict[str, Any]]:
+            """One attempt: open the stream and convert its chunks, ending it
+            once it has been silent longer than *limits* allow."""
+            activity = ByteActivity()
+            http_client = activity_http_client(activity)
+            # ``api_key`` is required by the OpenAI SDK (rejects None/""); the
+            # placeholder is ignored by an unauthenticated Lemonade.
+            # ``max_retries=0``: transient failures are retried by
+            # ``_model_retrier`` (classified, with backoff and a deadline). The
+            # SDK's own retries would run inside each of those attempts and
+            # multiply them.
+            client = OpenAI(
+                base_url=self.base_url,
+                api_key=self.api_key or "lemonade",
+                # A backstop only: the watchdog ends a silent stream first.
+                timeout=timeout + STREAM_READ_BACKSTOP,
+                max_retries=0,
+                http_client=http_client,
+            )
+
+            def produce() -> Generator[Dict[str, Any], None, None]:
+                try:
+                    stream = client.chat.completions.create(**request_params)
+                    try:
+                        yield from _convert(stream)
+                    finally:
+                        close = getattr(stream, "close", None)
+                        if callable(close):
+                            close()
+                finally:
+                    http_client.close()
+
+            return watch_stream(
+                produce,
+                limits=limits,
+                activity=activity,
+                is_output=_chunk_carries_output,
+            )
 
         def _convert(stream) -> Generator[Dict[str, Any], None, None]:
             for chunk in stream:
@@ -3943,6 +3979,10 @@ class LemonadeClient:
                 "Lemonade rejected the API key (401 Unauthorized) on "
                 "streaming chat completions. Verify LEMONADE_API_KEY is correct."
             )
+        except StreamStalledError as e:
+            message = e.describe(state.attempts)
+            self.log.error(message)
+            raise attach_retry_state(LemonadeClientError(message), state) from e
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
             if self.cloud_model_provider(model):
                 raise attach_retry_state(

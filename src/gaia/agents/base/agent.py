@@ -6500,9 +6500,15 @@ Do NOT wrap conversational replies in JSON.
         record, so those paths are untouched. A read timeout, or a cloud
         provider's, is excluded too — the request already used its whole time
         budget, and sending it again would most likely hang the same way (#1030).
+        So is a stalled stream: the client already retried it, and each further
+        try costs another whole idle limit.
         """
         state = retry_state_of(exc)
-        if state is None or state.last_reason in ("read timeout", "upstream timeout"):
+        if state is None or state.last_reason in (
+            "read timeout",
+            "upstream timeout",
+            "stream stalled",
+        ):
             return None
         if is_context_overflow_error(str(exc).lower()):
             # Overflow has its own trim-once / reload handling; never a wait.
@@ -6529,6 +6535,8 @@ Do NOT wrap conversational replies in JSON.
             return "The connection to the model service dropped"
         if reason == "upstream timeout":
             return "The model service did not answer in time"
+        if reason == "stream stalled":
+            return "The model stopped sending"
         return f"The model service had a problem ({reason or 'unknown error'})"
 
     def _announce_model_retry(self, notice: RetryNotice) -> None:
