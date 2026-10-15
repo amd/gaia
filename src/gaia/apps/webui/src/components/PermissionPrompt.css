@@ -117,6 +117,17 @@
     background: var(--accent-fill-hover);
 }
 
+.perm-btn.is-suggested {
+    border-color: var(--accent-fill);
+    color: var(--text-primary);
+}
+
+.perm-card-hint {
+    color: var(--text-secondary);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
 .perm-btn:disabled {
     opacity: 0.6;
     cursor: default;

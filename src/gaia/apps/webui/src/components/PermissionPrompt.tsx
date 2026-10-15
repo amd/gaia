@@ -7,6 +7,7 @@ import {
     useNotificationStore,
     selectSessionPermissionPrompt,
     requiresFreshConsent,
+    repeatedAllowCount,
     PATH_ACCESS_TOOL,
     type PermissionDecision,
 } from '../stores/notificationStore';
@@ -57,6 +58,8 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const cardRef = useRef<HTMLElement>(null);
     const freshConsent = requiresFreshConsent(notification.tool);
     const scope = freshConsent ? undefined : notification.alwaysScope;
+    const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
+    const suggestAlways = !!scope && repeats > 0;
     const detail = summarize(notification);
     const args = notification.toolArgs ?? {};
     const hasArgs = Object.keys(args).length > 0;
@@ -139,6 +142,12 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {showArgs && <pre className="perm-card-pre">{JSON.stringify(args, null, 2)}</pre>}
                 </div>
             )}
+            {suggestAlways && !expired && (
+                <p className="perm-card-hint">
+                    You've allowed this {repeats === 1 ? 'once' : `${repeats} times`} already.
+                    {' '}Always allow stops asking about <code>{scope}</code> in this chat.
+                </p>
+            )}
             {expired ? (
                 <p className="perm-card-detail">No answer in time, so GAIA was told no.</p>
             ) : (
@@ -150,7 +159,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {scope && (
                         <button
                             type="button"
-                            className="perm-btn"
+                            className={`perm-btn${suggestAlways ? ' is-suggested' : ''}`}
                             onClick={() => answer('always')}
                             disabled={busy}
                             aria-label={`Always allow ${scope} in this chat`}

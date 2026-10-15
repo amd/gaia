@@ -1753,6 +1753,17 @@
         "title": "Output Tokens",
         "type": "integer"
       },
+      "steps": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Steps"
+      },
       "time_to_first_token": {
         "default": 0,
         "title": "Time To First Token",

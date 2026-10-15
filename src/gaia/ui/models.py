@@ -495,6 +495,8 @@ class InferenceStatsResponse(BaseModel):
     time_to_first_token: float = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    # The agent's own step count for the turn, not the number of activity rows.
+    steps: Optional[int] = None
 
 
 class MessageResponse(BaseModel):
