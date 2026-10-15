@@ -79,7 +79,7 @@ class MCPClientManager:
             raise RuntimeError(f"Failed to connect to MCP server '{name}'{detail}")
 
         # Store client (in-memory only).
-        # Persistence to ~/.gaia/mcp_servers.json goes through the connectors
+        # Persistence to <gaia_home>/mcp_servers.json goes through the connectors
         # framework (see gaia.connectors.mcp_server.McpServerHandler.configure)
         # — this manager is a runtime registry, not a writer (#976).
         self._clients[name] = client
