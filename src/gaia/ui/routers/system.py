@@ -480,7 +480,16 @@ def _probe_ok(probe: str) -> None:
 @router.get("/api/system/status", response_model=SystemStatus)
 async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
-    status = SystemStatus()
+    from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_choice import LemonadeChoiceError
+
+    # The config names the Lemonade server, so a broken one is reported, not raised.
+    config_errors = (GaiaConfigError, LemonadeChoiceError)
+    try:
+        status = SystemStatus()
+    except config_errors as exc:
+        logger.warning("system status: %s", exc)
+        status = SystemStatus(lemonade_url=None, config_error=str(exc))
     status.warm_up = WarmUpStatus(**warmup.warm_up_status())
 
     # Resolve how to start Lemonade on THIS host once, here, so every surface
@@ -499,8 +508,6 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
     # Resolved outside the probe below: its catch-all would report a corrupt
     # config as "Lemonade not running".
-    from gaia.config import GaiaConfigError
-
     default_model: Optional[str]
     try:
         default_model = _default_model_name()
@@ -781,6 +788,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         # "not responding" banner rather than calling it an ambiguous probe.
         logger.debug("system status: Lemonade is not running: %s", exc)
         status.lemonade_running = False
+    except config_errors as exc:
+        # Which server to probe is unknown until the config is fixed.
+        status.config_error = str(exc)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("system status: Lemonade health query failed: %s", exc)
         status.lemonade_running = False

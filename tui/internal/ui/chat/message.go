@@ -40,6 +40,9 @@ type Message struct {
 	InputTokens  int           // prompt tokens this turn sent; 0 => not reported
 	CachedTokens int           // prompt tokens served from the backend's cache
 
+	// DurationLabel names the time in the footnote; empty prints it bare.
+	DurationLabel string
+
 	// Metrics is the agent's per-turn performance record. Nil unless the agent
 	// ran with GAIA_TURN_LOG set — every ordinary turn, and every turn from an
 	// agent older than the record, leaves it nil.

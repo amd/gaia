@@ -1813,6 +1813,42 @@ so the two can never disagree about whether GAIA is set up.
   </Accordion>
 </AccordionGroup>
 
+### Lemonade server
+
+Which Lemonade Server GAIA uses: its own, or one the user already runs. Same
+choice and checks as `gaia lemonade connect` and `gaia config set lemonade_mode`.
+All three routes need the `X-Gaia-UI: 1` header (**403** without it).
+
+<AccordionGroup>
+  <Accordion title="GET /api/lemonade/target">
+    The server GAIA uses now and who chose it: `mode` (`gaia` or `external`),
+    `saved_mode` (`null` until someone chooses), `source`, `base_url`,
+    `saved_base_url`, `api_key_stored`, `env_override` (a warning when
+    `LEMONADE_BASE_URL` overrides the setting), `gaia_installed`, `offer` (no
+    choice saved and the environment isn't choosing, so the UI should offer the
+    switch), and `what_gaia_does`. **409** when the config is unreadable or the
+    saved choice is unusable; `detail` names the fix.
+  </Accordion>
+
+  <Accordion title="GET /api/lemonade/detect">
+    A Lemonade the user already runs on this PC's default ports:
+    `{"found": {"url", "status", "version", "minimum", "message"}}`, or
+    `{"found": null}` when none answers. `status` is `ok`, `needs_key`,
+    `bad_key`, `too_old`, `not_lemonade`, or `unreachable`.
+  </Accordion>
+
+  <Accordion title="POST /api/lemonade/target">
+    Switch servers. Body: `{"mode": "gaia" | "external", "base_url": "...",
+    "api_key": "..."}`; the URL and key are only for `external`. Nothing is
+    saved unless the user's server checks out. A running daemon is told to
+    stop (or start) GAIA's own server, and cached agents are dropped. Returns
+    the `GET` shape plus `daemon`. **422** when the server can't be used
+    (`detail.message`, `detail.status`), **409** for an unreadable config,
+    **403** over mobile access, **502** when it saved but the daemon did not
+    switch.
+  </Accordion>
+</AccordionGroup>
+
 ### Providers
 
 Where the chat model runs: **Local**, **Fireworks AI**, or the **AMD LLM

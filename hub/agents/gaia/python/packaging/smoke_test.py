@@ -34,6 +34,14 @@ stdio JSONL -- what the TUI spawns as a child process:
      The TUI forwards that flag, and the Anthropic client's import is guarded,
      so a binary built without it boots fine and fails only here.
 
+run_python -- the binary is the only Python a release user has:
+
+  9. ``--gaia-run-python-file <script>`` runs a script that imports the
+     bundled office/data libraries, writes an ``.xlsx``, starts a process
+     pool, and starts ``sys.executable -c`` / ``-m pip`` itself; a failing
+     script's exit code comes back unchanged. Before the fix the script path
+     reached the stdio parser and exited 2 with ``unrecognized arguments``.
+
 The handshake deliberately stops short of a real turn: an answer needs a running
 Lemonade Server and a downloaded model, which the release runners do not have.
 It still fails loudly on a broken binary -- the opening event is emitted with
@@ -54,6 +62,7 @@ import queue
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -77,6 +86,53 @@ STDIO_ARGV: list[str] = []
 #: cold one-file binary unpacks itself first. Generous on purpose: a slow
 #: runner must not read as a broken binary.
 STDIO_HANDSHAKE_DEADLINE_S = 300.0
+
+#: ``gaia_agent_chat.python_runner.RUN_PYTHON_FILE_FLAG``, copied because this
+#: harness imports nothing outside the stdlib (a unit test pins the two).
+RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
+
+#: What a knowledge-work ``run_python`` call does: office files, a table, a
+#: chart, and stdlib modules nothing in GAIA itself imports.
+RUN_PYTHON_SCRIPT = """\
+import sys, statistics, sqlite3, zipfile, xml.etree.ElementTree, csv, decimal
+import subprocess
+from concurrent.futures import ProcessPoolExecutor
+
+import openpyxl, docx, pptx, pandas, numpy, reportlab, pypdf, pymupdf, xlsxwriter
+import matplotlib.pyplot as plt
+
+
+def py(*argv):
+    # A script starting sys.executable -- the binary -- as an interpreter.
+    return subprocess.run([sys.executable, *argv], capture_output=True, text=True)
+
+
+def main():
+    wb = openpyxl.Workbook()
+    wb.active.append(["part", "qty"])
+    wb.active.append(["bolt", 4])
+    wb.save("bom.xlsx")
+    assert openpyxl.load_workbook("bom.xlsx").active["B2"].value == 4
+    docx.Document().save("notes.docx")
+    pptx.Presentation().save("deck.pptx")
+    plt.plot([1, 2, 3])
+    plt.savefig("chart.png")
+    frame = pandas.DataFrame({"qty": [4, 6]})
+    # Workers re-launch the binary. Under spawn (macOS) they re-import this
+    # file as __mp_main__, as CPython does, so the work sits under the guard.
+    with ProcessPoolExecutor(2) as pool:
+        assert list(pool.map(abs, [-1, -2])) == [1, 2]
+    nested = py("-c", "import pypdf, pymupdf, xlsxwriter; print('nested ok')")
+    assert nested.stdout.strip().endswith("nested ok"), (nested.stdout, nested.stderr)
+    pip = py("-m", "pip", "install", "pypdf")
+    assert pip.returncode == 1 and "can't be installed" in pip.stderr, pip.stderr
+    total = int(frame["qty"].sum())
+    print("RUN_PYTHON_OK", sys.argv[1:], total, statistics.mean([1, 3]))
+
+
+if __name__ == "__main__":
+    main()
+"""
 
 
 def log(msg: str) -> None:
@@ -345,6 +401,58 @@ def check_stdio_handshake(
         _kill_tree(proc)
 
 
+def _run_script(binary: Path, workdir: Path, body: str, *args: str):
+    script = workdir / "snippet.py"
+    script.write_text(body, encoding="utf-8")
+    cmd = [str(binary), RUN_PYTHON_FILE_FLAG, str(script), *args]
+    log(f"command: {' '.join(cmd)}")
+    t0 = time.time()
+    # The tool's own call shape: piped output, closed stdin, script's cwd.
+    result = subprocess.run(
+        cmd,
+        cwd=str(workdir),
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+        check=False,
+    )
+    log(f"exited {result.returncode} after {time.time() - t0:.1f}s")
+    return result
+
+
+def check_run_python(binary: Path) -> bool:
+    """A script runs on the bundled libraries, and its exit code comes back."""
+    with tempfile.TemporaryDirectory(prefix="gaia-smoke-run-python-") as tmp:
+        workdir = Path(tmp)
+        ok = _run_script(binary, workdir, RUN_PYTHON_SCRIPT, "--rows", "2")
+        if ok.returncode != 0 or "RUN_PYTHON_OK ['--rows', '2'] 10 2" not in ok.stdout:
+            log(
+                "FAIL: the run_python script did not run on the frozen binary. "
+                f"stdout: {ok.stdout[-1500:]!r} stderr: {ok.stderr[-3000:]!r}"
+            )
+            return False
+        missing = [
+            name
+            for name in ("bom.xlsx", "notes.docx", "deck.pptx", "chart.png")
+            if not (workdir / name).is_file()
+        ]
+        if missing:
+            log(f"FAIL: the script ran but did not write {missing}")
+            return False
+
+        failed = _run_script(binary, workdir, "import sys\nsys.exit(3)\n")
+        if failed.returncode != 3:
+            log(
+                f"FAIL: a script exiting 3 came back as {failed.returncode}. "
+                f"stderr: {failed.stderr[-1500:]!r}"
+            )
+            return False
+    log("run_python check PASS -- scripts run on the bundled libraries")
+    return True
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Smoke-test the frozen GAIA agent binary (both transports)."
@@ -410,8 +518,11 @@ def main(argv=None) -> int:
         binary, ["--use-claude"], env=claude_env, backend="claude"
     )
 
+    log("checking run_python on the frozen binary")
+    results["run_python"] = check_run_python(binary)
+
     log(f"results: {results}")
-    ok = len(results) == 6 and all(results.values())
+    ok = len(results) == 7 and all(results.values())
     log("VERDICT: PASS" if ok else "VERDICT: FAIL")
     return 0 if ok else 1
 
