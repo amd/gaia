@@ -3038,6 +3038,13 @@ Examples:
         action="store_true",
         help="Use stdio transport instead of HTTP (for Claude Code / eval runner integration)",
     )
+    mcp_serve_parser.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="Allow a non-loopback --host. Requires a bearer token of 32+ "
+        "characters in GAIA_AGENT_UI_MCP_TOKEN; clients send it as "
+        "'Authorization: Bearer <token>'",
+    )
 
     mcp_tui_parser = mcp_subparsers.add_parser(
         "tui",
@@ -9961,7 +9968,20 @@ def handle_mcp_serve(args):
     log = get_logger(__name__)
 
     try:
-        from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp
+        from gaia.mcp.servers.agent_ui_mcp import (
+            RemoteBindError,
+            create_agent_ui_mcp,
+            http_bind_token,
+            run_http,
+        )
+
+        token = None
+        if not args.stdio:
+            try:
+                token = http_bind_token(args.host, getattr(args, "allow_remote", False))
+            except RemoteBindError as e:
+                print(f"❌ {e}", file=sys.stderr)
+                raise SystemExit(2) from e
 
         mcp = create_agent_ui_mcp(backend_url=args.backend)
 
@@ -9990,7 +10010,7 @@ def handle_mcp_serve(args):
                 log.debug("MCPServer tool registry layout changed; skipping tool count")
             print("\nPress Ctrl+C to stop")
             print("=" * 60)
-            mcp.run(transport="streamable-http", host=args.host, port=args.port)
+            run_http(mcp, args.host, args.port, token)
 
     except KeyboardInterrupt:
         print("\n✅ Agent UI MCP server stopped")
