@@ -2,16 +2,17 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Chronological shipping-cadence stream: version, date, and a `.g-badge`
-// ("Today" / "N days ago") for anything released in the last week. Older
-// releases get a plain date and no badge — a badge on every row would stop
-// meaning "recent." Dumb renderer: the page fetches, filters, sorts and
-// slices the release list before it reaches this component.
+// Chronological shipping-cadence stream: version, date, and badges. A release
+// candidate wears the orange "RC" badge and the newest stable release the red
+// "Latest" one; anything from the last week also says how recent it is. Older
+// releases get a plain date and no age badge — a badge on every row would stop
+// meaning "recent." Dumb renderer: the page fetches, filters, sorts and slices
+// the release list before it reaches this component.
 
-import { daysSince, formatRelativeDate } from '../data/github';
+import { daysSince, formatRelativeDate, type ReleaseSummary } from '../data/github';
 
 interface Props {
-  releases: { tag: string; publishedAt: string; htmlUrl: string }[];
+  releases: ReleaseSummary[];
   class?: string;
 }
 
@@ -24,30 +25,43 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
   year: 'numeric',
 });
 
+const latestStable = releases.find((r) => r.kind === 'stable')?.tag;
+
 const rows = releases.map((r) => {
   const published = new Date(r.publishedAt);
   return {
     ...r,
     date: dateFormatter.format(published),
-    badge: daysSince(published) <= RECENT_DAYS ? formatRelativeDate(published) : null,
+    age: daysSince(published) <= RECENT_DAYS ? formatRelativeDate(published) : null,
   };
 });
 ---
 
-<ol class={`flex flex-col divide-y divide-g-border ${className}`}>
+<ol class={`flex flex-col divide-y divide-g-border border-y border-g-border ${className}`}>
   {rows.map((r) => (
     <li>
       <a
         href={r.htmlUrl}
         target="_blank"
         rel="noopener noreferrer"
-        class="group flex items-center justify-between gap-4 py-3 text-[13.5px] transition-colors hover:text-g-gold-text"
+        class="group flex items-center justify-between gap-4 px-1 py-3.5 text-[14px] transition-[background-color,padding] duration-300 ease-g-out hover:bg-g-surface hover:pl-3"
       >
-        <span class="mono flex items-center gap-3">
-          <span class="text-g-text group-hover:text-g-gold-text">{r.tag}</span>
-          {r.badge && <span class="g-badge">{r.badge}</span>}
+        <span class="mono flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <span
+            class:list={[
+              'h-1.5 w-1.5 flex-none',
+              r.kind === 'rc' ? 'bg-g-rc' : r.tag === latestStable ? 'bg-g-brand' : 'bg-g-faint',
+            ]}
+            aria-hidden="true"
+          ></span>
+          <span class="text-g-text group-hover:text-g-accent-text">{r.tag}</span>
+          {r.kind === 'rc' && (
+            <span class="g-badge-rc" title="Release candidate">RC<span class="sr-only"> (release candidate)</span></span>
+          )}
+          {r.tag === latestStable && <span class="g-badge-latest">Latest</span>}
+          {r.age && <span class="g-badge-muted">{r.age}</span>}
         </span>
-        <span class="text-g-faint">{r.date}</span>
+        <span class="mono flex-none text-[13px] text-g-faint">{r.date}</span>
       </a>
     </li>
   ))}

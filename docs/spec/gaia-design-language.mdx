@@ -1,11 +1,13 @@
 ---
 title: GAIA design language
-description: The graphite, ivory, and copper palette shared by the GAIA website, Agent UI, and TUI, with the contrast floors each surface must hold
+description: The graphite, ivory, and copper palette the GAIA Agent UI and TUI share, the AMD-brand palette the website carries, and the contrast floors each surface must hold
 ---
 
-GAIA looks like one product in a browser, a desktop window, and a terminal. This
-page pins the colour roles all three surfaces implement, the values behind them,
-and the contrast each surface is tested against. It is the source of truth for
+GAIA looks like one product in a desktop window and a terminal. This page pins
+the colour roles both implement, the values behind them, and the contrast each
+surface is tested against. The website shares their roles, floors and status
+hues but wears AMD's brand palette instead of the copper; see
+[The website](#the-website). This page is the source of truth for
 [`website/src/design/tokens.css`](https://github.com/amd/gaia/blob/main/website/src/design/tokens.css),
 the Agent UI's CSS custom properties, and
 [`tui/internal/ui/theme/theme.go`](https://github.com/amd/gaia/blob/main/tui/internal/ui/theme/theme.go).
@@ -43,7 +45,8 @@ prompt and the one primary action. That is why the TUI's markdown renderer paint
 
 ### The terminal has no canvas, and its status band is not the raised surface
 
-The first two rows are the two web surfaces only. A terminal's background belongs
+The first two rows are the Agent UI's grounds (its light theme substitutes white;
+see [Surface mappings](#surface-mappings)). A terminal's background belongs
 to the user's emulator, so the TUI sets none — it paints foregrounds onto
 whatever the reader already chose.
 
@@ -79,12 +82,56 @@ fails on a real terminal passes review.
 warm near-neutral. On a 256-colour light terminal GAIA's accent therefore reads
 as a dark warm grey rather than copper. That is the documented, intended
 degradation — the palette's rule is that a colour may fade toward neutral, but
-may never land on a *different* saturated meaning. Truecolor terminals and both
-web surfaces render `#9A4930` as copper.
+may never land on a *different* saturated meaning. Truecolor terminals and the
+Agent UI render `#9A4930` as copper.
 
-Using the same `#9A4930` on the web as in the terminal is deliberate: the
+Using the same `#9A4930` in the Agent UI as in the terminal is deliberate: the
 surfaces previously carried three near-but-unequal golds, and one shared literal
 is what makes "the same assistant" true rather than approximate.
+
+## The website
+
+amd-gaia.ai is where people decide whether to install GAIA, not where they work
+with it, so it carries AMD's brand rather than the assistant's working palette.
+It is **dark-only**: black ground, white type, AMD red as the single accent, and
+AMD orange for release candidates and nothing else.
+
+| Role | Value | Used for |
+|---|---|---|
+| Canvas | Black `#000000` | The page, and the starfield behind it |
+| Brand red | AMD red `#ED1C24` | Display-size type, the wordmark mark, section rules, the starfield's red streaks |
+| Accent | Lifted red `#FF4B51` | Links, small marks, the focus ring, the code panel's `$` |
+| Accent fill | Deep red `#D3121A` | The one filled primary action |
+| Release candidate | AMD orange `#F26522` | RC badges and the RC line under the download |
+
+AMD red `#ED1C24` measures **4.01:1** on the raised surfaces, below the 4.5:1 text
+floor, so it is held to the 3:1 large-text floor and used only at display size.
+Text-size red is lifted to `#FF4B51` instead. The filled button is
+deepened to `#D3121A`, which carries white at **5.42:1**; the brand red itself
+carries white at only 4.38:1.
+
+Red is the brand here, not a status. That does not break "a hue that carries a
+status meaning is not available for decoration": the site shows no status
+outside a code panel, and inside one, danger keeps its own `#F2787C`, a
+distinctly pinker red than the brand.
+
+What still matches the other two surfaces: the roles and their floors, and the
+status hues inside a code panel (`cross-surface.test.ts` holds green, amber and
+danger equal to the Agent UI's). What does not: the accent, the grounds, and the
+typography — Antonio, a tall condensed face, for headings, buttons and figures,
+and Titillium Web for body text (it stands in for Klavika, AMD's licensed face).
+The AMD logo is never drawn, imitated or used as a pattern; "AMD" appears as text.
+
+**Motion is allowed on the website, within limits.** The site has one ambient
+layer: a canvas of stars streaking past, which arrives at speed, settles to a
+cruise, and speeds up as the visitor scrolls. On top of it go entrance and
+scroll reveals, a headline that resolves out of noise once on load, a red
+glow on the primary action and on the hero's red phrase, and a breathing dot on the release-candidate line.
+Nothing else moves. Every one of these stops under `prefers-reduced-motion`,
+which gets a single static frame, and the footer carries a control that pauses
+the background and the dot for good. Below the hero the field dims, so body text
+never sits on a full-strength streak. The "no glow" and
+"no simulated typing" rules below still govern the Agent UI and the TUI.
 
 ## Semantic colours keep their conventional hues
 
@@ -133,7 +180,7 @@ colour that clears its floor in truecolor can drop below it once rounded. See
 
 | Surface | Token home | Theme switch | Test command |
 |---|---|---|---|
-| Website | `website/src/design/tokens.css` (`--g-*`, RGB triplets for Tailwind alpha) | `html[data-theme]`, `localStorage` key `gaia-theme` | `npm test` and `npm run build` in `website/` |
+| Website | `website/src/design/tokens.css` (`--g-*`, RGB triplets for Tailwind alpha) | None: dark-only | `npm test` and `npm run build` in `website/` |
 | Agent UI / Electron | `src/gaia/apps/webui/src/styles/index.css` | `html[data-theme]`, `localStorage` key `gaia-chat-theme` | `npm test` in `src/gaia/apps/webui/` |
 | TUI | `tui/internal/ui/theme/theme.go` (`lipgloss.AdaptiveColor`) | terminal background query, `GAIA_TUI_THEME` override | `go test ./internal/ui/...` in `tui/` |
 
@@ -141,12 +188,8 @@ colour that clears its floor in truecolor can drop below it once rounded. See
 white (`#FFFFFF`) with faintly cool greys for raised surfaces, rules and hover,
 because the warm stone read as brown in a full-window app. The accent, the accent
 fill and every status hue are the shared values above, and the dark theme is the
-shared graphite; the website and the TUI keep porcelain. `contrast.test.ts` holds
-the Agent UI's values to the same floors.
-
-Both web surfaces keep their own `localStorage` key on purpose — the website and
-the app are independently themeable, and sharing a key would make changing one
-silently change the other.
+shared graphite. `contrast.test.ts` holds the Agent UI's values to the same
+floors.
 
 ## Rules for adding a colour
 
@@ -177,18 +220,16 @@ Shared starting points, not pixel-matched measurements:
 - No simulated typing. A blinking cursor means output is still streaming — it is
   a status indicator, never decoration, and never runs when nothing is being
   written.
-- Light, dark, and system appearance; motion that honours `prefers-reduced-motion`;
-  visible keyboard focus at every interactive element.
+- Light, dark, and system appearance in the Agent UI (the website is dark-only);
+  motion that honours `prefers-reduced-motion`; visible keyboard focus at every
+  interactive element.
 
-Three gaps stand between those rules and what ships today. "No glow" and "no
-gradient-filled panels" are enforced by a test on both web surfaces
-(`styles/__tests__/contrast.test.ts` in the app, `design/literals.test.ts` on
-the site); the rest are held by review. Where each gap is scheduled in the
-[redesign plan](/plans/gaia-ui-redesign):
+Two gaps stand between those rules and what ships today. "No glow" is enforced
+by a test in the app (`styles/__tests__/contrast.test.ts`), and "no
+gradient-filled panels" by a test on both web surfaces (that file, and
+`design/literals.test.ts` on the site); the rest are held by review. Where each
+gap is scheduled in the [redesign plan](/plans/gaia-ui-redesign):
 
-- The website does not follow the OS appearance; an unset preference stays
-  dark by design. The Agent UI offers Light, Dark and Match system (the stored
-  `gaia-chat-theme` value `system`). Milestone 4 for the website.
 - `outline: none` appears in most component stylesheets. Most sit on a `:focus`
   rule that draws a border or ring in its place, but the pairing is unverified
   and nothing fails when it is missing. Milestone 3 covers keyboard behaviour.

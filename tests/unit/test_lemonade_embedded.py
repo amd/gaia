@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from gaia.llm.lemonade_client import REQUEST_BUDGET_ENV
 from gaia.llm.lemonade_embedded import (
     _ASSET_TEMPLATES,
     EMBEDDABLE_SHA256,
@@ -362,7 +363,7 @@ class TestConfig:
         assert config["broadcast"] is False
 
     def test_gaia_owned_keys_are_still_updated(self, manager, monkeypatch):
-        monkeypatch.setenv("GAIA_LEMONADE_REQUEST_BUDGET", "4321")
+        monkeypatch.setenv(REQUEST_BUDGET_ENV, "4321")
         manager.config_dir.mkdir(parents=True, exist_ok=True)
         path = manager.config_dir / "config.json"
         stale = {"broadcast": True, "auto_evict": True, "global_timeout": 600}
@@ -373,6 +374,36 @@ class TestConfig:
         assert config["global_timeout"] == 4321
         assert config["broadcast"] is False
         assert config["auto_evict"] is False
+
+    def test_a_stale_no_fetch_executables_is_stripped_loudly(self, manager, caplog):
+        manager.config_dir.mkdir(parents=True, exist_ok=True)
+        path = manager.config_dir / "config.json"
+        path.write_text(json.dumps({"no_fetch_executables": True}), encoding="utf-8")
+
+        with caplog.at_level("WARNING"):
+            config = json.loads(manager.write_config().read_text(encoding="utf-8"))
+
+        assert "no_fetch_executables" not in config
+        assert "no_fetch_executables" in caplog.text
+
+    def test_a_failed_write_keeps_the_old_config_and_no_temp_file(
+        self, manager, monkeypatch
+    ):
+        manager.config_dir.mkdir(parents=True, exist_ok=True)
+        path = manager.config_dir / "config.json"
+        original = json.dumps({"cloud_providers": [{"name": "fireworks"}]})
+        path.write_text(original, encoding="utf-8")
+
+        def _replace_fails(src, dst):
+            raise PermissionError("locked")
+
+        monkeypatch.setattr("gaia.llm.lemonade_embedded.os.replace", _replace_fails)
+
+        with pytest.raises(PermissionError):
+            manager.write_config()
+
+        assert path.read_text(encoding="utf-8") == original
+        assert list(manager.config_dir.glob("*.tmp")) == []
 
     @pytest.mark.parametrize("content", ["{ not json", "[1, 2]"])
     def test_unusable_existing_config_is_replaced_loudly(
@@ -409,7 +440,7 @@ class TestStatus:
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
         monkeypatch.setattr(
-            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda p: False)
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "other"
         )
         assert manager.status().running is False
         assert not manager.state_path.exists(), "dead instance left a stale state file"
@@ -422,7 +453,7 @@ class TestStatus:
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
         monkeypatch.setattr(
-            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda p: True)
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "own"
         )
 
         status = manager.status()
@@ -431,7 +462,7 @@ class TestStatus:
         assert manager.state_path.exists(), "live daemon lost its state file"
 
     def test_start_leaves_vulkan_coopmat_on_for_chat_models(self, manager, monkeypatch):
-        """The global flag halved chat prompt speed; the embedder runs on CPU instead."""
+        """The global flag halved chat prompt speed for every model."""
         monkeypatch.delenv("GGML_VK_DISABLE_COOPMAT", raising=False)
         # Any GPU but the Strix Halo iGPU (see TestVulkanWorkarounds).
         monkeypatch.setattr(
@@ -459,7 +490,7 @@ class TestStatus:
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
         monkeypatch.setattr(
-            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda p: True)
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "own"
         )
 
         with pytest.raises(EmbeddedLemonadeError) as exc:
@@ -475,8 +506,8 @@ class TestStatus:
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
         monkeypatch.setattr(
             EmbeddedLemonade,
-            "_daemon_alive",
-            staticmethod(lambda p: not killed),
+            "_identify",
+            lambda self, pid, port, key: "other" if killed else "own",
         )
         monkeypatch.setattr(EmbeddedLemonade, "_kill_tree", staticmethod(killed.append))
 
@@ -539,7 +570,7 @@ class TestUninstall:
         )
         monkeypatch.setattr(manager, "_health", lambda *args, **kwargs: None)
         monkeypatch.setattr(
-            EmbeddedLemonade, "_daemon_alive", staticmethod(lambda pid: True)
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: "own"
         )
 
         with pytest.raises(EmbeddedLemonadeError, match="embedded Lemonade.*running"):

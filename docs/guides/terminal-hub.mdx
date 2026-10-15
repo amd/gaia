@@ -198,8 +198,9 @@ there. The gate shows that as numbered steps, not failures:
 Press `Enter` and the step runs right there. The row it is working on shows it,
 and the line underneath says what is happening in words — never a log line.
 
-Step 1 installs Lemonade and stops, downloading nothing. Which models step 2
-fetches depends on where chat runs, so this is the moment to press `p` and pick
+Step 1 installs Lemonade and stops, downloading nothing — and so does every
+retry of it, and the key on a Lemonade row that is installed but not running.
+Which models step 2 fetches depends on where chat runs, so this is the moment to press `p` and pick
 Fireworks AI or the AMD LLM Gateway: step 2 then downloads only the embedding
 models, not a local chat model. Press `Enter` again to start step 2:
 
@@ -218,6 +219,14 @@ models, not a local chat model. Press `Enter` again to start step 2:
 
 `esc` cancels it. If setup stops, the screen says why and `d` shows its full
 output; `gaia init` does the same work from a terminal.
+
+If this PC already runs a Lemonade Server (v10.9.0 or newer) on its default
+port, the Lemonade row offers it instead of step 1: press `f` to use it, or `g`
+to install GAIA's own. Using yours keeps one server and one copy of each model
+on the PC. A server that needs an API key shows the `gaia lemonade connect`
+command that saves the key. The choice is remembered. To switch back, run
+`gaia config set lemonade_mode gaia`. See
+[Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
 
 When setup finishes, the gate checks the models by **loading** them once — the
 chat model, and the embedding model that document search and memory use — and
@@ -268,7 +277,15 @@ This row has no `f`: the TUI cannot install its own agent binary, so it names
 the installer instead of offering a key that would not work.
 
 A daemon-supervised sidecar agent goes through the same three screens, but its
-gate has more rows: background service, sidecar, Lemonade, and model.
+gate has more rows: background service, sidecar, Lemonade, and model. The
+flagship is one of these once setup has installed it as a hub package.
+
+When the background service or the agent is simply not running — the usual
+state after a reboot — the gate starts it itself and shows `starting…` on that
+row, so the launch needs no keypress. A start that fails keeps the row's error
+and remedy, and `f` tries again. The gate starts nothing on its own when the
+service's port answers as something else, or when `LEMONADE_BASE_URL` points at
+another machine; those rows wait for `f`.
 
 #### Markers
 
@@ -352,6 +369,14 @@ included: the one the startup check loaded, until the agent reports the model it
 actually runs. The model you last picked is restored on the next launch; if it
 can't be, the chat says so in one line and opens the provider picker. See
 [Your model is remembered](/guides/ai-providers#your-model-is-remembered).
+
+Once setup has installed the flagship as a hub package, the TUI reaches it through
+the background service. `/model` and `/provider` work the same there: the switch
+is checked against the models Lemonade serves, the header names the new model, and
+your next message runs on it. It is remembered once that message completes; if the
+agent refuses the model, the previous one comes back. Neither command is ever sent
+to the agent as a question. An agent too old to switch models mid-chat says so and
+names the update command.
 
 | Key | What it does |
 |---|---|
@@ -437,7 +462,10 @@ links and double-click copy.
 | `/clear` | Clear the conversation |
 | `/setup` | Re-run first-time setup (`gaia init`) for the flagship agent |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
-| `/model` | Switch the flagship agent's live model |
+| `/model` | Switch the flagship agent's live model. Bare `/model` lists what you can switch to |
+| `/provider` | Choose where chat runs — Local, Fireworks AI, or the AMD LLM Gateway — and set its key. See [AI providers](/guides/ai-providers) |
+| `/gateway` | Connect the AMD LLM Gateway and pick which of its models GAIA uses. See [LLM gateway](/guides/llm-gateway) |
+| `/slack` | Connect this agent to Slack, or show the connection's status. See [Slack](/guides/slack) |
 | `/full-access` | Explain full access; `/full-access confirm` then turns it on for this session (off by default) |
 | `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
@@ -699,6 +727,19 @@ number. A cloud provider trades that for network latency and privacy.
 
 **It quit with no message.** `gaia-tui status` shows the background service and
 what is installed.
+
+**Is it running on Vulkan, ROCm or the CPU?** `gaia-tui status` prints a
+**Model server** line, and `/provider` shows the same under **Local**:
+
+```text
+Model server:        Lemonade 2026.41.1 (GAIA's own) at localhost:51234 · Qwen3.6-35B-A3B-GGUF on Vulkan (default), 64K ctx
+```
+
+`(default)` means Lemonade picked the backend; `unknown` means this Lemonade
+does not report it. To choose one, run `gaia config set llamacpp_backend rocm`
+(or `vulkan`, `cpu`, `auto`), or use Settings → Advanced → Model server in the
+Agent UI, which lists only the backends this PC can run. It applies the next
+time the chat model loads.
 
 ## Next steps
 

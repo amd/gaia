@@ -71,7 +71,8 @@ class SystemStatus(BaseModel):
     # this machine has a modern daemon, a legacy CLI, or a tray app, and a
     # second copy of the answer is how `lemonade-server serve` survived in the
     # banner long after it stopped existing. ``start_command`` is None on hosts
-    # requiring GUI/manual configuration, including service context changes.
+    # requiring GUI/manual configuration, including service context changes,
+    # and on Windows when Command Prompt and PowerShell need different lines.
     # In those cases start_instruction carries the necessary steps.
     start_instruction: Optional[str] = None
     start_command: Optional[str] = None
@@ -102,7 +103,8 @@ class SystemStatus(BaseModel):
     # remnant from when the default was Qwen3.5-35B).
     default_model_size_gb: Optional[float] = None
     # Lemonade web UI origin; resolved per response (GAIA's server picks its port).
-    lemonade_url: str = Field(default_factory=_lemonade_web_origin)
+    # None when an unreadable config hides which server (``config_error`` says why).
+    lemonade_url: Optional[str] = Field(default_factory=_lemonade_web_origin)
     expected_model_loaded: bool = True  # False if a different model is loaded
     # Live download progress for ``default_model_name`` (or whatever is
     # currently being pulled). ``None`` when no pull is in flight.
@@ -110,6 +112,8 @@ class SystemStatus(BaseModel):
     # Boot-time initialization tracking (populated from DispatchQueue)
     init_state: str = "ready"  # "initializing" | "ready" | "degraded"
     init_tasks: List["InitTaskInfo"] = Field(default_factory=list)
+    # Priming of a new chat's prompt prefix; never blocks sending.
+    warm_up: Optional["WarmUpStatus"] = None
     # Multi-device support (issue #1220): hardware devices detected on this host.
     # Populated from Lemonade ``/system-info``. The frontend uses this to filter
     # which device options to show in the per-agent device dropdown.
@@ -124,7 +128,64 @@ class SystemStatus(BaseModel):
     probe_warnings: List[str] = Field(default_factory=list)
 
 
+class LoadedModelInfo(BaseModel):
+    """One model Lemonade has loaded, as the Model server panel shows it."""
+
+    name: Optional[str] = None
+    recipe: Optional[str] = None
+    device: Optional[str] = None
+    # vulkan | rocm | metal | cpu | npu | remote; None when Lemonade did not say.
+    backend: Optional[str] = None
+    # requested | launch | lemonade_default; None for remote/NPU/unknown.
+    backend_source: Optional[str] = None
+    ctx_size: Optional[int] = None
+
+
+class BackendOption(BaseModel):
+    """A llama.cpp backend this machine can run, with Lemonade's state for it."""
+
+    name: str
+    state: str  # installed | installable | update_required
+
+
+class ModelServerInfo(BaseModel):
+    """Which Lemonade GAIA talks to and what it runs (Settings → Advanced)."""
+
+    reachable: bool = False
+    # One plain sentence when Lemonade could not be read; None otherwise.
+    error: Optional[str] = None
+    base_url: str
+    port: Optional[int] = None
+    # gaia (GAIA's own embedded server) | user (another local one) | remote
+    owner: str
+    version: Optional[str] = None
+    chat_model: Optional[LoadedModelInfo] = None
+    embedding_model: Optional[LoadedModelInfo] = None
+    default_backend: Optional[str] = None
+    available_backends: List[BackendOption] = Field(default_factory=list)
+    # The saved choice; None means Auto (Lemonade decides).
+    preferred_backend: Optional[str] = None
+    # Set when /system-info could not be read; backends then show as unknown.
+    system_info_error: Optional[str] = None
+
+
+class ModelServerBackendRequest(BaseModel):
+    """Choose the llama.cpp backend for chat models: ``auto`` or a backend name."""
+
+    backend: str
+
+
 # ── Tasks ──────────────────────────────────────────────────────────────────
+
+
+class WarmUpStatus(BaseModel):
+    """Whether a new chat's first turn will find its prompt already read."""
+
+    state: str  # idle | warming | ready | failed | skipped
+    elapsed_seconds: Optional[float] = None
+    prompt_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    error: Optional[str] = None
 
 
 class InitTaskInfo(BaseModel):

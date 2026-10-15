@@ -239,19 +239,24 @@ func (c *Client) Pull(ctx context.Context, e Entry, progress func(PullProgress))
 	if !e.Fits {
 		return fmt.Errorf("%s will not fit this PC: %s", e.Model.ID, e.Reason)
 	}
-	if err := validateURL(c.BaseURL, true); err != nil {
+	base := c.current()
+	if err := validateURL(base, true); err != nil {
 		return err
 	}
 	b, err := json.Marshal(PullRequest(e))
 	if err != nil {
 		return fmt.Errorf("could not encode the download request")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/pull", bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/pull", bytes.NewReader(b))
 	if err != nil {
 		return fmt.Errorf("invalid Lemonade address")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := APIKeyFor(c.BaseURL); key != "" {
+	key, err := APIKeyFor(ctx, base)
+	if err != nil {
+		return err
+	}
+	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	// A download runs for as long as it takes; ctx is the only bound.

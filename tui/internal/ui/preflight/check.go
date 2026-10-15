@@ -8,10 +8,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/amd/gaia/tui/internal/daemon"
+	gaiaLemonade "github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
@@ -194,6 +196,7 @@ func checkDaemon(ctx context.Context, t Transport, cfg Config, rep *Report) Stat
 		// resolving a version skew is not, and must stay the user's call.
 		if startable(err) {
 			row.Fix = FixStartDaemon
+			row.AutoFix = simplyNotRunning(err) && !lemonadeElsewhere()
 			row.Line = "not running"
 		} else {
 			row.Line = "unusable"
@@ -218,6 +221,25 @@ func startable(err error) bool {
 		return stale.Kind != daemon.StaleUnresponsive
 	}
 	return false
+}
+
+// simplyNotRunning reports whether the daemon is absent rather than foreign: no
+// record, or one whose process is gone. A port answering as something else
+// keeps the `f` key — reclaiming it is the user's call.
+func simplyNotRunning(err error) bool {
+	var notRunning *daemon.NotRunningError
+	if errors.As(err, &notRunning) {
+		return true
+	}
+	var stale *daemon.StaleError
+	return errors.As(err, &stale) && (stale.Kind == daemon.StalePIDDead || stale.Kind == daemon.StaleCorrupt)
+}
+
+// lemonadeElsewhere reports whether LEMONADE_BASE_URL points at another
+// machine. That setup is the user's own, so the gate starts nothing for it.
+func lemonadeElsewhere() bool {
+	base := strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv))
+	return base != "" && !isLoopback(base)
 }
 
 func (r Row) commit(rep *Report) State {
@@ -307,6 +329,7 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 		row.Line = "installed, not started"
 		row.Detail = fmt.Sprintf("The %s agent is registered but its state is %q.", cfg.AgentName, a.State)
 		row.Fix = FixStartSidecar
+		row.AutoFix = !lemonadeElsewhere()
 		row.Remedy = Remedy{
 			Action:  "Start it — the background service supervises it from then on.",
 			Command: "gaia daemon start-agent " + cfg.AgentID,
@@ -653,6 +676,19 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 		// automatically before the user ever sees it, and once that has failed
 		// pressing f would only repeat it.
 		lemonade.Fix = FixNone
+		if gaiaLemonade.ExternalModeActive() {
+			// The user's own server: GAIA asks no one to start anything for it.
+			down := gaiaLemonade.ProbeResult{URL: body.Lemonade.BaseURL, Status: gaiaLemonade.ProbeUnreachable}
+			lemonade.Line = "your server at " + body.Lemonade.BaseURL + " is not answering"
+			lemonade.Detail = down.Message()
+			if err := gaiaLemonade.ChoiceError(); err != nil {
+				lemonade.Line = "GAIA's Lemonade setting is unusable"
+				lemonade.Detail = err.Error() + "."
+			}
+			lemonade.Remedy = Remedy{Action: "Then press r to re-check.", Where: lemonadeDocs}
+			setRow(rep, lemonade)
+			return StateFailed, false
+		}
 		if !isLoopback(body.Lemonade.BaseURL) {
 			// The agent is pointed at another machine, so a server started here
 			// is one nothing would talk to. Not startable — by us or the daemon.
@@ -701,6 +737,14 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 			Action:  "Upgrade the local model server, then re-check.",
 			Command: "gaia init",
 			Where:   "https://lemonade-server.ai",
+		}
+		if gaiaLemonade.ExternalModeActive() {
+			old := gaiaLemonade.ProbeResult{
+				URL: body.Lemonade.BaseURL, Status: gaiaLemonade.ProbeTooOld,
+				Version: versionOr(body.Lemonade.Version, "?"), Minimum: body.Lemonade.MinVersion,
+			}
+			lemonade.Detail = old.Message()
+			lemonade.Remedy = Remedy{Action: "Then press r to re-check.", Where: "https://lemonade-server.ai"}
 		}
 		setRow(rep, lemonade)
 		return StateFailed, false

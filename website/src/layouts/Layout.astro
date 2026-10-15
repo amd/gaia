@@ -4,6 +4,7 @@
 
 import '../design/tokens.css';
 import '../design/global.css';
+import StarField from '../components/StarField.astro';
 
 interface Props {
   title: string;
@@ -27,20 +28,14 @@ const shareImage = new URL('/gaia-icon.png', Astro.site);
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
-    <!-- Graphite canvas; kept in sync with the active theme by the script below
-         and by ThemeToggle, since a meta tag cannot read a CSS custom property. -->
-    <meta name="theme-color" content="#17161C" />
-    <!-- Pre-paint theme: avoids flash of wrong theme. Dark is the designed
-         default, so an unset preference stays dark rather than following the OS. -->
+    <!-- The black canvas; a meta tag cannot read a CSS custom property. -->
+    <meta name="theme-color" content="#000000" />
+    <!-- Pre-paint: marks JS as available so scroll reveals may start hidden
+         (without JS the class never lands and nothing is ever hidden), and
+         restores a visitor's choice to pause the background (Footer.astro). -->
     <script is:inline>
-      (() => {
-        const stored = localStorage.getItem('gaia-theme');
-        const theme = stored === 'light' ? 'light' : 'dark';
-        document.documentElement.dataset.theme = theme;
-        document
-          .querySelector('meta[name="theme-color"]')
-          ?.setAttribute('content', theme === 'light' ? '#F5F2EC' : '#17161C');
-      })();
+      document.documentElement.classList.add('js');
+      if (localStorage.getItem('gaia-motion') === 'paused') document.documentElement.dataset.motion = 'paused';
     </script>
 
     <!-- Canonical URL -->
@@ -65,18 +60,18 @@ const shareImage = new URL('/gaia-icon.png', Astro.site);
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" href="/gaia-icon.png" />
 
-    <!-- Fonts. Space Grotesk carries the identity, so a FOUT on h1 is very
+    <!-- Fonts. Antonio carries the identity, so a FOUT on h1 is very
          visible — fetch the stylesheet at highest priority, not lazily. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="preload"
       as="style"
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Antonio:wght@500;600;700&family=Titillium+Web:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
     />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Antonio:wght@500;600;700&family=Titillium+Web:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
     />
 
     <title>{title}</title>
@@ -87,7 +82,30 @@ const shareImage = new URL('/gaia-icon.png', Astro.site);
       Skip to main content
     </a>
 
-    <slot />
+    <StarField />
+
+    <!-- Content sits above the canvas (z-0). -->
+    <div class="relative z-[1]">
+      <slot />
+    </div>
+
+    <!-- Inline, not bundled: if this shared a module with the starfield, a
+         starfield failure would leave every .g-reveal hidden. -->
+    <script is:inline>
+      // Scroll reveals (.g-reveal in global.css). One observer for the page;
+      // each element is revealed once and then left alone.
+      const io = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            if (!e.isIntersecting) continue;
+            e.target.classList.add('is-in');
+            io.unobserve(e.target);
+          }
+        },
+        { threshold: 0.12 },
+      );
+      document.querySelectorAll('.g-reveal').forEach((el) => io.observe(el));
+    </script>
   </body>
 </html>
 
@@ -108,7 +126,7 @@ const shareImage = new URL('/gaia-icon.png', Astro.site);
   /* Headings carry the display face. Set here so every h1–h4 gets it without
      each page having to remember `font-display`. */
   h1, h2, h3, h4 {
-    font-family: 'Space Grotesk', Inter, system-ui, sans-serif;
+    font-family: Antonio, 'Arial Narrow', Arial, sans-serif;
   }
 
   /* Link colors, defined globally — the previous site left these to browser
@@ -126,7 +144,7 @@ const shareImage = new URL('/gaia-icon.png', Astro.site);
     color: rgb(var(--g-accent2));
   }
 
-  /* Custom scrollbar, theme-aware via tokens */
+  /* Custom scrollbar, drawn from the tokens */
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
@@ -158,7 +176,7 @@ const shareImage = new URL('/gaia-icon.png', Astro.site);
 
   /* Visible focus ring everywhere. The prototypes style hover but not focus;
      pills, tabs, search and the copy button all need this. --g-focus is the
-     themed accent, which clears SC 1.4.11's 3:1 on every surface. */
+     accent, which clears SC 1.4.11's 3:1 on every surface. */
   :focus-visible {
     outline: 2px solid rgb(var(--g-focus));
     outline-offset: 2px;

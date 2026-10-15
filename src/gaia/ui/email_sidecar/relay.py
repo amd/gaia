@@ -54,7 +54,9 @@ from gaia.ui.sse_handler import (
     _format_tool_args,
     _strip_balanced_json_blobs,
     _summarize_tool_result,
+    tool_result_failed,
 )
+from gaia.ui.sse_translation import SUMMARY_VIEW_KEYS
 
 logger = get_logger(__name__)
 
@@ -123,11 +125,29 @@ def _tool_label(tool: str, profile: RelayProfile = EMAIL_PROFILE) -> str:
     return profile.tool_labels.get(tool) or _humanize_tool(tool)
 
 
+def _is_summary_view(data: Any) -> bool:
+    return (
+        isinstance(data, dict)
+        and isinstance(data.get("summary"), str)
+        and set(data) <= set(SUMMARY_VIEW_KEYS)
+    )
+
+
 def _derive_summary(tool: str, data: Any, profile: RelayProfile = EMAIL_PROFILE) -> str:
     """Short, human summary for a ``tool_result`` — never a bare "Done"."""
+    if _is_summary_view(data) and data["summary"]:
+        # The sidecar already summarized it; re-summarizing names its keys.
+        return data["summary"]
     if isinstance(data, dict) and data:
         return _summarize_tool_result(data)
     return f"Ran {_tool_label(tool, profile).lower()}"
+
+
+def _derive_success(data: Any) -> bool:
+    """Whether the tool worked, by the same rule the in-process handler uses."""
+    if _is_summary_view(data) and isinstance(data.get("success"), bool):
+        return data["success"]
+    return not tool_result_failed(data)
 
 
 def _kind_re() -> "re.Pattern":
@@ -208,7 +228,7 @@ def _dispatch_one(
             "type": "tool_result",
             "tool": tool,
             "summary": _derive_summary(tool, data, profile),
-            "success": True,
+            "success": _derive_success(data),
             "data": data if data is not None else {},
         }
         render = event.get("render")
@@ -322,8 +342,12 @@ def relay_query(
     profile: RelayProfile = EMAIL_PROFILE,
     session_id: Optional[str] = None,
     answers_confirmations: bool = False,
+    documents: Optional[List[str]] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
+
+    *documents* — absolute paths of the chat's attached files, for a sidecar
+    the caller has established takes them (``profiles.documents_supported``).
 
     *answers_confirmations* — the caller has established that this sidecar
     takes ``tool_decision`` answers (``profiles.confirmations_supported``), so
@@ -387,6 +411,8 @@ def relay_query(
         # turn, so a document indexed on turn 1 is gone by turn 2. Gated by
         # profile because both request models are extra="forbid".
         body["session_id"] = session_id
+    if documents:
+        body["documents"] = list(documents)
 
     syncs_mode = full_access is not None and bool(session_id)
     enable_after_start = False

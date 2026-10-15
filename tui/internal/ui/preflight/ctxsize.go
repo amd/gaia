@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // Why a start command has to carry the context window.
@@ -104,17 +105,7 @@ func readDefaultDevice(p hostProbe) string {
 }
 
 func configPath(p hostProbe) string {
-	if file := strings.TrimSpace(p.getenv(configFileEnv)); file != "" {
-		return file
-	}
-	if dir := strings.TrimSpace(p.getenv(configDirEnv)); dir != "" {
-		return filepath.Join(dir, "config.json")
-	}
-	home, err := p.homeDir()
-	if err != nil || home == "" {
-		return ""
-	}
-	return filepath.Join(home, ".gaia", "config.json")
+	return lemonade.ConfigPathFrom(p.getenv, p.homeDir)
 }
 
 // --- attaching it to a command ----------------------------------------------
@@ -132,9 +123,8 @@ func ctxPrefix(goos string, ctx int) string {
 		// everything up to the ampersand, trailing space included — which the
 		// server then fails to parse. `set "VAR=1"` bounds the value.
 		//
-		// PowerShell wants `$env:VAR=...;` instead, and no single string is right
-		// in both; same tradeoff as the quoted exe path, and the tray app remains
-		// the shell-free alternative.
+		// PowerShell wants `$env:VAR=...;` instead; powerShellCommand renders
+		// that form alongside this one.
 		return fmt.Sprintf(`set "%s=%d" && `, ctxSizeEnv, ctx)
 	}
 	// POSIX: `env VAR=value command` runs in any shell, unlike `VAR=value command`

@@ -92,6 +92,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
+		// Kept in the transcript, not the live line: it explains later answers.
+		if e.HistoryCut != nil {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: truncateRunes(clean(e.Message), narrationMax),
+			})
+			break
+		}
+
 		// A phase report drives the live line and nothing else: it is not
 		// narration, so it never lands in the work log.
 		if e.Phase != "" {
@@ -267,42 +276,64 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		content = StripVerificationScope(content)
 		m.buffer = ""
+		m.confirmRelayedSwitch()
 		if m.awaitingModelSwitch && m.switchTarget != "" && m.switchedTo.model == m.switchTarget {
 			m.rememberModel(m.switchedTo)
 			if m.startup.inFlight && m.switchTarget == m.startup.model {
 				m.startup.confirmed = true
 				m.startup.warmNext = true
 				if m.startup.kind == StartupRestore {
-					content = "Restored your last model.\n\n" + content
+					if rest, ok := strings.CutPrefix(content, "Switched to "); ok {
+						content = "Restored your last model: " + rest
+					} else {
+						content = "Restored your last model.\n\n" + content
+					}
 				}
+			}
+		}
+		active := m.turnElapsed(time.Now())
+		duration := active
+		durationLabel := ""
+		if m.startup.warmNext {
+			if m.dev {
+				// A bare time under the model notice reads as noise.
+				durationLabel = "model switched in "
+			} else {
+				// The opening switch's time belongs to the ready line, not its own.
+				duration = 0
 			}
 		}
 		// The turn is over, so a confirmation still up is dead — resolved here,
 		// before the work is committed, so its step carries the outcome.
 		m.resolveConfirmationOnTurnEnd()
-		m.commitWork()
+		if content != "" {
+			m.commitAnsweredWork()
+		} else {
+			m.commitWork()
+		}
 		// A turn stopped before it said anything ends with an empty final; the
 		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
 		if content != "" || !m.cancelPending {
 			m.messages = append(m.messages, Message{
-				Role:         RoleAssistant,
-				Content:      content,
-				Rendered:     components.RenderMarkdown(content),
-				Duration:     time.Since(m.queryStart),
-				TTFT:         ttft,
-				TokPerS:      usage.TokPerS,
-				InputTokens:  usage.InputTokens,
-				CachedTokens: usage.CachedTokens,
-				Steps:        usage.Steps,
-				ToolsUsed:    usage.ToolsUsed,
-				Tokens:       usage.Tokens,
-				Metrics:      usage.Metrics,
+				Role:          RoleAssistant,
+				Content:       content,
+				Rendered:      components.RenderMarkdown(content),
+				Duration:      duration,
+				DurationLabel: durationLabel,
+				TTFT:          ttft,
+				TokPerS:       usage.TokPerS,
+				InputTokens:   usage.InputTokens,
+				CachedTokens:  usage.CachedTokens,
+				Steps:         usage.Steps,
+				ToolsUsed:     usage.ToolsUsed,
+				Tokens:        usage.Tokens,
+				Metrics:       usage.Metrics,
 			})
 		}
 		// One ledger entry per turn, from what the backend reported. A turn
 		// with no token counts still counts as a turn — see sessionCost.
 		m.cost.add(turnCost{
-			duration:  time.Since(m.queryStart),
+			duration:  active,
 			steps:     usage.Steps,
 			tools:     usage.ToolsUsed,
 			inTok:     usage.InputTokens,
@@ -668,11 +699,13 @@ func toolResultSucceeded(data json.RawMessage) bool {
 		return true
 	}
 	var probe struct {
-		OK            *bool `json:"ok"`
-		Success       *bool `json:"success"`
-		ReturnCode    *int  `json:"return_code"`
+		OK            *bool  `json:"ok"`
+		Success       *bool  `json:"success"`
+		ReturnCode    *int   `json:"return_code"`
+		ExpectedExit  string `json:"expected_exit"`
 		CommandOutput *struct {
-			ReturnCode *int `json:"return_code"`
+			ReturnCode   *int   `json:"return_code"`
+			ExpectedExit string `json:"expected_exit"`
 		} `json:"command_output"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
@@ -681,13 +714,12 @@ func toolResultSucceeded(data json.RawMessage) bool {
 	if probe.OK != nil && !*probe.OK || probe.Success != nil && !*probe.Success {
 		return false
 	}
-	// A shell tool reports success when the command RAN, whatever it
-	// returned — so pytest exiting 2 drew as a passed step. The exit code is
-	// the command's own verdict.
-	if rc := probe.ReturnCode; rc != nil && *rc != 0 {
+	// The exit code is the command's own verdict, so pytest exiting 2 is a
+	// failed step — unless the tool named it an answer (grep's 1: no match).
+	if rc := probe.ReturnCode; rc != nil && *rc != 0 && probe.ExpectedExit == "" {
 		return false
 	}
-	if co := probe.CommandOutput; co != nil && co.ReturnCode != nil && *co.ReturnCode != 0 {
+	if co := probe.CommandOutput; co != nil && co.ReturnCode != nil && *co.ReturnCode != 0 && co.ExpectedExit == "" {
 		return false
 	}
 	return true

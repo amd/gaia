@@ -25,18 +25,22 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_manager import gpu_display_info
 
+from .. import warmup
 from ..agent_loop import resolve_agent_mode
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_dispatch_queue
 from ..models import (
     DownloadProgress,
     InitTaskInfo,
+    ModelServerBackendRequest,
+    ModelServerInfo,
     ModelStatus,
     SettingsResponse,
     SettingsUpdateRequest,
     SystemStatus,
     TaskListResponse,
     TaskResponse,
+    WarmUpStatus,
 )
 
 # "autonomous" is intentionally absent: its observation cycle is unimplemented
@@ -197,10 +201,16 @@ async def _auto_load_after_download(model_name: str) -> None:
     Errors are swallowed: a load failure here surfaces via the existing
     ``/api/system/status`` health check; logging is enough.
     """
-    payload = {
-        "model_name": model_name,
-        "ctx_size": DEFAULT_CONTEXT_SIZE,
-    }
+    from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    try:
+        payload = await _with_chosen_backend(
+            {"model_name": model_name, "ctx_size": DEFAULT_CONTEXT_SIZE}
+        )
+    except (GaiaConfigError, LemonadeClientError) as exc:
+        logger.error("Auto-load %s skipped: %s", model_name, exc)
+        return
     logger.info(
         "Auto-load after download: %s (ctx_size=%d)",
         model_name,
@@ -470,7 +480,17 @@ def _probe_ok(probe: str) -> None:
 @router.get("/api/system/status", response_model=SystemStatus)
 async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
-    status = SystemStatus()
+    from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_choice import LemonadeChoiceError
+
+    # The config names the Lemonade server, so a broken one is reported, not raised.
+    config_errors = (GaiaConfigError, LemonadeChoiceError)
+    try:
+        status = SystemStatus()
+    except config_errors as exc:
+        logger.warning("system status: %s", exc)
+        status = SystemStatus(lemonade_url=None, config_error=str(exc))
+    status.warm_up = WarmUpStatus(**warmup.warm_up_status())
 
     # Resolve how to start Lemonade on THIS host once, here, so every surface
     # renders the same answer. Never fatal: a banner losing its hint is far
@@ -488,8 +508,6 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
     # Resolved outside the probe below: its catch-all would report a corrupt
     # config as "Lemonade not running".
-    from gaia.config import GaiaConfigError
-
     default_model: Optional[str]
     try:
         default_model = _default_model_name()
@@ -770,6 +788,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         # "not responding" banner rather than calling it an ambiguous probe.
         logger.debug("system status: Lemonade is not running: %s", exc)
         status.lemonade_running = False
+    except config_errors as exc:
+        # Which server to probe is unknown until the config is fixed.
+        status.config_error = str(exc)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("system status: Lemonade health query failed: %s", exc)
         status.lemonade_running = False
@@ -856,6 +877,23 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         status.download_progress = DownloadProgress(**progress_dict)
 
     return status
+
+
+@router.post("/api/system/warm-up", response_model=WarmUpStatus)
+async def request_warm_up():
+    """Prime the prompt a new chat's first turn sends; returns the warm-up state.
+
+    Called when the user opens a new chat. Debounced and single-flight, so a
+    repeat call while one runs, or just after one finished, changes nothing.
+    """
+    warmup.request_warm_up("new chat")
+    return WarmUpStatus(**warmup.warm_up_status())
+
+
+@router.get("/api/system/warm-up", response_model=WarmUpStatus)
+async def get_warm_up():
+    """The warm-up state alone, cheap enough to poll while one runs."""
+    return WarmUpStatus(**warmup.warm_up_status())
 
 
 @router.get("/api/system/tasks", response_model=TaskListResponse)
@@ -1085,6 +1123,111 @@ async def health(db: ChatDatabase = Depends(get_db)):
     }
 
 
+def _read_model_server() -> ModelServerInfo:
+    """Read Lemonade's /health and /system-info into the Model server panel.
+
+    Unreachable is an answer, not an exception: the panel shows one line.
+    """
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        _read_embedded_lemonade_state,
+    )
+    from gaia.llm.model_server_info import describe_model_server, server_owner
+
+    preferred = GaiaConfig.load().llamacpp_backend
+    client = LemonadeClient(verbose=False)
+    base_url = client.base_url
+    state = _read_embedded_lemonade_state()
+    owner = server_owner(base_url, state.get("port") if state else None)
+    try:
+        health = client.health_check(timeout=5)
+    except LemonadeClientError as exc:
+        logger.info("model server: %s did not answer: %s", base_url, exc)
+        return ModelServerInfo(
+            reachable=False,
+            error=f"Lemonade is not answering at {base_url}.",
+            base_url=base_url,
+            owner=owner,
+            preferred_backend=preferred,
+        )
+    system_info = None
+    system_info_error = None
+    try:
+        system_info = client.get_system_info(timeout=5)
+    except LemonadeClientError as exc:
+        system_info_error = f"Could not read Lemonade's system info: {exc}"
+        logger.warning("model server: %s", system_info_error)
+    info = describe_model_server(
+        base_url=base_url,
+        owner=owner,
+        health=health if isinstance(health, dict) else {},
+        system_info=system_info if isinstance(system_info, dict) else None,
+        preferred_backend=preferred,
+        is_cloud_model=cloud_model_provider,
+    )
+    return ModelServerInfo(**info, system_info_error=system_info_error)
+
+
+def _config_http_error(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/api/system/model-server", response_model=ModelServerInfo)
+async def model_server():
+    """Which Lemonade GAIA uses, where, and what backend each loaded model runs on."""
+    from gaia.config import GaiaConfigError
+
+    try:
+        return await asyncio.to_thread(_read_model_server)
+    except GaiaConfigError as exc:
+        raise _config_http_error(exc) from exc
+
+
+@router.put("/api/system/model-server/backend", response_model=ModelServerInfo)
+async def set_model_server_backend(body: ModelServerBackendRequest):
+    """Save the llama.cpp backend for chat models; it applies on the next load.
+
+    Only a backend Lemonade reports as usable on this machine is accepted.
+    """
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    choice = body.backend.strip().lower()
+    try:
+        if choice != "auto":
+            current = await asyncio.to_thread(_read_model_server)
+            if not current.reachable:
+                raise HTTPException(status_code=503, detail=current.error)
+            usable = sorted(b.name for b in current.available_backends)
+            if choice not in usable:
+                offered = ", ".join(usable) if usable else "none it reports"
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"llama.cpp's '{choice}' backend is not available on this "
+                        f"machine. Lemonade offers: {offered}."
+                    ),
+                )
+        await asyncio.to_thread(GaiaConfig.save_key, "llamacpp_backend", choice)
+        return await asyncio.to_thread(_read_model_server)
+    except GaiaConfigError as exc:
+        raise _config_http_error(exc) from exc
+
+
+async def _with_chosen_backend(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Add the user's llama.cpp backend choice to a raw ``/load`` payload."""
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    def _lookup() -> Optional[str]:
+        return LemonadeClient(verbose=False).chosen_backend_for(payload["model_name"])
+
+    backend = await asyncio.to_thread(_lookup)
+    if backend:
+        return {**payload, "llamacpp_backend": backend}
+    return payload
+
+
 class LoadModelRequest(BaseModel):
     model_name: str
     # ctx_size must be positive. Lemonade silently accepts 0 or negative values
@@ -1105,7 +1248,15 @@ async def load_model_endpoint(body: LoadModelRequest):
         raise HTTPException(status_code=400, detail="model_name must not be empty")
 
     ctx_size = body.ctx_size if body.ctx_size is not None else _MIN_CONTEXT_SIZE
-    payload = {"model_name": model_name, "ctx_size": ctx_size}
+    from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    try:
+        payload = await _with_chosen_backend(
+            {"model_name": model_name, "ctx_size": ctx_size}
+        )
+    except (GaiaConfigError, LemonadeClientError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     task = asyncio.create_task(
         _lemonade_post("load", payload, timeout=300.0, log_context=f"Load {model_name}")
     )

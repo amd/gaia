@@ -262,6 +262,8 @@ export interface Message {
     stopState?: 'stopped' | 'unconfirmed';
     /** Error the server reported while a stopped turn was closing. */
     stopError?: string;
+    /** Set when this turn pushed older turns out of the model's view. */
+    historyNotice?: string;
 }
 
 /** One card instance transferred onto a finalized Message (issue #2108). */
@@ -345,6 +347,15 @@ export interface DownloadProgress {
     message: string | null;
 }
 
+/** Whether a new chat's first turn will find its prompt already read. */
+export interface WarmUpStatus {
+    state: 'idle' | 'warming' | 'ready' | 'failed' | 'skipped';
+    elapsed_seconds?: number | null;
+    prompt_tokens?: number | null;
+    cached_tokens?: number | null;
+    error?: string | null;
+}
+
 export interface SystemStatus {
     lemonade_running: boolean;
     /** Present when the Lemonade health/catalog query failed. */
@@ -382,13 +393,15 @@ export interface SystemStatus {
      * the actual default — replaces the previously hard-coded "~25 GB".
      */
     default_model_size_gb: number | null;
-    lemonade_url: string;
+    lemonade_url: string | null;
     expected_model_loaded: boolean;
     /** Live progress while a model pull is in flight. ``null`` otherwise. */
     download_progress: DownloadProgress | null;
     // Boot-time initialization tracking
     init_state?: 'initializing' | 'ready' | 'degraded';
     init_tasks?: Array<{ name: string; status: string }>;
+    /** Priming of a new chat's prompt; never blocks sending. */
+    warm_up?: WarmUpStatus | null;
     /** Devices detected on this system (e.g. ['cpu', 'gpu', 'npu']). */
     detected_devices?: string[];
     /** Active profile from ``~/.gaia/config.json`` (e.g. "chat", "npu"). */
@@ -531,6 +544,8 @@ export interface CommandOutput {
     stdout: string;
     stderr: string;
     returnCode: number;
+    /** Why a non-zero exit is an answer, not a failure (grep's 1: no match). */
+    expectedExit?: string | null;
     cwd?: string;
     durationSeconds?: number;
     truncated?: boolean;
@@ -648,6 +663,7 @@ export interface StreamEvent {
         stdout: string;
         stderr: string;
         return_code: number;
+        expected_exit?: string | null;
         cwd?: string;
         duration_seconds?: number;
         truncated?: boolean;
@@ -676,6 +692,8 @@ export interface StreamEvent {
     mcp_server?: string;
     /** Tool call latency in milliseconds (for tool_result). */
     latency_ms?: number;
+    /** agent_error the agent recovers from by retrying, rather than a turn-ending one. */
+    recoverable?: boolean;
     /** Governance decision (for policy_alert). */
     decision?: string;
     /** Governance policy reason (for policy_alert). */
@@ -744,6 +762,43 @@ export interface SetupRunStatus {
     command?: string;
     log_tail?: string[];
     skip_chat_model?: boolean;
+}
+
+// ── Which Lemonade Server GAIA uses (/api/lemonade/*) ─────────────────────
+
+export type LemonadeMode = 'gaia' | 'external';
+
+/** GET /api/lemonade/target: the server GAIA uses now and who chose it. */
+export interface LemonadeTarget {
+    mode: LemonadeMode;
+    /** null until the user (or `gaia init`) has chosen. */
+    saved_mode: LemonadeMode | null;
+    /** `env` means LEMONADE_BASE_URL chose it, so the UI cannot change it. */
+    source: 'env' | 'config' | 'gaia';
+    base_url: string | null;
+    saved_base_url: string | null;
+    api_key_stored: boolean;
+    gaia_installed: boolean;
+    /** Nobody has chosen yet: offer a Lemonade found running. */
+    offer: boolean;
+    what_gaia_does: string;
+}
+
+export type LemonadeProbeStatus = 'ok' | 'needs_key' | 'bad_key' | 'too_old' | 'not_lemonade' | 'unreachable';
+
+/** A Lemonade the user already runs, from GET /api/lemonade/detect. */
+export interface LemonadeFound {
+    url: string;
+    status: LemonadeProbeStatus;
+    version: string | null;
+    minimum: string | null;
+    message: string;
+}
+
+export interface LemonadeTargetBody {
+    mode: LemonadeMode;
+    base_url?: string;
+    api_key?: string;
 }
 
 // ── AI providers (GET /api/providers) ─────────────────────────────────────

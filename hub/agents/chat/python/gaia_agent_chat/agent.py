@@ -4,6 +4,7 @@
 Chat Agent - Interactive chat with RAG and file search capabilities.
 """
 
+import dataclasses
 import os
 import platform
 import re
@@ -27,6 +28,7 @@ except ImportError as _watchdog_err:
     Observer = None
 
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
+from gaia_agent_chat.python_runner import python_command
 from gaia_agent_chat.session import SessionManager
 from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent_chat.tool_requests import requested_tools
@@ -43,6 +45,7 @@ from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_MIN_BATCH_TOKENS,
     DEFAULT_EVICT_THRESHOLD_TOKENS,
 )
+from gaia.agents.base.errors import exit_error
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.project_map import resolve_project_root
 
@@ -52,6 +55,7 @@ from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
 from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
@@ -83,7 +87,7 @@ from gaia.llm.lemonade_client import (
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
-from gaia.security import PathValidator, stable_scratch_dir
+from gaia.security import PathValidator, narrow_allowed_paths, stable_scratch_dir
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
 
@@ -108,6 +112,9 @@ _FILE_CREATING_TOOLS = frozenset(
 # code, so ``NOTIFY_DESKTOP_PS_SCRIPT`` stays a constant no input can alter.
 NOTIFY_TITLE_ENV_VAR = "GAIA_NOTIFY_TITLE"
 NOTIFY_MESSAGE_ENV_VAR = "GAIA_NOTIFY_MESSAGE"
+#: Seconds notify_desktop waits for PowerShell to fail before calling it shown.
+NOTIFY_STARTUP_GRACE_S = 3
+
 NOTIFY_DESKTOP_PS_SCRIPT = (
     "Add-Type -AssemblyName System.Windows.Forms; "
     "[System.Windows.Forms.MessageBox]::Show("
@@ -131,6 +138,37 @@ def _imports_gaia_tools(code: str) -> Optional[str]:
     return match.group(0).strip() if match else None
 
 
+def _python_run_result(
+    run: Any,
+    stdout: str,
+    stderr: str,
+    seconds: float,
+) -> Dict[str, Any]:
+    """A finished Python run as a tool result; a non-zero exit is an error.
+
+    The error names the last stderr line — the exception or ``sys.exit``
+    message — so a failed run never reads as a success to the model or the UI.
+    """
+    code = run.returncode
+    result: Dict[str, Any] = {
+        "status": "success" if code == 0 else "error",
+        "stdout": stdout,
+        "stderr": stderr,
+        "return_code": code,
+        "has_errors": code != 0,
+        "duration_seconds": round(seconds, 2),
+    }
+    if code != 0:
+        last = next(
+            (s.strip() for s in reversed((run.stderr or "").splitlines()) if s.strip()),
+            "",
+        )
+        result["error"] = f"Python exited with code {code}" + (
+            f": {last[:300]}" if last else ""
+        )
+    return result
+
+
 def _python_script_run_context(
     script: Path, project_dir: os.PathLike | str | None
 ) -> tuple[Path, Dict[str, str]]:
@@ -146,6 +184,8 @@ def _python_script_run_context(
     """
     script = Path(script).resolve()
     env = child_env()
+    # The tools decode the output as UTF-8; the locale codec can't print a ✓.
+    env["PYTHONIOENCODING"] = "utf-8"
     if project_dir is None:
         return script.parent, env
     project = Path(project_dir).resolve()
@@ -346,6 +386,11 @@ class ChatAgent(
         if config.namespaced_agent_id:
             self._gaia_namespaced_agent_id = config.namespaced_agent_id
 
+        # Narrowed once here so the validator, RAG and code-index ceilings agree.
+        narrowed = narrow_allowed_paths(config.allowed_paths)
+        if narrowed is not config.allowed_paths:
+            config = dataclasses.replace(config, allowed_paths=narrowed)
+
         # Initialize path validator
         self.path_validator = PathValidator(
             config.allowed_paths,
@@ -518,8 +563,9 @@ class ChatAgent(
             incognito=config.memory_incognito,
         )
 
-        # Store base URL for use in _register_tools() (VLM, etc.)
-        self._base_url = effective_base_url
+        # Store base URL for use in _register_tools() (VLM, etc.). Unset stays
+        # None: GAIA's own server can change port, so its users resolve per use.
+        self._base_url = config.base_url
 
         # MCP client manager — set up before super().__init__() because Agent.__init__()
         # calls _register_tools() internally, and MCP tools are loaded there.
@@ -537,7 +583,8 @@ class ChatAgent(
             use_claude=config.use_claude,
             use_chatgpt=config.use_chatgpt,
             claude_model=config.claude_model,
-            base_url=effective_base_url,
+            # Unset lets the base resolve the port only after starting the server.
+            base_url=config.base_url,
             model_id=effective_model_id,  # Pass the effective model to parent
             max_steps=config.max_steps,
             debug_prompts=config.debug_prompts,
@@ -1682,6 +1729,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 project's packages. Any other script runs from its own folder.
                 Relative paths resolve against that working directory.
 
+                Has pypdf, pymupdf, docx, pptx, openpyxl, xlsxwriter,
+                reportlab, pandas, numpy, matplotlib; no pip.
+
                 Args:
                     file_path: Path to the .py file to run
                     args: Space-separated CLI arguments to pass to the script
@@ -1692,7 +1742,6 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 """
                 import shlex
                 import subprocess
-                import sys
                 import time
 
                 file_path = os.path.expanduser(file_path)
@@ -1709,8 +1758,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "status": "error",
                         "error": f"File not found: {file_path}",
                     }
-                cmd = [sys.executable, str(p.resolve())] + (
-                    shlex.split(args) if args.strip() else []
+                cmd = python_command(
+                    p.resolve(), shlex.split(args) if args.strip() else []
                 )
                 start = time.monotonic()
                 try:
@@ -1735,14 +1784,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     from gaia.agents.base.artifacts import retain_excerpt
 
                     return attach_check(
-                        {
-                            "status": "success",
-                            "stdout": retain_excerpt(self, r.stdout, 8000),
-                            "stderr": retain_excerpt(self, r.stderr, 2000),
-                            "return_code": r.returncode,
-                            "has_errors": r.returncode != 0,
-                            "duration_seconds": round(time.monotonic() - start, 2),
-                        },
+                        _python_run_result(
+                            r,
+                            retain_excerpt(self, r.stdout, 8000),
+                            retain_excerpt(self, r.stderr, 2000),
+                            time.monotonic() - start,
+                        ),
                         check_from_python_run(
                             " ".join([file_path, args]).strip(),
                             r.returncode,
@@ -1754,6 +1801,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     return {
                         "status": "error",
                         "error": f"Timed out after {timeout}s",
+                        "has_errors": True,
+                    }
+                except OSError as e:
+                    return {
+                        "status": "error",
+                        "error": f"Could not start {cmd[0]}: {e}",
                         "has_errors": True,
                     }
                 except Exception as e:
@@ -1771,6 +1824,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 No access to your tools: `from gaia import <tool>` fails —
                 call it directly as a tool instead.
 
+                Has pypdf, pymupdf, docx, pptx, openpyxl, xlsxwriter,
+                reportlab, pandas, numpy, matplotlib; no pip.
+
                 Args:
                     code: Python source to run; print() whatever you need back.
                     timeout: Max seconds to wait (default 60)
@@ -1779,7 +1835,6 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     stdout, stderr, return_code, and duration.
                 """
                 import subprocess
-                import sys
                 import tempfile
                 import time
 
@@ -1820,6 +1875,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "has_errors": True,
                     }
                 env = child_env()
+                env["PYTHONIOENCODING"] = "utf-8"
                 if project:
                     existing = env.get("PYTHONPATH")
                     env["PYTHONPATH"] = (
@@ -1836,10 +1892,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 ) as handle:
                     handle.write(code)
                     snippet = Path(handle.name)
+                cmd = python_command(snippet)
                 start = time.monotonic()
                 try:
                     r = subprocess.run(
-                        [sys.executable, str(snippet)],
+                        cmd,
                         cwd=str(run_dir),
                         env=env,
                         capture_output=True,
@@ -1858,20 +1915,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except OSError as e:
                     return {
                         "status": "error",
-                        "error": f"Could not start {sys.executable}: {e}",
+                        "error": f"Could not start {cmd[0]}: {e}",
                         "has_errors": True,
                     }
                 finally:
                     snippet.unlink(missing_ok=True)
                 return attach_check(
-                    {
-                        "status": "success",
-                        "stdout": r.stdout[:8000],
-                        "stderr": r.stderr[:2000],
-                        "return_code": r.returncode,
-                        "has_errors": r.returncode != 0,
-                        "duration_seconds": round(time.monotonic() - start, 2),
-                    },
+                    _python_run_result(
+                        r, r.stdout[:8000], r.stderr[:2000], time.monotonic() - start
+                    ),
                     check_from_python_run(
                         snippet_target(code), r.returncode, r.stdout, r.stderr
                     ),
@@ -1949,7 +2001,16 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     logger.warning("open_url refused %s: %s", url, e)
                     return {"status": "error", "url": url, "error": str(e)}
                 try:
-                    webbrowser.open(url)
+                    # False means no browser could be launched (headless box).
+                    if not webbrowser.open(url):
+                        return {
+                            "status": "error",
+                            "url": url,
+                            "error": (
+                                f"No web browser could be opened for {url}. "
+                                "Give the user the link to open themselves."
+                            ),
+                        }
                     return {
                         "status": "success",
                         "message": f"Opened {url} in the default browser",
@@ -2026,7 +2087,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 info["disk_total_gb"] = round(disk.total / 1e9, 1)
                 info["disk_used_pct"] = round(disk.used / disk.total * 100, 1)
             except ImportError:
-                info["note"] = "psutil not installed — install with: pip install psutil"
+                info["note"] = "psutil not installed. " + missing_package_hint("psutil")
             return {"status": "success", **info}
 
         @tool
@@ -2044,7 +2105,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             except ImportError:
                 return {
                     "status": "error",
-                    "error": "pyperclip not installed. Run: pip install pyperclip",
+                    "error": "pyperclip not installed. "
+                    + missing_package_hint("pyperclip"),
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
@@ -2070,7 +2132,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             except ImportError:
                 return {
                     "status": "error",
-                    "error": "pyperclip not installed. Run: pip install pyperclip",
+                    "error": "pyperclip not installed. "
+                    + missing_package_hint("pyperclip"),
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
@@ -2097,25 +2160,43 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 if platform.system() == "Windows":
                     try:
                         import subprocess
+                        import tempfile
 
-                        subprocess.Popen(
-                            [
-                                "powershell",
-                                "-NoProfile",
-                                "-WindowStyle",
-                                "Hidden",
-                                "-Command",
-                                NOTIFY_DESKTOP_PS_SCRIPT,
-                            ],
-                            env=child_env(
-                                {
-                                    NOTIFY_MESSAGE_ENV_VAR: message,
-                                    NOTIFY_TITLE_ENV_VAR: title,
+                        with tempfile.TemporaryFile() as err:
+                            proc = subprocess.Popen(
+                                [
+                                    "powershell",
+                                    "-NoProfile",
+                                    "-WindowStyle",
+                                    "Hidden",
+                                    "-Command",
+                                    NOTIFY_DESKTOP_PS_SCRIPT,
+                                ],
+                                env=child_env(
+                                    {
+                                        NOTIFY_MESSAGE_ENV_VAR: message,
+                                        NOTIFY_TITLE_ENV_VAR: title,
+                                    }
+                                ),
+                                stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL,
+                                stderr=err,
+                            )
+                            # The box stays up until dismissed, so a process
+                            # still alive here is the box showing; one that
+                            # already exited non-zero never drew it.
+                            try:
+                                code = proc.wait(timeout=NOTIFY_STARTUP_GRACE_S)
+                            except subprocess.TimeoutExpired:
+                                code = 0
+                            if code != 0:
+                                err.seek(0)
+                                return {
+                                    "status": "error",
+                                    "error": "Notification failed: "
+                                    + exit_error("powershell", code, err.read()),
+                                    "return_code": code,
                                 }
-                            ),
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
                         return {
                             "status": "success",
                             "message": f"Notification sent via Windows fallback: {title}",
@@ -2134,7 +2215,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         }
                 return {
                     "status": "error",
-                    "error": "plyer not installed. Run: pip install plyer",
+                    "error": "plyer not installed. " + missing_package_hint("plyer"),
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
@@ -2192,6 +2273,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         timeout=10,
                         check=False,
                     )
+                    if result.returncode != 0:
+                        return {
+                            "status": "error",
+                            "error": exit_error(
+                                "tasklist", result.returncode, result.stderr
+                            ),
+                            "return_code": result.returncode,
+                        }
                     for line in result.stdout.strip().splitlines()[:50]:
                         parts = line.strip('"').split('","')
                         if len(parts) >= 2:
@@ -2244,6 +2333,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                                 "(Mission Control equivalent)"
                             ),
                         }
+                    if result.returncode != 0:
+                        return {
+                            "status": "error",
+                            "error": exit_error(
+                                "osascript", result.returncode, result.stderr
+                            ),
+                            "return_code": result.returncode,
+                            "hint": (
+                                "osascript may have been blocked by "
+                                "accessibility permissions."
+                            ),
+                        }
                 except (FileNotFoundError, subprocess.TimeoutExpired) as e:
                     logger.debug("osascript window listing unavailable: %s", e)
                 return {
@@ -2268,22 +2369,29 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         timeout=5,
                         check=False,
                     )
-                    if result.returncode == 0:
-                        for line in result.stdout.strip().splitlines():
-                            parts = line.split(None, 3)
-                            if len(parts) >= 4:
-                                windows.append(
-                                    {
-                                        "id": parts[0],
-                                        "desktop": parts[1],
-                                        "title": parts[3],
-                                    }
-                                )
+                    if result.returncode != 0:
                         return {
-                            "status": "success",
-                            "windows": windows,
-                            "count": len(windows),
+                            "status": "error",
+                            "error": exit_error(
+                                "wmctrl -l", result.returncode, result.stderr
+                            ),
+                            "return_code": result.returncode,
                         }
+                    for line in result.stdout.strip().splitlines():
+                        parts = line.split(None, 3)
+                        if len(parts) >= 4:
+                            windows.append(
+                                {
+                                    "id": parts[0],
+                                    "desktop": parts[1],
+                                    "title": parts[3],
+                                }
+                            )
+                    return {
+                        "status": "success",
+                        "windows": windows,
+                        "count": len(windows),
+                    }
                 except (FileNotFoundError, subprocess.TimeoutExpired) as e:
                     logger.debug("wmctrl window listing unavailable: %s", e)
                 return {

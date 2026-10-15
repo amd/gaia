@@ -35,7 +35,7 @@ func firstRunReport() Report {
 		{Key: KeyBinary, Label: "GAIA agent", State: StateOK, Line: `C:\gaia\gaia-agent.exe`},
 		{
 			Key: KeyLemonade, Label: lemonadeRowLabel, State: StateFailed, FirstRun: true,
-			Disposition: status.DispositionHalt, Fix: FixRunSetup,
+			Disposition: status.DispositionHalt, Fix: FixInstallServer,
 			Line: "not installed yet", Step: installServerStep,
 			Detail: "Lemonade runs AI models on this machine.",
 			Remedy: Remedy{Action: "Install the local model server first — it is not on this " +
@@ -142,7 +142,7 @@ func TestEnterStartsTheFocusedStep(t *testing.T) {
 		t.Fatal("enter started nothing")
 	}
 	drainUntilDone(t, m)
-	if len(*fixes) != 1 || (*fixes)[0] != FixRunSetup {
+	if len(*fixes) != 1 || (*fixes)[0] != FixInstallServer {
 		t.Errorf("fixes = %v, want one setup run", *fixes)
 	}
 }

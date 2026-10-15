@@ -42,6 +42,7 @@ def _response(status_code=200, body=None):
 def manager():
     client = MagicMock()
     client.base_url = "http://localhost:13305/api/v1"
+    client.credential_base_url.return_value = client.base_url
     return GatewayManager(client=client)
 
 
@@ -219,6 +220,7 @@ class TestAuth:
             "enabled_models",
             "active_model",
             "non_streaming_models",
+            "unavailable_models",
         }
 
     def test_empty_token_is_refused_before_any_request(self, manager):
@@ -543,16 +545,18 @@ class TestSelection:
     def test_uninstall_clears_the_global_default_model(self, manager, monkeypatch):
         """`use` writes the choice to two places; removing it cleaned only one,
         leaving `gaia chat` resolving a gateway id that no longer exists."""
+        from gaia.config import GaiaConfig
+
         cleared = {}
 
-        class FakeCfg:
+        class FakeCfg(GaiaConfig):
             def get(self, k):
                 return "amd.Claude-Opus-5"
 
             def set(self, k, v):
                 cleared[k] = v
 
-            def save(self):
+            def save(self, path=None):
                 cleared["saved"] = True
 
         monkeypatch.setattr(

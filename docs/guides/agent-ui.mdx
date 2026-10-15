@@ -46,8 +46,13 @@ The agent searches your common folders first, then offers a deep search across a
 In-process chat agents retain file reads, tool calls and tool results for later
 questions, including after the server restarts. Complete older turns leave the
 model's context only when its estimated history budget fills; the transcript and
-stored evidence remain on your machine. A backend log warning identifies context
-exclusions. Earlier conversations saved before this feature retain text only.
+stored evidence remain on your machine. When more older turns leave the model's
+view — a long chat, or a switch to a smaller model — the chat shows one quiet
+line before the reply — "Older messages are now out of the model's view (N
+turns)" — and the TUI shows the same line in its transcript. Ask GAIA to recall
+anything from before it. A Hub-installed GAIA agent relayed from the Agent UI
+sees only the last 5 exchanges, and the chat says so once, when the sixth one
+lands. Earlier conversations saved before this feature retain text only.
 If the current prompt leaves no history budget, GAIA warns and sends no older
 turns; saved evidence remains intact. Switching to a model without native tool
 calling replays recorded calls and results as text.
@@ -239,6 +244,10 @@ and where that model runs.
   while GAIA is working.
 - **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
   the detail.
+- **"Getting GAIA ready… 12s"** under the message box means a local model is
+  reading GAIA's instructions ahead of your first message, so that message
+  gets a quick answer. You can type and send meanwhile; a message sent early
+  waits for it to finish rather than starting over.
 
 Every chat runs the GAIA agent. Chats made by the retired `chat`, `doc` and
 `file` agents stay readable but can't be continued; start a new chat instead.
@@ -262,6 +271,62 @@ Open **Settings → Model** (or the model chip in the message box):
 - The model you choose is remembered across restarts (shared with the TUI). If
   it can't be restored, a one-line notice says why and asks you to pick one.
 - Switching from a local model to a cloud one shows the privacy note first.
+
+### When GAIA's model server runs
+
+Local chat runs on GAIA's own Lemonade Server, the one `gaia init` installs.
+GAIA manages it for you, and it gives its memory back when you stop using GAIA:
+
+| When | What happens |
+|---|---|
+| You open the app (desktop, `npx @amd-gaia/agent-ui`, or `gaia-tui`) | GAIA's background service starts the server if it is not running |
+| You close the last GAIA app | Every model is unloaded, so your GPU memory is free again. The server itself stays up for a quick next launch |
+| Another GAIA app or a `gaia` command is still running | Nothing is unloaded until it closes too |
+| No GAIA app or command has used it for 15 minutes | The server stops entirely |
+| `gaia daemon stop` | The server stops, including the one first-time setup started |
+
+The server keeps the same port from one start to the next, and moves only if
+another program has taken it. Its API key still changes on every start; read
+the current one from `~/.gaia/lemonade/env.sh` (`env.ps1` on Windows).
+
+Change the 15 minutes, or turn the timeout off with `0`:
+
+```bash
+gaia config set lemonade_idle_timeout_minutes 30
+```
+
+The new value applies within seconds; no restart is needed.
+
+None of this applies to a Lemonade Server you run yourself and point GAIA at
+with `LEMONADE_BASE_URL`: GAIA never unloads its models or stops it.
+### Which server and which GPU backend
+
+**Settings → Advanced → Model server** shows what is actually running:
+
+- **Server**: GAIA's own Lemonade or yours (another Lemonade on this PC, or one
+  on another machine), with its version.
+- **Address**: the URL and port GAIA talks to.
+- **Chat model** and **Runs on**: the loaded model and its llama.cpp backend
+  (Vulkan, ROCm, CPU), NPU, or *Remote (cloud)*. "Lemonade's default" means the
+  load did not name a backend and Lemonade picked it. *unknown* means this
+  Lemonade does not report it.
+- **Context window** and the **Embedding model** with its backend.
+
+To choose the backend, pick **Auto**, **Vulkan**, **ROCm** or **CPU** under
+*llama.cpp backend for chat models*. Only backends Lemonade can run on this PC
+are listed; one marked "downloads on first use" is fetched by Lemonade the
+first time it loads (ROCm is about 4 GB). The choice applies the next time the
+chat model loads; **Reload chat model now** applies it at once. The embedding
+model keeps its own backend.
+
+The same setting from a terminal:
+
+```bash
+gaia config set llamacpp_backend rocm   # vulkan | rocm | metal | cpu | auto
+```
+
+**Change model** opens Settings → Model. To use a different server, set
+`LEMONADE_BASE_URL`.
 
 ## Permissions
 
@@ -287,8 +352,15 @@ error, so it never runs with full access you turned off.
 
 One window with General (appearance: Light, Dark, Match system; shortcuts),
 Model, Permissions, Skills (what GAIA can load, with **Use** to try one),
-Connectors, Memory, Privacy and Advanced (model server status, context size,
-custom model ID, beta options, MCP servers, version and roll back).
+Connectors, Memory, Privacy and Advanced (model server and llama.cpp backend,
+context size, custom model ID, beta options, MCP servers, version and roll
+back).
+
+**Settings → Advanced → Model server** switches between GAIA's own Lemonade
+Server and one you already run: enter its address (and its API key, if it needs
+one) and choose **Use this server**. The setup screen offers a Lemonade it finds
+running the first time. See
+[Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
 
 ## Roll back to a previous version
 
@@ -334,6 +406,19 @@ Sessions let you organize conversations by topic. They sync between the CLI (`ga
 | `Ctrl+,` | Settings |
 
 When GAIA asks permission, the prompt takes focus and `Enter` does nothing, so a message you were typing can't approve it. `Escape` denies (it takes priority over stopping the reply); `Tab` to **Allow once** or **Always allow** and press `Enter` or `Space` to approve. The prompt counts down the time the agent will wait, and GAIA denies when it runs out.
+
+---
+
+## Long Responses
+
+A chat reply that runs longer than 600 seconds stops with "Response timed out after 600s." Time spent waiting for you to answer a question or approve a tool doesn't count. Raise the limit for slow models or heavy queries with `GAIA_STREAM_TIMEOUT`, set before GAIA starts:
+
+```bash
+export GAIA_STREAM_TIMEOUT=1800   # seconds; whole number from 1 to 86400
+gaia chat --ui
+```
+
+An invalid value (not a whole number, or out of range) stops the Agent UI server at startup with an error naming the variable, rather than quietly using the default.
 
 ---
 

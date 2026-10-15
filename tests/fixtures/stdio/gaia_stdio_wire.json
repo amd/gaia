@@ -29,7 +29,8 @@
         "lemonade_version",
         "lemonade_base_url"
       ],
-      "phase_extension": ["phase", "words", "chars"]
+      "phase_extension": ["phase", "words", "chars"],
+      "history_cut_extension": ["history_cut"]
     },
     "token": { "fields": ["delta"] },
     "tool_call": { "fields": ["tool", "args", "narration"] },

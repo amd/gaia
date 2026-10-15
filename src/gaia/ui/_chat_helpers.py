@@ -44,6 +44,7 @@ from gaia.ui.email_sidecar.profiles import (
     SIDECAR_AGENT_IDS,
     api_version_supported,
     confirmations_supported,
+    documents_supported,
     profile_for,
 )
 from gaia.ui.memory_settings import memory_enabled
@@ -60,6 +61,7 @@ from .sse_handler import (
     _fix_double_escaped,
 )
 from .utils import managed_documents_dir
+from .warmup import wait_for_warm_up
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +236,44 @@ _MAX_CACHED_AGENTS = 10
 # Non-streaming turns are cut off after this long (seconds).
 _CHAT_TIMEOUT_SECONDS = 600.0
 
+_STREAM_TIMEOUT_ENV = "GAIA_STREAM_TIMEOUT"
+_DEFAULT_STREAM_TIMEOUT_SECONDS = 600
+_MAX_STREAM_TIMEOUT_SECONDS = 86400
+
+
+def _stream_timeout_from_env() -> int:
+    """Resolve the streaming-turn timeout in seconds from ``GAIA_STREAM_TIMEOUT``.
+
+    Unset or empty returns the 600 s default. Any other value must be a whole
+    number of seconds from 1 to 86400 (24 h).
+
+    Raises:
+        ValueError: the variable is set to a non-integer or out-of-range value.
+    """
+    raw = os.environ.get(_STREAM_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_STREAM_TIMEOUT_SECONDS
+    remedy = (
+        f"Set it to a whole number of seconds from 1 to "
+        f"{_MAX_STREAM_TIMEOUT_SECONDS} (e.g. {_STREAM_TIMEOUT_ENV}=1800), or "
+        f"unset it for the {_DEFAULT_STREAM_TIMEOUT_SECONDS}s default. See "
+        "https://amd-gaia.ai/docs/guides/agent-ui#long-responses"
+    )
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"{_STREAM_TIMEOUT_ENV}={raw!r} is not a whole number of seconds. "
+            f"{remedy}"
+        ) from e
+    if not 1 <= value <= _MAX_STREAM_TIMEOUT_SECONDS:
+        raise ValueError(f"{_STREAM_TIMEOUT_ENV}={value} is out of range. {remedy}")
+    return value
+
+
+# Read once at import so a bad value stops the Agent UI server at startup.
+_STREAM_TIMEOUT_SECONDS = _stream_timeout_from_env()
+
 # Alias so call-sites read naturally; the canonical value lives in database.py.
 _DB_DEFAULT_MODEL = SESSION_DEFAULT_MODEL
 
@@ -261,17 +301,16 @@ _classify_chat_exception = classify_lemonade_exception
 # ── Auto-titling ────────────────────────────────────────────────────────────
 #
 # After the agent finishes a turn, kick off a background task that asks the
-# same LLM to generate a 3-6 word title summarising the conversation, then
-# update the session title in the DB. Fires when:
-#   * Title is still the default ("New Chat" / "New Task" / starts with
-#     "Untitled") — first-response pass
-#   * The new user message has low word-overlap with the existing title
-#     (≤ 0.15 Jaccard on lowercase words) AND the message is substantive
-#     (≥ 25 chars) — topic-shift pass
+# same LLM (the default chat model if that one is a safety classifier) to
+# generate a 3-6 word title summarising the conversation, then
+# update the session title in the DB. Fires only while the title is still a
+# placeholder ("New Chat" / "New Task" / "Untitled"): once named, a chat keeps
+# its name, so the sidebar never drifts to the latest question. The title is
+# always drawn from the chat's first question, even if that turn was stopped.
 #
 # Skipped when:
 #   * The session's title_is_custom flag is set — an explicit user/API title
-#     is pinned forever (#2165); only auto-generated titles may be replaced
+#     is pinned forever (#2165)
 #   * Title starts with "Eval:" — those are owned by the eval framework
 #   * Title was last updated < 30 s ago — prevents thrash mid-conversation
 #   * No agent / no Lemonade base URL available
@@ -282,42 +321,67 @@ _AUTO_TITLE_DEFAULTS = PLACEHOLDER_TITLES
 _AUTO_TITLE_LOCK = threading.Lock()
 _AUTO_TITLE_LAST_AT: dict[str, float] = {}  # session_id -> monotonic ts
 _AUTO_TITLE_THROTTLE_S = 30.0
-_AUTO_TITLE_RE_NONWORD = _re.compile(r"[^a-z0-9 ]+")
 
 
-def _title_word_set(s: str) -> set[str]:
-    """Lowercase word set for overlap comparison; strips punctuation,
-    drops 1-letter tokens (mostly noise like "a" / "I")."""
-    cleaned = _AUTO_TITLE_RE_NONWORD.sub(" ", (s or "").lower())
-    return {w for w in cleaned.split() if len(w) > 1}
+#: Safety-classifier model families. They answer any prompt with a verdict
+#: ("safe" / "unsafe S1" / "Yes"), never a title, and Lemonade's catalog has
+#: no label marking them, so they are matched by name.
+_GUARD_MODEL_NAME_PATTERNS = (
+    "llama-guard",
+    "llamaguard",
+    "prompt-guard",
+    "qwen3guard",
+    "wildguard",
+    "nemoguard",
+    "shieldgemma",
+    "granite-guardian",
+)
+#: First lines a classifier gives instead of a title.
+_CLASSIFIER_VERDICT_RE = _re.compile(
+    r"^(safe|unsafe|yes|no)([\s,:]+s\d+)*$", _re.IGNORECASE
+)
+_QUESTION_TITLE_MAX_CHARS = 60
 
 
-def _should_retitle(
-    current_title: str, last_user_msg: str, title_is_custom: bool = False
-) -> bool:
-    """Decide whether the session deserves a fresh title.
+def _is_guard_model(model_id: str) -> bool:
+    """True for a safety-classifier model, which cannot write a title."""
+    name = model_id.lower().replace("_", "-")
+    return any(pattern in name for pattern in _GUARD_MODEL_NAME_PATTERNS)
 
-    See module-level comment for the rule set.  Returns True/False; pure
-    function so it's easy to unit-test in isolation.
-    """
+
+def _title_model_for(session_model: str) -> str:
+    """The model that writes the title: the session's, unless it is a guard model."""
+    if not _is_guard_model(session_model):
+        return session_model
+    from gaia.llm.lemonade_client import resolve_default_chat_model
+
+    title_model = resolve_default_chat_model()
+    logger.info(
+        "Auto-title: %s is a safety classifier; titling with %s instead",
+        session_model,
+        title_model,
+    )
+    return title_model
+
+
+def _title_from_question(user_msg: str) -> Optional[str]:
+    """The first question itself, cut at a word boundary, as a title."""
+    text = " ".join((user_msg or "").split())
+    if len(text) > _QUESTION_TITLE_MAX_CHARS:
+        cut = text[:_QUESTION_TITLE_MAX_CHARS]
+        text = (cut.rsplit(" ", 1)[0] or cut) + "…"
+    text = text.rstrip(".!?;:,").strip()
+    return text or None
+
+
+def _should_retitle(current_title: str, title_is_custom: bool = False) -> bool:
+    """True only while the session still carries a placeholder title."""
     if title_is_custom:
         return False  # explicit user/API title — pinned (#2165)
     title = (current_title or "").strip()
-    title_lower = title.lower()
     if title.startswith("Eval:"):
         return False  # eval framework owns these
-    if not title or title_lower in _AUTO_TITLE_DEFAULTS:
-        return True  # first-response pass: replace the default
-    # Topic-shift pass: low overlap + substantive new message.
-    user_msg = (last_user_msg or "").strip()
-    if len(user_msg) < 25:
-        return False
-    title_words = _title_word_set(title)
-    user_words = _title_word_set(user_msg)
-    if not title_words:
-        return True
-    overlap = len(title_words & user_words) / len(title_words)
-    return overlap <= 0.15
+    return not title or title.lower() in _AUTO_TITLE_DEFAULTS
 
 
 async def _generate_session_title(
@@ -329,7 +393,9 @@ async def _generate_session_title(
     """Call Lemonade chat completions to produce a short tab-style title.
 
     Returns the cleaned title (≤ 64 chars, no quotes, no trailing
-    punctuation) or None on an HTTP or parse failure.  Times out at 30 s so a hung
+    punctuation) or None on an HTTP or parse failure.  An empty reply or a
+    classifier verdict ("safe", "unsafe S1") yields the first question instead,
+    with a warning.  Times out at 30 s so a hung
     LLM doesn't keep the background task alive forever.
     """
     import httpx  # pylint: disable=import-outside-toplevel
@@ -386,10 +452,35 @@ async def _generate_session_title(
             for prefix in ("title:", "tab:", "summary:"):
                 if title.lower().startswith(prefix):
                     title = title[len(prefix) :].strip()
-            return title[:64] if title else None
+            if not title or _CLASSIFIER_VERDICT_RE.match(title):
+                logger.warning(
+                    "Auto-title: %s replied %r, not a title; "
+                    "titling from the first question instead",
+                    model_id,
+                    content[:80],
+                )
+                return _title_from_question(user_msg)
+            return title[:64]
     except (httpx.HTTPError, ValueError, LookupError, AttributeError) as exc:
         logger.debug("Auto-title LLM call failed: %s", exc)
         return None
+
+
+def _first_exchange(
+    db: ChatDatabase, session_id: str, user_msg: str, assistant_msg: str
+) -> tuple[str, str]:
+    """The session's first user question and the reply that followed it."""
+    messages = db.get_messages(session_id, limit=20)
+    for i, msg in enumerate(messages):
+        if msg.get("role") != "user" or not (msg.get("content") or "").strip():
+            continue
+        if msg["content"] == user_msg:
+            return user_msg, assistant_msg
+        reply = messages[i + 1] if i + 1 < len(messages) else {}
+        return msg["content"], (
+            reply.get("content") or "" if reply.get("role") == "assistant" else ""
+        )
+    return user_msg, assistant_msg
 
 
 async def _maybe_update_session_title(
@@ -414,8 +505,10 @@ async def _maybe_update_session_title(
         return
     current_title = session.get("title") or ""
     title_is_custom = bool(session.get("title_is_custom"))
-    if not _should_retitle(current_title, user_msg, title_is_custom):
+    if not _should_retitle(current_title, title_is_custom):
         return
+    # Name the chat after its first question, even when that turn was stopped.
+    user_msg, assistant_msg = _first_exchange(db, session_id, user_msg, assistant_msg)
 
     # Throttle: don't re-title if we updated within the last 30 s.
     now = _time.monotonic()
@@ -432,7 +525,7 @@ async def _maybe_update_session_title(
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
     new_title = await _generate_session_title(
         base_url=base_url,
-        model_id=model_id,
+        model_id=_title_model_for(model_id),
         user_msg=user_msg,
         assistant_msg=assistant_msg,
     )
@@ -1022,6 +1115,16 @@ def evict_session_agent(session_id: str) -> None:
             _disconnect_cached_agent(entry)
 
 
+def evict_all_session_agents() -> int:
+    """Drop every cached agent, e.g. when GAIA switches Lemonade servers."""
+    with _agent_cache_lock:
+        entries = list(_agent_cache.values())
+        _agent_cache.clear()
+    for entry in entries:
+        _disconnect_cached_agent(entry)
+    return len(entries)
+
+
 # ── Chat Helpers ─────────────────────────────────────────────────────────────
 
 
@@ -1254,6 +1357,13 @@ def _session_mail_provider(session: dict) -> str | None:
 # before the first POST.
 
 
+_RELAY_CONTEXT_PAIRS = 5
+
+# Last history view per in-process chat session, so a model switch that hides
+# more turns is announced too.
+_history_cuts: dict = {}
+
+
 def _query_context_from_history(history_pairs: list) -> list[dict]:
     """Flatten (user, assistant) history pairs into ``QueryContextItem``-shaped
     dicts for the sidecar's ``/query`` request body (#2109).
@@ -1262,10 +1372,9 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     email session's context window stays comparable: last 5 pairs, 2000 chars
     per turn.
     """
-    _MAX_PAIRS = 5
     _MAX_CHARS = 2000
     context: list[dict] = []
-    for user_msg, assistant_msg in history_pairs[-_MAX_PAIRS:]:
+    for user_msg, assistant_msg in history_pairs[-_RELAY_CONTEXT_PAIRS:]:
         u = user_msg[:_MAX_CHARS]
         a = assistant_msg[:_MAX_CHARS]
         if len(assistant_msg) > _MAX_CHARS:
@@ -1275,9 +1384,16 @@ def _query_context_from_history(history_pairs: list) -> list[dict]:
     return context
 
 
-def _restore_model_history(agent, db, session_id: str, query: str) -> None:
-    """Reserve the current prompt and output before admitting completed turns."""
+def _restore_model_history(
+    agent, db, session_id: str, query: str, sse_handler=None
+) -> None:
+    """Reserve the current prompt and output before admitting completed turns.
+
+    With *sse_handler*, a turn that pushes older turns out of the model's view
+    streams a ``history_cut`` status so the chat can say so.
+    """
     from gaia.agents.base.history import (
+        CutReporter,
         history_budget,
         select_history,
         text_tool_history,
@@ -1290,7 +1406,30 @@ def _restore_model_history(agent, db, session_id: str, query: str) -> None:
         and not agent._uses_native_tool_calls()
     ):
         turns = text_tool_history(turns)
-    agent.conversation_history = select_history(turns, history_budget(agent, query))
+
+    def on_cut(cut):
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": cut.notice,
+                "turns": cut.turns,
+                "tokens": cut.tokens,
+            }
+        )
+
+    agent.conversation_history = select_history(
+        turns,
+        history_budget(agent, query),
+        on_cut if sse_handler is not None else None,
+        # Only streamed turns move the baseline, so a cut made while nobody
+        # could be told is announced on the next streamed turn.
+        (
+            _history_cuts.setdefault(session_id, CutReporter())
+            if sse_handler is not None
+            else None
+        ),
+    )
 
 
 def _probe_is_only_unreachable(init_body: dict | None) -> bool:
@@ -1387,8 +1526,13 @@ def _dispatch_sidecar_query(
     model_id: str | None,
     agent_type: str,
     session_id: str | None = None,
+    documents: list | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
+
+    *documents* are the session's attached file paths. A sidecar that takes
+    them gets them on every turn; one that should but is too old to stops
+    the turn with an upgrade message rather than answer without them.
 
     Self-contained: every path here either relays the sidecar's ``/query``
     loop to completion or emits a terminal SSE error and returns. The CALLER
@@ -1430,6 +1574,15 @@ def _dispatch_sidecar_query(
             {"type": "agent_error", "content": profile.version_upgrade_message}
         )
         return
+
+    relayed_documents = None
+    if documents and profile.min_documents_api_version is not None:
+        if not documents_supported(profile, handle.api_version):
+            sse_handler._emit(
+                {"type": "agent_error", "content": profile.documents_upgrade_message}
+            )
+            return
+        relayed_documents = [str(Path(p).resolve()) for p in documents]
 
     proxy = handle.proxy()
 
@@ -1485,9 +1638,24 @@ def _dispatch_sidecar_query(
         return
 
     context = _query_context_from_history(history_pairs)
-    # Known gap: session-attached documents do not cross this hop. The body
-    # carries the transcript, not rag_file_paths, so a relayed agent cannot
-    # see a file the user attached in this session (#4166).
+    if len(history_pairs) == _RELAY_CONTEXT_PAIRS + 1:
+        from gaia.agents.base.turn_metrics import count_tokens
+
+        # The window slides from here on; say so once, when it first does.
+        sse_handler._emit(
+            {
+                "type": "status",
+                "status": "history_cut",
+                "message": (
+                    "Older messages are now out of the model's view: this agent "
+                    f"sees the last {_RELAY_CONTEXT_PAIRS} exchanges of the chat."
+                ),
+                "turns": 1,
+                "tokens": count_tokens(
+                    json.dumps(list(history_pairs[0]), ensure_ascii=False)
+                ),
+            }
+        )
     from gaia.ui.email_sidecar.profiles import full_access_supported
 
     relay_query(
@@ -1507,6 +1675,7 @@ def _dispatch_sidecar_query(
         profile=profile,
         session_id=session_id,
         answers_confirmations=confirmations_supported(profile, handle.api_version),
+        documents=relayed_documents,
     )
 
 
@@ -1516,6 +1685,21 @@ def _find_last_tool_step(steps: list) -> dict | None:
         if steps[i].get("type") == "tool":
             return steps[i]
     return None
+
+
+def _echoes_failed_tool(event: dict, steps: list) -> bool:
+    """A recoverable error right after a failed tool repeats that tool's error.
+
+    A tool that raises or times out reports its error before its result lands,
+    so a still-running tool step counts too: its result always follows as failed.
+    """
+    if not event.get("recoverable") or not steps:
+        return False
+    last = steps[-1]
+    if last.get("type") != "tool":
+        return False
+    running = last.get("active") and last.get("success") is None
+    return last.get("success") is False or bool(running)
 
 
 class _UserWaitClock:
@@ -1663,6 +1847,8 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
             _EVAL_PROVIDER_ENV,
         )
         return
+    from gaia.llm.lemonade_client import InsufficientMemoryError
+
     try:
         import httpx
 
@@ -1782,6 +1968,13 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                 prompt=False,
                 timeout=_PREFLIGHT_LOAD_TIMEOUT_S,
             )
+    except InsufficientMemoryError as exc:
+        # The fix is closing apps, not checking Lemonade: pass the reason on.
+        logger.error("Pre-flight model load refused: %s", exc)
+        if sse_handler is not None:
+            sse_handler._emit(
+                {"type": "status", "status": "warning", "message": str(exc)}
+            )
     except BrokerUnavailableError as exc:
         # Do NOT report this as "check that Lemonade is running" — Lemonade is
         # fine, the daemon that arbitrates the model slot is not, and pointing
@@ -1893,6 +2086,8 @@ async def _get_chat_response(
         )
 
         # ── Agent cache ──────────────────────────────────────────────────────
+        # Reuse what a running warm-up is caching rather than read it twice.
+        wait_for_warm_up()
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
         if cached_agent is not None:
@@ -2283,6 +2478,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 t0 = _time.monotonic()
 
                 # ── Agent cache check ─────────────────────────────────────────
+                # Reuse what a running warm-up is caching rather than read it twice.
+                wait_for_warm_up()
                 cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
                 if cached_agent is not None:
@@ -2459,6 +2656,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         model_id,
                         agent_type,
                         session_id=session_id,
+                        documents=rag_file_paths,
                     )
                     return
 
@@ -2572,7 +2770,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if sse_handler.cancelled.is_set():
                     return
 
-                _restore_model_history(agent, db, session_id, request.message)
+                _restore_model_history(
+                    agent, db, session_id, request.message, sse_handler
+                )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -2677,7 +2877,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         step_id = 0
         idle_cycles = 0
         _stream_start = _time.time()
-        _STREAM_TIMEOUT = 600  # 10 minutes — large system prompts need time
         # Time spent waiting on a request_user_input answer is the user's, not
         # the turn's; that wait has its own deadline.
         _user_wait = _UserWaitClock()
@@ -2721,13 +2920,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             # Guard: total timeout for the streaming response
             _now = _time.time()
             _waited = _user_wait.update(sse_handler.awaiting_user_input(), _now)
-            if _now - _stream_start - _waited > _STREAM_TIMEOUT:
-                logger.error("Streaming response timed out after %ds", _STREAM_TIMEOUT)
+            if _now - _stream_start - _waited > _STREAM_TIMEOUT_SECONDS:
+                logger.error(
+                    "Streaming response timed out after %ds", _STREAM_TIMEOUT_SECONDS
+                )
                 timeout_event = json.dumps(
                     {
                         "type": "agent_error",
-                        "content": f"Response timed out after {_STREAM_TIMEOUT}s. "
-                        "Try a simpler query or break it into smaller questions.",
+                        "content": f"Response timed out after {_STREAM_TIMEOUT_SECONDS}s. "
+                        "Try a simpler query, break it into smaller questions, "
+                        f"or raise {_STREAM_TIMEOUT_ENV} and restart GAIA.",
                     }
                 )
                 yield f"data: {timeout_event}\n\n"
@@ -2845,6 +3047,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
                     )
+                elif event_type == "agent_error" and _echoes_failed_tool(
+                    event, captured_steps
+                ):
+                    pass  # The failed tool's step already holds this error.
                 elif event_type == "agent_error":
                     step_id += 1
                     for s in captured_steps:

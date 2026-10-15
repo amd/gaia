@@ -20,6 +20,13 @@ window the KV cache can take.
 
 ``tui/internal/lemonade/recommended_models.json`` carries the same two constants for
 the Go picker; ``tests/unit/test_model_fit.py`` fails if they drift.
+
+Total memory says which models this machine can ever run. Before a load, what
+is *free right now* decides too: other apps, and models another Lemonade holds,
+take memory the total does not show. :func:`free_memory` reads it from the OS,
+:func:`context_for_free_memory` shrinks a window to it (never below
+``MIN_CONTEXT_TOKENS``), and :func:`check_free_memory` refuses a load that would
+run the machine out of memory.
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ from __future__ import annotations
 import re
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 #: Multiplier on the weights' size for runtime buffers that scale with the model.
@@ -40,6 +48,15 @@ SYSTEM_RAM = "System RAM"
 CONTEXT_HEADROOM_FRACTION = 0.10
 #: Windows above the floor are whole multiples of this many tokens.
 CONTEXT_STEP_TOKENS = 8192
+#: The smallest window a chat model is shrunk to when free memory is short. The
+#: flagship's system prompt and tools alone run ~20K tokens, so a smaller
+#: window cannot hold a first turn; below this the load is refused instead.
+MIN_CONTEXT_TOKENS = 32768
+#: Free memory a shrunk window leaves for GAIA itself (UI, backend, indexes).
+FREE_MEMORY_HEADROOM_GB = 1.0
+#: Below this much system RAM, the Agent UI loads the chat model when the first
+#: message is sent rather than at startup, so setup never races a preload.
+EAGER_LOAD_MIN_RAM_GB = 24.0
 
 
 class ModelFitError(RuntimeError):
@@ -60,15 +77,6 @@ class MachineCapacity:
     def on_gpu(self) -> bool:
         """The memory pool is a GPU's, not system RAM on a CPU-only PC."""
         return self.memory_source != SYSTEM_RAM
-
-    @property
-    def shares_system_ram(self) -> bool:
-        """A model on the CPU backend draws from this same pool.
-
-        True for unified memory (an AMD iGPU, Apple Silicon) and for a CPU-only
-        PC; False for a discrete GPU, whose VRAM the CPU backend never touches.
-        """
-        return self.memory_source in ("AMD iGPU", "Apple GPU", SYSTEM_RAM)
 
 
 @dataclass(frozen=True)
@@ -322,3 +330,204 @@ def pick_default_model(candidates: Iterable[tuple], capacity: MachineCapacity) -
             return model_id, skipped
         skipped.append((model_id, verdict.reason))
     return items[-1][0], skipped
+
+
+# --- Free memory: what a load can take right now -------------------------------
+
+
+@dataclass(frozen=True)
+class GpuMemoryUse:
+    """One AMD GPU's memory as the Linux ``amdgpu`` driver reports it, in GB."""
+
+    vram_total_gb: float
+    vram_used_gb: float
+    gtt_total_gb: float
+    gtt_used_gb: float
+
+
+@dataclass(frozen=True)
+class OsMemory:
+    """Memory as the operating system reports it, in GB."""
+
+    ram_total_gb: float
+    #: Free plus reclaimable (page cache): what an allocation gets without swapping.
+    ram_available_gb: float
+    swap_free_gb: float = 0.0
+    gpus: Tuple[GpuMemoryUse, ...] = ()
+
+
+@dataclass(frozen=True)
+class FreeMemory:
+    """Memory a model load can take now, in GB."""
+
+    #: Without pushing other apps into swap: what a window is sized to.
+    free_gb: float
+    #: Counting free swap: past this, the load runs the machine out of memory.
+    limit_gb: float
+
+
+def _amdgpu_cards(drm: Path = Path("/sys/class/drm")) -> Tuple[GpuMemoryUse, ...]:
+    """Every AMD GPU's VRAM and GTT use from Linux sysfs; empty elsewhere."""
+    if not sys.platform.startswith("linux"):
+        return ()
+    cards = []
+    for card in sorted(drm.glob("card*")):
+        if not re.fullmatch(r"card\d+", card.name):
+            continue
+        dev = card / "device"
+        names = ("vram_total", "vram_used", "gtt_total", "gtt_used")
+        if not all((dev / f"mem_info_{n}").is_file() for n in names):
+            continue  # Not an amdgpu card.
+        gb = {}
+        for n in names:
+            path = dev / f"mem_info_{n}"
+            try:
+                gb[n] = int(path.read_text(encoding="ascii")) / 1e9
+            except (OSError, ValueError) as e:
+                raise ModelFitError(
+                    f"Cannot read GPU memory use from {path}: {e}. Check that "
+                    "this user can read /sys/class/drm, then retry."
+                ) from e
+        cards.append(
+            GpuMemoryUse(
+                vram_total_gb=gb["vram_total"],
+                vram_used_gb=gb["vram_used"],
+                gtt_total_gb=gb["gtt_total"],
+                gtt_used_gb=gb["gtt_used"],
+            )
+        )
+    return tuple(cards)
+
+
+def read_os_memory() -> OsMemory:
+    """This machine's memory, as the OS reports it now."""
+    import psutil
+
+    ram = psutil.virtual_memory()
+    return OsMemory(
+        ram_total_gb=ram.total / 1e9,
+        ram_available_gb=ram.available / 1e9,
+        swap_free_gb=psutil.swap_memory().free / 1e9,
+        gpus=_amdgpu_cards(),
+    )
+
+
+def ram_total_gb() -> float:
+    """This machine's installed RAM as the OS sees it, in GB."""
+    import psutil
+
+    return psutil.virtual_memory().total / 1e9
+
+
+def preloads_chat_model(ram_gb: float) -> bool:
+    """Whether to load the chat model at startup rather than on the first message."""
+    return ram_gb >= EAGER_LOAD_MIN_RAM_GB
+
+
+def _card_for(cards: Tuple[GpuMemoryUse, ...], vram_gb: float):
+    """The sysfs card that is the GPU Lemonade reported, or None if unsure."""
+    if vram_gb:
+        close = [
+            c
+            for c in cards
+            if abs(c.vram_total_gb - vram_gb) <= max(0.5, 0.1 * vram_gb)
+        ]
+        return close[0] if len(close) == 1 else None
+    return cards[0] if len(cards) == 1 else None
+
+
+def free_memory(info: Dict[str, Any], os_memory: OsMemory) -> Optional[FreeMemory]:
+    """Memory a model load on the pool of :func:`capacity_from_system_info` can take now.
+
+    ``None`` when nothing reports it: a discrete GPU without Linux ``amdgpu``
+    sysfs, or an integrated one whose carve-out neither Lemonade nor Windows
+    records. Running out of VRAM there fails the load in Lemonade, not the app.
+    Raises :class:`ModelFitError` when ``/system-info`` is unusable.
+    """
+    if not isinstance(info, dict):
+        raise ModelFitError("Lemonade /system-info did not return an object")
+    ram = os_memory.ram_available_gb
+    swap = os_memory.swap_free_gb
+    entries = _gpu_entries(info.get("devices") or {})
+    if not entries:
+        if _physical_memory_gb(info) <= 0:
+            raise ModelFitError(
+                "Lemonade /system-info reported neither GPU memory nor "
+                "'Physical Memory', so GAIA cannot tell whether a model fits. "
+                "Update Lemonade (`gaia init`) and retry."
+            )
+        return FreeMemory(ram, ram + swap)
+    for vendor, integrated, gpu in entries:
+        if vendor == "Apple":
+            # Unified memory: Metal allocates from system RAM.
+            return FreeMemory(ram, ram + swap)
+        if vendor != "AMD" or not integrated:
+            continue
+        card = _card_for(os_memory.gpus, _num(gpu.get("vram_gb")))
+        if card is not None:
+            carve_out = max(0.0, card.vram_total_gb - card.vram_used_gb)
+            gtt = max(0.0, card.gtt_total_gb - card.gtt_used_gb)
+            return FreeMemory(
+                carve_out + min(gtt, ram), carve_out + min(gtt, ram + swap)
+            )
+        # No per-GPU report (Windows): the BIOS carve-out is outside the RAM the
+        # OS reports, and only GPU work uses it.
+        carve_out = _num(gpu.get("vram_gb")) or _windows_adapter_memory_gb(
+            gpu.get("name")
+        )
+        if not carve_out:
+            # Unknown, like a discrete card's: judging on RAM alone would
+            # shrink or refuse a model the GPU holds.
+            return None
+        return FreeMemory(carve_out + ram, carve_out + ram + swap)
+    for vendor, _, gpu in entries:
+        vram = _num(gpu.get("vram_gb"))
+        if vendor == "AMD":
+            card = _card_for(os_memory.gpus, vram)
+            if card is not None:
+                left = max(0.0, card.vram_total_gb - card.vram_used_gb)
+                return FreeMemory(left, left)
+        if vram:
+            return None
+    return None
+
+
+def context_for_free_memory(
+    *,
+    size_gb: float,
+    kv_bytes_per_token: int,
+    ctx: int,
+    free_gb: float,
+    reserve_gb: float = 0.0,
+) -> Optional[int]:
+    """The largest window up to ``ctx`` that ``free_gb`` holds, or None.
+
+    The weights, ``reserve_gb`` (models still to load beside this one) and
+    ``FREE_MEMORY_HEADROOM_GB`` come off first. None means not even
+    ``MIN_CONTEXT_TOKENS`` (or ``ctx``, if smaller) fits.
+    """
+    floor = min(MIN_CONTEXT_TOKENS, ctx)
+    room = free_gb - FREE_MEMORY_HEADROOM_GB - reserve_gb - required_memory_gb(size_gb)
+    if room < 0:
+        return None
+    if kv_bytes_per_token <= 0:
+        return ctx
+    tokens = int(room * 1e9 // kv_bytes_per_token)
+    if tokens >= ctx:
+        return ctx
+    tokens -= tokens % CONTEXT_STEP_TOKENS
+    return tokens if tokens >= floor else None
+
+
+def check_free_memory(
+    size_gb: float, kv_cache_gb: float, limit_gb: float
+) -> FitVerdict:
+    """Whether loading a model now leaves the machine with memory to spare."""
+    need = required_memory_gb(size_gb, kv_cache_gb)
+    if need > limit_gb:
+        return FitVerdict(
+            False,
+            f"it needs about {need:.1f} GB and only {max(limit_gb, 0.0):.1f} GB "
+            "is free",
+        )
+    return FitVerdict(True)

@@ -49,7 +49,7 @@ import (
 const lemonadeProbeTimeout = 3 * time.Second
 
 // lemonadePorts are the ports a local Lemonade listens on, newest first.
-// Mirrors client.DetectLemonadeURL — a probe that looked elsewhere would report
+// Mirrors client.detectLemonadeURL — a probe that looked elsewhere would report
 // a running server as down.
 var lemonadePorts = []string{"13305", "8000"}
 
@@ -303,6 +303,33 @@ func (l localRunner) checkBinary(_ context.Context, cfg Config) Row {
 func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	row := Row{Key: KeyLemonade}
 
+	choice, err := lemonade.ReadChoice()
+	if err != nil {
+		row.State = StateFailed
+		row.Disposition = status.DispositionHalt
+		row.Line = "GAIA's config cannot be read"
+		row.Detail = err.Error() + "."
+		row.Raw = err.Error()
+		return row
+	}
+	if external, active, err := lemonade.SavedExternal(); active {
+		if err != nil {
+			row.State = StateFailed
+			row.Disposition = status.DispositionHalt
+			row.Line = "your Lemonade Server is not set"
+			row.Detail = err.Error() + "."
+			row.Raw = err.Error()
+			return row
+		}
+		// The user's own server: GAIA starts nothing for it, whatever it finds.
+		return l.checkExternalLemonade(ctx, row, external)
+	}
+	if offersRunningLemonade(choice) {
+		if found, ok := detectRunningLemonade(ctx); ok {
+			return offerRow(found)
+		}
+	}
+
 	base, reachable, probe := probeLemonade(ctx)
 	row.Raw = probe
 
@@ -353,10 +380,9 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	row.Line = "not running"
 	row.Detail = "GAIA needs Lemonade to run local models or route chat to your chosen provider."
 	row.Remedy = lemonadeStartRemedy()
-	// Installing and starting Lemonade is `gaia init`'s job, so this row gets
-	// the same one-key setup the model row does. It cannot run twice: Check
-	// stops at the FIRST failure, so whenever this row is the blocker the model
-	// row below it is pending and unfocusable.
+	// Installing and starting Lemonade is `gaia init`'s job, so this row gets a
+	// one-key setup — the server step only. The models wait for the model row,
+	// which shows their real size once a provider can be picked.
 	//
 	// A bad LEMONADE_SERVER_PATH is excluded because `gaia init` provably cannot
 	// fix it: setup would inherit the same bad value, so the key would fail
@@ -366,7 +392,7 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	if l0.BadOverride != "" {
 		return row
 	}
-	row.Fix = FixRunSetup
+	row.Fix = FixInstallServer
 	if lemonadeNotInstalled() {
 		// Nothing installed is how every new machine starts — a step, not a fault.
 		row.FirstRun = true
@@ -435,8 +461,8 @@ func readEmbeddedLemonade() *embeddedLemonade {
 //
 // LEMONADE_API_KEY wins when set, so an explicitly configured credential is
 // never overridden by whatever a local state file happens to hold.
-func lemonadeAPIKey() string {
-	return lemonade.APIKeyFor(lemonade.ResolveBaseURL(""))
+func lemonadeAPIKey() (string, error) {
+	return lemonade.APIKeyFor(context.Background(), lemonade.ResolveBaseURL(""))
 }
 
 // It returns the base URL it settled on, whether it answered, and a trace for
@@ -479,7 +505,12 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 			traces = append(traces, fmt.Sprintf("GET %s/models -> %v", b, err))
 			continue
 		}
-		if key := lemonade.APIKeyFor(b); key != "" {
+		key, err := lemonade.APIKeyFor(ctx, b)
+		if err != nil {
+			traces = append(traces, err.Error())
+			continue
+		}
+		if key != "" {
 			req.Header.Set("Authorization", "Bearer "+key)
 		}
 		resp, err := probeClient.Do(req)
@@ -880,16 +911,24 @@ var lemonadeNotInstalled = func() bool {
 }
 
 func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress func(Progress)) FixResult {
-	if kind != FixRunSetup {
+	switch kind {
+	case FixUseRunningLemonade:
+		return l.useRunningLemonade(ctx)
+	case FixUseGAIALemonade:
+		return l.useGAIALemonade()
+	}
+	if !runsSetup(kind) {
 		return FixResult{Err: errNoFix}
 	}
 
-	// Step 1 stops after the server, so a provider can be picked before step 2 picks models.
+	// Step 1 stops after the server, so a provider can be picked before step 2
+	// picks models. Decided by the row, not by what is on disk: a step 1 that
+	// failed after installing Lemonade must not turn its retry into step 2.
 	start := func() (<-chan gaiainit.Event, context.CancelFunc, error) {
 		return gaiainit.Start(l.skipChatModel())
 	}
 	command := gaiainit.RunCommand(l.skipChatModel())
-	if lemonadeNotInstalled() {
+	if kind == FixInstallServer {
 		start, command = gaiainit.StartServerOnly, gaiainit.ServerOnlyCommand()
 	}
 

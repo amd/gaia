@@ -16,6 +16,7 @@ export interface ApiSchemas {
   AgentStepResponse: AgentStepResponse;
   AttachDocumentRequest: AttachDocumentRequest;
   AuthorizeRequest: AuthorizeRequest;
+  BackendOption: BackendOption;
   Body_upload_document_blob_api_documents_upload_post: BodyUploadDocumentBlobApiDocumentsUploadPost;
   Body_upload_file_api_files_upload_post: BodyUploadFileApiFilesUploadPost;
   BrowseResponse: BrowseResponse;
@@ -55,9 +56,12 @@ export interface ApiSchemas {
   KnowledgeCreate: KnowledgeCreate;
   KnowledgeUpdate: KnowledgeUpdate;
   LoadModelRequest: LoadModelRequest;
+  LoadedModelInfo: LoadedModelInfo;
   MemorySettingsBody: MemorySettingsBody;
   MessageListResponse: MessageListResponse;
   MessageResponse: MessageResponse;
+  ModelServerBackendRequest: ModelServerBackendRequest;
+  ModelServerInfo: ModelServerInfo;
   ModelStatus: ModelStatus;
   OpenFileRequest: OpenFileRequest;
   ParseScheduleRequest: ParseScheduleRequest;
@@ -78,6 +82,7 @@ export interface ApiSchemas {
   SourceInfo: SourceInfo;
   StartAgentServerRequest: StartAgentServerRequest;
   SystemStatus: SystemStatus;
+  TargetRequest: TargetRequest;
   TaskCreate: TaskCreate;
   TaskListResponse: TaskListResponse;
   TaskResponse: TaskResponse;
@@ -87,6 +92,7 @@ export interface ApiSchemas {
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
+  WarmUpStatus: WarmUpStatus;
 }
 /**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
@@ -221,6 +227,13 @@ export interface AttachDocumentRequest {
 export interface AuthorizeRequest {
   grant_agents?: string[];
   scopes?: string[];
+}
+/**
+ * A llama.cpp backend this machine can run, with Lemonade's state for it.
+ */
+export interface BackendOption {
+  name: string;
+  state: string;
 }
 export interface BodyUploadDocumentBlobApiDocumentsUploadPost {
   file: string;
@@ -568,6 +581,17 @@ export interface LoadModelRequest {
   model_name: string;
 }
 /**
+ * One model Lemonade has loaded, as the Model server panel shows it.
+ */
+export interface LoadedModelInfo {
+  backend?: string | null;
+  backend_source?: string | null;
+  ctx_size?: number | null;
+  device?: string | null;
+  name?: string | null;
+  recipe?: string | null;
+}
+/**
  * Typed request body for PUT /api/memory/settings.
  */
 export interface MemorySettingsBody {
@@ -604,6 +628,29 @@ export interface SourceInfo {
   filename: string;
   page?: number | null;
   score: number;
+}
+/**
+ * Choose the llama.cpp backend for chat models: ``auto`` or a backend name.
+ */
+export interface ModelServerBackendRequest {
+  backend: string;
+}
+/**
+ * Which Lemonade GAIA talks to and what it runs (Settings → Advanced).
+ */
+export interface ModelServerInfo {
+  available_backends?: BackendOption[];
+  base_url: string;
+  chat_model?: LoadedModelInfo | null;
+  default_backend?: string | null;
+  embedding_model?: LoadedModelInfo | null;
+  error?: string | null;
+  owner: string;
+  port?: number | null;
+  preferred_backend?: string | null;
+  reachable?: boolean;
+  system_info_error?: string | null;
+  version?: string | null;
 }
 /**
  * Status of a custom model on the Lemonade server.
@@ -805,7 +852,7 @@ export interface SystemStatus {
   initialized?: boolean;
   lemonade_error?: string | null;
   lemonade_running?: boolean;
-  lemonade_url?: string;
+  lemonade_url?: string | null;
   lemonade_version?: string | null;
   memory_available_gb?: number | null;
   model_context_size?: number | null;
@@ -821,6 +868,25 @@ export interface SystemStatus {
   time_to_first_token?: number | null;
   tokens_per_second?: number | null;
   version?: string;
+  warm_up?: WarmUpStatus | null;
+}
+/**
+ * Whether a new chat's first turn will find its prompt already read.
+ */
+export interface WarmUpStatus {
+  cached_tokens?: number | null;
+  elapsed_seconds?: number | null;
+  error?: string | null;
+  prompt_tokens?: number | null;
+  state: string;
+}
+/**
+ * ``mode`` "gaia" or "external"; the URL and key only for "external".
+ */
+export interface TargetRequest {
+  api_key?: string | null;
+  base_url?: string | null;
+  mode: string;
 }
 export interface TaskCreate {
   description: string;

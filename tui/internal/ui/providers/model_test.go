@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func key(m Model, k tea.KeyType) Model { next, _ := m.Update(tea.KeyMsg{Type: k}); return next.(Model) }
@@ -42,6 +43,15 @@ func TestMaskedPasteNeverReachesViewAndClearsOnCancel(t *testing.T) {
 	m = key(m, tea.KeyEsc)
 	if m.fields != nil || m.stage != "providers" {
 		t.Fatal("cancel retained key")
+	}
+}
+func TestThePanelOpensOnTheCurrentProvider(t *testing.T) {
+	for provider, want := range map[string]string{
+		"amd": "amd", "fireworks": "fireworks", "local": "local", "claude": "local", "": "local",
+	} {
+		if got := New("", 100, 30).WithCurrent(provider).chosen(); got != want {
+			t.Fatalf("WithCurrent(%q) chose %q, want %q", provider, got, want)
+		}
 	}
 }
 func TestProviderScreenOffersAllDestinations(t *testing.T) {
@@ -647,5 +657,21 @@ func TestAnEmptyConnectRereadsProviderState(t *testing.T) {
 	m = m.setup()
 	if _, cmd := m.Update(modelsMsg{}); cmd == nil {
 		t.Fatal("an empty connect left the provider list stale")
+	}
+}
+func TestLocalRowNamesTheModelServerAndBackend(t *testing.T) {
+	m := New("", 100, 30)
+	next, _ := m.Update(loadedMsg{source: m.client, started: time.Now(),
+		server: "Lemonade 2026.41.1 (GAIA's own) at localhost:51234 · Qwen3.6-35B-A3B-GGUF on ROCm, 64K ctx"})
+	view := next.(Model).View()
+	if !strings.Contains(view, "at localhost:51234") || !strings.Contains(view, "on ROCm") {
+		t.Fatalf("local row lacks the model server line:\n%s", view)
+	}
+	narrow, _ := New("", 40, 30).Update(loadedMsg{started: time.Now(),
+		server: "Lemonade (yours) at localhost:13305 · " + strings.Repeat("x", 200) + " on Vulkan"})
+	for _, line := range strings.Split(narrow.(Model).View(), "\n") {
+		if ansi.StringWidth(line) > 40 {
+			t.Fatalf("line wider than the panel: %q", line)
+		}
 	}
 }

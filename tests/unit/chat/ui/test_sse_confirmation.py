@@ -35,11 +35,20 @@ def _drain(handler: SSEOutputHandler):
 
 
 def _wait_for_pending_confirmation(handler: SSEOutputHandler):
-    """Wait until confirm_tool_execution has installed its pending event."""
-    deadline = time.time() + 2.0
-    while handler._confirm_event is None and time.time() < deadline:
+    """Wait until confirm_tool_execution has armed AND emitted its prompt."""
+
+    # The pending event is armed before permission_request is queued.
+    def _emitted() -> bool:
+        with handler.event_queue.mutex:
+            return any(
+                e.get("type") == "permission_request" for e in handler.event_queue.queue
+            )
+
+    deadline = time.time() + 5.0
+    while (handler._confirm_event is None or not _emitted()) and time.time() < deadline:
         time.sleep(0.05)
     assert handler._confirm_event is not None
+    assert _emitted(), "confirm_tool_execution never emitted permission_request"
 
 
 # ===========================================================================

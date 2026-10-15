@@ -6,7 +6,8 @@
 import json
 from collections import deque
 from copy import deepcopy
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
 
 from gaia.agents.base.turn_metrics import count_tokens
 from gaia.logger import get_logger
@@ -24,6 +25,10 @@ class TurnMessages(list):
     def append(self, message):
         super().append(message)
         self.recorded.append(deepcopy(message))
+
+    def append_transient(self, message):
+        """Send *message* this turn without recording it in the saved history."""
+        super().append(message)
 
     def extend(self, messages):
         for message in messages:
@@ -83,17 +88,72 @@ class TurnMessages(list):
         return result
 
 
-def select_history(turns: list[list[dict[str, Any]]], budget: int) -> list[dict]:
+@dataclass(frozen=True)
+class HistoryCut:
+    """Turns the latest completed turn pushed out of the model's view."""
+
+    turns: int
+    tokens: int
+
+    @property
+    def notice(self) -> str:
+        noun = "turn" if self.turns == 1 else "turns"
+        return (
+            f"Older messages are now out of the model's view ({self.turns} {noun}). "
+            "Ask me to recall them if you need them."
+        )
+
+
+class CutReporter:
+    """Remembers how many turns one conversation's last view hid.
+
+    A smaller budget (a model switch, a long prompt) hides turns the newest
+    turn did not push out; comparing with the last view catches those too.
+    Before it has seen a view it falls back to the newest-turn check, so a
+    restart does not re-announce a stable cut.
+    """
+
+    def __init__(self) -> None:
+        self.hidden: Optional[int] = None
+
+    def update(
+        self,
+        hidden: int,
+        hidden_before_newest: int,
+        tokens: int,
+        on_cut: Optional[Callable[[HistoryCut], None]],
+    ) -> None:
+        baseline = hidden_before_newest if self.hidden is None else self.hidden
+        self.hidden = hidden
+        if on_cut is not None and hidden > baseline:
+            on_cut(HistoryCut(turns=hidden, tokens=tokens))
+
+
+def select_history(
+    turns: list[list[dict[str, Any]]],
+    budget: int,
+    on_cut: Optional[Callable[[HistoryCut], None]] = None,
+    reporter: Optional[CutReporter] = None,
+) -> list[dict]:
     """Replay whole turns, evicting to half the estimated budget on overflow.
 
     Replaying the same prefix makes eviction deterministic across restarts.
-    The persistent transcript is never shortened.
+    The persistent transcript is never shortened. *on_cut* fires only when
+    more turns are hidden than before, so a stable cut is reported once, not
+    per turn. Without a *reporter*, "before" means without the newest turn.
     """
+    reporter = reporter if reporter is not None else CutReporter()
     if budget <= 0:
         logger.warning(
             "No context budget remains for history; replaying none of the %d "
             "stored turn(s). Full evidence remains in the session database.",
             len(turns),
+        )
+        reporter.update(
+            len(turns),
+            max(len(turns) - 1, 0),
+            sum(count_tokens(json.dumps(t, ensure_ascii=False)) for t in turns),
+            on_cut,
         )
         return []
     retained: deque = deque()
@@ -101,16 +161,22 @@ def select_history(turns: list[list[dict[str, Any]]], budget: int) -> list[dict]
     evicted = 0
     unreplayable = 0
     hole = False
-    for turn in turns:
+    hidden_tokens = 0
+    hidden_before_newest = 0
+    for index, turn in enumerate(turns):
+        if index == len(turns) - 1:
+            hidden_before_newest = evicted + unreplayable
         cost = count_tokens(json.dumps(turn, ensure_ascii=False))
         if cost > budget:
             hole = True
             unreplayable += 1
+            hidden_tokens += cost
             continue
         if hole:
             # Replay stays contiguous: nothing before a dropped turn may sit
             # next to what followed it.
             evicted += len(retained)
+            hidden_tokens += used
             retained.clear()
             used = 0
             hole = False
@@ -121,6 +187,7 @@ def select_history(turns: list[list[dict[str, Any]]], budget: int) -> list[dict]
             while len(retained) > 1 and used > target:
                 _, removed = retained.popleft()
                 used -= removed
+                hidden_tokens += removed
                 evicted += 1
     if evicted or unreplayable:
         logger.warning(
@@ -131,6 +198,7 @@ def select_history(turns: list[list[dict[str, Any]]], budget: int) -> list[dict]
             unreplayable,
             budget,
         )
+    reporter.update(evicted + unreplayable, hidden_before_newest, hidden_tokens, on_cut)
     return [message for turn, _ in retained for message in turn]
 
 
@@ -251,6 +319,7 @@ class SessionHistory(list):
             "CREATE TABLE IF NOT EXISTS turns (id INTEGER PRIMARY KEY, messages TEXT NOT NULL)"
         )
         self._db.commit()
+        self._cuts = CutReporter()
 
     def record(self, messages: list[dict]) -> None:
         """Persist a complete turn without modifying its native tool IDs."""
@@ -260,7 +329,12 @@ class SessionHistory(list):
                 (json.dumps(messages, ensure_ascii=False),),
             )
 
-    def prepare(self, agent: Any, query: str) -> None:
+    def prepare(
+        self,
+        agent: Any,
+        query: str,
+        on_cut: Optional[Callable[[HistoryCut], None]] = None,
+    ) -> None:
         """Rebuild the bounded view for the currently selected model."""
         turns = [
             json.loads(row[0])
@@ -271,12 +345,19 @@ class SessionHistory(list):
             and not agent._uses_native_tool_calls()
         ):
             turns = text_tool_history(turns)
-        self[:] = select_history(turns, history_budget(agent, query))
+        # Only a reporting rebuild moves the baseline; the others tell nobody.
+        self[:] = select_history(
+            turns,
+            history_budget(agent, query),
+            on_cut,
+            self._cuts if on_cut is not None else None,
+        )
 
     def clear(self) -> None:
         with self._db:
             self._db.execute("DELETE FROM turns")
         super().clear()
+        self._cuts = CutReporter()
 
     def close(self) -> None:
         self._db.close()

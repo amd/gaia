@@ -25,6 +25,8 @@ import {
     Check,
     File,
     ShieldAlert,
+    Brain,
+    MessageCircleQuestionMark,
     type LucideIcon,
 } from 'lucide-react';
 import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
@@ -72,7 +74,19 @@ const TOOL_META: Record<string, ToolMeta> = {
     add_watch_directory:   { label: 'Added watch dir',    activeLabel: 'Adding watch dir',    icon: FolderOpen },
     // Web
     web_search:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe },
+    search_web:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe },
+    fetch_page:            { label: 'Read web page',      activeLabel: 'Reading web page',    icon: Globe },
+    fetch_webpage:         { label: 'Read web page',      activeLabel: 'Reading web page',    icon: Globe },
     analyze_data:          { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3 },
+    // GAIA agent: files, memory, questions
+    find_files:            { label: 'Found files',        activeLabel: 'Finding files',       icon: Search },
+    edit_file:             { label: 'Edited file',        activeLabel: 'Editing file',        icon: FileEdit },
+    recall:                { label: 'Recalled memory',    activeLabel: 'Recalling memory',    icon: Brain },
+    remember:              { label: 'Saved to memory',    activeLabel: 'Saving to memory',    icon: Brain },
+    update_memory:         { label: 'Updated memory',     activeLabel: 'Updating memory',     icon: Brain },
+    forget:                { label: 'Deleted from memory', activeLabel: 'Deleting from memory', icon: Brain },
+    search_past_conversations: { label: 'Searched past chats', activeLabel: 'Searching past chats', icon: Brain },
+    request_user_input:    { label: 'Asked you',          activeLabel: 'Asking you',          icon: MessageCircleQuestionMark },
 };
 
 const DEFAULT_TOOL_META: ToolMeta = {
@@ -219,7 +233,8 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
 
     // Build summary — always use stable step count so the bar doesn't
     // visually change when transitioning from thinking to answer streaming.
-    const stepCount = displaySteps.length;
+    // Progress-status rows aren't saved with the turn; counting them made the total drop on finish.
+    const stepCount = displaySteps.filter((s) => s.type !== 'status').length || displaySteps.length;
     const summaryText = hasPolicyAlerts
         ? `Blocked by policy \u00b7 ${policySteps.length} alert${policySteps.length !== 1 ? 's' : ''}`
         : `${stepCount} step${stepCount !== 1 ? 's' : ''}`
@@ -446,7 +461,12 @@ interface FlowToolCardProps {
 function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
     const meta = getToolMeta(step.tool);
     const Icon = meta.icon;
-    const friendlyLabel = step.active ? meta.activeLabel : meta.label;
+    // The done-label ("Wrote file") would claim a failed, denied or stopped call succeeded.
+    const unfinished = step.success == null && !step.result;
+    const friendlyLabel = step.active
+        ? meta.activeLabel
+        : step.success === false ? `${meta.activeLabel} failed`
+        : unfinished ? `${meta.activeLabel} didn't finish` : meta.label;
     const hasDetail = !!(step.detail || step.result || step.commandOutput || step.fileList?.files?.length);
 
     return (
@@ -474,7 +494,7 @@ function FlowToolCard({ step, isExpanded, onToggle }: FlowToolCardProps) {
                 </div>
                 <div className="flow-tool-right">
                     {step.latencyMs != null && !step.active && (
-                        <span className="flow-tool-latency">{Math.round(step.latencyMs)}ms</span>
+                        <span className="flow-tool-latency">{formatToolLatency(step.latencyMs)}</span>
                     )}
                     {hasDetail && (
                         <span className={`flow-tool-chevron ${isExpanded ? 'expanded' : ''}`}>
@@ -680,7 +700,7 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
     }, [output]);
 
     const hasOutput = !!(output.stdout || output.stderr);
-    const isError = output.returnCode !== 0;
+    const isError = output.returnCode !== 0 && !output.expectedExit;
 
     return (
         <div className={`cmd-output ${isError ? 'cmd-error' : ''}`}>
@@ -695,7 +715,12 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
                         <span className="cmd-duration">{output.durationSeconds.toFixed(1)}s</span>
                     )}
                     {output.returnCode !== 0 && (
-                        <span className="cmd-exit-code">exit {output.returnCode}</span>
+                        <span
+                            className={`cmd-exit-code${isError ? '' : ' cmd-exit-expected'}`}
+                            title={output.expectedExit ?? undefined}
+                        >
+                            exit {output.returnCode}
+                        </span>
                     )}
                     {hasOutput && (
                         <button
@@ -725,7 +750,17 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-function formatArgsDisplay(detail: string): React.ReactNode {
+/** `47031` -> "47.0s", `312.4` -> "312ms", `0.3` -> "<1ms". */
+export function formatToolLatency(ms: number): string {
+    if (ms < 1) return '<1ms';
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
+}
+
+/** `key: value`, where the colon is followed by a space — so `C:\x` is never read as key `C`. */
+const ARG_ROW_RE = /^([A-Za-z_][\w.-]{0,29}):(?:\s+([\s\S]*))?$/;
+
+export function formatArgsDisplay(detail: string): React.ReactNode {
     const parts = detail.includes('\n')
         ? detail.split('\n').filter(Boolean)
         : detail.split(', ').filter(Boolean);
@@ -737,10 +772,10 @@ function formatArgsDisplay(detail: string): React.ReactNode {
     return (
         <div className="args-grid">
             {parts.map((part, i) => {
-                const colonIdx = part.indexOf(':');
-                if (colonIdx > 0 && colonIdx < 30) {
-                    const key = part.slice(0, colonIdx).trim();
-                    const val = part.slice(colonIdx + 1).trim();
+                const row = ARG_ROW_RE.exec(part.trim());
+                if (row) {
+                    const key = row[1];
+                    const val = (row[2] ?? '').trim();
                     return (
                         <div key={i} className="arg-row">
                             <span className="arg-key">{key}</span>

@@ -36,6 +36,7 @@ from gaia.daemon.lock import StartLock
 from gaia.env import is_internal_secret
 from gaia.log_rotation import rotate_if_oversized
 from gaia.logger import get_logger
+from gaia.utils.terminal import background_popen_kwargs
 
 logger = get_logger(__name__)
 
@@ -65,6 +66,13 @@ DAEMON_DEPS = (
 _REQUIRED_AGENTS_MINOR = 1
 # The MINOR that added /daemon/v1/lemonade/ensure.
 _REQUIRED_LEMONADE_MINOR = 2
+# The MINOR that added /daemon/v1/lemonade/clients.
+_REQUIRED_CLIENTS_MINOR = 4
+# The MINOR that added /daemon/v1/lemonade/reconfigure.
+_REQUIRED_RECONFIGURE_MINOR = 5
+# Registration and release are loopback bookkeeping; an exiting app must not
+# hang on them.
+_CLIENTS_TIMEOUT = (2.0, 10.0)
 
 # Ensure: connect fast; read generously — a first-run ensure may lazily fetch the
 # sidecar binary before answering (mirrors gaia.ui.email_sidecar.daemon_client).
@@ -73,8 +81,8 @@ _ENSURE_TIMEOUT = (5.0, 900.0)
 # gaiainit.CheckTimeout in the TUI above this plus daemon start (60s).
 _LEMONADE_ENSURE_TIMEOUT = (5.0, 80.0)
 
-# How long `gaia daemon stop` waits before tree-killing. Shutdown now stops the
-# Lemonade Server this daemon started, so this must outlast that teardown or a
+# How long `gaia daemon stop` waits before tree-killing. Shutdown now stops
+# GAIA's Lemonade Server, so this must outlast that teardown or a
 # routine stop kills the daemon before its custody store closes.
 # tests/unit/test_daemon_lemonade.py pins the margin.
 STOP_WAIT_TIMEOUT = 45.0
@@ -117,12 +125,15 @@ def attach(timeout: float = 1.5) -> Optional[DaemonInstance]:
 
 
 def start_or_attach(
-    timeout: float = _START_TIMEOUT, on_progress: Optional[ProgressCallback] = None
+    timeout: float = _START_TIMEOUT,
+    on_progress: Optional[ProgressCallback] = None,
+    drop_env: tuple = (),
 ) -> DaemonInstance:
     """Return the running daemon, starting one if needed. Single-instance guaranteed.
 
     *on_progress* is called every few seconds while a start is still under way,
-    so a front-end can show that something is happening.
+    so a front-end can show that something is happening. *drop_env* names
+    variables of this process a newly started daemon must not inherit.
     """
     inst = attach()
     if inst is not None:
@@ -150,7 +161,7 @@ def start_or_attach(
                 'into that environment with pip install "amd-gaia[api]" '
                 "(or uv pip install), then retry."
             )
-        return _spawn_and_wait(timeout, on_progress)
+        return _spawn_and_wait(timeout, on_progress, drop_env)
 
 
 def missing_daemon_deps() -> list:
@@ -160,7 +171,7 @@ def missing_daemon_deps() -> list:
     return [pkg for mod, pkg in DAEMON_DEPS if importlib.util.find_spec(mod) is None]
 
 
-def _daemon_env() -> dict:
+def _daemon_env(drop: tuple = ()) -> dict:
     """The parent's environment minus anything pointing at another daemon.
 
     The daemon mints its own credentials and serves its own custody endpoint, so
@@ -170,7 +181,9 @@ def _daemon_env() -> dict:
     return {
         name: value
         for name, value in os.environ.items()
-        if not is_internal_secret(name) and name != CUSTODY_URL_ENV_VAR
+        if not is_internal_secret(name)
+        and name != CUSTODY_URL_ENV_VAR
+        and name not in drop
     }
 
 
@@ -201,7 +214,9 @@ def _log_tail(lines: int = _LOG_TAIL_LINES) -> str:
 
 
 def _spawn_and_wait(
-    timeout: float, on_progress: Optional[ProgressCallback] = None
+    timeout: float,
+    on_progress: Optional[ProgressCallback] = None,
+    drop_env: tuple = (),
 ) -> DaemonInstance:
     """Spawn the daemon detached, wait until it registers a live instance.json."""
     paths.ensure_host_dir()
@@ -219,22 +234,17 @@ def _spawn_and_wait(
         os.chmod(paths.log_path(), 0o600)
     except OSError:
         pass
-    creationflags = 0
-    start_new_session = False
-    if sys.platform == "win32":
-        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: outlive the launcher.
-        creationflags = 0x00000008 | 0x00000200
-    else:
-        start_new_session = True
+    # Own group/session to outlive the launcher. A hidden console, not none, so
+    # the console programs the daemon starts don't each open a blank window.
+    spawn_kwargs = background_popen_kwargs()
     try:
         proc = subprocess.Popen(
             [sys.executable, "-m", "gaia.daemon"],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            start_new_session=start_new_session,
-            creationflags=creationflags,
-            env=_daemon_env(),
+            env=_daemon_env(drop_env),
+            **spawn_kwargs,
         )
     except OSError as e:
         log_file.close()
@@ -404,6 +414,187 @@ def ensure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> dict:
         raise DaemonError(
             f"the daemon could not start Lemonade Server: {_error_detail(r)}"
         )
+    return r.json()
+
+
+def _post_reconfigure(inst: DaemonInstance, timeout) -> dict:
+    import requests
+
+    url = f"{inst.base_url}{API_PREFIX}/lemonade/reconfigure"
+    try:
+        r = requests.post(
+            url,
+            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
+            timeout=timeout,
+        )
+    except requests.exceptions.RequestException as e:
+        raise DaemonError(
+            f"could not reach the daemon at {inst.base_url} to switch Lemonade "
+            f"Server: {e}. Run `gaia daemon restart` so it picks up the change."
+        ) from e
+    if r.status_code != 200:
+        raise DaemonError(
+            f"the daemon could not switch Lemonade Server: {_error_detail(r)}"
+        )
+    return r.json()
+
+
+def reconfigure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> Optional[dict]:
+    """Make a running daemon follow the saved Lemonade choice.
+
+    The daemon reads the choice live, so normally it only has to stop (or
+    start) GAIA's own server. It is restarted instead when it predates the
+    reconfigure route, or when it still resolves another server -- it was
+    spawned with a ``LEMONADE_BASE_URL`` -- so it never quietly stays on the old
+    one. The daemon is machine-wide, so it follows the saved setting; the
+    restarted one does not inherit this shell's ``LEMONADE_BASE_URL``.
+
+    Returns:
+        The daemon's effective choice plus ``action`` and ``restarted``, or
+        None when no daemon is running (the next one reads the setting).
+
+    Raises:
+        DaemonError: The daemon could not apply the setting or restart.
+    """
+    from gaia.llm.lemonade_choice import saved_target
+
+    inst = attach()
+    if inst is None:
+        return None
+    wanted = saved_target()
+
+    def _matches(applied: dict) -> bool:
+        return (applied.get("mode"), applied.get("base_url")) == (
+            wanted["mode"],
+            wanted["base_url"],
+        )
+
+    if _minor(inst) >= _REQUIRED_RECONFIGURE_MINOR:
+        applied = _post_reconfigure(inst, timeout)
+        if _matches(applied):
+            return {**applied, "restarted": False}
+        logger.info(
+            "daemon: it uses Lemonade at %s (%s), the setting says %s; restarting it",
+            applied.get("base_url"),
+            applied.get("source"),
+            wanted["base_url"],
+        )
+    if not request_shutdown(inst):
+        raise DaemonError(
+            "the daemon refused to restart for the new Lemonade setting. Run "
+            "`gaia daemon restart`."
+        )
+    if not wait_until_gone(inst, timeout=STOP_WAIT_TIMEOUT):
+        raise DaemonError(
+            f"the daemon (pid {inst.pid}) did not exit to pick up the new Lemonade "
+            "setting. Run `gaia daemon restart`."
+        )
+    fresh = start_or_attach(drop_env=("LEMONADE_BASE_URL", "LEMONADE_API_KEY"))
+    applied = _post_reconfigure(fresh, timeout)
+    if not _matches(applied):
+        raise DaemonError(
+            f"the restarted daemon still uses the Lemonade at {applied.get('base_url')}, "
+            f"not the one GAIA is set to use. Check `gaia daemon logs`."
+        )
+    return {**applied, "restarted": True}
+
+
+def register_lemonade_client(
+    kind: str, pids: list, name: str = "", client_id: Optional[str] = None
+) -> str:
+    """Tell the running daemon this process is using GAIA's Lemonade.
+
+    The registration lasts until :func:`release_lemonade_client`, or until any
+    of *pids* exits. While one is held the daemon keeps the server's models
+    loaded and its idle timeout paused.
+
+    Args:
+        kind: ``"app"`` (Agent UI, TUI) or ``"cli"`` (a ``gaia`` command).
+        pids: Processes the registration lives as long as.
+        name: Shown in the daemon log.
+        client_id: Repeat an earlier registration, so a daemon that restarted
+            since learns of this client too. A no-op on the daemon that has it.
+
+    Returns:
+        The client id to release with.
+
+    Raises:
+        DaemonError: No daemon is running, it predates client registration, or
+            it refused the registration.
+    """
+    import requests
+
+    inst = attach()
+    if inst is None:
+        raise DaemonError(
+            "the GAIA daemon is not running, so there is nothing to register "
+            "with. Start it with `gaia daemon start`."
+        )
+    if _minor(inst) < _REQUIRED_CLIENTS_MINOR:
+        raise DaemonVersionError(
+            f"the running daemon (host API v{inst.api_version}) cannot tell when "
+            "GAIA apps close, so it will not free Lemonade's memory for them. "
+            "Restart it with `gaia daemon restart` so the current version takes "
+            "over."
+        )
+    url = f"{inst.base_url}{API_PREFIX}/lemonade/clients"
+    try:
+        r = requests.post(
+            url,
+            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
+            json={
+                "kind": kind,
+                "pids": list(pids),
+                "name": name,
+                "client_id": client_id,
+            },
+            timeout=_CLIENTS_TIMEOUT,
+        )
+    except requests.exceptions.RequestException as e:
+        raise DaemonError(
+            f"could not reach the daemon at {inst.base_url} to register this "
+            f"{kind}: {e}. Check `gaia daemon status`."
+        ) from e
+    if r.status_code != 200:
+        raise DaemonError(
+            f"the daemon refused to register this {kind}: {_error_detail(r)}"
+        )
+    return r.json()["client_id"]
+
+
+def release_lemonade_client(client_id: str) -> Optional[dict]:
+    """Release a registration from :func:`register_lemonade_client`.
+
+    Returns:
+        The daemon's answer (``clients`` left, whether it ``unloaded``), or None
+        when there was nothing to release: the daemon has exited, or already
+        dropped the registration.
+
+    Raises:
+        DaemonError: The daemon could not be reached or refused the release.
+    """
+    import requests
+
+    inst = attach()
+    if inst is None:
+        return None
+    url = f"{inst.base_url}{API_PREFIX}/lemonade/clients/{client_id}"
+    try:
+        r = requests.delete(
+            url,
+            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
+            timeout=_CLIENTS_TIMEOUT,
+        )
+    except requests.exceptions.RequestException as e:
+        raise DaemonError(
+            f"could not reach the daemon at {inst.base_url} to release client "
+            f"{client_id}: {e}. It drops the registration once this process "
+            "exits."
+        ) from e
+    if r.status_code == 404:
+        return None
+    if r.status_code != 200:
+        raise DaemonError(f"the daemon refused the release: {_error_detail(r)}")
     return r.json()
 
 

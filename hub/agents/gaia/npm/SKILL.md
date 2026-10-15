@@ -247,7 +247,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.15**; the stream is
+package — call it with plain `fetch`. Contract version **2.17**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -258,6 +258,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `run_id` | yes | **You mint it**, and it must be a UUID (non-UUID → 422). It is the cancel handle, valid from the instant the request is sent. |
 | `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. |
 | `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. 1–128 characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a **400**. |
+| `documents` | no | Contract ≥ 2.16. Absolute paths of the files the user attached to this conversation — send the whole set **every turn**. The agent indexes any it has not read yet before the turn runs, granting each exact file and not its folder. A relative path is a **422**. A missing file, a folder, or a refused secret is named as not indexed in the turn's `index_documents` step, and the turn still runs. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
@@ -466,10 +467,16 @@ intermediate files, so they stay out of the user's project. It is created per
 agent under the system temp dir, deleted when the agent closes, and is the only
 part of the temp dir the agent may use.
 
-**In 0.1.1 narrowing it is a construction-time setting only.** The packaged
-sidecar exposes no flag or env var for `allowed_paths` (its CLI accepts only
-`--host` and `--port`), so restricting the scope means embedding `GaiaAgent` in
-your own Python process:
+**To narrow it for a run, set `GAIA_ALLOWED_PATHS`** in the environment the
+sidecar starts in — absolute folders joined with `;` on Windows and `:` elsewhere.
+The scope becomes the overlap with the default; an entry outside it is ignored
+with a warning and never widens it, and out-of-scope paths are refused without a
+prompt, even under full access. The scratch directory stays writable. An empty,
+relative or missing entry stops the sidecar at startup. It confines the agent's
+tools, not code they run: a `run_python` script or shell command can still read
+anything the OS user can, so isolating a run from files it must not see needs a
+separate OS user, container or VM. Embedding `GaiaAgent` lets you pass an explicit
+list instead (the variable still narrows it):
 
 ```python
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -651,7 +658,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.15","agentVersion":"0.1.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.17","agentVersion":"0.1.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
@@ -685,6 +692,10 @@ finish (or close an idle session) and retry the same `/query`.
   closed, so omitting the header is refused rather than served. Send
   `Host: 127.0.0.1:<port>`; every real HTTP client already does.
 
+**After cancelling a turn, send the next `/query` on that session straight
+away.** It is held until the stopped turn's model call returns (up to 240 s),
+then runs. A session whose running turn was NOT cancelled still answers `409`.
+
 For the full wire contract, lock schema, exit codes, and timeout table, see
 [`SPEC.md`](./SPEC.md). For the user-facing overview, see [`README.md`](./README.md)
 and <https://amd-gaia.ai/docs/guides/gaia>.
@@ -694,7 +705,8 @@ and <https://amd-gaia.ai/docs/guides/gaia>.
 The stdio TUI supports `/provider` for Local, Fireworks AI, and AMD LLM Gateway.
 Keys are entered in a masked field and sent directly to local Lemonade's runtime
 auth API, never as agent queries. `/model` lists supported discovered cloud and
-downloaded local models; `/model fireworks.gemma-4-31b-it` selects Gemma 4 31B IT
+downloaded local models, marking the configured default with `(default)`;
+`/model fireworks.gemma-4-31b-it` selects Gemma 4 31B IT
 when available. Cloud chat sends conversation history to the selected provider;
 embeddings remain on Lemonade. The status event names the actual provider and
 marks remote inference. This is a TUI/stdio capability, not an HTTP query command.

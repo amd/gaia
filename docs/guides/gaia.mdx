@@ -17,9 +17,9 @@ GAIA is the agent a new user meets first. One agent handles the everyday work yo
 ## What it does
 
 - **Conversation with memory** — facts you tell it persist to an on-device store and come back in later sessions. It can also search your own past conversations.
-- **Document Q&A over your files** — index a file or a whole folder, then ask questions. PDF, Word, PowerPoint, and plain text; the prompt tells the agent to name which document each fact came from rather than blending sources.
+- **Document Q&A over your files** — index a file or a whole folder, then ask questions. PDF, Word, PowerPoint, and plain text; the prompt tells the agent to name which document each fact came from rather than blending sources. Asked to review, compare or reconcile a few documents, it reads each one in full instead — `read_file` returns the text of Word, PDF and Excel files — so a detail no search asked for, like a date that differs between two of them, isn't missed.
 - **Data exploration** — load a CSV or Excel file into a local SQL scratchpad table and query it, so "which region grew fastest" becomes a real query rather than a guess from a truncated preview.
-- **Web research** — search the web, fetch and read pages, download files.
+- **Web research** — search the web, fetch and read pages, download files. A long page is read in marked parts, or searched for one detail such as a price, rather than cut off unannounced.
 - **Files** — read, search by name or content, and walk directory trees inside your allowed scope. Writing and editing are available too, behind an explicit confirmation (see [Tools that need your approval](#tools-that-need-your-approval)).
 - **Images** — describe a local image or answer a question about it, using the local vision model. It can also *generate* one from a description with local Stable Diffusion; that swaps the resident model, so the reply after an image takes an extra moment while the chat model reloads.
 - **Skills** — short playbooks loaded into the agent's own prompt. One ships always-on; the rest are opt-in. See [Skills](#skills) below for what this release ships.
@@ -209,7 +209,7 @@ Both are refused with a message naming the file and why. Edit such a file yourse
 
 **Reaching outside the scope asks first.** When a tool needs a file or folder outside the allowed set, the TUI and Agent UI show the same approval dialog as a write, naming the path. The prompt waits 10 minutes, then counts as a no. Approving grants that one file, or that folder and everything inside it, until the chat's agent restarts — never saved, never "always", and each new path is asked about on its own. The grant is not read-only, but writing or editing is a gated action that still asks on its own. Paths that stay off limits whatever you answer are refused without a prompt: secrets, system and program directories, the system temp folder, a whole drive, your entire home folder, and any folder that contains one of those. Pre-approved tools (`GAIA_AUTO_APPROVE_TOOLS`) never answer this prompt; only full access does. The Agent UI scopes a chat to its attached documents, so this is how it reads or indexes a file you name in your own folders; one approval covers reading, indexing and querying it. A tool waiting on this question does not count the wait against its own time limit. Every file tool asks the same way — listing or searching a folder, indexing a document for Q&A, and choosing where a screenshot, transcript or export is saved.
 
-To narrow the scope, construct the agent with an explicit list:
+To narrow the scope for one run without code, set `GAIA_ALLOWED_PATHS` before the agent starts — see [Narrowing file access](/reference/cli#narrowing-file-access). It only narrows, refuses out-of-scope paths without prompting, and confines GAIA's tools but not code they run. Embedding the agent, you can construct it with an explicit list:
 
 ```python
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -219,11 +219,6 @@ agent = GaiaAgent(config=GaiaAgentConfig(
 ))
 ```
 
-<Note>
-  In v0.1.1 this is a **construction-time** setting only — the packaged sidecar exposes no
-  flag or environment variable for it, so narrowing the scope means embedding the agent in
-  your own Python process.
-</Note>
 
 ## Memory
 
@@ -263,6 +258,7 @@ The agent runs as a **sidecar** — a self-contained HTTP service the GAIA daemo
 | `GET /version` | The daemon's contract probe → `{apiVersion, agentVersion}`. |
 | `GET /v1/gaia/version` | The terminal UI's negotiation probe. |
 | `GET /v1/gaia/init` | Readiness preflight (see [above](#check-its-ready-before-you-ask-it-anything)). |
+| `GET /v1/gaia/skills` | The skills the agent can load (contract >= 2.17). |
 | `POST /v1/gaia/query` | Run one turn. Streams Server-Sent Events. |
 | `POST /v1/gaia/query/{run_id}/cancel` | Cooperatively cancel a live run. |
 | `POST /v1/gaia/query/{run_id}/respond` | Answer a mid-run `needs_input` question. |
@@ -293,7 +289,7 @@ Only **`query`**, **`run_id`**, and **`context`** are required; everything else 
 - **A user who says something mid-turn doesn't have to wait for it.** `POST /v1/gaia/query/{run_id}/followup` with `{"text": "…"}` hands the running turn their words; the agent folds them in at its next step and answers them alongside the work in progress. Nothing is interrupted and no second turn starts. Because context is pushed rather than pulled, record a delivered follow-up in the `context` you send next turn — between that turn's question and its answer.
 - **Confirmation-gated tools are answered over `POST /v1/gaia/query/{run_id}/tool_decision`** (contract >= 2.14) when there's a session to hold the grant and the caller declared it can answer — see [Tools that need your approval](#tools-that-need-your-approval).
 
-`/query` implements the shared canonical SSE contract (API version **2.15**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically.
+`/query` implements the shared canonical SSE contract (API version **2.17**), so every stream is terminated by **exactly one** `final` or `error` event — the guarantee that lets the daemon relay and the terminal UI treat every GAIA agent identically.
 
 ### Authenticating your requests
 
@@ -334,6 +330,6 @@ The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<
 ## Limitations (v0.1.1)
 
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
-- **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
+- **Narrowing file scope is environment-only for the sidecar** — `GAIA_ALLOWED_PATHS` narrows it; there is no flag, and a running daemon must be restarted to pick up a change.
 - **Server-side confirmation needs a session** — over `/query`, a [confirmation-gated tool](#tools-that-need-your-approval) is answered with `POST /v1/gaia/query/{run_id}/tool_decision` when the request carries a `session_id` and can answer; a one-shot request (no `session_id`, or `can_answer_questions: false`) still ends the run with a refusal instead of prompting.
 - **Image generation evicts the chat model** — the SD model has to be resident to draw, so the first reply after an image waits for the chat model to reload. Ask for pictures at a natural pause, not mid-thread.

@@ -178,6 +178,9 @@ func (m Model) footer(w int) string {
 	case fix != FixNone:
 		keys = append(keys, [2]string{"f", fix.Label()})
 	}
+	if row, ok := m.focusedRow(); ok && !m.Busy() && row.DeclineFix != FixNone {
+		keys = append(keys, [2]string{"g", row.DeclineFix.Label()})
+	}
 	if m.cfg.AgentID == "gaia" && !m.Busy() {
 		keys = append(keys, [2]string{"p", "AI provider"})
 	}
@@ -349,7 +352,7 @@ func (m Model) trailerLines(w int) []string {
 	switch {
 	case m.phase == phaseProvisioning:
 		leaving := "Leaving this screen cancels the download."
-		if m.focusFix() == FixRunSetup {
+		if runsSetup(m.focusFix()) {
 			leaving = "Leaving this screen stops setup."
 		}
 		return []string{
@@ -441,15 +444,25 @@ func (m Model) remedyLines(row Row, w int) []string {
 	if row.Fix != FixNone {
 		out = append(out, keyStyle.Render("f")+" "+dimStyle.Render(row.Fix.Label()))
 	}
-	if row.Remedy.Command != "" {
-		label := "run:   "
+	if row.DeclineFix != FixNone {
+		out = append(out, keyStyle.Render("g")+" "+dimStyle.Render(row.DeclineFix.Label()))
+	}
+	for _, c := range row.Remedy.Commands() {
+		label := c.Label()
 		if row.Fix != FixNone {
-			label = "or run:"
+			label = "or " + label
 		}
-		for i, l := range wrap(row.Remedy.Command, w-8) {
-			prefix := dimStyle.Render(label + " ")
+		first := dimStyle.Render(fmt.Sprintf("%-7s", label) + " ")
+		if c.Shell != "" {
+			// A shell-named label gets its own line so the command keeps the
+			// full width and a long path is not split mid-word.
+			out = append(out, dimStyle.Render(label))
+			first = strings.Repeat(" ", 8)
+		}
+		for i, l := range wrap(c.Line, w-8) {
+			prefix := first
 			if i > 0 {
-				prefix = strings.Repeat(" ", len(label)+1)
+				prefix = strings.Repeat(" ", 8)
 			}
 			out = append(out, prefix+cmdStyle.Render(l))
 		}

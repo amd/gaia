@@ -889,6 +889,12 @@
     background: color-mix(in srgb, var(--code-danger) 12%, var(--bg-code));
 }
 
+/* An exit the tool named as an answer (grep's 1: no match), not a failure. */
+.cmd-exit-code.cmd-exit-expected {
+    color: var(--text-code-dim);
+    background: none;
+}
+
 .cmd-copy {
     display: flex;
     align-items: center;

@@ -197,7 +197,8 @@ func validateURL(raw string, loopback bool) error {
 func (c *Client) request(ctx context.Context, method, path string, data any, result any) error {
 	// Configuration changes are local administrative operations. Never send a
 	// pasted key to an arbitrary remote Lemonade address or follow a redirect.
-	if err := validateURL(c.BaseURL, true); err != nil {
+	base := c.current()
+	if err := validateURL(base, true); err != nil {
 		return err
 	}
 	var body io.Reader
@@ -208,12 +209,16 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, base+path, body)
 	if err != nil {
 		return fmt.Errorf("Invalid Lemonade address")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := APIKeyFor(c.BaseURL); key != "" {
+	key, err := APIKeyFor(ctx, base)
+	if err != nil {
+		return err
+	}
+	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	resp, err := c.HTTP.Do(req)
@@ -292,12 +297,21 @@ func (c *Client) Configure(ctx context.Context, p Provider, key string) error {
 	if strings.TrimSpace(p.Header) == "" || strings.ContainsAny(p.Header+p.Prefix, "\r\n") {
 		return fmt.Errorf("Enter a valid authentication header and prefix")
 	}
+	target := c
+	if key != "" {
+		// Registration and key must land on the same server, and only one a key may reach.
+		base, err := CredentialBaseURL(ctx, c.BaseURL)
+		if err != nil {
+			return err
+		}
+		target = &Client{BaseURL: base, HTTP: c.HTTP}
+	}
 	data := map[string]any{"backend": "cloud", "provider": p.Name, "base_url": p.BaseURL, "auth_header_name": p.Header, "auth_header_prefix": p.Prefix, "wire_format": "openai"}
-	if err := c.request(ctx, "POST", "/install", data, nil); err != nil {
+	if err := target.request(ctx, "POST", "/install", data, nil); err != nil {
 		return err
 	}
 	if key != "" {
-		return c.request(ctx, "POST", "/cloud/auth", map[string]string{"provider": p.Name, "api_key": key}, nil)
+		return target.request(ctx, "POST", "/cloud/auth", map[string]string{"provider": p.Name, "api_key": key}, nil)
 	}
 	return nil
 }

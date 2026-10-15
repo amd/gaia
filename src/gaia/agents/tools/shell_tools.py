@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from gaia.agents.base.checks import attach_check, check_from_command
+from gaia.agents.base.errors import exit_error
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
@@ -769,9 +770,6 @@ _STDERR_REDIRECTION = re.compile(
     r"(?<![^\s])(?:2>&1|2>/dev/null|2>[nN][uU][lL])(?![^\s])"
 )
 
-#: A pipe the way ``_split_pipeline`` reads one: its own token, never ``a|b``.
-_BARE_PIPE = re.compile(r"(?<![^\s])\|(?![^\s])")
-
 
 def _double_quoted(text: str) -> list:
     """Per character: is it inside a double-quoted span, or a quote itself?"""
@@ -807,15 +805,14 @@ def _take_stderr_redirections(text: str) -> tuple:
     Neither form creates, truncates, or runs anything — they only say where
     that segment's stderr goes — so they are lifted out here rather than
     refused by the operator scan. Segments are counted the way
-    ``_split_pipeline`` counts them, so a redirection lands on the command
+    ``_split_shell_pipes`` cuts them, so a redirection lands on the command
     that wrote it. Only the surrounding whitespace survives a removal: a
     newline elsewhere on the line must still reach the operator scan.
     """
     matches = _stderr_redirections(text)
     if not matches:
         return text, {}
-    quoted = _double_quoted(text)
-    pipes = [m.start() for m in _BARE_PIPE.finditer(text) if not quoted[m.start()]]
+    pipes = _pipe_positions(text)
     modes: Dict[int, str] = {}
     kept = []
     end = 0
@@ -1378,9 +1375,9 @@ def _operator_check_text(command: str) -> str:
     return " ".join(outer)
 
 
-#: Tokens that end one command and begin the next. Only ``|`` can appear
-#: outside bypass mode — ``DANGEROUS_SHELL_OPERATORS`` refuses the rest before
-#: tokenisation — so extending the set leaves default behaviour untouched.
+#: Tokens that end one command and begin the next, under full access only.
+#: The default path cuts pipes from the text (``_split_shell_pipes``), and
+#: ``DANGEROUS_SHELL_OPERATORS`` refuses the rest before tokenisation.
 _SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
 
 #: Characters shlex is asked to lex as punctuation under full access. A newline is
@@ -1702,6 +1699,59 @@ def _connector_runs(connector: str, previous_code: int) -> bool:
     return True
 
 
+#: Programs whose documented exit 1 is an answer, not a failure. Nothing is
+#: guessed: each meaning is the program's own (grep(1), diff(1), findstr /?,
+#: fc /?). Exit 2 and up is still a failure for every one of them.
+_ANSWER_EXIT_ONE = {
+    "grep": "grep exits 1 when nothing matches",
+    "egrep": "egrep exits 1 when nothing matches",
+    "fgrep": "fgrep exits 1 when nothing matches",
+    "rg": "rg exits 1 when nothing matches",
+    "findstr": "findstr exits 1 when nothing matches",
+    "diff": "diff exits 1 when the inputs differ",
+    "cmp": "cmp exits 1 when the inputs differ",
+    "fc": "fc exits 1 when the inputs differ",
+}
+
+#: ``git diff`` flags that make exit 1 mean "there are differences".
+_GIT_DIFF_EXIT_CODE_FLAGS = frozenset({"--exit-code", "--quiet", "--no-index"})
+
+
+def _answer_exit(segment: list, code: int) -> Optional[str]:
+    """Why *code* from *segment* is the program's answer, or None if it failed."""
+    if code != 1 or not segment:
+        return None
+    name = _interpreter_name(segment[0])
+    if name in _ANSWER_EXIT_ONE:
+        return _ANSWER_EXIT_ONE[name]
+    if name != "git":
+        return None
+    argv, error = _git_policy_argv(segment)
+    if error or len(argv) < 2:
+        return None
+    if argv[1] == "grep":
+        return "git grep exits 1 when nothing matches"
+    if argv[1] == "diff" and _GIT_DIFF_EXIT_CODE_FLAGS.intersection(argv[2:]):
+        return "git diff --exit-code exits 1 when there are differences"
+    return None
+
+
+def _step_answer_exit(
+    step: "_Step", result: subprocess.CompletedProcess
+) -> Optional[str]:
+    """Why a step's non-zero code is an answer, judged by the stage that set it.
+
+    The code must come from the last stage: ``pytest | grep x`` exiting 1 is
+    no-match only if pytest passed. Where every stage's code is known (a
+    pipeline run here) that is checked; cmd.exe and sh report only the last
+    stage's code, so there the last stage is the one that set it.
+    """
+    stage_codes = getattr(result, "stage_codes", None)
+    if stage_codes and any(stage_codes[:-1]):
+        return None
+    return _answer_exit(step.segments[-1], result.returncode)
+
+
 #: The ``/d`` of a leading ``cd /d``, for the text a step keeps beside its segments.
 _CD_DRIVE_FLAG = re.compile(r"^(\s*cd)\s+/d(?=\s)", re.I)
 
@@ -1798,6 +1848,67 @@ def _take_segment_envs(segments: list) -> tuple:
     return tuple(envs), stripped, None
 
 
+def _ambiguous_pipe_refusal(piece: str, exc: ValueError) -> Dict[str, Any]:
+    """The shell cuts at a ``|`` the argument quoting says is data."""
+    return {
+        "status": "error",
+        "error": (
+            "Cannot tell where this pipeline's commands begin and end: the "
+            "shell would cut it at a '|' that the quoting puts inside an "
+            f"argument ({exc} in {piece.strip()!r})."
+        ),
+        "has_errors": True,
+        "hint": (
+            "Wrap any argument that contains '|' in double quotes, e.g. "
+            'findstr "a|b" file. On Windows, cmd.exe does not treat single '
+            "quotes or a backslash as quoting a '|'."
+        ),
+    }
+
+
+def _pipeline_segments(text: str, bypass_gates: bool) -> tuple:
+    """``(segments, error)``: one step's commands, cut where its shell cuts them.
+
+    Every ``|`` the executing shell reads as a pipe ends a command, spaced or
+    not, so each command the shell runs is a segment the allowlist sees. Each
+    piece is tokenised on its own; when the whole step tokenises but a piece
+    does not, the shell's cut and the quoting disagree, and the step is
+    refused rather than guessed at.
+
+    Default mode keeps a piece's tokens as one segment: every unquoted ``|``
+    is already cut, so a ``|`` token left here was quoted and is data. Full
+    access also cuts each piece on ``&``, ``;`` and newline, as before.
+    """
+    walk = _strip_heredoc_bodies(text) if bypass_gates else text
+    try:
+        _tokenize(walk, bypass_gates=bypass_gates)
+    except ValueError as exc:
+        return [], {
+            "status": "error",
+            "error": f"Invalid command syntax: {exc}",
+            "has_errors": True,
+        }
+    pieces: list = []
+    for piece in _split_shell_pipes(walk):
+        try:
+            tokens = _tokenize(piece, bypass_gates=bypass_gates)
+        except ValueError as exc:
+            return [], _ambiguous_pipe_refusal(piece, exc)
+        if bypass_gates:
+            pieces.append(_split_pipeline(tokens))
+        else:
+            pieces.append([tokens] if tokens else [])
+    if not any(pieces):
+        return [], None
+    if not all(pieces):
+        return [], {
+            "status": "error",
+            "error": "Empty command in a pipeline: each '|' needs a command on both sides.",
+            "has_errors": True,
+        }
+    return [segment for piece in pieces for segment in piece], None
+
+
 def _parse_line(command: str, bypass_gates: bool = False) -> tuple:
     """*command* as steps, or the refusal its text alone earns.
 
@@ -1834,22 +1945,11 @@ def _parse_line(command: str, bypass_gates: bool = False) -> tuple:
                     "To write a file, use write_file or edit_file."
                 ),
             }
-        try:
-            # A heredoc body is input to the command that opened it, not a
-            # command: stripped only for the walk that picks out which
-            # binaries run. ``text`` (below, and in the ``_Step`` it builds)
-            # keeps the body, so the step that actually executes still has it.
-            cmd_parts = _tokenize(
-                _strip_heredoc_bodies(text) if bypass_gates else text,
-                bypass_gates=bypass_gates,
-            )
-        except ValueError as exc:
-            return [], {
-                "status": "error",
-                "error": f"Invalid command syntax: {exc}",
-                "has_errors": True,
-            }
-        segments = _split_pipeline(cmd_parts)
+        # A heredoc body is stripped only for this walk; ``text`` (in the
+        # ``_Step`` below) keeps it, so the step that executes still has it.
+        segments, error = _pipeline_segments(text, bypass_gates)
+        if error is not None:
+            return [], error
         if not segments:
             missing = f"after '{connector}'" if connector else "before an operator"
             return [], {
@@ -2011,18 +2111,24 @@ def _run_pipeline(
             err.close()
 
     sigpipe = -getattr(signal, "SIGPIPE", 0)
-    codes = [proc.returncode for proc in procs]
-    failed = [
-        code
-        for i, code in enumerate(codes)
-        if code != 0 and not (i < len(codes) - 1 and sigpipe and code == sigpipe)
+    codes = [
+        (
+            0
+            if (i < len(procs) - 1 and sigpipe and proc.returncode == sigpipe)
+            else proc.returncode
+        )
+        for i, proc in enumerate(procs)
     ]
-    return subprocess.CompletedProcess(
+    failed = [code for code in codes if code != 0]
+    completed = subprocess.CompletedProcess(
         args=segments,
         returncode=failed[-1] if failed else 0,
         stdout=(out or b"").decode("utf-8", errors="replace"),
         stderr=stderr,
     )
+    # Which stage set the code decides whether grep's exit 1 is "no match".
+    completed.stage_codes = codes
+    return completed
 
 
 #: Unix commands cmd.exe spells differently, used only when Git-for-Windows
@@ -2035,6 +2141,146 @@ _UNIX_TO_WIN = {
     "cp": "copy",
     "mv": "move",
 }
+
+
+#: cmd.exe tools that Git-for-Windows shadows with a GNU tool of the same name.
+_SHADOWED_WIN_TOOLS = frozenset({"find", "sort"})
+
+#: A cmd-style switch: /c, /i, /+3, /off — one segment, so never a path.
+_CMD_SWITCH_RE = re.compile(r"/[a-z+?][^/\\]*", re.IGNORECASE)
+
+
+def _wants_windows_tool(segment: list) -> bool:
+    """Whether *segment* is find/sort spelled with cmd-style ``/x`` switches."""
+    return segment[0].lower().removesuffix(".exe") in _SHADOWED_WIN_TOOLS and any(
+        _CMD_SWITCH_RE.fullmatch(arg) for arg in segment[1:]
+    )
+
+
+def _cmd_pipe_positions(text: str) -> list:
+    """Offsets of every ``|`` cmd.exe reads as a pipe: not quoted, not ``^|``."""
+    honour_quotes = text.count('"') % 2 == 0
+    positions: list = []
+    quoted = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if honour_quotes and char == '"':
+            quoted = not quoted
+        elif not quoted and char == "^":
+            index += 2
+            continue
+        elif not quoted and char == "|":
+            positions.append(index)
+        index += 1
+    return positions
+
+
+def _posix_pipe_positions(text: str) -> list:
+    """Offsets of every ``|`` sh reads as a pipe, spaced or not.
+
+    sh's quoting, which is also shlex's: single quotes take everything
+    literally, and a backslash outside them escapes the next character.
+    """
+    positions: list = []
+    quote = ""
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and quote != "'":
+            index += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char == "|":
+            positions.append(index)
+        index += 1
+    return positions
+
+
+def _pipe_dialect() -> str:
+    """Whose pipe rules a step follows: cmd.exe's on Windows, sh's elsewhere."""
+    return "cmd" if os.name == "nt" else "posix"
+
+
+def _pipe_positions(text: str) -> list:
+    """Offsets of every ``|`` that ends a command when this step runs."""
+    if _pipe_dialect() == "cmd":
+        return _cmd_pipe_positions(text)
+    return _posix_pipe_positions(text)
+
+
+def _split_at(text: str, positions: list) -> list:
+    """*text* cut at each offset in *positions*, dropping the character there."""
+    pieces: list = []
+    start = 0
+    for position in positions:
+        pieces.append(text[start:position])
+        start = position + 1
+    pieces.append(text[start:])
+    return pieces
+
+
+def _split_cmd_pipes(text: str) -> list:
+    """*text* split on the ``|`` cmd.exe reads as a pipe: not quoted, not ``^|``."""
+    return _split_at(text, _cmd_pipe_positions(text))
+
+
+def _split_shell_pipes(text: str) -> list:
+    """*text* split on every ``|`` that ends a command when this step runs."""
+    return _split_at(text, _pipe_positions(text))
+
+
+def _system32_tool(name: str) -> str:
+    """The absolute path of the Windows *name* tool in System32."""
+    root = os.environ.get("SystemRoot")
+    if not root:
+        raise RuntimeError(
+            f"SystemRoot is not set, so Windows {name}.exe cannot be located. "
+            "Run the command from a normal Windows session, or use the GNU "
+            f"spelling of {name} (e.g. '{name} -...')."
+        )
+    path = os.path.join(root, "System32", f"{name}.exe")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Windows {name} not found at {path}")
+    return path
+
+
+def _pin_windows_tools(shell_text: str, segments: list) -> str:
+    """*shell_text* with each ``/x``-switch find/sort pinned to System32 by path.
+
+    By path, not PATH order: Git-for-Windows' GNU find reads ``/c`` as the C:
+    drive and walks all of it, and cmd.exe would also prefer a ``find.bat`` in
+    the working directory.
+    """
+    if not any(_wants_windows_tool(segment) for segment in segments):
+        return shell_text
+    pieces = _split_cmd_pipes(shell_text)
+    if len(pieces) != len(segments):
+        raise ValueError(
+            f"Cannot tell which command is find/sort in: {shell_text}. "
+            "Put spaces around each '|' and run it again."
+        )
+    pinned = []
+    for piece, segment in zip(pieces, segments):
+        if _wants_windows_tool(segment):
+            body = piece.lstrip()
+            word = segment[0]
+            rest = body[len(word) :]
+            if body[: len(word)].lower() != word.lower() or (
+                rest and not rest[0].isspace()
+            ):
+                raise ValueError(
+                    f"Cannot pin '{word}' to Windows {word} in: {piece.strip()}. "
+                    "Write it unquoted at the start of its pipe segment."
+                )
+            name = word.lower().removesuffix(".exe")
+            piece = f'{piece[: len(piece) - len(body)]}"{_system32_tool(name)}"{rest}'
+        pinned.append(piece)
+    return "|".join(pinned)
 
 
 def _run_step(
@@ -2096,6 +2342,8 @@ def _run_step(
         # there creates a file called NUL — so it gets the lifted text and the
         # redirection is applied below.
         exec_cmd = (step.shell_text or step.text) if os.name == "nt" else step.text
+        if os.name == "nt":
+            exec_cmd = _pin_windows_tools(exec_cmd, segments)
         cmd_base = segments[0][0].lower()
         if cmd_base in _UNIX_TO_WIN:
             if not shutil.which(cmd_base):
@@ -2672,14 +2920,22 @@ class ShellToolsMixin:
         if os.name == "nt" and candidate_path.startswith("/"):
             if "/" not in candidate_path[1:]:
                 return None
-        if not (
+        # A shell or script may expand '~' and '$HOME'; check both readings.
+        expanded = os.path.expandvars(os.path.expanduser(candidate_path))
+        looks_like_path = (
             os.sep in candidate_path or "/" in candidate_path or ".." in candidate_path
+        )
+        # Under GAIA_ALLOWED_PATHS a bare '%USERPROFILE%' or '$HOME' is a path too.
+        if not looks_like_path and isinstance(
+            getattr(self.path_validator, "env_scope", None), list
         ):
+            looks_like_path = expanded != candidate_path and (
+                os.sep in expanded or "/" in expanded
+            )
+        if not looks_like_path:
             return None
         if candidate_path.startswith(("http://", "https://", "git://", "ssh://")):
             return None
-        # A shell or script may expand '~' and '$HOME'; check both readings.
-        expanded = os.path.expandvars(os.path.expanduser(candidate_path))
         for path in dict.fromkeys((candidate_path, expanded)):
             refusal = self._resolved_path_refusal(label, arg, path, cwd)
             if refusal:
@@ -3183,7 +3439,10 @@ class ShellToolsMixin:
                 part_lower = part.lower()
                 flag = part_lower.split("=", 1)[0]
                 is_output = False
-                if flag.startswith("--"):
+                if len(flag) > 1 and "/output".startswith(flag):
+                    # Windows sort: /o, /out, /output.
+                    is_output = True
+                elif flag.startswith("--"):
                     # --output and any unambiguous abbreviation (--o, --out, ...).
                     if len(flag) > 2 and "--output".startswith(flag):
                         is_output = True
@@ -3197,7 +3456,7 @@ class ShellToolsMixin:
                     return {
                         "status": "error",
                         "tier": TIER_CONFIRM,
-                        "error": "sort -o/--output writes to a file, which is not allowed under the read-only command policy.",
+                        "error": "sort -o/--output (or /o) writes to a file, which is not allowed under the read-only command policy.",
                         "has_errors": True,
                         "hint": "Drop -o/--output and read sort's result from stdout (e.g. 'sort file' or 'sort file | head').",
                     }
@@ -3540,22 +3799,33 @@ class ShellToolsMixin:
                 stderr_parts: list = []
                 ran: list = []
                 last_code = 0
-                unhandled_failure = False
+                last_answer: Optional[str] = None
+                # The first failure nothing on the line handles, as
+                # (and-or list, step, exit code, output to quote).
+                unhandled_failure: Optional[Tuple[int, str, int, str]] = None
+                and_or_list = 0
                 spawned = False
                 ran_cwd = cwd
 
                 for index, (step, step_cwd) in enumerate(zip(steps, step_cwds)):
+                    if step.connector not in ("&&", "||"):
+                        and_or_list += 1
                     if not _connector_runs(step.connector, last_code):
                         continue
-                    # `||` is the line saying it expects the failure before it;
-                    # anything else leaves it standing, so `pytest -q; ls`
-                    # cannot report a failing suite as a passing check.
-                    if step.connector == "||":
-                        unhandled_failure = False
+                    # `||` handles a failure in its own and-or list, as in sh;
+                    # one before a `;` still stands, so `pytest -q; ls` (or
+                    # `make; grep x f || echo none`) is not reported as passing.
+                    if (
+                        step.connector == "||"
+                        and unhandled_failure is not None
+                        and unhandled_failure[0] == and_or_list
+                    ):
+                        unhandled_failure = None
                     if step.is_cd:
                         # Its whole effect is the directory the walk above
                         # already applied to the steps that follow it.
                         last_code = 0
+                        last_answer = None
                         ran.append({"command": step.text, "return_code": 0})
                         # Only a cd that actually ran moves the session.
                         ran_cwd = (
@@ -3649,9 +3919,16 @@ class ShellToolsMixin:
                         if not spawned:
                             raise
                         logger.error("Command executable not found: %s", exc)
-                        stderr_parts.append(f"{step.text}: {exc.strerror or exc}\n")
+                        not_found = f"{step.text}: {exc.strerror or exc}\n"
+                        stderr_parts.append(not_found)
                         last_code = _COMMAND_NOT_FOUND
-                        unhandled_failure = True
+                        last_answer = None
+                        unhandled_failure = unhandled_failure or (
+                            and_or_list,
+                            step.text,
+                            last_code,
+                            not_found,
+                        )
                         ran.append({"command": step.text, "return_code": last_code})
                         continue
 
@@ -3659,8 +3936,21 @@ class ShellToolsMixin:
                     stdout_parts.append(result.stdout or "")
                     stderr_parts.append(result.stderr or "")
                     last_code = result.returncode
-                    unhandled_failure = unhandled_failure or last_code != 0
-                    ran.append({"command": step.text, "return_code": last_code})
+                    last_answer = (
+                        _step_answer_exit(step, result) if last_code != 0 else None
+                    )
+                    if last_code != 0 and last_answer is None:
+                        # Under 2>&1 the verdict is on stdout.
+                        unhandled_failure = unhandled_failure or (
+                            and_or_list,
+                            step.text,
+                            last_code,
+                            (result.stderr or "").strip() or result.stdout or "",
+                        )
+                    entry = {"command": step.text, "return_code": last_code}
+                    if last_answer:
+                        entry["expected_exit"] = last_answer
+                    ran.append(entry)
 
                 duration = time.monotonic() - start_time
 
@@ -3695,13 +3985,30 @@ class ShellToolsMixin:
                         f"Command completed in {duration:.2f}s with return code {last_code}"
                     )
 
+                check = check_from_command(
+                    command,
+                    [seg for st in steps for seg in st.segments],
+                    # `pytest -q | grep FAILED` finding nothing is a pass.
+                    0 if last_answer else last_code,
+                    "".join(stdout_parts),
+                    "".join(stderr_parts),
+                )
+                if unhandled_failure is not None:
+                    failure: Optional[str] = exit_error(*unhandled_failure[1:])
+                elif check is not None and not check.passed:
+                    # `pytest | tail` exits 0; the runner's summary is the verdict.
+                    failure = f"{check.label} reported failures" + (
+                        f": {check.summary}" if check.summary else ""
+                    )
+                else:
+                    failure = None
                 outcome = {
-                    "status": "success",
+                    "status": "error" if failure else "success",
                     "command": command,
                     "stdout": stdout,
                     "stderr": stderr,
                     "return_code": last_code,
-                    "has_errors": last_code != 0 or unhandled_failure,
+                    "has_errors": failure is not None,
                     "duration_seconds": duration,
                     "timeout": timeout,
                     "timeout_class": timeout_class,
@@ -3709,15 +4016,12 @@ class ShellToolsMixin:
                     "output_truncated": truncated,
                     "steps": ran,
                 }
+                if failure:
+                    outcome["error"] = failure
+                elif last_answer:
+                    outcome["expected_exit"] = last_answer
                 if waited:
                     outcome["waited_seconds"] = round(waited, 1)
-                check = check_from_command(
-                    command,
-                    [seg for st in steps for seg in st.segments],
-                    last_code,
-                    "".join(stdout_parts),
-                    "".join(stderr_parts),
-                )
                 return attach_check(outcome, check)
 
             except FileNotFoundError as exc:

@@ -37,6 +37,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from gaia.agents.install_hints import agent_import_error_message
 from gaia.config import UnsafeGaiaHomeError
+from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
 # ── Backward-compatible re-exports ──────────────────────────────────────────
 # Tests use @patch("gaia.ui.server._get_chat_response") etc., so we must
@@ -63,6 +64,7 @@ from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
 from .routers import goals as goals_router_mod
 from .routers import hub as hub_router_mod
+from .routers import lemonade as lemonade_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
 from .routers import onboarding as onboarding_router_mod
@@ -200,24 +202,29 @@ def start_model_server_owner() -> threading.Thread:
 
     What the CLI does for its front-ends; a library ``create_app`` must not, so
     only the runners that serve the UI call this. Off the main thread so the
-    page loads while the daemon starts.
+    page loads while the daemon starts. Registers the UI as an app, so closing
+    it unloads GAIA's models when no other GAIA client is using them.
     """
     from gaia.llm.lemonade_service import ensure_daemon_owns_lemonade
 
     thread = threading.Thread(
-        target=ensure_daemon_owns_lemonade, name="gaia-daemon-start", daemon=True
+        target=ensure_daemon_owns_lemonade,
+        kwargs={"kind": "app", "name": "agent-ui"},
+        name="gaia-daemon-start",
+        daemon=True,
     )
     thread.start()
     return thread
 
 
 def lemonade_is_remote() -> bool:
-    """Whether ``LEMONADE_BASE_URL`` names another machine, which no daemon here owns."""
+    """Whether the chosen Lemonade is on another machine, which no daemon here owns."""
     from urllib.parse import urlparse
 
+    from gaia.llm.lemonade_client import configured_lemonade_url
     from gaia.llm.lemonade_supervisor import _is_loopback
 
-    base_url = os.environ.get("LEMONADE_BASE_URL")
+    base_url = configured_lemonade_url()
     return bool(base_url) and not _is_loopback(urlparse(base_url).hostname or "")
 
 
@@ -273,6 +280,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     Returns:
         Configured FastAPI application.
     """
+    # A bad GAIA_ALLOWED_PATHS stops startup, not the first chat.
+    env_allowed_paths()
+
     # Initialize database early so lifespan can access it
     db = ChatDatabase(db_path)
 
@@ -389,6 +399,12 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             )
             from gaia.llm.lemonade_manager import LemonadeManager
             from gaia.ui._chat_helpers import model_load_lock
+            from gaia.ui.warmup import preload_skip_reason
+
+            low_memory = preload_skip_reason()
+            if low_memory:
+                logger.info("Model preload skipped: %s", low_memory)
+                return
 
             base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
             _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
@@ -457,11 +473,25 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             "Checking LLM server", _check_lemonade, visible=True
         )
         queue.dispatch("Loading ML libraries", _import_modules, visible=True)
-        queue.dispatch(
+        model_job = queue.dispatch(
             "Loading AI model",
             _load_model,
             visible=True,
             depends_on=lemonade_id,
+        )
+        from gaia.ui import warmup
+        from gaia.ui.dispatch import JobStatus
+
+        warmup.configure(db)
+
+        def _prime_first_prompt():
+            # A failed model load already explains a slow first turn.
+            if queue.get_job(model_job).status == JobStatus.DONE:
+                warmup.request_warm_up("startup")
+
+        # Not visible: priming the prompt must never hold the composer.
+        queue.dispatch(
+            "Priming the first prompt", _prime_first_prompt, depends_on=model_job
         )
 
         # Start autonomous agent loop
@@ -685,6 +715,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(system_router_mod.router)
     app.include_router(onboarding_router_mod.router)
     app.include_router(setup_router_mod.router)
+    app.include_router(lemonade_router_mod.router)
     app.include_router(providers_router_mod.router)
     app.include_router(skills_router_mod.router)
     app.include_router(hub_router_mod.router)
@@ -971,9 +1002,10 @@ def main():
     print(f"Starting GAIA Agent UI server on http://{args.host}:{args.port}")
     try:
         server_app = create_app(webui_dist=args.ui_dist)
-    except UnsafeGaiaHomeError as exc:
-        # A misconfigured GAIA_HOME is the user's to fix, so print the remedy
-        # rather than a traceback. 64 is EX_USAGE, as gaia uninstall uses.
+    except (UnsafeGaiaHomeError, AllowedPathsEnvError) as exc:
+        # A misconfigured GAIA_HOME or GAIA_ALLOWED_PATHS is the user's to fix,
+        # so print the remedy rather than a traceback. 64 is EX_USAGE, as gaia
+        # uninstall uses.
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(64) from exc
     if not lemonade_is_remote():

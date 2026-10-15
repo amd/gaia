@@ -48,10 +48,14 @@ type installedMsg struct {
 	err    error
 }
 
-// authedMsg carries the result of handing Lemonade a token.
+// authedMsg carries the result of handing Lemonade a token. rejected means the
+// token discovered no models and was dropped again; restored says whether the
+// saved token took its place.
 type authedMsg struct {
-	result installResult
-	err    error
+	result   installResult
+	err      error
+	rejected bool
+	restored bool
 }
 
 // persistedMsg reports whether the accepted token reached the credential
@@ -87,6 +91,9 @@ type GatewayModel struct {
 	height   int
 	initErr  error
 	haveInit bool
+
+	// availability warns that the active model last answered "not found".
+	availability string
 
 	// pendingPersist saves the token once the gateway has accepted it. It is a
 	// closure over the token, never the token itself.
@@ -171,7 +178,16 @@ func (m GatewayModel) authenticate(token string) tea.Cmd {
 	baseURL := m.state.BaseURL
 	return func() tea.Msg {
 		result, err := client.SetToken(token, baseURL)
-		return authedMsg{result: result, err: err}
+		if err != nil || !result.foundNone() {
+			return authedMsg{result: result, err: err}
+		}
+		// Lemonade now holds a token that found nothing; put the kept one back so
+		// a mistyped token does not break a working gateway.
+		if err := client.ClearToken(); err != nil {
+			return authedMsg{err: fmt.Errorf(
+				"That token found no gateway models, and Lemonade would not drop it, so it is still in use: %w", err)}
+		}
+		return authedMsg{result: result, rejected: true, restored: restoreToken()}
 	}
 }
 
@@ -250,7 +266,7 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.result.AuthState.EnvVarSet || msg.result.AuthState.RuntimeKeySet {
-			m.notice = fmt.Sprintf("Registered. %d model(s) discovered.", msg.result.ModelsDiscovered)
+			m.notice = fmt.Sprintf("Registered. %d model(s) discovered.", msg.result.discovered())
 			m.stage = stageModels
 			m.busy = "Loading models..."
 			return m, m.fetchModels()
@@ -264,13 +280,26 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case authedMsg:
 		m.busy = ""
 		if msg.err != nil {
+			m.pendingPersist = nil
 			m.errMsg = msg.err.Error()
 			return m, nil
+		}
+		if msg.rejected {
+			// Saving it would replay the bad token into every later session.
+			m.pendingPersist = nil
+			m.errMsg = "That token found no gateway models, so it was not saved. "
+			if msg.restored {
+				m.errMsg += "Your saved token is back in use."
+			} else {
+				m.errMsg += "Check the token and the gateway URL, then try again."
+			}
+			m.tokenInput.Focus()
+			return m, textinput.Blink
 		}
 		m.errMsg = ""
 		m.notice = fmt.Sprintf(
 			"Token accepted — %d model(s) discovered. %s",
-			msg.result.ModelsDiscovered, savingNotice)
+			msg.result.discovered(), savingNotice)
 		m.stage = stageModels
 		m.tokenInput.Blur()
 		m.busy = "Loading models..."
@@ -311,9 +340,15 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// returns 76 models and a new user has no way to know which of them
 		// streams; without this they leave the screen with nothing active and
 		// their next agent turn fails on whatever the old default was.
-		// An existing choice is never overridden.
+		// An existing choice is never overridden, and a model the gateway last
+		// answered 404 for is never picked on the user's behalf.
 		if m.state.ActiveModel == "" && len(m.models) > 0 {
-			chosen := m.models[0].ID // preference-ranked: the default model first
+			chosen := m.firstAvailable() // preference-ranked: the default model first
+			if chosen == "" {
+				m.errMsg = "Every discovered model last answered \"not found\". " +
+					"Press r to reload, or enter to pick one anyway."
+				return m, nil
+			}
 			m.state = m.state.SetActive(chosen)
 			if err := m.state.Save(); err != nil {
 				m.errMsg = err.Error()
@@ -325,6 +360,7 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.notice = chosen + " selected as the default. Press enter on another to change it."
 		}
+		m.availability = m.activeAvailability()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -332,6 +368,28 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m.forwardToInput(msg)
+}
+
+// firstAvailable is the best-ranked model with no recorded "not found".
+func (m GatewayModel) firstAvailable() string {
+	for _, model := range m.models {
+		if _, down := m.state.Unavailable(model.ID); !down {
+			return model.ID
+		}
+	}
+	return ""
+}
+
+// activeAvailability is the one-line warning for an active model the gateway
+// last answered "not found" for, or "" when there is nothing to say.
+func (m GatewayModel) activeAvailability() string {
+	id := m.state.ActiveModel
+	u, down := m.state.Unavailable(id)
+	if id == "" || !down {
+		return ""
+	}
+	return id + " " + u.Describe() + " — it may not be deployed any more. " +
+		"Press enter on another model to switch."
 }
 
 func (m GatewayModel) forwardToInput(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -435,6 +493,7 @@ func (m GatewayModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.notice = id + " is now the default model for GAIA."
+			m.availability = m.activeAvailability()
 			return m, nil
 		case "r":
 			m.busy = "Reloading models..."
@@ -493,6 +552,9 @@ func (m GatewayModel) View() string {
 	}
 	if m.notice != "" {
 		tail.WriteString("\n" + noticeStyle.Render(m.notice) + "\n")
+	}
+	if m.availability != "" && m.stage == stageModels {
+		tail.WriteString("\n" + busyStyle.Render(m.availability) + "\n")
 	}
 	if m.errMsg != "" {
 		tail.WriteString("\n" + errorStyle.Render(m.errMsg) + "\n")
@@ -581,6 +643,9 @@ func (m GatewayModel) renderModels(budget int) string {
 		name := model.ID
 		if model.ID == m.state.ActiveModel {
 			name = activeStyle.Render(model.ID + " (active)")
+		}
+		if _, down := m.state.Unavailable(model.ID); down {
+			name += errorStyle.Render(" (unavailable)")
 		}
 		star := ""
 		if model.Recommended() {

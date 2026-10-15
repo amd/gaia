@@ -2,7 +2,7 @@
 name: document-brief
 description: Index a document or folder and answer questions about it with quotes from the source. Use when the user points at a PDF, contract, spec, report, or folder of files and asks what it says, what changed, or what they should worry about.
 license: MIT
-version: 1.0.0
+version: 1.0.1
 metadata:
   gaia:
     security_tier: community
@@ -13,6 +13,7 @@ metadata:
       - query_documents
       - summarize_document
       - rag_status
+      - read_file
     provenance:
       source: starter-pack
 ---
@@ -21,6 +22,15 @@ metadata:
 
 Reading a long document for someone is not summarization — it is answering the
 question they actually have, with the sentence that proves it.
+
+## A few documents? Read them in full
+
+To review, compare or reconcile a handful of documents, `read_file` each one in
+full instead of indexing it — it returns Word, PDF and Excel text; follow
+`next_offset` until it is null — and work from the whole text. A retrieved
+snippet only holds what a query asked for, and a date or amount that differs
+between two documents is exactly what no query asks for. The procedure below is
+for a large collection or a single lookup.
 
 ## Procedure
 

@@ -187,7 +187,7 @@ def test_discovered_custom_cloud_avoids_local_load(client):
 @pytest.mark.parametrize(
     "status,remedy",
     [
-        (401, "Reconnect"),
+        (401, "Run /provider"),
         (403, "model access"),
         (404, "deployed model"),
         (429, "Wait before retrying"),
@@ -204,10 +204,13 @@ def test_cloud_error_never_echoes_upstream_body(client, status, remedy, caplog):
         status=status,
         json={"error": {"message": reflected_key}},
     )
+    # 429 and 500 are retried before this error is raised; skip the backoff
+    # waits. The caplog check below then also covers the retry log lines.
+    client._retry_sleep = lambda _seconds: None
     with pytest.raises(LemonadeClientError) as error:
         client.chat_completions("fireworks.gemma-4-31b-it", [])
     assert str(status) in str(error.value)
-    assert "provider settings" in str(error.value)
+    assert "TUI" in str(error.value)
     assert remedy in str(error.value)
     assert reflected_key not in str(error.value)
     assert reflected_key not in caplog.text
@@ -424,7 +427,7 @@ def test_model_availability_does_not_hide_programming_errors(client, monkeypatch
 @pytest.mark.parametrize(
     "status,remedy",
     [
-        (401, "Reconnect"),
+        (401, "Run /provider"),
         (403, "model access"),
         (404, "deployed model"),
         (429, "Wait before retrying"),
@@ -464,6 +467,38 @@ def test_cloud_sse_backend_error_uses_status_without_reflecting_body(
     assert remedy in str(error.value)
     assert reflected_key not in str(error.value)
     assert reflected_key not in caplog.text
+
+
+def test_cloud_sse_error_reads_status_from_the_flat_stream_frame(client, monkeypatch):
+    # The frame Lemonade 2026.40.0 streams when the AMD gateway rate-limits:
+    # status_code sits on the error object, with no details block.
+    error_frame = {
+        "error": {
+            "message": "cloud (amd) request failed",
+            "status_code": 429,
+            "type": "backend_error",
+        }
+    }
+
+    def handle(request):
+        return httpx.Response(
+            200,
+            content=f"data: {json.dumps(error_frame)}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as transport:
+        with OpenAI(
+            base_url=client.base_url, api_key="test-placeholder", http_client=transport
+        ) as sdk:
+            monkeypatch.setattr("gaia.llm.lemonade_client.OpenAI", lambda **kwargs: sdk)
+            with pytest.raises(LemonadeClientError) as error:
+                list(
+                    client.chat_completions("amd.DeepSeek-V4.1-Flash", [], stream=True)
+                )
+
+    assert "HTTP 429" in str(error.value)
+    assert "Wait before retrying" in str(error.value)
 
 
 _PENALTIES = (

@@ -74,7 +74,9 @@ def lemonade(monkeypatch):
             cloud_keys,
             "LemonadeClient",
             lambda verbose=False: type(
-                "C", (), {"base_url": "http://127.0.0.1:1/api/v1"}
+                "C",
+                (),
+                {"credential_base_url": lambda self: "http://127.0.0.1:1/api/v1"},
             )(),
         )
         return fake

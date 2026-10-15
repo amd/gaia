@@ -80,9 +80,12 @@ class ProviderError(Exception):
 
 
 def _base_url() -> str:
-    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
-    return resolve_lemonade_base_url().rstrip("/")
+    try:
+        return LemonadeClient(verbose=False).credential_base_url().rstrip("/")
+    except LemonadeClientError as e:
+        raise ProviderError(str(e), status=503) from e
 
 
 def _require_loopback(base_url: str) -> None:
@@ -109,7 +112,7 @@ def _lemonade(
             json=payload,
             headers={
                 "Content-Type": "application/json",
-                **lemonade_auth_headers(resolve_lemonade_api_key()),
+                **lemonade_auth_headers(resolve_lemonade_api_key(base_url=base)),
             },
             timeout=_TIMEOUT,
             allow_redirects=False,
@@ -407,10 +410,15 @@ def restore_last_model(db: ChatDatabase) -> Dict[str, Any]:
             # Not cached: the UI asks again once the server is up.
             return {"status": "pending", "message": None}
         if reason is None:
+            from gaia.llm.lemonade_client import resolve_default_chat_model
+
+            current = (db.get_setting("custom_model") or "").strip()
+            unchanged = last == (current or resolve_default_chat_model())
             db.set_setting("custom_model", last)
             _restore_result = {
                 "status": "restored",
-                "message": "Restored your last model.",
+                # Nothing to announce when the model was going to run anyway.
+                "message": None if unchanged else "Restored your last model.",
             }
         else:
             _restore_result = {

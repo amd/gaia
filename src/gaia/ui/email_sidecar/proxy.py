@@ -197,6 +197,18 @@ class SidecarProxy:
                 f"decision: {exc}"
             ) from exc
 
+    def skills(self) -> dict:
+        """The skills the agent can load (flagship, contract >= 2.17)."""
+        import requests
+
+        try:
+            return self._get(f"{self.prefix}/skills")
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to list its "
+                f"skills: {exc}"
+            ) from exc
+
     def set_bypass(self, session_id: str, enabled: bool) -> dict:
         """Turn the sidecar session's unattended tool approval on or off.
 

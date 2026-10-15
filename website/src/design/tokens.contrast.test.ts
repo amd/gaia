@@ -40,6 +40,19 @@ const composite = (fg: Paint, bg: RGB): RGB =>
 
 const hex = (c: RGB): string => '#' + c.map((x) => x.toString(16).padStart(2, '0')).join('');
 
+const fromHex = (h: string): RGB =>
+  [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as RGB;
+
+/** Hue in degrees, 0..360; null for a neutral. */
+function hue([r, g, b]: RGB): number | null {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  if (max === min) return null;
+  const d = max - min;
+  const h = max === r ? (g - b) / d : max === g ? 2 + (b - r) / d : 4 + (r - g) / d;
+  return ((h * 60) % 360 + 360) % 360;
+}
+
 // ---------------------------------------------------------------------- parse
 
 const TRIPLET = /^(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})$/;
@@ -53,40 +66,36 @@ function asPaint(value: string): Paint | null {
   return null; // shadows, scalars — not a colour
 }
 
-/**
- * Read the `:root` and `[data-theme='dark']` declaration blocks out of
- * tokens.css. Neither contains a nested rule, so `[^{}]*` is enough to bound
- * them and keeps @keyframes / @media out of the result.
- */
-function readThemes(): { light: Map<string, string>; dark: Map<string, string> } {
-  const css = readFileSync(new URL('./tokens.css', import.meta.url), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, ''); // hexes live in the comments too
-  const light = new Map<string, string>();
-  const darkOnly = new Map<string, string>();
+const css = readFileSync(new URL('./tokens.css', import.meta.url), 'utf8').replace(
+  /\/\*[\s\S]*?\*\//g, // hexes live in the comments too
+  '',
+);
 
-  const blocks = css.matchAll(/(:root|\[data-theme='dark'\])\s*\{([^{}]*)\}/g);
+/**
+ * Read the `:root` declaration block out of tokens.css. It contains no nested
+ * rule, so `[^{}]*` is enough to bound it and keeps @keyframes / @media out.
+ */
+function readTokens(): Map<string, string> {
+  const vars = new Map<string, string>();
   let sawRoot = false;
-  let sawDark = false;
-  for (const [, selector, body] of blocks) {
-    const target = selector === ':root' ? light : darkOnly;
-    if (selector === ':root') sawRoot = true;
-    else sawDark = true;
+  for (const [, body] of css.matchAll(/:root\s*\{([^{}]*)\}/g)) {
+    sawRoot = true;
     for (const decl of body.split(';')) {
       const m = /^\s*--([\w-]+)\s*:\s*([\s\S]+?)\s*$/.exec(decl);
-      if (m) target.set(`--${m[1]}`, m[2].replace(/\s+/g, ' ').trim());
+      if (m) vars.set(`--${m[1]}`, m[2].replace(/\s+/g, ' ').trim());
     }
   }
   // A silent parse failure would turn every assertion below into a no-op.
-  if (!sawRoot || !sawDark) throw new Error('tokens.css: could not find both theme blocks');
-
-  return { light, dark: new Map([...light, ...darkOnly]) };
+  if (!sawRoot) throw new Error('tokens.css: could not find the :root block');
+  return vars;
 }
 
-const { light, dark } = readThemes();
-/** Tokens the dark block overrides; the rest are deliberately mode-invariant. */
-const themed = new Set(
-  [...dark].filter(([k, v]) => light.get(k) !== v).map(([k]) => k),
-);
+const vars = readTokens();
+const paint = (token: string): Paint => {
+  const p = asPaint(vars.get(token) ?? '');
+  if (!p) throw new Error(`${token} is not a colour in tokens.css`);
+  return p;
+};
 
 // ----------------------------------------------------------------- the floors
 
@@ -95,6 +104,8 @@ const FLOOR = {
   text: 4.5,
   /** Deliberately recessive; always repeats something on the same row. */
   recessive: 3.0,
+  /** Display-size type and graphics only. WCAG 2.1 AA large text. */
+  large: 3.0,
   /** A rule, a bar track, a fill — carries nothing, must only stay visible. */
   chrome: 1.5,
 } as const;
@@ -103,10 +114,9 @@ type Role = keyof typeof FLOOR | 'ground' | 'pair-only';
 
 /**
  * Every colour token in tokens.css and the job it does. `page` tokens are
- * measured against the page grounds, `code` tokens against --g-code-bg (the
- * code panel is dark in both themes, so its palette is pinned and judged only
- * against itself). A token missing from this table fails
- * "every colour token declares a floor" — which is the point.
+ * measured against the page grounds, `code` tokens against --g-code-bg. A
+ * token missing from this table fails "every colour token declares a floor" —
+ * which is the point.
  */
 const ROLES: Record<string, { role: Role; on: 'page' | 'code' }> = {
   // Grounds. Everything else is measured against these.
@@ -122,13 +132,22 @@ const ROLES: Record<string, { role: Role; on: 'page' | 'code' }> = {
   '--g-muted': { role: 'text', on: 'page' },
   '--g-faint': { role: 'recessive', on: 'page' },
 
-  // Accent. The accent is a text colour, so it carries the text floor even
-  // where it is only painted as a dot or a bar.
+  // Accent. The brand red is display-size only; the lifted red is a text
+  // colour, so it carries the text floor even where it is only a dot or a bar.
+  '--g-brand': { role: 'large', on: 'page' },
   '--g-accent': { role: 'text', on: 'page' },
   '--g-accent2': { role: 'text', on: 'page' },
   '--g-accent-text': { role: 'text', on: 'page' },
   '--g-focus': { role: 'text', on: 'page' },
   '--g-accent-dim': { role: 'chrome', on: 'page' },
+
+  // Release candidates.
+  '--g-rc': { role: 'text', on: 'page' },
+  '--g-rc-dim': { role: 'chrome', on: 'page' },
+
+  // The starfield is drawn behind everything and carries nothing.
+  '--g-sky-star': { role: 'chrome', on: 'page' },
+  '--g-sky-hot': { role: 'chrome', on: 'page' },
 
   // Hairlines.
   '--g-border': { role: 'chrome', on: 'page' },
@@ -164,12 +183,7 @@ const NON_COLOUR = new Set(['--g-shadow-card', '--g-shadow-btn', '--g-shadow-ter
  * and each translucent surface composited over both. Measuring only the flat
  * canvas is how a value that is fine on the page goes marginal inside a card.
  */
-function pageGrounds(vars: Map<string, string>): Array<{ name: string; rgb: RGB }> {
-  const paint = (n: string): Paint => {
-    const p = asPaint(vars.get(n)!);
-    if (!p) throw new Error(`${n} is not a colour`);
-    return p;
-  };
+function pageGrounds(): Array<{ name: string; rgb: RGB }> {
   const bg = paint('--g-bg').rgb;
   const bg2 = paint('--g-bg2').rgb;
   const out = [
@@ -184,230 +198,208 @@ function pageGrounds(vars: Map<string, string>): Array<{ name: string; rgb: RGB 
   return out;
 }
 
-function groundsFor(kind: 'page' | 'code', vars: Map<string, string>) {
-  if (kind === 'code') return [{ name: 'code panel', rgb: asPaint(vars.get('--g-code-bg')!)!.rgb }];
-  return pageGrounds(vars);
-}
-
-const THEMES: Array<[string, Map<string, string>]> = [
-  ['light', light],
-  ['dark', dark],
-];
+const groundsFor = (kind: 'page' | 'code') =>
+  kind === 'code' ? [{ name: 'code panel', rgb: paint('--g-code-bg').rgb }] : pageGrounds();
 
 // ----------------------------------------------------------------- the checks
 
 describe('tokens.css parses', () => {
-  it('finds both themes and the full token set', () => {
-    expect(light.get('--g-bg')).toBe('245 242 236');
-    expect(dark.get('--g-bg')).toBe('23 22 28');
-    // Mode-invariant tokens must be inherited by the dark theme, not dropped.
-    expect(dark.get('--g-accent-fill')).toBe(light.get('--g-accent-fill'));
+  it('finds the token set', () => {
+    expect(vars.get('--g-bg')).toBe('0 0 0');
+    expect(vars.size).toBeGreaterThan(30);
   });
 
-  // `dark` is light merged with the dark block, so its key set is the union of
-  // both themes. Walking `light` instead would let a token declared only under
-  // [data-theme='dark'] reach the screen with no floor attached to it.
+  // The site is dark-only. A theme block coming back would carry values this
+  // suite never measures.
+  it('declares no second theme', () => {
+    expect(css).not.toMatch(/\[data-theme/);
+  });
+
   it('every colour token declares a floor', () => {
-    const undeclared = [...dark.keys()].filter(
-      (k) => !NON_COLOUR.has(k) && !(k in ROLES) && asPaint(dark.get(k)!) !== null,
+    const undeclared = [...vars.keys()].filter(
+      (k) => !NON_COLOUR.has(k) && !(k in ROLES) && asPaint(vars.get(k)!) !== null,
     );
     expect(undeclared, 'add these to ROLES with the contrast they owe').toEqual([]);
   });
 
   it('declares no floor for a token that no longer exists', () => {
-    const stale = Object.keys(ROLES).filter((k) => !dark.has(k));
-    expect(stale).toEqual([]);
+    expect(Object.keys(ROLES).filter((k) => !vars.has(k))).toEqual([]);
   });
 
   it('classifies the shadow stacks as non-colours, not as missing roles', () => {
     for (const k of NON_COLOUR) {
-      expect(light.has(k), k).toBe(true);
-      expect(asPaint(light.get(k)!), k).toBeNull();
+      expect(vars.has(k), k).toBe(true);
+      expect(asPaint(vars.get(k)!), k).toBeNull();
     }
   });
 });
 
-describe.each(THEMES)('%s theme holds its floors', (themeName, vars) => {
+describe('every token holds its floor', () => {
   const entries = Object.entries(ROLES).filter(
     ([, r]) => r.role !== 'ground' && r.role !== 'pair-only',
   );
 
   it.each(entries)('%s', (token, { role, on }) => {
     const floor = FLOOR[role as keyof typeof FLOOR];
-    // A dark-only token has nothing to measure in the light theme. Assert it
-    // exists somewhere rather than returning quietly, so a typo in ROLES still
-    // fails here and not only in the staleness check.
-    if (!vars.has(token)) {
-      expect(dark.has(token), `${token} is declared in neither theme`).toBe(true);
-      return;
-    }
-    const paint = asPaint(vars.get(token)!)!;
-    for (const ground of groundsFor(on, vars)) {
+    const p = paint(token);
+    for (const ground of groundsFor(on)) {
       // A translucent token (a hairline) is judged as it is actually painted.
-      const actual = composite(paint, ground.rgb);
+      const actual = composite(p, ground.rgb);
       const ratio = contrast(actual, ground.rgb);
       expect(
         Number(ratio.toFixed(2)),
-        `${themeName} ${token} ${hex(actual)} on ${ground.name} ${hex(ground.rgb)} — ` +
+        `${token} ${hex(actual)} on ${ground.name} ${hex(ground.rgb)} — ` +
           `${ratio.toFixed(2)}:1, floor ${floor}:1 (${role})`,
       ).toBeGreaterThanOrEqual(floor);
     }
   });
 });
 
-describe.each(THEMES)('%s theme: filled buttons carry their text', (themeName, vars) => {
+describe('filled buttons carry their text', () => {
   // The pair covers the ground, so it is judged against itself.
   it.each(['--g-accent-fill', '--g-accent-fill2'])('white on %s', (fillToken) => {
-    const fill = asPaint(vars.get(fillToken)!)!.rgb;
-    const on = asPaint(vars.get('--g-on-accent')!)!.rgb;
+    const fill = paint(fillToken).rgb;
+    const on = paint('--g-on-accent').rgb;
     const ratio = contrast(on, fill);
     expect(
       Number(ratio.toFixed(2)),
-      `${themeName} ${hex(on)} on ${hex(fill)} — ${ratio.toFixed(2)}:1, floor ${FLOOR.text}:1`,
+      `${hex(on)} on ${hex(fill)} — ${ratio.toFixed(2)}:1, floor ${FLOOR.text}:1`,
     ).toBeGreaterThanOrEqual(FLOOR.text);
   });
 
-  it('uses the same fill in both themes, so one on-colour serves both', () => {
-    expect(themed.has('--g-accent-fill')).toBe(false);
-    expect(themed.has('--g-accent-fill2')).toBe(false);
-    expect(themed.has('--g-on-accent')).toBe(false);
+  // AMD red itself is 4.38:1 under white: a button filled with it would ship
+  // below the floor. Pinning the gap is what stops a "use the real brand red"
+  // edit from going green.
+  it('is not the brand red, which cannot carry white text', () => {
+    expect(vars.get('--g-accent-fill')).not.toBe(vars.get('--g-brand'));
+    expect(contrast([255, 255, 255], paint('--g-brand').rgb)).toBeLessThan(FLOOR.text);
   });
 });
 
-// docs/spec/gaia-design-language.mdx — graphite / ivory / copper. These are
-// shared verbatim with the Agent UI and the TUI, so a "small tweak" here
-// silently desynchronises three surfaces.
-const PINNED: Array<[string, string, string]> = [
-  // token, light, dark
-  ['--g-bg', '#f5f2ec', '#17161c'],
-  ['--g-bg2', '#eae5dc', '#222128'],
-  ['--g-text', '#242129', '#f0ede7'],
-  ['--g-muted', '#645d6a', '#aaa5b0'],
-  ['--g-accent', '#9a4930', '#eba474'],
-  ['--g-focus', '#9a4930', '#eba474'],
+// AMD's brand literals. The black ground, white type, AMD red and AMD orange
+// are the brand's own values, so a "small tweak" here is a brand change, not a
+// design tweak. "The website" in docs/spec/gaia-design-language.mdx.
+const PINNED: Array<[string, string]> = [
+  ['--g-bg', '#000000'],
+  ['--g-text', '#ffffff'],
+  ['--g-brand', '#ed1c24'],
+  ['--g-rc', '#f26522'],
+  ['--g-sky-hot', '#ed1c24'],
 ];
 
-describe('the palette is the one the design language pins', () => {
-  it.each(PINNED)('%s', (token, expectLight, expectDark) => {
-    expect(hex(asPaint(light.get(token)!)!.rgb)).toBe(expectLight);
-    expect(hex(asPaint(dark.get(token)!)!.rgb)).toBe(expectDark);
+describe('the palette is AMD brand', () => {
+  it.each(PINNED)('%s', (token, expected) => {
+    expect(hex(paint(token).rgb)).toBe(expected);
   });
 
-  it('fills with burnished copper in both themes, carrying white', () => {
-    expect(hex(asPaint(light.get('--g-accent-fill')!)!.rgb)).toBe('#9a4930');
-    expect(hex(asPaint(light.get('--g-on-accent')!)!.rgb)).toBe('#ffffff');
-    expect(contrast([255, 255, 255], [0x9a, 0x49, 0x30])).toBeCloseTo(6.23, 1);
-  });
-
-  // The browser-chrome colour is the one canvas value that cannot come from a
-  // CSS custom property — a <meta> tag can't read one — so Layout.astro and
-  // ThemeToggle.astro repeat both canvas hexes in JS. Pin them here: an edit to
-  // --g-bg that misses these leaves the phone status bar on the old palette,
-  // which no page-level assertion would catch.
-  it.each(['../layouts/Layout.astro', '../components/ThemeToggle.astro'])(
-    'keeps the theme-color literals in %s equal to the canvas tokens',
-    (file) => {
-      const src = readFileSync(new URL(file, import.meta.url), 'utf8');
-      const found = new Set(
-        [...src.matchAll(/#[0-9a-fA-F]{6}\b/g)].map((m) => m[0].toLowerCase()),
-      );
-      const canvases = [light, dark].map((v) => hex(asPaint(v.get('--g-bg')!)!.rgb));
-      expect([...found].sort()).toEqual([...new Set(canvases)].sort());
+  // Every red role stays red: within a few degrees of the brand hue. A copper,
+  // a gold or a pink that slips in reads as a different brand.
+  it.each(['--g-accent', '--g-accent2', '--g-accent-text', '--g-accent-fill', '--g-accent-fill2', '--g-focus', '--g-code-accent'])(
+    '%s is in the red family',
+    (token) => {
+      const h = hue(paint(token).rgb)!;
+      const off = Math.min(h, 360 - h);
+      expect(off, `${token} hue ${h.toFixed(1)}° is ${off.toFixed(1)}° off red`).toBeLessThan(6);
     },
   );
 
-  it('keeps no gold-family accent behind', () => {
-    // #E7A33C and its neighbours were the previous brand colour. Copper's hue
-    // is ~15°; the old gold sat at ~36°. Anything back in that arc means a
-    // stray value survived the retheme.
-    for (const [name, vars] of THEMES) {
-      for (const token of ['--g-accent', '--g-accent2', '--g-accent-text', '--g-accent-fill']) {
-        const [r, g, b] = asPaint(vars.get(token)!)!.rgb;
-        const max = Math.max(r, g, b);
-        const min = Math.min(r, g, b);
-        if (max === min) continue;
-        const hue =
-          60 *
-          (((max === r ? (g - b) / (max - min) : max === g ? 2 + (b - r) / (max - min) : 4 + (r - g) / (max - min)) %
-            6) +
-            6) %
-          360;
-        expect(hue, `${name} ${token} hue ${hue.toFixed(1)}° is back in the gold arc`).toBeLessThan(
-          28,
-        );
-      }
-    }
+  // The browser-chrome colour is the one canvas value that cannot come from a
+  // CSS custom property — a <meta> tag can't read one — so Layout.astro repeats
+  // it. Pin it: an edit to --g-bg that misses it leaves the phone status bar on
+  // the old canvas, which no page-level assertion would catch.
+  it('keeps the theme-color literal in Layout.astro equal to the canvas', () => {
+    const src = readFileSync(new URL('../layouts/Layout.astro', import.meta.url), 'utf8');
+    const found = new Set([...src.matchAll(/#[0-9a-fA-F]{6}\b/g)].map((m) => m[0].toLowerCase()));
+    expect([...found]).toEqual([hex(paint('--g-bg').rgb)]);
   });
 });
 
-// The spec calls itself the source of truth and then quotes four ratios in
-// prose. Retune a neutral and the page states a number that is no longer true,
-// with nothing to notice. These recompute them from the tokens.
-describe('the design language quotes the ratios these tokens actually hold', () => {
+// The spec calls itself the source of truth and quotes ratios in prose. A
+// retuned value leaves the page stating a number that is no longer true, with
+// nothing to notice. These recompute every quoted figure.
+describe('the design language quotes the ratios its values actually hold', () => {
   const SPEC_PATH = 'docs/spec/gaia-design-language.mdx';
   const spec = readFileSync(
     new URL('../../../docs/spec/gaia-design-language.mdx', import.meta.url),
     'utf8',
   );
 
-  const grounds = ['--g-bg', '--g-bg2'];
-  const roles = PINNED.map(([token]) => token).filter((token) => !grounds.includes(token));
+  // The shared palette (Agent UI and TUI) is stated in the spec's role table;
+  // its quoted ratios must follow from the hexes in that same table.
+  const table = new Map<string, [RGB, RGB]>();
+  for (const [, role, dark, light] of spec.matchAll(
+    /^\|\s*([^|]+?)\s*\|[^|`]*`(#[0-9a-fA-F]{6})`\s*\|[^|`]*`(#[0-9a-fA-F]{6})`\s*\|/gm,
+  ))
+    table.set(role, [fromHex(dark), fromHex(light)]);
 
-  /** Lowest ratio any pinned role holds against either ground, as the spec rounds it. */
-  const measuredMinimum = (vars: Map<string, string>): number => {
-    const ratios = roles.flatMap((token) =>
-      grounds.map((ground) =>
-        contrast(asPaint(vars.get(token)!)!.rgb, asPaint(vars.get(ground)!)!.rgb),
-      ),
-    );
-    return Number(Math.min(...ratios).toFixed(2));
-  };
+  const SHARED_ROLES = ['Primary text', 'Secondary text', 'Accent / focus'];
+  const SHARED_GROUNDS = ['Canvas', 'Raised surface'];
 
   const headline = /\*\*([\d.]+):1 dark, ([\d.]+):1 light\*\*/.exec(spec);
   const onFill = /carries white at ([\d.]+):1/.exec(spec);
   const band =
     /pale stone measures \*\*([\d.]+):1\*\*[\s\S]{0,60}?warm slate \*\*([\d.]+):1\*\*/.exec(spec);
+  const siteRed = /AMD red `#ED1C24` measures \*\*([\d.]+):1\*\*/.exec(spec);
+  const siteFill = /deepened to `#D3121A`, which carries white at \*\*([\d.]+):1\*\*/.exec(spec);
 
   it('still states the sentences this suite checks', () => {
     // Reworded prose must fail loudly rather than skip the cases below.
+    expect([...table.keys()]).toEqual(
+      expect.arrayContaining([...SHARED_ROLES, ...SHARED_GROUNDS, 'Accent fill']),
+    );
     expect(headline, `${SPEC_PATH} no longer says "N:1 dark, N:1 light"`).not.toBeNull();
     expect(onFill, `${SPEC_PATH} no longer says "carries white at N:1"`).not.toBeNull();
     expect(band, `${SPEC_PATH} no longer measures pale stone and warm slate`).not.toBeNull();
+    expect(siteRed, `${SPEC_PATH} no longer measures AMD red on the website`).not.toBeNull();
+    expect(siteFill, `${SPEC_PATH} no longer states the website's button fill`).not.toBeNull();
   });
 
   it.each([
-    ['dark', dark, 1],
-    ['light', light, 2],
-  ] as const)('the %s measured minimum', (themeName, vars, group) => {
-    const actual = measuredMinimum(vars);
+    ['dark', 0, 1],
+    ['light', 1, 2],
+  ] as const)('the shared %s measured minimum', (themeName, column, group) => {
+    const ratios = SHARED_ROLES.flatMap((role) =>
+      SHARED_GROUNDS.map((ground) => contrast(table.get(role)![column], table.get(ground)![column])),
+    );
+    const actual = Number(Math.min(...ratios).toFixed(2));
     expect(
       Number(headline![group]),
-      `${SPEC_PATH} says ${headline![group]}:1 ${themeName}; the tokens now measure ` +
-        `${actual}:1 — update the "Measured minimums" sentence under "Contrast floors"`,
+      `${SPEC_PATH} says ${headline![group]}:1 ${themeName}; its own table measures ${actual}:1`,
     ).toBe(actual);
   });
 
-  it('white on the accent fill', () => {
-    const actual = Number(
-      contrast([255, 255, 255], asPaint(light.get('--g-accent-fill')!)!.rgb).toFixed(2),
+  it('white on the shared accent fill', () => {
+    const actual = Number(contrast([255, 255, 255], table.get('Accent fill')![0]).toFixed(2));
+    expect(Number(onFill![1]), `${SPEC_PATH} says ${onFill![1]}:1; the table gives ${actual}:1`).toBe(
+      actual,
     );
-    expect(
-      Number(onFill![1]),
-      `${SPEC_PATH} says ${onFill![1]}:1; the fill now carries white at ${actual}:1`,
-    ).toBe(actual);
   });
 
-  // The raised surface is unusable as the TUI's status band because it vanishes
-  // against a plain terminal; the spec cites the two ratios that prove it.
   it.each([
-    ['pale stone on a white terminal', light, [255, 255, 255] as RGB, 1],
-    ['warm slate on a black terminal', dark, [0, 0, 0] as RGB, 2],
-  ] as const)('%s', (label, vars, terminal, group) => {
-    const actual = Number(contrast(asPaint(vars.get('--g-bg2')!)!.rgb, terminal).toFixed(2));
-    expect(
-      Number(band![group]),
-      `${SPEC_PATH} says ${band![group]}:1 for ${label}; --g-bg2 now measures ${actual}:1 — ` +
-        'update "The terminal has no canvas, and its status band is not the raised surface"',
-    ).toBe(actual);
+    ['pale stone on a white terminal', 1, [255, 255, 255] as RGB, 1],
+    ['warm slate on a black terminal', 0, [0, 0, 0] as RGB, 2],
+  ] as const)('%s', (label, column, terminal, group) => {
+    const actual = Number(contrast(table.get('Raised surface')![column], terminal).toFixed(2));
+    expect(Number(band![group]), `${SPEC_PATH} says ${band![group]}:1 for ${label}; the table gives ${actual}:1`).toBe(
+      actual,
+    );
+  });
+
+  // The website's own figures are measured off tokens.css.
+  it("AMD red's lowest ratio on the website's grounds", () => {
+    const actual = Number(
+      Math.min(...pageGrounds().map((g) => contrast(paint('--g-brand').rgb, g.rgb))).toFixed(2),
+    );
+    expect(Number(siteRed![1]), `${SPEC_PATH} says ${siteRed![1]}:1; tokens.css measures ${actual}:1`).toBe(
+      actual,
+    );
+  });
+
+  it("white on the website's button fill", () => {
+    const actual = Number(contrast([255, 255, 255], paint('--g-accent-fill').rgb).toFixed(2));
+    expect(Number(siteFill![1]), `${SPEC_PATH} says ${siteFill![1]}:1; tokens.css measures ${actual}:1`).toBe(
+      actual,
+    );
+    expect(hex(paint('--g-accent-fill').rgb)).toBe('#d3121a');
   });
 });

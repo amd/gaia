@@ -6,6 +6,111 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A failed tool call is reported as a failure.** `run_shell_command` returned
+  `status: success` for a command that exited non-zero, so the TUI and Agent UI
+  showed a failed build or test run as a passed step. It is now `status: error`
+  with an `error` naming the failing step, its exit code and the last stderr
+  line; `stdout`, `stderr` and `return_code` are unchanged. grep's no-match and
+  diff's "inputs differ" (exit 1) stay a success and say so in `expected_exit`.
+  An MCP tool that answers `isError`, a DuckDuckGo search that was blocked, a
+  `tasklist`/`wmctrl`/`osascript` window listing that failed, a notification
+  whose PowerShell died, and an `open_url` with no browser to open are errors
+  too. Install hints in a frozen build no longer name the binary as a Python to
+  run pip with.
+- **Reviewing a few documents reads them in full.** `read_file` on a Word,
+  PDF or Excel file returned `[Binary file, N bytes]`, so to compare a term
+  sheet against a draft agreement the agent indexed them and ran a handful of
+  searches, and missed a closing date that differed between the two because no
+  search asked for it. `read_file` now returns the extracted text, in parts sized
+  to the model's budget that say where the next part starts, and the prompt
+  tells the agent to read a few documents in full for a review, comparison or
+  reconciliation and keep indexing for large collections and single lookups.
+- **`fetch_page` no longer drops the middle of a long page.** Text past
+  `max_length` was cut to its head and tail, which is where a product page keeps
+  its menus and footer, not its price. It now returns the first part with a
+  marker naming the offset of the next, takes `offset` to continue and `find` to
+  jump to the passages containing a word, says so when a word is not on the
+  page, and flags a page with almost no static text as rendered by JavaScript.
+  `Length:` now reports the whole page rather than the excerpt.
+- **Long desktop tasks finish with their deliverables instead of a bare "I
+  can't confirm this is done".** Picking a controller from nine datasheets and
+  pricing a 40-unit BOM ran out of its 50 steps while still searching for
+  prices, and the reply dropped the recommendation the agent had already
+  written. The agent's default step limit is now **150** (a `/query`
+  `max_steps` or `GAIA_AGENT_MAX_STEPS` still wins); at 20, 10 and 5 steps left
+  it is told to write the requested files from what it has, marking unverified
+  values, and a turn that still runs out keeps its findings and lists what is
+  missing after them.
+- **The model notice is one line.** Switching or restoring a model printed a
+  four-sentence paragraph that named the model twice and said "via Lemonade".
+  It now reads like "Switched to **DeepSeek-V4.1-Flash** on the AMD LLM Gateway
+  (cloud). Your messages, and anything read from files or memory, are sent
+  there." The `/model` list drops "via Lemonade" from its headings and marks
+  the configured default model with `(default)`.
+- **Single-file search results name their file.** `query_specific_file` put the
+  path only at the top of its result, so each chunk arrived with no source and
+  the chunk cards showed none. Every chunk now carries `source_file`, and the
+  result lists it in `source_files`, as `query_documents` already did.
+- **The turn log counts the answer of a streamed turn.** With `GAIA_TURN_LOG`
+  set, a turn whose answer streamed out recorded `answer_chars: 0`. It now
+  records the length of the answer the user saw.
+- **`run_python` and `execute_python_file` work in the released binary.** The
+  binary has no Python interpreter, so it handed every script to its own
+  argument parser, which rejected it, and no calculation, chart or `.xlsx`
+  could be produced. It now runs scripts itself, with pypdf, pymupdf,
+  python-docx, python-pptx, openpyxl, xlsxwriter, reportlab, pandas, numpy,
+  matplotlib and the full standard library bundled for them, and both tools
+  name those libraries to the model. A script that starts `sys.executable`
+  (`-m`, `-c`, a file) runs too; `-m pip` says packages can't be installed
+  and lists what is bundled. The Windows binary grows from 147 MB to 168 MB.
+- **A Python script that fails is reported as a failure.** A non-zero exit
+  came back as `status: success`, so the TUI showed a failed run as
+  successful. It is now `status: error`, with an `error` naming the exit code
+  and the last stderr line; `stdout`, `stderr` and `return_code` are unchanged.
+- **`GAIA_ALLOWED_PATHS` confines a run to the folders you name.** The agent
+  could read anything under the user's home and nothing narrowed that short of
+  embedding it, so an evaluation run could read the graders' answer keys. Set
+  to absolute folders, it narrows every file tool, search, index and shell path
+  check to them — it never widens, an invalid value stops startup, and code the
+  agent runs (`run_python`, shell) is not confined.
+
+- **The sidecar's start-up warm-up now makes the first question fast.** It
+  primed only the agent's own instructions, without the tool list or the rest
+  of the system prompt, so the first question re-read all ~19K prompt tokens
+  (34 s on Qwen3.6-35B-A3B). It now sends exactly what a turn sends, and the
+  first question reads only its own ~50 tokens (5 s). A warm-up that fails is
+  logged as a warning with its cause instead of an info line.
+- **`/model` names the command that connects a cloud provider.** With no
+  Fireworks or AMD gateway connection, the list told users to "connect this
+  provider in the TUI provider settings", a screen with no obvious way in. It
+  now says to run `/provider`, the command that opens it.
+- **The TUI's provider picker works after GAIA's Lemonade restarts.** When the
+  agent ran as the TUI's own child, its model-state ping kept naming the port
+  Lemonade started on, so after a restart the picker said "Lemonade did not
+  respond" while chat worked. With a local or cloud chat model the ping now
+  reports the port the agent talks to, and it still never starts a stopped
+  server. A Claude session still reports the port it started with.
+- **The Agent UI's Skills settings list this agent's skills.** With the agent
+  installed from the Hub, the page said the agent package was not installed
+  and to run `gaia init`, which changed nothing: the bundled skills live
+  inside the binary, where the UI could not read them. `GET /v1/gaia/skills`
+  (contract **2.17**) now returns them.
+- **A message sent right after Stop is answered instead of refused.** A stopped
+  turn holds its session until its model call returns, so the next `/query`
+  got `409 … is already running a turn` for as long as the stopped answer would
+  have taken — about 40 s for a long one. It now waits for the stopped turn to
+  finish (up to 240 s) and then runs. A turn that was not cancelled is still
+  refused at once.
+- **Documents attached to a chat now reach the agent.** In the Agent UI, a
+  Hub-installed agent answered "no documents are indexed" about a file the user
+  had attached, because the relayed turn never carried the chat's files.
+  `/query` now takes a `documents` field (contract **2.16**): the agent indexes
+  them before the turn, granting each exact file and not its folder, including
+  a file attached partway through a conversation.
+- **The first chat after the agent starts uses its own tools.** A session built
+  while the start-up warm-up was still building could end up running the
+  warm-up agent's tools, so a file it had just indexed read as access denied.
+  Agents are now built one at a time.
 - **Web requests work behind a corporate TLS-inspecting proxy.** HTTPS now
   trusts the operating system's certificate store, as pip does, instead of only
   Python's bundled list, so a proxy root such as Zscaler's no longer fails every
