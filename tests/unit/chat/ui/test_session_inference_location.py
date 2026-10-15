@@ -114,7 +114,10 @@ class TestSessionResponseFields:
             assert data["inference_remote"] is True
             assert data["inference_provider"] == "fireworks"
             assert data["inference_provider_name"] == "Fireworks AI"
-            assert "Fireworks AI via Lemonade" in data["inference_description"]
+            assert data["inference_description"] == (
+                "Using deepseek-v4p1-flash on Fireworks AI (cloud). Your messages, "
+                "and anything read from files or memory, are sent there."
+            )
             # The header badge names the same model the location classified.
             assert data["effective_model"] == "fireworks.deepseek-v4p1-flash"
 
