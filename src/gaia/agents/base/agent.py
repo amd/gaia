@@ -11208,6 +11208,8 @@ Do NOT wrap conversational replies in JSON.
                         final_answer,
                         streaming=self.streaming,
                         total_tokens=cap_output_tokens,
+                        input_tokens=_cap_input_tokens,
+                        cached_tokens=_sum_cached_tokens(conversation),
                         ttft_seconds=_query_ttft_seconds(conversation),
                         tok_per_s=_query_tok_per_s(conversation),
                     )
@@ -11339,6 +11341,7 @@ Do NOT wrap conversational replies in JSON.
             "output_tokens": total_output_tokens,  # Total output tokens across all steps
             "total_tokens": total_input_tokens
             + total_output_tokens,  # Combined token count
+            "cached_tokens": _sum_cached_tokens(conversation),
             "error_count": len(self.error_history),
             "error_history": self.error_history,  # Include the full error history
             "tool_schema": self._trace_tool_schema(),

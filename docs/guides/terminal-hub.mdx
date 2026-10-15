@@ -350,7 +350,7 @@ Once the gate clears, GAIA starts the agent and drops you into the conversation:
 GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
 ────────────────────────────────────────────────────────────────────────────────
 Welcome to GAIA
-Connected to: agent gaia v0.2.0
+Connected to: agent gaia v0.2.0 (GAIA core 0.25.0)
 
 Type a message and press Enter to start chatting.
 Type /help for available commands.
@@ -361,6 +361,10 @@ Type /help for available commands.
 
 The `agent <id>` segment is always the stable id, lowercased — the same string
 `--agent <id>` takes, so you can read it straight off the header and pass it back.
+The version beside it is the one the running agent reports about itself, and the
+welcome line adds the GAIA core it runs on. An agent too old to report a
+version gets no number at all rather than one read from an install record, which
+can name a different build than the one answering.
 On a narrow terminal this segment is the first thing to give way, never the model
 chip next to it.
 
@@ -382,6 +386,8 @@ names the update command.
 |---|---|
 | `Enter` | Send message. Mid-answer it goes to the turn already running — see below |
 | `Alt+Enter`, `Ctrl+J` | New line in the composer |
+| `Ctrl+Backspace`, `Alt+Backspace`, `Ctrl+W` | Delete the word before the cursor. A terminal that sends `^H` for plain Backspace (PuTTY's "Control-H" setting, `stty erase ^H`) deletes a word with Backspace too; set it to send `DEL` |
+| `Ctrl+Delete`, `Alt+Delete`, `Alt+D` | Delete the word after the cursor |
 | `Esc` | Idle: clear the composer. Streaming: stop the turn; the agent keeps its session. Press again to stop at once — an agent the TUI runs itself is then restarted without its loaded skills or grants |
 | `Ctrl+C` | Quit |
 | `Shift+Tab` | Change the permission mode: ask → accept edits → full access — see [When the agent asks first](#when-the-agent-asks-first) |
@@ -416,7 +422,9 @@ the answer set apart below:
   it gated then records your answer in a word: `approved`, `denied`, or `always
   allowed '<scope>'`.
 - **The agent's narration** ("Let me check the tests first") is folded away.
-  `Ctrl+O` shows it, along with each step's full command and timing.
+  `Ctrl+O` shows it, along with each step's full command and timing. A stage or a
+  narration line the agent repeats word for word — a plan's "Following the plan
+  to …" headline before every step — is shown once, until it changes.
 
 ### Saying something while the agent is still working
 

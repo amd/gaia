@@ -150,6 +150,11 @@ still sends conversation history to Fireworks and incurs usage charges — see
   example), the panel says the key works for this session only. Set
   `LEMONADE_FIREWORKS_API_KEY` or `LEMONADE_AMD_API_KEY` in Lemonade's own
   environment instead.
+- If GAIA can't hand a kept key back, the panel says what is wrong and the one
+  thing to do in a line, for example "GAIA's background service is out of date.
+  Run `pip install --upgrade amd-gaia`, then press r." Press **d** for the full
+  account: the request that failed, the environment-key alternative, and where the
+  background service's log is.
 - Provider URLs and authentication-header settings are saved by Lemonade and
   shared with its other clients. Runtime keys are also available to other clients
   of that same Lemonade server.
