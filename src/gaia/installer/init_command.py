@@ -839,6 +839,8 @@ class InitCommand:
         self.lemonade_url = lemonade_url
         self.gaia_lemonade = gaia_lemonade
         self._chose_now = False
+        # GAIA's own was chosen; saved only once that server is running.
+        self._gaia_choice_pending = False
         self.profile = profile.lower()
         # This machine's chat model, resolved once so download and verify agree.
         self._chat_choice: Optional[ChatModelChoice] = None
@@ -1310,8 +1312,8 @@ class InitCommand:
 
         try:
             if self.gaia_lemonade:
-                choice.use_gaia()
-                self._print_success("Using GAIA's own Lemonade Server (saved).")
+                self._gaia_choice_pending = True
+                self._print("   Using GAIA's own Lemonade Server.")
             elif self.lemonade_url:
                 if not self._adopt_external(self.lemonade_url):
                     return False
@@ -1324,7 +1326,12 @@ class InitCommand:
             return False
         if not self._tell_daemon():
             return False
-        self._lemonade_base_url = configured_lemonade_url()
+        # GAIA's own, chosen but not yet running, wins over a saved server;
+        # LEMONADE_BASE_URL still wins over both.
+        if self._gaia_choice_pending and choice.env_override_note() is None:
+            self._lemonade_base_url = None
+        else:
+            self._lemonade_base_url = configured_lemonade_url()
         if self._lemonade_base_url:
             hostname = urlparse(self._lemonade_base_url).hostname or "localhost"
             if hostname not in ("localhost", "127.0.0.1", "::1"):
@@ -1336,7 +1343,7 @@ class InitCommand:
         from gaia.daemon.errors import DaemonError
         from gaia.llm.lemonade_choice import apply_to_daemon
 
-        if not (self.lemonade_url or self.gaia_lemonade or self._chose_now):
+        if not (self.lemonade_url or self._chose_now) or self._gaia_choice_pending:
             return True
         try:
             apply_to_daemon()
@@ -1383,8 +1390,8 @@ class InitCommand:
         self._chose_now = True
         if self._prompt_yes_no("Use your Lemonade Server?", default=True):
             return self._adopt_external(found.url)
-        choice.use_gaia()
-        self._print("   Setting up GAIA's own Lemonade Server (saved).")
+        self._gaia_choice_pending = True
+        self._print("   Setting up GAIA's own Lemonade Server.")
         return True
 
     def _adopt_external(self, url: str) -> bool:
@@ -1516,6 +1523,13 @@ class InitCommand:
         self._print_success(
             f"Lemonade Server v{status.version} running on port {status.port}"
         )
+        if self._gaia_choice_pending:
+            # Saved only now: until it runs, "GAIA's own" would name nothing.
+            from gaia.llm.lemonade_choice import use_gaia
+
+            use_gaia()
+            self._gaia_choice_pending = False
+            self._print_success("Saved: GAIA uses its own Lemonade Server.")
         self._hand_server_to_daemon()
         return True
 

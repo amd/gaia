@@ -549,6 +549,18 @@ def users_server_unchanged_message(saved_url: str, action: str) -> str:
     )
 
 
+def users_server_repair_message(url: str, model: str, cause: Exception) -> str:
+    """A broken model on the user's server: theirs to repair, never GAIA's."""
+    match = users_server_route(url)
+    server = match[0] if match else url
+    return (
+        f"The model '{model}' on your Lemonade Server at {server} is incomplete "
+        f"or corrupt, and resuming its download did not fix it ({cause}). GAIA "
+        "does not change models on your server. Repair it there by downloading "
+        f"it again with your server's own tools, or {SWITCH_BACK_HINT}."
+    )
+
+
 def setup_change_refusal(
     url: str, method: str, payload: Optional[dict] = None
 ) -> Optional[str]:
@@ -602,6 +614,32 @@ def apply_to_daemon() -> Optional[dict]:
     from gaia.daemon.client import reconfigure_lemonade
 
     return reconfigure_lemonade()
+
+
+def apply_gaia_switch(previous_mode: Optional[str]) -> Optional[dict]:
+    """Tell the daemon about a switch to GAIA's own, and wait until it answers.
+
+    The daemon starts GAIA's server in the background, so a start that fails
+    would otherwise leave ``gaia`` saved while nothing serves it. Leaving the
+    user's server is checked end to end; a first-run choice is not, because
+    setup installs the server afterwards.
+
+    Raises:
+        DaemonError: The daemon did not switch, or GAIA's server did not start.
+            The previous mode is saved back first.
+    """
+    from gaia.daemon.client import ensure_lemonade
+    from gaia.daemon.errors import DaemonError
+
+    try:
+        applied = apply_to_daemon()
+        if applied is not None and previous_mode == MODE_EXTERNAL:
+            applied = {**applied, "lemonade": ensure_lemonade()}
+    except DaemonError:
+        # The daemon reads the choice live, so it follows this too.
+        restore_mode(previous_mode)
+        raise
+    return applied
 
 
 def saved_target() -> dict:

@@ -9162,20 +9162,21 @@ _KEEP_SAVED = object()
 def _apply_lemonade_choice_to_daemon(restore_mode=_KEEP_SAVED):
     """Tell a running daemon about a changed Lemonade choice, loudly on failure.
 
-    With *restore_mode*, a daemon that can't switch gets that mode saved back,
-    so the setting never claims a switch that did not happen.
+    With *restore_mode* (a switch to GAIA's own), it also waits for GAIA's
+    server to answer; if either fails that mode is saved back, so the setting
+    never claims a switch that did not happen.
     """
     from gaia.daemon.errors import DaemonError
-    from gaia.llm.lemonade_choice import apply_to_daemon
-    from gaia.llm.lemonade_choice import restore_mode as put_back
+    from gaia.llm.lemonade_choice import apply_gaia_switch, apply_to_daemon
 
     try:
-        return apply_to_daemon()
+        if restore_mode is _KEEP_SAVED:
+            return apply_to_daemon()
+        return apply_gaia_switch(restore_mode)
     except DaemonError as e:
         if restore_mode is _KEEP_SAVED:
             print(f"❌ Saved, but the running GAIA daemon did not switch: {e}")
         else:
-            put_back(restore_mode)
             print(
                 f"❌ GAIA could not switch to its own Lemonade Server: {e} "
                 "Nothing was changed."

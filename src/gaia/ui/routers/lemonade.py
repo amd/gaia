@@ -118,16 +118,17 @@ def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
     _drop_cached_agents()
     applied = None
     try:
-        applied = choice.apply_to_daemon()
+        if body.mode == choice.MODE_GAIA:
+            applied = choice.apply_gaia_switch(previous_mode)
+        else:
+            applied = choice.apply_to_daemon()
     except DaemonError as e:
         if body.mode != choice.MODE_GAIA:
             raise HTTPException(
                 status_code=502,
                 detail=f"Saved, but the GAIA daemon did not switch: {e}",
             ) from e
-        # Saying "GAIA's own" while the daemon stays on the user's server is
-        # the false success this switch must never report.
-        choice.restore_mode(previous_mode)
+        # The previous mode is back: never report "GAIA's own" unless it runs.
         _drop_cached_agents()
         raise HTTPException(
             status_code=502,

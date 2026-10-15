@@ -204,8 +204,8 @@ with no address uses the one `gaia lemonade detect` finds on this PC.
 The choice is stored as `lemonade_mode` and `lemonade_base_url` in
 `~/.gaia/config.json`. Switching tells a running GAIA daemon right away. It stops
 GAIA's own server when you switch to yours, and starts it again when you switch back.
-Switching back needs GAIA's own server installed: if it isn't, the switch is refused
-and nothing changes. Run `gaia init --gaia-lemonade` to install it and switch in one
+Switching back needs GAIA's own server installed, and waits until it answers: if it
+isn't installed or won't start, the switch is refused or undone and nothing changes. Run `gaia init --gaia-lemonade` to install it and switch in one
 step.
 
 ## Updating GAIA

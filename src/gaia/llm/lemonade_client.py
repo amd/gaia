@@ -6314,6 +6314,15 @@ class LemonadeClient:
                         f"{_emoji('⚠️', '[RETRY]')} Resume failed: {resume_error}"
                     )
 
+                    if self.is_users_server():
+                        from gaia.llm.lemonade_choice import users_server_repair_message
+
+                        raise UsersServerUnchangedError(
+                            users_server_repair_message(
+                                self.base_url, model_name, resume_error
+                            )
+                        ) from resume_error
+
                     # Honor `prompt` before the destructive delete too.
                     if prompt and not _prompt_user_for_delete(model_name):
                         raise LemonadeClientError(

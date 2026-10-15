@@ -324,6 +324,9 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 		// The user's own server: GAIA starts nothing for it, whatever it finds.
 		return l.checkExternalLemonade(ctx, row, external)
 	}
+	if awaitsGAIALemonade(choice) {
+		return gaiaLemonadeMissingRow(row)
+	}
 	if offersRunningLemonade(choice) {
 		if found, ok := detectRunningLemonade(ctx); ok {
 			return offerRow(found)
@@ -945,6 +948,10 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 	command := gaiainit.RunCommand(l.skipChatModel())
 	if kind == FixInstallServer {
 		start, command = gaiainit.StartServerOnly, gaiainit.ServerOnlyCommand()
+		// Setup saves "GAIA's own" itself, once that server runs.
+		if choice, err := lemonade.ReadChoice(); err == nil && awaitsGAIALemonade(choice) {
+			start, command = gaiainit.StartGAIAServerOnly, gaiainit.GAIAServerOnlyCommand()
+		}
 	}
 
 	ch, cancel, err := start()

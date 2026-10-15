@@ -479,6 +479,34 @@ class TestModelLoad:
             call(client)
         assert users_server.setup_writes() == []
 
+    def test_a_broken_model_is_left_for_the_user_to_repair(
+        self, users_server, client, monkeypatch
+    ):
+        """Resume failed: the advice is to fix it on their server, never delete."""
+        from gaia.llm import lemonade_client as lc
+
+        def broken_load(self, *a, **k):
+            raise lc.LemonadeClientError(
+                "download validation failed: files are missing"
+            )
+
+        monkeypatch.setattr(
+            lc.LemonadeClient, "_post_load_with_transient_retry", broken_load
+        )
+        monkeypatch.setattr(
+            lc.LemonadeClient,
+            "_consume_pull_stream",
+            lambda *a: (_ for _ in ()).throw(lc.LemonadeClientError("pull stalled")),
+        )
+        with pytest.raises(lc.UsersServerUnchangedError) as err:
+            client.load_model(CHAT, auto_download=True, prompt=False)
+        message = str(err.value)
+        assert "Repair it there" in message
+        assert "gaia config set lemonade_mode gaia" in message
+        assert "delete" not in message.lower()
+        assert "Force-redownload" not in message
+        assert users_server.setup_writes() == []
+
     def test_gateway_registration_is_refused(self, users_server):
         from gaia.llm.gateway import GatewayError, GatewayManager
 
@@ -682,6 +710,8 @@ class TestUseGaiasOwn:
         app.include_router(router_mod.router)
         self.applied = mock.Mock(return_value={"action": "starting_gaia_lemonade"})
         monkeypatch.setattr(choice, "apply_to_daemon", self.applied)
+        self.ensured = mock.Mock(return_value={"port": 1})
+        monkeypatch.setattr("gaia.daemon.client.ensure_lemonade", self.ensured)
         monkeypatch.setattr(router_mod, "_drop_cached_agents", mock.Mock())
         _save(lemonade_mode="external", lemonade_base_url=self.USER_URL)
         return TestClient(app)
@@ -725,12 +755,46 @@ class TestUseGaiasOwn:
         assert "Nothing was changed" in r.json()["detail"]
         self._still_on_users_server()
 
-    def test_installed_switches(self, client):
+    def test_installed_switches_once_gaias_server_answers(self, client):
         _install_gaias_own(binary=True)
         r = self._switch(client)
         assert r.status_code == 200, r.text
         assert r.json()["mode"] == "gaia"
         assert GaiaConfig.load().lemonade_mode == "gaia"
+        self.ensured.assert_called_once()
+
+    def test_a_background_start_that_fails_rolls_the_switch_back(self, client):
+        """The daemon accepts the switch, then GAIA's server will not start."""
+        from gaia.daemon.errors import DaemonError
+
+        _install_gaias_own(binary=True)
+        self.ensured.side_effect = DaemonError(
+            "the daemon could not start Lemonade Server: port in use"
+        )
+        r = self._switch(client)
+        assert r.status_code == 502
+        assert "port in use" in r.json()["detail"]
+        assert "Nothing was changed" in r.json()["detail"]
+        self._still_on_users_server()
+
+    def test_cli_rolls_back_a_background_start_that_fails(self, monkeypatch, capsys):
+        from gaia.cli import _set_lemonade_config
+        from gaia.daemon.errors import DaemonError
+
+        _save(lemonade_mode="external", lemonade_base_url=self.USER_URL)
+        _install_gaias_own(binary=True)
+        monkeypatch.setattr(
+            choice, "apply_to_daemon", mock.Mock(return_value={"action": "x"})
+        )
+        monkeypatch.setattr(
+            "gaia.daemon.client.ensure_lemonade",
+            mock.Mock(side_effect=DaemonError("would not start")),
+        )
+        with pytest.raises(SystemExit):
+            _set_lemonade_config("lemonade_mode", "gaia", "cfg", None)
+        out = capsys.readouterr().out
+        assert "would not start" in out and "✅" not in out
+        self._still_on_users_server()
 
     def test_first_run_choice_saves_before_setup_installs(self, client):
         _save(lemonade_mode=None)

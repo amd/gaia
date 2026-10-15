@@ -190,6 +190,17 @@ func ServerOnlyCommand() string {
 	return "gaia init --profile " + Profile + " --skip-models"
 }
 
+// StartGAIAServerOnly is StartServerOnly for a user who chose GAIA's own
+// server over one already running: setup saves that choice once it runs.
+func StartGAIAServerOnly() (<-chan Event, context.CancelFunc, error) {
+	return start(append(ServerOnlyArgs(), "--gaia-lemonade"))
+}
+
+// GAIAServerOnlyCommand is the command a user should type to run that step.
+func GAIAServerOnlyCommand() string {
+	return ServerOnlyCommand() + " --gaia-lemonade"
+}
+
 func start(args []string) (<-chan Event, context.CancelFunc, error) {
 	bin, err := Binary()
 	if err != nil {
