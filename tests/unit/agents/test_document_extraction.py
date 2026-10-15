@@ -1198,7 +1198,7 @@ def test_running_out_of_steps_keeps_the_extracted_inventory(agent, tmp_path):
 
 
 def test_the_closing_answer_at_the_step_limit_is_checked_too(agent, tmp_path):
-    """The last-step summary is an answer, not an exemption from the gate."""
+    """The last-step summary is kept, but the gate still lists what it lacks."""
     (tmp_path / "source.txt").write_text("Exercise ALPHA\nExercise BETA")
     script(
         agent,
@@ -1210,8 +1210,12 @@ def test_the_closing_answer_at_the_step_limit_is_checked_too(agent, tmp_path):
     )
     assert result["status"] == "incomplete"
     assert result["completion_gaps"]
-    assert "Saved every exercise to report.txt." not in result["result"]
-    assert "Exercise ALPHA" in result["result"] and "Exercise BETA" in result["result"]
+    text = result["result"]
+    assert text.index("Saved every exercise to report.txt.") < text.index(
+        "I can't confirm this is done"
+    )
+    assert "No successful write to `report.txt`" in text
+    assert "Exercise ALPHA" in text and "Exercise BETA" in text
 
 
 def test_a_finished_extraction_survives_the_step_limit(agent, tmp_path):

@@ -17,7 +17,12 @@ def sdk():
 
         def completion(**kwargs):
             if kwargs["stream"]:
-                return iter([{"choices": [{"delta": {"content": "answer"}}]}])
+                return iter(
+                    [
+                        {"choices": [{"delta": {"content": "answer"}}]},
+                        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                    ]
+                )
             return {"choices": [{"message": {"content": "answer"}}]}
 
         backend.chat_completions.side_effect = completion

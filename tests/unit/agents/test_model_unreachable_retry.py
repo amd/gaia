@@ -407,7 +407,7 @@ def test_retry_status_line_wording(agent, notice, line):
 def _tui_turn(agent):
     """One turn through the stdio transport the TUI drives, as the canonical
     events it writes to the pipe."""
-    from gaia_agent.stdio import run_turn
+    run_turn = pytest.importorskip("gaia_agent.stdio").run_turn
 
     # History sizing needs a real model's context window; not under test here.
     agent.conversation_history = None

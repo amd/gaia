@@ -31,15 +31,18 @@ from gaia.llm.retry import (
     retry_state_of,
     tag_http_failure,
 )
-from tests.unit.agents.test_model_unreachable_retry import (  # noqa: F401
+from tests.unit.agents import test_model_unreachable_retry as _base
+from tests.unit.agents.test_model_unreachable_retry import (
     _ANSWER,
     _TOOL_RUNS,
     _make_agent,
     _script,
     _tool_call,
     _transient,
-    clean_registry,
 )
+
+# The shared fixture, bound by name so pytest finds it in this module.
+clean_registry = _base.clean_registry
 
 POLICY = RetryPolicy(max_attempts=5, base_delay=2.0, max_delay=30.0, deadline=120.0)
 
