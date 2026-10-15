@@ -57,6 +57,25 @@ describe('PermissionPrompt', () => {
         expect(screen.getByRole('alertdialog')).not.toHaveTextContent('should not show');
     });
 
+    it('shows a one-time call verbatim with its folder and risk note, and no always', () => {
+        const command = 'git push   origin main';
+        useNotificationStore.getState().addNotification(request({
+            toolArgs: {
+                command,
+                working_directory: '/home/u/proj',
+                _risk_note: 'Sends your commits to the remote repository.',
+            },
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        const dialog = screen.getByRole('alertdialog');
+        // Unwrapped and uncollapsed: the exact text the shell receives.
+        expect(dialog.querySelector('pre.perm-card-exact')?.textContent).toBe(command);
+        expect(dialog).toHaveTextContent('in /home/u/proj');
+        expect(screen.getByRole('note')).toHaveTextContent('Sends your commits to the remote repository.');
+        expect(screen.queryByRole('button', { name: /Always allow/ })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Allow once' })).toBeInTheDocument();
+    });
+
     it('offers no always option without a scope', () => {
         useNotificationStore.getState().addNotification(request());
         render(<PermissionPrompt sessionId="chat-1" />);

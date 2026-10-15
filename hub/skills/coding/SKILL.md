@@ -105,8 +105,8 @@ files, access the network, and launch other programs, including commands the
 direct CLI policy refuses. These grants do not sandbox their effects. The
 separate `execute_python_file` tool still requires per-call approval.
 
-`python -c "..."` is refused because the grant requires a reviewable file in the
-checkout. Write new code to a file first so the diff shows it, and review what
+`python -c "..."` is outside the grant, which requires a reviewable file in the
+checkout — the user would have to approve that exact line once. Write new code to a file first so the diff shows it, and review what
 it does before executing it. For a one-off calculation that should not land in
 the repository at all, `run_python` takes the snippet through the tool path
 instead — it asks for approval on every call rather than riding this grant.

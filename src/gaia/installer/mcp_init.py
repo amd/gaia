@@ -5,8 +5,8 @@
 GAIA MCP Init Command
 
 Initializes MCP configuration for GAIA:
-1. Creates ~/.gaia/ directory if it doesn't exist
-2. Creates ~/.gaia/mcp_servers.json with empty config if it doesn't exist
+1. Creates the GAIA home directory (``GAIA_HOME``, default ~/.gaia) if missing
+2. Creates <gaia_home>/mcp_servers.json with empty config if it doesn't exist
 3. Provides guidance on adding MCP servers
 """
 
@@ -16,6 +16,8 @@ from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
+
+from gaia.config import mcp_servers_path
 
 log = logging.getLogger(__name__)
 
@@ -57,8 +59,9 @@ class MCPInitCommand:
         self.console.print()
 
         try:
-            # Step 1: Create ~/.gaia/ directory if it doesn't exist
-            gaia_dir = Path.home() / ".gaia"
+            # Step 1: Create the GAIA home directory if it doesn't exist
+            config_path = mcp_servers_path()
+            gaia_dir = config_path.parent
             if not gaia_dir.exists():
                 gaia_dir.mkdir(parents=True, exist_ok=True)
                 self.console.print(f"   [green]✓[/green] Created directory: {gaia_dir}")
@@ -66,7 +69,6 @@ class MCPInitCommand:
                 self.console.print(f"   [green]✓[/green] Directory exists: {gaia_dir}")
 
             # Step 2: Create mcp_servers.json if it doesn't exist
-            config_path = gaia_dir / "mcp_servers.json"
             if not config_path.exists():
                 config_data: dict[str, dict] = {"mcpServers": {}}
                 with open(config_path, "w", encoding="utf-8") as f:

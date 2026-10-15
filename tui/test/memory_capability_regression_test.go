@@ -183,7 +183,7 @@ func TestMemoryResolvesForARealHubInstalledFlagship(t *testing.T) {
 	// applyFirstBootGate arms setupChecking for the "gaia" agent id, and
 	// runPaletteRow (palette.go) queues /memory behind that gate instead of
 	// running it, so the fetch this test exists to prove never fires.
-	m := chat.NewChatModelForFlagship(cl, agent.ID, agent.Name, agent.Version, false, true)
+	m := chat.NewChatModelForFlagship(cl, agent.ID, agent.Name, false, true)
 	updated, _ := m.Update(windowSize(100, 30))
 	m = updated.(chat.ChatModel)
 

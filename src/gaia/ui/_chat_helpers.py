@@ -1820,6 +1820,34 @@ def _empty_answer_outcome(
     return _EMPTY_ANSWER_LEMONADE_MSG, "error", False
 
 
+def _turn_inference_stats(
+    backend_stats: Optional[dict], answer_event: Optional[dict]
+) -> Optional[dict]:
+    """Merge the backend's last-call rate/TTFT with the agent's turn totals.
+
+    Token counts and the step count come only from the agent's ``answer``
+    event, which covers every model call in the turn. Lemonade's ``/stats``
+    describes just the last call, so its counts are dropped rather than shown
+    as the turn's.
+    """
+    stats = {
+        k: v
+        for k, v in (backend_stats or {}).items()
+        if k not in ("input_tokens", "output_tokens")
+    }
+    answer_event = answer_event or {}
+    output_tokens = answer_event.get("tokens")
+    if isinstance(output_tokens, int) and output_tokens > 0:
+        stats["output_tokens"] = output_tokens
+        input_tokens = answer_event.get("input_tokens")
+        if isinstance(input_tokens, int) and input_tokens > 0:
+            stats["input_tokens"] = input_tokens
+    steps = answer_event.get("steps")
+    if isinstance(steps, int) and steps > 0:
+        stats["steps"] = steps
+    return stats or None
+
+
 def _done_event(
     msg_id: int, content: str, turn_cancelled: bool, stats: Optional[dict] = None
 ) -> dict:
@@ -2915,6 +2943,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Yield SSE events from the handler's queue
         # Also capture agent steps for persistence
         full_response = ""
+        answer_event = None
         captured_steps = []  # Collect agent steps for DB persistence
         persisted_policy_block_msg_id = None
         persisted_policy_block_content = None
@@ -3002,6 +3031,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     # only email response) is a valid answer — keeping the noisy
                     # chunk accumulation instead would persist raw echoed JSON.
                     full_response = event.get("content", "")
+                    answer_event = event
                 elif event_type == "chunk":
                     full_response += event.get("content", "")
 
@@ -3315,6 +3345,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     "missing for this turn",
                     exc,
                 )
+            inference_stats = _turn_inference_stats(inference_stats, answer_event)
 
             msg_id = db.upsert_message(
                 request.session_id,
