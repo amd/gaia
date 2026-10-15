@@ -293,9 +293,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		active := m.turnElapsed(time.Now())
 		duration := active
-		if m.startup.warmNext && !m.dev {
-			// The opening switch's time belongs to the ready line, not its own.
-			duration = 0
+		durationLabel := ""
+		if m.startup.warmNext {
+			if m.dev {
+				// A bare time under the model notice reads as noise.
+				durationLabel = "model switched in "
+			} else {
+				// The opening switch's time belongs to the ready line, not its own.
+				duration = 0
+			}
 		}
 		// The turn is over, so a confirmation still up is dead — resolved here,
 		// before the work is committed, so its step carries the outcome.
@@ -309,18 +315,19 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
 		if content != "" || !m.cancelPending {
 			m.messages = append(m.messages, Message{
-				Role:         RoleAssistant,
-				Content:      content,
-				Rendered:     components.RenderMarkdown(content),
-				Duration:     duration,
-				TTFT:         ttft,
-				TokPerS:      usage.TokPerS,
-				InputTokens:  usage.InputTokens,
-				CachedTokens: usage.CachedTokens,
-				Steps:        usage.Steps,
-				ToolsUsed:    usage.ToolsUsed,
-				Tokens:       usage.Tokens,
-				Metrics:      usage.Metrics,
+				Role:          RoleAssistant,
+				Content:       content,
+				Rendered:      components.RenderMarkdown(content),
+				Duration:      duration,
+				DurationLabel: durationLabel,
+				TTFT:          ttft,
+				TokPerS:       usage.TokPerS,
+				InputTokens:   usage.InputTokens,
+				CachedTokens:  usage.CachedTokens,
+				Steps:         usage.Steps,
+				ToolsUsed:     usage.ToolsUsed,
+				Tokens:        usage.Tokens,
+				Metrics:       usage.Metrics,
 			})
 		}
 		// One ledger entry per turn, from what the backend reported. A turn

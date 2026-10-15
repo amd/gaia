@@ -791,12 +791,9 @@ class TestReadFileBinaryGuard:
     @pytest.mark.parametrize(
         "extension",
         [
-            ".pdf",
-            ".docx",
             ".doc",
             ".pptx",
             ".ppt",
-            ".xlsx",
             ".xls",
             ".odt",
             ".ods",
@@ -805,7 +802,7 @@ class TestReadFileBinaryGuard:
         ],
     )
     def test_binary_extension_returns_error(self, read_file_fn, extension, tmp_path):
-        """read_file must return an error dict for binary document formats."""
+        """read_file must return an error dict for formats it cannot extract."""
         fake_doc = tmp_path / f"document{extension}"
         fake_doc.write_bytes(b"%PDF-1.4 fake content")
 

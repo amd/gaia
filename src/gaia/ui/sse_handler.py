@@ -311,6 +311,9 @@ class SSEOutputHandler(OutputHandler):
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
+        # The answer this turn already put on the wire. A transport that ends
+        # the turn on it cancels the run, so the run reads it back from here.
+        self.delivered_answer: str = ""
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -327,6 +330,7 @@ class SSEOutputHandler(OutputHandler):
         self._start_time = time.time()
         self._step_count = 0
         self._tool_count = 0
+        self.delivered_answer = ""
         model_label = model_id or "LLM"
         self._emit(
             {
@@ -750,6 +754,7 @@ class SSEOutputHandler(OutputHandler):
         record, self._turn_metrics = self._turn_metrics, None
         if record is not None and turn_log_path() is not None:
             event["metrics"] = record
+        self.delivered_answer = event["content"] or ""
         self._emit(event)
 
     def print_repeated_tool_warning(self):
@@ -917,6 +922,7 @@ class SSEOutputHandler(OutputHandler):
                             len(answer_text),
                             answer_text[:100],
                         )
+                        self.delivered_answer = answer_text
                         self._emit({"type": "answer", "content": answer_text})
                     else:
                         logger.debug("Filtered answer JSON: %s", stripped[:100])

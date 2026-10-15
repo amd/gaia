@@ -1197,6 +1197,9 @@ class RAGToolsMixin:
                 # Build chunk entries; omit ``page`` when absent so the
                 # agent can't template ``page null`` into the citation.
                 # See the companion comment in query_documents above.
+                # Every chunk names its file, as in query_documents, so a fact
+                # can be cited and the chunk card can show where it came from.
+                source_path = str(Path(target_file).resolve())
                 formatted_chunks = []
                 for i, (chunk, score) in enumerate(zip(top_chunks, top_scores)):
                     _page = extract_page_from_chunk(
@@ -1207,6 +1210,7 @@ class RAGToolsMixin:
                     )
                     _entry = {
                         "chunk_id": i + 1,
+                        "source_file": source_path,
                         "content": chunk,
                         "relevance_score": float(score),
                         "_debug_chunk_index": (
@@ -1222,6 +1226,7 @@ class RAGToolsMixin:
                     "message": f"Found {len(top_chunks)} relevant chunks in {Path(target_file).name}",
                     "chunks": formatted_chunks,
                     "file": str(target_file),
+                    "source_files": [source_path],
                     "auto_indexed": auto_indexed,
                     "instruction": f"Use these chunks from {Path(target_file).name} to answer the question. Read through ALL {len(top_chunks)} chunks completely before answering.\n\nCRITICAL CITATION REQUIREMENT:\nYour answer MUST start with: 'According to {Path(target_file).name}, page X:' where X is the page number from the chunk's 'page' field.\n\nExample: If chunk has 'page': 2, say 'According to {Path(target_file).name}, page 2:'\nIf info from multiple pages, say 'According to {Path(target_file).name}, pages 2 and 5:'",
                 }
