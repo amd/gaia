@@ -37,8 +37,9 @@ stdio JSONL -- what the TUI spawns as a child process:
 run_python -- the binary is the only Python a release user has:
 
   9. ``--gaia-run-python-file <script>`` runs a script that imports the
-     bundled office/data libraries, writes an ``.xlsx``, and starts a process
-     pool, and a failing script's exit code comes back unchanged. Before the fix the script path
+     bundled office/data libraries, writes an ``.xlsx``, starts a process
+     pool, and starts ``sys.executable -c`` / ``-m pip`` itself; a failing
+     script's exit code comes back unchanged. Before the fix the script path
      reached the stdio parser and exited 2 with ``unrecognized arguments``.
 
 The handshake deliberately stops short of a real turn: an answer needs a running
@@ -94,24 +95,43 @@ RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
 #: chart, and stdlib modules nothing in GAIA itself imports.
 RUN_PYTHON_SCRIPT = """\
 import sys, statistics, sqlite3, zipfile, xml.etree.ElementTree, csv, decimal
-import openpyxl, docx, pptx, pandas, numpy, reportlab, pypdf
+import subprocess
+from concurrent.futures import ProcessPoolExecutor
+
+import openpyxl, docx, pptx, pandas, numpy, reportlab, pypdf, pymupdf, xlsxwriter
 import matplotlib.pyplot as plt
 
-assert __name__ == "__main__", __name__
-wb = openpyxl.Workbook()
-wb.active.append(["part", "qty"])
-wb.active.append(["bolt", 4])
-wb.save("bom.xlsx")
-assert openpyxl.load_workbook("bom.xlsx").active["B2"].value == 4
-docx.Document().save("notes.docx")
-pptx.Presentation().save("deck.pptx")
-plt.plot([1, 2, 3])
-plt.savefig("chart.png")
-frame = pandas.DataFrame({"qty": [4, 6]})
-from concurrent.futures import ProcessPoolExecutor
-with ProcessPoolExecutor(2) as pool:  # workers re-launch the binary
-    assert list(pool.map(abs, [-1, -2])) == [1, 2]
-print("RUN_PYTHON_OK", sys.argv[1:], int(frame["qty"].sum()), statistics.mean([1, 3]))
+
+def py(*argv):
+    # A script starting sys.executable -- the binary -- as an interpreter.
+    return subprocess.run([sys.executable, *argv], capture_output=True, text=True)
+
+
+def main():
+    wb = openpyxl.Workbook()
+    wb.active.append(["part", "qty"])
+    wb.active.append(["bolt", 4])
+    wb.save("bom.xlsx")
+    assert openpyxl.load_workbook("bom.xlsx").active["B2"].value == 4
+    docx.Document().save("notes.docx")
+    pptx.Presentation().save("deck.pptx")
+    plt.plot([1, 2, 3])
+    plt.savefig("chart.png")
+    frame = pandas.DataFrame({"qty": [4, 6]})
+    # Workers re-launch the binary. Under spawn (macOS) they re-import this
+    # file as __mp_main__, as CPython does, so the work sits under the guard.
+    with ProcessPoolExecutor(2) as pool:
+        assert list(pool.map(abs, [-1, -2])) == [1, 2]
+    nested = py("-c", "import pypdf, pymupdf, xlsxwriter; print('nested ok')")
+    assert nested.stdout.strip().endswith("nested ok"), (nested.stdout, nested.stderr)
+    pip = py("-m", "pip", "install", "pypdf")
+    assert pip.returncode == 1 and "can't be installed" in pip.stderr, pip.stderr
+    total = int(frame["qty"].sum())
+    print("RUN_PYTHON_OK", sys.argv[1:], total, statistics.mean([1, 3]))
+
+
+if __name__ == "__main__":
+    main()
 """
 
 

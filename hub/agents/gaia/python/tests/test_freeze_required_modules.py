@@ -73,7 +73,18 @@ def test_release_freeze_env_installs_required_import(module):
 # ---------------------------------------------------------------------------
 
 #: Installed by the `rag` extra the freeze step already installs.
-_FROM_RAG_EXTRA = {"openpyxl", "docx", "pptx", "reportlab", "pypdf", "numpy", "PIL"}
+#: xlsxwriter comes with python-pptx.
+_FROM_RAG_EXTRA = {
+    "openpyxl",
+    "xlsxwriter",
+    "docx",
+    "pptx",
+    "reportlab",
+    "pypdf",
+    "pymupdf",
+    "numpy",
+    "PIL",
+}
 
 
 @pytest.mark.parametrize(
@@ -135,6 +146,15 @@ def test_stdlib_is_offered_without_gui_or_test_suite():
     for module in ("tkinter", "test", "idlelib", "turtle"):
         assert module not in stdlib
     assert "tkinter" in freeze.EXCLUDES
+
+
+def test_every_library_the_tools_advertise_is_bundled():
+    """The run_python description names them; the binary must have them."""
+    pytest.importorskip("gaia_agent_chat")
+    from gaia_agent_chat.python_runner import BUNDLED_LIBRARIES
+
+    missing = set(BUNDLED_LIBRARIES.values()) - set(freeze.SCRIPT_LIBRARIES)
+    assert not missing, f"advertised to the model but not bundled: {missing}"
 
 
 def test_smoke_test_uses_the_runner_flag():

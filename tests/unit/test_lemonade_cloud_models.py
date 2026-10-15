@@ -204,6 +204,9 @@ def test_cloud_error_never_echoes_upstream_body(client, status, remedy, caplog):
         status=status,
         json={"error": {"message": reflected_key}},
     )
+    # 429 and 500 are retried before this error is raised; skip the backoff
+    # waits. The caplog check below then also covers the retry log lines.
+    client._retry_sleep = lambda _seconds: None
     with pytest.raises(LemonadeClientError) as error:
         client.chat_completions("fireworks.gemma-4-31b-it", [])
     assert str(status) in str(error.value)

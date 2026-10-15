@@ -90,6 +90,7 @@ def test_provider_keeps_streamed_reasoning():
                 {"choices": [{"delta": {"reasoning_content": "Think "}}]},
                 {"choices": [{"delta": {"reasoning_content": "hard."}}]},
                 {"choices": [{"delta": {"content": "Done."}}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
             ]
         )
     )
