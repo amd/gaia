@@ -357,3 +357,159 @@ def test_cancelled_run_skips_the_closing_call(agent):
         in result["result"]
     )
     assert "cancelled" in result["result"]
+
+
+# ---------------------------------------------------------------------------
+# A requested file was never written: the findings survive, the gap is listed
+# ---------------------------------------------------------------------------
+
+_FINDINGS = (
+    "Recommendation: the CM5 carrier board. Confirmed subtotal $9,000 for 40 "
+    "units; PSU and cooler prices are unverified."
+)
+
+
+def test_step_cap_keeps_the_findings_when_a_requested_file_is_missing(agent):
+    """kw-02: the closing reply held the whole recommendation, and the gate
+    replaced it with only "I can't confirm this is done"."""
+    agent.tool_result = {"status": "success", "body": "datasheet text"}
+    _stub_chat(agent, _tool_call(1), _tool_call(2), _tool_call(3), _FINDINGS)
+
+    result = agent.process_query("Save the recommendation as report.md", max_steps=3)
+
+    answer = result["result"]
+    assert answer.startswith(_FINDINGS)
+    assert "I can't confirm this is done" in answer
+    assert "report.md" in answer.split(_FINDINGS, 1)[1]
+    assert result["status"] == "incomplete"
+    assert result["completion_gaps"]
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_failed_closing_call_still_carries_the_latest_findings():
+    """No closing summary: the model's last write-up goes into the note."""
+    agent = _make_agent(streaming=False, model_id=None)
+    calls = [
+        json.dumps(
+            {
+                "thought": f"Board {n} checked. {_FINDINGS}",
+                "tool": _TOOL,
+                "tool_args": {"number": n},
+            }
+        )
+        for n in (1, 2, 3)
+    ]
+    _stub_chat(agent, *calls, ConnectionError("gateway down"))
+
+    result = agent.process_query("Save the recommendation as report.md", max_steps=3)
+
+    answer = result["result"]
+    assert "I ran out of steps" in answer
+    assert f"Board 3 checked. {_FINDINGS}" in answer
+    assert "gateway down" in answer
+    assert "report.md" in answer
+
+
+def test_latest_findings_prefers_the_newest_prose(agent):
+    conversation = [
+        {"role": "assistant", "content": {"thought": "old"}},
+        {"role": "tool", "name": _TOOL, "content": "x"},
+        {"role": "assistant", "content": {"thought": "  ", "tool": _TOOL}},
+        {"role": "assistant", "content": {"answer": "newest", "thought": "t"}},
+        {"role": "user", "content": "ignored"},
+    ]
+    assert agent._latest_findings(conversation) == "newest"
+    assert agent._latest_findings([]) == ""
+
+
+# ---------------------------------------------------------------------------
+# Budget notices reach the model but not the saved history
+# ---------------------------------------------------------------------------
+
+
+def test_budget_notices_are_sent_but_not_saved(agent):
+    agent.tool_result = {"status": "success", "body": "datasheet text"}
+    chat = _stub_chat(agent, *[_tool_call(n) for n in range(1, 9)], _SUMMARY)
+
+    result = agent.process_query("summarize issue 42", max_steps=8)
+
+    sent = [
+        m["content"]
+        for call in _model_calls(agent, chat)
+        for m in call.kwargs["messages"]
+        if isinstance(m.get("content"), str) and "Step budget" in m["content"]
+    ]
+    assert sent, "no budget notice reached the model"
+    assert all("Step budget" not in str(m) for m in result["model_messages"])
+
+
+# ---------------------------------------------------------------------------
+# The plan-iteration cap: never a forced stop with most of the budget unspent
+# ---------------------------------------------------------------------------
+
+
+def _plan(number: int) -> str:
+    return json.dumps(
+        {
+            "thought": f"plan {number}",
+            "goal": "read the claims",
+            "plan": [{"tool": _TOOL, "tool_args": {"number": number}}],
+            "tool": _TOOL,
+            "tool_args": {"number": number},
+        }
+    )
+
+
+def _forced_stops(agent, chat) -> list:
+    # The last request holds the whole turn's context.
+    return [
+        m["content"]
+        for m in _model_calls(agent, chat)[-1].kwargs["messages"]
+        if isinstance(m.get("content"), str)
+        and m["content"].startswith("Maximum plan iterations")
+    ]
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_three_short_plans_do_not_force_a_stop_on_a_large_budget():
+    """kw-06: three plans in ~15 of 50 steps forced "the audit is not done"."""
+    agent = _make_agent(streaming=False, model_id=None)
+    agent.tool_result = {"status": "success", "body": "rows"}
+    chat = _stub_chat(agent, _plan(1), _plan(2), _plan(3), _plan(4), _answer("Done."))
+
+    result = agent.process_query("audit the claims", max_steps=50)
+
+    assert agent.plan_iterations == 4
+    assert _forced_stops(agent, chat) == []
+    assert result["result"].startswith("Done.")
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_the_plan_cap_still_binds_late_and_asks_for_the_deliverables():
+    agent = _make_agent(streaming=False, model_id=None)
+    agent.tool_result = {"status": "success", "body": "rows"}
+    chat = _stub_chat(agent, _plan(1), _plan(2), _plan(3), _answer("Partial."))
+
+    agent.process_query("audit the claims", max_steps=10)
+
+    forced = _forced_stops(agent, chat)
+    assert len(forced) == 1
+    assert "write them now from what you already have" in forced[0]
+    assert "unverified" in forced[0]
+
+
+@pytest.mark.parametrize(
+    "plans, cap, taken, limit, expected",
+    [
+        (3, 3, 15, 50, False),  # most of the budget left
+        (3, 3, 25, 50, True),  # half spent
+        (2, 3, 49, 50, False),  # under the plan count
+        (9, 0, 49, 50, False),  # 0 = unlimited
+        (3, 3, 75, 150, True),
+        (3, 3, 74, 150, False),
+    ],
+)
+def test_plan_cap_reached(agent, plans, cap, taken, limit, expected):
+    agent.plan_iterations = plans
+    agent.max_plan_iterations = cap
+    assert agent._plan_cap_reached(taken, limit) is expected

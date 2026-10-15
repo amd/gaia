@@ -2720,7 +2720,7 @@ func (m ChatModel) answerStats(msg *Message) string {
 	if msg.Duration <= 0 {
 		return ""
 	}
-	stats := []string{fmt.Sprintf("%.1fs", msg.Duration.Seconds())}
+	stats := []string{msg.DurationLabel + fmt.Sprintf("%.1fs", msg.Duration.Seconds())}
 	if !m.dev {
 		return stats[0]
 	}

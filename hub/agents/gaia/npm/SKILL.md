@@ -467,10 +467,16 @@ intermediate files, so they stay out of the user's project. It is created per
 agent under the system temp dir, deleted when the agent closes, and is the only
 part of the temp dir the agent may use.
 
-**In 0.1.1 narrowing it is a construction-time setting only.** The packaged
-sidecar exposes no flag or env var for `allowed_paths` (its CLI accepts only
-`--host` and `--port`), so restricting the scope means embedding `GaiaAgent` in
-your own Python process:
+**To narrow it for a run, set `GAIA_ALLOWED_PATHS`** in the environment the
+sidecar starts in — absolute folders joined with `;` on Windows and `:` elsewhere.
+The scope becomes the overlap with the default; an entry outside it is ignored
+with a warning and never widens it, and out-of-scope paths are refused without a
+prompt, even under full access. The scratch directory stays writable. An empty,
+relative or missing entry stops the sidecar at startup. It confines the agent's
+tools, not code they run: a `run_python` script or shell command can still read
+anything the OS user can, so isolating a run from files it must not see needs a
+separate OS user, container or VM. Embedding `GaiaAgent` lets you pass an explicit
+list instead (the variable still narrows it):
 
 ```python
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
@@ -699,7 +705,8 @@ and <https://amd-gaia.ai/docs/guides/gaia>.
 The stdio TUI supports `/provider` for Local, Fireworks AI, and AMD LLM Gateway.
 Keys are entered in a masked field and sent directly to local Lemonade's runtime
 auth API, never as agent queries. `/model` lists supported discovered cloud and
-downloaded local models; `/model fireworks.gemma-4-31b-it` selects Gemma 4 31B IT
+downloaded local models, marking the configured default with `(default)`;
+`/model fireworks.gemma-4-31b-it` selects Gemma 4 31B IT
 when available. Cloud chat sends conversation history to the selected provider;
 embeddings remain on Lemonade. The status event names the actual provider and
 marks remote inference. This is a TUI/stdio capability, not an HTTP query command.

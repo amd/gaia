@@ -2,7 +2,7 @@
 name: file-ops
 description: Read, write, and edit files on disk safely — locate the right file, change only what was asked, and confirm before anything destructive. Use when the user wants a file read, created, modified, or searched for by name or content.
 license: MIT
-version: 1.0.0
+version: 1.0.1
 metadata:
   gaia:
     security_tier: community
@@ -65,8 +65,9 @@ check.
 
 ## What this skill does not cover
 
-`read_file` is for text — Python, Markdown, config, plain text. It refuses
-binary document formats (PDF, DOCX, XLSX, and similar) outright, because
+`read_file` is for text — Python, Markdown, config, plain text — and returns
+the extracted text of Word, PDF and Excel files, in parts when long. It refuses
+other binary document formats (`.doc`, `.pptx`, `.xls`, OpenDocument), because
 reading them raw produces garbage the model then reasons over as if it were
 real content. Those need `index_document` + `query_documents` instead — see
 the `document-brief` skill.

@@ -205,3 +205,14 @@ def test_open_url_reports_client_initialization_failure(full_profile_tools, fail
     assert result["status"] == "error"
     assert str(failure) in result["error"]
     opener.assert_not_called()
+
+
+def test_open_url_with_no_browser_to_launch_is_an_error(full_profile_tools):
+    _, registry = full_profile_tools
+    with (
+        patch.object(WebClient, "validate_url", return_value=None),
+        patch("webbrowser.open", return_value=False),
+    ):
+        result = _tool(registry, "open_url")("https://example.com/")
+    assert result["status"] == "error"
+    assert "No web browser could be opened" in result["error"]
