@@ -9,6 +9,17 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A batch organize that failed for every message is reported as a failure.**
+  `archive_message_batch`, `mark_read_batch`, `mark_unread_batch`,
+  `add_star_batch`, `remove_star_batch`, `label_message_batch` and
+  `move_to_label_batch` returned `ok: true` even when no message was changed,
+  so the agent and the Agent UI read a total failure as done. Every message
+  failing now returns `ok: false` with the per-message results under `data`.
+  When only some fail, the result stays `ok: true` with `partial: true`,
+  `succeeded_count`, `failed_count` and a `summary` naming the failed messages
+  and why. An archive batch where nothing was archived is no longer what a
+  bare "undo that" picks up.
+
 - **A conflict check that could only see the calendar's first page no longer
   reports a busy slot as free (#3610).** `detect_calendar_conflicts` scanned
   the provider's first page (25 events) and said nothing about the rest, so a

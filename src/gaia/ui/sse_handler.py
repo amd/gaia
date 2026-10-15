@@ -25,37 +25,30 @@ from typing import Any, ClassVar, Dict, List, Optional
 from gaia.agents.base.call_risk import call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
 from gaia.agents.base.tool_grants import grant_scope
+from gaia.agents.base.tool_outcome import FAILED_STATUSES
+from gaia.agents.base.tool_outcome import tool_result_failed as _tool_result_failed
 from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
 from gaia.agents.base.turn_metrics import turn_log_path
 from gaia.agents.base.verification import split_verification_scope
 from gaia.ui import scripted_user
 from gaia.ui.event_narration import DEBUG_CHANNEL, format_count
+from gaia.utils.json_string import (
+    JsonStringStreamDecoder,
+    extract_json_string_field,
+    json_string_field_start,
+)
 
 logger = logging.getLogger(__name__)
 
 _SUMMARY_CHAR_CAP = 300
 
 #: A tool result with one of these statuses did not do its job.
-FAILED_TOOL_STATUSES = ("error", "denied")
+FAILED_TOOL_STATUSES = FAILED_STATUSES
 
 
 def tool_result_failed(data: Any) -> bool:
-    """Whether a tool result reports a failure.
-
-    A non-zero ``return_code`` counts even under ``status: "success"``, as it
-    does in the agent loop, unless the tool marked it ``expected_exit``.
-    """
-    if not isinstance(data, dict):
-        return False
-    if data.get("status") in FAILED_TOOL_STATUSES:
-        return True
-    code = data.get("return_code")
-    return (
-        isinstance(code, int)
-        and not isinstance(code, bool)
-        and code != 0
-        and not data.get("expected_exit")
-    )
+    """Whether a tool result reports a failure, refusals included."""
+    return _tool_result_failed(data, FAILED_TOOL_STATUSES)
 
 
 #: Seconds the agent thread waits for a tool-confirm response before denying.
@@ -263,6 +256,8 @@ class SSEOutputHandler(OutputHandler):
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
         self._in_thinking = False  # True while inside a <think>...</think> block
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
+        # Set while streaming the value of a {"answer": "..."} reply.
+        self._answer_stream: Optional[JsonStringStreamDecoder] = None
         # Tool confirmation state (blocking until frontend responds)
         self._confirm_lock = threading.Lock()
         self._confirm_event: Optional[threading.Event] = None
@@ -794,6 +789,15 @@ class SSEOutputHandler(OutputHandler):
             # LLMs sometimes emit as text content before the tool is invoked.
             self._stream_buffer += text_chunk
 
+            # Inside a JSON answer string: decode escapes as they arrive and
+            # drop the closing `"}` structure that follows the value.
+            if self._answer_stream is not None:
+                self._emit_answer_text(self._answer_stream.feed(self._stream_buffer))
+                self._stream_buffer = ""
+                if end_of_stream:
+                    self._answer_stream = None
+                return
+
             # ── Handle <think>...</think> blocks ──────────────────────
             # Route thinking content to thinking events, keep remainder
             # in buffer for normal tool-call filtering below.
@@ -904,23 +908,17 @@ class SSEOutputHandler(OutputHandler):
 
             # Case 1b: Buffer starts with "{" and has "answer" — raw JSON answer
             # The LLM sometimes emits {"answer": "..."} as the entire response.
-            # Extract the answer text and emit it so the frontend can stream it.
+            # Once the value's opening quote arrives, stream the decoded value.
             elif stripped.startswith("{") and '"answer"' in stripped:
-                if stripped.endswith("}"):
-                    answer_text = _clean_answer_json(stripped)
-                    if answer_text and answer_text != stripped:
-                        # Extracted answer text — emit as answer event
-                        logger.debug(
-                            "Extracted answer from JSON (%d chars): %s",
-                            len(answer_text),
-                            answer_text[:100],
-                        )
-                        self.delivered_answer = answer_text
-                        self._emit({"type": "answer", "content": answer_text})
-                    else:
-                        logger.debug("Filtered answer JSON: %s", stripped[:100])
+                value_start = json_string_field_start(self._stream_buffer, "answer")
+                if value_start is not None:
+                    raw_value = self._stream_buffer[value_start:]
                     self._stream_buffer = ""
                     self._json_filtered = True
+                    self._answer_stream = JsonStringStreamDecoder()
+                    self._emit_answer_text(self._answer_stream.feed(raw_value))
+                    if end_of_stream:
+                        self._answer_stream = None
                     return
                 if len(self._stream_buffer) > 4096:
                     # Safety: don't buffer forever
@@ -1012,6 +1010,13 @@ class SSEOutputHandler(OutputHandler):
             ):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
+        if end_of_stream:
+            self._answer_stream = None
+
+    def _emit_answer_text(self, text: str) -> None:
+        if text:
+            self.delivered_answer = (self.delivered_answer or "") + text
+            self._emit({"type": "chunk", "content": text})
 
     # === Tool Confirmation (blocking) ===
 
@@ -1275,6 +1280,9 @@ class SSEOutputHandler(OutputHandler):
                 # Nothing is waiting: the next prompt starts a fresh slot, so an
                 # answer recorded here would be reported delivered and then lost.
                 return False
+            if self._confirm_event.is_set():
+                # Answered already: a second answer must not overwrite the first.
+                return False
             if always and self._confirm_tool:
                 self.grant_call_for_session(self._confirm_tool, self._confirm_args)
             self._confirm_result = (approved or always) and not timed_out
@@ -1525,6 +1533,7 @@ class SSEOutputHandler(OutputHandler):
             ):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
+        self._answer_stream = None
         self._emit(None)  # Sentinel value
 
 
@@ -1726,42 +1735,27 @@ def _clean_answer_json(text: str) -> str:
 
     LLMs sometimes wrap their entire response in a JSON envelope like
     ``{"answer": "the actual text..."}``.  This function detects that
-    pattern and extracts only the answer content.  It handles both
-    valid JSON (with escaped newlines) and the common case where the
-    JSON string contains literal newlines (making it invalid JSON).
+    pattern and extracts only the answer content.  It handles valid JSON,
+    JSON whose string contains literal newlines, and an envelope cut off
+    before its closing quote (a stopped or truncated reply), in which case
+    everything received is kept.
     """
     if not text:
         return text
     stripped = text.strip()
-    # Quick check: must start with { and contain "answer"
-    if not (
-        stripped.startswith("{") and '"answer"' in stripped and stripped.endswith("}")
-    ):
+    if not (stripped.startswith("{") and '"answer"' in stripped):
         return text
-    # Try proper JSON parse first
     try:
-        parsed = json.loads(stripped)
-        if isinstance(parsed, dict) and "answer" in parsed:
+        parsed = json.loads(stripped, strict=False)
+        if isinstance(parsed, dict) and isinstance(parsed.get("answer"), str):
             return parsed["answer"]
-    except (json.JSONDecodeError, ValueError):
-        pass
-    # Fallback: manual extraction for JSON with literal newlines
-    m = re.match(r'^\s*\{\s*"answer"\s*:\s*"', stripped)
-    if m:
-        content_start = m.end()
-        # Walk backwards from end, skipping whitespace + closing } + "
-        end = len(stripped) - 1
-        while end > content_start and stripped[end] in " \t\n\r}":
-            end -= 1
-        if end > content_start and stripped[end] == '"':
-            end -= 1  # skip trailing quote
-        extracted = stripped[content_start : end + 1]
-        # Unescape any JSON escape sequences
-        extracted = extracted.replace("\\n", "\n")
-        extracted = extracted.replace("\\t", "\t")
-        extracted = extracted.replace('\\"', '"')
-        return extracted
-    return text
+        return text
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.debug("Answer envelope is not valid JSON, decoding leniently: %s", exc)
+    field = extract_json_string_field(stripped, "answer")
+    if field is None:
+        return text
+    return field[0]
 
 
 def _fix_double_escaped(text: str) -> str:

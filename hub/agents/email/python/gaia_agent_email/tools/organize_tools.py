@@ -631,6 +631,32 @@ def _run_batch_with_prior(
     return {"succeeded": succeeded, "failed": failed}
 
 
+def _batch_envelope(
+    verb: str, batch_id: str, message_ids: List[str], result: Dict[str, Any]
+) -> str:
+    """Per-item results; an error envelope when every message failed."""
+    failed = result["failed"]
+    data = {
+        "batch_id": batch_id,
+        "total": len(message_ids),
+        "succeeded_count": len(result["succeeded"]),
+        "failed_count": len(failed),
+        "succeeded": result["succeeded"],
+        "failed": failed,
+    }
+    if failed:
+        reasons = "; ".join(f"{f['message_id']}: {f['error']}" for f in failed[:3])
+        more = f" (and {len(failed) - 3} more)" if len(failed) > 3 else ""
+        data["summary"] = (
+            f"Could not {verb} {len(failed)} of {len(message_ids)} messages: "
+            f"{reasons}{more}"
+        )
+        if not result["succeeded"]:
+            return _envelope_err(data["summary"], data)
+        data["partial"] = True
+    return _envelope_ok(data)
+
+
 class OrganizeToolsMixin:
     def _register_organize_tools(self) -> None:
         db = self
@@ -881,14 +907,7 @@ class OrganizeToolsMixin:
                 )
                 for _mid in message_ids:
                     agent._record_organize_op(_mid, "")
-                return _envelope_ok(
-                    {
-                        "batch_id": batch_id,
-                        "total": len(message_ids),
-                        "succeeded": result["succeeded"],
-                        "failed": result["failed"],
-                    }
-                )
+                return _batch_envelope("mark as read", batch_id, message_ids, result)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
@@ -917,14 +936,7 @@ class OrganizeToolsMixin:
                 )
                 for _mid in message_ids:
                     agent._record_organize_op(_mid, "")
-                return _envelope_ok(
-                    {
-                        "batch_id": batch_id,
-                        "total": len(message_ids),
-                        "succeeded": result["succeeded"],
-                        "failed": result["failed"],
-                    }
-                )
+                return _batch_envelope("mark as unread", batch_id, message_ids, result)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
@@ -953,14 +965,7 @@ class OrganizeToolsMixin:
                 )
                 for _mid in message_ids:
                     agent._record_organize_op(_mid, "")
-                return _envelope_ok(
-                    {
-                        "batch_id": batch_id,
-                        "total": len(message_ids),
-                        "succeeded": result["succeeded"],
-                        "failed": result["failed"],
-                    }
-                )
+                return _batch_envelope("star", batch_id, message_ids, result)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
@@ -989,14 +994,7 @@ class OrganizeToolsMixin:
                 )
                 for _mid in message_ids:
                     agent._record_organize_op(_mid, "")
-                return _envelope_ok(
-                    {
-                        "batch_id": batch_id,
-                        "total": len(message_ids),
-                        "succeeded": result["succeeded"],
-                        "failed": result["failed"],
-                    }
-                )
+                return _batch_envelope("unstar", batch_id, message_ids, result)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
@@ -1042,15 +1040,9 @@ class OrganizeToolsMixin:
                 for _mid in message_ids:
                     agent._record_organize_op(_mid, "")
                 # #2456 — remember this batch so a next-turn "undo that" can find it.
-                agent._last_archive_batch_id = batch_id
-                return _envelope_ok(
-                    {
-                        "batch_id": batch_id,
-                        "total": len(message_ids),
-                        "succeeded": result["succeeded"],
-                        "failed": result["failed"],
-                    }
-                )
+                if result["succeeded"]:
+                    agent._last_archive_batch_id = batch_id
+                return _batch_envelope("archive", batch_id, message_ids, result)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
@@ -1143,14 +1135,7 @@ class OrganizeToolsMixin:
                 )
                 for _mid in message_ids:
                     agent._record_organize_op(_mid, "")
-                return _envelope_ok(
-                    {
-                        "batch_id": batch_id,
-                        "total": len(message_ids),
-                        "succeeded": result["succeeded"],
-                        "failed": result["failed"],
-                    }
-                )
+                return _batch_envelope("label", batch_id, message_ids, result)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
@@ -1210,14 +1195,7 @@ class OrganizeToolsMixin:
                 )
                 for _mid in message_ids:
                     agent._record_organize_op(_mid, "")
-                return _envelope_ok(
-                    {
-                        "batch_id": batch_id,
-                        "total": len(message_ids),
-                        "succeeded": result["succeeded"],
-                        "failed": result["failed"],
-                    }
-                )
+                return _batch_envelope("move", batch_id, message_ids, result)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:

@@ -119,7 +119,7 @@ Each tool call is bounded so a hung tool (e.g. a stuck connector or network requ
 export GAIA_AGENT_TOOL_TIMEOUT=300
 ```
 
-Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — for example image generation, which may need to download a model on first use. For relayed agent queries, the same variable also extends the SSE idle-read budget in the daemon relay, API host, and thin client. That transport budget remains at least **300 seconds** and adds a 60-second grace period above a larger configured tool timeout so the sidecar can return its own timeout error. An invalid `GAIA_AGENT_TOOL_TIMEOUT` value (non-numeric or ≤ 0) fails fast with an actionable error rather than silently removing the guard.
+Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — for example image generation, which may need to download a model on first use. A tool that takes its own `timeout` argument, like `run_python` and `execute_python_file`, is never abandoned before the time that call asked for plus 30 seconds. For relayed agent queries, the same variable also extends the SSE idle-read budget in the daemon relay, API host, and thin client. That transport budget remains at least **300 seconds** and adds a 60-second grace period above a larger configured tool timeout so the sidecar can return its own timeout error. An invalid `GAIA_AGENT_TOOL_TIMEOUT` value (non-numeric or ≤ 0) fails fast with an actionable error rather than silently removing the guard.
 
 ### Confirming dangerous tools
 
@@ -3542,7 +3542,7 @@ Endpoints (all under `/control/v1`, all requiring `Authorization: Bearer <token>
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /status` | `running` plus the active view (`splash` \| `preflight` \| `chat` \| `unknown`), active agent, streaming, `overlay` (e.g. `help`, `connect-mailbox`, `halt`), `blocker` (the key of the readiness row refusing a launch, e.g. `binary`, `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`; empty while the gate starts a stopped daemon or agent itself), and terminal size. |
+| `GET /status` | `running` plus the active view (`splash` \| `preflight` \| `chat` \| `unknown`), active agent, streaming, `overlay` (e.g. `help`, `connect-mailbox`, `choose-chat`, `halt`), `blocker` (the key of the readiness row refusing a launch, e.g. `binary`, `chat`, `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`; empty while the gate starts a stopped daemon or agent itself), and terminal size. |
 | `GET /screen` | The current rendered frame. `?format=plain` (default, ANSI stripped) or `?format=ansi`. |
 | `POST /keys` | Inject named keys — `{"keys": ["tab","down","enter"]}`. |
 | `POST /text` | Type a string as runes — `{"text": "triage my inbox"}`. |
