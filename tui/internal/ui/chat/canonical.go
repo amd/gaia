@@ -699,11 +699,13 @@ func toolResultSucceeded(data json.RawMessage) bool {
 		return true
 	}
 	var probe struct {
-		OK            *bool `json:"ok"`
-		Success       *bool `json:"success"`
-		ReturnCode    *int  `json:"return_code"`
+		OK            *bool  `json:"ok"`
+		Success       *bool  `json:"success"`
+		ReturnCode    *int   `json:"return_code"`
+		ExpectedExit  string `json:"expected_exit"`
 		CommandOutput *struct {
-			ReturnCode *int `json:"return_code"`
+			ReturnCode   *int   `json:"return_code"`
+			ExpectedExit string `json:"expected_exit"`
 		} `json:"command_output"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
@@ -712,13 +714,12 @@ func toolResultSucceeded(data json.RawMessage) bool {
 	if probe.OK != nil && !*probe.OK || probe.Success != nil && !*probe.Success {
 		return false
 	}
-	// A shell tool reports success when the command RAN, whatever it
-	// returned — so pytest exiting 2 drew as a passed step. The exit code is
-	// the command's own verdict.
-	if rc := probe.ReturnCode; rc != nil && *rc != 0 {
+	// The exit code is the command's own verdict, so pytest exiting 2 is a
+	// failed step — unless the tool named it an answer (grep's 1: no match).
+	if rc := probe.ReturnCode; rc != nil && *rc != 0 && probe.ExpectedExit == "" {
 		return false
 	}
-	if co := probe.CommandOutput; co != nil && co.ReturnCode != nil && *co.ReturnCode != 0 {
+	if co := probe.CommandOutput; co != nil && co.ReturnCode != nil && *co.ReturnCode != 0 && co.ExpectedExit == "" {
 		return false
 	}
 	return true

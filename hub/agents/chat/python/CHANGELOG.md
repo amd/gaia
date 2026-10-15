@@ -74,3 +74,10 @@
   `--use-chatgpt` and `use_chatgpt=True` now fail with migration guidance before
   inference. Configure a local or on-prem model in Lemonade and use its server
   URL and catalog model ID. The OpenAI Python HTTP-client dependency is retained.
+- `list_windows` reports a failed `tasklist`, `wmctrl` or `osascript` as an
+  error naming its exit code, instead of an empty list or a generic message.
+  `notify_desktop`'s Windows fallback waits briefly and reports a PowerShell
+  that exited non-zero, and `open_url` reports when no browser could be opened.
+- Missing-package hints (`psutil`, `pyperclip`, `plyer`) give a working install
+  command, and in a frozen build say the package isn't bundled rather than
+  suggesting `pip install`.

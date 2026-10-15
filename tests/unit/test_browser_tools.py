@@ -336,6 +336,17 @@ class TestWebClientDuckDuckGo:
         assert results[0]["url"] == "https://example.com/page"
         assert results[1]["title"] == "Other Result"
 
+    def test_a_challenged_search_raises_instead_of_finding_nothing(self):
+        """DDG answers an automated-traffic check with 202 and no results."""
+        mock_response = MagicMock()
+        mock_response.text = "<html><body>challenge</body></html>"
+        mock_response.status_code = 202
+        mock_response.headers = {"Content-Type": "text/html"}
+
+        with patch.object(self.client, "_request", return_value=mock_response):
+            with pytest.raises(RuntimeError, match="HTTP 202"):
+                self.client.search_duckduckgo("test query")
+
 
 class TestWebClientDownload:
     """Test file download functionality."""

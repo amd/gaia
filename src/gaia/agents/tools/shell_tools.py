@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from gaia.agents.base.checks import attach_check, check_from_command
+from gaia.agents.base.errors import exit_error
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
@@ -1698,6 +1699,59 @@ def _connector_runs(connector: str, previous_code: int) -> bool:
     return True
 
 
+#: Programs whose documented exit 1 is an answer, not a failure. Nothing is
+#: guessed: each meaning is the program's own (grep(1), diff(1), findstr /?,
+#: fc /?). Exit 2 and up is still a failure for every one of them.
+_ANSWER_EXIT_ONE = {
+    "grep": "grep exits 1 when nothing matches",
+    "egrep": "egrep exits 1 when nothing matches",
+    "fgrep": "fgrep exits 1 when nothing matches",
+    "rg": "rg exits 1 when nothing matches",
+    "findstr": "findstr exits 1 when nothing matches",
+    "diff": "diff exits 1 when the inputs differ",
+    "cmp": "cmp exits 1 when the inputs differ",
+    "fc": "fc exits 1 when the inputs differ",
+}
+
+#: ``git diff`` flags that make exit 1 mean "there are differences".
+_GIT_DIFF_EXIT_CODE_FLAGS = frozenset({"--exit-code", "--quiet", "--no-index"})
+
+
+def _answer_exit(segment: list, code: int) -> Optional[str]:
+    """Why *code* from *segment* is the program's answer, or None if it failed."""
+    if code != 1 or not segment:
+        return None
+    name = _interpreter_name(segment[0])
+    if name in _ANSWER_EXIT_ONE:
+        return _ANSWER_EXIT_ONE[name]
+    if name != "git":
+        return None
+    argv, error = _git_policy_argv(segment)
+    if error or len(argv) < 2:
+        return None
+    if argv[1] == "grep":
+        return "git grep exits 1 when nothing matches"
+    if argv[1] == "diff" and _GIT_DIFF_EXIT_CODE_FLAGS.intersection(argv[2:]):
+        return "git diff --exit-code exits 1 when there are differences"
+    return None
+
+
+def _step_answer_exit(
+    step: "_Step", result: subprocess.CompletedProcess
+) -> Optional[str]:
+    """Why a step's non-zero code is an answer, judged by the stage that set it.
+
+    The code must come from the last stage: ``pytest | grep x`` exiting 1 is
+    no-match only if pytest passed. Where every stage's code is known (a
+    pipeline run here) that is checked; cmd.exe and sh report only the last
+    stage's code, so there the last stage is the one that set it.
+    """
+    stage_codes = getattr(result, "stage_codes", None)
+    if stage_codes and any(stage_codes[:-1]):
+        return None
+    return _answer_exit(step.segments[-1], result.returncode)
+
+
 #: The ``/d`` of a leading ``cd /d``, for the text a step keeps beside its segments.
 _CD_DRIVE_FLAG = re.compile(r"^(\s*cd)\s+/d(?=\s)", re.I)
 
@@ -2057,18 +2111,24 @@ def _run_pipeline(
             err.close()
 
     sigpipe = -getattr(signal, "SIGPIPE", 0)
-    codes = [proc.returncode for proc in procs]
-    failed = [
-        code
-        for i, code in enumerate(codes)
-        if code != 0 and not (i < len(codes) - 1 and sigpipe and code == sigpipe)
+    codes = [
+        (
+            0
+            if (i < len(procs) - 1 and sigpipe and proc.returncode == sigpipe)
+            else proc.returncode
+        )
+        for i, proc in enumerate(procs)
     ]
-    return subprocess.CompletedProcess(
+    failed = [code for code in codes if code != 0]
+    completed = subprocess.CompletedProcess(
         args=segments,
         returncode=failed[-1] if failed else 0,
         stdout=(out or b"").decode("utf-8", errors="replace"),
         stderr=stderr,
     )
+    # Which stage set the code decides whether grep's exit 1 is "no match".
+    completed.stage_codes = codes
+    return completed
 
 
 #: Unix commands cmd.exe spells differently, used only when Git-for-Windows
@@ -3739,22 +3799,33 @@ class ShellToolsMixin:
                 stderr_parts: list = []
                 ran: list = []
                 last_code = 0
-                unhandled_failure = False
+                last_answer: Optional[str] = None
+                # The first failure nothing on the line handles, as
+                # (and-or list, step, exit code, output to quote).
+                unhandled_failure: Optional[Tuple[int, str, int, str]] = None
+                and_or_list = 0
                 spawned = False
                 ran_cwd = cwd
 
                 for index, (step, step_cwd) in enumerate(zip(steps, step_cwds)):
+                    if step.connector not in ("&&", "||"):
+                        and_or_list += 1
                     if not _connector_runs(step.connector, last_code):
                         continue
-                    # `||` is the line saying it expects the failure before it;
-                    # anything else leaves it standing, so `pytest -q; ls`
-                    # cannot report a failing suite as a passing check.
-                    if step.connector == "||":
-                        unhandled_failure = False
+                    # `||` handles a failure in its own and-or list, as in sh;
+                    # one before a `;` still stands, so `pytest -q; ls` (or
+                    # `make; grep x f || echo none`) is not reported as passing.
+                    if (
+                        step.connector == "||"
+                        and unhandled_failure is not None
+                        and unhandled_failure[0] == and_or_list
+                    ):
+                        unhandled_failure = None
                     if step.is_cd:
                         # Its whole effect is the directory the walk above
                         # already applied to the steps that follow it.
                         last_code = 0
+                        last_answer = None
                         ran.append({"command": step.text, "return_code": 0})
                         # Only a cd that actually ran moves the session.
                         ran_cwd = (
@@ -3848,9 +3919,16 @@ class ShellToolsMixin:
                         if not spawned:
                             raise
                         logger.error("Command executable not found: %s", exc)
-                        stderr_parts.append(f"{step.text}: {exc.strerror or exc}\n")
+                        not_found = f"{step.text}: {exc.strerror or exc}\n"
+                        stderr_parts.append(not_found)
                         last_code = _COMMAND_NOT_FOUND
-                        unhandled_failure = True
+                        last_answer = None
+                        unhandled_failure = unhandled_failure or (
+                            and_or_list,
+                            step.text,
+                            last_code,
+                            not_found,
+                        )
                         ran.append({"command": step.text, "return_code": last_code})
                         continue
 
@@ -3858,8 +3936,21 @@ class ShellToolsMixin:
                     stdout_parts.append(result.stdout or "")
                     stderr_parts.append(result.stderr or "")
                     last_code = result.returncode
-                    unhandled_failure = unhandled_failure or last_code != 0
-                    ran.append({"command": step.text, "return_code": last_code})
+                    last_answer = (
+                        _step_answer_exit(step, result) if last_code != 0 else None
+                    )
+                    if last_code != 0 and last_answer is None:
+                        # Under 2>&1 the verdict is on stdout.
+                        unhandled_failure = unhandled_failure or (
+                            and_or_list,
+                            step.text,
+                            last_code,
+                            (result.stderr or "").strip() or result.stdout or "",
+                        )
+                    entry = {"command": step.text, "return_code": last_code}
+                    if last_answer:
+                        entry["expected_exit"] = last_answer
+                    ran.append(entry)
 
                 duration = time.monotonic() - start_time
 
@@ -3894,13 +3985,30 @@ class ShellToolsMixin:
                         f"Command completed in {duration:.2f}s with return code {last_code}"
                     )
 
+                check = check_from_command(
+                    command,
+                    [seg for st in steps for seg in st.segments],
+                    # `pytest -q | grep FAILED` finding nothing is a pass.
+                    0 if last_answer else last_code,
+                    "".join(stdout_parts),
+                    "".join(stderr_parts),
+                )
+                if unhandled_failure is not None:
+                    failure: Optional[str] = exit_error(*unhandled_failure[1:])
+                elif check is not None and not check.passed:
+                    # `pytest | tail` exits 0; the runner's summary is the verdict.
+                    failure = f"{check.label} reported failures" + (
+                        f": {check.summary}" if check.summary else ""
+                    )
+                else:
+                    failure = None
                 outcome = {
-                    "status": "success",
+                    "status": "error" if failure else "success",
                     "command": command,
                     "stdout": stdout,
                     "stderr": stderr,
                     "return_code": last_code,
-                    "has_errors": last_code != 0 or unhandled_failure,
+                    "has_errors": failure is not None,
                     "duration_seconds": duration,
                     "timeout": timeout,
                     "timeout_class": timeout_class,
@@ -3908,15 +4016,12 @@ class ShellToolsMixin:
                     "output_truncated": truncated,
                     "steps": ran,
                 }
+                if failure:
+                    outcome["error"] = failure
+                elif last_answer:
+                    outcome["expected_exit"] = last_answer
                 if waited:
                     outcome["waited_seconds"] = round(waited, 1)
-                check = check_from_command(
-                    command,
-                    [seg for st in steps for seg in st.segments],
-                    last_code,
-                    "".join(stdout_parts),
-                    "".join(stderr_parts),
-                )
                 return attach_check(outcome, check)
 
             except FileNotFoundError as exc:
