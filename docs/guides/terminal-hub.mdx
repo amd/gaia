@@ -463,7 +463,10 @@ the answer set apart below:
 - **Paths** are shown relative to the folder you started GAIA in, or under `~`;
   a path that is still long keeps its end.
 - **A failed step** keeps its reason under it, remedy included — that row is
-  where a failure lives, so a retried call is one red row, not a separate error.
+  where a failure lives, not a separate error. While the turn is still running
+  it reads `error` in amber, since the agent may fix it and try again; once a
+  later call of the same kind succeeds it reads `error, retried`. One nothing
+  recovered from turns red and reads `failed` when the turn ends.
 - **A confirmation** asks once, in the prompt pinned above the composer. The step
   it gated then records your answer in a word: `approved`, `denied`, or `always
   allowed '<scope>'`.

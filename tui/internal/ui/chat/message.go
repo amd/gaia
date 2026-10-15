@@ -137,4 +137,11 @@ type ActivityItem struct {
 	// Repeat counts additional consecutive occurrences folded into this item by
 	// the live work log; 0 means it happened once.
 	Repeat int
+	// RetryKey is what "the same kind of call" means for a failed step that a
+	// later success can settle: the tool, plus a shell command's program and
+	// first argument. Empty falls back to activityKey.
+	RetryKey string
+	// Recovery is how a failed step reads given the rest of its turn — set at
+	// render time by settleFailures, never stored. "" is a plain failure.
+	Recovery string
 }
