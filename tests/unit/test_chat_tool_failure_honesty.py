@@ -15,13 +15,16 @@ import pytest
 
 from tests.unit.test_profilespec_characterization import chat_agent_build_context
 
-pytest.importorskip("gaia_agent_chat", reason="gaia-agent-chat wheel not installed")
 
-from gaia_agent_chat import agent as chat_agent  # noqa: E402
+@pytest.fixture
+def chat_agent():
+    return pytest.importorskip(
+        "gaia_agent_chat.agent", reason="gaia-agent-chat wheel not installed"
+    )
 
 
 @pytest.fixture
-def tools():
+def tools(chat_agent):
     with chat_agent_build_context("full") as agent:
         agent._register_tools()
         yield agent._tools_registry
@@ -31,7 +34,9 @@ def _completed(code, stdout="", stderr=""):
     return subprocess.CompletedProcess(["x"], code, stdout, stderr)
 
 
-def test_a_failed_tasklist_is_an_error_not_an_empty_list(tools, monkeypatch):
+def test_a_failed_tasklist_is_an_error_not_an_empty_list(
+    tools, chat_agent, monkeypatch
+):
     monkeypatch.setattr(chat_agent.platform, "system", lambda: "Windows")
     monkeypatch.setitem(sys.modules, "pywinauto", None)
     monkeypatch.setattr(
@@ -47,7 +52,7 @@ def test_a_failed_tasklist_is_an_error_not_an_empty_list(tools, monkeypatch):
     assert result["return_code"] == 1
 
 
-def test_a_failed_wmctrl_names_its_exit_code(tools, monkeypatch):
+def test_a_failed_wmctrl_names_its_exit_code(tools, chat_agent, monkeypatch):
     monkeypatch.setattr(chat_agent.platform, "system", lambda: "Linux")
     monkeypatch.setattr(
         subprocess,
@@ -84,7 +89,9 @@ class _RunningPopen:
 @pytest.mark.parametrize(
     "popen, status", [(_ExitedPopen, "error"), (_RunningPopen, "success")]
 )
-def test_notify_desktop_reports_what_powershell_did(tools, monkeypatch, popen, status):
+def test_notify_desktop_reports_what_powershell_did(
+    tools, chat_agent, monkeypatch, popen, status
+):
     monkeypatch.setattr(chat_agent.platform, "system", lambda: "Windows")
     monkeypatch.setitem(sys.modules, "plyer", None)
     monkeypatch.setattr(subprocess, "Popen", popen)

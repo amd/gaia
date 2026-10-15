@@ -489,8 +489,11 @@ already off, `--accept-edits` starts it in accept-edits mode, and `--use-claude`
 of the process (embeddings stay on Lemonade either way).
 
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
-Lemonade. `/model` lists downloaded local and discovered cloud chat models;
+Lemonade. `/model` lists downloaded local and discovered cloud chat models,
+grouped by provider, with `(default)` beside the configured default model;
 `/model <id>` switches the live client while preserving conversation and skills.
+The switch reply is one line naming the model, where it runs, and, for a cloud
+model, that messages and anything read from files or memory are sent there.
 Cloud IDs (`fireworks.*`, `amd.*`) route through Lemonade without local model
 loading. Model-state status events identify the provider and remote inference.
 The TUI's `/provider` panel configures credentials directly with local Lemonade;

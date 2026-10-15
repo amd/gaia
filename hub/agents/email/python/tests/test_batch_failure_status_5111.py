@@ -120,11 +120,104 @@ def test_every_message_succeeding_has_no_failure_summary(agent):
 def test_batch_envelope_caps_the_reasons_it_lists():
     failed = [{"message_id": f"x{i}", "error": "KeyError: gone"} for i in range(5)]
     body = json.loads(
-        _batch_envelope("star", "b1", [f["message_id"] for f in failed], {
-            "succeeded": [],
-            "failed": failed,
-        })
+        _batch_envelope(
+            "star",
+            "b1",
+            [f["message_id"] for f in failed],
+            {
+                "succeeded": [],
+                "failed": failed,
+            },
+        )
     )
     assert body["ok"] is False
     assert body["error"].endswith("(and 2 more)")
     assert len(body["data"]["failed"]) == 5
+
+
+# ---------------------------------------------------------------------------
+# Adversarial: all-failed, partial and all-success stay distinguishable
+# ---------------------------------------------------------------------------
+
+BATCH_TOOLS = [
+    ("mark_read_batch", ()),
+    ("mark_unread_batch", ()),
+    ("add_star_batch", ()),
+    ("remove_star_batch", ()),
+    ("archive_message_batch", ()),
+    ("label_message_batch", ("Label_1",)),
+    ("move_to_label_batch", ("Label_1",)),
+]
+
+
+@pytest.mark.parametrize("name, extra", BATCH_TOOLS)
+def test_every_batch_tool_reports_all_failed_as_an_error(agent, name, extra):
+    agent._reset_organize_counter()
+    body, raw = _call(name, ["gone1", "gone2"], *extra)
+
+    assert body["ok"] is False, (name, body)
+    assert tool_result_failed(raw), name
+    assert body["data"]["succeeded_count"] == 0
+    assert body["data"]["failed_count"] == 2
+
+
+@pytest.mark.parametrize("name, extra", BATCH_TOOLS[:5])
+def test_every_batch_tool_reports_partial_as_ok_with_counts(agent, name, extra):
+    agent._reset_organize_counter()
+    body, raw = _call(name, ["m1", "gone"], *extra)
+
+    assert body["ok"] is True, (name, body)
+    assert not tool_result_failed(raw)
+    data = body["data"]
+    assert data["partial"] is True
+    assert (data["succeeded_count"], data["failed_count"]) == (1, 1)
+    assert "gone" in data["summary"]
+
+
+def test_counts_always_add_up_even_with_duplicate_ids(agent):
+    body, _ = _call("mark_read_batch", ["m1", "m1", "gone", "gone"])
+    data = body["data"]
+
+    assert data["succeeded_count"] + data["failed_count"] == data["total"] == 4
+
+
+def test_a_huge_all_failed_batch_names_a_few_reasons_not_all():
+    ids = [f"gone{i}" for i in range(500)]
+    failed = [{"message_id": i, "error": "KeyError: gone"} for i in ids]
+
+    body = json.loads(
+        _batch_envelope("archive", "b", ids, {"succeeded": [], "failed": failed})
+    )
+
+    assert body["ok"] is False
+    assert "Could not archive 500 of 500 messages" in body["error"]
+    assert body["error"].endswith("(and 497 more)")
+    assert len(body["error"]) < 400
+    assert len(body["data"]["failed"]) == 500
+
+
+def test_one_success_among_many_failures_is_still_partial_not_error():
+    ids = ["ok1"] + [f"gone{i}" for i in range(50)]
+    failed = [{"message_id": i, "error": "boom"} for i in ids[1:]]
+
+    body = json.loads(
+        _batch_envelope("star", "b", ids, {"succeeded": ["ok1"], "failed": failed})
+    )
+
+    assert body["ok"] is True
+    assert body["data"]["partial"] is True
+    assert body["data"]["summary"].startswith("Could not star 50 of 51 messages")
+
+
+def test_an_envelope_saying_ok_false_is_failed_however_it_is_spelled():
+    for raw in (
+        json.dumps({"ok": False, "error": "x"}),
+        json.dumps({"ok": False, "error": "x"}, indent=2),
+        "  " + json.dumps({"ok": False, "error": "x", "data": {"ok": True}}),
+    ):
+        assert tool_result_failed(raw), raw
+    for raw in (
+        json.dumps({"ok": True, "data": {"ok": False, "summary": "error"}}),
+        json.dumps({"ok": True, "data": {"error": "none"}}),
+    ):
+        assert not tool_result_failed(raw), raw
