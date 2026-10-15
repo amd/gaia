@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -370,5 +371,56 @@ func TestSingleResultsAreNotPluralised(t *testing.T) {
 		Data: []byte(`{"success":true,"skills":[{"name":"github-triage"}]}`),
 	}); !strings.Contains(got, "1 skill") || strings.Contains(got, "1 skills") {
 		t.Errorf("a single result read as %q", got)
+	}
+}
+
+// #5089: a plan run re-announces its headline after every step's own status
+// lines. The headline is said once, and the step line carries no "[harness]".
+func TestAPlanHeadlineIsSaidOnce(t *testing.T) {
+	for _, dev := range []bool{false, true} {
+		m := newTestChat(t)
+		m.dev = dev
+		m.expandWork = true
+		const headline = "Following the plan to compare the term sheet"
+		for step := 1; step <= 3; step++ {
+			m = feed(t, m,
+				event.CanonicalStatusEvent{Type: "status", Message: fmt.Sprintf("Step %d/50", step)},
+				event.CanonicalStatusEvent{Type: "status", Message: "Plan: query_specific_file → query_specific_file → write_file"},
+				event.CanonicalStatusEvent{Type: "status", Message: fmt.Sprintf("Executing step %d of the plan", step)},
+				event.CanonicalStatusEvent{Type: "status", Message: headline},
+				event.CanonicalToolCallEvent{Type: "tool_call", Tool: "query_specific_file"},
+				event.CanonicalToolResultEvent{Type: "tool_result", Tool: "query_specific_file", Preview: "10 chunks"},
+			)
+		}
+
+		out := ansi.Strip(m.renderLiveRegion())
+		if n := strings.Count(out, headline); n != 1 {
+			t.Errorf("dev=%v: the plan headline was shown %d times:\n%s", dev, n, out)
+		}
+		if strings.Contains(out, "[harness]") {
+			t.Errorf("dev=%v: an internal word reached the screen:\n%s", dev, out)
+		}
+	}
+}
+
+// Narration the model repeats word for word before the next step adds nothing.
+func TestRepeatedNarrationIsKeptOnce(t *testing.T) {
+	m := newTestChat(t)
+	m.expandWork = true
+	for i := 0; i < 3; i++ {
+		m = feed(t, m,
+			event.CanonicalTokenEvent{Type: "token", Delta: "Checking the next datasheet."},
+			event.CanonicalToolCallEvent{Type: "tool_call", Tool: "query_specific_file"},
+			event.CanonicalToolResultEvent{Type: "tool_result", Tool: "query_specific_file", Preview: "3 chunks"},
+		)
+	}
+	notes := 0
+	for _, item := range m.activity {
+		if item.Kind == "note" {
+			notes++
+		}
+	}
+	if notes != 1 {
+		t.Errorf("identical narration was logged %d times: %+v", notes, m.activity)
 	}
 }

@@ -480,6 +480,9 @@
     white-space: pre;
     word-wrap: normal;
     overflow-wrap: normal;
+    /* The page-wide scrollbar is invisible on the code background; a wide row needs a visible cue. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-code-dim) transparent;
 }
 
 .code-block code {

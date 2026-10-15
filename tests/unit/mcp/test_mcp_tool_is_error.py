@@ -80,3 +80,83 @@ def test_perplexity_does_not_return_a_tool_error_as_the_answer(monkeypatch):
     result = service.search_web("q")
 
     assert result == {"success": False, "error": "repo not found", "answer": ""}
+
+
+# ---------------------------------------------------------------------------
+# Adversarial: only a real failure flag or JSON-RPC error is a failure
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "result, expected",
+    [
+        ({"isError": True}, "The MCP tool reported an error."),
+        ({"isError": True, "content": None}, "The MCP tool reported an error."),
+        (
+            {"isError": True, "content": [{"type": "image", "data": "..."}]},
+            "The MCP tool reported an error.",
+        ),
+        (
+            {"isError": True, "content": [{"type": "text", "text": "   "}]},
+            "The MCP tool reported an error.",
+        ),
+        (
+            {
+                "isError": True,
+                "content": [
+                    {"type": "text", "text": "first"},
+                    "not a dict",
+                    {"text": "untyped is text"},
+                    {"type": "text", "text": "second"},
+                ],
+            },
+            "first\nuntyped is text\nsecond",
+        ),
+        ({"error": None}, "Unknown error"),
+        ({"error": ""}, "Unknown error"),
+        ({"error": {"code": -32602, "message": "Invalid params"}}, "Invalid params"),
+        ({"error": "x", "isError": False}, "x"),
+    ],
+)
+def test_a_failure_is_reported_whatever_its_content_holds(result, expected):
+    assert expected in mcp_tool_error(result)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"isError": False, "content": [{"type": "text", "text": "Error: none"}]},
+        {"content": [{"type": "text", "text": "ERROR 500 in the log we fetched"}]},
+        {"isError": None, "content": []},
+        {"content": []},
+        {},
+        [],
+        None,
+        "isError: true",
+        {"result": {"isError": True}},  # nested in data, not the flag itself
+    ],
+)
+def test_text_that_mentions_an_error_is_not_a_failure(result):
+    assert mcp_tool_error(result) is None
+
+
+def test_the_wrapper_never_reports_is_error_false_as_a_failure(registered):
+    outcome, tool = registered
+    outcome["result"] = {
+        "isError": False,
+        "content": [{"type": "text", "text": "error count: 0"}],
+    }
+
+    result = tool()
+
+    assert result["status"] == "success"
+
+
+def test_the_wrapper_reports_a_json_rpc_error(registered):
+    outcome, tool = registered
+    outcome["result"] = {"error": "Method not found"}
+
+    result = tool()
+
+    assert result["status"] == "error"
+    assert "Method not found" in result["error"]

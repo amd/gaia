@@ -17,6 +17,7 @@ from gaia.agents.install_hints import (
     gaia_extras_install_args,
     pip_install_hint,
 )
+from gaia.config import gaia_agents_dir
 from gaia.env import load_env
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
@@ -3037,6 +3038,13 @@ Examples:
         action="store_true",
         help="Use stdio transport instead of HTTP (for Claude Code / eval runner integration)",
     )
+    mcp_serve_parser.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="Allow a non-loopback --host. Requires a bearer token of 32+ "
+        "characters in GAIA_AGENT_UI_MCP_TOKEN; clients send it as "
+        "'Authorization: Bearer <token>'",
+    )
 
     mcp_tui_parser = mcp_subparsers.add_parser(
         "tui",
@@ -3067,7 +3075,7 @@ Examples:
     )
     mcp_list_parser.add_argument(
         "--config",
-        help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
+        help="Path to MCP servers config file (default: $GAIA_HOME/mcp_servers.json, else ~/.gaia/mcp_servers.json)",
     )
 
     mcp_tools_parser = mcp_subparsers.add_parser(
@@ -3076,7 +3084,7 @@ Examples:
     mcp_tools_parser.add_argument("name", help="Name of the MCP server")
     mcp_tools_parser.add_argument(
         "--config",
-        help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
+        help="Path to MCP servers config file (default: $GAIA_HOME/mcp_servers.json, else ~/.gaia/mcp_servers.json)",
     )
 
     mcp_test_client_parser = mcp_subparsers.add_parser(
@@ -8778,7 +8786,7 @@ def _resolve_sidecar_log(agent_id: str):
     ``sidecar-*.log`` on disk when the daemon is down or the agent is stopped
     (so ``logs`` still works post-mortem). Returns ``None`` if no log exists.
     """
-    log_dir = Path.home() / ".gaia" / "agents" / agent_id / "logs"
+    log_dir = gaia_agents_dir() / agent_id / "logs"
 
     # Best-effort: ask the daemon for the running port so we follow the live
     # process. Never fatal — a down daemon just means we use the newest file.
@@ -8839,7 +8847,7 @@ def _handle_daemon_logs(args):
         if log_file is None:
             print(
                 f"No log for sidecar '{agent_id}' at "
-                f"{Path.home() / '.gaia' / 'agents' / agent_id / 'logs'} "
+                f"{gaia_agents_dir() / agent_id / 'logs'} "
                 f"(it has not run yet). Start it with `gaia daemon start-agent "
                 f"{agent_id}` or run the agent once."
             )
@@ -9173,8 +9181,6 @@ def _apply_lemonade_choice_to_daemon() -> None:
 
 def handle_lemonade_choice_command(args):
     """``gaia lemonade connect|detect|status``: which Lemonade GAIA uses."""
-    import json as _json
-
     from gaia.config import GaiaConfigError
     from gaia.llm import lemonade_choice as choice
 
@@ -9183,7 +9189,7 @@ def handle_lemonade_choice_command(args):
         if action == "status":
             info = choice.describe()
             if getattr(args, "json", False):
-                print(_json.dumps(info))
+                print(json.dumps(info))
                 return
             if info["source"] == "env":
                 print(f"GAIA uses the Lemonade Server at {info['base_url']}")
@@ -9201,7 +9207,7 @@ def handle_lemonade_choice_command(args):
         if action == "detect":
             found = choice.detect_running_lemonade()
             if getattr(args, "json", False):
-                print(_json.dumps(found.to_dict() if found else None))
+                print(json.dumps(found.to_dict() if found else None))
                 return
             if found is None:
                 print("No Lemonade Server found on this PC's default ports.")
@@ -9962,7 +9968,20 @@ def handle_mcp_serve(args):
     log = get_logger(__name__)
 
     try:
-        from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp
+        from gaia.mcp.servers.agent_ui_mcp import (
+            RemoteBindError,
+            create_agent_ui_mcp,
+            http_bind_token,
+            run_http,
+        )
+
+        token = None
+        if not args.stdio:
+            try:
+                token = http_bind_token(args.host, getattr(args, "allow_remote", False))
+            except RemoteBindError as e:
+                print(f"❌ {e}", file=sys.stderr)
+                raise SystemExit(2) from e
 
         mcp = create_agent_ui_mcp(backend_url=args.backend)
 
@@ -9991,7 +10010,7 @@ def handle_mcp_serve(args):
                 log.debug("MCPServer tool registry layout changed; skipping tool count")
             print("\nPress Ctrl+C to stop")
             print("=" * 60)
-            mcp.run(transport="streamable-http", host=args.host, port=args.port)
+            run_http(mcp, args.host, args.port, token)
 
     except KeyboardInterrupt:
         print("\n✅ Agent UI MCP server stopped")
@@ -10058,7 +10077,7 @@ def handle_mcp_list(args):
     config = MCPConfig(args.config) if args.config else MCPConfig()
     servers = config.get_servers()
 
-    config_path = args.config if args.config else "~/.gaia/mcp_servers.json"
+    config_path = args.config if args.config else config.config_file
 
     if not servers:
         print("📋 No MCP servers configured")
