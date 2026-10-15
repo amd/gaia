@@ -19,6 +19,9 @@
   also runs the `python -m/-c/<file>` forms a script uses to start
   `sys.executable`, and refuses `-m pip` with the bundled-library list. Both
   tool descriptions name the bundled libraries.
+- The agent reads its MCP server list from `$GAIA_HOME/mcp_servers.json`, not
+  always `~/.gaia/mcp_servers.json`, so a run with its own `GAIA_HOME` no longer
+  starts the user's MCP servers.
 - A Python run that exits non-zero now returns `status: "error"` with an
   `error` naming the exit code and the last stderr line, instead of
   `status: "success"`.
