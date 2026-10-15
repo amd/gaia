@@ -227,7 +227,12 @@ def process_query(
             "output_tokens": int,    # Total output tokens across all steps
             "total_tokens": int,     # Combined token count
             "error_count": int,      # Number of errors encountered
-            "error_history": list,   # Full error history
+            "error_history": list,   # Full error history; an unusable reply
+                                     # (malformed tool call, a stream that closed
+                                     # before the model finished) that a later
+                                     # reply recovered from is kept with
+                                     # "recovered": True and does not make the
+                                     # status "failed"
             # "output_file": str     # Present only when trace=True
         }
     """

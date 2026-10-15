@@ -1108,15 +1108,22 @@ A successful executor call alone is not proof of a save; a failed call that
 changed an output invalidates earlier evidence. A file last modified during a
 successful executor call, such as `ls > listing.txt`, counts as written once it
 is read back; one touched by a failed call does not, and such a file proves only
-its own path, never a pathless "saved it to a file" claim. Cached transcripts are
-not new writes.
+its own path, never a pathless "saved it to a file" claim. A requested file or
+folder that no tool reports writing is checked the same way, so a script that
+builds its output paths at run time still fulfils the save; files in the folder
+are found only within the read boundary. A bare folder name in the answer
+("saved in `reports`") is fulfilled by files written inside any folder of that
+name. Cached transcripts are not new writes.
 Cleanup claims likewise need concrete paths observed disappearing during the
 turn; a general statement that everything was cleaned up is not proof. A claimed
 path that is absent and untouched already agrees with the claim, and removal from
 an index or list is not a file deletion.
 
-The loop offers one bounded correction for missing artifact evidence. If work or
-readback remains missing, the emitted answer names the gaps and `process_query`
+The loop offers one bounded correction for missing artifact evidence. That
+correction reopens the turn, so writing the output, running the script that
+produces it, and reading it back are not refused as work after the answer;
+files inside a folder the request or the correction names are always in scope.
+If work or readback remains missing, the emitted answer names the gaps and `process_query`
 returns `status: "incomplete"` with `completion_gaps`. When the turn ended on an
 error, such as an unreachable server, the error message and `failed` status are
 kept and the gaps are listed beneath it. A blocked save cannot be

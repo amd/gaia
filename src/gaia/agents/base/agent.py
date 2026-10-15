@@ -115,7 +115,10 @@ from gaia.llm.lemonade_client import (
     resolve_default_chat_model,
     truncation_budget,
 )
-from gaia.llm.providers.lemonade import CONNECTION_FAILURE_RE
+from gaia.llm.providers.lemonade import (
+    CONNECTION_FAILURE_RE,
+    LemonadeStreamCutOffError,
+)
 from gaia.utils.power import stay_awake
 from gaia.utils.terminal import stdin_is_interactive
 
@@ -950,6 +953,11 @@ def _response_reasoning(response: Any) -> Optional[str]:
 
 # A reply that ended on the output-token limit (finish_reason=length).
 _MAX_CUT_OFF_CONTINUATIONS = 2
+# A stream that closed before the model finished: asked for again, never parsed.
+_MAX_STREAM_CUT_OFF_RETRIES = 2
+STREAM_CUT_OFF_ERROR = "stream_cut_off"
+# Errors the loop recovered from once a later reply parsed: not a failed turn.
+_RECOVERABLE_ERROR_TYPES = frozenset({"tool_call_parse_error", STREAM_CUT_OFF_ERROR})
 _CUT_OFF_CONTINUE_PROMPT = (
     "Your last reply was cut off at the output-token limit before it finished, "
     "so nothing in it was carried out. Continue from where you stopped: keep "
@@ -3948,6 +3956,54 @@ Do NOT wrap conversational replies in JSON.
             "sentence). If you don't need a tool, answer in plain text."
         )
 
+    @staticmethod
+    def _regex_tool_args(response: str, tool: str) -> Dict[str, Any]:
+        """The ``tool_args`` object of a reply whose JSON did not parse as a whole.
+
+        No ``tool_args`` key means a call with no arguments. A key whose object
+        is cut off or malformed raises: running the tool with ``{}`` would
+        report a failure that is the parser's, not the tool's.
+        """
+        key = re.search(r'"tool_args"\s*:\s*', response)
+        if key is None:
+            return {}
+        start = key.end()
+        if not response.startswith("{", start):
+            raise ValueError(
+                f"Malformed tool_call arguments for '{tool}': tool_args is not "
+                "a JSON object."
+            )
+        depth = 0
+        in_string = False
+        escape_next = False
+        for i in range(start, len(response)):
+            char = response[i]
+            if escape_next:
+                escape_next = False
+            elif char == "\\":
+                escape_next = True
+            elif char == '"':
+                in_string = not in_string
+            elif not in_string and char == "{":
+                depth += 1
+            elif not in_string and char == "}":
+                depth -= 1
+                if depth == 0:
+                    raw = response[start : i + 1]
+                    try:
+                        parsed = json.loads(raw)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            f"Malformed tool_call arguments for '{tool}': {exc}. "
+                            "Escape every double quote and newline inside string "
+                            "values."
+                        ) from exc
+                    return parsed
+        raise ValueError(
+            f"The tool_call arguments for '{tool}' were cut off before the JSON "
+            "object closed, so the call was not run."
+        )
+
     def _extract_embedded_tool_call(self, response: str) -> Optional[Dict[str, Any]]:
         """
         Detect and extract a tool call JSON embedded in a text response.
@@ -4021,6 +4077,7 @@ Do NOT wrap conversational replies in JSON.
         # Collect all tool-call candidates, tagged by whether they are inside a fence
         unfenced: list[Dict[str, Any]] = []
         fenced: list[Dict[str, Any]] = []
+        cut_off_call: Optional[str] = None
 
         idx = 0
         while idx < len(response):
@@ -4061,6 +4118,10 @@ Do NOT wrap conversational replies in JSON.
                             break
 
             if depth != 0:
+                # Runs to the end of the reply unclosed: a call that was cut off.
+                named = re.search(r'"tool"\s*:\s*"([^"]+)"', response[brace_pos:])
+                if named and cut_off_call is None:
+                    cut_off_call = named.group(1)
                 idx = brace_pos + 1
                 continue
 
@@ -4073,6 +4134,12 @@ Do NOT wrap conversational replies in JSON.
                     unfenced.append(parsed)
 
             idx = brace_pos + 1
+
+        if cut_off_call and not unfenced and not fenced:
+            raise ValueError(
+                f"Your reply ends inside an unfinished '{cut_off_call}' tool call "
+                "(its JSON never closes), so it was not run and is not an answer."
+            )
 
         # Decision logic
         if unfenced:
@@ -4823,47 +4890,13 @@ Do NOT wrap conversational replies in JSON.
         # "answer", the tool should be executed because the "answer" is
         # often just the LLM narrating what it plans to do, not the final
         # response.  The real answer will come after the tool executes.
+        goal_match = re.search(r'"goal":\s*"([^"]*)"', response)
+        goal = goal_match.group(1) if goal_match else ""
         if tool_match:
-            tool_args = {}
-
-            tool_args_start = response.find('"tool_args"')
-
-            if tool_args_start >= 0:
-                # Find the opening brace after "tool_args":
-                brace_start = response.find("{", tool_args_start)
-                if brace_start >= 0:
-                    # Use bracket-matching to find the complete object
-                    bracket_count = 0
-                    in_string = False
-                    escape_next = False
-                    for i, char in enumerate(response[brace_start:], brace_start):
-                        if escape_next:
-                            escape_next = False
-                            continue
-                        if char == "\\":
-                            escape_next = True
-                            continue
-                        if char == '"' and not escape_next:
-                            in_string = not in_string
-                        if not in_string:
-                            if char == "{":
-                                bracket_count += 1
-                            elif char == "}":
-                                bracket_count -= 1
-                                if bracket_count == 0:
-                                    # Found complete tool_args object
-                                    tool_args_str = response[brace_start : i + 1]
-                                    try:
-                                        tool_args = json.loads(tool_args_str)
-                                    except json.JSONDecodeError as e:
-                                        error_msg = f"Failed to parse tool_args JSON: {str(e)}, content: {tool_args_str[:100]}..."
-                                        logger.error(error_msg)
-                                        self.error_history.append(error_msg)
-                                    break
-
+            tool_args = self._regex_tool_args(response, tool_match.group(1))
             result = {
                 "thought": thought_match.group(1) if thought_match else "",
-                "goal": "clear statement of what you're trying to achieve",
+                "goal": goal,
                 "tool": tool_match.group(1),
                 "tool_args": tool_args,
             }
@@ -4885,7 +4918,7 @@ Do NOT wrap conversational replies in JSON.
         if answer_match:
             result = {
                 "thought": thought_match.group(1) if thought_match else "",
-                "goal": "what was achieved",
+                "goal": goal,
                 "answer": answer_match.group(1),
             }
             logger.debug(f"Extracted answer using regex: {result}")
@@ -7239,6 +7272,23 @@ Do NOT wrap conversational replies in JSON.
         explicit = getattr(getattr(self, "config", None), "project_root", None)
         return resolve_project_root(explicit)
 
+    def _mark_errors_recovered(self) -> None:
+        """A reply parsed cleanly: earlier unusable replies were retried, not fatal."""
+        for entry in self.error_history:
+            if (
+                isinstance(entry, dict)
+                and entry.get("type") in _RECOVERABLE_ERROR_TYPES
+            ):
+                entry["recovered"] = True
+
+    def _unrecovered_errors(self) -> List[Any]:
+        """Errors that still stand at the end of the turn."""
+        return [
+            entry
+            for entry in self.error_history
+            if not (isinstance(entry, dict) and entry.get("recovered"))
+        ]
+
     def _reopen_turn_scope(self, conversation: List[Dict[str, Any]]) -> None:
         """A check is sending the answer back; the work it asks for is in scope."""
         scope = getattr(self, "_turn_scope", None)
@@ -7376,9 +7426,11 @@ Do NOT wrap conversational replies in JSON.
             report = incomplete_answer(gaps)
             # Keep the error that ended the turn; add what stays unverified.
             answer = (
-                f"{answer}\n\n{report}" if answer and self.error_history else report
+                f"{answer}\n\n{report}"
+                if answer and self._unrecovered_errors()
+                else report
             )
-        elif answer and answer.strip() and not self.error_history:
+        elif answer and answer.strip() and not self._unrecovered_errors():
             self._note_ungrounded(answer, getattr(self, "_current_query", ""))
         # Items already extracted stay visible when the turn runs out.
         inventory = self._extraction_ledger.render()
@@ -7641,6 +7693,7 @@ Do NOT wrap conversational replies in JSON.
         verify_after_change_reprompted = False
         test_claim_corrections = 0
         cut_off_continuations = 0
+        stream_cut_offs = 0
         completion_corrections = 0
         completion_gaps = []
         # Answer text the model sent alongside its latest tool calls.
@@ -7677,6 +7730,7 @@ Do NOT wrap conversational replies in JSON.
             user_input,
             os.getcwd(),
             scratch=getattr(self._read_validator(), "scratch_dir", None),
+            validator=self._read_validator(),
         )
         # Files edited this turn, so an empty response can name what it left
         # behind (#3733). Per-turn: an instance persists across queries.
@@ -8223,6 +8277,34 @@ Do NOT wrap conversational replies in JSON.
                         self.console.print_streaming_text("", end_of_stream=True)
                         response = full_response
                         break
+                    except LemonadeStreamCutOffError as e:
+                        # A fragment is never the reply: ask for the whole one again.
+                        self.console.print_streaming_text("", end_of_stream=True)
+                        stream_cut_offs += 1
+                        self.error_history.append(
+                            {
+                                "step": steps_taken,
+                                "error": str(e),
+                                "type": STREAM_CUT_OFF_ERROR,
+                            }
+                        )
+                        if stream_cut_offs > _MAX_STREAM_CUT_OFF_RETRIES:
+                            logger.warning(
+                                "[WORKFLOW] Reply stream cut off %d times this "
+                                "turn; stopping (step %d/%d)",
+                                stream_cut_offs,
+                                steps_taken,
+                                steps_limit,
+                            )
+                            final_answer = e.user_message
+                            break
+                        logger.warning(
+                            "[WORKFLOW] Reply stream ended before the model "
+                            "finished; requesting it again (%d/%d)",
+                            stream_cut_offs,
+                            _MAX_STREAM_CUT_OFF_RETRIES,
+                        )
+                        continue
                     except ConnectionError as e:
                         error_msg = (
                             f"LLM Server Connection Failed (streaming): {str(e)}"
@@ -8553,6 +8635,7 @@ Do NOT wrap conversational replies in JSON.
                 parsed = self._parse_llm_response(response)
                 # Budget is consecutive: a clean parse gives the retries back.
                 parse_failures = 0
+                self._mark_errors_recovered()
             except ValueError as parse_exc:
                 logger.warning(
                     "Tool-call parse failed (step %d): %s — recovering with retry prompt",
@@ -8763,6 +8846,7 @@ Do NOT wrap conversational replies in JSON.
                     parsed_plan = self._parse_llm_response(plan_response)
                     # Budget is consecutive: a clean parse gives the retries back.
                     parse_failures = 0
+                    self._mark_errors_recovered()
                 except ValueError as plan_parse_exc:
                     logger.warning(
                         "Plan parse failed (step %d): %s — recovering with retry prompt",
@@ -10061,8 +10145,11 @@ Do NOT wrap conversational replies in JSON.
                                     "complete answer again."
                                 )
                         else:
-                            # Only the files it names: other reads are still drift.
                             self._turn_scope.widen(correction)
+                            if artifact_gaps:
+                                # Writing and reading back the deliverable is the
+                                # request's work, even when a script produces it.
+                                self._reopen_turn_scope(conversation)
                         messages.append({"role": "user", "content": correction})
                         conversation.append({"role": "user", "content": correction})
                         continue
@@ -10289,7 +10376,7 @@ Do NOT wrap conversational replies in JSON.
             final_answer = self._with_verification_scope(final_answer)
 
         # Return the result
-        has_errors = len(self.error_history) > 0
+        has_errors = bool(self._unrecovered_errors())
         has_valid_answer = (
             final_answer and final_answer.strip()
         )  # Check for non-empty answer

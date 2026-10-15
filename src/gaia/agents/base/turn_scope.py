@@ -24,7 +24,7 @@ import os
 import re
 from typing import Any, Dict, Optional, Set
 
-from gaia.agents.base.completion import mentioned_paths
+from gaia.agents.base.completion import mentioned_paths, save_obligations
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
     is_mutating_tool,
@@ -96,6 +96,11 @@ FAILURE_STREAK_CORRECTION = (
 def _norm(path: str, root: str) -> str:
     joined = path if os.path.isabs(path) else os.path.join(root, path)
     return os.path.normcase(os.path.normpath(joined))
+
+
+def _within(path: str, folder: str) -> bool:
+    """Whether normalized *path* lies strictly inside normalized *folder*."""
+    return path.startswith(folder.rstrip(os.sep) + os.sep)
 
 
 def _relative(path: str, root: str) -> str:
@@ -174,6 +179,8 @@ class TurnScopeGuard:
         self.last_error: Dict[str, str] = {}
         self.corrected: Set[str] = set()
         self.paths: Set[str] = set()
+        #: Output folders the request or a check named: what's inside them is in scope.
+        self.folders: Set[str] = set()
         self.tables: Set[str] = set()
 
     def begin_turn(self, query: str, root: str) -> None:
@@ -187,6 +194,7 @@ class TurnScopeGuard:
         self.last_error = {}
         self.corrected = set()
         self.paths = {_norm(p, root) for p in mentioned_paths(query or "")}
+        self.folders = self._output_folders(save_obligations(query or "")[0])
         self.tables = set()
 
     def mark_answered(self) -> None:
@@ -200,7 +208,24 @@ class TurnScopeGuard:
 
     def widen(self, text: str) -> None:
         """Paths a check names (a missing deliverable) become part of the request."""
-        self.paths |= {_norm(p, self.root) for p in mentioned_paths(text or "")}
+        named = mentioned_paths(text or "")
+        self.paths |= {_norm(p, self.root) for p in named}
+        self.folders |= self._output_folders(named)
+
+    def _output_folders(self, paths: Any) -> Set[str]:
+        """Deliverable paths whose contents are in scope; never the working root.
+
+        Any of them may be a folder; a file contains nothing, so it adds nothing.
+        """
+        root = _norm(self.root, self.root)
+        return {
+            path
+            for path in (_norm(p, self.root) for p in paths)
+            if path != root and not _within(root, path)
+        }
+
+    def _in_output_folder(self, paths: Set[str]) -> bool:
+        return any(_within(p, folder) for p in paths for folder in self.folders)
 
     def _call_paths(self, args: Dict[str, Any]) -> Set[str]:
         return {
@@ -241,7 +266,8 @@ class TurnScopeGuard:
     def related(self, tool: str, args: Dict[str, Any]) -> bool:
         if tool in _ALWAYS_RELATED or verification_check_label(tool, args):
             return True
-        if self._call_paths(args) & self.paths:
+        paths = self._call_paths(args)
+        if paths & self.paths or self._in_output_folder(paths):
             return True
         # A table this turn already built is the request's own data.
         if self._touches_known_table(args):
