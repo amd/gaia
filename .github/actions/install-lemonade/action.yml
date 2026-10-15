@@ -184,6 +184,23 @@ runs:
             return $va.CompareTo($vb)
         }
 
+        function Invoke-MsiExec {
+            # A bounded wait: an msiexec that never returns would otherwise hold
+            # the job, and the shared eval slot, until the job timeout.
+            param([string[]]$Arguments, [string]$LogPath, [int]$TimeoutMinutes = 10)
+            $p = Start-Process -FilePath "msiexec.exe" -ArgumentList ($Arguments + @("/L*v", $LogPath)) -PassThru
+            $null = $p.Handle
+            if (-not $p.WaitForExit($TimeoutMinutes * 60 * 1000)) {
+                Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+                Write-Host "===== MSI log tail ($LogPath) ====="
+                Get-Content $LogPath -Tail 80 -ErrorAction SilentlyContinue
+                Write-Host "==================================="
+                Write-Host "::error::msiexec $($Arguments -join ' ') did not finish within $TimeoutMinutes minutes and was killed. Its verbose log is $LogPath (tail above). Check the runner for another msiexec.exe holding the Windows Installer lock, then re-run."
+                throw "msiexec timed out after $TimeoutMinutes minutes. See $LogPath."
+            }
+            return $p.ExitCode
+        }
+
         function Install-LemonadeMsi {
             param([string]$Version)
             $url = "https://github.com/lemonade-sdk/lemonade/releases/download/v$Version/lemonade.msi"
@@ -198,15 +215,14 @@ runs:
             }
 
             Write-Host "Running silent MSI install (msiexec /i $dest /quiet /norestart)..."
-            $msi = Start-Process -FilePath "msiexec.exe" `
-                -ArgumentList "/i", $dest, "/quiet", "/norestart", "/L*v", "$env:RUNNER_TEMP\lemonade-msi.log" `
-                -PassThru -Wait
-            Write-Host "msiexec exit code: $($msi.ExitCode)"
-            if ($msi.ExitCode -ne 0) {
+            $msiLog = "$env:RUNNER_TEMP\lemonade-msi.log"
+            $msiCode = Invoke-MsiExec -Arguments @("/i", $dest, "/quiet", "/norestart") -LogPath $msiLog
+            Write-Host "msiexec exit code: $msiCode"
+            if ($msiCode -ne 0) {
                 Write-Host "===== MSI install log (tail) ====="
-                Get-Content "$env:RUNNER_TEMP\lemonade-msi.log" -Tail 80 -ErrorAction SilentlyContinue
+                Get-Content $msiLog -Tail 80 -ErrorAction SilentlyContinue
                 Write-Host "==================================="
-                throw "MSI install failed with exit code $($msi.ExitCode). See log above."
+                throw "MSI install failed with exit code $msiCode. See log above."
             }
             Write-Host "MSI install completed."
         }
@@ -230,20 +246,13 @@ runs:
             foreach ($root in $uninstallRoots) {
                 if (-not (Test-Path $root)) { continue }
                 Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
-                    try {
-                        $displayName = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName
-                        if ($displayName -and $displayName -match "(?i)lemonade") {
-                            $productCode = $_.PSChildName
-                            Write-Host "Found residual registry entry: '$displayName' ($productCode) -- removing via msiexec..."
-                            $r = Start-Process -FilePath "msiexec.exe" `
-                                -ArgumentList "/x", $productCode, "/qn", "/norestart" `
-                                -PassThru -Wait -ErrorAction SilentlyContinue
-                            if ($r) {
-                                Write-Host "msiexec /x exit code: $($r.ExitCode)"
-                            }
-                        }
-                    } catch {
-                        # Tolerate individual key read errors.
+                    $displayName = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName
+                    if ($displayName -and $displayName -match "(?i)lemonade") {
+                        $productCode = $_.PSChildName
+                        Write-Host "Found residual registry entry: '$displayName' ($productCode) -- removing via msiexec..."
+                        $unCode = Invoke-MsiExec -Arguments @("/x", $productCode, "/qn", "/norestart") `
+                            -LogPath "$env:RUNNER_TEMP\lemonade-msi-uninstall.log"
+                        Write-Host "msiexec /x exit code: $unCode"
                     }
                 }
             }
