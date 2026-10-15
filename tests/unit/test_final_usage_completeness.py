@@ -118,3 +118,16 @@ class TestTerminalClamp:
         ]
         assert terminal_indices, "an answer event must produce a terminal"
         assert terminal_indices[0] == len(out) - 1
+
+
+def test_an_answer_pulled_from_the_stream_does_not_end_the_turn():
+    """Only the agent's printed answer is the final; the streamed one is text.
+
+    As a ``final`` it ended the stdio stream early, the host cancelled the run,
+    and the real final carrying the token counts never went out (#5087).
+    """
+    out = CanonicalTranslator(run_id=None, agent_id="gaia", debug=False).translate(
+        {"type": "answer", "content": "2", "streamed": True}
+    )
+
+    assert out == [{"type": "token", "delta": "2"}]

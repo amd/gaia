@@ -9,12 +9,31 @@
   stopped-state address `localhost:13305`. Without a configured `base_url` the
   agent takes the port the server actually starts on, so its first turn answers
   instead of failing with "Couldn't reach the local LLM".
+- `run_python` with no project and a working directory outside the allowed
+  paths (the Agent UI server's own folder) runs in the agent's scratch
+  directory instead of being refused, and its result names that directory. A
+  project outside the allowed paths is still refused.
 - `run_python`, `execute_python_file` and the Windows notification fallback start
   their child process without GAIA's internal credentials, as core's shell and
   MCP children already do.
 - `run_python` and `execute_python_file` run inside a frozen (PyInstaller)
   agent. There `sys.executable` is the agent binary, so they now re-launch it
   with `--gaia-run-python-file`, which its entry point must hand to
+  `gaia_agent_chat.python_runner.run_python_file` before parsing argv.
+- A Python run that exits non-zero now returns `status: "error"` with an
+  `error` naming the exit code and the last stderr line, instead of
+  `status: "success"`.
+- `run_python` and `execute_python_file` default to a 120 s run (was 60 s) and
+  accept `timeout` up to 1800 s; a larger value is refused, not clamped. The
+  agent waits out the requested time instead of abandoning the call at its
+  180 s default. A run that times out or is stopped kills its whole process
+  tree (a Job Object on Windows, so orphaned grandchildren die too), and its
+  result lists `files_modified` — the files that changed while it ran, with
+  `files_modified_complete: false` when the bounded search stopped early — so
+  a half-written file is checked rather than reported as finished. Nothing is
+  deleted. A script that exits while a process it started still holds its
+  output no longer waits out the timeout: those processes are stopped and the
+  result carries a `note`.
   `gaia_agent_chat.python_runner.dispatch` before parsing argv. `dispatch`
   also runs the `python -m/-c/<file>` forms a script uses to start
   `sys.executable`, and refuses `-m pip` with the bundled-library list. Both

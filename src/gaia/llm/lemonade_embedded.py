@@ -409,7 +409,10 @@ def _binds(family: int, host: str, port: int, reuseport: bool) -> bool:
         raise
     with sock:
         if reuseport:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            # Only the POSIX path passes reuseport; Windows has no SO_REUSEPORT.
+            sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_REUSEPORT, 1  # pylint: disable=no-member
+            )
         try:
             sock.bind((host, port))
         except OSError as e:

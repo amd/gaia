@@ -9174,8 +9174,6 @@ def _apply_lemonade_choice_to_daemon() -> None:
 
 def handle_lemonade_choice_command(args):
     """``gaia lemonade connect|detect|status``: which Lemonade GAIA uses."""
-    import json as _json
-
     from gaia.config import GaiaConfigError
     from gaia.llm import lemonade_choice as choice
 
@@ -9184,7 +9182,7 @@ def handle_lemonade_choice_command(args):
         if action == "status":
             info = choice.describe()
             if getattr(args, "json", False):
-                print(_json.dumps(info))
+                print(json.dumps(info))
                 return
             if info["source"] == "env":
                 print(f"GAIA uses the Lemonade Server at {info['base_url']}")
@@ -9202,7 +9200,7 @@ def handle_lemonade_choice_command(args):
         if action == "detect":
             found = choice.detect_running_lemonade()
             if getattr(args, "json", False):
-                print(_json.dumps(found.to_dict() if found else None))
+                print(json.dumps(found.to_dict() if found else None))
                 return
             if found is None:
                 print("No Lemonade Server found on this PC's default ports.")

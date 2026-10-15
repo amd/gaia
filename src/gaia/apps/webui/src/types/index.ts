@@ -241,6 +241,8 @@ export interface InferenceStats {
     time_to_first_token: number;
     input_tokens: number;
     output_tokens: number;
+    /** The agent's own step count for the turn. */
+    steps?: number | null;
 }
 
 export interface Message {
@@ -674,6 +676,8 @@ export interface StreamEvent {
     confirm_id?: string;
     /** What "always allow" would grant for this call; absent means it is not offered. */
     always_scope?: string;
+    /** What the call does: read, write, execute, or destructive (for permission_request events). */
+    risk?: string;
     /** Machine tool name a confirmation is about (for needs_confirmation events). */
     action?: string;
     /** Question id to echo back on POST /chat/user-input (for needs_input events). */
