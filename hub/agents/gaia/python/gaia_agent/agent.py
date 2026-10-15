@@ -264,7 +264,7 @@ class GaiaAgentConfig(ChatAgentConfig):
     # The user's home is the honest scope for a personal document agent — it is
     # what "ask questions about my files" means — and it stays a real boundary
     # (system directories, other users, and program files are still refused).
-    # Override with ``allowed_paths=[...]`` to narrow it.
+    # Override with ``allowed_paths=[...]``, or set GAIA_ALLOWED_PATHS, to narrow it.
     allowed_paths: Optional[List[str]] = field(
         default_factory=lambda: [str(Path.home())]
     )
@@ -303,7 +303,8 @@ def _code_search_start(allowed: List[str]) -> str:
     """
     folders = [p for p in allowed if Path(p).is_dir()]
     repos = [p for p in folders if is_code_repository(p)]
-    return (repos or folders or allowed)[0]
+    # Empty only when GAIA_ALLOWED_PATHS left nothing in scope; ceilings refuse all.
+    return (repos or folders or allowed or [os.getcwd()])[0]
 
 
 def _apply_fast_mode(config: GaiaAgentConfig) -> None:
@@ -478,7 +479,9 @@ class GaiaAgent(
             # back to allowed_paths for the same reason that field rejects cwd: the
             # daemon launches this sidecar with cwd = the package directory, so cwd
             # would sandbox code search to the agent's own source tree.
-            allowed = getattr(self.config, "allowed_paths", None) or [str(Path.home())]
+            allowed = getattr(self.config, "allowed_paths", None)
+            if allowed is None:
+                allowed = [str(Path.home())]
             # Through the mixin, so both read the one cached resolution and can
             # never end up describing two different trees.
             index_root = self._project_map_root() or _code_search_start(allowed)

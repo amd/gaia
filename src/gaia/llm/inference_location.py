@@ -41,6 +41,9 @@ _DISPLAY_NAMES = {
 #: Lemonade server the request goes through is still the local one.
 _VIA_LEMONADE = frozenset({"amd", "fireworks"})
 
+#: Providers whose display name reads with "the" in a sentence.
+_ARTICLED = frozenset({"amd"})
+
 
 @dataclass(frozen=True)
 class InferenceLocation:
@@ -59,6 +62,36 @@ class InferenceLocation:
     def display(self) -> str:
         """Human name for the provider, for a prompt or a status line."""
         return _DISPLAY_NAMES.get(self.provider, self.provider)
+
+    @property
+    def model_name(self) -> str:
+        """The model as a person reads it: no routing prefix, no account path."""
+        prefix = f"{self.provider}."
+        name = (
+            self.model[len(prefix) :] if self.model.startswith(prefix) else self.model
+        )
+        return name.rstrip("/").rsplit("/", 1)[-1] or self.model
+
+    def placement(self) -> str:
+        """Where the model runs and what leaves the machine, after its name.
+
+        The user-facing half of :meth:`describe`: one line for the TUI and the
+        Agent UI. ``describe`` stays the system prompt's fuller wording.
+        """
+        if not self.remote:
+            return (
+                "on this machine. GAIA is not sending this conversation to any "
+                "cloud provider."
+            )
+        where = f"the {self.display}" if self.provider in _ARTICLED else self.display
+        return (
+            f"on {where} (cloud). Your messages, and anything read from files "
+            "or memory, are sent there."
+        )
+
+    def notice(self) -> str:
+        """The one-line notice a person sees: model, place, what is sent."""
+        return f"Using {self.model_name} {self.placement()}"
 
     def describe(self) -> str:
         """One sentence naming the destination, honest about what is local."""

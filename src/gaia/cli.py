@@ -3137,6 +3137,30 @@ Examples:
     embedded_backend_parser.add_argument(
         "spec", help="Backend spec, e.g. llamacpp:vulkan (recipe:backend)"
     )
+    connect_parser = lemonade_subparsers.add_parser(
+        "connect",
+        help="Use a Lemonade Server you already run instead of GAIA's own "
+        "(saved; undo with `gaia config set lemonade_mode gaia`)",
+    )
+    connect_parser.add_argument(
+        "url",
+        nargs="?",
+        help="Its address, e.g. http://localhost:13305 (default: the one "
+        "`gaia lemonade detect` finds)",
+    )
+    connect_parser.add_argument(
+        "--api-key-stdin",
+        action="store_true",
+        help="Read the server's API key from stdin instead of prompting",
+    )
+    lemonade_subparsers.add_parser(
+        "detect",
+        help="Look for a Lemonade Server already running on this PC's default ports",
+    ).add_argument("--json", action="store_true", help="Print one JSON object")
+    lemonade_subparsers.add_parser(
+        "status",
+        help="Show which Lemonade Server GAIA uses and who chose it",
+    ).add_argument("--json", action="store_true", help="Print one JSON object")
 
     # Daemon command (headless custody daemon lifecycle)
     daemon_parser = subparsers.add_parser(
@@ -3651,6 +3675,18 @@ Examples:
         help="Use the Lemonade Server LEMONADE_BASE_URL names instead of GAIA's "
         "own (checks it; downloads models via its API). Implied by a non-localhost "
         "LEMONADE_BASE_URL.",
+    )
+    init_parser.add_argument(
+        "--lemonade-url",
+        default=None,
+        help="Use the Lemonade Server you already run at this address instead "
+        "of installing GAIA's own, and save that choice",
+    )
+    init_parser.add_argument(
+        "--gaia-lemonade",
+        action="store_true",
+        help="Use GAIA's own Lemonade Server, and save that choice (skips the "
+        "offer to use one already running)",
     )
     init_parser.add_argument(
         "--skip-chat-model",
@@ -5683,6 +5719,8 @@ Let me know your answer!
             remote=getattr(args, "remote", False),
             skip_webui_build=getattr(args, "skip_webui_build", False),
             skip_chat_model=getattr(args, "skip_chat_model", False),
+            lemonade_url=getattr(args, "lemonade_url", None),
+            gaia_lemonade=getattr(args, "gaia_lemonade", False),
         )
         sys.exit(exit_code)
 
@@ -6372,6 +6410,10 @@ def handle_config_command(args):
         print(value if value is not None else "")
         return
 
+    if action == "set" and args.key.startswith("lemonade_"):
+        _set_lemonade_config(args.key, args.value, config_file, path)
+        return
+
     if action == "set":
         try:
             cfg.set(args.key, args.value)
@@ -6385,6 +6427,41 @@ def handle_config_command(args):
         print(f"✅ Set {args.key} = {cfg.get(args.key)}")
         print(f"   Saved to {config_file}")
         return
+
+
+def _set_lemonade_config(key, value, config_file, path) -> None:
+    """``gaia config set lemonade_*``: check the server, save, switch the daemon."""
+    from gaia.config import GaiaConfig, GaiaConfigError
+    from gaia.llm import lemonade_choice as choice
+
+    if path is not None:
+        print(
+            "❌ The Lemonade setting lives in GAIA's own config file, which every "
+            "front end reads; --config can't move it.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    try:
+        if key == "lemonade_mode":
+            mode = GaiaConfig._coerce(key, value)
+            if mode is None:
+                raise GaiaConfigError(
+                    "lemonade_mode can't be empty: use 'gaia' or 'external'."
+                )
+            choice.set_mode(mode)
+        elif key == "lemonade_base_url":
+            choice.set_url(value)
+        else:
+            raise GaiaConfigError(
+                f"{key} is set by `gaia lemonade connect <url>`, which stores the "
+                "key in the OS credential store."
+            )
+    except (choice.LemonadeChoiceError, GaiaConfigError) as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"✅ Set {key} = {GaiaConfig.load().get(key)}")
+    print(f"   Saved to {config_file}")
+    _apply_lemonade_choice_to_daemon()
 
 
 def _print_gateway_models(models, state):
@@ -8552,7 +8629,7 @@ def _handle_daemon_stop_agent(args):
     print(f"✅ agent '{args.agent_id}' sidecar stopped (daemon still running)")
 
 
-def _handle_daemon_stop():
+def _handle_daemon_stop(exit_on_lemonade_error: bool = True):
     from gaia.daemon import client
     from gaia.daemon.errors import DaemonError
     from gaia.daemon.instance import (
@@ -8564,32 +8641,61 @@ def _handle_daemon_stop():
 
     inst = read_instance()
     if inst is None:
-        print("GAIA daemon: not running (nothing to stop)")
-        return
-    if not pid_alive(inst.pid):
+        print("GAIA daemon: not running")
+    elif not pid_alive(inst.pid):
         remove_instance(only_pid=inst.pid)
         print(f"GAIA daemon: cleared stale registry (pid {inst.pid} was already dead)")
-        return
-    # Prefer a graceful, authed shutdown; escalate to terminate if it won't answer.
-    try:
-        client.request_shutdown(inst)
-    except DaemonError as e:
-        print(f"⚠️  graceful shutdown failed ({e}); terminating pid {inst.pid}")
-        terminate_instance(inst)
-    # Shutdown drains requests, waits out a Lemonade start in flight and stops
-    # the Lemonade Server it started — see client.STOP_WAIT_TIMEOUT.
-    if client.wait_until_gone(inst, timeout=client.STOP_WAIT_TIMEOUT):
-        remove_instance(only_pid=inst.pid)
-        print(f"✅ GAIA daemon stopped (pid {inst.pid})")
     else:
-        print(f"⚠️  daemon pid {inst.pid} did not exit; terminating")
-        terminate_instance(inst)
-        remove_instance(only_pid=inst.pid)
-        print(f"✅ GAIA daemon terminated (pid {inst.pid})")
+        # Prefer a graceful, authed shutdown; escalate to terminate if it won't
+        # answer.
+        try:
+            client.request_shutdown(inst)
+        except DaemonError as e:
+            print(f"⚠️  graceful shutdown failed ({e}); terminating pid {inst.pid}")
+            terminate_instance(inst)
+        # Shutdown drains requests, waits out a Lemonade start in flight and
+        # stops GAIA's Lemonade Server — see client.STOP_WAIT_TIMEOUT.
+        if client.wait_until_gone(inst, timeout=client.STOP_WAIT_TIMEOUT):
+            remove_instance(only_pid=inst.pid)
+            print(f"✅ GAIA daemon stopped (pid {inst.pid})")
+        else:
+            print(f"⚠️  daemon pid {inst.pid} did not exit; terminating")
+            terminate_instance(inst)
+            remove_instance(only_pid=inst.pid)
+            print(f"✅ GAIA daemon terminated (pid {inst.pid})")
+    _stop_gaia_lemonade_left_running(exit_on_error=exit_on_lemonade_error)
+
+
+def _stop_gaia_lemonade_left_running(exit_on_error: bool = True):
+    """Stop GAIA's own Lemonade Server if the daemon did not.
+
+    Covers one ``gaia init`` started with no daemon to hand it to, a daemon
+    that was killed rather than shut down, and a start still in flight when the
+    daemon exited. A server ``LEMONADE_BASE_URL`` names is the user's and is
+    never touched.
+
+    Args:
+        exit_on_error: Exit 1 when it will not stop. ``restart`` passes False:
+            the error is printed, and the new daemon still starts.
+    """
+    from gaia.llm.lemonade_client import configured_lemonade_url
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
+
+    if configured_lemonade_url():
+        return
+    try:
+        stopped = EmbeddedLemonade().stop()
+    except EmbeddedLemonadeError as e:
+        print(f"❌ {e}")
+        if exit_on_error:
+            sys.exit(1)
+        return
+    if stopped:
+        print("✅ GAIA's Lemonade Server stopped")
 
 
 def _handle_daemon_restart():
-    _handle_daemon_stop()
+    _handle_daemon_stop(exit_on_lemonade_error=False)
     _handle_daemon_start()
 
 
@@ -8955,13 +9061,125 @@ def handle_lemonade_command(args):
     Args:
         args: Parsed arguments for the lemonade command.
     """
-    if getattr(args, "lemonade_action", None) != "embedded":
-        print(
-            "❌ No Lemonade action specified. Use 'gaia lemonade --help' to see "
-            "available actions."
-        )
+    action = getattr(args, "lemonade_action", None)
+    if action == "embedded":
+        handle_lemonade_embedded_command(args)
+        return
+    if action in ("connect", "detect", "status"):
+        handle_lemonade_choice_command(args)
+        return
+    print(
+        "❌ No Lemonade action specified. Use 'gaia lemonade --help' to see "
+        "available actions."
+    )
+    sys.exit(1)
+
+
+def _apply_lemonade_choice_to_daemon() -> None:
+    """Tell a running daemon about a changed Lemonade choice, loudly on failure."""
+    from gaia.daemon.errors import DaemonError
+    from gaia.llm.lemonade_choice import apply_to_daemon
+
+    try:
+        applied = apply_to_daemon()
+    except DaemonError as e:
+        print(f"❌ Saved, but the running GAIA daemon did not switch: {e}")
         sys.exit(1)
-    handle_lemonade_embedded_command(args)
+    from gaia.llm.lemonade_choice import env_override_note
+
+    note = env_override_note()
+    if note:
+        print(f"   Note: {note}")
+    if applied is None:
+        return
+    if applied.get("restarted"):
+        print("   Restarted the GAIA daemon so it uses the new server.")
+    if applied.get("action") == "stopped_gaia_lemonade":
+        print("   Stopped GAIA's own Lemonade Server.")
+    elif applied.get("action") == "starting_gaia_lemonade":
+        print("   Starting GAIA's own Lemonade Server.")
+
+
+def handle_lemonade_choice_command(args):
+    """``gaia lemonade connect|detect|status``: which Lemonade GAIA uses."""
+    import json as _json
+
+    from gaia.config import GaiaConfigError
+    from gaia.llm import lemonade_choice as choice
+
+    action = args.lemonade_action
+    try:
+        if action == "status":
+            info = choice.describe()
+            if getattr(args, "json", False):
+                print(_json.dumps(info))
+                return
+            if info["source"] == "env":
+                print(f"GAIA uses the Lemonade Server at {info['base_url']}")
+                print("   chosen by LEMONADE_BASE_URL (it overrides the saved setting)")
+            elif info["source"] == "config":
+                print(f"GAIA uses your Lemonade Server at {info['base_url']}")
+                print(
+                    "   saved setting; back to GAIA's own: gaia config set lemonade_mode gaia"
+                )
+            else:
+                print("GAIA uses its own Lemonade Server")
+                print("   to use one you run: gaia lemonade connect <url>")
+            return
+
+        if action == "detect":
+            found = choice.detect_running_lemonade()
+            if getattr(args, "json", False):
+                print(_json.dumps(found.to_dict() if found else None))
+                return
+            if found is None:
+                print("No Lemonade Server found on this PC's default ports.")
+                return
+            print(found.message())
+            if found.status in (choice.OK, choice.NEEDS_KEY):
+                print(f"   To use it: gaia lemonade connect {found.url}")
+            return
+
+        # connect
+        url = args.url
+        if not url:
+            found = choice.detect_running_lemonade()
+            if found is None or found.status == choice.TOO_OLD:
+                msg = (
+                    found.message()
+                    if found
+                    else ("No Lemonade Server found on this PC's default ports.")
+                )
+                print(f"❌ {msg} Give its address: gaia lemonade connect <url>")
+                sys.exit(1)
+            url = found.url
+        key = None
+        if getattr(args, "api_key_stdin", False):
+            key = sys.stdin.readline().strip() or None
+        try:
+            result = choice.use_external(url, key)
+        except choice.LemonadeChoiceError as e:
+            if e.status != choice.NEEDS_KEY or key is not None:
+                raise
+            if not sys.stdin.isatty():
+                print(f"❌ {e} Pass it on stdin with --api-key-stdin.")
+                sys.exit(1)
+            import getpass
+
+            print(e)
+            key = getpass.getpass("API key: ").strip() or None
+            result = choice.use_external(url, key)
+        print(
+            f"✅ GAIA now uses your Lemonade Server v{result.version} at {result.url}"
+        )
+        print("   It will not install or start its own. GAIA registers its embedding")
+        print("   model there and loads its models there; it does not change your")
+        print("   server's settings.")
+        print("   Back to GAIA's own: gaia config set lemonade_mode gaia")
+        _apply_lemonade_choice_to_daemon()
+    except (choice.LemonadeChoiceError, GaiaConfigError) as e:
+        print(f"❌ {e}")
+        sys.exit(1)
 
 
 def handle_lemonade_embedded_command(args):

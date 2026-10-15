@@ -1570,15 +1570,17 @@ def serve_http(argv: List[str]) -> int:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
     args = parser.parse_args(argv)
 
-    # The warm-up swallows agent-build errors, so a stale GAIA_SKILL_SET would
-    # otherwise leave a healthy-looking sidecar with no skills.
+    # The warm-up swallows agent-build errors, so a stale GAIA_SKILL_SET or a
+    # bad GAIA_ALLOWED_PATHS would otherwise leave a healthy-looking sidecar.
     from gaia_agent.agent import check_skill_set_selection
 
+    from gaia.security import AllowedPathsEnvError, env_allowed_paths
     from gaia.skills.errors import SkillSetError
 
     try:
         check_skill_set_selection()
-    except SkillSetError as exc:
+        env_allowed_paths()
+    except (SkillSetError, AllowedPathsEnvError) as exc:
         print(f"gaia-agent: {exc}", file=sys.stderr)
         return 2
 
