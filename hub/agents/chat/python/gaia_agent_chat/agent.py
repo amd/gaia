@@ -1817,14 +1817,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 """Run a Python snippet and return what it prints.
 
                 Compute or check something without creating a file. Runs
-                from the project root, so relative paths reach the user's
-                files; with no project it may run in your scratch
-                directory, so use absolute paths for the user's files.
-                Report numbers from its output — do not work them out in
-                your head.
+                from the project root; with no project it may run in your
+                scratch directory, so use absolute paths for user files.
+                Report numbers from its output.
 
                 No access to your tools: `from gaia import <tool>` fails —
-                call it directly as a tool instead.
+                call it directly as a tool.
 
                 Has pypdf, pymupdf, docx, pptx, openpyxl, xlsxwriter,
                 reportlab, pandas, numpy, matplotlib; no pip.
