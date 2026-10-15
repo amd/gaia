@@ -13,14 +13,17 @@ from gaia.agents.base.tool_markup import (
     parse_deepseek_tool_calls,
     strip_tool_markup,
 )
-from tests.unit.agents.test_deepseek_tool_markup import (  # noqa: F401
+from tests.unit.agents import test_deepseek_tool_markup as _base
+from tests.unit.agents.test_deepseek_tool_markup import (
     KW06_MARKUP,
     _answer,
     _final_text,
     _register_run_python,
     _stub_chat,
-    agent,
 )
+
+# The shared fixture, bound by name so pytest finds it in this module.
+agent = _base.agent
 
 P_CLOSE = "</｜DSML｜parameter>"
 
