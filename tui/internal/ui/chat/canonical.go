@@ -293,9 +293,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		active := m.turnElapsed(time.Now())
 		duration := active
-		if m.startup.warmNext && !m.dev {
-			// The opening switch's time belongs to the ready line, not its own.
-			duration = 0
+		durationLabel := ""
+		if m.startup.warmNext {
+			if m.dev {
+				// A bare time under the model notice reads as noise.
+				durationLabel = "model switched in "
+			} else {
+				// The opening switch's time belongs to the ready line, not its own.
+				duration = 0
+			}
 		}
 		// The turn is over, so a confirmation still up is dead — resolved here,
 		// before the work is committed, so its step carries the outcome.
@@ -309,18 +315,19 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
 		if content != "" || !m.cancelPending {
 			m.messages = append(m.messages, Message{
-				Role:         RoleAssistant,
-				Content:      content,
-				Rendered:     components.RenderMarkdown(content),
-				Duration:     duration,
-				TTFT:         ttft,
-				TokPerS:      usage.TokPerS,
-				InputTokens:  usage.InputTokens,
-				CachedTokens: usage.CachedTokens,
-				Steps:        usage.Steps,
-				ToolsUsed:    usage.ToolsUsed,
-				Tokens:       usage.Tokens,
-				Metrics:      usage.Metrics,
+				Role:          RoleAssistant,
+				Content:       content,
+				Rendered:      components.RenderMarkdown(content),
+				Duration:      duration,
+				DurationLabel: durationLabel,
+				TTFT:          ttft,
+				TokPerS:       usage.TokPerS,
+				InputTokens:   usage.InputTokens,
+				CachedTokens:  usage.CachedTokens,
+				Steps:         usage.Steps,
+				ToolsUsed:     usage.ToolsUsed,
+				Tokens:        usage.Tokens,
+				Metrics:       usage.Metrics,
 			})
 		}
 		// One ledger entry per turn, from what the backend reported. A turn
@@ -692,11 +699,13 @@ func toolResultSucceeded(data json.RawMessage) bool {
 		return true
 	}
 	var probe struct {
-		OK            *bool `json:"ok"`
-		Success       *bool `json:"success"`
-		ReturnCode    *int  `json:"return_code"`
+		OK            *bool  `json:"ok"`
+		Success       *bool  `json:"success"`
+		ReturnCode    *int   `json:"return_code"`
+		ExpectedExit  string `json:"expected_exit"`
 		CommandOutput *struct {
-			ReturnCode *int `json:"return_code"`
+			ReturnCode   *int   `json:"return_code"`
+			ExpectedExit string `json:"expected_exit"`
 		} `json:"command_output"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
@@ -705,13 +714,12 @@ func toolResultSucceeded(data json.RawMessage) bool {
 	if probe.OK != nil && !*probe.OK || probe.Success != nil && !*probe.Success {
 		return false
 	}
-	// A shell tool reports success when the command RAN, whatever it
-	// returned — so pytest exiting 2 drew as a passed step. The exit code is
-	// the command's own verdict.
-	if rc := probe.ReturnCode; rc != nil && *rc != 0 {
+	// The exit code is the command's own verdict, so pytest exiting 2 is a
+	// failed step — unless the tool named it an answer (grep's 1: no match).
+	if rc := probe.ReturnCode; rc != nil && *rc != 0 && probe.ExpectedExit == "" {
 		return false
 	}
-	if co := probe.CommandOutput; co != nil && co.ReturnCode != nil && *co.ReturnCode != 0 {
+	if co := probe.CommandOutput; co != nil && co.ReturnCode != nil && *co.ReturnCode != 0 && co.ExpectedExit == "" {
 		return false
 	}
 	return true

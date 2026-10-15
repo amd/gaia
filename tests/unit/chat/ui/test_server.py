@@ -141,6 +141,8 @@ class TestSystemStatus:
         assert "not valid JSON" in data["config_error"]
         # The config names the model, so an unreadable one leaves it unknown.
         assert data["default_model_name"] is None
+        # It names the Lemonade server too, so that is unknown as well.
+        assert data["lemonade_url"] is None
 
     def test_valid_config_reports_its_profile_and_no_error(
         self, client, tmp_path, monkeypatch

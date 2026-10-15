@@ -202,7 +202,8 @@
                       "sdk/sdks/llm",
                       "sdk/sdks/vlm",
                       "sdk/sdks/audio",
-                      "sdk/sdks/governance"
+                      "sdk/sdks/governance",
+                      "sdk/sdks/skills"
                     ]
                   },
                   {

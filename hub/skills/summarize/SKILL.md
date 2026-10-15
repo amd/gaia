@@ -2,7 +2,7 @@
 name: summarize
 description: Summarize a document, meeting transcript, or email — pick a style that matches what the content actually is, and fold long input forward in sections instead of losing the back half. Use when the user pastes or points at a transcript, email, PDF, or long document and asks for a summary, action items, or key decisions.
 license: MIT
-version: 1.0.0
+version: 1.0.1
 metadata:
   gaia:
     security_tier: community
@@ -37,8 +37,9 @@ material when the input is too long to read in one pass.
 2. **Get the full text.** For an indexed document, `index_document` it first
    if it isn't already (`list_indexed_documents` to check), then either call
    `summarize_document(file_path, summary_type)` or `dump_document` first if
-   you need the raw extracted text. For pasted text or a plain text file,
-   `read_file` is enough.
+   you need the raw extracted text. For pasted text, a plain text file, or a
+   Word, PDF or Excel file of a few pages, `read_file` is enough — it returns
+   the extracted text in parts; follow `next_offset` until it is null.
 
    `summary_type` accepts **only** `brief`, `detailed`, or `bullets` — anything
    else comes back as an error, not a summary. The named styles below are how

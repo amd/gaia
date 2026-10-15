@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -108,7 +110,7 @@ class _NoAgentsRegistry:
     """A registry with the flagship registered that must never be built."""
 
     def get(self, name):
-        return object()
+        return SimpleNamespace(is_sidecar=False)
 
     def resolve_model(self, name):
         return None
@@ -138,6 +140,29 @@ def test_a_catalog_cloud_model_is_never_warmed(monkeypatch):
     monkeypatch.setattr(lemonade_client.LemonadeClient, "get_model_info", catalog)
     monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {})
     assert warmup._warm_new_chat_prefix(_EmptyDb()) is None
+
+
+def test_a_sidecar_flagship_is_skipped_without_a_traceback(monkeypatch, caplog):
+    """The Hub-installed flagship runs in its daemon sidecar; chat relays to it.
+
+    Building it here raised from the registry's stand-in factory and logged a
+    traceback on every boot and every new chat.
+    """
+    from gaia.agents.registry import AgentRegistry
+    from gaia.ui import _chat_helpers as chat
+
+    registry = AgentRegistry()
+    registry.register_sidecar("gaia", "GAIA", [])
+
+    def must_not_build(*args, **kwargs):
+        raise AssertionError("the warm-up built the sidecar agent in-process")
+
+    monkeypatch.setattr(registry, "create_agent", must_not_build)
+    monkeypatch.setattr(chat, "_agent_registry", registry)
+    with caplog.at_level(logging.INFO, logger=warmup.logger.name):
+        assert warmup._warm_new_chat_prefix(_EmptyDb()) is None
+    assert any("daemon sidecar" in r.getMessage() for r in caplog.records)
+    assert not any(r.exc_info for r in caplog.records)
 
 
 def test_the_eval_cloud_provider_is_never_warmed(monkeypatch):

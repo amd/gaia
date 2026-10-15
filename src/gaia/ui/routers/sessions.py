@@ -82,7 +82,7 @@ def _resolved_session_response(
             "inference_remote": loc.remote,
             "inference_provider": loc.provider,
             "inference_provider_name": loc.display,
-            "inference_description": loc.describe() if loc.model else None,
+            "inference_description": loc.notice() if loc.model else None,
         }
     )
 
