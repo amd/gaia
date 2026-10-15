@@ -509,6 +509,25 @@
     "title": "AuthorizeRequest",
     "type": "object"
   },
+  "BackendOption": {
+    "description": "A llama.cpp backend this machine can run, with Lemonade's state for it.",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "state": {
+        "title": "State",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "state"
+    ],
+    "title": "BackendOption",
+    "type": "object"
+  },
   "Body_upload_document_blob_api_documents_upload_post": {
     "properties": {
       "file": {
@@ -1977,6 +1996,79 @@
     "title": "LoadModelRequest",
     "type": "object"
   },
+  "LoadedModelInfo": {
+    "description": "One model Lemonade has loaded, as the Model server panel shows it.",
+    "properties": {
+      "backend": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Backend"
+      },
+      "backend_source": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Backend Source"
+      },
+      "ctx_size": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Ctx Size"
+      },
+      "device": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Device"
+      },
+      "name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Name"
+      },
+      "recipe": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Recipe"
+      }
+    },
+    "title": "LoadedModelInfo",
+    "type": "object"
+  },
   "MemorySettingsBody": {
     "description": "Typed request body for PUT /api/memory/settings.",
     "properties": {
@@ -2109,6 +2201,137 @@
       "created_at"
     ],
     "title": "MessageResponse",
+    "type": "object"
+  },
+  "ModelServerBackendRequest": {
+    "description": "Choose the llama.cpp backend for chat models: ``auto`` or a backend name.",
+    "properties": {
+      "backend": {
+        "title": "Backend",
+        "type": "string"
+      }
+    },
+    "required": [
+      "backend"
+    ],
+    "title": "ModelServerBackendRequest",
+    "type": "object"
+  },
+  "ModelServerInfo": {
+    "description": "Which Lemonade GAIA talks to and what it runs (Settings → Advanced).",
+    "properties": {
+      "available_backends": {
+        "items": {
+          "$ref": "#/components/schemas/BackendOption"
+        },
+        "title": "Available Backends",
+        "type": "array"
+      },
+      "base_url": {
+        "title": "Base Url",
+        "type": "string"
+      },
+      "chat_model": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/LoadedModelInfo"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "default_backend": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Default Backend"
+      },
+      "embedding_model": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/LoadedModelInfo"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error"
+      },
+      "owner": {
+        "title": "Owner",
+        "type": "string"
+      },
+      "port": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Port"
+      },
+      "preferred_backend": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Preferred Backend"
+      },
+      "reachable": {
+        "default": false,
+        "title": "Reachable",
+        "type": "boolean"
+      },
+      "system_info_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "System Info Error"
+      },
+      "version": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Version"
+      }
+    },
+    "required": [
+      "base_url",
+      "owner"
+    ],
+    "title": "ModelServerInfo",
     "type": "object"
   },
   "ModelStatus": {
@@ -3266,6 +3489,42 @@
       }
     },
     "title": "SystemStatus",
+    "type": "object"
+  },
+  "TargetRequest": {
+    "description": "``mode`` \"gaia\" or \"external\"; the URL and key only for \"external\".",
+    "properties": {
+      "api_key": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Api Key"
+      },
+      "base_url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Base Url"
+      },
+      "mode": {
+        "title": "Mode",
+        "type": "string"
+      }
+    },
+    "required": [
+      "mode"
+    ],
+    "title": "TargetRequest",
     "type": "object"
   },
   "TaskCreate": {

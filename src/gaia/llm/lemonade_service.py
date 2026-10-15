@@ -33,7 +33,10 @@ construction and every CLI call.
 
 from __future__ import annotations
 
-from typing import Optional
+import atexit
+import os
+import threading
+from typing import List, Optional
 
 from gaia.llm.lemonade_supervisor import (
     DEFAULT_START_TIMEOUT_S,
@@ -51,6 +54,8 @@ __all__ = [
     "LemonadeState",
     "ensure_daemon_owns_lemonade",
     "ensure_lemonade_running",
+    "hold_lemonade_open",
+    "release_lemonade_hold",
     "install_supervisor",
     "installed_supervisor",
 ]
@@ -64,6 +69,21 @@ def install_supervisor(supervisor: Optional[LemonadeSupervisor]) -> None:
     """Declare this process the owner of the model server (``None`` clears it)."""
     global _SUPERVISOR
     _SUPERVISOR = supervisor
+
+
+#: Set by the Electron app and the npm launcher on the Agent UI backend they
+#: spawn: the app's own pid, so its registration ends when the app does even if
+#: the backend lingers.
+APP_PID_ENV = "GAIA_APP_PID"
+
+# This process's registration with the daemon, released at exit.
+_HELD_CLIENT: Optional[str] = None
+_HELD_LOCK = threading.Lock()
+
+#: How often a held registration is repeated, so a daemon that restarted while
+#: this process ran learns of it before its idle timeout can fire.
+HOLD_RENEW_SECONDS = 30.0
+_RENEW_STOP = threading.Event()
 
 
 def installed_supervisor() -> Optional[LemonadeSupervisor]:
@@ -140,8 +160,9 @@ def _ask_the_daemon(
     )
 
 
-def ensure_daemon_owns_lemonade() -> None:
-    """Make sure a daemon exists, so the model server has an owner.
+def ensure_daemon_owns_lemonade(kind: str = "cli", name: str = "") -> None:
+    """Make sure a daemon exists, so the model server has an owner, and tell it
+    this process is using the server.
 
     A front-end calls this ONCE at startup. It is the opt-in that lets a
     user-facing command bring up the machine's background service —
@@ -149,10 +170,16 @@ def ensure_daemon_owns_lemonade() -> None:
     check that boots a daemon behind the caller's back surprises every library
     and test caller, and costs them up to a minute to do it.
 
-    Cheap when a daemon is already running (one status probe). A failure is
-    logged, not raised: the ``ensure_lemonade_running`` call that follows
-    produces the actionable error, and raising here would report the same
-    problem twice in different words.
+    Cheap when a daemon is already running (one status probe, one
+    registration). A failure is logged, not raised: the
+    ``ensure_lemonade_running`` call that follows produces the actionable
+    error, and raising here would report the same problem twice in different
+    words.
+
+    Args:
+        kind: ``"app"`` for the Agent UI backend, ``"cli"`` for a command; see
+            :mod:`gaia.daemon.lemonade_clients` for what each means.
+        name: Shown in the daemon log.
     """
     from gaia.daemon import client as daemon_client
     from gaia.daemon.errors import DaemonError
@@ -161,6 +188,104 @@ def ensure_daemon_owns_lemonade() -> None:
         daemon_client.start_or_attach()
     except DaemonError as e:
         log.warning("Could not start the GAIA background service: %s", e)
+        return
+    try:
+        hold_lemonade_open(kind, name)
+    except DaemonError as e:
+        log.warning(
+            "The GAIA background service will not know when this %s closes, so "
+            "it cannot free Lemonade's memory for it: %s",
+            kind,
+            e,
+        )
+
+
+def _client_pids(kind: str) -> List[int]:
+    """This process, plus the app that spawned it for an Agent UI backend.
+
+    The app pid is taken out of the environment so the processes this one
+    spawns do not register as part of an app that is not theirs.
+    """
+    pids = [os.getpid()]
+    raw = os.environ.pop(APP_PID_ENV, "").strip() if kind == "app" else ""
+    if raw:
+        try:
+            pids.append(int(raw))
+        except ValueError:
+            log.warning("Ignoring %s=%r: it is not a process id", APP_PID_ENV, raw)
+    return pids
+
+
+def hold_lemonade_open(kind: str, name: str = "") -> None:
+    """Register this process with the running daemon until it exits.
+
+    One registration per process: a second call is a no-op. Released by
+    :func:`release_lemonade_hold` at interpreter exit; a process killed outright
+    is noticed by the daemon within seconds.
+
+    Raises:
+        DaemonError: The daemon is not running or refused the registration.
+    """
+    global _HELD_CLIENT
+    from gaia.daemon import client as daemon_client
+
+    with _HELD_LOCK:
+        if _HELD_CLIENT is not None:
+            return
+        pids = _client_pids(kind)
+        _HELD_CLIENT = daemon_client.register_lemonade_client(kind, pids, name or kind)
+        client_id = _HELD_CLIENT
+    atexit.register(release_lemonade_hold)
+    _RENEW_STOP.clear()
+    threading.Thread(
+        target=_renew_hold,
+        args=(client_id, kind, pids, name or kind),
+        name="gaia-lemonade-hold",
+        daemon=True,
+    ).start()
+
+
+def _renew_hold(client_id: str, kind: str, pids: List[int], name: str) -> None:
+    """Repeat the registration until it is released.
+
+    Never starts a daemon: with none running there is nothing to tell, and the
+    next one hears from this loop once it is up. A failure is logged once per
+    distinct reason, not every 30 seconds.
+    """
+    from gaia.daemon import client as daemon_client
+    from gaia.daemon.errors import DaemonError
+
+    last_error = None
+    while not _RENEW_STOP.wait(HOLD_RENEW_SECONDS):
+        with _HELD_LOCK:
+            if _HELD_CLIENT != client_id:
+                return
+        try:
+            if daemon_client.attach() is None:
+                continue
+            daemon_client.register_lemonade_client(kind, pids, name, client_id)
+            last_error = None
+        except DaemonError as e:
+            if str(e) != last_error:
+                log.warning("Could not renew this %s's hold on Lemonade: %s", kind, e)
+            last_error = str(e)
+
+
+def release_lemonade_hold() -> None:
+    """Release this process's registration, if it holds one."""
+    global _HELD_CLIENT
+    from gaia.daemon import client as daemon_client
+    from gaia.daemon.errors import DaemonError
+
+    with _HELD_LOCK:
+        client_id, _HELD_CLIENT = _HELD_CLIENT, None
+    _RENEW_STOP.set()
+    if client_id is None:
+        return
+    try:
+        daemon_client.release_lemonade_client(client_id)
+    except DaemonError as e:
+        log.warning("%s; the daemon notices this process exit on its own.", e)
 
 
 def _post_start(payload: dict, timeout: float) -> dict:

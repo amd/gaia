@@ -2860,14 +2860,22 @@ class ShellToolsMixin:
         if os.name == "nt" and candidate_path.startswith("/"):
             if "/" not in candidate_path[1:]:
                 return None
-        if not (
+        # A shell or script may expand '~' and '$HOME'; check both readings.
+        expanded = os.path.expandvars(os.path.expanduser(candidate_path))
+        looks_like_path = (
             os.sep in candidate_path or "/" in candidate_path or ".." in candidate_path
+        )
+        # Under GAIA_ALLOWED_PATHS a bare '%USERPROFILE%' or '$HOME' is a path too.
+        if not looks_like_path and isinstance(
+            getattr(self.path_validator, "env_scope", None), list
         ):
+            looks_like_path = expanded != candidate_path and (
+                os.sep in expanded or "/" in expanded
+            )
+        if not looks_like_path:
             return None
         if candidate_path.startswith(("http://", "https://", "git://", "ssh://")):
             return None
-        # A shell or script may expand '~' and '$HOME'; check both readings.
-        expanded = os.path.expandvars(os.path.expanduser(candidate_path))
         for path in dict.fromkeys((candidate_path, expanded)):
             refusal = self._resolved_path_refusal(label, arg, path, cwd)
             if refusal:
