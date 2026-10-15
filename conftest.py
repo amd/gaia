@@ -119,6 +119,8 @@ _STATE_ENV = {
     "GAIA_CONFIG_FILE": ("config", "config.json"),
     "GAIA_DAEMON_HOME": ("daemon-home",),
     "GAIA_MEMORY_DB": ("memory", "memory.db"),
+    # Cloud calls record model availability here.
+    "GAIA_GATEWAY_FILE": ("gateway", "gateway.json"),
 }
 _STATE_ROOT = Path(tempfile.mkdtemp(prefix="gaia-test-state-"))
 atexit.register(shutil.rmtree, _STATE_ROOT, ignore_errors=True)

@@ -167,7 +167,11 @@ func (c *Client) do(method, path string, payload any, out any) error {
 		return fmt.Errorf("could not build request for %s: %w", url, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := lemonade.APIKeyFor(base); key != "" {
+	key, err := lemonade.APIKeyFor(context.Background(), base)
+	if err != nil {
+		return err
+	}
+	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 

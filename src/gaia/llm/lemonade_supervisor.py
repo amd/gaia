@@ -202,6 +202,15 @@ class LemonadeSupervisor:
                 waited_seconds=0.0,
             )
 
+        from gaia.llm.lemonade_choice import (
+            external_down_message,
+            external_mode_active,
+        )
+
+        if external_mode_active():
+            # The user runs this server; starting anything here would be the
+            # second Lemonade they switched to theirs to avoid.
+            raise LemonadeStartError(external_down_message(target))
         if not _is_loopback(urlparse(target).hostname or ""):
             raise self._remote_error(target)
         self._require_supervisable_port(client)

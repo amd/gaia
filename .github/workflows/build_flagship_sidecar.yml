@@ -107,11 +107,17 @@ jobs:
           # `anthropic` backs `--use-claude` and `/model`, which the TUI passes
           # to this binary. Its import is guarded, so leaving it out still
           # builds a binary that boots and then fails every Claude launch.
+          #
+          # pandas and matplotlib are for run_python scripts: the binary is the
+          # only Python a release user has (#5088). freeze.py refuses to build
+          # without them (SCRIPT_LIBRARIES).
           uv pip install --python .venv-freeze \
             -e ".[api,rag,diarize,browser]" \
             -e hub/agents/chat/python \
             -e hub/agents/gaia/python \
             anthropic \
+            pandas \
+            matplotlib \
             pyinstaller
 
       - name: Freeze one-file binary

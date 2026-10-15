@@ -38,6 +38,26 @@ _SUMMARY_CHAR_CAP = 300
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = ("error", "denied")
 
+
+def tool_result_failed(data: Any) -> bool:
+    """Whether a tool result reports a failure.
+
+    A non-zero ``return_code`` counts even under ``status: "success"``, as it
+    does in the agent loop, unless the tool marked it ``expected_exit``.
+    """
+    if not isinstance(data, dict):
+        return False
+    if data.get("status") in FAILED_TOOL_STATUSES:
+        return True
+    code = data.get("return_code")
+    return (
+        isinstance(code, int)
+        and not isinstance(code, bool)
+        and code != 0
+        and not data.get("expected_exit")
+    )
+
+
 #: Seconds the agent thread waits for a tool-confirm response before denying.
 #: Matches the TUI's ``DeliverableConfirmationTimeout`` so a prompt waits as
 #: long on every surface.
@@ -409,6 +429,9 @@ class SSEOutputHandler(OutputHandler):
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
+        # The answer this turn already put on the wire. A transport that ends
+        # the turn on it cancels the run, so the run reads it back from here.
+        self.delivered_answer: str = ""
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -425,6 +448,7 @@ class SSEOutputHandler(OutputHandler):
         self._start_time = time.time()
         self._step_count = 0
         self._tool_count = 0
+        self.delivered_answer = ""
         model_label = model_id or "LLM"
         self._emit(
             {
@@ -556,11 +580,7 @@ class SSEOutputHandler(OutputHandler):
 
         # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
-        success = (
-            data.get("status") not in FAILED_TOOL_STATUSES
-            if isinstance(data, dict)
-            else True
-        )
+        success = not tool_result_failed(data)
         self._last_tool_success = success
         event = {
             "type": "tool_result",
@@ -592,6 +612,7 @@ class SSEOutputHandler(OutputHandler):
                 "stdout": data.get("stdout", ""),
                 "stderr": data.get("stderr", ""),
                 "return_code": data.get("return_code", 0),
+                "expected_exit": data.get("expected_exit"),
                 "cwd": data.get("cwd", ""),
                 "duration_seconds": data.get("duration_seconds"),
                 "truncated": data.get("output_truncated", False),
@@ -851,6 +872,7 @@ class SSEOutputHandler(OutputHandler):
         record, self._turn_metrics = self._turn_metrics, None
         if record is not None and turn_log_path() is not None:
             event["metrics"] = record
+        self.delivered_answer = event["content"] or ""
         self._emit(event)
 
     def print_repeated_tool_warning(self):
@@ -1081,6 +1103,7 @@ class SSEOutputHandler(OutputHandler):
                             len(answer_text),
                             answer_text[:100],
                         )
+                        self.delivered_answer = answer_text
                         self._emit({"type": "answer", "content": answer_text})
                     else:
                         logger.debug("Filtered answer JSON: %s", stripped[:100])
@@ -1741,6 +1764,8 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         stdout = data.get("stdout", "")
         rc = data.get("return_code", 0)
         lines = stdout.strip().split("\n") if stdout.strip() else []
+        if rc != 0 and data.get("expected_exit"):
+            return f"{data['expected_exit']} (exit {rc})"
         if rc != 0:
             stderr = data.get("stderr", "")
             return f"Command failed (exit {rc})" + (

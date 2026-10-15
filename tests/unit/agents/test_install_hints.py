@@ -108,6 +108,38 @@ class TestResolvePipFrontend:
         assert "ensurepip" in message
 
 
+@pytest.fixture
+def frozen_build(monkeypatch, stock_venv):
+    """A PyInstaller binary: sys.executable is the app, even with uv on PATH."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "C:\\GAIA\\gaia-agent.exe")
+
+
+class TestFrozenBuild:
+    """Every install hint named the binary as a Python to run pip with."""
+
+    def test_resolve_pip_frontend_refuses(self, frozen_build):
+        with pytest.raises(install_hints.PackageInstallerUnavailableError) as exc:
+            install_hints.resolve_pip_frontend()
+        assert str(exc.value) == install_hints.FROZEN_NO_INSTALL
+
+    def test_pip_install_hint_names_no_command(self, frozen_build):
+        hint = install_hints.pip_install_hint("psutil")
+        assert hint == install_hints.FROZEN_NO_INSTALL
+        assert "gaia-agent.exe" not in hint
+        assert "/docs/" in hint
+
+    def test_missing_package_hint_says_it_is_not_bundled(self, frozen_build):
+        hint = install_hints.missing_package_hint("pyperclip")
+        assert hint.startswith("pyperclip isn't bundled in this GAIA build.")
+        assert "pip install" not in hint
+
+    def test_missing_package_hint_from_source_gives_the_command(self, stock_venv):
+        assert install_hints.missing_package_hint("pyperclip") == (
+            f"Install with: {sys.executable} -m pip install pyperclip"
+        )
+
+
 class TestFormatCommand:
     def test_quotes_shell_meaningful_args_only(self):
         assert (
