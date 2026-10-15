@@ -129,23 +129,57 @@ class PrefixWarmer:
             }
 
 
+def preload_skip_reason() -> Optional[str]:
+    """Why this PC loads the chat model on the first message, or None.
+
+    On a small machine a startup preload races first-run setup and whatever
+    else is open for the same memory; loading on demand leaves the free-memory
+    check to the one load that has to happen.
+    """
+    from gaia.llm.model_fit import (
+        EAGER_LOAD_MIN_RAM_GB,
+        preloads_chat_model,
+        ram_total_gb,
+    )
+
+    ram = ram_total_gb()
+    if preloads_chat_model(ram):
+        return None
+    return (
+        f"this PC has {ram:.0f} GB of memory (under "
+        f"{EAGER_LOAD_MIN_RAM_GB:.0f} GB), so the model loads with the first message"
+    )
+
+
 def _warm_new_chat_prefix(db) -> Optional[Dict[str, Any]]:
     """Build the flagship exactly as a new chat's first turn does, and warm it.
 
     Returns None when there is nothing to warm locally: a cloud model, a model
     not downloaded yet (loading it would start a download nobody asked for),
-    or no flagship registered.
+    no flagship registered, a flagship that runs in its daemon sidecar, or a
+    PC small enough to load on demand.
     """
     from gaia.llm.lemonade_client import LemonadeClient
     from gaia.ui import _chat_helpers as chat
     from gaia.ui.database import resolved_default_model
 
+    low_memory = preload_skip_reason()
+    if low_memory:
+        logger.info("Warm-up skipped: %s", low_memory)
+        return None
     if chat._eval_provider_kwargs():
         logger.info("Warm-up skipped: chat turns run on a cloud provider")
         return None
     registry = chat.get_agent_registry()
     if registry is None or registry.get(NEW_CHAT_AGENT) is None:
         logger.info("Warm-up skipped: the %s agent is not registered", NEW_CHAT_AGENT)
+        return None
+    if chat._should_relay_to_sidecar(NEW_CHAT_AGENT, registry):
+        # Chat relays to the sidecar, which cannot be built here and warms its
+        # own prompt when the daemon starts it.
+        logger.info(
+            "Warm-up skipped: the %s agent runs in its daemon sidecar", NEW_CHAT_AGENT
+        )
         return None
     client = LemonadeClient(verbose=False)
 

@@ -5,7 +5,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, Check, ChevronRight, Cloud, Cpu, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 import { useModelStore } from '../stores/modelStore';
-import type { PreflightReport, ProviderId, SetupCheck, SetupRunStatus, SetupStep } from '../types';
+import { lemonadeKeyRejected } from '../utils/lemonade';
+import type { LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCheck, SetupRunStatus, SetupStep } from '../types';
 import './SetupScreen.css';
 
 const CHOICES: Array<{ id: ProviderId; title: string; note: string }> = [
@@ -43,6 +44,102 @@ function StepIcon({ status, n }: { status?: SetupStep['status']; n: number }) {
     if (status === 'active') return <Loader2 size={14} className="spin" aria-hidden="true" />;
     if (status === 'failed' || status === 'cancelled') return <AlertCircle size={14} aria-hidden="true" />;
     return <>{n}</>;
+}
+
+const OFFERED: ReadonlyArray<LemonadeFound['status']> = ['ok', 'needs_key', 'too_old'];
+
+/**
+ * First run on a PC that already runs Lemonade: offer it, so GAIA does not
+ * install a second server and a second copy of every model.
+ */
+function ExistingLemonadeOffer() {
+    const [offer, setOffer] = useState<{ target: LemonadeTarget; found: LemonadeFound } | null>(null);
+    const [checkError, setCheckError] = useState<string | null>(null);
+    const [key, setKey] = useState('');
+    const [needsKey, setNeedsKey] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [chosen, setChosen] = useState<'external' | 'gaia' | null>(null);
+
+    useEffect(() => {
+        let live = true;
+        (async () => {
+            const target = await api.getLemonadeTarget();
+            if (!target.offer) return;
+            const { found } = await api.detectLemonade();
+            if (live && found && OFFERED.includes(found.status)) {
+                setOffer({ target, found });
+                setNeedsKey(found.status === 'needs_key');
+            }
+        })().catch((err) => {
+            if (live) setCheckError(err instanceof Error ? err.message : String(err));
+        });
+        return () => { live = false; };
+    }, []);
+
+    const choose = useCallback(async (mode: 'external' | 'gaia') => {
+        if (!offer) return;
+        setBusy(true);
+        setError(null);
+        try {
+            await api.setLemonadeTarget(mode === 'external'
+                ? { mode, base_url: offer.found.url, api_key: key.trim() || undefined }
+                : { mode });
+            setKey('');
+            setChosen(mode);
+        } catch (err) {
+            if (lemonadeKeyRejected(err)) setNeedsKey(true);
+            setError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setBusy(false);
+        }
+    }, [offer, key]);
+
+    if (checkError) {
+        return <p className="setup-hint">Could not check for a Lemonade Server you already run: {checkError}</p>;
+    }
+    if (!offer) return null;
+    const { target, found } = offer;
+    if (chosen) {
+        return (
+            <p className="setup-hint" role="status">
+                {chosen === 'external'
+                    ? `GAIA will use your Lemonade Server at ${found.url} and won't install its own.`
+                    : 'GAIA will set up its own Lemonade Server.'}
+            </p>
+        );
+    }
+    if (found.status === 'too_old') {
+        return <p className="setup-hint">{found.message}</p>;
+    }
+    return (
+        <form className="setup-lemonade" aria-label="Use your Lemonade Server" onSubmit={(e) => { e.preventDefault(); void choose('external'); }}>
+            <span className="setup-choice-title">
+                Use the Lemonade you already run at {found.url}{found.version ? ` (v${found.version})` : ''}
+            </span>
+            <span className="setup-choice-note">{target.what_gaia_does}</span>
+            {needsKey && (
+                <input
+                    className="settings-input"
+                    type="password"
+                    autoComplete="off"
+                    value={key}
+                    onChange={(e) => setKey(e.target.value)}
+                    placeholder="The API key your Lemonade Server was started with"
+                    aria-label="Lemonade API key"
+                />
+            )}
+            <div className="setup-row">
+                <button type="submit" className="btn-primary" disabled={busy || (needsKey && !key.trim())}>
+                    {busy && <Loader2 size={13} className="spin" />} Use mine
+                </button>
+                <button type="button" className="btn-secondary" disabled={busy} onClick={() => void choose('gaia')}>
+                    Use GAIA&rsquo;s own
+                </button>
+            </div>
+            {error && <p className="setup-error" role="alert">{error}</p>}
+        </form>
+    );
 }
 
 interface SetupScreenProps {
@@ -162,6 +259,7 @@ export function SetupScreen({ initial, onReady }: SetupScreenProps) {
                         </div>
                         {!run && (
                             <div className="setup-step-body">
+                                <ExistingLemonadeOffer />
                                 <div className="setup-choices" role="radiogroup" aria-label="Where GAIA runs">
                                     {CHOICES.map((c) => (
                                         <button

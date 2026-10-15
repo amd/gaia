@@ -4,6 +4,7 @@
 Chat Agent - Interactive chat with RAG and file search capabilities.
 """
 
+import dataclasses
 import os
 import platform
 import re
@@ -84,7 +85,7 @@ from gaia.llm.lemonade_client import (
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
-from gaia.security import PathValidator, stable_scratch_dir
+from gaia.security import PathValidator, narrow_allowed_paths, stable_scratch_dir
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
 
@@ -379,6 +380,11 @@ class ChatAgent(
         # silently fall back to "ad-hoc agent — show every MCP server".
         if config.namespaced_agent_id:
             self._gaia_namespaced_agent_id = config.namespaced_agent_id
+
+        # Narrowed once here so the validator, RAG and code-index ceilings agree.
+        narrowed = narrow_allowed_paths(config.allowed_paths)
+        if narrowed is not config.allowed_paths:
+            config = dataclasses.replace(config, allowed_paths=narrowed)
 
         # Initialize path validator
         self.path_validator = PathValidator(

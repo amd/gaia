@@ -32,6 +32,7 @@ from gaia.agents.tools.file_edit import (
 from gaia.agents.tools.path_access import read_access_error, readable_entry
 from gaia.agents.tools.search_scope import (
     DEEP_ROOT_DEPTH,
+    confine_roots,
     is_broad_root,
     root_depth,
     search_roots,
@@ -612,14 +613,17 @@ class FileSearchToolsMixin:
 
                     logger.debug("Phase 1: Searching common document locations...")
 
-                    common_locations = [
-                        home / "Documents",
-                        home / "Downloads",
-                        home / "Desktop",
-                        home / "OneDrive",
-                        home / "Google Drive",
-                        home / "Dropbox",
-                    ]
+                    common_locations = confine_roots(
+                        self,
+                        [
+                            home / "Documents",
+                            home / "Downloads",
+                            home / "Desktop",
+                            home / "OneDrive",
+                            home / "Google Drive",
+                            home / "Dropbox",
+                        ],
+                    )
 
                     # By path, not string prefix: a root ~/Doc must not cover ~/Documents.
                     for location in common_locations:
@@ -718,19 +722,20 @@ class FileSearchToolsMixin:
                 logger.debug("Phase 2: Deep search across drive(s)...")
 
                 if platform.system() == "Windows":
-                    # Search all available drives on Windows
                     import string
 
-                    for drive_letter in string.ascii_uppercase:
-                        drive = Path(f"{drive_letter}:/")
-                        if drive.exists():
-                            logger.debug(f"Searching drive {drive_letter}:...")
-                            search_location(drive, max_depth=999)
-                            if len(matching_files) >= 10:
-                                break
+                    drives = [
+                        Path(f"{letter}:/")
+                        for letter in string.ascii_uppercase
+                        if Path(f"{letter}:/").exists()
+                    ]
                 else:
-                    # On Linux/Mac, search from root
-                    search_location(Path("/"), max_depth=999)
+                    drives = [Path("/")]
+                for drive in confine_roots(self, drives):
+                    logger.debug("Searching %s...", drive)
+                    search_location(drive, max_depth=999)
+                    if len(matching_files) >= 10:
+                        break
 
                 # Stop progress indicator
                 if hasattr(self, "console") and hasattr(self.console, "stop_progress"):

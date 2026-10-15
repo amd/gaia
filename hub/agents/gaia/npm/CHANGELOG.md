@@ -19,6 +19,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   came back as `status: success`, so the TUI showed a failed run as
   successful. It is now `status: error`, with an `error` naming the exit code
   and the last stderr line; `stdout`, `stderr` and `return_code` are unchanged.
+- **`GAIA_ALLOWED_PATHS` confines a run to the folders you name.** The agent
+  could read anything under the user's home and nothing narrowed that short of
+  embedding it, so an evaluation run could read the graders' answer keys. Set
+  to absolute folders, it narrows every file tool, search, index and shell path
+  check to them — it never widens, an invalid value stops startup, and code the
+  agent runs (`run_python`, shell) is not confined.
+
 - **The sidecar's start-up warm-up now makes the first question fast.** It
   primed only the agent's own instructions, without the tool list or the rest
   of the system prompt, so the first question re-read all ~19K prompt tokens
