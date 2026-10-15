@@ -155,6 +155,49 @@ GAIA_AUTO_APPROVE_TOOLS=1 gaia chat --cli
 A `.env` file cannot set this variable; it must come from the real process
 environment, so a project directory can never switch off your prompts.
 
+### Narrowing file access
+
+The flagship agent can read anything under your home folder by default. To
+confine one run to particular folders — an evaluation run that must not read the
+graders' answer keys, or a session you want kept to one project — set
+`GAIA_ALLOWED_PATHS` to absolute paths separated by `;` on Windows and `:`
+elsewhere:
+
+```bash
+# Linux / macOS
+GAIA_ALLOWED_PATHS=/home/me/evals/task-17 gaia-tui
+
+# Windows (PowerShell)
+$env:GAIA_ALLOWED_PATHS = "C:\evals\task-17"; gaia-tui
+```
+
+- **It only narrows.** The agent's scope becomes the overlap of its normal scope
+  and this list. An entry wider than the normal scope (`C:\`, `/`) narrows
+  nothing, and one outside it (another drive) is ignored with a warning — neither
+  grants anything. If no entry overlaps, the agent can reach no files at all
+  except its scratch folder. Out-of-scope paths are refused without an approval
+  prompt, and full access does not lift that.
+- **Every file tool honours it:** reading, writing, listing, `tree`, name and
+  content searches (including the Documents/Downloads sweep and deep search),
+  indexing a document, code search and its index, the project map, saving
+  downloads, capturing a skill from a local folder, and the path checks on shell
+  commands. The agent's own scratch folder stays writable.
+- **It does not sandbox code.** A `run_python` script or a shell command the
+  agent runs can open any file your OS account can read. This setting confines
+  GAIA's tools, not arbitrary code — for real isolation, run the agent as a
+  separate OS user, in a container, or in a VM, and keep answer keys where that
+  account cannot read them.
+- **It is read when the agent starts.** `gaia chat` reads it directly, and
+  `gaia-tui` passes it to the agent it launches. A Hub-installed flagship runs
+  under the GAIA background service, so the variable must be set when
+  `gaia daemon start` runs; restart the daemon to change it. The Agent UI
+  server reads it when it starts.
+
+An empty value, an empty entry, a relative path (`~/x` included) or a folder that
+does not exist stops the agent at startup with an error naming the bad entry;
+GAIA never falls back to your home folder. Unset the variable to get the default
+scope back.
+
 ---
 
 ## Initialization

@@ -25,6 +25,7 @@ from typing import Any, Dict, Optional, Sequence
 
 from gaia.agents.base.tools import tool
 from gaia.agents.tools.path_access import read_access_error
+from gaia.agents.tools.search_scope import in_env_scope
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -54,6 +55,19 @@ _HOME_DIRECTORY_REFUSAL = json.dumps(
         )
     }
 )
+
+
+def _env_scope_refusal(repo_path: str) -> str:
+    """The refusal for a repository outside ``GAIA_ALLOWED_PATHS``."""
+    return json.dumps(
+        {
+            "error": (
+                f"'{repo_path}' is outside GAIA_ALLOWED_PATHS, which confines "
+                "this session's file access. Call index_codebase with a "
+                "repository inside it."
+            )
+        }
+    )
 
 
 def _dropped_note(result: Any) -> Dict[str, Any]:
@@ -110,7 +124,8 @@ class CodeIndexToolsMixin:
             repo_path: Repository root (absolute or relative, resolved here).
             code_index_config: Optional pre-built ``CodeIndexConfig``.
             ceiling_paths: Roots a requested ``repo_path`` must sit under —
-                the consumer's declared file scope. Defaults to ``repo_path``.
+                the consumer's declared file scope. Defaults to ``repo_path``;
+                an empty list allows no ``repo_path`` at all.
         """
         # expanduser everywhere a root is stored, or a '~'-style
         # allowed_paths config produces a "<cwd>/~" root that rejects the
@@ -122,7 +137,7 @@ class CodeIndexToolsMixin:
         # repo, so a second repository could never be indexed (#3544).
         self._code_index_ceilings = (
             tuple(os.path.abspath(os.path.expanduser(p)) for p in ceiling_paths)
-            if ceiling_paths
+            if ceiling_paths is not None
             else (self._repo_path,)
         )
         self._code_index_config = code_index_config
@@ -219,6 +234,8 @@ class CodeIndexToolsMixin:
 
             if _is_home_directory(self._repo_path):
                 return _HOME_DIRECTORY_REFUSAL
+            if not in_env_scope(self, self._repo_path):
+                return _env_scope_refusal(self._repo_path)
 
             sdk = self._get_code_index_sdk()
             if sdk is None:
@@ -263,6 +280,10 @@ class CodeIndexToolsMixin:
             """
             if not _CODE_INDEX_AVAILABLE:
                 return json.dumps({"error": _MISSING_DEPS_MSG})
+            self._ensure_code_index_state()
+            # An index built before the run would answer from outside the scope.
+            if not in_env_scope(self, self._repo_path):
+                return _env_scope_refusal(self._repo_path)
 
             sdk = self._get_code_index_sdk()
             if sdk is None:
