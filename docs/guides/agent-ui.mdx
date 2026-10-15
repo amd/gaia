@@ -243,7 +243,11 @@ and where that model runs.
   permission mode, the model chip picks the model, and Send turns into Stop
   while GAIA is working.
 - **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
-  the detail.
+  the detail. "Steps" is the agent's own count, the same figure the TUI and
+  evals report.
+- **The line under an answer** shows its time and the tokens the whole turn
+  read and wrote, across every model call. Files the answer names by full path,
+  such as a saved deliverable, open in your file explorer when clicked.
 - **"Getting GAIA ready… 12s"** under the message box means a local model is
   reading GAIA's instructions ahead of your first message, so that message
   gets a quick answer. You can type and send meanwhile; a message sent early
@@ -337,6 +341,10 @@ The question appears above the message box with three answers:
 - **Always allow** *this exact action* in this chat (offered only when the action
   is narrow enough to name, e.g. `write_file on notes.md`)
 - **Deny**
+
+When the same question comes back after you allowed it once, the prompt says
+so and highlights **Always allow**. It never answers for you, and a different
+tool or a riskier call gets no hint.
 
 Pick **Full access** from the shield to let a chat run everything without
 asking (you confirm once). **Settings → Permissions** lists every chat with full

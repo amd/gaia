@@ -262,6 +262,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const closeStoppedTurnLocallyRef = useRef<(() => void) | null>(null);
     const stepIdRef = useRef(0);
+    /** The agent's own step number for the live turn, from its `step` events. */
+    const [liveAgentStep, setLiveAgentStep] = useState(0);
     const toolOccurredRef = useRef(false);
     const sendMessageRef = useRef<(text?: string, options?: { attach?: boolean }) => void>(() => {});
 
@@ -553,6 +555,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // from the start, so stale cards would double up without this.
         clearCards();
         stepIdRef.current = 0;
+        setLiveAgentStep(0);
         toolOccurredRef.current = false;
 
         log.stream.info('Starting agent stream...');
@@ -696,6 +699,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         toolArgs: event.args as Record<string, unknown> | undefined,
                         confirmId: event.confirm_id,
                         alwaysScope: typeof event.always_scope === 'string' ? event.always_scope : undefined,
+                        risk: typeof event.risk === 'string' ? event.risk : undefined,
                         // A relayed agent sends a summary of the call instead of its args.
                         summary: typeof event.summary === 'string' && event.summary ? event.summary : undefined,
                         // No timeout from the backend means it waits; don't invent one.
@@ -900,7 +904,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
 
                 if (event.type === 'step') {
-                    return; // Step headers are redundant with actual tool/thinking steps
+                    // No row of its own, but it is the turn's step count.
+                    if (typeof event.step === 'number') setLiveAgentStep(event.step);
+                    return;
                 }
 
                 if (event.type === 'agent_error' && isEchoOfFailedTool(event, useChatStore.getState().agentSteps)) {
@@ -1522,6 +1528,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 isStreaming={isStreaming}
                                 agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
+                                agentStepCount={liveAgentStep}
                                 cards={isStreaming ? cards : lastCardsRef.current}
                                 liveStatus={isStreaming ? liveStatus : null}
                                 awaitingUser={isStreaming && awaitingUser}
