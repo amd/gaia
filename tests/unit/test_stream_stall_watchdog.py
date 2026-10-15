@@ -14,6 +14,7 @@ import threading
 import time
 from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +27,7 @@ from gaia.llm.retry import (
     StreamStalledError,
     attach_retry_state,
     classify_exception,
+    hosted_reply_timeout,
     model_retry_notices,
     retry_state_of,
     stream_idle_timeout,
@@ -66,8 +68,8 @@ GOOD = _frames(_chunk(role="assistant"), _chunk("Hel"), _chunk("lo", finish="sto
 
 
 class StallServer:
-    """Runs one behaviour per request. A behaviour is a function of
-    ``(send_headers, send, finish, hold)``."""
+    """Runs one behaviour per request: a function of an object with
+    ``send_headers``, ``send``, ``finish``, ``hold`` and ``send_json``."""
 
     def __init__(self, script):
         self.script = list(script)
@@ -106,9 +108,25 @@ class StallServer:
                 def hold():
                     server.release.wait(HOLD)
 
+                def send_json(payload):
+                    body = json.dumps(payload).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    self.wfile.flush()
+
+                io = SimpleNamespace(
+                    send_headers=send_headers,
+                    send=send,
+                    finish=finish,
+                    hold=hold,
+                    send_json=send_json,
+                )
                 self.close_connection = True
                 try:
-                    behaviour(send_headers, send, finish, hold)
+                    behaviour(io)
                 except (ConnectionError, OSError):
                     pass  # The client hung up on a stall: what we want.
 
@@ -127,56 +145,57 @@ class StallServer:
         self.httpd.server_close()
 
 
-def good(send_headers, send, finish, hold):
-    send_headers()
+def good(io):
+    io.send_headers()
     for frame in GOOD:
-        send(frame)
-    finish()
+        io.send(frame)
+    io.finish()
 
 
-def stall_after_headers(send_headers, send, finish, hold):
-    send_headers()
-    hold()
+def stall_after_headers(io):
+    io.send_headers()
+    io.hold()
 
 
-def stall_mid_stream(send_headers, send, finish, hold):
-    send_headers()
+def stall_mid_stream(io):
+    io.send_headers()
     for frame in _frames(_chunk(role="assistant"), _chunk("Hel"), done=False):
-        send(frame)
-    hold()
+        io.send(frame)
+    io.hold()
 
 
-def trickle_then_answer(send_headers, send, finish, hold):
+def trickle_then_answer(io):
     """Four gaps of 75% of the idle limit (3x the limit in all) before the
     first token, each ended by one byte of an SSE comment."""
-    send_headers()
+    io.send_headers()
     for byte in (b":", b"\n", b":", b"\n"):
         time.sleep(IDLE * 0.75)
-        send(byte)
+        io.send(byte)
     for frame in GOOD:
-        send(frame)
-    finish()
+        io.send(frame)
+    io.finish()
 
 
-def prefill_after_headers(send_headers, send, finish, hold):
+def prefill_after_headers(io):
     """Headers at once, then 2x the idle limit of silence, then the answer."""
-    send_headers()
+    io.send_headers()
     time.sleep(IDLE * 2)
     for frame in GOOD:
-        send(frame)
-    finish()
+        io.send(frame)
+    io.finish()
 
 
-def prefill_before_headers(send_headers, send, finish, hold):
+def prefill_before_headers(io):
     """llama.cpp's shape: nothing at all, headers included, until the first
     token."""
     time.sleep(IDLE * 2)
-    good(send_headers, send, finish, hold)
+    good(io)
 
 
 @pytest.fixture
 def make_client(monkeypatch):
     for name in (
+        "GAIA_LLM_HOSTED_REPLY_TIMEOUT",
         "GAIA_LLM_RETRY_ATTEMPTS",
         "GAIA_LLM_RETRY_BASE_DELAY",
         "GAIA_LLM_RETRY_MAX_DELAY",
@@ -352,6 +371,126 @@ def test_stop_during_a_stall_ends_the_stream_promptly(make_client, monkeypatch, 
     assert took < 5, f"Stop took {took:.1f}s to end the stream"
     assert retry_state_of(raised.value) is None
     assert _no_reader_left()
+
+
+# ── a hosted model answering without streaming ───────────────────────────
+
+#: The hosted reply limit in these tests: above the stream idle limit, so a
+#: reply that passes must have outlasted the streaming rule.
+HOSTED_REPLY = IDLE * 2
+
+COMPLETION = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 0,
+    "model": MODEL,
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hello"},
+            "finish_reason": "stop",
+        }
+    ],
+}
+
+
+def reply(io):
+    io.send_json(COMPLETION)
+
+
+def silent(io):
+    """Nothing at all, not even headers: a non-streaming reply that never comes."""
+    io.hold()
+
+
+def slow_reply(io):
+    """A long hosted reply: past the stream idle limit, under the reply limit."""
+    time.sleep(IDLE * 1.5)
+    io.send_json(COMPLETION)
+
+
+def slow_local_reply(io):
+    """A local prefill longer than the hosted reply limit."""
+    time.sleep(HOSTED_REPLY * 1.5)
+    io.send_json(COMPLETION)
+
+
+def _ask(client, timeout=600):
+    started = time.monotonic()
+    result = client.chat_completions(
+        model=MODEL,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        timeout=timeout,
+    )
+    return result["choices"][0]["message"]["content"], time.monotonic() - started
+
+
+@pytest.fixture
+def hosted_reply_limit(monkeypatch):
+    monkeypatch.setenv("GAIA_LLM_HOSTED_REPLY_TIMEOUT", str(HOSTED_REPLY))
+
+
+def test_hosted_reply_that_never_comes_is_retried(make_client, hosted_reply_limit):
+    """The non-streaming twin of the reported hang: bounded, then retried."""
+    with StallServer([silent, reply]) as server:
+        client = make_client(server, remote=True)
+        text, took = _ask(client)
+    assert text == "Hello"
+    assert server.requests == 2
+    assert client.last_request_retries == 1
+    assert took < HOSTED_REPLY + 6, f"took {took:.1f}s"
+
+
+def test_hosted_reply_silent_on_every_attempt_fails_loudly(
+    make_client, hosted_reply_limit
+):
+    with StallServer([silent] * 5) as server:
+        client = make_client(server, remote=True)
+        started = time.monotonic()
+        with pytest.raises(LemonadeClientError) as raised:
+            _ask(client)
+        took = time.monotonic() - started
+        assert server.requests == 2
+    message = str(raised.value)
+    assert message.startswith("The hosted model accepted the request but sent nothing")
+    assert "tried 2 times" in message
+    # The knob for this path, not the streaming one.
+    assert "GAIA_LLM_HOSTED_REPLY_TIMEOUT" in message
+    assert "GAIA_LLM_STREAM_IDLE_TIMEOUT" not in message
+    state = retry_state_of(raised.value)
+    assert state is not None and state.last_reason == "stream stalled"
+    assert took < 2 * HOSTED_REPLY + 8, f"gave up after {took:.1f}s"
+
+
+def test_slow_hosted_reply_is_not_killed(make_client, hosted_reply_limit):
+    """A whole reply arrives at once, so it gets the reply limit, not the
+    stream idle limit."""
+    with StallServer([slow_reply]) as server:
+        client = make_client(server, remote=True)
+        text, took = _ask(client)
+    assert text == "Hello"
+    assert server.requests == 1
+    assert took > IDLE
+
+
+def test_local_non_streaming_keeps_its_prefill_budget(make_client, hosted_reply_limit):
+    """The hosted reply limit must not leak onto a local model."""
+    with StallServer([slow_local_reply]) as server:
+        client = make_client(server, remote=False)
+        text, took = _ask(client, timeout=HOSTED_REPLY * 5)
+    assert text == "Hello"
+    assert server.requests == 1
+    assert took > HOSTED_REPLY
+
+
+def test_hosted_reply_limit_scales_with_the_reply(monkeypatch):
+    monkeypatch.delenv("GAIA_LLM_HOSTED_REPLY_TIMEOUT", raising=False)
+    assert hosted_reply_timeout(1000) == 300.0
+    assert hosted_reply_timeout(32000) == 800.0
+    monkeypatch.setenv("GAIA_LLM_HOSTED_REPLY_TIMEOUT", "0")
+    with pytest.raises(ValueError, match="GAIA_LLM_HOSTED_REPLY_TIMEOUT"):
+        hosted_reply_timeout(1000)
 
 
 # ── the retry policy around a stall ──────────────────────────────────────

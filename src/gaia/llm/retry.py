@@ -136,6 +136,35 @@ def stream_idle_timeout() -> float:
     return value
 
 
+#: Seconds a hosted model may take to send a whole non-streaming reply, which
+#: arrives all at once. Overrides the size computed from the reply's tokens.
+HOSTED_REPLY_TIMEOUT_ENV = "GAIA_LLM_HOSTED_REPLY_TIMEOUT"
+#: Floor for that limit, and the pessimistic decode rate it scales by: a hosted
+#: model prefills in seconds, so the reply's length is what takes time.
+HOSTED_REPLY_MIN_SECONDS = 300.0
+HOSTED_REPLY_MIN_TOKENS_PER_SECOND = 40.0
+
+
+def hosted_reply_timeout(max_tokens: Optional[int]) -> float:
+    """Read timeout for one non-streaming reply from a hosted model.
+
+    ``GAIA_LLM_HOSTED_REPLY_TIMEOUT`` when set (an invalid value raises);
+    otherwise 300 s, or longer when *max_tokens* at 40 tok/s needs it.
+    """
+    if os.environ.get(HOSTED_REPLY_TIMEOUT_ENV, "").strip():
+        value = _env_number(
+            HOSTED_REPLY_TIMEOUT_ENV, HOSTED_REPLY_MIN_SECONDS, float, minimum=0
+        )
+        if value <= 0:
+            raise ValueError(
+                f"{HOSTED_REPLY_TIMEOUT_ENV} must be greater than 0, got {value}. "
+                "Unset it to size the limit from the reply length."
+            )
+        return value
+    tokens = max(int(max_tokens or 0), 0)
+    return max(HOSTED_REPLY_MIN_SECONDS, tokens / HOSTED_REPLY_MIN_TOKENS_PER_SECOND)
+
+
 def _env_number(name: str, default: float, kind: type, *, minimum: float) -> float:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -341,12 +370,22 @@ def _caused_by_tls(error: BaseException) -> bool:
 
 
 class StreamStalledError(Exception):
-    """A model stream sent nothing for longer than its idle limit."""
+    """A model request sent nothing for longer than its idle limit: a stream
+    gone quiet, or a non-streaming reply that never came."""
 
-    def __init__(self, *, limit: float, remote: bool, before_output: bool):
+    def __init__(
+        self,
+        *,
+        limit: float,
+        remote: bool,
+        before_output: bool,
+        setting: str = STREAM_IDLE_TIMEOUT_ENV,
+    ):
         self.limit = limit
         self.remote = remote
         self.before_output = before_output
+        #: The variable that raises *limit*, named in the message.
+        self.setting = setting
         super().__init__(self.describe(1))
 
     @property
@@ -390,7 +429,7 @@ class StreamStalledError(Exception):
             )
         return (
             f"{what} {advice} To wait longer before giving up, set "
-            f"{STREAM_IDLE_TIMEOUT_ENV} (seconds)."
+            f"{self.setting} (seconds)."
         )
 
 
@@ -627,6 +666,42 @@ def current_cancel_check() -> Optional[Callable[[], bool]]:
     return _retry_cancelled.get()
 
 
+class _StallBudget:
+    """Stalled attempts of one request. Each already spent a whole idle limit,
+    so its time is kept out of the retry deadline (or one stall would rule out
+    every retry) and ``max_stall_attempts`` bounds them instead."""
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.seconds = 0.0
+
+    def spent(
+        self,
+        retrier: "ModelCallRetrier",
+        error: BaseException,
+        state: RetryState,
+        attempt_started: float,
+        what: str,
+    ) -> bool:
+        """Record *error* if it is a retryable stall; True when that was the
+        last stall the policy allows (and *state* is marked exhausted)."""
+        if not (isinstance(error, StreamStalledError) and error.retryable):
+            return False
+        self.count += 1
+        self.seconds += retrier._clock() - attempt_started
+        if self.count < retrier.policy.max_stall_attempts:
+            return False
+        state.exhausted = True
+        state.last_reason = "stream stalled"
+        retrier._log.warning(
+            "%s stalled (no data for %.0fs); giving up after %d stalled attempts",
+            what,
+            error.limit,
+            self.count,
+        )
+        return True
+
+
 class ModelCallRetrier:
     """Run a model call under a :class:`RetryPolicy`.
 
@@ -742,12 +817,19 @@ class ModelCallRetrier:
         """
         state = state if state is not None else RetryState()
         started = self._clock()
+        stalls = _StallBudget()
         while True:
             state.attempts += 1
+            attempt_started = self._clock()
             try:
                 return fn()
             except Exception as error:
-                if not self._wait_or_give_up(error, state, started, what):
+                if stalls.spent(self, error, state, attempt_started, what):
+                    attach_retry_state(error, state)
+                    raise
+                if not self._wait_or_give_up(
+                    error, state, started + stalls.seconds, what
+                ):
                     attach_retry_state(error, state)
                     raise
 
@@ -768,14 +850,12 @@ class ModelCallRetrier:
         been yielded a failure is never retried — that would duplicate it — and
         is re-raised with ``output_delivered`` set on its state.
 
-        A :class:`StreamStalledError` already spent a whole idle limit, so its
-        attempt does not count against ``deadline`` (or one stall would rule
-        out every retry); ``max_stall_attempts`` bounds those instead.
+        A stalled attempt is bounded by ``max_stall_attempts``, not
+        ``deadline`` (see :class:`_StallBudget`).
         """
         state = state if state is not None else RetryState()
         started = self._clock()
-        stalls = 0
-        stalled_for = 0.0
+        stalls = _StallBudget()
         while True:
             state.attempts += 1
             attempt_started = self._clock()
@@ -806,22 +886,12 @@ class ModelCallRetrier:
                         state.last_reason = reason
                         attach_retry_state(error, state)
                     raise
-                if isinstance(error, StreamStalledError) and error.retryable:
-                    stalls += 1
-                    stalled_for += self._clock() - attempt_started
-                    if stalls >= self.policy.max_stall_attempts:
-                        state.exhausted = True
-                        state.last_reason = "stream stalled"
-                        self._log.warning(
-                            "%s stalled (no data for %.0fs); giving up after %d "
-                            "stalled attempts",
-                            what,
-                            error.limit,
-                            stalls,
-                        )
-                        attach_retry_state(error, state)
-                        raise
-                if not self._wait_or_give_up(error, state, started + stalled_for, what):
+                if stalls.spent(self, error, state, attempt_started, what):
+                    attach_retry_state(error, state)
+                    raise
+                if not self._wait_or_give_up(
+                    error, state, started + stalls.seconds, what
+                ):
                     attach_retry_state(error, state)
                     raise
             finally:

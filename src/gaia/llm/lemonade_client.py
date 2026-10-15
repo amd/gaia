@@ -50,12 +50,15 @@ from gaia.llm.lemonade_launcher import (
     resolve_lemonade,
 )
 from gaia.llm.retry import (
+    HOSTED_REPLY_TIMEOUT_ENV,
     ModelCallRetrier,
     RetryPolicy,
     RetryState,
     StreamStalledError,
     attach_retry_state,
     classify_exception,
+    hosted_reply_timeout,
+    retry_state_of,
     tag_http_failure,
 )
 from gaia.llm.stream_watchdog import (
@@ -3523,15 +3526,36 @@ class LemonadeClient:
         if tools:
             data["tools"] = tools
 
+        # A hosted reply needs no local prefill budget: bound it by its length.
+        hosted = bool(self.cloud_model_provider(model) or is_cloud_model(model))
+        read_limit = (
+            min(hosted_reply_timeout(max_completion_tokens), timeout)
+            if hosted
+            else timeout
+        )
+
         # Helper function for the actual API call
         def _make_request():
             self.log.debug(f"Sending chat completion request to model: {model}")
-            response = requests.post(
-                url,
-                json=data,
-                headers={"Content-Type": "application/json", **self._auth_headers()},
-                timeout=timeout,
-            )
+            try:
+                response = requests.post(
+                    url,
+                    json=data,
+                    headers={
+                        "Content-Type": "application/json",
+                        **self._auth_headers(),
+                    },
+                    timeout=read_limit,
+                )
+            except requests.exceptions.ReadTimeout as e:
+                if not hosted:
+                    raise
+                raise StreamStalledError(
+                    limit=read_limit,
+                    remote=True,
+                    before_output=True,
+                    setting=HOSTED_REPLY_TIMEOUT_ENV,
+                ) from e
 
             if response.status_code == 401:
                 if self.cloud_model_provider(model):
@@ -3603,6 +3627,13 @@ class LemonadeClient:
 
             try:
                 return _request_with_retry()
+            except StreamStalledError as e:
+                state = retry_state_of(e)
+                message = e.describe(state.attempts if state else 1)
+                self.log.error(message)
+                if state is None:
+                    raise LemonadeClientError(message) from e
+                raise attach_retry_state(LemonadeClientError(message), state) from e
             except (requests.exceptions.RequestException, LemonadeClientError) as e:
                 # Use helper to handle auto-download and retry. Passing the
                 # already-caught error lets it skip the retry entirely for
