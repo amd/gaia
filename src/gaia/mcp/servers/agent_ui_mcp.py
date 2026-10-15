@@ -540,9 +540,11 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
         try:
             from PIL import Image, ImageGrab
         except ImportError:
+            from gaia.agents.install_hints import missing_package_hint
+
             return {
                 "status": "error",
-                "detail": "Pillow not installed. Run: pip install Pillow",
+                "detail": f"Pillow not installed. {missing_package_hint('Pillow')}",
             }
 
         try:

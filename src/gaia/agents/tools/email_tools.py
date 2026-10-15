@@ -336,7 +336,8 @@ class EmailToolsMixin:
         except ImportError as exc:  # pragma: no cover - packaging guard
             raise MailboxError(
                 "The connectors framework is unavailable, so no mailbox can be "
-                "reached. Reinstall GAIA with `uv pip install -e .` and retry."
+                "reached. Reinstall GAIA "
+                "(https://amd-gaia.ai/docs/guides/install) and retry."
             ) from exc
 
         provider, scope, source, alternatives = self._resolve_mailbox()

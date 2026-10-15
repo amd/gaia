@@ -84,6 +84,18 @@
     overflow-wrap: anywhere;
 }
 
+/* The exact line a one-time approval runs: never clipped, never collapsed. */
+.perm-card-exact {
+    max-height: none;
+}
+
+.perm-card-risk {
+    margin-top: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
 .perm-card-actions {
     display: flex;
     flex-wrap: wrap;

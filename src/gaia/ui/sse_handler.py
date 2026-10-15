@@ -25,6 +25,8 @@ from typing import Any, ClassVar, Dict, List, Optional
 from gaia.agents.base.call_risk import call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
 from gaia.agents.base.tool_grants import grant_scope
+from gaia.agents.base.tool_outcome import FAILED_STATUSES
+from gaia.agents.base.tool_outcome import tool_result_failed as _tool_result_failed
 from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
 from gaia.agents.base.turn_metrics import turn_log_path
 from gaia.agents.base.verification import split_verification_scope
@@ -41,26 +43,12 @@ logger = logging.getLogger(__name__)
 _SUMMARY_CHAR_CAP = 300
 
 #: A tool result with one of these statuses did not do its job.
-FAILED_TOOL_STATUSES = ("error", "denied")
+FAILED_TOOL_STATUSES = FAILED_STATUSES
 
 
 def tool_result_failed(data: Any) -> bool:
-    """Whether a tool result reports a failure.
-
-    A non-zero ``return_code`` counts even under ``status: "success"``, as it
-    does in the agent loop, unless the tool marked it ``expected_exit``.
-    """
-    if not isinstance(data, dict):
-        return False
-    if data.get("status") in FAILED_TOOL_STATUSES:
-        return True
-    code = data.get("return_code")
-    return (
-        isinstance(code, int)
-        and not isinstance(code, bool)
-        and code != 0
-        and not data.get("expected_exit")
-    )
+    """Whether a tool result reports a failure, refusals included."""
+    return _tool_result_failed(data, FAILED_TOOL_STATUSES)
 
 
 #: Seconds the agent thread waits for a tool-confirm response before denying.
@@ -1291,6 +1279,9 @@ class SSEOutputHandler(OutputHandler):
             if self._confirm_event is None:
                 # Nothing is waiting: the next prompt starts a fresh slot, so an
                 # answer recorded here would be reported delivered and then lost.
+                return False
+            if self._confirm_event.is_set():
+                # Answered already: a second answer must not overwrite the first.
                 return False
             if always and self._confirm_tool:
                 self.grant_call_for_session(self._confirm_tool, self._confirm_args)

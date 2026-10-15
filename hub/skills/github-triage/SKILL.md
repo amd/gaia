@@ -79,12 +79,14 @@ Compose the command and run it. If the user says no, the tool returns a denial �
 report it and move on. Never re-run a denied command hoping for a different
 answer.
 
-**Refused outright — no prompt, and approval is not available.** `gh auth token`
+**Outside this skill's grant — never pre-approved.** These are not part of a
+triage: don't run them. If one is truly needed, the user sees its exact text
+and a risk line and can approve it once; anything that deletes is refused. `gh auth token`
 and `gh auth status -t`/`--show-token` (both print the credential), `gh alias`
 (defines a shell command), `gh extension` (installs and runs code), `gh config`,
 `gh codespace`, any `gh api` write (`-X POST`, `-f`/`--field`, `graphql`), and
 the irreversible ones: `gh pr merge`, `gh issue close`, `gh label delete`,
-`gh repo delete`. Also refused on any subcommand: `--body-file` (uploads a local
+`gh repo delete`. Also outside the grant on any subcommand: `--body-file` (uploads a local
 file's contents), `--editor`, `--web` (opens a browser, returns you nothing), and
 `--watch` (blocks until the run finishes). The `repo`, `release`, `run`, `search`,
 and `auth` read commands accept only reviewed flags from GAIA's policy table.

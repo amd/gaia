@@ -1566,6 +1566,8 @@ class _TaintProbeAgent:
     _call_tool_bounded = Agent._call_tool_bounded
     _fold_tool_usage = Agent._fold_tool_usage
     _resolve_tool_timeout = Agent._resolve_tool_timeout
+    _requested_tool_timeout = Agent._requested_tool_timeout
+    _bounded_tool_timeout = Agent._bounded_tool_timeout
     _begin_turn_provenance = Agent._begin_turn_provenance
     mark_external_content = Agent.mark_external_content
     turn_content_provenance = Agent.turn_content_provenance

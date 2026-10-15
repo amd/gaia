@@ -2489,15 +2489,10 @@ def classify_invocation(
         # read-only binary promising "writes ask you first" sends the model
         # hunting for a write that does not exist.
         has_writes = any(r.confirm_actions for r in policy.subcommands.values())
-        tiers = (
-            "reads run straight through, and the few writes among them ask you "
-            "first. "
-            if has_writes
-            else ""
-        )
+        tiers = "the few writes among them always ask you first. " if has_writes else ""
         return _refuse(
-            f"'{policy.binary} {subcommand}' is not allowed. This skill's grant "
-            f"covers these {policy.binary} commands: {allowed_subcommands} — "
+            f"'{policy.binary} {subcommand}' is not allowed. The {policy.binary} "
+            f"commands GAIA can run are: {allowed_subcommands} — "
             f"{tiers}{policy.refuse_note}"
         )
 
@@ -2698,22 +2693,23 @@ def classify_ungranted_invocation(
 ) -> InvocationDecision:
     """The verdict for a policed binary invoked with **no skill grant at all**.
 
-    Only :attr:`BinaryPolicy.ungranted` subcommands are reachable, and only at
-    ALLOW: with no skill loaded there is no consent to point at, so a CONFIRM
-    prompt would be asking the user to approve a capability nobody declared.
+    Only :attr:`BinaryPolicy.ungranted` subcommands run unasked. Everything
+    else answers REFUSE here, and the shell tool decides what that means: a
+    call the granted policy would run or confirm goes to the user's prompt
+    instead (no grant means no pre-approval, not no), and a call the granted
+    policy refuses stays refused.
 
-    Nearly every policy leaves ``ungranted`` empty and this answers REFUSE. It
-    is non-empty only for a binary that had a read-only floor in the shell
-    tool's whitelist *before* it had a policy — ``git status`` — so that floor
-    keeps working without the binary needing a second, looser table beside
-    this one.
+    Nearly every policy leaves ``ungranted`` empty. It is non-empty only for a
+    binary that had a read-only floor in the shell tool's whitelist *before* it
+    had a policy — ``git status`` — so that floor keeps working without the
+    binary needing a second, looser table beside this one.
+
+    The messages are what a person reads when nobody could be asked, so they
+    say what the user can do, not which grant is missing.
     """
     if not policy.ungranted:
         return _refuse(
-            f"Command '{policy.binary}' is not available to this agent. It is "
-            "granted only to a skill that declares "
-            f"'shell:execute:{policy.binary}' in its SKILL.md — load that skill "
-            "first."
+            f"'{policy.binary}' runs only after you approve the exact command."
         )
 
     subcommand = next(
@@ -2732,11 +2728,9 @@ def classify_ungranted_invocation(
 
     spelled = f"{policy.binary} {subcommand}".strip()
     return _refuse(
-        f"'{spelled}' needs a skill grant. Without one this agent runs only "
-        f"read-only {policy.binary}: {', '.join(sorted(policy.ungranted))}. "
-        "Anything that changes state — including every write this policy can "
-        f"offer — requires a skill declaring 'shell:execute:{policy.binary}' "
-        "in its SKILL.md; load that skill first."
+        f"'{spelled}' runs only after you approve the exact command. Unasked, "
+        f"GAIA runs only read-only {policy.binary}: "
+        f"{', '.join(sorted(policy.ungranted))}."
     )
 
 
