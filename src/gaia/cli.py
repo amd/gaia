@@ -705,8 +705,8 @@ async def async_main(action, **kwargs):
                 ),
                 model_id=explicit_model,
                 device=effective_device,
-                # None falls through to the global default (default_max_steps,
-                # honoring $GAIA_AGENT_MAX_STEPS) resolved in Agent.__init__.
+                # None falls through to the flagship default (flagship_max_steps,
+                # honoring $GAIA_AGENT_MAX_STEPS) resolved in GaiaAgent.__init__.
                 max_steps=kwargs.get("max_steps"),
                 streaming=kwargs.get("stream", False),
                 show_prompts=kwargs.get("show_prompts", False),
@@ -1163,8 +1163,8 @@ def build_parser():
         "--max-steps",
         type=int,
         default=None,
-        help="Maximum conversation steps. Defaults to the global agent step "
-        "limit (50, or $GAIA_AGENT_MAX_STEPS if set).",
+        help="Maximum conversation steps. Defaults to the agent's step limit "
+        "(150 for the flagship, 50 for others, or $GAIA_AGENT_MAX_STEPS if set).",
     )
     agent_loop_parser.add_argument(
         "--list-tools",

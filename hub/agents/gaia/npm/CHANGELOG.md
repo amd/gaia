@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Long desktop tasks finish with their deliverables instead of a bare "I
+  can't confirm this is done".** Picking a controller from nine datasheets and
+  pricing a 40-unit BOM ran out of its 50 steps while still searching for
+  prices, and the reply dropped the recommendation the agent had already
+  written. The agent's default step limit is now **150** (a `/query`
+  `max_steps` or `GAIA_AGENT_MAX_STEPS` still wins); at 20, 10 and 5 steps left
+  it is told to write the requested files from what it has, marking unverified
+  values, and a turn that still runs out keeps its findings and lists what is
+  missing after them.
 - **The model notice is one line.** Switching or restoring a model printed a
   four-sentence paragraph that named the model twice and said "via Lemonade".
   It now reads like "Switched to **DeepSeek-V4.1-Flash** on the AMD LLM Gateway

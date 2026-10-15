@@ -91,9 +91,9 @@ gaia --ui --base-url https://your-server:13305/api/v1
 
 ### Agent step limit
 
-Agents stop after a maximum number of reasoning/tool steps. The default is **50**, applied consistently across the CLI, the Agent UI, and background runs.
+Agents stop after a maximum number of reasoning/tool steps. The flagship GAIA agent (`gaia chat`, the Agent UI, the TUI) defaults to **150**, enough for long desktop tasks such as reading a folder of datasheets and writing a costed BOM. Other agents default to **50**.
 
-An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. If that last call fails, you get the step-limit notice plus a line saying why the summary couldn't be written.
+When 20, 10 and 5 steps remain, the agent is told so and asked to produce what the request asked for from what it already has, marking anything it couldn't verify, rather than keep researching. An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. That summary is kept even when a requested file was never written; the missing file is listed after it. If that last call fails, you get the step-limit notice with the agent's latest write-up and a line saying why the summary couldn't be written. Set `GAIA_AGENT_BUDGET_NOTICES=0` to turn the step-budget notices off.
 
 The same closing call runs when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused still report the failure. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
 
