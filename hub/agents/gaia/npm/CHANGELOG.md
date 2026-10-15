@@ -6,6 +6,31 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Exploring data no longer asks twice per step.** Each step wrote a helper
+  script into the agent's own scratch folder and ran it, so a data task asked
+  for approval about 30 times. Writes inside that folder now run unasked
+  (writes anywhere else still ask), and running a script from it offers
+  `always_scope` "Python scripts in GAIA's scratch folder", so one answer
+  covers the next script for the session.
+- **A command no loaded skill grants asks you instead of failing.** `python
+  script.py`, `git commit` or `pip install` with no skill granting them used to
+  come back as "needs a skill grant … declares 'shell:execute:git' in its
+  SKILL.md", which nobody could act on. They now raise the approval prompt; a
+  skill grant still skips it for reads. A prompt's `summary` for a write or
+  code-running command ends with one plain line on what it can do, and the
+  `in <folder>` line also appears when an earlier `cd` moved the session. A
+  call you decline tells the agent not to reach the same result another way,
+  and a run nobody can answer refuses in one plain sentence.
+- **Commands GAIA's checks don't cover ask once instead of failing.** `git
+  push`, `git fetch`, `python -c`, PowerShell the checks can't read, a line with
+  shell operators, or a path outside the allowed folders used to be refused
+  outright. They now raise a prompt whose `summary` is the exact line the shell
+  will run, its full folder and a risk sentence, with no `always_scope`; an
+  approval runs that line once. Still refused with no prompt: an encoded
+  PowerShell command or invisible characters, a line whose quoting can't be
+  split the way the shell would, such a line that also deletes or discards work
+  (`git push --force`, `git reset --hard`, `rm` outside the project), and
+  folders no approval can open.
 - **`run_python` and `execute_python_file` work in the released binary.** The
   binary has no Python interpreter, so it handed every script to its own
   argument parser, which rejected it, and no calculation, chart or `.xlsx`

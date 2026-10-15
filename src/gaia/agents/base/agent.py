@@ -40,12 +40,19 @@ from typing import (
     Union,
 )
 
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.completion import (
     CompletionEvidence,
     incomplete_answer,
     mentioned_paths,
 )
-from gaia.agents.base.console import AgentConsole, SilentConsole
+from gaia.agents.base.console import (
+    AgentConsole,
+    SilentConsole,
+    edit_is_inside,
+    edit_target,
+    user_denial_message,
+)
 from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_KEEP_STEPS,
     DEFAULT_EVICT_MIN_BATCH_TOKENS,
@@ -94,7 +101,11 @@ from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
 from gaia.agents.base.task_lessons import attach as attach_task_lessons
-from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
+from gaia.agents.base.tool_grants import (
+    PATH_ACCESS_PROMPT_TOOL,
+    PATH_TOOLS,
+    SCRATCH_ARG,
+)
 from gaia.agents.base.tool_markup import (
     MalformedToolMarkup,
     has_tool_markup,
@@ -630,6 +641,13 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # applying the day a non-Windows backend (plyer) becomes reachable.
     "notify_desktop",
 }
+
+#: Put on a call the user declined, so the model stops instead of rerouting.
+DECLINED_HINT = (
+    "The user declined this. Do not try to get the same result another way "
+    "(a different command, tool, or script). Tell the user what you were going "
+    "to do and why, then stop."
+)
 
 # Tools whose result is nothing but a receipt for what the agent itself just
 # did. EVERY other tool is treated as bringing in content the user did not type
@@ -5784,6 +5802,17 @@ Do NOT wrap conversational replies in JSON.
         insists = getattr(getattr(self, "console", None), "insists_on_asking", None)
         if callable(insists) and insists(tool_name, tool_args) is True:
             return False
+        # The agent's own scratch folder holds no user data: writing a helper
+        # script there is not a change to anything the user owns.
+        if tool_name in PATH_TOOLS:
+            reader = getattr(self, "_read_validator", None)
+            scratch = getattr(
+                reader() if callable(reader) else None, "scratch_dir", None
+            )
+            target = edit_target(tool_args)
+            if scratch and target and edit_is_inside(target, (str(scratch),)):
+                logger.info("Writing %s in the agent's scratch folder unasked", target)
+                return True
         covers = getattr(self, "skill_grant_covers_call", None)
         if not callable(covers):
             return False
@@ -6082,6 +6111,23 @@ Do NOT wrap conversational replies in JSON.
                 ),
             }
 
+        # Prompt-only fields are written by GAIA, never taken from the model.
+        reserved = sorted(
+            key
+            for key in (tool_args if isinstance(tool_args, dict) else {})
+            if key in (RISK_NOTE_ARG, SCRATCH_ARG)
+        )
+        if reserved:
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error_type": "invalid_arguments",
+                "error": (
+                    f"Unexpected argument(s) for {tool_name}: {', '.join(reserved)}. "
+                    "Call the tool again without them."
+                ),
+            }
+
         # Validate first, confirm second: a call the guardrails already refuse
         # must never reach a prompt.
         refusal = self._policy_refusal(tool_name, tool_args)
@@ -6113,7 +6159,26 @@ Do NOT wrap conversational replies in JSON.
         # Consoles that cannot reach a human deny rather than answer for them
         # (#2210): AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
         # frontend modal, everything else denies with an actionable message.
-        if not asked_and_allowed and self._tool_requires_confirmation(
+        # A host may add what the arguments leave out, such as where a shell
+        # call runs. Display only: the tool runs with tool_args.
+        shows = getattr(self, "confirmation_args_for_call", None)
+        prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
+        # A script in the agent's own scratch folder can be granted as such —
+        # narrower than "running Python files", and it covers the next one.
+        if tool_name == "execute_python_file" and isinstance(prompt_args, dict):
+            reader = getattr(self, "_read_validator", None)
+            scratch = getattr(
+                reader() if callable(reader) else None, "scratch_dir", None
+            )
+            target = edit_target(prompt_args)
+            if scratch and target and edit_is_inside(target, (str(scratch),)):
+                prompt_args = {**prompt_args, SCRATCH_ARG: str(scratch)}
+        # A one-time call is approved on its own prompt, which carries its
+        # risk note — never through the reroute question above.
+        one_time = isinstance(prompt_args, dict) and bool(
+            prompt_args.get(RISK_NOTE_ARG)
+        )
+        if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
             # Blocking on a human is not tool cost. Timed separately so a turn
@@ -6121,7 +6186,7 @@ Do NOT wrap conversational replies in JSON.
             # having taken five minutes.
             _confirm_started = time.perf_counter()
             try:
-                approved = self.console.confirm_tool_execution(tool_name, tool_args)
+                approved = self.console.confirm_tool_execution(tool_name, prompt_args)
             finally:
                 # Accumulates: a tool body that invokes another confirmed tool
                 # asks twice, and the outer timer resets this per turn anyway.
@@ -6135,10 +6200,16 @@ Do NOT wrap conversational replies in JSON.
                     # Nobody said no, so this is not a refusal to route around.
                     denied["timed_out"] = True
                 else:
+                    if denied_error == user_denial_message(tool_name):
+                        denied["hint"] = DECLINED_HINT
                     ledger = getattr(self, "_denied_effects", None)
                     if ledger is not None:
                         ledger.record(tool_name, tool_args, denied_error)
                 return denied
+            # A call approved once runs against this record, and only once.
+            noted = getattr(self, "note_confirmed_call", None)
+            if callable(noted):
+                noted(tool_name, tool_args)
 
         # Dynamic tool loader (#1449): record use for LRU recency. The name is
         # fully resolved and confirmed in the registry here. Execution stays on

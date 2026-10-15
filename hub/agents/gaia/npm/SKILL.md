@@ -372,7 +372,10 @@ land is additionally **code-inert**: its instructions load, but any
 `tools.py`/scripts stay unregistered until a human runs
 `gaia skill promote <name>` in a terminal. Everything else — reading,
 indexing, querying, web fetching, memory, and the read-only `check_cli_setup`
-— runs without asking.
+— runs without asking. A write or edit inside the agent's own scratch
+folder (`gaia-scratch-…` under the system temp folder) runs without asking too,
+and running a script from it carries `always_scope` "Python scripts in GAIA's
+scratch folder".
 
 The eight live-browser tools are gated by a **hook**, not a set, so a name
 alone does not tell you whether a call will ask. `browser_login` always asks.
@@ -387,7 +390,7 @@ Design a workflow around the approval path, not around a fixed tool list.
 carrying a `confirm_id` and then **stays open** while the agent waits:
 
 ```
-data: {"type":"needs_confirmation","run_id":"…","action":"run_shell_command","summary":"python -m pytest -q tests/","confirm_id":"…","always_scope":"pytest","risk":"execute"}
+data: {"type":"needs_confirmation","run_id":"…","action":"run_shell_command","summary":"python -m pytest -q tests/\nCan run any code, with your permissions.","confirm_id":"…","always_scope":"pytest","risk":"execute"}
 ```
 
 Answer it on the same run, then keep reading the stream:
@@ -398,7 +401,15 @@ POST /v1/gaia/query/{run_id}/tool_decision
 ```
 
 `summary` is the command or call itself, shown once — your UI supplies the
-question. `risk` says what the call does (`read`, `write`, `execute`,
+question. For a shell command it can carry two more lines: `in <folder>` when
+the command runs outside the workspace, and one plain sentence on what a `write`
+or `execute` command can do. Show it as-is. A CLI a skill would grant (`git
+commit`, `python script.py`) with no such skill loaded arrives here as a prompt,
+not a refusal. So does a command GAIA's own checks don't cover (`git push`,
+`python -c`, a path outside the project): its `summary` is the exact line the
+shell will run, unshortened, then `in <folder>`, then a risk sentence, and it
+carries no `always_scope` — offer allow-once and deny only. `allow` runs that
+line once; the next call asks again. `risk` says what the call does (`read`, `write`, `execute`,
 `destructive`); label by it rather than by tool name, since `run_shell_command`
 is `pytest` on one call and `rm -rf` on the next. `always` grants the family
 named in `always_scope` for the rest of the session (`pytest` covers every
