@@ -258,6 +258,8 @@ type fixDoneMsg struct {
 	key  string
 	err  error
 	note string
+	// diag explains err when the runner had something specific to say.
+	diag Diagnosis
 	// auto marks a fix the screen applied on its own (Row.AutoFix); gate is
 	// the screen that started it, so a late answer cannot land on another.
 	auto bool
@@ -299,7 +301,7 @@ func (m Model) quickFixCmd(key string, kind FixKind, timeout time.Duration) tea.
 	r, cfg := m.r, m.cfg
 	return func() tea.Msg {
 		res := r.Fix(ctx, cfg, kind, nil)
-		return fixDoneMsg{key: key, err: res.Err, note: res.Note}
+		return fixDoneMsg{key: key, err: res.Err, note: res.Note, diag: res.Diagnosis}
 	}
 }
 
@@ -531,7 +533,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fixApplied = true
 		}
 		if msg.err != nil {
-			d := Ladder{AgentID: m.cfg.AgentID}.Error("apply that fix", msg.err)
+			d := msg.diag
+			if d.Cause == "" {
+				d = Ladder{AgentID: m.cfg.AgentID}.Error("apply that fix", msg.err)
+			}
 			m.note = "Fix failed. " + d.String()
 			m.phase = phaseIdle
 			return m, nil
@@ -691,6 +696,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.applyFix()
+
+	case "g":
+		row, ok := m.focusedRow()
+		if m.Busy() || !ok || row.DeclineFix == FixNone {
+			return m, nil
+		}
+		m.phase = phaseFixing
+		m.note = "Saving your choice…"
+		return m, tea.Batch(m.quickFixCmd(row.Key, row.DeclineFix, startTimeout), m.spin.Tick)
 	}
 	return m, nil
 }
@@ -715,6 +729,10 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.quickFixCmd(KeySidecar, FixRestartSidecar, ensureTimeout), m.spin.Tick)
 	case FixPullModel, FixRunSetup, FixInstallServer:
 		return m.startProvision()
+	case FixUseRunningLemonade:
+		m.phase = phaseFixing
+		m.note = "Switching GAIA to your Lemonade…"
+		return m, tea.Batch(m.quickFixCmd(KeyLemonade, FixUseRunningLemonade, startTimeout), m.spin.Tick)
 	case FixConnectMailbox:
 		agentID, provider := m.cfg.AgentID, row.Provider
 		return m, func() tea.Msg {

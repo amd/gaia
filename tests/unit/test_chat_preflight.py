@@ -528,3 +528,27 @@ def test_a_reload_uses_the_agents_ctx_and_keeps_the_embedder():
     client.unload_model.assert_called_once_with(expected, ignore_if_not_loaded=True)
     client.load_model.assert_called_once()
     assert client.load_model.call_args.kwargs["ctx_size"] == 65536
+
+
+def test_a_load_refused_for_memory_tells_the_user_what_to_close():
+    """Not "check that Lemonade is running": Lemonade is fine, memory is not."""
+    from gaia.llm.lemonade_client import InsufficientMemoryError
+
+    refusal = InsufficientMemoryError(
+        "Not enough free memory to load Gemma-4-E4B-it-GGUF with a 32,768-token "
+        "window: it needs about 7.8 GB and only 6.0 GB is free. Close apps..."
+    )
+    sse = MagicMock()
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, return_value=_health_ok([])),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        mock_cls.return_value.load_model.side_effect = refusal
+
+        _maybe_load_expected_model("Gemma-4-E4B-it-GGUF", sse_handler=sse)
+
+    (event,), _ = sse._emit.call_args
+    assert event["message"] == str(refusal)
+    assert "Lemonade is running" not in event["message"]
