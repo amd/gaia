@@ -348,6 +348,26 @@ def get_tool_display_label(tool_name: str) -> str:
     return tool.get("display_label")  # type: ignore[return-value]
 
 
+#: What a long tool call is doing, in the user's words, while it streams.
+_TOOL_CALL_PROGRESS_LABELS = {
+    "edit_file": "Writing a file edit",
+    "edit_python_file": "Writing a file edit",
+    "write_file": "Writing a file",
+    "write_python_file": "Writing a file",
+    "write_markdown_file": "Writing a file",
+    "run_python": "Writing Python code",
+    "run_shell_command": "Writing a command",
+}
+
+
+def tool_call_progress_message(tool: Optional[str], chars: int) -> str:
+    """Progress line for a tool call still streaming: what it is, never what it says."""
+    label = _TOOL_CALL_PROGRESS_LABELS.get(tool or "") or (
+        f"Preparing {tool}" if tool else "Preparing a tool call"
+    )
+    return f"{label} — {chars:,} characters so far"
+
+
 def get_tool_metadata(tool_name: str):
     """Return the full registry entry for a tool, or ``None`` if not found.
 

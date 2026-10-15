@@ -25,9 +25,17 @@ from typing import Any, ClassVar, Dict, List, Optional
 from gaia.agents.base.call_risk import call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
 from gaia.agents.base.tool_grants import grant_scope
-from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
+from gaia.agents.base.tools import (
+    get_tool_display_label,
+    get_tool_metadata,
+    tool_call_progress_message,
+)
 from gaia.agents.base.turn_metrics import turn_log_path
 from gaia.agents.base.verification import split_verification_scope
+from gaia.llm.providers.lemonade import (
+    TOOL_CALL_PROGRESS_INTERVAL_S,
+    TOOL_CALL_PROGRESS_MIN_CHARS,
+)
 from gaia.ui import scripted_user
 from gaia.ui.event_narration import DEBUG_CHANNEL, format_count
 
@@ -287,6 +295,90 @@ def _parse_envelope(obj_text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+# Native tool-call markup some models write as text instead of a call (DeepSeek
+# DSML and its older special tokens, Claude/Qwen-style XML, harmony channels).
+# Each opener maps to the closer that ends the call; everything between is the
+# call and never reaches the transcript.
+_BAR = r"[|｜]"
+_SEP = r"[▁_]"
+_MARKUP_FAMILIES: tuple = (
+    (
+        re.compile(
+            rf"<\s*{_BAR}\s*DSML\s*{_BAR}\s*(calls|function_calls|tool_calls)\s*>"
+        ),
+        lambda m: re.compile(
+            rf"<\s*/\s*{_BAR}\s*DSML\s*{_BAR}\s*{re.escape(m.group(1))}\s*>"
+        ),
+    ),
+    (
+        re.compile(rf"<\s*{_BAR}\s*DSML\s*{_BAR}\s*invoke\s+name\s*="),
+        lambda m: re.compile(rf"<\s*/\s*{_BAR}\s*DSML\s*{_BAR}\s*invoke\s*>"),
+    ),
+    (
+        re.compile(rf"<{_BAR}tool{_SEP}calls{_SEP}begin{_BAR}>"),
+        lambda m: re.compile(rf"<{_BAR}tool{_SEP}calls{_SEP}end{_BAR}>"),
+    ),
+    (
+        re.compile(rf"<{_BAR}tool{_SEP}call{_SEP}begin{_BAR}>"),
+        lambda m: re.compile(rf"<{_BAR}tool{_SEP}call{_SEP}end{_BAR}>"),
+    ),
+    (re.compile(r"<tool_call>"), lambda m: re.compile(r"</tool_call>")),
+    (re.compile(r"<function_calls>"), lambda m: re.compile(r"</function_calls>")),
+    (re.compile(r"<invoke\s+name\s*="), lambda m: re.compile(r"</invoke>")),
+    (
+        re.compile(r"(?:<\|start\|>assistant)?<\|channel\|>\s*commentary\s+to="),
+        lambda m: re.compile(r"<\|call\|>"),
+    ),
+)
+_MARKUP_OPEN_RE = re.compile("|".join(f"(?:{o.pattern})" for o, _ in _MARKUP_FAMILIES))
+# Leftover tags of a call whose opener streamed before this filter saw it.
+_MARKUP_STRAY_RE = re.compile(
+    rf"<\s*/?\s*{_BAR}\s*DSML\s*{_BAR}[^>\n]{{0,80}}>"
+    rf"|<{_BAR}tool{_SEP}(?:calls?{_SEP}(?:begin|end)|sep){_BAR}>"
+)
+_MARKUP_TOOL_NAME_RE = re.compile(r'name\s*=\s*"([\w.-]+)"')
+# The tool an opener that ends in ``name=`` names.
+_MARKUP_INVOKED_NAME_RE = re.compile(r'\s*"([\w.-]+)"')
+_ENVELOPE_TOOL_NAME_RE = re.compile(r'"tool"\s*:\s*"([\w.-]+)"')
+# Longest opener/closer, so a tag split across two tokens is still recognised.
+_MARKUP_TAIL = 64
+
+
+def _partial_markup_start(text: str) -> Optional[int]:
+    """Where a tag that may still grow into a tool-call opener starts, if any.
+
+    Generous on purpose: holding plain text with a "<" costs at most
+    ``_MARKUP_TAIL`` characters of latency, and leaking an opener costs the call.
+    """
+    window = max(0, len(text) - _MARKUP_TAIL)
+    for lt in range(window, len(text)):
+        if text[lt] != "<":
+            continue
+        tail = text[lt:]
+        if "\n" in tail:
+            continue
+        # Harmony and DeepSeek special tokens carry a '>' before the deciding part.
+        if ">" not in tail or tail.startswith(("<|", "<｜")):
+            return lt
+    return None
+
+
+# Keys that make a reply the agent's protocol: a reply led by one of them that
+# will not parse is a malformed envelope, not prose. "answer" is left out so a
+# broken answer still reaches the old answer-extraction path.
+_PROTOCOL_LEAD_KEYS = frozenset({"thought", "goal", "plan", "tool", "tool_args"})
+
+
+def _is_malformed_envelope(obj_text: str, lead: "Optional[re.Match]") -> bool:
+    if lead is None or lead.group(1) not in _PROTOCOL_LEAD_KEYS:
+        return False
+    try:
+        json.loads(obj_text, strict=False)
+    except ValueError:
+        return True
+    return False  # valid JSON that is not an envelope is the user's content
+
+
 def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
     """Dig the live TCP socket out of a ``requests`` streamed response.
 
@@ -368,6 +460,16 @@ class SSEOutputHandler(OutputHandler):
         # the buffer it scanned: a long tool call is scanned once, not per token.
         self._envelope_scan: Optional[tuple] = None
         self._envelope_head = ""
+        # Head of a reply held whole because its envelope will not parse.
+        self._broken_envelope_head = ""
+        # Native tool-call markup in flight: the closer that ends it, the tail
+        # held back in case a tag is split across tokens, and what it calls.
+        self._markup_close: Optional["re.Pattern"] = None
+        self._markup_pending = ""
+        self._markup_in_fence = False
+        self._markup_tool: Optional[str] = None
+        self._markup_chars = 0
+        self._call_progress_next = 0.0
         # Tool confirmation state (blocking until frontend responds)
         self._confirm_lock = threading.Lock()
         self._confirm_event: Optional[threading.Event] = None
@@ -905,6 +1007,24 @@ class SSEOutputHandler(OutputHandler):
         if self._json_filtered:
             # The gap after a dropped envelope separates it from nothing.
             self._stream_buffer = self._stream_buffer.lstrip()
+        if self._broken_envelope_head:
+            if not self._stream_buffer.startswith(self._broken_envelope_head):
+                self._broken_envelope_head = ""  # a cancelled stream left it behind
+            elif end_of_stream:
+                logger.debug(
+                    "Dropped malformed envelope: %s", self._stream_buffer[:100]
+                )
+                self._broken_envelope_head = ""
+                self._stream_buffer = ""
+                self._json_filtered = True
+                return False
+            else:
+                self._report_envelope_progress()
+                return True
+        if self._envelope_scan is None and self._markup_in_fence ^ (
+            self._stream_buffer.count("```") % 2 == 1
+        ):
+            return False  # JSON inside a code block is the answer's own content
         while self._stream_buffer:
             resume = self._envelope_scan
             if resume is not None and (
@@ -920,11 +1040,14 @@ class SSEOutputHandler(OutputHandler):
                 self._envelope_scan = scan
                 self._envelope_head = self._stream_buffer[:256]
             if state == _ENV_NONE:
+                if self._split_inline_envelope(end_of_stream):
+                    continue
                 return False
             if state == _ENV_PENDING:
                 return not end_of_stream
             if state == _ENV_OPEN:
                 if not end_of_stream:
+                    self._report_envelope_progress()
                     return True
                 # Truncated mid-envelope (e.g. max tokens): still protocol.
                 logger.debug(
@@ -935,7 +1058,13 @@ class SSEOutputHandler(OutputHandler):
                 return False
             envelope = _parse_envelope(self._stream_buffer[start:end])
             if envelope is None:
-                return False
+                lead = _ENVELOPE_LEAD_RE.match(self._stream_buffer, start)
+                if not _is_malformed_envelope(self._stream_buffer[start:end], lead):
+                    return False
+                # An unescaped quote in a long thought: the scan cannot be
+                # trusted to have found its end, so the reply is held whole.
+                self._broken_envelope_head = self._stream_buffer[:256]
+                return self._take_leading_envelopes(end_of_stream)
             answer = envelope.get("answer")
             if isinstance(answer, str) and answer.strip():
                 self._emit({"type": "answer", "content": answer})
@@ -944,7 +1073,181 @@ class SSEOutputHandler(OutputHandler):
             self._json_filtered = True
         return False
 
+    def _split_inline_envelope(self, end_of_stream: bool) -> bool:
+        """Emit the prose before an envelope that opens on a line of its own.
+
+        Models narrate a line, then write the call; the envelope is then not at
+        the head of the buffer. True when the buffer now starts with it.
+        """
+        buf = self._stream_buffer
+        # Fence state where the buffer starts, so a JSON line in a code block stays.
+        in_fence = self._markup_in_fence ^ (buf.count("```") % 2 == 1)
+        pos = 0
+        while True:
+            nl = buf.find("\n", pos)
+            if nl < 0:
+                return False
+            i = _skip_ws(buf, nl + 1)
+            pos = nl + 1
+            if i >= len(buf) or buf[i] != "{":
+                continue
+            if in_fence ^ (buf.count("```", 0, nl) % 2 == 1):
+                continue
+            if _leading_envelope(buf[i:], end_of_stream)[0] == _ENV_NONE:
+                continue
+            prose = buf[:i]
+            if prose.strip():
+                self._json_filtered = False
+                self._emit({"type": "chunk", "content": prose})
+            self._stream_buffer = buf[i:]
+            return True
+
+    def _report_envelope_progress(self) -> None:
+        if self._call_progress_due(len(self._stream_buffer)):
+            named = _ENVELOPE_TOOL_NAME_RE.search(self._stream_buffer)
+            self._report_call_progress(
+                len(self._stream_buffer),
+                self._stream_buffer,
+                named.group(1) if named else None,
+            )
+
+    def _call_progress_due(self, chars: int) -> bool:
+        """Whether a held-back call is long enough, and it is time, to report it."""
+        if chars < TOOL_CALL_PROGRESS_MIN_CHARS:
+            return False
+        now = time.monotonic()
+        if now < self._call_progress_next:
+            return False
+        self._call_progress_next = now + TOOL_CALL_PROGRESS_INTERVAL_S
+        return True
+
+    def _report_call_progress(self, chars: int, held: str, tool: Optional[str]) -> None:
+        """Say a held-back tool call is still being written, and how big it is.
+
+        Only its size and the tool's kind are reported, never its content. An
+        envelope that has not named a tool yet is still its "thought".
+        """
+        if tool is None and held:
+            words = len(held.split())
+            self.report_phase(
+                "reasoning", f"Reasoning — {words:,} words so far", words=words
+            )
+            return
+        self.report_phase(
+            "tool_call", tool_call_progress_message(tool, chars), chars=chars
+        )
+
+    def _filter_tool_markup(self, text: str, end_of_stream: bool) -> str:
+        """*text* with any native tool-call markup removed, as it streams.
+
+        A call is held from its opener to its closer however long it runs, then
+        dropped; the agent runs it from the full reply. Markup inside a fenced
+        code block is an example, not a call, and passes through.
+        """
+        text = self._markup_pending + text
+        self._markup_pending = ""
+        if self._markup_close is None and (
+            self._envelope_scan is not None
+            or self._stream_buffer.lstrip().startswith("{")
+        ):
+            self._markup_in_fence ^= text.count("```") % 2 == 1
+            return text  # inside a JSON envelope, markup is string content
+        out: List[str] = []
+        while text:
+            if self._markup_close is not None:
+                close = self._markup_close.search(text)
+                if close is None:
+                    keep = "" if end_of_stream else text[-_MARKUP_TAIL:]
+                    self._markup_chars += len(text) - len(keep)
+                    if self._markup_tool is None:
+                        named = _MARKUP_TOOL_NAME_RE.search(text)
+                        if named:
+                            self._markup_tool = named.group(1)
+                    self._markup_pending = keep
+                    if not end_of_stream and self._call_progress_due(
+                        self._markup_chars
+                    ):
+                        self._report_call_progress(
+                            self._markup_chars, "", self._markup_tool
+                        )
+                    break
+                if self._markup_tool is None:
+                    named = _MARKUP_TOOL_NAME_RE.search(text, 0, close.start())
+                    if named:
+                        self._markup_tool = named.group(1)
+                logger.debug(
+                    "Filtered %s tool-call markup (%d chars)",
+                    self._markup_tool,
+                    self._markup_chars + close.end(),
+                )
+                text = text[close.end() :]
+                self._markup_close = None
+                self._json_filtered = True
+                continue
+            opener = self._next_markup_opener(text)
+            if opener is None:
+                cut = None if end_of_stream else _partial_markup_start(text)
+                if cut is None and not end_of_stream and text.endswith("`"):
+                    cut = len(text.rstrip("`"))  # a fence may be half-written
+                safe = text if cut is None else text[:cut]
+                self._markup_pending = "" if cut is None else text[cut:]
+                out.append(self._outside_fences(safe))
+                break
+            start, end, closer = opener
+            before = text[:start]
+            out.append(self._outside_fences(before))
+            self._markup_close = closer
+            self._markup_tool = None
+            self._markup_chars = end - start
+            named = _MARKUP_INVOKED_NAME_RE.match(text, end)
+            if named:
+                self._markup_tool = named.group(1)
+            text = text[end:]
+        if end_of_stream and self._markup_close is not None:
+            logger.debug("Dropped unterminated tool-call markup")
+            self._markup_close = None
+            self._json_filtered = True
+        return "".join(out)
+
+    def _outside_fences(self, text: str) -> str:
+        """*text* minus stray markup tags outside code blocks; tracks fence state."""
+        parts = text.split("```")
+        for k in range(len(parts)):
+            if k:
+                self._markup_in_fence = not self._markup_in_fence
+            if not self._markup_in_fence:
+                parts[k] = _MARKUP_STRAY_RE.sub("", parts[k])
+        return "```".join(parts)
+
+    def _next_markup_opener(self, text: str) -> "Optional[tuple]":
+        """``(start, end, closer)`` of the first tool-call opener outside a fence."""
+        pos = 0
+        in_fence = self._markup_in_fence
+        while True:
+            m = _MARKUP_OPEN_RE.search(text, pos)
+            if m is None:
+                return None
+            if in_fence ^ (text.count("```", 0, m.start()) % 2 == 1):
+                pos = m.end()
+                continue
+            for open_re, make_close in _MARKUP_FAMILIES:
+                fam = open_re.match(text, m.start())
+                if fam is not None:
+                    return m.start(), fam.end(), make_close(fam)
+            pos = m.end()
+
     def print_streaming_text(self, text_chunk: str, end_of_stream: bool = False):
+        try:
+            self._print_streaming_text(text_chunk, end_of_stream)
+        finally:
+            if end_of_stream:
+                self._markup_in_fence = False  # the next model call starts afresh
+
+    def _print_streaming_text(self, text_chunk: str, end_of_stream: bool) -> None:
+        if text_chunk or (
+            end_of_stream and (self._markup_pending or self._markup_close is not None)
+        ):
+            text_chunk = self._filter_tool_markup(text_chunk or "", end_of_stream)
         if text_chunk:
             # Buffer text to detect and suppress raw tool-call JSON that
             # LLMs sometimes emit as text content before the tool is invoked.
@@ -1683,6 +1986,11 @@ class SSEOutputHandler(OutputHandler):
             self._emit({"type": "thinking", "content": self._stream_buffer})
             self._stream_buffer = ""
             self._in_thinking = False
+
+        # A stopped stream can leave a call open or a tag tail held back.
+        if self._markup_close is not None or self._markup_pending:
+            self._stream_buffer += self._filter_tool_markup("", end_of_stream=True)
+        self._markup_in_fence = False
 
         # Flush any remaining stream buffer before signaling done
         if self._stream_buffer:
