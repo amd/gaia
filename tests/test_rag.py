@@ -179,6 +179,7 @@ class TestRAGSDK:
 
             # Mock LemonadeClient for embeddings
             mock_lemonade_instance = Mock()
+            mock_lemonade_instance.is_users_server.return_value = False
             # Return OpenAI-compatible format: {"data": [{"embedding": [...]}]}
             mock_lemonade_instance.embeddings.return_value = {
                 "data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]
