@@ -24,7 +24,7 @@ import (
 func gaiaTestModel(t *testing.T) ChatModel {
 	t.Helper()
 	c := &nullClient{}
-	m := NewChatModelForCatalogAgent(c, setupAgentID, "GAIA", "", false)
+	m := NewChatModelForCatalogAgent(c, setupAgentID, "GAIA", false)
 	m.width, m.height = 100, 30
 	return m
 }

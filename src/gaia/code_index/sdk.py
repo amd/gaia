@@ -23,9 +23,12 @@ from gaia.logger import get_logger
 from gaia.security import PathValidator
 from gaia.tool_cancellation import raise_if_cancelled
 
-_MISSING_DEPS_MSG = (
-    "code_index dependencies missing. Install with: pip install -e '.[rag]'"
-)
+
+def _missing_deps_msg() -> str:
+    from gaia.agents.install_hints import missing_extra_hint
+
+    return f"code_index dependencies missing. {missing_extra_hint('rag')}"
+
 
 # ---------------------------------------------------------------------------
 # Configuration and response dataclasses
@@ -291,7 +294,7 @@ class CodeIndexSDK:
         try:
             import numpy as np
         except ImportError as e:
-            raise ImportError(_MISSING_DEPS_MSG) from e
+            raise ImportError(_missing_deps_msg()) from e
 
         # Reuse existing embeddings for unchanged chunks. Matching is keyed on
         # (file_path, start_line, content) with each cache row consumed at
@@ -511,7 +514,7 @@ class CodeIndexSDK:
         try:
             import numpy as np
         except ImportError as e:
-            raise ImportError(_MISSING_DEPS_MSG) from e
+            raise ImportError(_missing_deps_msg()) from e
 
         query_vec = query_emb[0:1].astype(np.float32)
 
@@ -1011,7 +1014,7 @@ class CodeIndexSDK:
             import faiss
             import numpy as np
         except ImportError as e:
-            raise ImportError(_MISSING_DEPS_MSG) from e
+            raise ImportError(_missing_deps_msg()) from e
 
         dim = embeddings.shape[1]
         index = faiss.IndexFlatL2(dim)
@@ -1084,7 +1087,7 @@ class CodeIndexSDK:
         try:
             import faiss
         except ImportError as e:
-            raise ImportError(_MISSING_DEPS_MSG) from e
+            raise ImportError(_missing_deps_msg()) from e
 
         try:
             index = faiss.read_index(str(self._index_path))

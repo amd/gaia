@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
 from gaia.agents.base.tools import tool
+from gaia.agents.install_hints import missing_extra_hint
 from gaia.agents.tools.path_access import read_access_error
 from gaia.agents.tools.search_scope import in_env_scope
 from gaia.logger import get_logger
@@ -37,9 +38,10 @@ try:
 except ImportError:
     _CODE_INDEX_AVAILABLE = False
 
-_MISSING_DEPS_MSG = (
-    "code_index dependencies missing. Install with: pip install -e '.[rag]'"
-)
+
+def _missing_deps_msg() -> str:
+    return f"code_index dependencies missing. {missing_extra_hint('rag')}"
+
 
 # Shared by every path that can trigger an index build (explicit
 # index_codebase and the lazy build on first search): the sandbox ceiling may
@@ -188,7 +190,7 @@ class CodeIndexToolsMixin:
                 JSON summary with files_indexed, chunks_created, and status.
             """
             if not _CODE_INDEX_AVAILABLE:
-                return json.dumps({"error": _MISSING_DEPS_MSG})
+                return json.dumps({"error": _missing_deps_msg()})
 
             self._ensure_code_index_state()
 
@@ -279,7 +281,7 @@ class CodeIndexToolsMixin:
                 language, score, and a content snippet.
             """
             if not _CODE_INDEX_AVAILABLE:
-                return json.dumps({"error": _MISSING_DEPS_MSG})
+                return json.dumps({"error": _missing_deps_msg()})
             self._ensure_code_index_state()
             # An index built before the run would answer from outside the scope.
             if not in_env_scope(self, self._repo_path):
@@ -344,7 +346,7 @@ class CodeIndexToolsMixin:
                 embedding model, and cache path.
             """
             if not _CODE_INDEX_AVAILABLE:
-                return json.dumps({"error": _MISSING_DEPS_MSG})
+                return json.dumps({"error": _missing_deps_msg()})
 
             sdk = self._get_code_index_sdk()
             if sdk is None:
@@ -363,7 +365,7 @@ class CodeIndexToolsMixin:
                 JSON confirmation message.
             """
             if not _CODE_INDEX_AVAILABLE:
-                return json.dumps({"error": _MISSING_DEPS_MSG})
+                return json.dumps({"error": _missing_deps_msg()})
 
             sdk = self._get_code_index_sdk()
             if sdk is None:

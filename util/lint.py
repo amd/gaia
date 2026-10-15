@@ -256,10 +256,11 @@ def check_pylint() -> CheckResult:
     exit_code, output = run_command(cmd)
 
     if exit_code != 0:
-        # Count error lines
         import re
 
-        issues = len(re.findall(r":\d+:\d+: [EF]\d+", output)) or 1
+        # Any enabled message fails the check (pylint's exit code is a bitmask),
+        # so count warnings too, not just E/F.
+        issues = len(re.findall(r":\d+:\d+: [A-Z]\d+", output)) or 1
         print(f"\n[!] Pylint found critical errors:")
         print(output)
         return CheckResult("Critical Errors (Pylint)", False, False, issues, output)

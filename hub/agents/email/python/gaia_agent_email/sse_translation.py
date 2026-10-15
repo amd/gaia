@@ -233,6 +233,10 @@ class CanonicalTranslator:
         ]
 
     def _on_answer(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if event.get("streamed"):
+            # Mid-turn text; only the printed answer is the final.
+            content = str(event.get("content", "") or "")
+            return [{"type": "token", "delta": content}] if content else []
         usage: Dict[str, Any] = {}
         for src, dst in (
             ("steps", "steps"),

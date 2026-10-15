@@ -125,6 +125,13 @@ def test_answer_is_terminal():
     assert out[0]["type"] in TERMINAL_TYPES
 
 
+def test_a_streamed_answer_is_text_not_the_final():
+    """An answer pulled out of the stream mid-turn must not end it: the route
+    would cancel the run and the real final, with its usage, never goes out."""
+    out = _tr().translate({"type": "answer", "content": "Done.", "streamed": True})
+    assert out == [{"type": "token", "delta": "Done."}]
+
+
 def test_permission_request_maps_to_needs_confirmation_without_confirm_url():
     out = _tr().translate(
         {
