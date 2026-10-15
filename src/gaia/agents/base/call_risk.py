@@ -32,6 +32,11 @@ DESTRUCTIVE = "destructive"
 
 _ORDER = {READ: 0, WRITE: 1, EXECUTE: 2, DESTRUCTIVE: 3}
 
+#: Display-only prompt argument carrying the risk note of a call GAIA's own
+#: checks would otherwise refuse. Such a call is approved once or not at all,
+#: so no "always" is offered for it and none can cover it.
+RISK_NOTE_ARG = "_risk_note"
+
 SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
 
 _FILE_WRITE_TOOLS = frozenset(
@@ -308,9 +313,11 @@ def call_risk(tool_name: str, tool_args: Any) -> Optional[str]:
     args: Dict[str, Any] = tool_args if isinstance(tool_args, dict) else {}
     if tool_name in SHELL_TOOLS:
         command = args.get("command")
-        if isinstance(command, str) and command.strip():
-            return shell_command_risk(command)
-        return EXECUTE
+        if not isinstance(command, str) or not command.strip():
+            return EXECUTE
+        risk = shell_command_risk(command)
+        # A call GAIA's checks would refuse is never labelled a mere read.
+        return _stricter(risk, WRITE) if args.get(RISK_NOTE_ARG) else risk
     if tool_name in _CODE_TOOLS:
         return EXECUTE
     if tool_name in _FILE_WRITE_TOOLS:
@@ -318,12 +325,27 @@ def call_risk(tool_name: str, tool_args: Any) -> Optional[str]:
     return None
 
 
+#: The plain line a command prompt shows under the command. A read needs no
+#: warning, and front-ends already print their own sentence for a delete.
+_PLAIN_NOTES = {
+    WRITE: "Changes files or repository state where it runs.",
+    EXECUTE: "Can run any code, with your permissions.",
+}
+
+
+def plain_risk_note(risk: Optional[str]) -> str:
+    """One plain sentence for *risk* on a command prompt, or "" when none is due."""
+    return _PLAIN_NOTES.get(risk or "", "")
+
+
 __all__ = [
     "DESTRUCTIVE",
     "EXECUTE",
     "READ",
+    "RISK_NOTE_ARG",
     "SHELL_TOOLS",
     "WRITE",
     "call_risk",
+    "plain_risk_note",
     "shell_command_risk",
 ]

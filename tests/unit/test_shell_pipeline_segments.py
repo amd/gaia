@@ -53,7 +53,7 @@ class _PathValidator:
     def __init__(self, root: Path):
         self._root = root.resolve()
 
-    def is_path_allowed(self, path: str) -> bool:
+    def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         return Path(path).resolve().is_relative_to(self._root)
 
 
