@@ -26,6 +26,9 @@ func (m FlagshipModel) ControlSnapshot() control.Snapshot {
 			if blocker, blocked := m.preflight.Report().Blocker(); blocked {
 				snap.Blocker = blocker.Key
 			}
+			if m.preflight.Choosing() {
+				snap.Overlay = "choose-chat"
+			}
 		}
 		if m.connect != nil {
 			snap.Overlay = "connect-mailbox"

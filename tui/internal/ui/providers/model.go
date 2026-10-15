@@ -96,6 +96,9 @@ type Model struct {
 	// listRead is set once a read returned the provider list. A failed read
 	// proves nothing absent, so registering waits for this, not for read.
 	listRead bool
+	// autoConnect opens the chosen provider's key form once the first
+	// provider read lands (see WithConnect).
+	autoConnect bool
 	// detail is the full account behind note — route, alternatives, log path —
 	// shown by `d` while detailNote is still the note on screen.
 	detail     string
@@ -105,7 +108,7 @@ type Model struct {
 	server string
 }
 
-var names = []string{"local", "fireworks", "amd"}
+var names = lemonade.ChatProviders
 
 func New(base string, width, height int) Model {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -158,7 +161,31 @@ func (m Model) WithCurrent(provider string) Model {
 	return m
 }
 
+// WithConnect opens the panel on provider and goes straight to its key form
+// once the provider read lands — for a choice the user already made elsewhere.
+// A provider the panel does not offer leaves it on the list.
+func (m Model) WithConnect(provider string) Model {
+	for i, name := range names {
+		if name == provider && name != "local" {
+			m.selected, m.autoConnect = i, true
+		}
+	}
+	return m
+}
+
 func (m Model) chosen() string { return names[m.selected] }
+
+// openSetup is enter on a cloud provider: its key form, registering the
+// provider with Lemonade first when a read has proved it absent.
+func (m Model) openSetup() (Model, tea.Cmd) {
+	m = m.setup()
+	// Only once a read proves it absent: registering over a provider not yet
+	// read would replace another gateway's settings.
+	if m.listRead && !m.listed(m.chosen()) && m.formProvider().BaseURL != "" {
+		return m, tea.Batch(textinput.Blink, m.register())
+	}
+	return m, textinput.Blink
+}
 
 // waiting is true when Lemonade is absent only because setup has not
 // installed it yet.
@@ -440,6 +467,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.stage == "setup" {
 			m.fields[3].Placeholder = m.keyPlaceholder()
 		}
+		if m.autoConnect && m.stage == "providers" && v.err == nil {
+			m.autoConnect = false
+			return m.openSetup()
+		}
 		return m, nil
 	case modelsMsg:
 		if v.source != nil && v.source != m.client {
@@ -565,9 +596,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "d":
 				m.showDetail = m.hasDetail() && !m.showDetail
 			case "up":
-				m.selected = (m.selected + 2) % 3
+				m.selected = (m.selected + len(names) - 1) % len(names)
 			case "down", "tab":
-				m.selected = (m.selected + 1) % 3
+				m.selected = (m.selected + 1) % len(names)
 			case "enter":
 				// Nothing to connect to until setup installs Lemonade.
 				if m.waiting() {
@@ -578,13 +609,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activity = "Loading models"
 					return m, tea.Batch(m.spin.Tick, m.fetchModels())
 				}
-				m = m.setup()
-				// Only once a read proves it absent: registering over a provider
-				// not yet read would replace another gateway's settings.
-				if m.listRead && !m.listed(m.chosen()) && m.formProvider().BaseURL != "" {
-					return m, tea.Batch(textinput.Blink, m.register())
-				}
-				return m, textinput.Blink
+				m.autoConnect = false
+				return m.openSetup()
 			case "r":
 				return m, m.Init()
 			}

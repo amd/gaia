@@ -104,6 +104,11 @@ type FlagshipModel struct {
 	// pfLocal overrides the local runner's options. Tests point it at a
 	// different binary name; a real session leaves it alone.
 	pfLocal *preflight.LocalOptions
+	// chatChoice is where the user said chat runs on the gate's first-run
+	// step; gateSteps is the steps that gate had finished when it was left for
+	// the provider panel, carried into the gate rebuilt after it.
+	chatChoice string
+	gateSteps  int
 
 	// halted is every Outcome the active screen is currently holding on.
 	// FlagshipModel does not render it or intercept keys for it — the screen
@@ -338,7 +343,7 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 'p' key was pressed on, which during a switch is the incoming
 			// agent, not the still-live outgoing one m.agent names until the
 			// switch commits.
-			return m.beginPreflight(*m.pending)
+			return m.beginPreflightCarrying(*m.pending, m.gateSteps)
 		default:
 			if size, ok := msg.(tea.WindowSizeMsg); ok {
 				m.width = size.Width
@@ -355,6 +360,7 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// key is only ever meant for whichever agent the gate on screen is for.
 	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "p" && m.activeView == viewPreflight && m.preflight != nil && !m.preflight.Busy() && m.pending != nil && m.pending.ID == catalog.FlagshipID {
 		m.preflight.Cancel()
+		m.gateSteps = m.preflight.StepsDone()
 		panel := providers.New("", m.width, m.height).WithSetupStep(m.preflight.Report().LemonadeStep())
 		m.providerPanel = &panel
 		return m, panel.Init()
@@ -415,6 +421,22 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.cancelFromGate()
+
+	case preflight.ChatChosenMsg:
+		if m.gateIsFor(msg.AgentID) {
+			m.chatChoice = msg.Provider
+		}
+		return m, nil
+
+	case preflight.ConnectProviderMsg:
+		if !m.gateIsFor(msg.AgentID) {
+			return m, nil
+		}
+		m.preflight.Cancel()
+		m.gateSteps = m.preflight.StepsDone()
+		panel := providers.New("", m.width, m.height).WithConnect(msg.Provider)
+		m.providerPanel = &panel
+		return m, panel.Init()
 
 	case preflight.ConnectMailboxMsg:
 		if !m.gateIsFor(msg.AgentID) {
