@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -39,8 +40,10 @@ type modelsMsg struct {
 	capacity string
 	err      error
 	// note is a warning about an otherwise successful connect — the key
-	// works, but could not be kept for the next session.
-	note string
+	// works, but could not be kept for the next session. noteDetail is the
+	// full reason.
+	note       string
+	noteDetail string
 }
 
 // Pull messages carry their download's channel so a cancelled download's late
@@ -93,11 +96,19 @@ type Model struct {
 	// listRead is set once a read returned the provider list. A failed read
 	// proves nothing absent, so registering waits for this, not for read.
 	listRead bool
+	// autoConnect opens the chosen provider's key form once the first
+	// provider read lands (see WithConnect).
+	autoConnect bool
+	// detail is the full account behind note — route, alternatives, log path —
+	// shown by `d` while detailNote is still the note on screen.
+	detail     string
+	detailNote string
+	showDetail bool
 	// server names the Lemonade in use and the backend its chat model runs on.
 	server string
 }
 
-var names = []string{"local", "fireworks", "amd"}
+var names = lemonade.ChatProviders
 
 func New(base string, width, height int) Model {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -150,19 +161,68 @@ func (m Model) WithCurrent(provider string) Model {
 	return m
 }
 
+// WithConnect opens the panel on provider and goes straight to its key form
+// once the provider read lands — for a choice the user already made elsewhere.
+// A provider the panel does not offer leaves it on the list.
+func (m Model) WithConnect(provider string) Model {
+	for i, name := range names {
+		if name == provider && name != "local" {
+			m.selected, m.autoConnect = i, true
+		}
+	}
+	return m
+}
+
 func (m Model) chosen() string { return names[m.selected] }
+
+// openSetup is enter on a cloud provider: its key form, registering the
+// provider with Lemonade first when a read has proved it absent.
+func (m Model) openSetup() (Model, tea.Cmd) {
+	m = m.setup()
+	// Only once a read proves it absent: registering over a provider not yet
+	// read would replace another gateway's settings.
+	if m.listRead && !m.listed(m.chosen()) && m.formProvider().BaseURL != "" {
+		return m, tea.Batch(textinput.Blink, m.register())
+	}
+	return m, textinput.Blink
+}
 
 // waiting is true when Lemonade is absent only because setup has not
 // installed it yet.
 func (m Model) waiting() bool { return m.down && m.setupStep > 0 }
 
 // explain turns a Lemonade error into the note shown under the panel.
-func (m Model) explain(err error) string {
+func (m Model) explain(err error) Model {
 	if m.setupStep > 0 && errors.Is(err, lemonade.ErrUnreachable) {
-		return fmt.Sprintf("Lemonade isn't installed yet — setup step %d installs it. "+
-			"Choose a provider once that step is done: close this panel and press enter to start it.", m.setupStep)
+		return m.withDetail(fmt.Sprintf("Lemonade isn't installed yet — setup step %d installs it. "+
+			"Choose a provider once that step is done: close this panel and press enter to start it.", m.setupStep), "")
 	}
-	return err.Error()
+	return m.withDetail(daemon.Brief(err), err.Error())
+}
+
+// withDetail shows note and keeps detail behind `d` when it says more.
+func (m Model) withDetail(note, detail string) Model {
+	m.note = note
+	m.showDetail = false
+	m.detail, m.detailNote = "", ""
+	if detail != "" && detail != note {
+		m.detail, m.detailNote = detail, note
+	}
+	return m
+}
+
+// hasDetail reports whether the note on screen has more behind `d`.
+func (m Model) hasDetail() bool { return m.detail != "" && m.note == m.detailNote }
+
+// restoreNote is the status line for a saved key that could not be handed back.
+func restoreNote(err error) (note, detail string) {
+	detail = "Could not check for a saved key: " + strings.TrimSuffix(err.Error(), ".") +
+		". Until it is restored, a provider may show \"key needed\" while one is saved."
+	var b daemon.Briefer
+	if errors.As(err, &b) {
+		return strings.TrimSuffix(b.Brief(), ".") + ", then press r.", detail
+	}
+	return "Could not check for a saved key: " + strings.TrimSuffix(err.Error(), ".") + ". Press r to retry.", detail
 }
 
 // register lists the chosen provider with Lemonade — the settings the form
@@ -398,15 +458,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.down = errors.Is(v.err, lemonade.ErrUnreachable)
 		switch {
 		case v.err != nil:
-			m.note = m.explain(v.err)
+			m = m.explain(v.err)
 		case v.restoreErr != nil:
-			m.note = "Could not check for a saved key: " + v.restoreErr.Error() +
-				". A provider may show \"key needed\" while one is saved. Press r to retry."
+			m = m.withDetail(restoreNote(v.restoreErr))
 		case wasWaiting:
 			m.note = ""
 		}
 		if m.stage == "setup" {
 			m.fields[3].Placeholder = m.keyPlaceholder()
+		}
+		if m.autoConnect && m.stage == "providers" && v.err == nil {
+			m.autoConnect = false
+			return m.openSetup()
 		}
 		return m, nil
 	case modelsMsg:
@@ -415,7 +478,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = false
 		if v.err != nil {
-			m.note = m.explain(v.err)
+			m = m.explain(v.err)
 			return m, nil
 		}
 		m.capacity = v.capacity
@@ -445,7 +508,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-		m.note = v.note
+		m = m.withDetail(v.note, v.noteDetail)
 		return m, m.Init()
 	case pullProgressMsg:
 		if v.ch != m.pullCh || m.stage != "download" {
@@ -476,7 +539,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = false
 		if v.err != nil {
-			m.note = m.explain(v.err)
+			m = m.explain(v.err)
 		} else {
 			m.note = "Key cleared, here and for future sessions. An environment key, if set, remains active."
 			// Reflect the clear immediately rather than waiting on the
@@ -530,10 +593,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.stage {
 		case "providers":
 			switch v.String() {
+			case "d":
+				m.showDetail = m.hasDetail() && !m.showDetail
 			case "up":
-				m.selected = (m.selected + 2) % 3
+				m.selected = (m.selected + len(names) - 1) % len(names)
 			case "down", "tab":
-				m.selected = (m.selected + 1) % 3
+				m.selected = (m.selected + 1) % len(names)
 			case "enter":
 				// Nothing to connect to until setup installs Lemonade.
 				if m.waiting() {
@@ -544,13 +609,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activity = "Loading models"
 					return m, tea.Batch(m.spin.Tick, m.fetchModels())
 				}
-				m = m.setup()
-				// Only once a read proves it absent: registering over a provider
-				// not yet read would replace another gateway's settings.
-				if m.listRead && !m.listed(m.chosen()) && m.formProvider().BaseURL != "" {
-					return m, tea.Batch(textinput.Blink, m.register())
-				}
-				return m, textinput.Blink
+				m.autoConnect = false
+				return m.openSetup()
 			case "r":
 				return m, m.Init()
 			}
@@ -623,8 +683,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					// A kept copy would come straight back on the next launch.
 					if err := forgetKey(p); err != nil {
-						return clearedMsg{source: c, err: fmt.Errorf(
-							"Cleared for this session, but the saved copy could not be removed: %w", err)}
+						return clearedMsg{source: c, err: keptCopyError{err}}
 					}
 					return clearedMsg{source: c}
 				})
@@ -658,7 +717,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return msg
 					}
 					if err := rememberKey(p.Name, key); err != nil {
-						msg.note = "Connected for this session only — the key could not be kept: " + err.Error()
+						msg.note = "Connected for this session only; the key wasn't saved. " + daemon.Brief(err)
+						msg.noteDetail = "The key could not be kept for the next session: " + err.Error()
 					}
 					return msg
 				})
@@ -875,6 +935,9 @@ func (m Model) View() string {
 	if m.note != "" {
 		lines = append(lines, "", m.note)
 	}
+	if m.showDetail && m.hasDetail() {
+		lines = append(lines, "", lipgloss.NewStyle().Foreground(theme.Dim).Render(m.detail))
+	}
 	hint := "↑/↓ choose · enter continue · r refresh · esc close"
 	if m.stage == "models" {
 		hint = "type to search · ↑/↓ choose · enter select · ctrl+r refresh · esc back"
@@ -909,6 +972,9 @@ func (m Model) View() string {
 	}
 	if m.waiting() && m.stage == "providers" {
 		hint = "r re-check · esc close"
+	}
+	if m.stage == "providers" && m.hasDetail() {
+		hint = "d details · " + hint
 	}
 	if m.busy {
 		hint = m.spin.View() + " " + m.activity + "… · esc cancel"

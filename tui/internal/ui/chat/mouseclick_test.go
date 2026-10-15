@@ -80,11 +80,15 @@ func TestOnlyHTTPLinksAreClickable(t *testing.T) {
 	}
 }
 
-// clickAt drives a left press at (x, y) the way Bubble Tea delivers one.
+// clickAt drives a left click at (x, y) the way Bubble Tea delivers one: a
+// press, then a release on the same cell. Clicks act on the release.
 func clickAt(t *testing.T, m ChatModel, x, y int) (ChatModel, tea.Cmd) {
 	t.Helper()
-	next, cmd := m.handleTranscriptMouse(tea.MouseMsg{
+	next, _ := m.handleTranscriptMouse(tea.MouseMsg{
 		X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	})
+	next, cmd := next.(ChatModel).handleTranscriptMouse(tea.MouseMsg{
+		X: x, Y: y, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft,
 	})
 	return next.(ChatModel), cmd
 }
