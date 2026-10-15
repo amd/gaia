@@ -87,6 +87,55 @@ class EmptyPDFError(PDFExtractionError):
     status = "empty"
 
 
+def _missing_package_hint(*packages: str) -> str:
+    from gaia.agents.install_hints import (  # pylint: disable=import-outside-toplevel
+        missing_package_hint,
+    )
+
+    return missing_package_hint(*packages)
+
+
+def _is_connection_failure(exc: BaseException) -> bool:
+    """Whether *exc*, or anything it was raised from, is a failed connection."""
+    import requests  # pylint: disable=import-outside-toplevel
+
+    from gaia.llm.providers.lemonade import (  # pylint: disable=import-outside-toplevel
+        CONNECTION_FAILURE_RE,
+    )
+
+    seen = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(
+            current,
+            (ConnectionError, requests.exceptions.ConnectionError),
+        ) or CONNECTION_FAILURE_RE.search(str(current)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+class EmbeddingUnavailableError(RuntimeError):
+    """The embedding model could not run, so nothing was embedded or searched.
+
+    ``unreachable`` is True when Lemonade Server itself could not be reached,
+    as opposed to the server answering with an error.
+    """
+
+    def __init__(self, model: str, cause: BaseException):
+        self.model = model
+        self.unreachable = _is_connection_failure(cause)
+        if self.unreachable:
+            what = (
+                f"Lemonade Server is not reachable, so the embedding model "
+                f"{model} could not run"
+            )
+        else:
+            what = f"The embedding model {model} failed"
+        super().__init__(f"{what}: {cause}")
+
+
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
 # and extracted-text markdown. clear_cache() deletes nothing else.
 _CACHE_OWNED_FILE = re.compile(
@@ -300,12 +349,13 @@ class RAGSDK:
             missing.append("faiss-cpu")
 
         if missing:
+            from gaia.agents.install_hints import (  # pylint: disable=import-outside-toplevel
+                missing_extra_hint,
+            )
+
             error_msg = (
                 f"\n❌ Error: Missing required RAG dependencies: {', '.join(missing)}\n\n"
-                f"Please install the RAG dependencies:\n"
-                f'  uv pip install -e ".[rag]"\n\n'
-                f"Or install packages directly:\n"
-                f"  uv pip install {' '.join(missing)}\n"
+                f"{missing_extra_hint('rag')}\n"
             )
             # A package that is installed but failed to import (broken native
             # deps) needs a different fix than a missing one — name the cause.
@@ -562,71 +612,76 @@ class RAGSDK:
         evict the co-resident chat model and trigger a ~100s cold reload.
         """
         if self.embedder is None:
-            self.log.info(
-                f"Loading embedding model via Lemonade: {self.config.embedding_model}"
-            )
+            try:
+                self._start_embedder()
+            except EmbeddingUnavailableError:
+                raise
+            except Exception as e:
+                raise EmbeddingUnavailableError(self.config.embedding_model, e) from e
 
-            from gaia.llm.lemonade_client import MODELS, LemonadeClient
+    def _start_embedder(self):
+        """Register, download and load the embedder; ``_load_embedder`` wraps it."""
+        self.log.info(
+            f"Loading embedding model via Lemonade: {self.config.embedding_model}"
+        )
 
-            if not hasattr(self, "llm_client") or self.llm_client is None:
-                self.llm_client = LemonadeClient()
+        from gaia.llm.lemonade_client import MODELS, LemonadeClient
 
-            # Register + download the embedder before loading. Custom
-            # (``user.``) embedders aren't Lemonade built-ins — they need
-            # checkpoint + recipe + the embedding label on first pull. Fail
-            # loudly if registration fails (no silent fall-back to another model).
-            mr = next(
-                (
-                    m
-                    for m in MODELS.values()
-                    if m.model_id == self.config.embedding_model
-                ),
-                None,
-            )
-            if mr and self.config.embedding_model.startswith("user."):
-                if not self.llm_client.ensure_model_downloaded(
-                    self.config.embedding_model,
-                    checkpoint=mr.checkpoint,
-                    recipe=mr.recipe,
-                    embedding=mr.embedding,
-                ):
-                    raise RuntimeError(
-                        f"Failed to register/download embedding model "
-                        f"{self.config.embedding_model!r}. Ensure Lemonade Server "
-                        f"is running and reachable, then retry "
-                        f"(or run `gaia init --profile rag`)."
-                    )
+        if not hasattr(self, "llm_client") or self.llm_client is None:
+            self.llm_client = LemonadeClient()
 
-            # Serialize the whole unload→load swap through the broker (#2248).
-            # Not an eviction guard — per #1544 the embedder is co-resident in
-            # its own slot, so a chat load will not evict it. It is a guard on
-            # the *load* itself: concurrent loads contend for GPU memory and
-            # backend startup, which is what the broker arbitrates. Background
-            # priority so a warm-up never makes an interactive turn wait.
-            from gaia.daemon.broker_client import model_lease
-
-            with model_lease(self.config.embedding_model, priority="background"):
-                # Scoped unload of the embedder ONLY — a global /unload would evict
-                # the co-resident chat model and trigger a ~100s cold reload (#1544).
-                # ignore_if_not_loaded: on a cold start the embedder slot is empty
-                # and Lemonade 404s "Model not loaded" — a benign no-op here, since
-                # we reload it on the next line anyway.
-                if not self.llm_client.is_users_server():
-                    self.llm_client.unload_model(
-                        self.config.embedding_model, ignore_if_not_loaded=True
-                    )
-                self.llm_client.load_model(
-                    self.config.embedding_model,
-                    llamacpp_args=EMBEDDER_LLAMACPP_ARGS,
+        # Register + download the embedder before loading. Custom
+        # (``user.``) embedders aren't Lemonade built-ins — they need
+        # checkpoint + recipe + the embedding label on first pull. Fail
+        # loudly if registration fails (no silent fall-back to another model).
+        mr = next(
+            (m for m in MODELS.values() if m.model_id == self.config.embedding_model),
+            None,
+        )
+        if mr and self.config.embedding_model.startswith("user."):
+            if not self.llm_client.ensure_model_downloaded(
+                self.config.embedding_model,
+                checkpoint=mr.checkpoint,
+                recipe=mr.recipe,
+                embedding=mr.embedding,
+            ):
+                raise RuntimeError(
+                    f"Failed to register/download embedding model "
+                    f"{self.config.embedding_model!r}. Ensure Lemonade Server "
+                    f"is running and reachable, then retry "
+                    f"(or run `gaia init --profile rag`)."
                 )
 
-            self.embedder = self.llm_client
-            self.use_lemonade_embeddings = True
+        # Serialize the whole unload→load swap through the broker (#2248).
+        # Not an eviction guard — per #1544 the embedder is co-resident in
+        # its own slot, so a chat load will not evict it. It is a guard on
+        # the *load* itself: concurrent loads contend for GPU memory and
+        # backend startup, which is what the broker arbitrates. Background
+        # priority so a warm-up never makes an interactive turn wait.
+        from gaia.daemon.broker_client import model_lease
 
-            self.log.info(
-                f"Loaded embedding model (ubatch-size={EMBEDDER_UBATCH_TOKENS}); "
-                "chat model left resident"
+        with model_lease(self.config.embedding_model, priority="background"):
+            # Scoped unload of the embedder ONLY — a global /unload would evict
+            # the co-resident chat model and trigger a ~100s cold reload (#1544).
+            # ignore_if_not_loaded: on a cold start the embedder slot is empty
+            # and Lemonade 404s "Model not loaded" — a benign no-op here, since
+            # we reload it on the next line anyway.
+            if not self.llm_client.is_users_server():
+                self.llm_client.unload_model(
+                    self.config.embedding_model, ignore_if_not_loaded=True
+                )
+            self.llm_client.load_model(
+                self.config.embedding_model,
+                llamacpp_args=EMBEDDER_LLAMACPP_ARGS,
             )
+
+        self.embedder = self.llm_client
+        self.use_lemonade_embeddings = True
+
+        self.log.info(
+            f"Loaded embedding model (ubatch-size={EMBEDDER_UBATCH_TOKENS}); "
+            "chat model left resident"
+        )
 
     def _encode_texts(
         self, texts: List[str], show_progress: bool = False
@@ -735,7 +790,9 @@ class RAGSDK:
                         self.log.error(
                             f"   ❌ Batch {batch_num} failed after {max_retries + 1} attempts"
                         )
-                        raise
+                        raise EmbeddingUnavailableError(
+                            self.config.embedding_model, e
+                        ) from e
 
             batch_duration = time.time() - batch_start
 
@@ -1120,7 +1177,7 @@ class RAGSDK:
         except ImportError:
             raise ImportError(
                 "python-pptx is required for PowerPoint processing. "
-                "Install it with: uv pip install python-pptx"
+                + _missing_package_hint("python-pptx")
             )
 
         # Guard against zip bombs: .pptx is a ZIP container. Check that
@@ -2907,6 +2964,9 @@ These positions indicate where to split the text."""
                 if not limits_ok:
                     stats["memory_limit_warning"] = True
                 return stats
+            except EmbeddingUnavailableError as e:
+                # The cache is fine; the embedder is not. Keep the cache.
+                return self._embedding_failed(stats, file_path, e)
             except Exception as e:
                 self.log.warning(f"Cache load failed: {e}, reindexing")
                 if self.config.show_stats:
@@ -3109,6 +3169,8 @@ These positions indicate where to split the text."""
             stats["error"] = str(e)
             stats["pdf_status"] = e.status
             return stats
+        except EmbeddingUnavailableError as e:
+            return self._embedding_failed(stats, file_path, e)
         except Exception as e:
             if self.config.show_stats:
                 print(f"❌ Failed to index {Path(file_path).name}: {e}")
@@ -3118,6 +3180,18 @@ These positions indicate where to split the text."""
             )
             stats["error"] = str(e)
             return stats
+
+    def _embedding_failed(
+        self, stats: Dict[str, Any], file_path: str, error: EmbeddingUnavailableError
+    ) -> Dict[str, Any]:
+        """Index stats for a document that could not be embedded."""
+        if self.config.show_stats:
+            print(f"❌ Failed to index {Path(file_path).name}: {error}")
+        self.log.error(f"Failed to index {file_path}: {error}")
+        stats["error"] = str(error)
+        stats["error_type"] = "embedding_unavailable"
+        stats["lemonade_unreachable"] = error.unreachable
+        return stats
 
     def _retrieve_chunks_from_file(self, query: str, file_path: str) -> tuple:
         """

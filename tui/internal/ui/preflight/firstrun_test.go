@@ -3,6 +3,7 @@ package preflight
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,7 +25,13 @@ type scriptedRunner struct {
 func (s scriptedRunner) Label() string                        { return "scripted" }
 func (s scriptedRunner) Rows(Config) []Row                    { return append([]Row(nil), s.rep.Rows...) }
 func (s scriptedRunner) Check(context.Context, Config) Report { return s.rep }
+// scriptedFixesMu serialises Fix: a test that mashes keys can start a fix
+// while an earlier one's goroutine is still recording.
+var scriptedFixesMu sync.Mutex
+
 func (s scriptedRunner) Fix(_ context.Context, _ Config, kind FixKind, _ func(Progress)) FixResult {
+	scriptedFixesMu.Lock()
+	defer scriptedFixesMu.Unlock()
 	*s.fixes = append(*s.fixes, kind)
 	return FixResult{Note: "done"}
 }

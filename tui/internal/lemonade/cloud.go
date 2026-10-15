@@ -158,6 +158,13 @@ func (m Model) Cloud() bool { return m.Recipe == "cloud" || m.Provider != "" || 
 func IsCloudID(id string) bool {
 	return strings.HasPrefix(id, "fireworks.") || strings.HasPrefix(id, "amd.")
 }
+
+// ChatProviders are the places chat can run, in the order they are offered:
+// this PC first, then the cloud providers Lemonade routes to.
+var ChatProviders = []string{"local", "fireworks", "amd"}
+
+// IsCloudProvider reports whether chat on provider leaves this PC.
+func IsCloudProvider(provider string) bool { return provider != "" && IsCloudID(provider+".") }
 func Label(provider string) string {
 	switch provider {
 	case "local":

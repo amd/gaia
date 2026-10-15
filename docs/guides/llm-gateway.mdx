@@ -101,6 +101,10 @@ clears it. GAIA never switches to another model on its own; it tells you instead
 - `gaia gateway status` and `gaia gateway models` mark it unavailable.
 - The TUI's `/gateway` screen marks it `(unavailable)`, says so under the list when it is
   the active model, and never auto-selects it.
+- A chat turn in the Agent UI or the TUI ends with an error that names the model and
+  says retrying won't help. The Agent UI points you to its model menu (or to
+  **Settings > Advanced > Custom model ID** if you typed the ID there); the TUI points
+  you to `/model`.
 
 A 401 or 403 is an authentication problem, not a missing model, so it is not recorded.
 

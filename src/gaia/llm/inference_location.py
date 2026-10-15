@@ -45,6 +45,12 @@ _VIA_LEMONADE = frozenset({"amd", "fireworks"})
 _ARTICLED = frozenset({"amd"})
 
 
+def provider_phrase(provider: str) -> str:
+    """The provider's name as it reads mid-sentence: "the AMD LLM Gateway"."""
+    display = _DISPLAY_NAMES.get(provider, provider)
+    return f"the {display}" if provider in _ARTICLED else display
+
+
 @dataclass(frozen=True)
 class InferenceLocation:
     """Where the chat model runs, and what that does and does not cover."""
@@ -83,7 +89,7 @@ class InferenceLocation:
                 "on this machine. GAIA is not sending this conversation to any "
                 "cloud provider."
             )
-        where = f"the {self.display}" if self.provider in _ARTICLED else self.display
+        where = provider_phrase(self.provider)
         return (
             f"on {where} (cloud). Your messages, and anything read from files "
             "or memory, are sent there."

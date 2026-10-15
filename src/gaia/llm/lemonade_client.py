@@ -1952,9 +1952,15 @@ class CloudModelUnavailableError(LemonadeClientError):
     Distinct from an auth failure (401/403), which says nothing about the model.
     """
 
-    def __init__(self, message: str, model_id: Optional[str] = None):
+    def __init__(
+        self,
+        message: str,
+        model_id: Optional[str] = None,
+        provider: Optional[str] = None,
+    ):
         super().__init__(message)
         self.model_id = model_id
+        self.provider = provider
         self.status = 404
 
 
@@ -2047,6 +2053,7 @@ def _cloud_request_error(
             "deployment or access for your account. Choose a deployed model "
             "or router in the TUI provider settings.",
             model_id=model,
+            provider=provider,
         )
     if status == 429:
         return LemonadeClientError(

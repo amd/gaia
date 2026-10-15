@@ -1740,12 +1740,15 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
   </Accordion>
 
   <Accordion title="POST /api/schedules">
-    Create a scheduled task from a name, interval, and prompt.
+    Create a scheduled task from a name, interval, and prompt. An optional
+    `timezone` (IANA name, e.g. `America/Los_Angeles`) sets the zone its times
+    are in; it defaults to the server PC's zone. An unknown zone returns 400.
   </Accordion>
 
   <Accordion title="POST /api/schedules/parse">
     Parse a natural-language schedule description (e.g. "every morning at
-    8am") into structured interval config, without creating anything.
+    8am") into structured interval config, without creating anything. Takes
+    the same optional `timezone` and echoes the zone it used.
   </Accordion>
 
   <Accordion title="GET /api/schedules/{name}">

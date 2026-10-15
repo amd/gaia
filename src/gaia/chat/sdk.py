@@ -8,8 +8,10 @@ Gaia Agent SDK - Unified text chat integration with conversation history
 
 import json
 import logging
+import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
@@ -18,6 +20,9 @@ from gaia.llm import create_client
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.llm.providers.lemonade import NATIVE_TOOL_CALLS_PREFIX
 from gaia.logger import get_logger
+
+#: Threads inside ``AgentSDK.side_request``; their calls are not the turn's.
+_SIDE_CALLS = threading.local()
 
 
 @dataclass
@@ -367,12 +372,30 @@ class AgentSDK:
     #: Receives one timing dict per model request; set by the agent loop.
     llm_call_sink: Optional[Callable[[Dict[str, Any]], None]] = None
 
+    @staticmethod
+    @contextmanager
+    def side_request():
+        """Keep this thread's model calls out of the user turn's metrics.
+
+        A background call (memory extraction) can run while a turn is open;
+        recorded into it, its stats and timing replace the turn's own call's.
+        """
+        previous = getattr(_SIDE_CALLS, "active", False)
+        _SIDE_CALLS.active = True
+        try:
+            yield
+        finally:
+            _SIDE_CALLS.active = previous
+
+    def _turn_recorder(self) -> Optional[Any]:
+        return None if getattr(_SIDE_CALLS, "active", False) else self.turn_recorder
+
     def _report_llm_call(self, started: float, *, streamed: bool, ok: bool) -> None:
         """Hand the sink this request's wall time, ttft, finish reason, and
         the tokens from the response's own usage (never ``/stats``)."""
         seconds = time.perf_counter() - started
         sink = self.llm_call_sink
-        if sink is None:
+        if sink is None or getattr(_SIDE_CALLS, "active", False):
             return
         usage = self.llm_client.get_last_usage() if ok else None
         usage = usage if isinstance(usage, dict) else {}
@@ -391,7 +414,7 @@ class AgentSDK:
     def _recorder_begin(
         self, structured: List[Dict[str, Any]], tools: Optional[List[Dict]]
     ) -> None:
-        recorder = self.turn_recorder
+        recorder = self._turn_recorder()
         if recorder is None:
             return
         try:
@@ -411,7 +434,7 @@ class AgentSDK:
 
     def _recorder_mark(self) -> None:
         """Stop the clock on the open call before its stats are fetched."""
-        recorder = self.turn_recorder
+        recorder = self._turn_recorder()
         if recorder is None:
             return
         try:
@@ -422,7 +445,7 @@ class AgentSDK:
     def _recorder_end(self, stats: Optional[Dict[str, Any]] = None) -> None:
         """Close the open call. A no-op once closed, so a ``finally`` can back
         up a normal close without recording the call twice."""
-        recorder = self.turn_recorder
+        recorder = self._turn_recorder()
         if recorder is None:
             return
         try:

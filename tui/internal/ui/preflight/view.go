@@ -88,7 +88,9 @@ func (m Model) render() string {
 	}
 
 	var body []string
-	if m.details {
+	if m.choosing {
+		body = m.chooserLines(w, budget)
+	} else if m.details {
 		body = m.detailLines(w, budget)
 	} else {
 		body = m.rowLines(labelW, lineW, w, budget)
@@ -171,6 +173,15 @@ func (m Model) footer(w int) string {
 	if row, ok := m.focusedRow(); ok && row.FirstRun && row.Fix != FixNone {
 		firstRun = true
 	}
+	if m.choosing {
+		// Narrow terminals drop hints from the front, so enter and esc go last.
+		keys = append(keys, [2]string{"↑/↓", "move"})
+		if m.cfg.AgentID == "gaia" {
+			keys = append(keys, [2]string{"p", "all providers"})
+		}
+		keys = append(keys, [2]string{"enter", "choose"}, [2]string{"esc", "back to the steps"})
+		return m.fitFooter(w, keys)
+	}
 	switch fix := m.focusedFix(); {
 	case m.Busy():
 	case firstRun:
@@ -195,7 +206,10 @@ func (m Model) footer(w int) string {
 		keys = append(keys, [2]string{"enter", "continue"})
 	}
 	keys = append(keys, [2]string{"esc", "back"})
+	return m.fitFooter(w, keys)
+}
 
+func (m Model) fitFooter(w int, keys [][2]string) string {
 	// Fitted against the REAL terminal, not the floored layout width, and
 	// narrowed by dropping whole hints from the FRONT.
 	//

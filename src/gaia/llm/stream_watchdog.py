@@ -17,20 +17,21 @@ so a server that trickles keep-alives or a slow SSE frame is never cut off.
 
 The stream is read on a worker thread and handed over through a queue, so the
 consumer regains control on a stall (or on Stop) even while the socket read is
-still blocked. The worker's socket is then closed to unblock it.
+still blocked. The worker's reads wait in short slices, so once the stream is
+abandoned it stops within one slice and closes its own connection.
 """
 
 from __future__ import annotations
 
 import contextvars
-import logging
 import queue
-import socket
+import ssl
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Iterator, List, TypeVar
+from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar
 
+import httpcore
 import httpx
 
 from gaia.llm.retry import (
@@ -40,11 +41,9 @@ from gaia.llm.retry import (
     stream_idle_timeout,
 )
 
-logger = logging.getLogger(__name__)
-
 T = TypeVar("T")
 
-#: Longest stretch between two checks of the Stop hook while a stream is quiet.
+#: Longest stretch between two checks of Stop, or of an abandoned reader's flag.
 _POLL_INTERVAL = 0.25
 #: Seconds the HTTP client's own read timeout runs past the stall limit, so the
 #: watchdog, with its actionable message, is always the one that fires.
@@ -79,38 +78,110 @@ class ByteActivity:
     def __init__(self, clock: Callable[[], float] = time.monotonic):
         self._clock = clock
         self.last = clock()
-        self._responses: List[httpx.Response] = []
-        self._lock = threading.Lock()
+        self._aborted = threading.Event()
 
     def touch(self) -> None:
         self.last = self._clock()
 
-    def track(self, response: httpx.Response) -> None:
-        with self._lock:
-            self._responses.append(response)
+    @property
+    def aborted(self) -> bool:
+        return self._aborted.is_set()
 
     def abort(self) -> None:
-        """Close the tracked connections so a read blocked on them returns.
+        """Make every read on this stream's connections give up.
 
-        ``shutdown`` wakes the reader on Linux and macOS, ``close`` on Windows.
+        Readers wait on the socket in short slices and check this between
+        them, because no cross-thread socket call wakes a blocked read on
+        every OS (``shutdown`` does not on macOS). The reader then closes its
+        own socket, so a descriptor is never freed under a read in flight.
         """
-        with self._lock:
-            responses = list(self._responses)
-        for response in responses:
-            stream = response.extensions.get("network_stream")
-            get_info = getattr(stream, "get_extra_info", None)
-            sock = get_info("socket") if callable(get_info) else None
-            if not isinstance(sock, socket.socket):
-                logger.warning(
-                    "Could not reach the socket of a stalled model stream; its "
-                    "reader thread ends when the read timeout fires."
-                )
-                continue
+        self._aborted.set()
+
+
+class _AbandonedStream(httpcore.ReadError):
+    def __init__(self) -> None:
+        super().__init__("The model stream was abandoned by the stall watchdog.")
+
+
+class _AbortableStream(httpcore.NetworkStream):
+    """A connection whose reads wait in short slices and stop once aborted."""
+
+    def __init__(self, inner: httpcore.NetworkStream, activity: ByteActivity):
+        self._inner = inner
+        self._activity = activity
+
+    def read(self, max_bytes: int, timeout: Optional[float] = None) -> bytes:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            if self._activity.aborted:
+                raise _AbandonedStream()
+            wait = _POLL_INTERVAL
+            if deadline is not None:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise httpcore.ReadTimeout("timed out")
+                wait = min(wait, left)
             try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError as e:
-                logger.debug("Stalled stream socket already shut down: %s", e)
-            sock.close()
+                data = self._inner.read(max_bytes, wait)
+            except httpcore.ReadTimeout:
+                continue
+            except httpcore.ReadError:
+                if self._activity.aborted:
+                    raise _AbandonedStream() from None
+                raise
+            if self._activity.aborted:
+                raise _AbandonedStream()
+            return data
+
+    def write(self, buffer: bytes, timeout: Optional[float] = None) -> None:
+        if self._activity.aborted:
+            raise httpcore.WriteError("The model stream was abandoned.")
+        self._inner.write(buffer, timeout)
+
+    def close(self) -> None:
+        self._inner.close()
+
+    def start_tls(
+        self,
+        ssl_context: ssl.SSLContext,
+        server_hostname: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> httpcore.NetworkStream:
+        tls = self._inner.start_tls(ssl_context, server_hostname, timeout)
+        return _AbortableStream(tls, self._activity)
+
+    def get_extra_info(self, info: str) -> Any:
+        return self._inner.get_extra_info(info)
+
+
+class _AbortableBackend(httpcore.NetworkBackend):
+    def __init__(self, inner: httpcore.NetworkBackend, activity: ByteActivity):
+        self._inner = inner
+        self._activity = activity
+
+    def _connect(self, connect: Callable[[], httpcore.NetworkStream]):
+        if self._activity.aborted:
+            raise httpcore.ConnectError("The model stream was abandoned.")
+        return _AbortableStream(connect(), self._activity)
+
+    def connect_tcp(
+        self, host, port, timeout=None, local_address=None, socket_options=None
+    ) -> httpcore.NetworkStream:
+        return self._connect(
+            lambda: self._inner.connect_tcp(
+                host, port, timeout, local_address, socket_options
+            )
+        )
+
+    def connect_unix_socket(
+        self, path, timeout=None, socket_options=None
+    ) -> httpcore.NetworkStream:
+        return self._connect(
+            lambda: self._inner.connect_unix_socket(path, timeout, socket_options)
+        )
+
+    def sleep(self, seconds: float) -> None:
+        self._inner.sleep(seconds)
 
 
 class _ActivityStream(httpx.SyncByteStream):
@@ -139,7 +210,6 @@ class _ActivityTransport(httpx.BaseTransport):
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         response = self._inner.handle_request(request)
         self._activity.touch()
-        self._activity.track(response)
         return httpx.Response(
             status_code=response.status_code,
             headers=response.headers,
@@ -152,9 +222,21 @@ class _ActivityTransport(httpx.BaseTransport):
 
 
 def activity_http_client(activity: ByteActivity) -> httpx.Client:
-    """An ``httpx.Client`` for the OpenAI SDK that feeds *activity*."""
+    """An ``httpx.Client`` for the OpenAI SDK that feeds *activity* and whose
+    reads end once *activity* is aborted."""
+    transport = httpx.HTTPTransport()
+    pool = getattr(transport, "_pool", None)
+    if not isinstance(getattr(pool, "_network_backend", None), httpcore.NetworkBackend):
+        raise RuntimeError(
+            f"httpx {httpx.__version__} / httpcore {httpcore.__version__} no "
+            "longer exposes the connection pool's network backend, so a stalled "
+            "model stream could not be abandoned. Install the httpx version "
+            "pinned in GAIA's setup.py and report this at "
+            "https://github.com/amd/gaia/issues."
+        )
+    pool._network_backend = _AbortableBackend(pool._network_backend, activity)
     return httpx.Client(
-        transport=_ActivityTransport(httpx.HTTPTransport(), activity),
+        transport=_ActivityTransport(transport, activity),
         follow_redirects=True,
     )
 

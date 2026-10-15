@@ -243,7 +243,11 @@ and where that model runs.
   permission mode, the model chip picks the model, and Send turns into Stop
   while GAIA is working.
 - **Tool steps** show as one quiet line ("3 steps · 1 tool") you can open for
-  the detail.
+  the detail. "Steps" is the agent's own count, the same figure the TUI and
+  evals report.
+- **The line under an answer** shows its time and the tokens the whole turn
+  read and wrote, across every model call. Files the answer names by full path,
+  such as a saved deliverable, open in your file explorer when clicked.
 - **"Getting GAIA ready… 12s"** under the message box means a local model is
   reading GAIA's instructions ahead of your first message, so that message
   gets a quick answer. You can type and send meanwhile; a message sent early
@@ -337,6 +341,10 @@ The question appears above the message box with three answers:
 - **Always allow** *this exact action* in this chat (offered only when the action
   is narrow enough to name, e.g. `write_file on notes.md`)
 - **Deny**
+
+When the same question comes back after you allowed it once, the prompt says
+so and highlights **Always allow**. It never answers for you, and a different
+tool or a riskier call gets no hint.
 
 Pick **Full access** from the shield to let a chat run everything without
 asking (you confirm once). **Settings → Permissions** lists every chat with full
@@ -453,6 +461,7 @@ Behavior notes:
 - Runs are **suspended while mobile access (tunnel) is active**, matching the autonomous agent loop's security posture. Set `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` to override.
 - One run executes at a time; overlapping schedules queue.
 - Per-run timeout defaults to 300 s; override with `GAIA_SCHEDULE_TIMEOUT`.
+- Times are your local time, taken from the browser's time zone, and stay put across daylight-saving changes. A time skipped when clocks jump forward runs just after the jump; a time repeated when they fall back runs once. Schedules made before this was fixed were read in UTC; they move to this PC's time zone on the next start.
 
 The REST API lives at `/api/schedules` (create/list/get), `/api/schedules/{name}` (pause/resume/cancel via `PUT`, delete via `DELETE`), `/api/schedules/{name}/results` (run history), and `/api/schedules/parse` (natural-language preview).
 

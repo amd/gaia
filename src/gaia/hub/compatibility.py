@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gaia.config import gaia_agents_dir
 from gaia.hub.manifest import Requirements
 from gaia.hub.native_launcher import NativeAgentError, current_platform
 from gaia.logger import get_logger
@@ -197,7 +198,7 @@ def check_compatibility(
             headroom multiplier to estimate required free disk when the manifest
             declares no explicit ``min_disk_gb``.
         install_dir: Where the agent will be installed; the disk check probes
-            this volume. Defaults to ``~/.gaia/agents``.
+            this volume. Defaults to ``<gaia_home>/agents``.
         detected_npu: Whether an NPU was actually detected by the caller's
             hardware scan (e.g. the Agent UI's ``/api/system/status`` probe).
             ``True``/``False`` turn an ``npu`` requirement into a real
@@ -219,7 +220,7 @@ def check_compatibility(
         blockers were found.
     """
     reqs = _coerce_requirements(requirements)
-    install_dir = install_dir or (Path.home() / ".gaia" / "agents")
+    install_dir = install_dir or gaia_agents_dir()
 
     warnings: List[str] = []
     blockers: List[str] = []

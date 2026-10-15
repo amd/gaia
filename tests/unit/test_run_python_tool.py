@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import tempfile
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -212,6 +213,28 @@ def test_without_a_project_it_runs_from_the_current_directory(
 
     assert result["status"] == "success", result
     assert result["stdout"].strip() == "payload"
+    assert "note" not in result
+
+
+def test_without_a_project_a_disallowed_cwd_runs_in_the_scratch_dir(
+    make_run_python, tmp_path, monkeypatch
+):
+    server_cwd = tmp_path / "server"
+    server_cwd.mkdir()
+    allowed = tmp_path / "docs"
+    allowed.mkdir()
+    monkeypatch.chdir(server_cwd)
+    agent, run_python = make_run_python(allowed)
+    monkeypatch.setattr(
+        "gaia.agents.base.project_map.resolve_project_root", lambda explicit: None
+    )
+    assert agent.scratch_dir is not None
+
+    result = run_python(code="import os; print(os.getcwd())")
+
+    assert result["status"] == "success", result
+    assert Path(result["stdout"].strip()).resolve() == agent.scratch_dir.resolve()
+    assert str(agent.scratch_dir) in result["note"]
 
 
 def test_an_unusable_project_root_is_a_tool_error(

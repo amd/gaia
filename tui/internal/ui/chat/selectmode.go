@@ -15,10 +15,13 @@ import (
 // the terminal sends each wheel tick as ↑/↓ — and those keys already scroll the
 // transcript.
 //
-// Ctrl+T hands the mouse to the app instead (APP MOUSE): a printed link opens
-// on click and a double-click copies a whole message, at the cost of plain
-// drag-select (most terminals still select with Shift held — Option in
-// iTerm2). An open overlay takes the mouse either way — see overlayOpen.
+// The terminal's selection can only cover what is on screen, though: the
+// transcript is an app-drawn viewport, and dragging past its edge has nothing
+// to scroll. Ctrl+T hands the mouse to the app instead (APP MOUSE): a drag
+// selects inside the app, scrolls the transcript when it passes the top or
+// bottom edge, and copies on release (selection.go); a printed link opens on
+// click and a double-click copies a whole message. An open overlay takes the
+// mouse either way — see overlayOpen.
 
 // toggleAppMouse gives the mouse to the app or back to the terminal (Ctrl+T).
 //
@@ -27,13 +30,14 @@ import (
 // sequence, so toggling while an overlay is open can never fight it.
 func (m ChatModel) toggleAppMouse() (tea.Model, tea.Cmd) {
 	m.appMouse = !m.appMouse
+	m.sel = textSelection{}
 	cmd := m.applyMouseCapture()
 	content := "Mouse back to your terminal — drag to select, and copy and " +
 		"paste as usual. The wheel still scrolls."
 	if m.appMouse {
-		content = "Mouse to GAIA — click a link to open it, double-click a " +
-			"message to copy it. Hold Shift (Option in iTerm2) to drag-select; " +
-			"Ctrl+T gives the mouse back."
+		content = "Mouse to GAIA — drag to select and copy; dragging past the " +
+			"top or bottom edge scrolls. Click a link to open it, double-click " +
+			"a message to copy it. Ctrl+T gives the mouse back."
 	}
 	m.messages = append(m.messages, Message{Role: RoleStatus, Content: content})
 	m.updateViewport()
