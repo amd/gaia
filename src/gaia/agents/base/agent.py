@@ -118,7 +118,7 @@ from gaia.agents.base.tool_outcome import (
     tool_result_error_fields,
     tool_result_failed,
 )
-from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool_call_progress_message
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
     POST_ANSWER_CLOSING_PROMPT,
@@ -599,17 +599,6 @@ class ToolExecutionTimeout(Exception):
 # This set only covers tools whose names GAIA controls. Tools registered at
 # runtime under a third-party name (MCP) carry a ``requires_confirmation`` flag
 # on their registry entry instead — see ``Agent._tool_requires_confirmation``.
-#: What a long tool call is doing, in the user's words, while it streams.
-_TOOL_CALL_PROGRESS_LABELS = {
-    "edit_file": "Writing a file edit",
-    "edit_python_file": "Writing a file edit",
-    "write_file": "Writing a file",
-    "write_python_file": "Writing a file",
-    "write_markdown_file": "Writing a file",
-    "run_python": "Writing Python code",
-    "run_shell_command": "Writing a command",
-}
-
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
     "run_cli_command",
@@ -4187,11 +4176,8 @@ Do NOT wrap conversational replies in JSON.
         self.console.report_phase("reading", reading)
 
     def _report_tool_call_progress(self, tool: str, chars: int) -> None:
-        label = _TOOL_CALL_PROGRESS_LABELS.get(tool) or (
-            f"Preparing {tool}" if tool else "Preparing a tool call"
-        )
         self.console.report_phase(
-            "tool_call", f"{label} — {chars:,} characters so far", chars=chars
+            "tool_call", tool_call_progress_message(tool, chars), chars=chars
         )
 
     def _report_reasoning_progress(self, words: int) -> None:

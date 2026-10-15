@@ -1076,26 +1076,25 @@ class TestPrintStreamingText:
         assert handler._stream_buffer == ""
 
     def test_embedded_text_then_tool_json_split(self, handler):
-        """Pre-tool planning text and tool JSON are both suppressed.
+        """A narration line before a tool call on its own line shows; the call does not.
 
-        When the buffer contains text followed by tool-call JSON, Case 3 of
-        print_streaming_text discards the pre-tool planning text (per system
-        prompt rules: "NEVER output planning text before a tool call") and
-        then filters the tool-call JSON itself.  No chunk event is emitted.
+        The narration usually streams token by token ahead of the call, so
+        dropping only the part that shares a buffer with it would cut a
+        sentence in half.
         """
         mixed = 'I will search now.\n{"tool": "search_file", "tool_args": {"query": "test"}}'
         handler.print_streaming_text(mixed)
         events = _drain(handler)
-        assert len(events) == 0
+        assert events == [{"type": "chunk", "content": "I will search now.\n"}]
         assert handler._stream_buffer == ""
 
     def test_oversized_open_envelope_is_held_not_leaked(self, handler):
         """A long tool call is still a tool call: hold it, never flush it raw."""
         large_text = '{"tool": "x"' + " " * 2100
         handler.print_streaming_text(large_text)
-        assert _drain(handler) == []
+        assert _content(_drain(handler)) == []
         handler.print_streaming_text("", end_of_stream=True)
-        assert _drain(handler) == []
+        assert _content(_drain(handler)) == []
         assert handler._stream_buffer == ""
 
     def test_json_like_but_not_tool_call_emitted(self, handler):
@@ -1196,6 +1195,11 @@ def _shown(events):
     return "".join(e["content"] for e in events if e and e["type"] == "chunk")
 
 
+def _content(events):
+    """What reaches the transcript; progress status events say only size and kind."""
+    return [e for e in events if e is None or e["type"] != "status"]
+
+
 def _pieces(text, size):
     return [text[i : i + size] for i in range(0, len(text), size)]
 
@@ -1226,14 +1230,14 @@ class TestResponseEnvelopeNeverStreamsRaw:
     @pytest.mark.parametrize("size", [1, 7, 64, 2500, 100_000])
     def test_long_tool_envelope_split_any_way_is_dropped(self, handler, size):
         events = _stream(handler, _pieces(_WRITE_ENVELOPE, size))
-        assert events == []
+        assert _content(events) == []
         assert handler._stream_buffer == ""
 
     def test_nothing_leaks_mid_stream_either(self, handler):
         """Each partial state is checked, not just the end of the stream."""
         for piece in _pieces(_WRITE_ENVELOPE, 3):
             handler.print_streaming_text(piece)
-            assert _drain(handler) == [], handler._stream_buffer[:80]
+            assert _content(_drain(handler)) == [], handler._stream_buffer[:80]
 
     def test_huge_envelope_token_by_token_is_not_quadratic(self, handler):
         """A 400 KB file write streamed 4 chars at a time scans each char once."""
@@ -1243,7 +1247,7 @@ class TestResponseEnvelopeNeverStreamsRaw:
             f'"tool_args": {{"file_path": "a.md", "content": "{content}"}}}}'
         )
         started = time.monotonic()
-        assert _stream(handler, _pieces(envelope, 4)) == []
+        assert _content(_stream(handler, _pieces(envelope, 4))) == []
         assert time.monotonic() - started < 5
 
     def test_think_tag_inside_an_envelope_string_is_content(self, handler):
