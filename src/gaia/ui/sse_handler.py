@@ -179,6 +179,127 @@ def _strip_balanced_json_blobs(text: str, needle: "re.Pattern") -> str:
     return "".join(out)
 
 
+# The agent's response protocol: {"thought", "goal", "plan", "tool",
+# "tool_args", "answer"}. A streamed reply in this shape is the model talking to
+# the harness, not to the user, and must never reach the transcript raw.
+_ENVELOPE_KEYS = frozenset({"thought", "goal", "plan", "tool", "tool_args", "answer"})
+# Keys only the protocol uses: one of them makes an object an envelope even
+# when the model adds a key of its own.
+_ENVELOPE_MARKER_KEYS = frozenset({"thought", "tool_args", "answer"})
+_ENVELOPE_LEAD_RE = re.compile(r'\{\s*"(\w+)"\s*:')
+_ENVELOPE_LEAD_PARTIAL_RE = re.compile(r'\{\s*(?:"\w*(?:"\s*)?)?')
+_FENCE_OPEN_RE = re.compile(r"```[ \t]*(?:json|JSON)?[ \t]*\r?\n")
+_FENCE_OPEN_PARTIAL_RE = re.compile(
+    r"`{1,3}[ \t]*(?:j(?:s(?:o(?:n)?)?)?|J(?:S(?:O(?:N)?)?)?)?[ \t]*\r?"
+)
+_FENCE_CLOSE_RE = re.compile(r"\s*```")
+_FENCE_CLOSE_PARTIAL_RE = re.compile(r"\s*`{0,2}")
+
+_ENV_NONE = "none"  # the buffer does not open with an envelope
+_ENV_PENDING = "pending"  # too short to tell yet
+_ENV_OPEN = "open"  # an envelope has started and not closed
+_ENV_COMPLETE = "complete"
+
+
+def _skip_ws(text: str, i: int) -> int:
+    while i < len(text) and text[i].isspace():
+        i += 1
+    return i
+
+
+def _json_object_end(
+    text: str, start: int, resume: "Optional[tuple[int, int, bool, bool]]" = None
+) -> "tuple[Optional[int], tuple[int, int, bool, bool]]":
+    """Index just past the ``{...}`` opening at *start*, or None if unclosed.
+
+    String-aware, so a brace or an escaped quote inside a value never ends it.
+    Also returns the scan state, so a caller whose text only grew can pass it
+    back as *resume* instead of rescanning a long envelope on every token.
+    """
+    pos, depth, in_str, esc = resume if resume else (start, 0, False, False)
+    for j in range(pos, len(text)):
+        c = text[j]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return j + 1, (j + 1, depth, in_str, esc)
+    return None, (len(text), depth, in_str, esc)
+
+
+def _leading_envelope(
+    text: str, end_of_stream: bool, resume: Optional[tuple] = None
+) -> "tuple[str, int, int, int, Optional[tuple]]":
+    """Classify the head of a stream buffer against the response envelope.
+
+    Returns ``(state, obj_start, obj_end, consumed, scan)``; the offsets are set
+    only for ``_ENV_COMPLETE`` and *scan* only for ``_ENV_OPEN`` (pass it back
+    as *resume* once more text is appended). An optional ```` ```json ````
+    fence around the object is part of what is consumed.
+    """
+    none = (_ENV_NONE, 0, 0, 0, None)
+    pending = (_ENV_PENDING, 0, 0, 0, None)
+    i = _skip_ws(text, 0)
+    fenced = False
+    if text.startswith("`", i):
+        fence = _FENCE_OPEN_RE.match(text, i)
+        if fence is None:
+            if _FENCE_OPEN_PARTIAL_RE.fullmatch(text, i):
+                return pending
+            return none
+        fenced = True
+        i = _skip_ws(text, fence.end())
+    if i >= len(text):
+        return pending
+    if text[i] != "{":
+        return none
+    lead = _ENVELOPE_LEAD_RE.match(text, i)
+    if lead is None:
+        if _ENVELOPE_LEAD_PARTIAL_RE.fullmatch(text, i):
+            return pending
+        return none
+    if lead.group(1) not in _ENVELOPE_KEYS:
+        return none
+    if resume is not None and resume[0] != i:
+        resume = None
+    end, scan = _json_object_end(text, i, resume[1] if resume else None)
+    if end is None:
+        return (_ENV_OPEN, 0, 0, 0, (i, scan))
+    consumed = end
+    if fenced:
+        close = _FENCE_CLOSE_RE.match(text, end)
+        if close is not None:
+            consumed = close.end()
+        elif not end_of_stream and _FENCE_CLOSE_PARTIAL_RE.fullmatch(text, end):
+            return pending
+    return (_ENV_COMPLETE, i, end, consumed, None)
+
+
+def _parse_envelope(obj_text: str) -> Optional[Dict[str, Any]]:
+    """The envelope as a dict, or None when *obj_text* is ordinary JSON/text."""
+    try:
+        # strict=False: models put literal newlines inside string values.
+        parsed = json.loads(obj_text, strict=False)
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict) or not parsed:
+        return None
+    keys = set(parsed)
+    if keys <= _ENVELOPE_KEYS or keys & _ENVELOPE_MARKER_KEYS:
+        return parsed
+    return None
+
+
 def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
     """Dig the live TCP socket out of a ``requests`` streamed response.
 
@@ -202,6 +323,9 @@ def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
     sock = getattr(rawio, "_sock", None)
     return sock if isinstance(sock, socket.socket) else None
 
+
+# An envelope whose first key is "answer".
+_ANSWER_FIRST_RE = re.compile(r'\s*\{\s*"answer"\s*:')
 
 class SSEOutputHandler(OutputHandler):
     """
@@ -256,6 +380,10 @@ class SSEOutputHandler(OutputHandler):
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
         self._in_thinking = False  # True while inside a <think>...</think> block
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
+        # Where the brace scan of a still-open envelope stopped, and the head of
+        # the buffer it scanned: a long tool call is scanned once, not per token.
+        self._envelope_scan: Optional[tuple] = None
+        self._envelope_head = ""
         # Set while streaming the value of a {"answer": "..."} reply.
         self._answer_stream: Optional[JsonStringStreamDecoder] = None
         # Tool confirmation state (blocking until frontend responds)
@@ -783,6 +911,64 @@ class SSEOutputHandler(OutputHandler):
 
     # === Optional Methods (with SSE-friendly implementations) ===
 
+    def _take_leading_envelopes(self, end_of_stream: bool) -> bool:
+        """Consume response envelopes at the head of the stream buffer.
+
+        Holds an envelope until its closing brace however long it runs (a
+        ``write_file`` call carries the whole file), then drops it; its
+        ``answer``, if any, is emitted as the answer. The thought, goal and
+        plan reach the user through ``print_thought``/``print_goal``/
+        ``print_plan`` once the agent parses the full reply.
+
+        Returns True when the caller must keep buffering.
+        """
+        if self._json_filtered:
+            # The gap after a dropped envelope separates it from nothing.
+            self._stream_buffer = self._stream_buffer.lstrip()
+        while self._stream_buffer:
+            # A reply that opens with its answer streams that answer as it
+            # arrives (case 1b in print_streaming_text), not once it closes.
+            if _ANSWER_FIRST_RE.match(self._stream_buffer):
+                self._envelope_scan = None
+                return False
+            resume = self._envelope_scan
+            if resume is not None and (
+                len(self._stream_buffer) < resume[1][0]
+                or not self._stream_buffer.startswith(self._envelope_head)
+            ):
+                resume = None
+            state, start, end, consumed, scan = _leading_envelope(
+                self._stream_buffer, end_of_stream, resume
+            )
+            self._envelope_scan = None
+            if state == _ENV_OPEN and not end_of_stream:
+                self._envelope_scan = scan
+                self._envelope_head = self._stream_buffer[:256]
+            if state == _ENV_NONE:
+                return False
+            if state == _ENV_PENDING:
+                return not end_of_stream
+            if state == _ENV_OPEN:
+                if not end_of_stream:
+                    return True
+                # Truncated mid-envelope (e.g. max tokens): still protocol.
+                logger.debug(
+                    "Dropped unterminated envelope: %s", self._stream_buffer[:100]
+                )
+                self._stream_buffer = ""
+                self._json_filtered = True
+                return False
+            envelope = _parse_envelope(self._stream_buffer[start:end])
+            if envelope is None:
+                return False
+            answer = envelope.get("answer")
+            if isinstance(answer, str) and answer.strip():
+                self._emit({"type": "answer", "content": answer})
+            logger.debug("Filtered response envelope: %s", self._stream_buffer[:100])
+            self._stream_buffer = self._stream_buffer[consumed:].lstrip()
+            self._json_filtered = True
+        return False
+
     def print_streaming_text(self, text_chunk: str, end_of_stream: bool = False):
         if text_chunk:
             # Buffer text to detect and suppress raw tool-call JSON that
@@ -801,7 +987,15 @@ class SSEOutputHandler(OutputHandler):
             # ── Handle <think>...</think> blocks ──────────────────────
             # Route thinking content to thinking events, keep remainder
             # in buffer for normal tool-call filtering below.
-            while "<think>" in self._stream_buffer or self._in_thinking:
+            # Inside an open envelope a "<think>" is string content, and
+            # searching a long held envelope on every token is quadratic.
+            if self._envelope_scan is not None and not self._stream_buffer.startswith(
+                self._envelope_head
+            ):
+                self._envelope_scan = None  # a cancelled stream left it behind
+            while self._in_thinking or (
+                self._envelope_scan is None and "<think>" in self._stream_buffer
+            ):
                 if self._in_thinking:
                     # We're inside a thinking block — look for closing tag
                     close_idx = self._stream_buffer.find("</think>")
@@ -849,6 +1043,8 @@ class SSEOutputHandler(OutputHandler):
                         break  # No more <think> tags
 
             # If buffer is empty after thinking extraction, nothing left to do
+            if self._take_leading_envelopes(end_of_stream):
+                return
             if not self._stream_buffer:
                 return
 
@@ -999,6 +1195,8 @@ class SSEOutputHandler(OutputHandler):
             self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
 
+        if end_of_stream and self._stream_buffer:
+            self._take_leading_envelopes(end_of_stream=True)
         if end_of_stream and self._stream_buffer:
             # Flush any remaining buffer at end of stream
             stripped = self._stream_buffer.strip()
@@ -1526,6 +1724,8 @@ class SSEOutputHandler(OutputHandler):
             self._in_thinking = False
 
         # Flush any remaining stream buffer before signaling done
+        if self._stream_buffer:
+            self._take_leading_envelopes(end_of_stream=True)
         if self._stream_buffer:
             stripped = self._stream_buffer.strip()
             if not _TOOL_CALL_JSON_RE.match(stripped) and not _ANSWER_JSON_RE.search(
