@@ -202,6 +202,12 @@ def test_a_plan_budget_stop_alone_never_marks_the_turn_answered(tmp_path, monkey
                 "plan": [
                     {"tool": "search_web", "tool_args": {"query": "cm5"}},
                     {"tool": "search_web", "tool_args": {"query": "cm5io"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5 3"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5 4"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5 5"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5 6"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5 7"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5 8"}},
                 ],
             },
             {"answer": "The CM5 8GB is about $95."},
@@ -215,7 +221,8 @@ def test_a_plan_budget_stop_alone_never_marks_the_turn_answered(tmp_path, monkey
 
         agent.chat = MagicMock()
         agent.chat.send_messages.side_effect = send
-        result = agent.process_query("What does a CM5 8GB cost?")
+        # The plan cap binds once half the step budget is spent.
+        result = agent.process_query("What does a CM5 8GB cost?", max_steps=16)
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(snapshot)

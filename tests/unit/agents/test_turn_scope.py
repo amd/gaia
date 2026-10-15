@@ -438,6 +438,12 @@ def test_a_plan_budget_stop_does_not_count_as_the_answer(tmp_path, monkeypatch):
                 "plan": [
                     {"tool": "search_web", "tool_args": {"query": "cm5 price"}},
                     {"tool": "search_web", "tool_args": {"query": "cm5io price"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5 price 3"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5 price 4"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5 price 5"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5 price 6"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5 price 7"}},
+                    {"tool": "search_web", "tool_args": {"query": "cm5 price 8"}},
                 ],
             },
             # The reply to the budget stop, with the BOM not yet written.
@@ -452,7 +458,9 @@ def test_a_plan_budget_stop_does_not_count_as_the_answer(tmp_path, monkeypatch):
             {"answer": f"Wrote `{bom}`: 40 x CM5 8GB at $95.00, total $3800.00."},
         )
         result = agent.process_query(
-            "Using current prices online, write a 40-unit BOM to `bom.xlsx`."
+            "Using current prices online, write a 40-unit BOM to `bom.xlsx`.",
+            # The plan cap binds once half the step budget is spent.
+            max_steps=16,
         )
     finally:
         _TOOL_REGISTRY.clear()
