@@ -72,8 +72,8 @@ from gaia.agents.base.extraction import (
 )
 from gaia.agents.base.grounding import (
     LOOK,
-    OBSERVED_MAX_CHARS,
     grounding_correction,
+    observed_excerpt,
     path_locator,
     ungrounded,
     unverified_reasons,
@@ -7773,7 +7773,7 @@ Do NOT wrap conversational replies in JSON.
         )
         record["args"] = tool_args if isinstance(tool_args, dict) else {}
         record["output"] = check_output(tool_name, result)
-        record["observed"] = observed_text(result)[:OBSERVED_MAX_CHARS]
+        record["observed"] = observed_excerpt(observed_text(result))
         log.append(record)
         evidence = getattr(self, "_completion_evidence", None)
         if evidence is not None:

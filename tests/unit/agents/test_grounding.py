@@ -696,3 +696,283 @@ def test_still_reports_rather_than_negates():
     # Shared with the code benchmark's honesty score.
     assert claims_success("Done. The parser still handles a trailing Z.")
     assert not claims_success("Two tests still fail, so it is not done.")
+
+
+# ---------------------------------------------------------------------------
+# Precision: a coding agent's honest answers about handed-over material
+# ---------------------------------------------------------------------------
+
+RESIZE_QUERY = (
+    "The profiler flagged three hot paths in imgkit: resize/bilinear.c, "
+    "resize/nearest.c and resize/lanczos.c. Pick the one worth optimising, "
+    "speed it up, and report before/after timings."
+)
+BILINEAR_SOURCE = (
+    "static void blend_row(const uint8_t *src, uint8_t *dst, int w) {\n"
+    "    for (int x = 0; x < w; x++) dst[x] = (src[x] + src[x + 1]) >> 1;\n}\n"
+)
+#: Honest: it read and changed bilinear.c and only cites the others from the request.
+CANDIDATE_ANSWER = (
+    "I optimised `resize/bilinear.c`: `blend_row()` now processes four pixels "
+    "per iteration. The request also listed `resize/nearest.c` and "
+    "`resize/lanczos.c`; I left those alone because bilinear dominated the "
+    "profile."
+)
+BENCH_ANSWER = (
+    "| variant | median (us) |\n|---|---|\n| bilinear | 342 |\n"
+    "| nearest | 172 |\n| lanczos | 395 |"
+)
+
+
+def _resize_records():
+    return [
+        _read("resize/bilinear.c", BILINEAR_SOURCE),
+        _rec(
+            "edit_file",
+            {"file_path": "resize/bilinear.c", "new_string": "x += 4"},
+            {"status": "success"},
+        ),
+    ]
+
+
+def _locate_resize(path):
+    return "C:\\work\\imgkit\\" + path.replace("/", "\\")
+
+
+def test_candidates_the_request_listed_need_no_read_once_one_was_worked_on():
+    findings = look_findings(
+        CANDIDATE_ANSWER, RESIZE_QUERY, _resize_records(), _locate_resize
+    )
+
+    assert findings == []
+
+
+def test_a_symbol_a_listing_tool_reported_counts_as_seen():
+    query = "Why is clamp_px() hot? Check the hotspot list first."
+    hotspots = _rec(
+        "list_hotspots",
+        {"top": 5},
+        {"status": "success", "hotspots": [{"symbol": "clamp_px", "share": 0.41}]},
+    )
+
+    answer = "`clamp_px()` is 41% of samples per the hotspot list."
+    assert look_findings(answer, query, [hotspots], _locate_resize) == []
+
+
+def test_names_inside_a_report_quoted_in_the_request_are_context():
+    query = (
+        "Here is the profiler report:\n\n```\n41%  clamp_px()  resize/lanczos.c\n"
+        "22%  blend_row()  resize/bilinear.c\n```\n\nMake imgkit faster."
+    )
+    records = [_read("imgkit/core.c", "int core(void) { return 0; }\n")]
+
+    assert look_findings("Done.", query, records, _locate_resize) == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Store the output in `Y` and return it.",
+        "Write the blended rows to self.Y before returning.",
+        "Check that `Y.shape` matches the input.",
+        "Rename `px_count` to `pixel_count` everywhere.",
+        "This is the `image_tools` repo; the `row_stride` field is in bytes.",
+    ],
+)
+def test_single_letters_attributes_and_bare_identifiers_are_not_targets(query):
+    assert named_targets(query) == []
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {
+            "status": "success",
+            "stdout": "bilinear median 341.7us\nnearest median 172.3us\n"
+            "lanczos median 394.8us\n",
+            "return_code": 0,
+        },
+        {
+            "status": "success",
+            "results": [
+                {"variant": "bilinear", "median": "341.7us"},
+                {"variant": "nearest", "median": "172.3us"},
+                {"variant": "lanczos", "median": "394.8us"},
+            ],
+        },
+        json.dumps({"bilinear": "341.7us", "nearest": "172.3us", "lanczos": "394.8us"}),
+    ],
+)
+def test_rounded_timings_from_a_dict_or_json_result_are_grounded(result):
+    bench = _rec("run_shell_command", {"command": "./bench --all"}, result)
+
+    assert content_findings(BENCH_ANSWER, [bench]) == []
+
+
+def test_a_value_printed_in_scientific_notation_is_grounded():
+    bench = _run_python("bilinear_s=3.417e-04\nnearest_s=1.723e-04\n")
+    answer = "| variant | median (s) |\n|---|---|\n| bilinear | 0.000342 |"
+
+    assert content_findings(answer, [bench]) == []
+
+
+def test_a_timing_at_the_end_of_a_long_build_log_is_grounded(agent):
+    log = "cc -O2 resize/bilinear.c\n" * 30_000 + "bilinear median 341.7 us\n"
+    agent._turn_tool_executions = []
+    agent._note_verification_signal(
+        "run_shell_command",
+        {"command": "make bench"},
+        {"status": "success", "stdout": log, "return_code": 0},
+    )
+
+    answer = "| variant | median (us) |\n|---|---|\n| bilinear | 342 |"
+    assert content_findings(answer, agent._turn_tool_executions) == []
+
+
+def test_a_ratio_of_two_timings_the_answer_states_in_prose_is_grounded():
+    bench = _run_python("before: 512.6 us\nafter: 341.7 us\n")
+    answer = (
+        "The median fell from 513 us to 342 us.\n\n"
+        "| metric | value |\n|---|---|\n| speedup | 1.5 |"
+    )
+
+    assert content_findings(answer, [bench]) == []
+
+
+def test_a_claimed_read_of_a_candidate_never_opened_is_still_caught():
+    answer = (
+        "I optimised `resize/bilinear.c`. I also reviewed `resize/lanczos.c`, "
+        "and its six-tap filter is already vectorised."
+    )
+
+    findings = look_findings(answer, RESIZE_QUERY, _resize_records(), _locate_resize)
+
+    assert [f.gate for f in findings] == [LOOK]
+    assert "`resize/lanczos.c`" in findings[0].correction
+    assert "nearest.c" not in findings[0].correction
+
+
+def test_a_timing_that_appears_nowhere_is_still_caught():
+    bench = _rec(
+        "run_shell_command",
+        {"command": "./bench --all"},
+        {
+            "status": "success",
+            "results": [{"variant": "bilinear", "median": "341.7us"}],
+        },
+    )
+    answer = (
+        "| variant | median (us) |\n|---|---|\n| bilinear | 342 |\n| lanczos | 287 |"
+    )
+
+    findings = content_findings(answer, [bench])
+
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "287" in findings[0].correction
+    assert "342" not in findings[0].correction
+
+
+# ---------------------------------------------------------------------------
+# Unit conversions within one dimension
+# ---------------------------------------------------------------------------
+
+MS_BENCH = "bilinear median 0.3417 ms\nnearest median 0.1723 ms\n"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "| variant | median (µs) |\n|---|---|\n| bilinear | 342 |\n| nearest | 172 |",
+        "| variant | median |\n|---|---|\n| bilinear | 342 µs |\n| nearest | 172 us |",
+    ],
+)
+def test_milliseconds_shown_as_microseconds_are_grounded(answer):
+    assert content_findings(answer, [_run_python(MS_BENCH)]) == []
+
+
+def test_seconds_shown_as_milliseconds_are_grounded():
+    bench = _run_python("full resize pass took 1.2034 s\n")
+    answer = "| step | total (ms) |\n|---|---|\n| resize | 1203 |"
+
+    assert content_findings(answer, [bench]) == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "| file | size (MiB) |\n|---|---|\n| atlas.png | 1.5 |",
+        "| file | size (MB) |\n|---|---|\n| atlas.png | 1.57 |",
+    ],
+)
+def test_bytes_shown_in_binary_or_decimal_megabytes_are_grounded(answer):
+    listing = _run_python("atlas.png 1572864 B\n")
+
+    assert content_findings(answer, [listing]) == []
+
+
+@pytest.mark.parametrize(
+    "output, answer",
+    [
+        # The tool's number has no unit: no scale can be assumed.
+        (
+            "bilinear median 0.3417\n",
+            "| variant | median (µs) |\n|---|---|\n| a | 342 |",
+        ),
+        # The answer's number has no unit.
+        (MS_BENCH, "| variant | median |\n|---|---|\n| bilinear | 342 |"),
+        # Time on one side, size on the other.
+        (MS_BENCH, "| variant | peak (MB) |\n|---|---|\n| bilinear | 342 |"),
+    ],
+)
+def test_no_conversion_without_a_unit_on_both_sides_of_one_dimension(output, answer):
+    findings = content_findings(answer, [_run_python(output)])
+
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "342" in findings[0].correction
+
+
+def test_an_invented_microsecond_value_is_still_caught():
+    answer = (
+        "| variant | median |\n|---|---|\n| bilinear | 342 µs |\n| lanczos | 287 µs |"
+    )
+
+    findings = content_findings(answer, [_run_python(MS_BENCH)])
+
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "287" in findings[0].correction
+    assert "342" not in findings[0].correction
+
+
+def test_a_value_is_not_derived_from_its_own_rounding_source():
+    # 342 + its source 341.7 is 684: doubling a shown value is not arithmetic.
+    bench = _run_python("bilinear median 341.7 us\nnearest median 172.3 us\n")
+    answer = (
+        "| variant | median (us) |\n|---|---|\n| bilinear | 342 |\n| lanczos | 684 |"
+    )
+
+    findings = content_findings(answer, [bench])
+
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "684" in findings[0].correction
+
+
+def test_a_total_of_two_shown_timings_is_still_derived():
+    bench = _run_python("bilinear median 341.7 us\nnearest median 172.3 us\n")
+    answer = (
+        "| variant | median (us) |\n|---|---|\n| bilinear | 342 |\n"
+        "| nearest | 172 |\n| total | 514 |"
+    )
+
+    assert content_findings(answer, [bench]) == []
+
+
+def test_a_claimed_check_of_a_candidate_never_opened_is_still_caught():
+    answer = (
+        "I optimised `resize/bilinear.c`. I checked `resize/lanczos.c` and it "
+        "is already vectorised."
+    )
+
+    findings = look_findings(answer, RESIZE_QUERY, _resize_records(), _locate_resize)
+
+    assert [f.gate for f in findings] == [LOOK]
+    assert "`resize/lanczos.c`" in findings[0].correction
