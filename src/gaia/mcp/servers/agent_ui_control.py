@@ -1135,14 +1135,14 @@ def transport_security_settings(host: str):
     answer a prompt. ``Host`` is pinned to loopback against DNS rebinding.
     A non-loopback *host* is refused: it must be served by :func:`remote_app`.
     """
-    from mcp.server.transport_security import TransportSecuritySettings
-
     if not is_loopback_host(host):
         raise RemoteBindError(
             f"Refusing to serve {host!r} without a bearer token: it is reachable "
             "from the network. Bind to localhost, or pass --allow-remote with a "
             f"token in {REMOTE_TOKEN_ENV}."
         )
+    from mcp.server.transport_security import TransportSecuritySettings
+
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
