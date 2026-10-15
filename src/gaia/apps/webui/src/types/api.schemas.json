@@ -3328,8 +3328,15 @@
         "type": "boolean"
       },
       "lemonade_url": {
-        "title": "Lemonade Url",
-        "type": "string"
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Lemonade Url"
       },
       "lemonade_version": {
         "anyOf": [

@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia.env import child_env
 from gaia.logger import get_logger
+from gaia.mcp.client.mcp_client import mcp_tool_error
 
 logger = get_logger(__name__)
 
@@ -343,15 +344,16 @@ class Context7Service(ExternalMCPService):
 
         result = self.call_tool("get-library-docs", arguments)
 
-        if "error" in result:
+        error = mcp_tool_error(result)
+        if error is not None:
             # Check if it's a rate limit error (HTTP 429)
-            is_rate_limit = "429" in str(result.get("error", ""))
+            is_rate_limit = "429" in error
             self._rate_limiter.record_failure(is_rate_limit)
 
-            logger.error(f"Context7 search failed: {result['error']}")
+            logger.error(f"Context7 search failed: {error}")
             return {
                 "success": False,
-                "error": result["error"],
+                "error": error,
                 "documentation": "",
             }
 
@@ -380,8 +382,9 @@ class Context7Service(ExternalMCPService):
         """
         result = self.call_tool("resolve-library-id", {"libraryName": library_name})
 
-        if "error" in result:
-            logger.warning(f"Failed to resolve library ID: {result['error']}")
+        error = mcp_tool_error(result)
+        if error is not None:
+            logger.warning(f"Failed to resolve library ID: {error}")
             return None
 
         # Extract library ID from response
@@ -536,9 +539,10 @@ class PerplexityService(ExternalMCPService):
             "perplexity_ask", {"messages": [{"role": "user", "content": query}]}
         )
 
-        if "error" in result:
-            logger.error(f"Perplexity search failed: {result['error']}")
-            return {"success": False, "error": result["error"], "answer": ""}
+        error = mcp_tool_error(result)
+        if error is not None:
+            logger.error(f"Perplexity search failed: {error}")
+            return {"success": False, "error": error, "answer": ""}
 
         # Extract answer from response
         content = result.get("content", [])

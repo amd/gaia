@@ -853,7 +853,7 @@ export interface SystemStatus {
   initialized?: boolean;
   lemonade_error?: string | null;
   lemonade_running?: boolean;
-  lemonade_url?: string;
+  lemonade_url?: string | null;
   lemonade_version?: string | null;
   memory_available_gb?: number | null;
   model_context_size?: number | null;

@@ -395,7 +395,7 @@ export interface SystemStatus {
      * the actual default — replaces the previously hard-coded "~25 GB".
      */
     default_model_size_gb: number | null;
-    lemonade_url: string;
+    lemonade_url: string | null;
     expected_model_loaded: boolean;
     /** Live progress while a model pull is in flight. ``null`` otherwise. */
     download_progress: DownloadProgress | null;
@@ -546,6 +546,8 @@ export interface CommandOutput {
     stdout: string;
     stderr: string;
     returnCode: number;
+    /** Why a non-zero exit is an answer, not a failure (grep's 1: no match). */
+    expectedExit?: string | null;
     cwd?: string;
     durationSeconds?: number;
     truncated?: boolean;
@@ -663,6 +665,7 @@ export interface StreamEvent {
         stdout: string;
         stderr: string;
         return_code: number;
+        expected_exit?: string | null;
         cwd?: string;
         duration_seconds?: number;
         truncated?: boolean;

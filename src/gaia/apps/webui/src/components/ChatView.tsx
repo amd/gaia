@@ -805,6 +805,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             stdout: event.command_output.stdout,
                             stderr: event.command_output.stderr,
                             returnCode: event.command_output.return_code,
+                            expectedExit: event.command_output.expected_exit,
                             cwd: event.command_output.cwd,
                             durationSeconds: event.command_output.duration_seconds,
                             truncated: event.command_output.truncated,

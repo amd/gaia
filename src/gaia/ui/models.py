@@ -103,7 +103,8 @@ class SystemStatus(BaseModel):
     # remnant from when the default was Qwen3.5-35B).
     default_model_size_gb: Optional[float] = None
     # Lemonade web UI origin; resolved per response (GAIA's server picks its port).
-    lemonade_url: str = Field(default_factory=_lemonade_web_origin)
+    # None when an unreadable config hides which server (``config_error`` says why).
+    lemonade_url: Optional[str] = Field(default_factory=_lemonade_web_origin)
     expected_model_loaded: bool = True  # False if a different model is loaded
     # Live download progress for ``default_model_name`` (or whatever is
     # currently being pulled). ``None`` when no pull is in flight.

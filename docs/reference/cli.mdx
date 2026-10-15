@@ -1561,12 +1561,13 @@ SecretService) and replays it — encrypted at rest, never in a GAIA file.
 ```bash
 gaia gateway install --base-url https://llm-api.amd.com/Unified/v1  # register the gateway
 gaia gateway auth                     # prompts for the token without echo
-gaia gateway status                   # registration, auth state, active model
+gaia gateway status                   # registration, auth state, active model and its last failure
 gaia gateway models                   # what the gateway offers
 gaia gateway enable amd.Claude-Opus-5 # add it to your enabled set
 gaia gateway disable amd.Claude-Opus-5 # remove it from your enabled set
 gaia gateway use amd.Claude-Opus-5    # make it the default for chat/llm/prompt
-gaia gateway test "Say hello"         # end-to-end round trip
+gaia gateway test "Say hello"         # end-to-end round trip on the active model
+gaia gateway test --model amd.Gemma-4-31B "Say hello"  # test a specific model
 gaia gateway auth --no-remember       # ask me every restart instead
 gaia gateway logout                   # drop Lemonade's copy, keep the stored one
 gaia gateway logout --forget          # also delete it from the credential store
@@ -1590,6 +1591,10 @@ Gateway models are namespaced `amd.<model>` and work anywhere a local model
 does. `LEMONADE_AMD_API_KEY` in **Lemonade's** environment still takes
 precedence over a stored token; if both are set, Lemonade says so rather than
 silently choosing.
+
+When a gateway model answers HTTP 404, GAIA records it. `status` and `models` then
+mark it unavailable, and `chat`, `llm`, and `prompt` warn when it is your saved
+default. GAIA never switches models for you; pick another with `gaia gateway use <id>`.
 
 [→ LLM Gateway Guide](/guides/llm-gateway)
 

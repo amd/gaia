@@ -265,6 +265,26 @@ def mcp_tool_requires_confirmation(name: str, annotations: Dict[str, Any]) -> bo
     return bool(_name_tokens(name) & _MUTATING_NAME_TOKENS)
 
 
+def mcp_tool_error(result: Any) -> Optional[str]:
+    """The error a ``tools/call`` result reports, or None if the tool succeeded.
+
+    A JSON-RPC failure arrives as ``{"error": ...}``; a tool that ran and failed
+    answers ``isError: true`` with its message in ``content`` (MCP spec).
+    """
+    if not isinstance(result, dict):
+        return None
+    if "error" in result:
+        return str(result["error"] or "Unknown error")
+    if result.get("isError") is not True:
+        return None
+    texts = [
+        item.get("text", "").strip()
+        for item in result.get("content") or []
+        if isinstance(item, dict) and item.get("type", "text") == "text"
+    ]
+    return "\n".join(t for t in texts if t) or "The MCP tool reported an error."
+
+
 @dataclass
 class MCPTool:
     """Represents an MCP tool with its schema.

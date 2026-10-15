@@ -6,6 +6,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **A failed tool call is reported as a failure.** `run_shell_command` returned
+  `status: success` for a command that exited non-zero, so the TUI and Agent UI
+  showed a failed build or test run as a passed step. It is now `status: error`
+  with an `error` naming the failing step, its exit code and the last stderr
+  line; `stdout`, `stderr` and `return_code` are unchanged. grep's no-match and
+  diff's "inputs differ" (exit 1) stay a success and say so in `expected_exit`.
+  An MCP tool that answers `isError`, a DuckDuckGo search that was blocked, a
+  `tasklist`/`wmctrl`/`osascript` window listing that failed, a notification
+  whose PowerShell died, and an `open_url` with no browser to open are errors
+  too. Install hints in a frozen build no longer name the binary as a Python to
+  run pip with.
+- **Reviewing a few documents reads them in full.** `read_file` on a Word,
+  PDF or Excel file returned `[Binary file, N bytes]`, so to compare a term
+  sheet against a draft agreement the agent indexed them and ran a handful of
+  searches, and missed a closing date that differed between the two because no
+  search asked for it. `read_file` now returns the extracted text, in parts sized
+  to the model's budget that say where the next part starts, and the prompt
+  tells the agent to read a few documents in full for a review, comparison or
+  reconciliation and keep indexing for large collections and single lookups.
+- **`fetch_page` no longer drops the middle of a long page.** Text past
+  `max_length` was cut to its head and tail, which is where a product page keeps
+  its menus and footer, not its price. It now returns the first part with a
+  marker naming the offset of the next, takes `offset` to continue and `find` to
+  jump to the passages containing a word, says so when a word is not on the
+  page, and flags a page with almost no static text as rendered by JavaScript.
+  `Length:` now reports the whole page rather than the excerpt.
 - **Long desktop tasks finish with their deliverables instead of a bare "I
   can't confirm this is done".** Picking a controller from nine datasheets and
   pricing a 40-unit BOM ran out of its 50 steps while still searching for
