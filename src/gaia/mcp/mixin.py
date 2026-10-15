@@ -56,7 +56,7 @@ class MCPClientMixin:
 
         Args:
             auto_load_config: When True, automatically load servers from the
-                stacked config files (``~/.gaia/mcp_servers.json`` + local
+                stacked config files (``<gaia_home>/mcp_servers.json`` + local
                 ``mcp_servers.json``).  Ignored when ``config_file`` is
                 provided — loading always occurs in that case.
             debug: Enable debug logging for MCP client connections.
@@ -247,7 +247,7 @@ class MCPClientMixin:
         """Load and register MCP servers from configuration file.
 
         This is a convenience method that:
-        1. Loads servers from ~/.gaia/mcp_servers.json via the manager
+        1. Loads servers from <gaia_home>/mcp_servers.json via the manager
         2. Registers all tools from loaded servers
 
         Returns:

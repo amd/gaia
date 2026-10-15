@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from gaia.config import gaia_agents_dir
 from gaia.daemon.sidecars import platform as plat
 from gaia.daemon.sidecars.errors import (
     BinaryNotFoundError,
@@ -70,7 +71,7 @@ def verify_sha256(data: bytes, expected: str, source_label: str) -> str:
 
 
 def default_cache_dir(agent_dir_name: str = "email") -> Path:
-    return Path.home() / ".gaia" / "agents" / agent_dir_name
+    return gaia_agents_dir() / agent_dir_name
 
 
 @dataclass(frozen=True)

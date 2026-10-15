@@ -4,7 +4,7 @@
 McpServerHandler — ConnectorHandler implementation for ``type="mcp_server"``.
 
 Manages MCP server connectors: stores secret env-var values in the OS keyring
-under ``$keyring`` references, writes ``~/.gaia/mcp_servers.json`` atomically,
+under ``$keyring`` references, writes ``<gaia_home>/mcp_servers.json`` atomically,
 and signals ``MCPClientManager.reload()`` so new tools materialize without
 restarting GAIA (plan amendment A5).
 
@@ -27,6 +27,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
+from gaia.config import mcp_servers_path
 from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.handler import register_handler
@@ -35,13 +36,10 @@ from gaia.connectors.store import SERVICE_NAME
 
 logger = logging.getLogger(__name__)
 
-# Path to the MCP server config file read by MCPClient.
-_MCP_SERVERS_FILE = Path.home() / ".gaia" / "mcp_servers.json"
-
 
 def _mcp_servers_path() -> Path:
-    """Resolve on each call so tests can monkeypatch ``Path.home``."""
-    return Path.home() / ".gaia" / "mcp_servers.json"
+    """Resolve on each call so ``GAIA_HOME`` set after import is honored."""
+    return mcp_servers_path()
 
 
 def _keyring_ref(connector_id: str, env_key: str) -> str:

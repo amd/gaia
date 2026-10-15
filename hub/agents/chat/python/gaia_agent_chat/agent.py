@@ -2393,12 +2393,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 "voice": voice,
             }
 
-        # MCP tools — load from ~/.gaia/mcp_servers.json if configured.
+        # MCP tools — load from <gaia_home>/mcp_servers.json if configured.
         # Must run last so MCP tools don't bloat context before we know the base count.
         # Hard limit: skip if MCP would add too many tools (context bloat guard).
         # Configurable via ChatAgentConfig.mcp_tool_limit (default 50).
         _MCP_TOOL_LIMIT = self.config.mcp_tool_limit
-        _mcp_config_path = Path.home() / ".gaia" / "mcp_servers.json"
+        _mcp_config_path = gaia_home() / "mcp_servers.json"
         if _mcp_config_path.exists() and self._mcp_manager is not None:
             try:
                 self._mcp_manager.load_from_config()
@@ -2567,7 +2567,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (code/tools/file_io.py): read_file, write_file, edit_file (3 generic tools only)
     # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
-    # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from ~/.gaia/mcp_servers.json)
+    # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from <gaia_home>/mcp_servers.json)
 
     def _register_external_tools_conditional(self) -> None:
         """Register web/doc search tools only when their backends are available.
