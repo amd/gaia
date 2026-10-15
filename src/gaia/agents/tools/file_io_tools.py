@@ -426,14 +426,13 @@ class FileIOToolsMixin:
             start_line: Optional[int] = None,
             end_line: Optional[int] = None,
         ) -> Dict[str, Any]:
-            """Read any file and intelligently analyze based on file type.
+            """Read any file, analyzed by type.
 
-            Automatically detects file type and provides appropriate analysis:
-            - Python files (.py): Syntax validation + symbol extraction (functions/classes)
-            - Markdown files (.md): Headers + code blocks + links
+            - Python (.py): syntax validation + functions/classes
+            - Markdown (.md): headers, code blocks, links
             - Word (.docx), PDF and Excel (.xlsx): extracted text, in parts when
               long; continue at next_offset until it is null
-            - Other text files: Raw content
+            - Other text files: raw content
 
             Read the part you need with start_line/end_line, e.g. the line a
             search reported.

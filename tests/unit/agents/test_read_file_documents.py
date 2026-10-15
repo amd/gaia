@@ -17,7 +17,6 @@ from gaia.agents.tools.file_tools import FileSearchToolsMixin
 from gaia.security import PathValidator
 
 docx = pytest.importorskip("docx")
-openpyxl = pytest.importorskip("openpyxl")
 
 BUDGET = 2000
 
@@ -175,6 +174,7 @@ def test_a_corrupt_document_is_an_error_not_binary_noise(read_file, tmp_path):
 
 
 def test_an_xlsx_is_read_sheet_by_sheet(read_file, tmp_path):
+    openpyxl = pytest.importorskip("openpyxl")
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Prices"
@@ -194,6 +194,7 @@ def test_formulas_without_saved_values_are_flagged_not_silently_blank(
     read_file, tmp_path
 ):
     """openpyxl writes formulas but never computes them, like any script."""
+    openpyxl = pytest.importorskip("openpyxl")
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.append(["Qty", "Unit", "Total"])

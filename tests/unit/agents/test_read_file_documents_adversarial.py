@@ -26,7 +26,6 @@ from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 from gaia.security import PathValidator
 
 docx = pytest.importorskip("docx")
-openpyxl = pytest.importorskip("openpyxl")
 
 BUDGET = 2000
 URL = "https://example.com/p"
@@ -160,6 +159,7 @@ def test_a_password_protected_pdf_says_so(read_file, tmp_path):
 
 
 def test_a_workbook_with_many_sheets_is_read_sheet_by_sheet(read_file, tmp_path):
+    openpyxl = pytest.importorskip("openpyxl")
     book = openpyxl.Workbook()
     book.active.title = "S0"
     book.active.append(["v", 0])
@@ -178,6 +178,7 @@ def test_a_workbook_with_many_sheets_is_read_sheet_by_sheet(read_file, tmp_path)
 def test_a_workbook_past_the_text_cap_is_refused_not_cut(
     read_file, tmp_path, monkeypatch
 ):
+    openpyxl = pytest.importorskip("openpyxl")
     monkeypatch.setattr(document_text, "MAX_EXTRACT_CHARS", 20_000)
     book = openpyxl.Workbook(write_only=True)
     sheet = book.create_sheet()
