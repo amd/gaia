@@ -77,7 +77,9 @@ AGENT_ID = "gaia"
 #: 2.15 (#3620) added ``POST /query/{run_id}/followup`` for mid-turn messages.
 #: 2.16 (#4166) added ``/query``'s ``documents`` field.
 #: 2.17 added ``GET /skills`` for the Agent UI's Skills settings.
-API_VERSION = "2.17"
+#: 2.18 lets ``/query``'s ``max_steps`` be 0 (no limit), the default; a
+#: ``step`` event's ``total`` is then null.
+API_VERSION = "2.18"
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -149,8 +151,12 @@ class QueryRequest(_Strict):
     )
     max_steps: Optional[int] = Field(
         default=None,
-        ge=1,
-        description="Cap on agent-loop steps for this turn. Omit for the agent's default.",
+        ge=0,
+        description=(
+            "Cap on agent-loop steps for this turn; 0 means no limit. Omit for "
+            "the agent's default (no limit unless GAIA_AGENT_MAX_STEPS or the "
+            "max_steps config key sets one)."
+        ),
     )
     session_id: Optional[str] = Field(
         default=None,

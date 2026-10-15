@@ -706,8 +706,8 @@ async def async_main(action, **kwargs):
                 ),
                 model_id=explicit_model,
                 device=effective_device,
-                # None falls through to the flagship default (flagship_max_steps,
-                # honoring $GAIA_AGENT_MAX_STEPS) resolved in GaiaAgent.__init__.
+                # None falls through to the flagship default (flagship_max_steps:
+                # $GAIA_AGENT_MAX_STEPS, config max_steps, else no limit).
                 max_steps=kwargs.get("max_steps"),
                 streaming=kwargs.get("stream", False),
                 show_prompts=kwargs.get("show_prompts", False),
@@ -1027,6 +1027,21 @@ def _compare_benchmark_ctx(current_ctx, baseline, baseline_path):
         )
 
 
+def _step_limit_arg(value: str) -> int:
+    """``--max-steps`` value: a whole number of steps, 0 meaning no limit."""
+    import argparse
+
+    try:
+        steps = int(value)
+    except ValueError:
+        steps = -1
+    if steps < 0:
+        raise argparse.ArgumentTypeError(
+            f"must be a whole number of steps, or 0 for no limit; got {value!r}"
+        )
+    return steps
+
+
 def build_parser():
     """Build and return the root argparse parser."""
     import argparse
@@ -1162,10 +1177,11 @@ def build_parser():
     agent_loop_parser = argparse.ArgumentParser(add_help=False)
     agent_loop_parser.add_argument(
         "--max-steps",
-        type=int,
+        type=_step_limit_arg,
         default=None,
-        help="Maximum conversation steps. Defaults to the agent's step limit "
-        "(150 for the flagship, 50 for others, or $GAIA_AGENT_MAX_STEPS if set).",
+        help="Maximum conversation steps; 0 means no limit. Defaults to the "
+        "agent's step limit (none for the flagship, 50 for others), or "
+        "$GAIA_AGENT_MAX_STEPS / the max_steps config key if set.",
     )
     agent_loop_parser.add_argument(
         "--list-tools",

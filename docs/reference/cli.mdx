@@ -91,22 +91,37 @@ gaia --ui --base-url https://your-server:13305/api/v1
 
 ### Agent step limit
 
-Agents stop after a maximum number of reasoning/tool steps. The flagship GAIA agent (`gaia chat`, the Agent UI, the TUI) defaults to **150**, enough for long desktop tasks such as reading a folder of datasheets and writing a costed BOM. Other agents default to **50**.
+The flagship GAIA agent (`gaia chat`, the Agent UI, the TUI) has **no step limit** by default: a long research or build task runs until it is done. Other agents stop after **50** reasoning/tool steps. The UI then shows "Step 12" rather than "Step 12 of 50".
 
-When 20, 10 and 5 steps remain, the agent is told so and asked to produce what the request asked for from what it already has, marking anything it couldn't verify, rather than keep researching. An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. That summary is kept even when a requested file was never written; the missing file is listed after it. If that last call fails, you get the step-limit notice with the agent's latest write-up and a line saying why the summary couldn't be written. Set `GAIA_AGENT_BUDGET_NOTICES=0` to turn the step-budget notices off.
+A turn with no limit is still bounded:
+
+- **Repeats stop.** An agent repeating one tool call with identical arguments, or a short cycle of calls, is stopped as described below.
+- **Stalls stop.** After 15 steps in a row that make no progress (every call failed, repeated one already made, or no call was made) the agent is told to change approach; after 30 the turn ends with a summary of what it found. Waiting with `sleep` between polls counts as progress.
+- **Stop always works**, at any step.
+- **Hosted models check in.** On a model billed per use (Claude, or a Lemonade cloud model such as `fireworks.*`), every 200 steps the agent asks whether to keep going, in the same prompt it uses to approve a tool. Answer no, or leave it unanswered until it times out, and the turn ends with a summary. Local models never ask: a long local turn costs time, not money. With full access on, the check-in is approved without asking.
+
+With a limit set, when 20, 10 and 5 steps remain the agent is told so and asked to produce what the request asked for from what it already has, marking anything it couldn't verify, rather than keep researching. An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. That summary is kept even when a requested file was never written; the missing file is listed after it. If that last call fails, you get the step-limit notice with the agent's latest write-up and a line saying why the summary couldn't be written. Set `GAIA_AGENT_BUDGET_NOTICES=0` to turn the step-budget notices off. With no limit there is no budget, so none of these notices is sent.
 
 The same closing call runs when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused still report the failure. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
 
+To set a limit (`0` means no limit everywhere one is taken):
+
 - **Per-invocation:** pass `--max-steps <n>` to `gaia chat` (e.g. `gaia chat --max-steps 80`).
-- **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
+- **Fleet-wide, this shell:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once.
+- **Fleet-wide, persistent:** `gaia config set max_steps <n>`. `gaia config set max_steps ""` goes back to each agent's own default.
+
+The flag wins over the environment variable, which wins over the config key.
 
 ```bash
-# Raise the limit for every agent in this shell
+# Cap every agent at 80 steps in this shell
 export GAIA_AGENT_MAX_STEPS=80
 gaia chat --query "research the latest AMD Ryzen AI news"
+
+# Or persistently
+gaia config set max_steps 80
 ```
 
-Some skills intentionally need more headroom than the default (e.g. multi-file code generation). An invalid `GAIA_AGENT_MAX_STEPS` value (non-integer or ≤ 0) fails fast with an actionable error rather than silently capping agents.
+An invalid value (negative, or not a whole number) fails fast with an actionable error rather than silently capping or uncapping agents.
 
 ### Per-tool execution timeout
 
@@ -1633,6 +1648,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `lemonade_mode` | _(unset)_ | `gaia` runs GAIA's own Lemonade Server; `external` uses yours at `lemonade_base_url` and never starts one. Unset means not chosen yet, which runs GAIA's own. Setting `external` checks the server first; either change tells a running daemon. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
 | `lemonade_base_url` | _(unset)_ | Your Lemonade Server's address, for `lemonade_mode external` |
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
+| `max_steps` | _(unset)_ | Step limit per turn for every agent; `0` means no limit. Unset leaves each agent its own default: no limit for the flagship, 50 for others. `GAIA_AGENT_MAX_STEPS` and `--max-steps` win over it — see [Agent step limit](#agent-step-limit) |
 
 ### Full access
 

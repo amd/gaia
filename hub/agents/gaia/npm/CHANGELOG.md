@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Long tasks no longer stop at 150 steps.** A turn now has no step limit by
+  default, so a long research or build task runs to the end instead of
+  stopping mid-work. What bounds it instead: repeated calls are stopped as
+  before, 30 steps in a row with no progress end the turn with a summary, and
+  on a hosted model the turn asks every 200 steps whether to keep going
+  (`continue_long_turn`; declining or not answering ends it with a summary).
+  `/query`'s `max_steps` now accepts `0` for no limit (contract **2.18**), and
+  a `step` event's `total` is `null` when a turn has none. Set a limit with
+  `max_steps`, `GAIA_AGENT_MAX_STEPS`, or `gaia config set max_steps <n>`.
 - **`run_python` works in the Agent UI without a project.** It ran from the
   server's own folder, which is not an allowed path, so every approved snippet
   was refused and the agent fell back to slower shell commands. With no project

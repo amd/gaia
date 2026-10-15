@@ -157,7 +157,14 @@ _SKILL_TOOLS = frozenset({"install_skill", "remove_skill"})
 #: become "always allow any path" — each new path is asked about on its own.
 PATH_ACCESS_PROMPT_TOOL = "allow_path_access"
 
-_UNGRANTABLE_TOOLS = frozenset({"capture_skill", PATH_ACCESS_PROMPT_TOOL})
+#: The check-in a turn with no step limit on a hosted model sends every few
+#: hundred steps. Not a registered tool, and ungrantable: each check-in is a
+#: fresh decision to keep spending.
+STEP_CHECK_IN_PROMPT_TOOL = "continue_long_turn"
+
+_UNGRANTABLE_TOOLS = frozenset(
+    {"capture_skill", PATH_ACCESS_PROMPT_TOOL, STEP_CHECK_IN_PROMPT_TOOL}
+)
 
 #: Display-only prompt argument: the agent's own scratch folder, set by the
 #: agent when a script it runs sits inside it.

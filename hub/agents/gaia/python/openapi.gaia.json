@@ -164,14 +164,14 @@
           "max_steps": {
             "anyOf": [
               {
-                "minimum": 1.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Cap on agent-loop steps for this turn. Omit for the agent's default.",
+            "description": "Cap on agent-loop steps for this turn; 0 means no limit. Omit for the agent's default (no limit unless GAIA_AGENT_MAX_STEPS or the max_steps config key sets one).",
             "title": "Max Steps"
           },
           "model": {
@@ -397,7 +397,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.17"
+    "version": "2.18"
   },
   "openapi": "3.1.0",
   "paths": {

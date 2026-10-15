@@ -645,7 +645,8 @@ export interface StreamEvent {
     /** Model phase on a status event: reading, loading_model, reasoning, tool_call, … */
     phase?: string;
     step?: number;
-    total?: number;
+    /** On `step`: the turn's step limit, or null when it has none. */
+    total?: number | null;
     tool?: string;
     summary?: string;
     success?: boolean;

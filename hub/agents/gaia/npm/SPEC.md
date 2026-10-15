@@ -254,7 +254,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.17"`                  |
+| Contract version   | `API_VERSION = "2.18"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -287,6 +287,24 @@ missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
 `documents`) is optional.
+
+`max_steps` caps the turn's agent-loop steps; `0` means no limit (contract
+≥ 2.18). Omitted, a turn has no limit unless the host sets
+`GAIA_AGENT_MAX_STEPS` or `max_steps` in `~/.gaia/config.json`. Each `step`
+event's `total` is the limit, or `null` when there is none. A turn with no
+limit is still bounded:
+
+- the same call (or a short cycle of calls) repeated is stopped, as with a limit;
+- 30 steps in a row that make no progress — every call failed, repeated an
+  earlier one, or none was made — end the turn with a summary;
+- on a hosted model (Claude, or a Lemonade cloud model) the turn asks every 200
+  steps whether to keep going, through the ordinary confirmation prompt:
+  `tool: "continue_long_turn"`, `args: { steps, model }`. Declining it, or a
+  prompt nobody answers, ends the turn with a summary of what it found, so a
+  host that cannot answer prompts stops there; pass `max_steps` to choose the
+  limit yourself. With full access on, the check-in is approved without
+  asking, like any gated tool;
+- cancel always works.
 
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn

@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, EyeOff } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp } from '../stores/notificationStore';
+import { useNotificationStore, PATH_ACCESS_TOOL, STEP_CHECK_IN_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, stepCheckInQuestion, stepCheckInTitle } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -94,6 +94,11 @@ function HistoryNotice({ text }: { text: string }) {
     return <div className="history-notice" role="note">{text}</div>;
 }
 
+/** "Step 3 of 50", or "Step 3" when the turn has no step limit (`total` null). */
+export function stepLabel(step: number | undefined, total: number | null | undefined): string {
+    return `Step ${step}${total ? ` of ${total}` : ''}`;
+}
+
 /** Map an SSE agent event to an AgentStep for the UI. */
 function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<number>): AgentStep | null {
     const id = ++stepIdRef.current;
@@ -124,7 +129,7 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
         case 'step':
             return {
                 id, type: 'status',
-                label: `Step ${event.step}${event.total ? ` of ${event.total}` : ''}`,
+                label: stepLabel(event.step, event.total),
                 active: true, timestamp: ts,
             };
         case 'status':
@@ -683,6 +688,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     const toolName = event.tool || '';
                     const { addNotification: addNotif, notifications } = useNotificationStore.getState();
                     const isPathAccess = toolName === PATH_ACCESS_TOOL;
+                    const isCheckIn = toolName === STEP_CHECK_IN_TOOL;
                     const followUp = isPathAccess && isPathAccessFollowUp(notifications, sessionId, event.args);
                     addNotif({
                         id: event.confirm_id ?? `perm-${Date.now()}`,
@@ -690,10 +696,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         agentId: sessionId,
                         sessionId,
                         agentName: 'GAIA',
-                        title: isPathAccess ? pathAccessTitle(event.args, followUp) : `Allow ${toolName}?`,
+                        title: isPathAccess
+                            ? pathAccessTitle(event.args, followUp)
+                            : isCheckIn ? stepCheckInTitle(event.args) : `Allow ${toolName}?`,
                         message: isPathAccess
                             ? pathAccessQuestion(event.args, followUp)
-                            : `The agent wants to execute: ${toolName}`,
+                            : isCheckIn ? stepCheckInQuestion(event.args) : `The agent wants to execute: ${toolName}`,
                         timestamp: Date.now(),
                         read: false,
                         dismissed: false,

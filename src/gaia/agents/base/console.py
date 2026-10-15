@@ -360,13 +360,15 @@ class OutputHandler(ABC):
     # === Core Progress/State Methods (Required) ===
 
     @abstractmethod
-    def print_processing_start(self, query: str, max_steps: int, model_id: str = None):
-        """Print processing start message."""
+    def print_processing_start(
+        self, query: str, max_steps: Optional[int], model_id: str = None
+    ):
+        """Print processing start message. ``max_steps`` is None with no limit."""
         ...
 
     @abstractmethod
-    def print_step_header(self, step_num: int, step_limit: int):
-        """Print step header."""
+    def print_step_header(self, step_num: int, step_limit: Optional[int]):
+        """Print step header. ``step_limit`` is None when the turn has no limit."""
         ...
 
     @abstractmethod
@@ -507,8 +509,8 @@ class OutputHandler(ABC):
         ...
 
     @abstractmethod
-    def print_completion(self, steps_taken: int, steps_limit: int):
-        """Print completion summary."""
+    def print_completion(self, steps_taken: int, steps_limit: Optional[int]):
+        """Print completion summary. ``steps_limit`` is None with no limit."""
         ...
 
     @abstractmethod
@@ -1796,7 +1798,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         """
         self.print_separator()
 
-        if steps_taken < steps_limit:
+        if steps_limit is None or steps_taken < steps_limit:
             # Completed successfully before hitting limit - clean message
             message = "✨ Processing complete!"
         else:
