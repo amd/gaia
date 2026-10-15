@@ -904,6 +904,17 @@ def test_run_http_cannot_be_called_around_the_check(monkeypatch):
     run.assert_not_called()
 
 
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.5", "::", "myhost.lan"])
+def test_loopback_transport_settings_refuse_a_network_host(host):
+    from gaia.mcp.servers.agent_ui_control import (
+        RemoteBindError,
+        transport_security_settings,
+    )
+
+    with pytest.raises(RemoteBindError):
+        transport_security_settings(host)
+
+
 def _remote_client(monkeypatch):
     from starlette.testclient import TestClient
 
