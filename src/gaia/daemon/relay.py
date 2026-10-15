@@ -55,6 +55,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
+from gaia.config import gaia_agents_dir
 from gaia.daemon.sidecars.errors import (
     SidecarNotRunningError,
     SidecarUnresponsiveError,
@@ -143,7 +144,7 @@ def stream_ended_unexpectedly_detail(agent_id: str) -> str:
     return (
         f"agent '{agent_id}' stream ended unexpectedly without a terminal "
         "event — the sidecar may have crashed mid-run. Check its log under "
-        f"~/.gaia/agents/{agent_id}/logs/, re-ensure it "
+        f"{gaia_agents_dir() / agent_id / 'logs'}, re-ensure it "
         f"(POST /daemon/v1/agents/{agent_id}/ensure), and retry."
     )
 

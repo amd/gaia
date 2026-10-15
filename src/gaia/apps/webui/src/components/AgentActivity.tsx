@@ -109,10 +109,12 @@ interface AgentActivityProps {
     isActive: boolean;
     /** Whether this is the inline version (during streaming) or the summary version (after). */
     variant?: 'inline' | 'summary';
+    /** The agent's own step count; rows (thinking, plans, tools) are not steps. */
+    agentStepCount?: number;
 }
 
 /** Displays agent activity as a single expandable "Thinking" panel with tool calls inline. */
-export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActivityProps) {
+export function AgentActivity({ steps, isActive, variant = 'inline', agentStepCount }: AgentActivityProps) {
     // Always start collapsed — thinking text is shown via ThinkingIndicator
     // in the message header. Users can expand to see details if they want.
     const [expanded, setExpanded] = useState(false);
@@ -233,8 +235,10 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
 
     // Build summary — always use stable step count so the bar doesn't
     // visually change when transitioning from thinking to answer streaming.
-    // Progress-status rows aren't saved with the turn; counting them made the total drop on finish.
-    const stepCount = displaySteps.filter((s) => s.type !== 'status').length || displaySteps.length;
+    // Messages saved before the agent's count was recorded only have their rows to go by.
+    const stepCount = agentStepCount && agentStepCount > 0
+        ? agentStepCount
+        : displaySteps.filter((s) => s.type !== 'status').length || displaySteps.length;
     const summaryText = hasPolicyAlerts
         ? `Blocked by policy \u00b7 ${policySteps.length} alert${policySteps.length !== 1 ? 's' : ''}`
         : `${stepCount} step${stepCount !== 1 ? 's' : ''}`

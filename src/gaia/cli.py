@@ -17,6 +17,7 @@ from gaia.agents.install_hints import (
     gaia_extras_install_args,
     pip_install_hint,
 )
+from gaia.config import gaia_agents_dir
 from gaia.env import load_env
 from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
@@ -3067,7 +3068,7 @@ Examples:
     )
     mcp_list_parser.add_argument(
         "--config",
-        help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
+        help="Path to MCP servers config file (default: $GAIA_HOME/mcp_servers.json, else ~/.gaia/mcp_servers.json)",
     )
 
     mcp_tools_parser = mcp_subparsers.add_parser(
@@ -3076,7 +3077,7 @@ Examples:
     mcp_tools_parser.add_argument("name", help="Name of the MCP server")
     mcp_tools_parser.add_argument(
         "--config",
-        help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
+        help="Path to MCP servers config file (default: $GAIA_HOME/mcp_servers.json, else ~/.gaia/mcp_servers.json)",
     )
 
     mcp_test_client_parser = mcp_subparsers.add_parser(
@@ -8778,7 +8779,7 @@ def _resolve_sidecar_log(agent_id: str):
     ``sidecar-*.log`` on disk when the daemon is down or the agent is stopped
     (so ``logs`` still works post-mortem). Returns ``None`` if no log exists.
     """
-    log_dir = Path.home() / ".gaia" / "agents" / agent_id / "logs"
+    log_dir = gaia_agents_dir() / agent_id / "logs"
 
     # Best-effort: ask the daemon for the running port so we follow the live
     # process. Never fatal — a down daemon just means we use the newest file.
@@ -8839,7 +8840,7 @@ def _handle_daemon_logs(args):
         if log_file is None:
             print(
                 f"No log for sidecar '{agent_id}' at "
-                f"{Path.home() / '.gaia' / 'agents' / agent_id / 'logs'} "
+                f"{gaia_agents_dir() / agent_id / 'logs'} "
                 f"(it has not run yet). Start it with `gaia daemon start-agent "
                 f"{agent_id}` or run the agent once."
             )
@@ -10056,7 +10057,7 @@ def handle_mcp_list(args):
     config = MCPConfig(args.config) if args.config else MCPConfig()
     servers = config.get_servers()
 
-    config_path = args.config if args.config else "~/.gaia/mcp_servers.json"
+    config_path = args.config if args.config else config.config_file
 
     if not servers:
         print("📋 No MCP servers configured")
