@@ -1099,7 +1099,11 @@ a rewrite, a file listing, a binary metadata summary, or only the last page is
 insufficient. `read_file` pages and archived `read_tool_output` continuations
 must cover the complete output. Source-code edits without a save instruction
 or claim retain the existing test-verification policy. Binary outputs require
-path-specific write evidence but are not forced through a text reader.
+path-specific write evidence but are not forced through a text reader. A script
+output larger than 64 KB may instead be checked in part after its latest write:
+a non-empty range read, or a later successful run that names the file and
+prints something (`wc -l`, `head`, a row count). A run that failed, printed
+nothing, or rewrote the file is not a check, and smaller outputs are read whole.
 
 For Python and shell executors, the loop compares file metadata before and after
 the call for requested and previously tracked targets, plus literal Python path

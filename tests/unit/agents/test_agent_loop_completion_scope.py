@@ -672,3 +672,156 @@ def test_short_real_content_is_written(content):
     assert (
         _write_stand_in("write_file", {"file_path": "m.py", "content": content}) is None
     )
+
+
+# --------------------------------------------------------------------------
+# A large script output may be checked in part
+# --------------------------------------------------------------------------
+
+
+def _summary_run(ledger, code, stdout, successful=True, tool_name="run_python"):
+    args = {"code": code} if tool_name == "run_python" else {"command": code}
+    before = ledger.snapshot(tool_name, args)
+    ledger.record(
+        tool_name,
+        args,
+        {"status": "success" if successful else "error", "stdout": stdout},
+        successful,
+        before=before,
+    )
+
+
+def _big_csv(path, megabytes=50):
+    row = "ref,amount,vendor,area\n" + "1234567890,25000.00,Acme Ltd,Estates\n" * 1
+    chunk = row * 20000
+    with open(path, "w") as f:
+        while f.tell() < megabytes * 1024 * 1024:
+            f.write(chunk)
+
+
+@pytest.fixture
+def big_output(tmp_path):
+    ledger = CompletionEvidence("Save the cleaned data into out/", str(tmp_path))
+    out = tmp_path / "out"
+    target = out / "clean.csv"
+
+    def effect():
+        out.mkdir()
+        _big_csv(target)
+
+    _run_script(ledger, effect)
+    return ledger, target
+
+
+def test_a_50mb_script_output_checked_by_row_count_is_complete(big_output):
+    ledger, target = big_output
+    _summary_run(
+        ledger,
+        f"import pandas as pd; print(len(pd.read_csv(r'{target}')))",
+        "1310720\n",
+    )
+    assert _gaps(ledger) == []
+
+
+@pytest.mark.parametrize(
+    "command", ["wc -l out/clean.csv", "tail -n 3 out\clean.csv", "head clean.csv"]
+)
+def test_a_shell_head_tail_or_count_checks_a_large_output(big_output, command):
+    ledger, _ = big_output
+    _summary_run(ledger, command, "ref,amount\n", tool_name="run_shell_command")
+    assert _gaps(ledger) == []
+
+
+def test_a_range_read_checks_a_large_output(big_output):
+    ledger, target = big_output
+    result = {
+        "file_path": str(target),
+        "content": "1 | ref,amount,vendor,area\n",
+        "start_line": 1,
+    }
+    ledger.delivered("read_file", {"file_path": str(target)}, result, result)
+    assert _gaps(ledger) == []
+
+
+def test_a_large_output_never_checked_still_needs_a_check(big_output):
+    ledger, _ = big_output
+    assert any("clean.csv" in g and "read back" in g for g in _gaps(ledger))
+
+
+def test_a_summary_script_that_crashed_is_not_a_check(big_output):
+    ledger, target = big_output
+    _summary_run(
+        ledger,
+        f"import pandas as pd; print(len(pd.read_csv(r'{target}')))",
+        "Traceback (most recent call last):\nMemoryError\n",
+        successful=False,
+    )
+    assert any("clean.csv" in g for g in _gaps(ledger))
+
+
+def test_a_summary_that_printed_nothing_is_not_a_check(big_output):
+    ledger, target = big_output
+    _summary_run(ledger, f"open(r'{target}').read()", "")
+    assert any("clean.csv" in g for g in _gaps(ledger))
+
+
+def test_a_summary_of_another_file_is_not_a_check(big_output):
+    ledger, _ = big_output
+    _summary_run(ledger, "print(len(open('raw.csv').readlines()))", "12\n")
+    _summary_run(ledger, "print(len(open('unclean.csv').readlines()))", "12\n")
+    assert any("clean.csv" in g for g in _gaps(ledger))
+
+
+def test_a_run_that_rewrites_the_output_is_not_a_check_of_it(big_output):
+    ledger, target = big_output
+    code = f"open(r'{target}', 'a').write('x\n'); print('appended')"
+
+    def run():
+        args = {"code": code}
+        before = ledger.snapshot("run_python", args)
+        time.sleep(0.02)
+        with open(target, "a") as f:
+            f.write("x\n")
+        ledger.record(
+            "run_python", args, {"status": "success", "stdout": "ok\n"}, True, before
+        )
+
+    run()
+    assert any("clean.csv" in g for g in _gaps(ledger))
+
+
+@pytest.mark.parametrize("body", ["", "ref,amount\n1,2\n"], ids=["empty", "truncated"])
+def test_a_partial_read_of_a_small_output_is_not_enough(tmp_path, body):
+    """An empty or cut-short output is small, so it must be read whole."""
+    ledger = CompletionEvidence("Save the cleaned data into out/", str(tmp_path))
+    target = tmp_path / "out" / "clean.csv"
+
+    def effect():
+        target.parent.mkdir()
+        target.write_text(body)
+
+    _run_script(ledger, effect)
+    result = {"file_path": str(target), "content": body[:4], "start_line": 1}
+    ledger.delivered("read_file", {"file_path": str(target)}, result, result)
+    _summary_run(ledger, "print(open('out/clean.csv').readline())", body[:10] or "\n")
+    assert any("clean.csv" in g and "read back" in g for g in _gaps(ledger))
+
+
+def test_an_empty_or_failed_read_of_a_large_output_is_not_a_check(big_output):
+    ledger, target = big_output
+    for result in (
+        {"file_path": str(target), "content": "", "start_line": 1},
+        {"file_path": str(target), "status": "error", "error": "denied"},
+    ):
+        ledger.delivered("read_file", {"file_path": str(target)}, result, result)
+    assert any("clean.csv" in g for g in _gaps(ledger))
+
+
+def test_a_large_file_written_by_write_file_still_needs_a_full_read(tmp_path):
+    ledger = CompletionEvidence("Save the data to `out.csv`", str(tmp_path))
+    target = tmp_path / "out.csv"
+    _big_csv(target, megabytes=1)
+    ledger.record("write_file", {"file_path": str(target)}, {}, True)
+    result = {"file_path": str(target), "content": "ref,amount\n", "start_line": 1}
+    ledger.delivered("read_file", {"file_path": str(target)}, result, result)
+    assert any("out.csv" in g and "read back" in g for g in _gaps(ledger))

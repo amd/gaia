@@ -183,6 +183,10 @@ _LEAD = re.compile(
 
 # Files checked under one requested folder for script-written outputs.
 _MAX_FOLDER_FILES = 2000
+# Above this, a script output may be checked in part instead of read whole.
+_FULL_READ_LIMIT = 64 * 1024
+# How much of a script file is searched for the outputs it names.
+_MAX_SCRIPT_CHARS = 1_000_000
 
 
 def _inside(path: str, folder: str) -> bool:
@@ -363,6 +367,10 @@ class FileEvidence:
     inferred: bool = False
     # Read in full and matched exactly by the framework; a rewrite clears it.
     verified: bool = False
+    # Written by a script, which may produce more than any reader can page through.
+    by_script: bool = False
+    # Shown in part since its latest write: a range read, head/tail, a summary.
+    spot_checked: bool = False
 
     def page(self, start: int, end: int, total: int | None) -> None:
         self.ranges.append((start, end))
@@ -417,7 +425,10 @@ class CompletionEvidence:
         self.requested, self.save_requested = save_obligations(query)
         self.instructed = save_instructed(query)
         self.disk_tool_ran = False
-        self.exec_windows: list[tuple[int, int, bool]] = []
+        # (started ns, ended ns, succeeded, ledger sequence) per executor run.
+        self.exec_windows: list[tuple[int, int, bool, int]] = []
+        # (ledger sequence, what the run named) for runs that printed something.
+        self.summaries: list[tuple[int, str]] = []
         self._exec_started = 0
 
     def key(self, path: str, root: str | None = None) -> str:
@@ -506,7 +517,9 @@ class CompletionEvidence:
         if tool in WRITE_TOOLS or tool in SIDE_EFFECT_PATHS or tool in _EXEC_TOOLS:
             self.disk_tool_ran = True
         if tool in _EXEC_TOOLS:
-            self.exec_windows.append((self._exec_started, time.time_ns(), successful))
+            self.exec_windows.append(
+                (self._exec_started, time.time_ns(), successful, self.sequence)
+            )
         for path, old in (before or {}).items():
             current = self._stamp(path)
             if current is _UNOBSERVABLE or old is _UNOBSERVABLE:
@@ -526,7 +539,10 @@ class CompletionEvidence:
                     self.removed.add(path)
                 if current is not None:
                     self.files[path] = FileEvidence(
-                        path, self.sequence if successful else 0, True
+                        path,
+                        self.sequence if successful else 0,
+                        True,
+                        by_script=tool in _EXEC_TOOLS,
                     )
         data = _payload(result)
         paths = []
@@ -560,7 +576,39 @@ class CompletionEvidence:
                 key,
                 self.sequence if successful else 0,
                 tool in WRITE_TOOLS or tool in _EXEC_TOOLS,
+                by_script=tool in _EXEC_TOOLS,
             )
+        if tool in _EXEC_TOOLS and successful:
+            self._note_summaries(args, data)
+
+    def _note_summaries(self, args: dict, data: dict) -> None:
+        """A successful run that names a script output and prints something checked it.
+
+        ``wc -l out.csv``, ``head out.csv`` or a pandas row count: what it
+        printed is the observation. A run that rewrote the file is a new
+        write, not a check of it.
+        """
+        printed = data.get("stdout")
+        nested = data.get("command_output")
+        if not isinstance(printed, str) and isinstance(nested, dict):
+            printed = nested.get("stdout")
+        if not isinstance(printed, str) or not printed.strip():
+            return
+        text = " ".join(
+            value
+            for key in ("code", "command", "script")
+            if isinstance((value := args.get(key)), str)
+        )
+        script = args.get("file_path")
+        if isinstance(script, str) and self._readable(self.key(script), self.validator):
+            try:
+                with open(self.key(script), encoding="utf-8", errors="replace") as f:
+                    text += " " + f.read(_MAX_SCRIPT_CHARS)
+            except OSError:
+                pass
+        if not text:
+            return
+        self.summaries.append((self.sequence, os.path.normcase(text)))
 
     def _record_refusal(self, tool: str, args: dict, result: Any) -> None:
         """Remember a write the user or the path allowlist turned down."""
@@ -594,11 +642,16 @@ class CompletionEvidence:
         if not isinstance(stamp, tuple):
             return None
         during = [
-            ok for start, end, ok in self.exec_windows if start <= stamp[3] <= end
+            (ok, run)
+            for start, end, ok, run in self.exec_windows
+            if start <= stamp[3] <= end
         ]
-        if not during or not all(during):
+        if not during or not all(ok for ok, _ in during):
             return None
-        self.files[key] = FileEvidence(key, self.sequence, True, inferred=True)
+        # Dated by the run that wrote it, so a later run can be its check.
+        self.files[key] = FileEvidence(
+            key, max(run for _, run in during), True, inferred=True, by_script=True
+        )
         return self.files[key]
 
     def _find_executor_writes(self, key: str) -> None:
@@ -607,7 +660,7 @@ class CompletionEvidence:
         A script builds its output paths at run time, so no tool reports them;
         the file's modification time inside a successful run is the evidence.
         """
-        if not any(ok for _, _, ok in self.exec_windows):
+        if not any(window[2] for window in self.exec_windows):
             return
         if not self._readable(key, self.validator):
             return
@@ -655,6 +708,8 @@ class CompletionEvidence:
         if item is None or not item.written or raw.get("is_binary"):
             return
         content = raw.get("content")
+        if isinstance(content, str) and content.strip():
+            item.spot_checked = True
         # A numbered line window is not the file's bytes: never a full readback.
         if not isinstance(content, str) or raw.get("start_line") is not None:
             return
@@ -838,11 +893,30 @@ class CompletionEvidence:
                 and (data_output or requested(item.path))
                 and not item.observed
                 and not item.verified
+                and not self._large_and_checked(item)
             ):
                 gaps.append(
                     f"`{item.path}` has not been read back completely after its latest write."
                 )
         return gaps
+
+    def _large_and_checked(self, item: FileEvidence) -> bool:
+        """A large script output shown in part counts; a small one is read whole."""
+        named = re.compile(
+            rf"(?<![\w.-]){re.escape(os.path.basename(item.path))}(?![\w-])"
+        )
+        if not item.by_script or not (
+            item.spot_checked
+            or any(
+                run > item.written and named.search(text)
+                for run, text in self.summaries
+            )
+        ):
+            return False
+        try:
+            return os.path.getsize(item.path) > _FULL_READ_LIMIT
+        except OSError:
+            return False
 
     def cleanup_gaps(self, answer: str) -> list[str]:
         """A deletion claim needs a concrete path observed disappearing."""
