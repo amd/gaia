@@ -6,6 +6,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The model notice is one line.** Switching or restoring a model printed a
+  four-sentence paragraph that named the model twice and said "via Lemonade".
+  It now reads like "Switched to **DeepSeek-V4.1-Flash** on the AMD LLM Gateway
+  (cloud). Your messages, and anything read from files or memory, are sent
+  there." The `/model` list drops "via Lemonade" from its headings and marks
+  the configured default model with `(default)`.
+- **Single-file search results name their file.** `query_specific_file` put the
+  path only at the top of its result, so each chunk arrived with no source and
+  the chunk cards showed none. Every chunk now carries `source_file`, and the
+  result lists it in `source_files`, as `query_documents` already did.
+- **The turn log counts the answer of a streamed turn.** With `GAIA_TURN_LOG`
+  set, a turn whose answer streamed out recorded `answer_chars: 0`. It now
+  records the length of the answer the user saw.
 - **`run_python` and `execute_python_file` work in the released binary.** The
   binary has no Python interpreter, so it handed every script to its own
   argument parser, which rejected it, and no calculation, chart or `.xlsx`

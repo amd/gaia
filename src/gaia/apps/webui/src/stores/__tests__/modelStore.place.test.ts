@@ -20,8 +20,8 @@ const CLOUD_ACTIVE: ActiveModel = {
     provider: 'fireworks', model: 'fireworks.deepseek-v4p1-flash', label: 'DeepSeek', remote: true, is_default: false,
 };
 const FIREWORKS_SENTENCE =
-    'Chat inference runs on Fireworks AI via Lemonade — a cloud provider — using model '
-    + '`fireworks.deepseek-v4p1-flash`. Everything in this conversation is sent there to be answered.';
+    'Using deepseek-v4p1-flash on Fireworks AI (cloud). Your messages, and anything read from '
+    + 'files or memory, are sent there.';
 
 describe('inferencePlace', () => {
     it('claims local only when the backend says the chat stays here', () => {
