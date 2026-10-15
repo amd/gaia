@@ -130,8 +130,12 @@ def __init__(
         claude_model: Model to use when use_claude=True
         base_url: Local LLM server URL (default: from LEMONADE_BASE_URL or http://localhost:13305/api/v1)
         model_id: Model ID for local LLM (default: None — resolve_default_chat_model(): config default_model, which gaia init sets from the hardware, else DEFAULT_MODEL_NAME, Gemma-4-E4B-it-GGUF)
-        max_steps: Maximum reasoning iterations (default: None — resolves to the
-            global default via default_max_steps(), i.e. GAIA_AGENT_MAX_STEPS or DEFAULT_MAX_STEPS)
+        max_steps: Maximum reasoning iterations; 0 (UNLIMITED_STEPS) means no limit
+            (default: None — resolves to the global default via default_max_steps(), i.e.
+            GAIA_AGENT_MAX_STEPS, then the max_steps config key, else DEFAULT_MAX_STEPS).
+            With no limit the turn is bounded by the repeat guard, a stall guard (30 steps
+            in a row without progress), cancel, and on a hosted model a check-in every
+            200 steps; budget notices and the plan cap are off.
         debug_prompts: Include prompts in conversation history (default: False)
         show_prompts: Display prompts sent to LLM (default: False)
         output_dir: Directory for JSON output files (default: current directory)
@@ -141,7 +145,8 @@ def __init__(
         debug: Enable debug logging (default: False)
         output_handler: Custom output handler (default: creates AgentConsole or SilentConsole)
         max_plan_iterations: Max plan-execute-replan cycles (default: 3, 0=unlimited);
-            forces the final answer only once half the step budget is spent
+            forces the final answer only once half the step budget is spent, so never
+            when the turn has no step limit
         max_consecutive_repeats: Max consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError).
             The first time the limit is hit the model gets one correction and the call is not run;
             a repeat after that ends the turn. When the repeats that ran worked, the agent makes one
@@ -210,7 +215,7 @@ def process_query(
 
     Args:
         user_input: User's question or command
-        max_steps: Override default max_steps (optional)
+        max_steps: Override default max_steps (optional; 0 means no limit)
         trace: Enable detailed execution tracing (default: False)
         filename: File to write trace output (optional)
 

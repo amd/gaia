@@ -9,6 +9,7 @@ import {
     requiresFreshConsent,
     repeatedAllowCount,
     PATH_ACCESS_TOOL,
+    STEP_CHECK_IN_TOOL,
     type PermissionDecision,
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -57,6 +58,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const [remaining, setRemaining] = useState<number | null>(hasTimeout ? notification.timeoutSeconds! : null);
     const cardRef = useRef<HTMLElement>(null);
     const freshConsent = requiresFreshConsent(notification.tool);
+    const isCheckIn = notification.tool === STEP_CHECK_IN_TOOL;
     const scope = freshConsent ? undefined : notification.alwaysScope;
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
@@ -120,7 +122,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                 <ShieldQuestion size={16} className="perm-card-icon" aria-hidden="true" />
                 <div className="perm-card-text">
                     <h2 id={`perm-${notification.id}`} className="perm-card-title">
-                        {notification.tool === PATH_ACCESS_TOOL
+                        {notification.tool === PATH_ACCESS_TOOL || isCheckIn
                             ? notification.title
                             : <>Allow GAIA to use <code>{notification.tool}</code>?</>}
                     </h2>
@@ -161,7 +163,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                 <div className="perm-card-actions">
                     <button type="button" className="perm-btn is-primary" onClick={() => answer('allow')} disabled={busy}>
                         {/* Granting a path lasts for the chat, as the question says. */}
-                        {notification.tool === PATH_ACCESS_TOOL ? 'Allow for this chat' : 'Allow once'}
+                        {notification.tool === PATH_ACCESS_TOOL
+                            ? 'Allow for this chat'
+                            : isCheckIn ? 'Keep going' : 'Allow once'}
                     </button>
                     {scope && (
                         <button
@@ -175,7 +179,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                         </button>
                     )}
                     <button type="button" className="perm-btn" onClick={() => answer('deny')} disabled={busy}>
-                        Deny
+                        {isCheckIn ? 'Stop here' : 'Deny'}
                     </button>
                 </div>
             )}

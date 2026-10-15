@@ -105,6 +105,7 @@ from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
     SCRATCH_ARG,
+    STEP_CHECK_IN_PROMPT_TOOL,
 )
 from gaia.agents.base.tool_markup import (
     MalformedToolMarkup,
@@ -119,6 +120,7 @@ from gaia.agents.base.tool_outcome import (
     tool_result_failed,
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool_call_progress_message
+from gaia.agents.base.turn_progress import TurnProgress
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
     POST_ANSWER_CLOSING_PROMPT,
@@ -213,11 +215,13 @@ CHUNK_TRUNCATION_THRESHOLD = 5000
 CHUNK_TRUNCATION_SIZE = 2500
 
 # Global default for how many reasoning/tool steps an agent may take before it
-# stops and reports progress. This is the single knob for the whole fleet:
-# change DEFAULT_MAX_STEPS here, or set GAIA_AGENT_MAX_STEPS=<n> at runtime to
-# override every agent at once. Agents that genuinely need more override it
-# explicitly in their own config.
+# stops and reports progress. Agents that need another default pass their own
+# to default_max_steps(); GAIA_AGENT_MAX_STEPS or the ``max_steps`` config key
+# overrides every agent at once.
 DEFAULT_MAX_STEPS = 50
+
+#: ``max_steps`` value meaning "no step limit", wherever a limit is accepted.
+UNLIMITED_STEPS = 0
 
 # Per-reply output caps. A local model's 32K ctx must also hold a ~7.7K-token
 # system prompt plus history, so 8K is the most output it can spare.
@@ -359,31 +363,50 @@ def effective_skill_body(agent, skill) -> str:
         return base
 
 
-def default_max_steps(default: int = DEFAULT_MAX_STEPS) -> int:
-    """Resolve the default agent step limit.
+def parse_max_steps(value: Any, source: str) -> int:
+    """*value* as a step limit, where 0 means no limit; ValueError otherwise."""
+    if isinstance(value, bool):
+        number = None
+    elif isinstance(value, int):
+        number = value
+    else:
+        try:
+            number = int(str(value).strip())
+        except ValueError:
+            number = None
+    if number is None or number < 0:
+        raise ValueError(
+            f"{source} must be a whole number of steps, or 0 for no limit; "
+            f"got {value!r}."
+        )
+    return number
 
-    Reads ``GAIA_AGENT_MAX_STEPS`` at call time (not import) so the env var can
-    be set after this module is imported and still take effect. Returns
-    *default* (``DEFAULT_MAX_STEPS`` unless an agent passes its own) when the
-    var is unset; raises on a present-but-invalid value so a typo surfaces
-    immediately instead of silently capping agents.
+
+def describe_step_limit(limit: Optional[int]) -> str:
+    """``"150"``, or ``"no limit"`` for :data:`UNLIMITED_STEPS` / ``None``."""
+    return str(limit) if limit else "no limit"
+
+
+def default_max_steps(default: int = DEFAULT_MAX_STEPS) -> int:
+    """Resolve the default agent step limit; 0 means no limit.
+
+    ``GAIA_AGENT_MAX_STEPS`` wins, then the ``max_steps`` key in
+    ``~/.gaia/config.json``, then *default*. Both are read at call time so a
+    change takes effect on the next agent built. A present-but-invalid value
+    raises, so a typo surfaces instead of silently capping (or uncapping) a run.
     """
     raw = os.environ.get("GAIA_AGENT_MAX_STEPS")
-    if raw is None or raw == "":
-        return default
-    try:
-        value = int(raw)
-    except ValueError as e:
-        raise ValueError(
-            f"GAIA_AGENT_MAX_STEPS must be a positive integer, got {raw!r}. "
-            f"Unset it to use the default ({default})."
-        ) from e
-    if value <= 0:
-        raise ValueError(
-            f"GAIA_AGENT_MAX_STEPS must be a positive integer, got {value}. "
-            f"Unset it to use the default ({default})."
-        )
-    return value
+    if raw is not None and raw.strip():
+        try:
+            return parse_max_steps(raw, "GAIA_AGENT_MAX_STEPS")
+        except ValueError as e:
+            raise ValueError(
+                f"{e} Unset it to use the default ({describe_step_limit(default)})."
+            ) from e
+    from gaia.config import GaiaConfig
+
+    configured = GaiaConfig.load().max_steps
+    return default if configured is None else configured
 
 
 # Default per-tool execution limit (seconds). Bounds a single ``tool(**args)``
@@ -768,6 +791,37 @@ def _budget_notice_trigger(steps_left: int, fraction_left: float, total: int) ->
     """
     return min(steps_left, max(1, int(fraction_left * total)))
 
+
+# With no step limit, what bounds a turn instead: the repeated-call guard
+# below, Stop, this stall guard, and on a hosted model a check-in.
+#: Back-to-back steps that made no progress (see TurnProgress) before a turn
+#: with no step limit is stopped. Half way there, the model is told to change
+#: approach.
+_STALL_STEPS = 30
+
+_STALL_NOTICE = (
+    "Your last {idle} steps made no progress: each call failed, repeated an "
+    "earlier one, or no call was made. Change approach. If you cannot make "
+    "progress, stop calling tools and answer with what you have."
+)
+
+_STALL_ANSWER_PROMPT = (
+    "Your last {idle} steps made no progress, so you can't call more tools. "
+    "Give the user your final answer now, using only what the tool results "
+    "above show: what you found, what you couldn't finish and why, and what "
+    "they can do next."
+)
+
+#: Steps between check-ins when a turn with no step limit runs on a hosted
+#: (paid) model. Local models cost time, not money, so they are never asked.
+_HOSTED_CHECK_IN_STEPS = 200
+
+_CHECK_IN_DECLINED_ANSWER_PROMPT = (
+    "Continuing past {steps} steps was not approved, so you can't call more "
+    "tools. Give the user your final answer now, using only what the tool "
+    "results above show: what you found, what you couldn't finish, and what "
+    "they can do next."
+)
 
 # Sent once, with no tools offered, when the loop guard stops a turn on
 # identical calls that all worked.
@@ -1989,9 +2043,10 @@ Do NOT wrap conversational replies in JSON.
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: ``resolve_lemonade_base_url()`` — LEMONADE_BASE_URL, else GAIA's own server)
             model_id: The ID of the model to use with LLM server (default for local)
-            max_steps: Maximum number of steps the agent can take before terminating.
-                When None, falls back to the global default_max_steps() (env
-                GAIA_AGENT_MAX_STEPS, else DEFAULT_MAX_STEPS).
+            max_steps: Maximum number of steps the agent can take before terminating;
+                0 (UNLIMITED_STEPS) means no limit. When None, falls back to the
+                global default_max_steps() (env GAIA_AGENT_MAX_STEPS, then the
+                ``max_steps`` config key, else DEFAULT_MAX_STEPS).
             debug_prompts: If True, includes prompts in the conversation history
             show_prompts: If True, displays prompts sent to LLM in console (default: False)
             output_dir: Directory for storing JSON output files (default: current directory)
@@ -2091,7 +2146,11 @@ Do NOT wrap conversational replies in JSON.
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
-        self.max_steps = max_steps if max_steps is not None else default_max_steps()
+        self.max_steps = (
+            parse_max_steps(max_steps, "max_steps")
+            if max_steps is not None
+            else default_max_steps()
+        )
         self.debug_prompts = debug_prompts
         self.show_prompts = show_prompts  # Separate flag for displaying prompts
         self.output_dir = output_dir if output_dir else os.getcwd()
@@ -5933,6 +5992,12 @@ Do NOT wrap conversational replies in JSON.
             ),
         }
 
+    def _record_progress(self, tool_name: str, tool_args: Any, ok: bool) -> None:
+        """Feed one executed call to this turn's stall guard, if a turn is running."""
+        progress = getattr(self, "_turn_progress", None)
+        if progress is not None:
+            progress.record(tool_name, tool_args, ok)
+
     def _execute_tool_timed(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """Run :meth:`_execute_tool`, timing it for the step and turn records.
 
@@ -5972,6 +6037,10 @@ Do NOT wrap conversational replies in JSON.
         if (recorder is None and step_timer is None) or not outermost:
             result = self._execute_tool(tool_name, tool_args)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
+            if outermost:
+                self._record_progress(
+                    tool_name, tool_args, not self._is_error_result(result)
+                )
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
@@ -5987,6 +6056,7 @@ Do NOT wrap conversational replies in JSON.
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
+            self._record_progress(tool_name, tool_args, ok)
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
@@ -6389,17 +6459,19 @@ Do NOT wrap conversational replies in JSON.
         self,
         conversation: List[Dict],
         steps_taken: int,
-        steps_limit: int,
+        steps_limit: Optional[int],
         findings: bool = False,
+        opener: Optional[str] = None,
     ) -> str:
         """Generate informative message when max steps is reached.
 
         Args:
             conversation: The conversation history
             steps_taken: Number of steps actually taken
-            steps_limit: Maximum steps allowed
+            steps_limit: Maximum steps allowed (``None`` when there is no limit)
             findings: Include the model's latest write-up, for the final
                 answer when no closing summary could be produced
+            opener: Why the turn stopped, when it was not the step limit
 
         Returns:
             Informative message about what was accomplished
@@ -6413,8 +6485,12 @@ Do NOT wrap conversational replies in JSON.
         ]
 
         message = (
-            f"I ran out of steps before I could finish — I used {steps_taken} "
-            f"of the {steps_limit} I get per request.\n\n"
+            f"{opener}\n\n"
+            if opener
+            else (
+                f"I ran out of steps before I could finish — I used {steps_taken} "
+                f"of the {steps_limit} I get per request.\n\n"
+            )
         )
         if tools_used:
             from collections import Counter
@@ -6428,10 +6504,13 @@ Do NOT wrap conversational replies in JSON.
         if latest:
             message += f"Where I'd got to:\n\n{latest}\n\n"
 
-        message += (
-            "Ask me to continue and I'll pick up from here. From the command "
-            f"line, `--max-steps {steps_limit + 50}` gives me more room.\n"
-        )
+        message += "Ask me to continue and I'll pick up from here."
+        if steps_limit:
+            message += (
+                " From the command line, "
+                f"`--max-steps {steps_limit + 50}` gives me more room."
+            )
+        message += "\n"
 
         return message
 
@@ -8245,7 +8324,7 @@ Do NOT wrap conversational replies in JSON.
 
         Args:
             user_input: User's query or request
-            max_steps: Maximum number of steps to take in the conversation (overrides class default if provided)
+            max_steps: Maximum number of steps to take in the conversation (overrides class default if provided; 0 means no limit)
             trace: If True, write detailed JSON trace to file
             filename: Optional filename for trace output, if None a timestamped name will be generated
 
@@ -8301,15 +8380,52 @@ Do NOT wrap conversational replies in JSON.
         pending.put(text)
         return True
 
-    def _plan_cap_reached(self, steps_taken: int, steps_limit: int) -> bool:
+    def _model_is_hosted(self) -> bool:
+        """True when this turn's model is billed per token: Claude, or a
+        Lemonade cloud model."""
+        chat = getattr(self, "chat", None)
+        if getattr(getattr(chat, "config", None), "use_claude", False) is True:
+            return True
+        probe = getattr(getattr(chat, "llm_client", None), "cloud_model_provider", None)
+        if not callable(probe):
+            return False
+        provider = probe(getattr(chat, "effective_model", None))
+        return isinstance(provider, str) and bool(provider)
+
+    def _check_in_to_continue(self, steps_taken: int) -> bool:
+        """Ask whether a long turn on a hosted model should keep spending.
+
+        Goes through the console's confirmation prompt, so every front-end
+        that can approve a tool can answer it. A console with nobody to ask
+        denies, and so does a prompt left unanswered: spending stops when no
+        one is watching it.
+        """
+        chat = getattr(self, "chat", None)
+        model = getattr(chat, "effective_model", None)
+        args = {
+            "steps": steps_taken,
+            "model": model if isinstance(model, str) else (self.model_id or ""),
+        }
+        approved = (
+            self.console.confirm_tool_execution(STEP_CHECK_IN_PROMPT_TOOL, args) is True
+        )
+        logger.info(
+            "Step check-in at step %d on a hosted model: %s",
+            steps_taken,
+            "continue" if approved else "stop",
+        )
+        return approved
+
+    def _plan_cap_reached(self, steps_taken: int, steps_limit: Optional[int]) -> bool:
         """Whether finishing this plan must force the final answer.
 
         The plan count alone stopped a 300-line audit after three short plans
         with most of its steps unspent, so the cap binds only once at least
         half the step budget is gone. Below that, the step budget, repetition
-        detection and timeouts still bound the turn.
+        detection and timeouts still bound the turn. With no step limit
+        (``None`` or 0) there is no budget to be half gone, so it never binds.
         """
-        if self.max_plan_iterations <= 0:
+        if not steps_limit or self.max_plan_iterations <= 0:
             return False
         if self.plan_iterations < self.max_plan_iterations:
             return False
@@ -8320,17 +8436,20 @@ Do NOT wrap conversational replies in JSON.
         messages: List[Dict],
         conversation: List[Dict],
         steps_taken: int,
-        steps_limit: int,
+        steps_limit: Optional[int],
     ) -> Optional[str]:
         """Tell the model how much of its step budget is gone, once per level.
 
         Called at the step boundary, so the notice is in context for the very
-        next model call. Returns the notice sent, or ``None``.
+        next model call. Returns the notice sent, or ``None`` — always, when
+        there is no step limit (``None`` or 0) and so no budget to report.
 
         Nothing else in the loop mentions the budget until it is already spent,
         so a turn that runs out does so without ever having had the chance to
         spend differently.
         """
+        if not steps_limit:
+            return None
         # getattr, not attribute access: an agent built via __new__ in a test
         # never ran __init__, and a missing notice must not crash a turn.
         if not getattr(self, "_budget_notices_on", False):
@@ -8366,10 +8485,10 @@ Do NOT wrap conversational replies in JSON.
             transient({"role": "user", "content": notice})
             conversation.append({"role": "user", "content": notice})
             logger.debug(
-                "Budget notice at %d step(s) left: step %d/%d",
+                "Budget notice at %d step(s) left: step %d/%s",
                 left,
                 steps_taken,
-                steps_limit,
+                describe_step_limit(steps_limit),
             )
             return notice
         return None
@@ -8602,12 +8721,25 @@ Do NOT wrap conversational replies in JSON.
         messages.recorded.clear()
         messages.append({"role": "user", "content": user_input})
 
-        # Use provided max_steps or fall back to class default
-        steps_limit = max_steps if max_steps is not None else self.max_steps
+        # Use provided max_steps or fall back to class default; None = no limit.
+        steps_limit: Optional[int] = (
+            parse_max_steps(max_steps, "max_steps")
+            if max_steps is not None
+            else self.max_steps
+        ) or None
+        step_bound = steps_limit if steps_limit is not None else math.inf
+        # With no limit, a stop that is not the step cap sets these two: what
+        # the closing call asks for, and what the user reads if it fails.
+        wrap_up_prompt: Optional[str] = None
+        stop_opener: Optional[str] = None
+        progress = TurnProgress(_PACING_TOOLS)
+        self._turn_progress = progress
+        # A threshold, not a modulus: some guards advance two steps at once.
+        next_check_in = _HOSTED_CHECK_IN_STEPS
 
         # Print initial message with max steps info
         self.console.print_processing_start(user_input, steps_limit, self.model_id)
-        logger.debug(f"Using max_steps: {steps_limit}")
+        logger.debug("Using max_steps: %s", describe_step_limit(steps_limit))
 
         prompt = f"User request: {user_input}\n\n"
 
@@ -8625,7 +8757,7 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Input prompt: {prompt[:200]}...")
 
         # Process the query in steps, allowing for multiple tool usages
-        while steps_taken < steps_limit and final_answer is None:
+        while steps_taken < step_bound and final_answer is None:
             # Cooperative cancellation: if a consumer (e.g. the Agent UI's
             # stream-timeout/disconnect cleanup) signalled cancel, stop here so
             # the producer thread is torn down rather than left running. Checked
@@ -8634,9 +8766,9 @@ Do NOT wrap conversational replies in JSON.
             cancel_event = getattr(self, "_cancel_event", None)
             if cancel_event is not None and cancel_event.is_set():
                 logger.warning(
-                    "Agent run cancelled at step %d/%d via cancel_event",
+                    "Agent run cancelled at step %d/%s via cancel_event",
                     steps_taken,
-                    steps_limit,
+                    describe_step_limit(steps_limit),
                 )
                 # Neutral wording: cancel now has several triggers (a user
                 # pressing Stop, an API client disconnecting, a stream timeout),
@@ -8660,11 +8792,52 @@ Do NOT wrap conversational replies in JSON.
             # model call sees it.
             self._announce_step_budget(messages, conversation, steps_taken, steps_limit)
 
+            # No step limit: the stall guard and, on a hosted model, a
+            # check-in stand where the budget would.
+            if steps_limit is None and steps_taken > 0:
+                idle = progress.end_step()
+                if idle >= _STALL_STEPS:
+                    logger.warning(
+                        "Stopping a turn with no step limit: %d steps in a row "
+                        "made no progress (step %d)",
+                        idle,
+                        steps_taken,
+                    )
+                    stop_opener = (
+                        f"I stopped because my last {idle} steps made no "
+                        "progress: each one's calls failed or repeated earlier "
+                        "ones, or it made none."
+                    )
+                    wrap_up_prompt = _STALL_ANSWER_PROMPT.format(idle=idle)
+                    break
+                if idle == _STALL_STEPS // 2:
+                    stall_notice = _STALL_NOTICE.format(idle=idle)
+                    transient = getattr(messages, "append_transient", messages.append)
+                    transient({"role": "user", "content": stall_notice})
+                    conversation.append({"role": "user", "content": stall_notice})
+                if steps_taken >= next_check_in and self._model_is_hosted():
+                    next_check_in = steps_taken + _HOSTED_CHECK_IN_STEPS
+                    if not self._check_in_to_continue(steps_taken):
+                        if self._console_cancelled():
+                            cancelled_by_console = True
+                            break
+                        if cancel_event is not None and cancel_event.is_set():
+                            # The cancel check at the top of the loop ends it.
+                            continue
+                        stop_opener = (
+                            f"I stopped after {steps_taken} steps because "
+                            "continuing was not approved."
+                        )
+                        wrap_up_prompt = _CHECK_IN_DECLINED_ANSWER_PROMPT.format(
+                            steps=steps_taken
+                        )
+                        break
+
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
             steps_taken += 1
             step_timer.begin_step(steps_taken)
-            logger.debug(f"Step {steps_taken}/{steps_limit}")
+            logger.debug("Step %d/%s", steps_taken, describe_step_limit(steps_limit))
             if self._context_evictor is not None:
                 from gaia.agents.base.artifacts import store_for
 
@@ -8908,12 +9081,18 @@ Do NOT wrap conversational replies in JSON.
                                     f'Answer with {{"thought": "...", "goal": "...", "answer": "..."}}'
                                 )
                             else:
+                                # No limit, no budget to quote.
+                                steps_left_note = (
+                                    f"; {steps_limit - steps_taken} of "
+                                    f"{steps_limit} steps left"
+                                    if steps_limit
+                                    else ""
+                                )
                                 completion_message = (
                                     "You have successfully completed all steps in the plan.\n"
                                     f"Task: {user_input}\n"
                                     f"Plan information:\n{plan_context_str}\n\n"
-                                    f"Plan iteration: {self.plan_iterations}; "
-                                    f"{steps_limit - steps_taken} of {steps_limit} steps left\n"
+                                    f"Plan iteration: {self.plan_iterations}{steps_left_note}\n"
                                     "Check if more work is needed:\n"
                                     "- If the task is complete and verified, provide a final answer\n"
                                     "- If critical validation/testing is needed, you may create ONE more plan\n"
@@ -9148,10 +9327,10 @@ Do NOT wrap conversational replies in JSON.
                         if stream_cut_offs > _MAX_STREAM_CUT_OFF_RETRIES:
                             logger.warning(
                                 "[WORKFLOW] Reply stream cut off %d times this "
-                                "turn; stopping (step %d/%d)",
+                                "turn; stopping (step %d/%s)",
                                 stream_cut_offs,
                                 steps_taken,
-                                steps_limit,
+                                describe_step_limit(steps_limit),
                             )
                             final_answer = e.user_message
                             break
@@ -9539,14 +9718,14 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if (
                     cut_off_continuations >= _MAX_CUT_OFF_CONTINUATIONS
-                    or steps_taken >= steps_limit
+                    or steps_taken >= step_bound
                 ):
                     logger.warning(
                         "[WORKFLOW] Reply cut off at the output-token limit "
-                        "%d time(s) this turn; stopping (step %d/%d)",
+                        "%d time(s) this turn; stopping (step %d/%s)",
                         cut_off_continuations + 1,
                         steps_taken,
-                        steps_limit,
+                        describe_step_limit(steps_limit),
                     )
                     final_answer = _CUT_OFF_FAILURE_ANSWER
                     break
@@ -10532,7 +10711,7 @@ Do NOT wrap conversational replies in JSON.
                 if (
                     last_index_pos >= 0
                     and not query_after_index
-                    and steps_taken < steps_limit - 1
+                    and steps_taken < step_bound - 1
                 ):
                     logger.debug(
                         "[WORKFLOW] Post-index answer without query — forcing query tool call: %s",
@@ -10618,19 +10797,19 @@ Do NOT wrap conversational replies in JSON.
 
                 unfinished_kind = _unfinished_answer_kind(answer_candidate)
                 can_reprompt_unfinished = (
-                    steps_taken < steps_limit - 1
+                    steps_taken < step_bound - 1
                     and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
                 )
                 if unfinished_kind and not can_reprompt_unfinished:
                     logger.warning(
                         "[WORKFLOW] Not re-prompting unfinished %s answer: re-prompt "
                         "budget or step limit reached (%d/%d re-prompts, "
-                        "step %d/%d): %s",
+                        "step %d/%s): %s",
                         unfinished_kind,
                         unfinished_answer_reprompts,
                         _MAX_UNFINISHED_ANSWER_REPROMPTS,
                         steps_taken,
-                        steps_limit,
+                        describe_step_limit(steps_limit),
                         answer_candidate[-120:],
                     )
                 if unfinished_kind == "tool_markup" and can_reprompt_unfinished:
@@ -10657,7 +10836,7 @@ Do NOT wrap conversational replies in JSON.
                 if (
                     not look_first_reprompted
                     and not tool_call_log
-                    and steps_taken < steps_limit - 1
+                    and steps_taken < step_bound - 1
                     and any(name in self._tools_registry for name in _LOOK_TOOLS)
                 ):
                     unlooked = named_workspace_paths(
@@ -10690,7 +10869,7 @@ Do NOT wrap conversational replies in JSON.
                 is_planning_text = len(answer_candidate) < 500 and any(
                     phrase in answer_candidate.lower() for phrase in _PLANNING_PHRASES
                 )
-                if is_planning_text and steps_taken < steps_limit - 1:
+                if is_planning_text and steps_taken < step_bound - 1:
                     # Inject a correction message and continue the loop to force the answer
                     logger.debug(
                         "[WORKFLOW] Blocking planning-only response as final answer: %s",
@@ -10743,7 +10922,7 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if (
                     _TOOL_ARTIFACT_PATTERN.match(answer_candidate.strip())
-                    and steps_taken < steps_limit - 1
+                    and steps_taken < step_bound - 1
                 ):
                     logger.debug(
                         "[WORKFLOW] Blocking tool-syntax artifact as final answer: %s",
@@ -10776,7 +10955,7 @@ Do NOT wrap conversational replies in JSON.
                     re.search(p, answer_candidate, re.DOTALL)
                     for p in _RAW_JSON_PATTERNS
                 )
-                if is_raw_json and steps_taken < steps_limit - 1:
+                if is_raw_json and steps_taken < step_bound - 1:
                     logger.debug(
                         "[WORKFLOW] Blocking raw-JSON hallucination as final answer: %s",
                         answer_candidate[:120],
@@ -10833,7 +11012,7 @@ Do NOT wrap conversational replies in JSON.
                 if (
                     image_outcome_recorded
                     and not image_outcome_corrected
-                    and steps_taken < steps_limit - 1
+                    and steps_taken < step_bound - 1
                     and any(
                         re.search(_p, answer_candidate, re.IGNORECASE)
                         for _p in _IMAGE_AVAILABILITY_CLAIM
@@ -10903,7 +11082,7 @@ Do NOT wrap conversational replies in JSON.
                         if f.gate not in grounding_fired
                     ]
                 )
-                if fresh and steps_taken < steps_limit - 1:
+                if fresh and steps_taken < step_bound - 1:
                     grounding_fired.update(f.gate for f in fresh)
                     logger.info(
                         "[check:grounding] %s fired at step %d",
@@ -10932,7 +11111,7 @@ Do NOT wrap conversational replies in JSON.
                         }
                     )
                 # Changed code after the last test run: ask once for the run.
-                if not verify_after_change_reprompted and steps_taken < steps_limit - 1:
+                if not verify_after_change_reprompted and steps_taken < step_bound - 1:
                     _correction = self._verify_after_change_prompt()
                     if _correction:
                         verify_after_change_reprompted = True
@@ -10952,19 +11131,19 @@ Do NOT wrap conversational replies in JSON.
                 if test_claim:
                     claim, why = test_claim
                     can_correct_claim = (
-                        steps_taken < steps_limit - 1
+                        steps_taken < step_bound - 1
                         and test_claim_corrections < _MAX_TEST_CLAIM_CORRECTIONS
                     )
                     if not can_correct_claim:
                         logger.warning(
                             "[WORKFLOW] Rejecting unsupported test claim %r (%s): "
-                            "%d/%d corrections used, step %d/%d",
+                            "%d/%d corrections used, step %d/%s",
                             claim,
                             why,
                             test_claim_corrections,
                             _MAX_TEST_CLAIM_CORRECTIONS,
                             steps_taken,
-                            steps_limit,
+                            describe_step_limit(steps_limit),
                         )
                         completion_gaps = [why + "."]
                         answer_candidate = incomplete_answer(completion_gaps)
@@ -11000,7 +11179,7 @@ Do NOT wrap conversational replies in JSON.
                 # steps_limit, which also makes the last step seal normally.
                 _cancel = getattr(self, "_cancel_event", None)
                 if (
-                    steps_taken < steps_limit
+                    steps_taken < step_bound
                     and not (_cancel is not None and _cancel.is_set())
                     and self._drain_followups(messages, conversation)
                 ):
@@ -11019,7 +11198,7 @@ Do NOT wrap conversational replies in JSON.
                 if artifact_gaps or soft_gaps:
                     if (
                         completion_corrections < _MAX_FILE_WRITE_CLAIM_REPROMPTS
-                        and steps_taken < steps_limit - 1
+                        and steps_taken < step_bound - 1
                         and any(
                             name in self._tools_registry
                             for name in (
@@ -11144,7 +11323,7 @@ Do NOT wrap conversational replies in JSON.
                 break
 
             # Check if we're at the limit and ask user if they want to continue
-            if steps_taken == steps_limit and final_answer is None:
+            if steps_taken == step_bound and final_answer is None:
                 # Show what was accomplished
                 max_steps_msg = self._generate_max_steps_message(
                     conversation, steps_taken, steps_limit
@@ -11167,6 +11346,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                         if response in ["y", "yes"]:
                             steps_limit += 50
+                            step_bound = steps_limit
                             # A new budget: its 20/10/5 notices are due again.
                             self._budget_notices_sent = set()
                             self.console.print_info(
@@ -11199,14 +11379,18 @@ Do NOT wrap conversational replies in JSON.
                 cap_answer = self._closing_answer(
                     messages,
                     conversation,
-                    _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
+                    wrap_up_prompt or _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
                     steps_taken,
                 )
             except Exception as e:  # noqa: BLE001 - the reason goes in the answer
                 logger.warning("Could not write the step-limit summary: %s", e)
                 final_answer = (
                     self._generate_max_steps_message(
-                        conversation, tool_steps, steps_limit, findings=True
+                        conversation,
+                        tool_steps,
+                        steps_limit,
+                        findings=True,
+                        opener=stop_opener,
                     ).rstrip()
                     + f"\n\nThe summary of what I found couldn't be written: {e}"
                 )
@@ -11347,7 +11531,11 @@ Do NOT wrap conversational replies in JSON.
                 if final_answer
                 else self._with_verification_scope(
                     self._generate_max_steps_message(
-                        conversation, steps_taken, steps_limit, findings=True
+                        conversation,
+                        steps_taken,
+                        steps_limit,
+                        findings=True,
+                        opener=stop_opener,
                     )
                     + (
                         "\n\n" + self._extraction_ledger.render()

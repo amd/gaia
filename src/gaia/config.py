@@ -154,6 +154,11 @@ class GaiaConfig:
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
             model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
             Takes effect on the next load; the embedding model keeps its own.
+        max_steps: Step limit per turn for every agent. ``0`` means no limit;
+            ``None`` (``gaia config set max_steps ""``) leaves each agent its
+            own default: no limit for the flagship, 50 for the others.
+            ``GAIA_AGENT_MAX_STEPS`` outranks it, and an explicit
+            ``--max-steps`` or per-request limit outranks both.
     """
 
     profile: str = "chat"
@@ -167,6 +172,7 @@ class GaiaConfig:
     lemonade_api_key_stored: bool = False
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
+    max_steps: Optional[int] = None
 
     #: Strings accepted for a boolean field, and what each means. Anything
     #: else raises — "false" silently meaning True is the exact accident this
@@ -206,6 +212,10 @@ class GaiaConfig:
             return cls._coerce_lemonade_mode(value)
         if key == "lemonade_base_url":
             return cls._coerce_lemonade_url(value)
+        if key == "max_steps":
+            if value is None or not str(value).strip():
+                return None
+            return cls._whole_number(key, value)
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -345,7 +355,9 @@ class GaiaConfig:
                         f"false (unquoted), but it is {value!r}. Fix it by hand, "
                         f"or delete the key to go back to the default."
                     )
-            if key in known and cls._is_int_field(key):
+            if key in known and (
+                cls._is_int_field(key) or (key == "max_steps" and value is not None)
+            ):
                 if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                     raise GaiaConfigError(
                         f"GAIA config at {config_file}: '{key}' must be a whole "

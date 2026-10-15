@@ -120,7 +120,7 @@ def test_a_typo_in_the_notice_switch_fails_the_turn_loudly(monkeypatch):
 # ---------------------------------------------------------- the step limit
 
 
-@pytest.mark.parametrize("bad", ["abc", "0", "-5", "1.5", " 7 x"])
+@pytest.mark.parametrize("bad", ["abc", "-1", "-5", "1.5", " 7 x"])
 def test_an_invalid_step_limit_env_raises_at_construction(monkeypatch, bad):
     monkeypatch.setenv("GAIA_AGENT_MAX_STEPS", bad)
     with pytest.raises(ValueError, match="GAIA_AGENT_MAX_STEPS"):
@@ -152,13 +152,14 @@ def test_a_per_query_limit_overrides_the_agents(monkeypatch):
 
 def test_the_flagship_limit_follows_the_same_rules(monkeypatch):
     gaia_agent = pytest.importorskip("gaia_agent.agent")
-    assert gaia_agent.flagship_max_steps() == 150
-    assert gaia_agent.GaiaAgentConfig().max_steps == 150
+    # No limit by default: 0 is the "no limit" value everywhere one is taken.
+    assert gaia_agent.flagship_max_steps() == 0
+    assert gaia_agent.GaiaAgentConfig().max_steps == 0
     assert gaia_agent.GaiaAgentConfig(max_steps=9).max_steps == 9
     monkeypatch.setenv("GAIA_AGENT_MAX_STEPS", "33")
     assert gaia_agent.GaiaAgentConfig().max_steps == 33
     monkeypatch.setenv("GAIA_AGENT_MAX_STEPS", "lots")
-    with pytest.raises(ValueError, match=r"default \(150\)"):
+    with pytest.raises(ValueError, match=r"default \(no limit\)"):
         gaia_agent.GaiaAgentConfig()
 
 

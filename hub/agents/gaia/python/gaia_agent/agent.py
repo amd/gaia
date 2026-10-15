@@ -57,7 +57,11 @@ from gaia_agent.engineering_tools import (
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 from gaia_agent_chat.profiles import get_profile_spec
 
-from gaia.agents.base.agent import default_max_steps, parse_skill_manifest
+from gaia.agents.base.agent import (
+    UNLIMITED_STEPS,
+    default_max_steps,
+    parse_skill_manifest,
+)
 from gaia.agents.base.project_map import ProjectMapMixin, is_code_repository
 from gaia.agents.base.skill_catalog import catalog_env_override
 from gaia.agents.base.skill_loader import (
@@ -150,15 +154,16 @@ def fast_env_override() -> Optional[bool]:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-#: The flagship's step limit when nothing overrides it. Desktop tasks (read nine
-#: datasheets, price a BOM, write two files) need ~60-70 steps, so the fleet's
-#: 50 ended them mid-research with nothing written. ``GAIA_AGENT_MAX_STEPS``
-#: and an explicit ``max_steps`` still win.
-FLAGSHIP_MAX_STEPS = 150
+#: The flagship's step limit when nothing overrides it: none. GAIA runs long
+#: tasks, and a fixed budget ended them mid-work. The loop's repeated-call and
+#: stall guards, Stop, and a check-in on hosted models bound a turn instead.
+#: ``GAIA_AGENT_MAX_STEPS``, the ``max_steps`` config key and an explicit
+#: ``max_steps`` still set a limit (0 means none).
+FLAGSHIP_MAX_STEPS = UNLIMITED_STEPS
 
 
 def flagship_max_steps() -> int:
-    """``GAIA_AGENT_MAX_STEPS`` if set, else :data:`FLAGSHIP_MAX_STEPS`."""
+    """``GAIA_AGENT_MAX_STEPS`` or config ``max_steps`` if set, else no limit (0)."""
     return default_max_steps(FLAGSHIP_MAX_STEPS)
 
 

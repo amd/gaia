@@ -108,11 +108,35 @@ export function isPathAccessFollowUp(
   return relative && p.endsWith(`/${a.replace(/^\.\//, '')}`);
 }
 
+/** The check-in a long turn on a hosted model sends every few hundred steps (agent.py). */
+export const STEP_CHECK_IN_TOOL = 'continue_long_turn';
+
+function stepCheckInArgs(args: unknown): { steps: string; model: string } {
+  const { steps, model } = (args ?? {}) as { steps?: unknown; model?: unknown };
+  return {
+    steps: typeof steps === 'number' ? String(steps) : 'many',
+    model: typeof model === 'string' && model ? model : 'a hosted model',
+  };
+}
+
+/** The check-in's heading. */
+export function stepCheckInTitle(args: unknown): string {
+  return `Keep going after ${stepCheckInArgs(args).steps} steps?`;
+}
+
+/** What the check-in asks, and what each answer does. */
+export function stepCheckInQuestion(args: unknown): string {
+  const { steps, model } = stepCheckInArgs(args);
+  return `This task has run ${steps} steps on ${model}, which is billed per use. `
+    + 'Keep going, or stop and get a summary of what GAIA has so far.';
+}
+
 export function requiresFreshConsent(tool: string | undefined): boolean {
   return tool === 'share_engineering_context'
     || tool === 'append_engineering_context'
     || tool === 'approve_engineering_code'
-    || tool === PATH_ACCESS_TOOL;
+    || tool === PATH_ACCESS_TOOL
+    || tool === STEP_CHECK_IN_TOOL;
 }
 
 /**

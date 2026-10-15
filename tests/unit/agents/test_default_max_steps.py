@@ -7,14 +7,19 @@
 reasoning/tool steps an agent may take. Every agent config inherits it via
 ``field(default_factory=default_max_steps)``, so these tests pin the
 resolution rules: the built-in default, the ``GAIA_AGENT_MAX_STEPS`` runtime
-override, and loud failure on a typo'd value (no silent capping).
+override (0 = no limit), and loud failure on a typo'd value (no silent
+capping).
 """
 
 import os
 import unittest
 from unittest import mock
 
-from gaia.agents.base.agent import DEFAULT_MAX_STEPS, default_max_steps
+from gaia.agents.base.agent import (
+    DEFAULT_MAX_STEPS,
+    UNLIMITED_STEPS,
+    default_max_steps,
+)
 
 
 class TestDefaultMaxSteps(unittest.TestCase):
@@ -36,8 +41,12 @@ class TestDefaultMaxSteps(unittest.TestCase):
             with self.assertRaises(ValueError):
                 default_max_steps()
 
-    def test_non_positive_raises_loudly(self):
-        for bad in ("0", "-5"):
+    def test_zero_means_no_limit(self):
+        with mock.patch.dict(os.environ, {"GAIA_AGENT_MAX_STEPS": "0"}):
+            self.assertEqual(default_max_steps(), UNLIMITED_STEPS)
+
+    def test_negative_raises_loudly(self):
+        for bad in ("-1", "-5"):
             with mock.patch.dict(os.environ, {"GAIA_AGENT_MAX_STEPS": bad}):
                 with self.assertRaises(ValueError):
                     default_max_steps()

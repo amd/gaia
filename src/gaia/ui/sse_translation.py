@@ -333,7 +333,8 @@ class CanonicalTranslator:
     def _on_step(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         step = event.get("step")
         total = event.get("total")
-        msg = f"Step {step}/{total}" if step and total else "Step"
+        # No total: the turn has no step limit, so the count stands alone.
+        msg = f"Step {step}/{total}" if step and total else f"Step {step or ''}".strip()
         # The step counter measures the harness, never the work.
         return self._debug_status(msg)
 

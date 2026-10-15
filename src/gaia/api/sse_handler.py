@@ -243,7 +243,11 @@ class SSEOutputHandler(OutputHandler):
     def print_completion(self, steps_taken: int, steps_limit: int):
         """Print completion summary."""
         # Infer status from steps_taken vs steps_limit
-        status = "success" if steps_taken < steps_limit else "incomplete"
+        status = (
+            "success"
+            if steps_limit is None or steps_taken < steps_limit
+            else "incomplete"
+        )
         self._add_event(
             "completion",
             {"steps_taken": steps_taken, "steps_limit": steps_limit, "status": status},

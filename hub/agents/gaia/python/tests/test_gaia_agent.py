@@ -242,15 +242,15 @@ def test_passing_both_a_config_and_kwargs_is_refused():
     assert "not both" in message
 
 
-def test_flagship_step_limit_defaults_to_150(monkeypatch):
-    """50 steps ended a nine-datasheet BOM task mid-research (kw-02)."""
+def test_flagship_has_no_step_limit_by_default(monkeypatch):
+    """GAIA runs long tasks; a fixed budget ended them mid-work."""
     from gaia_agent.agent import FLAGSHIP_MAX_STEPS
 
-    from gaia.agents.base.agent import DEFAULT_MAX_STEPS
+    from gaia.agents.base.agent import DEFAULT_MAX_STEPS, UNLIMITED_STEPS
 
     monkeypatch.delenv("GAIA_AGENT_MAX_STEPS", raising=False)
-    assert FLAGSHIP_MAX_STEPS == 150
-    assert GaiaAgentConfig().max_steps == 150
+    assert FLAGSHIP_MAX_STEPS == UNLIMITED_STEPS == 0
+    assert GaiaAgentConfig().max_steps == UNLIMITED_STEPS
     assert DEFAULT_MAX_STEPS == 50  # other agents keep the fleet default
 
 
@@ -274,7 +274,7 @@ def test_an_unset_step_limit_resolves_to_the_flagship_default(monkeypatch):
     monkeypatch.setattr(ChatAgent, "__init__", _capture)
     GaiaAgent(config=GaiaAgentConfig(max_steps=None))
 
-    assert seen["max_steps"] == 150
+    assert seen["max_steps"] == 0
 
 
 def test_the_readiness_probe_takes_no_request_parameters():

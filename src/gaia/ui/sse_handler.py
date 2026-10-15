@@ -628,12 +628,13 @@ class SSEOutputHandler(OutputHandler):
             }
         )
 
-    def print_step_header(self, step_num: int, step_limit: int):
+    def print_step_header(self, step_num: int, step_limit: Optional[int]):
         self._step_count = step_num
         self._emit(
             {
                 "type": "step",
                 "step": step_num,
+                # null: the turn has no step limit, so show "Step N" alone.
                 "total": step_limit,
                 "status": "started",
                 "channel": DEBUG_CHANNEL,

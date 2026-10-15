@@ -755,7 +755,7 @@ class AttachDocumentRequest(BaseModel):
     | Event type | Fields | Description |
     |------------|--------|-------------|
     | `thinking` | `content` (string) | Agent reasoning or progress message. Emitted when the agent starts processing, thinks through a problem, or begins a long-running operation. |
-    | `step` | `step` (int), `total` (int), `status` (string) | Agent step progress. `step` is the current step number, `total` is the step limit, and `status` is `"started"`. |
+    | `step` | `step` (int), `total` (int or null), `status` (string) | Agent step progress. `step` is the current step number, `total` is the step limit — `null` when the turn has none, the flagship's default — and `status` is `"started"`. |
     | `status` | `status` (string), `message` (string) | General status update. `status` is one of `"working"`, `"complete"`, `"warning"`, or `"info"`. May also include `steps` (int) and `elapsed` (number) when `status` is `"complete"`. |
     | `plan` | `steps` (string[]), `current_step` (int or null) | Agent execution plan. Each entry in `steps` is a human-readable description of a planned action. |
 
