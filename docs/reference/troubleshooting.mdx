@@ -112,6 +112,22 @@ icon: "bug"
     [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
   </Accordion>
 
+  <Accordion title="Connecting a cloud provider fails while GAIA uses my Lemonade" icon="plug-circle-xmark">
+    While GAIA uses a Lemonade you run, it never changes that server's setup, so it
+    won't register Fireworks AI or the AMD LLM Gateway there or hand it a key. The
+    error says your server has no working provider. Set the provider up on your
+    server yourself, with its key (`LEMONADE_FIREWORKS_API_KEY` or
+    `LEMONADE_AMD_API_KEY`) in your server's environment, then connect again. Or go
+    back to GAIA's own server with `gaia config set lemonade_mode gaia`.
+  </Accordion>
+
+  <Accordion title="Use GAIA's own says GAIA's server is not installed" icon="box-open">
+    Switching back from your Lemonade needs GAIA's own server, and on this PC it was
+    never installed (or only partly). The switch is refused and GAIA keeps using
+    yours. Run `gaia init --gaia-lemonade` to install GAIA's own and switch in one
+    step.
+  </Accordion>
+
   <Accordion title="gaia init can't download or start Lemonade Server" icon="cloud-slash">
     `gaia init` downloads GAIA's own Lemonade Server from GitHub into `~/.gaia/lemonade`
     and starts it on a private port. It needs no admin rights and never uses a package

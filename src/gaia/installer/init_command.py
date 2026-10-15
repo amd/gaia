@@ -22,7 +22,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional
 from urllib.parse import urlparse
 
 # Rich imports for better CLI formatting
@@ -288,6 +288,8 @@ class ModelLoad:
     size_gb: Optional[float]
     loaded: bool
     error: Optional[str] = None
+    #: Whether the server already has it; None when not checked.
+    downloaded: Optional[bool] = None
 
 
 @dataclass
@@ -634,18 +636,25 @@ def check_setup_status(
         model_ids = [m for m in model_ids if is_embedding_model_id(m)]
 
     reasons = []
+    downloaded: Dict[str, bool] = {}
     for model_id in model_ids:
         try:
             available = client.check_model_available(model_id)
         except LemonadeClientError as e:
             reasons.append(f"Could not check model '{model_id}': {e}")
             continue
+        downloaded[model_id] = bool(available)
         if not available:
             reasons.append(f"Model '{model_id}' is not downloaded")
 
     if reasons:
-        # Sizes let a caller say what the download will cost before it starts.
-        models = [_describe_model(client, m) for m in model_ids] if load else []
+        # Sizes let a caller say what the download will cost before it starts;
+        # ``downloaded`` lets it leave out models the server already has.
+        models = (
+            [_describe_model(client, m, downloaded.get(m)) for m in model_ids]
+            if load
+            else []
+        )
         return SetupStatus(ready=False, reasons=reasons, stage="setup", models=models)
     if not load:
         return SetupStatus(ready=True, reasons=[])
@@ -667,16 +676,18 @@ def check_setup_status(
     return SetupStatus(ready=True, reasons=[], models=models)
 
 
-def _describe_model(client, model_id: str) -> "ModelLoad":
-    """A not-yet-downloaded model and its download size."""
+def _describe_model(
+    client, model_id: str, downloaded: Optional[bool] = None
+) -> "ModelLoad":
+    """A model setup needs, its download size, and whether the server has it."""
     from gaia.llm.lemonade_client import LemonadeClientError
 
     role = "embedding" if is_embedding_model_id(model_id) else "chat"
     try:
         size_gb = client.get_model_info(model_id)["size_gb"]
     except LemonadeClientError as e:
-        return ModelLoad(model_id, role, None, False, str(e))
-    return ModelLoad(model_id, role, size_gb, False)
+        return ModelLoad(model_id, role, None, False, str(e), downloaded)
+    return ModelLoad(model_id, role, size_gb, False, downloaded=downloaded)
 
 
 def _load_model_once(client, model_id: str) -> "ModelLoad":
@@ -828,6 +839,8 @@ class InitCommand:
         self.lemonade_url = lemonade_url
         self.gaia_lemonade = gaia_lemonade
         self._chose_now = False
+        # GAIA's own was chosen; saved only once that server is running.
+        self._gaia_choice_pending = False
         self.profile = profile.lower()
         # This machine's chat model, resolved once so download and verify agree.
         self._chat_choice: Optional[ChatModelChoice] = None
@@ -1299,8 +1312,8 @@ class InitCommand:
 
         try:
             if self.gaia_lemonade:
-                choice.use_gaia()
-                self._print_success("Using GAIA's own Lemonade Server (saved).")
+                self._gaia_choice_pending = True
+                self._print("   Using GAIA's own Lemonade Server.")
             elif self.lemonade_url:
                 if not self._adopt_external(self.lemonade_url):
                     return False
@@ -1313,7 +1326,12 @@ class InitCommand:
             return False
         if not self._tell_daemon():
             return False
-        self._lemonade_base_url = configured_lemonade_url()
+        # GAIA's own, chosen but not yet running, wins over a saved server;
+        # LEMONADE_BASE_URL still wins over both.
+        if self._gaia_choice_pending and choice.env_override_note() is None:
+            self._lemonade_base_url = None
+        else:
+            self._lemonade_base_url = configured_lemonade_url()
         if self._lemonade_base_url:
             hostname = urlparse(self._lemonade_base_url).hostname or "localhost"
             if hostname not in ("localhost", "127.0.0.1", "::1"):
@@ -1325,7 +1343,7 @@ class InitCommand:
         from gaia.daemon.errors import DaemonError
         from gaia.llm.lemonade_choice import apply_to_daemon
 
-        if not (self.lemonade_url or self.gaia_lemonade or self._chose_now):
+        if not (self.lemonade_url or self._chose_now) or self._gaia_choice_pending:
             return True
         try:
             apply_to_daemon()
@@ -1372,8 +1390,8 @@ class InitCommand:
         self._chose_now = True
         if self._prompt_yes_no("Use your Lemonade Server?", default=True):
             return self._adopt_external(found.url)
-        choice.use_gaia()
-        self._print("   Setting up GAIA's own Lemonade Server (saved).")
+        self._gaia_choice_pending = True
+        self._print("   Setting up GAIA's own Lemonade Server.")
         return True
 
     def _adopt_external(self, url: str) -> bool:
@@ -1505,6 +1523,13 @@ class InitCommand:
         self._print_success(
             f"Lemonade Server v{status.version} running on port {status.port}"
         )
+        if self._gaia_choice_pending:
+            # Saved only now: until it runs, "GAIA's own" would name nothing.
+            from gaia.llm.lemonade_choice import use_gaia
+
+            use_gaia()
+            self._gaia_choice_pending = False
+            self._print_success("Saved: GAIA uses its own Lemonade Server.")
         self._hand_server_to_daemon()
         return True
 
@@ -1889,13 +1914,16 @@ class InitCommand:
                 min_ctx = resolve_ctx_size(
                     model=model_id, device="npu" if self.profile == "npu" else "gpu"
                 )
-                # A user's own server keeps its other models and saved options.
+                # A user's own server keeps its models and saved options; one
+                # saved with "Use mine" is never unloaded either.
                 users_server = bool(self._lemonade_base_url)
                 # Unload just this model so its recipe_options are saved; the
                 # embedder stays loaded instead of being reloaded after it.
                 # Wait until it is gone, or the load's free-memory check would
                 # count its memory as neither free nor its own.
-                if client.check_model_loaded(model_id):
+                if not self._uses_saved_server() and client.check_model_loaded(
+                    model_id
+                ):
                     client.unload_model(model_id)
                     client._wait_model_state(
                         model_id,

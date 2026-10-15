@@ -264,10 +264,14 @@ output; `gaia init` does the same work from a terminal.
 
 If this PC already runs a Lemonade Server (v10.9.0 or newer) on its default
 port, the Lemonade row offers it instead of step 1: press `f` to use it, or `g`
-to install GAIA's own. Using yours keeps one server and one copy of each model
+to install GAIA's own (saved once GAIA's server is installed and running). Using yours keeps one server and one copy of each model
 on the PC. A server that needs an API key shows the `gaia lemonade connect`
-command that saves the key. The choice is remembered. To switch back, run
-`gaia config set lemonade_mode gaia`. See
+command that saves the key. The choice is remembered. GAIA never changes your
+server's setup: it doesn't register cloud providers or hand it keys, and the
+`/provider` panel uses a provider only if your server already has it. Setup
+downloads only the models your server lacks. To switch
+back, run `gaia config set lemonade_mode gaia` (it's refused until GAIA's own
+server is installed; `gaia init --gaia-lemonade` does both). See
 [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
 
 When setup finishes, the gate checks the models by **loading** them once — the

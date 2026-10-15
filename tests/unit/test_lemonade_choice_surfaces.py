@@ -220,7 +220,12 @@ class TestAgentUiRouter:
         )
         assert r.status_code == 403
 
-    def test_back_to_gaias_own(self, client):
+    def test_back_to_gaias_own(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
+            lambda self: True,
+        )
+        monkeypatch.setattr("gaia.daemon.client.ensure_lemonade", lambda: {})
         _save(lemonade_mode="external", lemonade_base_url=USER_URL)
         r = client.post("/api/lemonade/target", json={"mode": "gaia"}, headers=self.H)
         assert r.status_code == 200
@@ -233,7 +238,8 @@ class TestAgentUiRouter:
         self.applied.side_effect = DaemonError("boom")
         r = client.post("/api/lemonade/target", json={"mode": "gaia"}, headers=self.H)
         assert r.status_code == 502
-        assert "did not switch" in r.json()["detail"]
+        assert "could not switch" in r.json()["detail"]
+        assert GaiaConfig.load().lemonade_mode is None
 
 
 # ---------------------------------------------------------------------------
@@ -276,13 +282,14 @@ class TestInit:
         assert cmd._lemonade_base_url == USER_URL
         assert GaiaConfig.load().lemonade_mode == "external"
 
-    def test_interactive_no_saves_gaia(self, fresh, monkeypatch):
+    def test_interactive_no_saves_gaia_only_once_it_runs(self, fresh, monkeypatch):
         monkeypatch.setattr(choice, "detect_running_lemonade", lambda: _ok())
         cmd = self._cmd()
         monkeypatch.setattr(cmd, "_prompt_yes_no", lambda *a, **k: False)
         assert cmd._choose_lemonade() is True
-        assert GaiaConfig.load().lemonade_mode == "gaia"
+        assert GaiaConfig.load().lemonade_mode is None
         assert cmd._lemonade_base_url is None
+        assert cmd._gaia_choice_pending is True
 
     def test_no_offer_once_gaias_own_is_installed(self, monkeypatch):
         monkeypatch.setattr(
@@ -307,10 +314,13 @@ class TestInit:
         assert any("v10.2.0" in line and "v10.9.0" in line for line in cmd._printed)
         assert GaiaConfig.load().lemonade_mode is None
 
-    def test_explicit_gaia_records_the_choice(self):
+    def test_explicit_gaia_waits_for_the_server_before_saving(self):
+        _save(lemonade_mode="external", lemonade_base_url=USER_URL)
         cmd = self._cmd(yes=True, gaia_lemonade=True)
         assert cmd._choose_lemonade() is True
-        assert GaiaConfig.load().lemonade_mode == "gaia"
+        assert GaiaConfig.load().lemonade_mode == "external"
+        # Setup installs GAIA's own, not the user's server it would check.
+        assert cmd._lemonade_base_url is None
 
     def test_both_flags_conflict(self):
         from gaia.installer.init_command import InitCommand
@@ -319,7 +329,7 @@ class TestInit:
             InitCommand(lemonade_url=USER_URL, gaia_lemonade=True)
 
     def test_init_does_not_clobber_the_users_server(self):
-        """No global unload and no saved per-model options on someone else's server."""
+        """No unload and no saved per-model options on someone else's server."""
         _save(lemonade_mode="external", lemonade_base_url=USER_URL)
         cmd = self._cmd(yes=True)
         cmd.profile = "chat"
@@ -327,7 +337,7 @@ class TestInit:
         client.check_model_loaded.return_value = True
         client.list_models.return_value = {"data": []}
         cmd._test_model_inference(client, "Gemma-4-E4B-it-GGUF")
-        client.unload_model.assert_called_once_with("Gemma-4-E4B-it-GGUF")
+        client.unload_model.assert_not_called()
         assert client.load_model.call_args.kwargs["save_options"] is False
 
 
@@ -345,6 +355,11 @@ class TestConfigSet:
         )
 
     def test_back_to_gaia_tells_the_daemon(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
+            lambda self: True,
+        )
+        monkeypatch.setattr("gaia.daemon.client.ensure_lemonade", lambda: {})
         _save(lemonade_mode="external", lemonade_base_url=USER_URL)
         applied = mock.Mock(return_value={"action": "starting_gaia_lemonade"})
         monkeypatch.setattr(choice, "apply_to_daemon", applied)
@@ -391,28 +406,52 @@ class TestInitReviewRegressions:
         assert seen and all(k is None for k in seen)
         assert choice.API_KEY_SECRET_NAME not in keyring
 
-    def test_an_explicit_choice_tells_the_daemon(self, monkeypatch):
+    def test_an_explicit_choice_tells_the_daemon(self, monkeypatch, keyring):
         applied = mock.Mock(return_value=None)
         monkeypatch.setattr(choice, "apply_to_daemon", applied)
-        assert self._cmd(yes=True, gaia_lemonade=True)._choose_lemonade() is True
+        monkeypatch.setattr(choice, "probe", lambda url, key=None, **k: _ok())
+        cmd = self._cmd(yes=True, lemonade_url="http://localhost:13305")
+        assert cmd._choose_lemonade() is True
         applied.assert_called_once()
 
-    def test_a_daemon_that_will_not_switch_fails_init(self, monkeypatch):
+    def test_a_daemon_that_will_not_switch_fails_init(self, monkeypatch, keyring):
         from gaia.daemon.errors import DaemonError
 
         monkeypatch.setattr(
             choice, "apply_to_daemon", mock.Mock(side_effect=DaemonError("stuck"))
         )
-        cmd = self._cmd(yes=True, gaia_lemonade=True)
+        monkeypatch.setattr(choice, "probe", lambda url, key=None, **k: _ok())
+        cmd = self._cmd(yes=True, lemonade_url="http://localhost:13305")
         assert cmd._choose_lemonade() is False
         assert any("did not switch" in line for line in cmd._printed)
 
     def test_gaia_lemonade_flag_repairs_a_broken_setting(self, monkeypatch):
         _save(lemonade_mode="external")  # no URL: unusable
-        monkeypatch.setattr(choice, "apply_to_daemon", lambda: None)
         cmd = self._cmd(yes=True, gaia_lemonade=True)
         assert cmd._choose_lemonade() is True
-        assert GaiaConfig.load().lemonade_mode == "gaia"
+        assert cmd._lemonade_base_url is None
+
+    @pytest.mark.parametrize("starts", [True, False])
+    def test_gaias_own_is_saved_only_once_it_runs(self, monkeypatch, starts):
+        from gaia.llm import lemonade_embedded as emb
+
+        _save(lemonade_mode="external", lemonade_base_url=USER_URL)
+        cmd = self._cmd(yes=True, gaia_lemonade=True)
+        assert cmd._choose_lemonade() is True
+        embedded = mock.Mock()
+        embedded.status.return_value = mock.Mock(
+            unresponsive_pid=None, running=False, version="1"
+        )
+        embedded.version = "1"
+        embedded.is_installed.return_value = True
+        if starts:
+            embedded.start.return_value = mock.Mock(version="1", port=1)
+        else:
+            embedded.start.side_effect = emb.EmbeddedLemonadeError("would not start")
+        monkeypatch.setattr(emb, "EmbeddedLemonade", lambda **k: embedded)
+        monkeypatch.setattr(cmd, "_hand_server_to_daemon", lambda: None)
+        assert cmd._start_embedded_server() is starts
+        assert GaiaConfig.load().lemonade_mode == ("gaia" if starts else "external")
 
     def test_force_models_never_deletes_from_the_users_server(self, monkeypatch):
         _save(lemonade_mode="external", lemonade_base_url=USER_URL)

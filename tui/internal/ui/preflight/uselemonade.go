@@ -17,8 +17,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
@@ -189,16 +191,45 @@ func (l localRunner) useRunningLemonade(ctx context.Context) FixResult {
 	return FixResult{Note: "GAIA now uses your Lemonade at " + r.URL + "."}
 }
 
-// useGAIALemonade records that the user wants GAIA's own server. An unset
-// mode already behaves as gaia, so no running daemon needs telling.
+// declinedRunningLemonade is set when the user answered the offer with `g`.
+// The answer is held here, not saved: until GAIA's own server is installed,
+// a saved "gaia" would name a server that does not exist, and the default
+// port would answer with the user's server instead.
+var declinedRunningLemonade atomic.Bool
+
+// useGAIALemonade answers the offer with GAIA's own server. Nothing is saved:
+// setup saves the choice once GAIA's server is installed and running.
 func (l localRunner) useGAIALemonade() FixResult {
-	path, err := writeConfigKeys(map[string]any{"lemonade_mode": lemonade.ModeGAIA})
-	if err != nil {
-		return FixResult{Err: err, Diagnosis: Diagnosis{
-			Cause:  "GAIA could not save the choice: " + err.Error() + ".",
-			Remedy: "Fix the file, then press r.",
-			Where:  path,
-		}}
+	declinedRunningLemonade.Store(true)
+	return FixResult{Note: "GAIA will install its own Lemonade. Press f to set it up."}
+}
+
+// awaitsGAIALemonade reports whether GAIA's own server is wanted but not yet
+// installed: chosen with `g` this session, or saved as "gaia" earlier. Then
+// a Lemonade answering on a standard port is someone else's, never GAIA's.
+func awaitsGAIALemonade(choice lemonade.Choice) bool {
+	wanted := declinedRunningLemonade.Load() || choice.Mode == lemonade.ModeGAIA
+	return wanted &&
+		strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv)) == "" &&
+		!lemonade.EmbeddedInstalled() &&
+		readEmbeddedLemonade() == nil
+}
+
+// gaiaLemonadeMissingRow is the Lemonade row while GAIA's own server is wanted
+// but not installed. It probes no port, so another server can't pass for it.
+func gaiaLemonadeMissingRow(row Row) Row {
+	row.State = StateFailed
+	row.Disposition = status.DispositionHalt
+	row.FirstRun = true
+	row.Line = "GAIA's own not installed yet"
+	row.Step = installServerStep
+	row.Detail = "You chose GAIA's own Lemonade Server. Setup installs it privately for GAIA; " +
+		"another Lemonade running on this PC is not used."
+	row.Fix = FixInstallServer
+	row.Remedy = Remedy{
+		Action:  "Press f to install it, or run this in a terminal, then press r.",
+		Command: gaiainit.GAIAServerOnlyCommand(),
+		Where:   lemonadeDocs,
 	}
-	return FixResult{Note: "GAIA will use its own Lemonade."}
+	return row
 }

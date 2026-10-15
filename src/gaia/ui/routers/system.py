@@ -10,7 +10,7 @@ import shutil
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -477,6 +477,28 @@ def _probe_ok(probe: str) -> None:
     _last_probe_warning.pop(probe, None)
 
 
+def _loaded_chat_entry(
+    health: Dict[str, Any],
+    loaded: List[Dict[str, Any]],
+    expected: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """The loaded chat model: the expected one, else the root's, else the first.
+
+    The root ``model_loaded`` names the most recent load, which on a shared
+    server is often a speech or embedding model; those never count.
+    """
+    from gaia.llm.model_server_info import is_chat_model_entry
+
+    chat = [m for m in loaded if is_chat_model_entry(m)]
+    for wanted in (expected, health.get("model_loaded")):
+        if not wanted:
+            continue
+        for m in chat:
+            if _norm_model_id(m.get("model_name") or "") == _norm_model_id(wanted):
+                return m
+    return chat[0] if chat else None
+
+
 @router.get("/api/system/status", response_model=SystemStatus)
 async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
@@ -543,60 +565,39 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
             if health_resp.status_code == 200:
                 status.lemonade_running = True
                 health_data = health_resp.json()
-                status.model_loaded = health_data.get("model_loaded") or None
                 status.lemonade_version = health_data.get("version")
-                # The root field names the most recent load, which is often the
-                # embedder; that is never the chat model, so fall back below.
-                if status.model_loaded and any(
-                    m.get("type") == "embedding"
-                    and (m.get("model_name") or "").lower()
-                    == status.model_loaded.lower()
-                    for m in health_data.get("all_models_loaded", [])
-                ):
+                loaded_models = [
+                    m
+                    for m in health_data.get("all_models_loaded") or []
+                    if isinstance(m, dict)
+                ]
+                if any(m.get("type") == "embedding" for m in loaded_models):
                     status.embedding_model_loaded = True
-                    status.model_loaded = None
+                chat_entry = _loaded_chat_entry(
+                    health_data, loaded_models, status.default_model_name
+                )
+                if chat_entry is not None:
+                    status.model_loaded = chat_entry.get("model_name") or None
+                    status.model_device = chat_entry.get("device")
+                    # recipe_options.ctx_size is a config echo, not a
+                    # measurement: clamp it to the model's real window (#2992).
+                    ctx = (chat_entry.get("recipe_options") or {}).get("ctx_size")
+                    # A cloud entry's ctx_size is a 4096 placeholder, not
+                    # the provider's window: leave it unknown, never "too small".
+                    if chat_entry.get("recipe") == "cloud":
+                        ctx = None
+                    if ctx is not None:
+                        status.model_context_size = resolve_effective_ctx_size(
+                            ctx, chat_entry.get("max_context_window")
+                        )
+                elif not loaded_models:
+                    # Older Lemonade names the model only at the root.
+                    status.model_loaded = health_data.get("model_loaded") or None
 
-                # Extract device info AND actual loaded context size from
-                # all_models_loaded. Some Lemonade versions omit the root-level
-                # model_loaded field and only expose the list, so when the root
-                # field is absent we fall back to the first non-embedding entry.
-                # Use case-insensitive match in case Lemonade normalises the name.
-                loaded_lower = (status.model_loaded or "").lower()
-                _llm_found = False
-                for m in health_data.get("all_models_loaded", []):
-                    if m.get("type") == "embedding":
-                        status.embedding_model_loaded = True
-                    else:
-                        m_name = m.get("model_name", "")
-                        # Match by name when root field was present; otherwise
-                        # take the first LLM entry as the fallback.
-                        is_match = bool(loaded_lower) and m_name.lower() == loaded_lower
-                        is_fallback = not loaded_lower
-                        if (is_match or is_fallback) and not _llm_found:
-                            if not status.model_loaded:
-                                status.model_loaded = m_name
-                            status.model_device = m.get("device")
-                            # Actual loaded context size (preferred over catalog
-                            # default) — clamped against the model's real
-                            # max_context_window (#2992). recipe_options.ctx_size
-                            # is a config echo, not a measurement: Lemonade can
-                            # report the ctx_size it was ASKED for even after
-                            # silently capping it lower, which without this
-                            # clamp made the UI report a different (higher, wrong)
-                            # context than the CLI for the same running server.
-                            ctx = m.get("recipe_options", {}).get("ctx_size")
-                            # A cloud entry's ctx_size is a 4096 placeholder, not
-                            # the provider's window: leave it unknown, never "too small".
-                            if m.get("recipe") == "cloud":
-                                ctx = None
-                            if ctx is not None:
-                                status.model_context_size = resolve_effective_ctx_size(
-                                    ctx, m.get("max_context_window")
-                                )
-                            _llm_found = True  # take only the first matching LLM
-
-                # Fallback: older Lemonade versions expose context_size at root level
-                if status.model_context_size is None:
+                # Fallback: older Lemonade versions expose context_size at root
+                # level. A newer one's root describes its last load, which may
+                # be a speech or embedding model, not the chat model.
+                if status.model_context_size is None and not loaded_models:
                     legacy_ctx = health_data.get("context_size")
                     if legacy_ctx is not None:
                         status.model_context_size = legacy_ctx
@@ -612,7 +613,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             # provide it (e.g. model not yet fully loaded) —
                             # clamped the same way as the health-derived value
                             # above.
-                            if status.model_context_size is None:
+                            if status.model_context_size is None and not (
+                                chat_entry and chat_entry.get("recipe") == "cloud"
+                            ):
                                 ctx = m.get("recipe_options", {}).get("ctx_size")
                                 if ctx is not None:
                                     status.model_context_size = (

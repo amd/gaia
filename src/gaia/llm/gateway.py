@@ -459,8 +459,13 @@ class GatewayManager:
         timeout: int = _REQUEST_TIMEOUT,
         redact: bool = False,
     ) -> Dict[str, Any]:
+        from gaia.llm.lemonade_choice import setup_change_refusal
+
         base_url = self.base_url
         url = f"{base_url}/{path.lstrip('/')}"
+        refusal = setup_change_refusal(url, method, payload)
+        if refusal:
+            raise GatewayError(refusal)
         self.log.debug(f"{method} {url}" + ("" if redact else f" {payload or ''}"))
         try:
             response = requests.request(
@@ -729,8 +734,22 @@ class GatewayManager:
         key: it stores one without validating it, so a revoked token reports
         authenticated and discovers nothing. Reporting that as success sends the
         caller looking for a missing model instead of an expired key.
+
+        Raises:
+            GatewayError: GAIA uses the user's own server and its gateway
+                provider isn't working; GAIA hands that server no token.
         """
+        from gaia.llm.lemonade_choice import is_users_server
+
         status = self.status()
+        if is_users_server(self.base_url) and not (
+            status.authenticated and status.models_discovered
+        ):
+            from gaia.llm.cloud_keys import users_server_provider_message
+
+            raise GatewayError(
+                users_server_provider_message(self.base_url, GATEWAY_PROVIDER)
+            )
         if not status.installed:
             return False
         if status.authenticated:

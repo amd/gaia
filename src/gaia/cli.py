@@ -6450,14 +6450,18 @@ def _set_lemonade_config(key, value, config_file, path) -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+    previous_mode = None
+    switching_to_gaia = False
     try:
         if key == "lemonade_mode":
+            previous_mode = choice.saved_mode()
             mode = GaiaConfig._coerce(key, value)
             if mode is None:
                 raise GaiaConfigError(
                     "lemonade_mode can't be empty: use 'gaia' or 'external'."
                 )
             choice.set_mode(mode)
+            switching_to_gaia = mode == choice.MODE_GAIA
         elif key == "lemonade_base_url":
             choice.set_url(value)
         else:
@@ -6468,9 +6472,15 @@ def _set_lemonade_config(key, value, config_file, path) -> None:
     except (choice.LemonadeChoiceError, GaiaConfigError) as e:
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
+    # Applied before "Set" is printed: a failed switch to GAIA's own is undone.
+    applied = (
+        _apply_lemonade_choice_to_daemon(restore_mode=previous_mode)
+        if switching_to_gaia
+        else _apply_lemonade_choice_to_daemon()
+    )
     print(f"✅ Set {key} = {GaiaConfig.load().get(key)}")
     print(f"   Saved to {config_file}")
-    _apply_lemonade_choice_to_daemon()
+    _print_lemonade_switch(applied)
 
 
 def _print_gateway_models(models, state):
@@ -9154,16 +9164,36 @@ def handle_lemonade_command(args):
     sys.exit(1)
 
 
-def _apply_lemonade_choice_to_daemon() -> None:
-    """Tell a running daemon about a changed Lemonade choice, loudly on failure."""
+_KEEP_SAVED = object()
+
+
+def _apply_lemonade_choice_to_daemon(restore_mode=_KEEP_SAVED):
+    """Tell a running daemon about a changed Lemonade choice, loudly on failure.
+
+    With *restore_mode* (a switch to GAIA's own), it also waits for GAIA's
+    server to answer; if either fails that mode is saved back, so the setting
+    never claims a switch that did not happen.
+    """
     from gaia.daemon.errors import DaemonError
-    from gaia.llm.lemonade_choice import apply_to_daemon
+    from gaia.llm.lemonade_choice import apply_gaia_switch, apply_to_daemon
 
     try:
-        applied = apply_to_daemon()
+        if restore_mode is _KEEP_SAVED:
+            return apply_to_daemon()
+        return apply_gaia_switch(restore_mode)
     except DaemonError as e:
-        print(f"❌ Saved, but the running GAIA daemon did not switch: {e}")
+        if restore_mode is _KEEP_SAVED:
+            print(f"❌ Saved, but the running GAIA daemon did not switch: {e}")
+        else:
+            print(
+                f"❌ GAIA could not switch to its own Lemonade Server: {e} "
+                "Nothing was changed."
+            )
         sys.exit(1)
+
+
+def _print_lemonade_switch(applied) -> None:
+    """Say what a daemon did for a changed Lemonade choice."""
     from gaia.llm.lemonade_choice import env_override_note
 
     note = env_override_note()
@@ -9253,7 +9283,7 @@ def handle_lemonade_choice_command(args):
         print("   model there and loads its models there; it does not change your")
         print("   server's settings.")
         print("   Back to GAIA's own: gaia config set lemonade_mode gaia")
-        _apply_lemonade_choice_to_daemon()
+        _print_lemonade_switch(_apply_lemonade_choice_to_daemon())
     except (choice.LemonadeChoiceError, GaiaConfigError) as e:
         print(f"❌ {e}")
         sys.exit(1)

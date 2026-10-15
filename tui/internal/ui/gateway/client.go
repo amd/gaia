@@ -157,6 +157,9 @@ func (c *Client) do(method, path string, payload any, out any) error {
 		body = bytes.NewReader(nil)
 	}
 
+	if err := lemonade.RefuseRequest(method, path); err != nil {
+		return err
+	}
 	base, err := c.target()
 	if err != nil {
 		return err
@@ -328,6 +331,9 @@ func (r installResult) foundNone() bool {
 // Install registers the gateway with Lemonade as a cloud provider.
 func (c *Client) Install(baseURL string) (installResult, error) {
 	var result installResult
+	if err := lemonade.RefuseSetupChange("register the AMD LLM Gateway there"); err != nil {
+		return result, err
+	}
 	body := map[string]any{
 		"backend":  "cloud",
 		"provider": Provider,

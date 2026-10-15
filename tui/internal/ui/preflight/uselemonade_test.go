@@ -37,6 +37,8 @@ func externalSetup(t *testing.T, doc map[string]any) (*starts, string) {
 			t.Fatal(err)
 		}
 	}
+	declinedRunningLemonade.Store(false)
+	t.Cleanup(func() { declinedRunningLemonade.Store(false) })
 	s := &starts{}
 	restoreAuto, restoreDetect, restoreProbe := tryAutoStartLemonade, detectRunningLemonade, probeLemonade
 	t.Cleanup(func() {
@@ -317,7 +319,8 @@ func TestAcceptingAndDecliningTheOfferSaveTheChoice(t *testing.T) {
 		{name: "accept, old daemon", kind: FixUseRunningLemonade, reconfig: 1,
 			reconfErr: fmt.Errorf("stub: route missing"), wantErrIn: "gaia daemon restart",
 			want: map[string]any{"lemonade_mode": "external", "lemonade_base_url": found.URL}},
-		{name: "decline", kind: FixUseGAIALemonade, want: map[string]any{"lemonade_mode": "gaia"}},
+		// Declining saves nothing: GAIA's own is not installed yet.
+		{name: "decline", kind: FixUseGAIALemonade, want: map[string]any{"lemonade_mode": nil}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, path := externalSetup(t, map[string]any{"default_model": "Gemma-4-E4B-it-GGUF", "full_access": true})
@@ -373,5 +376,60 @@ func TestAnUnreadableChoiceIsTheRowNotAStart(t *testing.T) {
 	}
 	if *s != (starts{}) {
 		t.Errorf("an unreadable choice tried to start or find a server: %+v", *s)
+	}
+}
+
+// Answering the offer with g must not save "gaia" before GAIA's server exists,
+// and the next check must not pass the user's server off as GAIA's.
+func TestDecliningTheOfferNeverCountsTheUsersServerAsGAIAs(t *testing.T) {
+	found := lemonade.ProbeResult{URL: "http://localhost:13305/api/v1", Status: lemonade.ProbeOK, Version: "10.10.0"}
+	s, path := externalSetup(t, map[string]any{"default_model": "Gemma-4-E4B-it-GGUF"})
+	detectRunningLemonade = func(context.Context) (lemonade.ProbeResult, bool) {
+		s.detect++
+		return found, true
+	}
+	// The user's server answers on the default port the whole time.
+	probeLemonade = func(context.Context) (string, bool, string) {
+		s.probe++
+		return found.URL, true, "GET " + found.URL + "/models -> 200"
+	}
+
+	if row := (localRunner{}).checkLemonade(context.Background(), localCfg()); row.Fix != FixUseRunningLemonade {
+		t.Fatalf("expected the offer first, got %+v", row)
+	}
+	if res := (localRunner{}).Fix(context.Background(), localCfg(), FixUseGAIALemonade, nil); res.Err != nil {
+		t.Fatalf("g failed: %v", res.Err)
+	}
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(string(raw), "lemonade_mode") {
+		t.Fatalf("g saved a choice before GAIA's server was installed: %s", raw)
+	}
+
+	*s = starts{}
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+	if row.State == StateOK {
+		t.Fatalf("the user's server passed for GAIA's own: %+v", row)
+	}
+	if row.Fix != FixInstallServer || !strings.Contains(row.Remedy.Command, "--gaia-lemonade") {
+		t.Fatalf("want the install step that saves GAIA's own once it runs, got %+v", row)
+	}
+	if *s != (starts{}) {
+		t.Errorf("the check probed, detected or started a server: %+v", *s)
+	}
+}
+
+// A "gaia" saved earlier, with GAIA's server never installed, is the same case.
+func TestASavedGAIAChoiceWithoutTheServerIsNotTheUsersServer(t *testing.T) {
+	s, _ := externalSetup(t, map[string]any{"lemonade_mode": "gaia"})
+	probeLemonade = func(context.Context) (string, bool, string) {
+		s.probe++
+		return "http://localhost:13305/api/v1", true, "stub: someone answers"
+	}
+	row := localRunner{}.checkLemonade(context.Background(), localCfg())
+	if row.State == StateOK || row.Fix != FixInstallServer {
+		t.Fatalf("row = %+v", row)
+	}
+	if *s != (starts{}) {
+		t.Errorf("the check probed, detected or started a server: %+v", *s)
 	}
 }

@@ -428,6 +428,39 @@ def use_gaia() -> None:
     cfg.save()
 
 
+#: Probe status for a switch to GAIA's own server when it is not installed.
+NOT_INSTALLED = "not_installed"
+
+
+def require_gaia_lemonade_installed() -> None:
+    """Refuse to leave the user's server for a GAIA server that isn't there.
+
+    Without it GAIA would fall back to the default port, which is usually the
+    user's own server, while saying it had switched.
+
+    Raises:
+        LemonadeChoiceError: GAIA's own server is missing or only partly
+            unpacked; status ``not_installed``.
+    """
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    if EmbeddedLemonade().is_installed():
+        return
+    raise LemonadeChoiceError(
+        "GAIA's own Lemonade Server is not installed, so GAIA is still using "
+        "yours. Install it and switch in one step with `gaia init "
+        "--gaia-lemonade`. Nothing was changed.",
+        NOT_INSTALLED,
+    )
+
+
+def restore_mode(previous: Optional[str]) -> None:
+    """Put back the saved mode after a switch the daemon could not apply."""
+    from gaia.config import GaiaConfig
+
+    GaiaConfig.save_key("lemonade_mode", previous)
+
+
 def _store_key(key: str) -> None:
     from gaia.connectors.errors import ConnectorsError
 
@@ -455,6 +488,112 @@ def _forget_key() -> None:
         log.warning("Could not remove the old Lemonade API key: %s", e)
 
 
+# ---------------------------------------------------------------------------
+# Never changing the user's server
+# ---------------------------------------------------------------------------
+
+#: Lemonade routes that change a server's setup instead of using it, and what
+#: each one would have done, for the refusal.
+_SETUP_ROUTES = {
+    "install": "register a cloud provider or install a backend",
+    "uninstall": "remove a cloud provider or backend",
+    "delete": "delete a model",
+    "unload": "unload a model",
+    "cloud/auth": "set a cloud provider key",
+}
+
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _server_identity(url: str) -> Optional[Tuple[str, str, int, str]]:
+    try:
+        parsed = urlparse(url.strip())
+        port = parsed.port
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return None
+    if host in _LOOPBACK_HOSTS:
+        host = "localhost"
+    scheme = parsed.scheme.lower()
+    port = port or (443 if scheme == "https" else 80)
+    return scheme, host, port, parsed.path.rstrip("/")
+
+
+def users_server_route(url: str) -> Optional[Tuple[str, str]]:
+    """``(saved_url, route)`` when *url* is on the user's own server, else None.
+
+    Only the saved ``external`` choice counts: ``LEMONADE_BASE_URL`` is an
+    override, not a server GAIA promised to leave alone.
+    """
+    if not external_mode_active():
+        return None
+    saved = external_lemonade_url()
+    mine = _server_identity(saved or "")
+    theirs = _server_identity(url)
+    if mine is None or theirs is None or mine[:3] != theirs[:3]:
+        return None
+    path = theirs[3]
+    if path != mine[3] and not path.startswith(mine[3] + "/"):
+        return None
+    return saved, path[len(mine[3]) :].strip("/")
+
+
+def users_server_unchanged_message(saved_url: str, action: str) -> str:
+    """The refusal: GAIA won't change the user's server, and what to do."""
+    return (
+        f"GAIA is set to use your Lemonade Server at {saved_url}, and it does not "
+        f"change that server's setup, so it did not {action}. Do it on your server "
+        f"yourself, or {SWITCH_BACK_HINT}."
+    )
+
+
+def users_server_repair_message(url: str, model: str, cause: Exception) -> str:
+    """A broken model on the user's server: theirs to repair, never GAIA's."""
+    match = users_server_route(url)
+    server = match[0] if match else url
+    return (
+        f"The model '{model}' on your Lemonade Server at {server} is incomplete "
+        f"or corrupt, and resuming its download did not fix it ({cause}). GAIA "
+        "does not change models on your server. Repair it there by downloading "
+        f"it again with your server's own tools, or {SWITCH_BACK_HINT}."
+    )
+
+
+def setup_change_refusal(
+    url: str, method: str, payload: Optional[dict] = None
+) -> Optional[str]:
+    """Why a request must not go to the user's server, or None when it may.
+
+    Using the server is fine: chat, embeddings, loading a model, downloading
+    one. Changing how it is set up is not: registering or removing providers,
+    handing it keys, installing backends, deleting or unloading models, or
+    saving load options into its config.
+    """
+    if method.upper() in ("GET", "HEAD", "OPTIONS"):
+        return None
+    match = users_server_route(url)
+    if match is None:
+        return None
+    saved, route = match
+    route = route.split("?", 1)[0]
+    if route.startswith("cloud/auth"):
+        return users_server_unchanged_message(saved, _SETUP_ROUTES["cloud/auth"])
+    if route in _SETUP_ROUTES:
+        return users_server_unchanged_message(saved, _SETUP_ROUTES[route])
+    if method.upper() == "DELETE":
+        return users_server_unchanged_message(saved, f"delete {route}")
+    if route == "load" and isinstance(payload, dict) and payload.get("save_options"):
+        return users_server_unchanged_message(saved, "save model load options")
+    return None
+
+
+def is_users_server(url: str) -> bool:
+    """True when *url* is on the user's own server (saved ``external`` mode)."""
+    return users_server_route(url) is not None
+
+
 def external_down_message(url: str) -> str:
     """The error for the user's server not answering: GAIA starts nothing."""
     from gaia.llm.lemonade_launcher import describe_start_hint
@@ -475,6 +614,32 @@ def apply_to_daemon() -> Optional[dict]:
     from gaia.daemon.client import reconfigure_lemonade
 
     return reconfigure_lemonade()
+
+
+def apply_gaia_switch(previous_mode: Optional[str]) -> Optional[dict]:
+    """Tell the daemon about a switch to GAIA's own, and wait until it answers.
+
+    The daemon starts GAIA's server in the background, so a start that fails
+    would otherwise leave ``gaia`` saved while nothing serves it. Leaving the
+    user's server is checked end to end; a first-run choice is not, because
+    setup installs the server afterwards.
+
+    Raises:
+        DaemonError: The daemon did not switch, or GAIA's server did not start.
+            The previous mode is saved back first.
+    """
+    from gaia.daemon.client import ensure_lemonade
+    from gaia.daemon.errors import DaemonError
+
+    try:
+        applied = apply_to_daemon()
+        if applied is not None and previous_mode == MODE_EXTERNAL:
+            applied = {**applied, "lemonade": ensure_lemonade()}
+    except DaemonError:
+        # The daemon reads the choice live, so it follows this too.
+        restore_mode(previous_mode)
+        raise
+    return applied
 
 
 def saved_target() -> dict:
@@ -545,6 +710,8 @@ def set_mode(mode: str) -> Optional[ProbeResult]:
     from gaia.config import GaiaConfig
 
     if mode == MODE_GAIA:
+        if saved_mode() == MODE_EXTERNAL:
+            require_gaia_lemonade_installed()
         use_gaia()
         return None
     if mode != MODE_EXTERNAL:

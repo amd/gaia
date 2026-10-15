@@ -370,6 +370,9 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 		// The user's own server: GAIA starts nothing for it, whatever it finds.
 		return l.checkExternalLemonade(ctx, row, external)
 	}
+	if awaitsGAIALemonade(choice) {
+		return gaiaLemonadeMissingRow(row)
+	}
 	if offersRunningLemonade(choice) {
 		if found, ok := detectRunningLemonade(ctx); ok {
 			return offerRow(found)
@@ -842,8 +845,23 @@ func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string,
 	row.FirstRun = true
 	row.Disposition = status.DispositionHalt
 	row.Line = "not downloaded yet"
-	row.Step = l.downloadStep(st.Models)
+	// Only what the server lacks: a model it already has is never offered again.
+	missing := st.Missing()
+	if len(missing) > 0 && len(missing) < len(st.Models) {
+		var ids []string
+		for _, m := range missing {
+			ids = append(ids, m.ID)
+		}
+		row.Line = strings.Join(ids, ", ") + " not downloaded yet"
+	}
+	row.Step = l.downloadStep(missing)
 	row.Detail = "Downloaded once, then reused by every GAIA session."
+	remedy := "Setup downloads what is missing and starts the local server."
+	if base, active, err := lemonade.SavedExternal(); active && err == nil {
+		row.Detail = "Setup downloads what is missing onto your Lemonade Server at " + base +
+			"; models it already has are not downloaded again."
+		remedy = "Setup downloads what is missing."
+	}
 	if l.skipChatModel() {
 		row.Line = "embedding models not downloaded"
 		row.Detail = "Chat uses your selected remote provider. Setup downloads local embedding models for document search and memory."
@@ -853,7 +871,7 @@ func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string,
 	}
 	row.Fix = FixRunSetup
 	row.Remedy = Remedy{
-		Action:  "Setup downloads what is missing and starts the local server.",
+		Action:  remedy,
 		Command: gaiainit.RunCommand(l.skipChatModel()),
 		Where:   installDocs,
 	}
@@ -1003,6 +1021,10 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 	command := gaiainit.RunCommand(l.skipChatModel())
 	if kind == FixInstallServer {
 		start, command = gaiainit.StartServerOnly, gaiainit.ServerOnlyCommand()
+		// Setup saves "GAIA's own" itself, once that server runs.
+		if choice, err := lemonade.ReadChoice(); err == nil && awaitsGAIALemonade(choice) {
+			start, command = gaiainit.StartGAIAServerOnly, gaiainit.GAIAServerOnlyCommand()
+		}
 	}
 
 	ch, cancel, err := start()
