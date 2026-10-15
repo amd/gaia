@@ -193,13 +193,13 @@ def test_real_loop_stops_off_request_work_after_the_answer(agent, tmp_path):
     (tmp_path / "third.txt").write_text("SENTINEL-THIRD")
     sent = script(
         agent,
-        # Answers without the requested save, so the completion check re-prompts.
-        {"answer": "The fix is done."},
+        # An impersonal save claim nobody asked for: corrected, not sent back.
+        {"answer": "The fix is done. The summary is saved to `summary.md`."},
         call("read_file", file_path="other.txt"),
         call("read_file", file_path="third.txt"),
         {"answer": "Fixed. I did not save summary.md."},
     )
-    result = agent.process_query("Save a summary of the fix to `summary.md`")
+    result = agent.process_query("Summarize the fix.")
     assert "[check:completion]" in sent[1][-1]["content"]
     refusals = [r for r in tool_results(sent) if "already answered" in str(r)]
     assert len(refusals) == 2
