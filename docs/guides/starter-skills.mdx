@@ -100,11 +100,12 @@ not confirm" section.
 ### document-brief
 
 Indexes a file or folder and answers questions from it, quoting the sentence
-that proves each claim rather than paraphrasing from the filename.
+that proves each claim rather than paraphrasing from the filename. A handful of
+documents to review or compare is read in full with `read_file` instead.
 
 - **Demonstrates** — the RAG loop end to end: index, query, summarize, status.
 - **Consumes** — `index_document`, `index_directory`, `list_indexed_documents`,
-  `query_documents`, `summarize_document`, `rag_status`.
+  `query_documents`, `summarize_document`, `rag_status`, `read_file`.
 - **Configure** — a file or directory path.
 
 ### data-explore
@@ -270,6 +271,57 @@ gaia skill info gpu-restock-watch
 - **Never put a secret in a skill file.** Reference it as a
   `requirements.env_vars` entry and configure it through
   `gaia connectors configure`.
+
+## Reference files and scripts
+
+A skill doesn't have to fit in one file. Put long material — a query syntax, a
+style guide, a table of codes, a helper script — in files beside `SKILL.md`, and
+have the instructions point at them. The agent reads a file only when the
+instructions send it there, so a skill can carry pages of reference without
+filling the agent's context every time it is used.
+
+```
+query-helper/
+├── SKILL.md
+├── references/
+│   └── query-syntax.md
+└── scripts/
+    └── build_query.py
+```
+
+In `SKILL.md`, name the file by its path from the skill folder, and say when to
+read it:
+
+```markdown
+---
+name: query-helper
+description: Write search queries using our query syntax. Use when the user asks for a search query.
+---
+
+# Query helper
+
+Before writing a query, read `references/query-syntax.md` for the operators
+we support, then build the query from them.
+```
+
+- **Folder names are up to you.** `references/` and `scripts/` are the
+  [Agent Skills](https://agentskills.io) standard's conventions, and Claude Code
+  skills use them, but GAIA reads `reference/`, `docs/`, or anything else the
+  same way.
+- **What loads when.** Using a skill adds only its `SKILL.md` instructions to the
+  conversation. When those instructions point at a file, the agent opens it with
+  its file tools, and the `load_skill` result tells the model which folder the
+  paths are relative to.
+- **The agent can read the skill's folder, not write it.** A loaded skill's folder
+  is readable even when your session's allowed folders don't include it — that is
+  what lets a skill installed in `~/.gaia/skills` use its reference files in the
+  Agent UI. Writes there are still refused, and so is any path that climbs out of
+  the folder with `..`.
+- **`gaia skill import` copies the whole folder**, so reference files and scripts
+  travel with the skill.
+
+To read a skill's reference files from your own Python code, see
+[Skills SDK → Reference files and scripts](/sdk/sdks/skills#reference-files-and-scripts).
 
 ## What is not in the pack yet
 

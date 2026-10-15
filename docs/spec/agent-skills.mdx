@@ -107,9 +107,14 @@ web-research/
 ├── tools.py          # optional — @tool functions (GAIA extension)
 ├── scripts/          # optional — executable scripts the agent may run
 │   └── extract.py
-└── reference/        # optional — resources the body links to
+└── references/       # optional — documents the body links to
     └── query-syntax.md
 ```
+
+`scripts/` and `references/` are the Agent Skills standard's conventional names,
+not reserved ones: GAIA treats every file in the skill folder the same way, so
+any folder name (`reference/`, `docs/`, `templates/`) works as long as the body
+points at it by its path relative to the skill folder.
 
 This shape yields two flavors that sit on one spectrum:
 
@@ -274,7 +279,14 @@ one-line menu entry on turns that no longer relate to it.
 </Step>
 <Step title="Resources (on demand)">
 Files the body references (scripts, reference docs, templates) load only when the
-agent reads or executes them — not at trigger time.
+agent reads or executes them — not at trigger time. Nothing under the skill
+folder is ever added to the prompt automatically. The `load_skill` tool returns
+the skill's `directory` so the model can join relative paths onto it, and
+`Agent.load_skill` grants the agent's file tools **read-only** access to that
+folder — so a skill installed in `~/.gaia/skills` stays readable even when the
+session's allowed paths don't cover it. Writes there are still refused, and the
+grant is withdrawn by `unload_skill`. From Python, `SkillManager.resource_path`
+resolves a bundled file and rejects paths that leave the skill folder.
 </Step>
 </Steps>
 
@@ -322,7 +334,9 @@ order:
 5. Merges any resolved `ConnectorRequirement`s into `REQUIRED_CONNECTORS` —
    **per instance**, never mutating the ClassVar, so one agent's skill never leaks
    requirements into a sibling.
-6. Rebuilds the system prompt, injecting the body via
+6. Grants the agent's path validator read-only access to the skill's folder, so
+   the file tools can open the files its body references.
+7. Rebuilds the system prompt, injecting the body via
    `get_skills_system_prompt()`.
 
 Loading is **idempotent** (a second `load_skill` of the same name returns the
@@ -678,7 +692,7 @@ Highlights as they apply at the agent boundary:
 | Per-agent least privilege | An agent receives a skill's tools only after the skill is explicitly loaded; no ambient activation. Tools are namespaced and instance-scoped | Shipped |
 | Instruction-only bodies | Loaded as context under a `==== LOADED SKILLS ====` prompt fragment (on the flagship agent, split into an `(active this turn)` bodies section and a collapsed one-line menu for the rest — per-turn semantic selection); treated as untrusted input, never as system-level instructions | Shipped |
 | Untrusted imports | `gaia skill import` stamps `security_tier: experimental` regardless of the tier the skill claims, and reports the reset. It accepts https URLs only, refuses symlinked or audit-blocked bundles, and requires `--allow-experimental` for a skill that ships code | Shipped |
-| Resource escape | A skill may only read files inside its own directory; `SkillManager.resource_path` rejects traversal, as does `.zip` import | Shipped |
+| Resource escape | A skill may only read files inside its own directory; `SkillManager.resource_path` rejects traversal, as does `.zip` import. The read-only folder grant a loaded skill gets resolves `..` and symlinks first, so it never reaches a file outside that folder | Shipped |
 | Tier ceiling | A permission above the effective tier's ceiling refuses the install, import, or capture, and is re-checked on promote and load against the tier recorded in `skill-lock.json` | Shipped ([#2467](https://github.com/amd/gaia/issues/2467)) |
 | Signing | Ed25519 signature over every bundled file, verified at install; the claimed tier is collapsed to what the signature earned, so no unsigned skill installs as `verified` | Shipped ([#2467](https://github.com/amd/gaia/issues/2467)) |
 | Pre-publish audit | Every skill scanned before it enters the catalog; publish fails loudly if the audit engine is absent | Gate shipped; the scanning engine is [#2468](https://github.com/amd/gaia/issues/2468) |

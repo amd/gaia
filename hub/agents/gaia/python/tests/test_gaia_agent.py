@@ -242,6 +242,41 @@ def test_passing_both_a_config_and_kwargs_is_refused():
     assert "not both" in message
 
 
+def test_flagship_step_limit_defaults_to_150(monkeypatch):
+    """50 steps ended a nine-datasheet BOM task mid-research (kw-02)."""
+    from gaia_agent.agent import FLAGSHIP_MAX_STEPS
+
+    from gaia.agents.base.agent import DEFAULT_MAX_STEPS
+
+    monkeypatch.delenv("GAIA_AGENT_MAX_STEPS", raising=False)
+    assert FLAGSHIP_MAX_STEPS == 150
+    assert GaiaAgentConfig().max_steps == 150
+    assert DEFAULT_MAX_STEPS == 50  # other agents keep the fleet default
+
+
+def test_flagship_step_limit_env_and_explicit_values_win(monkeypatch):
+    monkeypatch.setenv("GAIA_AGENT_MAX_STEPS", "70")
+    assert GaiaAgentConfig().max_steps == 70
+    assert GaiaAgentConfig(max_steps=12).max_steps == 12
+
+
+def test_an_unset_step_limit_resolves_to_the_flagship_default(monkeypatch):
+    """The CLI passes ``max_steps=None`` when --max-steps is not given."""
+    from gaia_agent_chat.agent import ChatAgent
+
+    seen = {}
+
+    def _capture(self, config=None, **_):
+        seen["max_steps"] = config.max_steps
+        self.config = config
+
+    monkeypatch.delenv("GAIA_AGENT_MAX_STEPS", raising=False)
+    monkeypatch.setattr(ChatAgent, "__init__", _capture)
+    GaiaAgent(config=GaiaAgentConfig(max_steps=None))
+
+    assert seen["max_steps"] == 150
+
+
 def test_the_readiness_probe_takes_no_request_parameters():
     """``init(response: Any = None)`` was unused, and FastAPI published it as a
     real query parameter — an argument callers could pass that does nothing."""

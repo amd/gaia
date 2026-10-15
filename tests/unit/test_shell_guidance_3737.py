@@ -116,7 +116,9 @@ class TestGitGlobalFlags:
         run = _run_tool(_Host(tmp_path))
         result = run(command=f"git -C {shlex.quote(str(tmp_path))} status")
         # Not a repo, so git exits non-zero — but it ran, and was not refused.
-        assert result["status"] == "success", result
+        assert result["return_code"] != 0, result
+        assert result["status"] == "error", result
+        assert f"exited with code {result['return_code']}" in result["error"]
 
     @pytest.mark.parametrize("host_cls", [_Host, _HostWithoutArgScan])
     def test_dash_c_outside_allowed_paths_is_refused(self, tmp_path, host_cls):

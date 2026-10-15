@@ -70,8 +70,20 @@ func TestRestoreKeepsItsTimingUnderDev(t *testing.T) {
 	m = openChat(t, m, c)
 	m.queryStart = m.queryStart.Add(-time.Second)
 	m = confirmRestore(t, m)
-	if last := m.messages[len(m.messages)-1]; last.Duration <= 0 {
+	last := m.messages[len(m.messages)-1]
+	if last.Duration <= 0 {
 		t.Fatal("--dev must keep the restore turn's timing")
+	}
+	if s := m.answerStats(&last); !strings.HasPrefix(s, "model switched in ") {
+		t.Fatalf("the restore time must say what it measures, not print bare: %q", s)
+	}
+}
+
+func TestAnOrdinaryAnswerKeepsItsBareTime(t *testing.T) {
+	m := ChatModel{}
+	msg := Message{Duration: 2 * time.Second}
+	if s := m.answerStats(&msg); s != "2.0s" {
+		t.Fatalf("only the model notice is labelled: %q", s)
 	}
 }
 

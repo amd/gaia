@@ -57,7 +57,7 @@ from gaia_agent.engineering_tools import (
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 from gaia_agent_chat.profiles import get_profile_spec
 
-from gaia.agents.base.agent import parse_skill_manifest
+from gaia.agents.base.agent import default_max_steps, parse_skill_manifest
 from gaia.agents.base.project_map import ProjectMapMixin, is_code_repository
 from gaia.agents.base.skill_catalog import catalog_env_override
 from gaia.agents.base.skill_loader import (
@@ -150,6 +150,18 @@ def fast_env_override() -> Optional[bool]:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+#: The flagship's step limit when nothing overrides it. Desktop tasks (read nine
+#: datasheets, price a BOM, write two files) need ~60-70 steps, so the fleet's
+#: 50 ended them mid-research with nothing written. ``GAIA_AGENT_MAX_STEPS``
+#: and an explicit ``max_steps`` still win.
+FLAGSHIP_MAX_STEPS = 150
+
+
+def flagship_max_steps() -> int:
+    """``GAIA_AGENT_MAX_STEPS`` if set, else :data:`FLAGSHIP_MAX_STEPS`."""
+    return default_max_steps(FLAGSHIP_MAX_STEPS)
+
+
 def _locate_agent_manifest() -> Optional[str]:
     """Absolute path to this package's ``gaia-agent.yaml``, or ``None``.
 
@@ -180,6 +192,9 @@ class GaiaAgentConfig(ChatAgentConfig):
     # "full" is the only spec whose tool_groups are the union this agent needs:
     # doc_rag + file_fs + data_scratch + web_browse + full_screenshot.
     prompt_profile: str = "full"
+
+    # None (the CLI's "not given") also resolves to the flagship limit.
+    max_steps: Optional[int] = field(default_factory=flagship_max_steps)
 
     # Kept explicit even though "full" already implies them: these gate mixin
     # *construction* (indexes, DB handles, HTTP session) in __init__, separately
@@ -249,7 +264,7 @@ class GaiaAgentConfig(ChatAgentConfig):
     # The user's home is the honest scope for a personal document agent — it is
     # what "ask questions about my files" means — and it stays a real boundary
     # (system directories, other users, and program files are still refused).
-    # Override with ``allowed_paths=[...]`` to narrow it.
+    # Override with ``allowed_paths=[...]``, or set GAIA_ALLOWED_PATHS, to narrow it.
     allowed_paths: Optional[List[str]] = field(
         default_factory=lambda: [str(Path.home())]
     )
@@ -288,7 +303,8 @@ def _code_search_start(allowed: List[str]) -> str:
     """
     folders = [p for p in allowed if Path(p).is_dir()]
     repos = [p for p in folders if is_code_repository(p)]
-    return (repos or folders or allowed)[0]
+    # Empty only when GAIA_ALLOWED_PATHS left nothing in scope; ceilings refuse all.
+    return (repos or folders or allowed or [os.getcwd()])[0]
 
 
 def _apply_fast_mode(config: GaiaAgentConfig) -> None:
@@ -367,6 +383,8 @@ class GaiaAgent(
                 "Set them on the config object, or drop the config= argument."
             )
         resolved = config or GaiaAgentConfig(**kwargs)
+        if resolved.max_steps is None:
+            resolved.max_steps = flagship_max_steps()
         # ``GAIA_FAST`` wins in both directions, so a launcher that hard-codes
         # fast=True is still overridable from the shell. Written back to the
         # field so ``config.fast`` never disagrees with how the agent was built.
@@ -461,7 +479,9 @@ class GaiaAgent(
             # back to allowed_paths for the same reason that field rejects cwd: the
             # daemon launches this sidecar with cwd = the package directory, so cwd
             # would sandbox code search to the agent's own source tree.
-            allowed = getattr(self.config, "allowed_paths", None) or [str(Path.home())]
+            allowed = getattr(self.config, "allowed_paths", None)
+            if allowed is None:
+                allowed = [str(Path.home())]
             # Through the mixin, so both read the one cached resolution and can
             # never end up describing two different trees.
             index_root = self._project_map_root() or _code_search_start(allowed)
