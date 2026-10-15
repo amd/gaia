@@ -27,6 +27,7 @@ acceptable. lemond invalidates stale binaries itself via the
 ``clear_bin_if_lemonade_below`` pin in its ``backend_versions.json``.
 """
 
+import errno
 import hashlib
 import json
 import os
@@ -393,21 +394,81 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _port_free(port: int) -> bool:
-    """Whether *port* can be bound on loopback right now.
+_LOOPBACKS = ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1"))
+# The machine has no IPv6 stack: nothing can hold a port on ::1.
+_NO_FAMILY = (errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT)
 
-    POSIX sets SO_REUSEADDR so the previous instance's TIME_WAIT sockets do not
-    read as "taken"; it still refuses a port something is listening on. Windows
-    does not, because there the option would let us bind over a live listener.
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        if sys.platform != "win32":
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+def _binds(family: int, host: str, port: int, reuseport: bool) -> bool:
+    """Whether a socket of *family* can bind *host*:*port* right now."""
+    try:
+        sock = socket.socket(family, socket.SOCK_STREAM)
+    except OSError as e:
+        if family == socket.AF_INET6 and e.errno in _NO_FAMILY:
+            return True
+        raise
+    with sock:
+        if reuseport:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            return False
+            sock.bind((host, port))
+        except OSError as e:
+            return family == socket.AF_INET6 and e.errno in _NO_FAMILY
     return True
+
+
+def _answers(family: int, host: str, port: int) -> bool:
+    """Whether something accepts TCP connections on *host*:*port*."""
+    try:
+        with socket.create_connection((host, port), timeout=1.0):
+            return True
+    except ConnectionRefusedError:
+        return False
+    except TimeoutError:
+        return True  # a listener whose backlog is full
+    except OSError as e:
+        if family == socket.AF_INET6 and e.errno in _NO_FAMILY + (errno.ENETUNREACH,):
+            return False
+        raise
+
+
+def _listening_on(port: int) -> bool:
+    """Whether any local socket, on any address, listens on *port*."""
+    import psutil
+
+    return any(
+        c.status == psutil.CONN_LISTEN and c.laddr and c.laddr.port == port
+        for c in psutil.net_connections(kind="tcp")
+    )
+
+
+def _port_free(port: int) -> bool:
+    """Whether lemond could bind *port* on loopback with nothing listening there.
+
+    lemond (cpp-httplib) binds 127.0.0.1 and ::1 with SO_REUSEPORT on POSIX,
+    which is what lets it reuse a port its last run left in TIME_WAIT; a bind
+    without it fails there for up to a minute. So the POSIX probe binds the
+    same way. SO_REUSEPORT also binds through a live same-user listener -- the
+    user's own lemond, say -- so a connect must find nobody answering first.
+
+    Windows has no SO_REUSEPORT and TIME_WAIT never blocks a plain bind. But a
+    bind there only conflicts with the exact same address (127.0.0.1 ignores
+    0.0.0.0 and ::), and a refused connect takes ~2 s, so the OS's listener
+    table decides instead.
+    """
+    if sys.platform == "win32":
+        if _listening_on(port):
+            return False
+        return all(
+            _binds(family, host, port, reuseport=False) for family, host in _LOOPBACKS
+        )
+    # Connect before binding: a connect that lands on its own ephemeral port
+    # leaves a TIME_WAIT on *port*, which the bind then reports as taken.
+    if any(_answers(family, host, port) for family, host in _LOOPBACKS):
+        return False
+    return all(
+        _binds(family, host, port, reuseport=True) for family, host in _LOOPBACKS
+    )
 
 
 def _extract(archive: Path, dest: Path) -> None:
