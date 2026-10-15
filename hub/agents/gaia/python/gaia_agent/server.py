@@ -1574,9 +1574,8 @@ def serve_http(argv: List[str]) -> int:
     # bad GAIA_ALLOWED_PATHS would otherwise leave a healthy-looking sidecar.
     from gaia_agent.agent import check_skill_set_selection
 
-    from gaia.skills.errors import SkillSetError
-
     from gaia.security import AllowedPathsEnvError, env_allowed_paths
+    from gaia.skills.errors import SkillSetError
 
     try:
         check_skill_set_selection()
