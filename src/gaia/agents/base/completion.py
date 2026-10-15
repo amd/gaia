@@ -9,7 +9,6 @@ Reading every byte establishes observation, not semantic extraction recall.
 from __future__ import annotations
 
 import ast
-import json
 import ntpath
 import os
 import re
@@ -17,6 +16,8 @@ import stat
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from gaia.agents.base.tool_outcome import tool_result_dict
 
 WRITE_TOOLS = frozenset(
     {
@@ -201,15 +202,7 @@ def _in_named_folder(path: str, names: set[str]) -> bool:
 
 
 def _payload(value: Any) -> dict:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except ValueError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+    return tool_result_dict(value) or {}
 
 
 def _path_token(match: re.Match) -> str | None:

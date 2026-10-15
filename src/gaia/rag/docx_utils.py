@@ -46,9 +46,13 @@ def extract_docx_text(docx_path: str) -> str:
         from docx import Document  # pylint: disable=import-outside-toplevel
         from docx.oxml.ns import qn  # pylint: disable=import-outside-toplevel
     except ImportError as e:
+        from gaia.agents.install_hints import (  # pylint: disable=import-outside-toplevel
+            missing_package_hint,
+        )
+
         raise ImportError(
             "python-docx is required for Word document processing. "
-            "Install it with: uv pip install python-docx"
+            + missing_package_hint("python-docx")
         ) from e
 
     # .docx is a ZIP container: check the uncompressed size before parsing.

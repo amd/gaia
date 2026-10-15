@@ -20,6 +20,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the agent waits that long, and a run that runs out of time is killed with
   every process it started; the result names the files that changed while it
   ran so the agent checks them instead of reporting them finished.
+- **Document search says when it could not search.** With the embedding
+  model or Lemonade Server down, `query_documents` and `query_specific_file`
+  answered "no relevant information found", so the agent told the user their
+  documents held nothing on the topic. They now return an error naming the
+  cause (Lemonade unreachable, or the embedding model failing) and how to fix
+  it. `index_document` and `index_directory` report the same cause, and
+  `index_directory` stops at the first such file and reports an error when no
+  file could be indexed. Hints for a missing optional package (RAG, PDF, Excel,
+  HTML parsing) say in a frozen build that it isn't bundled, and from source
+  give the install command for the running Python.
 - **A failed tool call is reported as a failure.** `run_shell_command` returned
   `status: success` for a command that exited non-zero, so the TUI and Agent UI
   showed a failed build or test run as a passed step. It is now `status: error`

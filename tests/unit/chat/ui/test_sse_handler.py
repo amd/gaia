@@ -525,6 +525,19 @@ class TestPrettyPrintJsonToolResults:
         assert event["command_output"]["expected_exit"] == reason
         assert event["summary"] == f"{reason} (exit 1)"
 
+    @pytest.mark.parametrize(
+        "data, success",
+        [
+            ('{"ok": false, "error": "Could not archive 3 of 3 messages"}', False),
+            ({"ok": False, "error": "boom"}, False),
+            ('{"ok": true, "data": {"failed_count": 1, "partial": true}}', True),
+            ('{"status": "error", "error": "boom"}', False),
+        ],
+    )
+    def test_an_ok_false_envelope_marks_success_false(self, handler, data, success):
+        handler.pretty_print_json(data, title="Result")
+        assert _drain(handler)[0]["success"] is success
+
     def test_non_dict_data_success_is_true(self, handler):
         handler.pretty_print_json("some string", title="Result")
         events = _drain(handler)

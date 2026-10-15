@@ -22,6 +22,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools import search_scope
 from gaia.agents.tools.document_text import (
     document_type,
@@ -1501,7 +1502,7 @@ class FileSearchToolsMixin:
                 except ImportError:
                     error = (
                         "Excel support requires openpyxl. "
-                        "Install with: pip install openpyxl. "
+                        f"{missing_package_hint('openpyxl')} "
                         "Alternatively, save the file as CSV and try again."
                     )
                 except Exception as e:
@@ -2874,7 +2875,10 @@ class FileSearchToolsMixin:
                 logger.error(f"Missing dependency for data analysis: {e}")
                 return {
                     "status": "error",
-                    "error": f"Missing dependency: {e}. Try: pip install python-dateutil openpyxl",
+                    "error": (
+                        f"Missing dependency: {e}. "
+                        f"{missing_package_hint('python-dateutil', 'openpyxl')}"
+                    ),
                     "has_errors": True,
                     "operation": "analyze_data_file",
                 }
