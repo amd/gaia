@@ -582,8 +582,11 @@ class TestShellVariables:
             command=f"ls {operand}", working_directory=str(confined.task)
         )
 
-        assert result["status"] == "error"
         assert "answer_key" not in _text(result)
+        # Only cmd.exe expands %VAR%; a POSIX shell lists a literal name in the task.
+        if operand.startswith("%") and os.name != "nt":
+            return
+        assert result["status"] == "error"
 
 
 class TestEmptyScope:
