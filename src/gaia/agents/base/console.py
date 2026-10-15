@@ -12,6 +12,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import PATH_TOOLS, grant_scope, path_argument
 from gaia.agents.base.tools import get_tool_display_name
 
@@ -270,8 +271,12 @@ def format_confirmation_args(tool_args: Any) -> str:
         return "(no arguments)"
     if not isinstance(tool_args, dict):
         return _shorten(str(tool_args))
+    # A one-time call is approved on its exact text, so that is never cut.
+    verbatim = {"command"} if tool_args.get(RISK_NOTE_ARG) else set()
     shortened = {
-        key: _shorten(value) if isinstance(value, str) else value
+        key: (
+            _shorten(value) if isinstance(value, str) and key not in verbatim else value
+        )
         for key, value in tool_args.items()
     }
     # ensure_ascii=False: the shortening marker (…) and any non-ASCII content in

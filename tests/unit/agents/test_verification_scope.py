@@ -861,7 +861,7 @@ EXECUTION_EVIDENCE_CASES = [
         {
             **NOT_EXECUTED,
             "status": "error",
-            "error": "Command 'python3.14' is not available to this agent.",
+            "error": "'python3.14 -c' is not allowed: it runs code passed on the command line.",
             "has_errors": True,
         },
         False,
@@ -1019,8 +1019,8 @@ REJECTION_RESULT = {
     **NOT_EXECUTED,
     "status": "error",
     "error": (
-        "Command 'python3.14' is not available to this agent. It is granted "
-        "only to a skill that declares 'shell:execute:python3.14'."
+        "Not run: `python3.14 -m pytest tests/` needs your approval, and "
+        "nothing in this run can ask you."
     ),
     "has_errors": True,
 }

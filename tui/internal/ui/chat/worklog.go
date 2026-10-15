@@ -49,10 +49,21 @@ func (m *ChatModel) stashNarration() {
 		return
 	}
 	m.stashed, m.buffer = m.buffer, ""
-	m.activity = append(m.activity, ActivityItem{
-		Kind:    "note",
-		Content: truncateRunes(shortenPaths(text), narrationMax),
-	})
+	content := truncateRunes(shortenPaths(text), narrationMax)
+	if m.lastNote() == content {
+		return
+	}
+	m.activity = append(m.activity, ActivityItem{Kind: "note", Content: content})
+}
+
+// lastNote is the most recent narration line in the work log, or "".
+func (m *ChatModel) lastNote() string {
+	for i := len(m.activity) - 1; i >= 0; i-- {
+		if m.activity[i].Kind == "note" {
+			return m.activity[i].Content
+		}
+	}
+	return ""
 }
 
 // awaitApproval marks the step a confirmation gates. The tool_call for a gated
