@@ -25,6 +25,10 @@ import requests
 
 from gaia.logger import route_console_logging_to_stderr
 from gaia.mcp.ports import AGENT_UI_MCP_PORT
+from gaia.mcp.servers.agent_ui_control import (
+    TurnRegistry,
+    transport_security_settings,
+)
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
@@ -414,6 +418,177 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
         To make the session visible in the browser, call open_session_in_browser() first.
         """
         return _stream_chat(backend_url, session_id, message)
+
+    # ── Turn control (drive a turn without blocking) ───────────────
+
+    turns = TurnRegistry(backend_url, UI_HEADER)
+
+    @mcp.tool()
+    def start_message(session_id: str, message: str) -> Dict[str, Any]:
+        """Send a message and return as soon as the backend accepts the turn.
+
+        The turn runs on while you poll turn_status or block on
+        wait_for_turn. It uses the model the Agent UI uses (see
+        get_settings / set_model). One turn per session at a time.
+
+        Returns {session_id, turn_id, accepted, state}, or an error when the
+        session does not exist or is already busy.
+        """
+        return turns.start(session_id, message)
+
+    @mcp.tool()
+    def turn_status(session_id: str) -> Dict[str, Any]:
+        """What the session's turn is doing right now.
+
+        state is "streaming", "awaiting_permission", "awaiting_input" or
+        "idle". pending_prompt carries the prompt to answer: confirm_id, tool,
+        args, args_summary, risk, always_scope (present only when "always" is
+        offered) and expires_in_s. Also current_step, elapsed_s and outcome
+        ("completed", "cancelled", "error", "disconnected") once idle.
+
+        A turn started in the browser is attached to and reported too.
+        """
+        return turns.status(session_id)
+
+    @mcp.tool()
+    def wait_for_turn(
+        session_id: str,
+        until: str = "idle",
+        text: str = "",
+        timeout_ms: int = 60000,
+    ) -> Dict[str, Any]:
+        """Block until the turn reaches a condition, instead of polling.
+
+        Args:
+            session_id: The session to watch.
+            until: "idle" (turn over), "prompt" (a permission prompt waits),
+                "question" (the agent asked the user something), "attention"
+                (any of those three), or "text" (the answer contains `text`).
+            text: Substring to wait for when until="text".
+            timeout_ms: 1 to 600000 (10 minutes). Call again to wait longer.
+
+        Returns the turn status with matched=true, or an error with
+        timed_out=true (still running) or ended=true (the turn finished
+        without reaching the condition), carrying the status it had.
+        """
+        return turns.wait(session_id, until=until, text=text, timeout_ms=timeout_ms)
+
+    @mcp.tool()
+    def answer_prompt(
+        session_id: str,
+        confirm_id: str,
+        decision: str,
+        always_scope: str = "",
+    ) -> Dict[str, Any]:
+        """Answer the pending tool permission prompt, as the user's click would.
+
+        Args:
+            session_id: The session whose prompt this is.
+            confirm_id: pending_prompt.confirm_id from turn_status. Required.
+            decision: "allow_once", "always" or "deny".
+            always_scope: For "always", repeat pending_prompt.always_scope
+                exactly. The grant covers only that scope.
+
+        Refused without calling the backend when the prompt was already
+        answered, has expired or been replaced, belongs to another session,
+        or "always" names a different scope. The reply's ``refused`` field
+        names the reason.
+        """
+        return turns.answer_prompt(session_id, confirm_id, decision, always_scope)
+
+    @mcp.tool()
+    def answer_question(session_id: str, request_id: str, value: str) -> Dict[str, Any]:
+        """Answer a question the agent asked mid-turn (pending_question).
+
+        Args:
+            session_id: The session whose question this is.
+            request_id: pending_question.request_id from turn_status.
+            value: The answer -- one of the options' values, or free text when
+                allow_free_text is true.
+        """
+        return turns.answer_question(session_id, request_id, value)
+
+    @mcp.tool()
+    def stop_turn(session_id: str) -> Dict[str, Any]:
+        """Stop the running turn, like the UI's Stop button.
+
+        The run ends at its next check; wait_for_turn(until="idle") then
+        returns, and turn_view reports stopped=true if the stop ended it.
+        """
+        return turns.stop(session_id)
+
+    @mcp.tool()
+    def turn_view(session_id: str) -> Dict[str, Any]:
+        """The turn as the user sees it in the Agent UI.
+
+        content is the answer text. steps is the activity list (thinking,
+        tools with their arguments and results, status lines, errors) folded
+        the way the UI folds them. footer is the stats line under the answer
+        (latency, tok/s, TTFT, input -> output tokens), present once idle.
+        Works while the turn runs and after it ends.
+        """
+        return turns.view(session_id)
+
+    @mcp.tool()
+    def turn_metrics(session_id: str) -> Dict[str, Any]:
+        """Per-turn numbers: steps, tool_calls, tokens_in, tokens_out, time.
+
+        steps, tool_calls and agent_elapsed_s come from the agent's answer
+        event; tokens_in, tokens_out, tokens_per_second and
+        time_to_first_token_s from the done event (the final model call --
+        the numbers the UI footer shows); turn_output_tokens and
+        turn_input_tokens sum the whole turn. wall_s is measured here. A
+        value nobody reported is null, never a made-up zero.
+        """
+        return turns.metrics(session_id)
+
+    # ── Settings a test needs ──────────────────────────────────────
+
+    @mcp.tool()
+    def get_settings() -> Dict[str, Any]:
+        """The active model and provider, and which Lemonade Server GAIA uses."""
+        active = _api(backend_url, "get", "/providers/active")
+        if active.get("status") == "error":
+            return active
+        target = _api(backend_url, "get", "/lemonade/target")
+        if target.get("status") == "error":
+            return target
+        return {"active_model": active, "model_server": target}
+
+    @mcp.tool()
+    def list_models(provider: str = "local") -> Dict[str, Any]:
+        """Chat models a provider offers ("local", "fireworks" or "amd")."""
+        from urllib.parse import quote
+
+        return _api(backend_url, "get", f"/providers/{quote(provider, safe='')}/models")
+
+    @mcp.tool()
+    def set_model(model: str) -> Dict[str, Any]:
+        """Make `model` the one new turns run (the UI's model picker).
+
+        The backend refuses a model that is not available.
+        """
+        return _api(backend_url, "post", "/providers/select", json={"model": model})
+
+    @mcp.tool()
+    def set_model_server(
+        mode: str, base_url: str = "", api_key: str = ""
+    ) -> Dict[str, Any]:
+        """Switch which Lemonade Server GAIA uses (Settings > Model server).
+
+        Args:
+            mode: "gaia" for GAIA's own server, or "external" for yours.
+            base_url: The external server, e.g. http://localhost:13305.
+            api_key: The external server's key, if it has one.
+
+        Nothing is saved unless the external server checks out.
+        """
+        body: Dict[str, Any] = {"mode": mode}
+        if base_url:
+            body["base_url"] = base_url
+        if api_key:
+            body["api_key"] = api_key
+        return _api(backend_url, "post", "/lemonade/target", json=body)
 
     # ── Documents ──────────────────────────────────────────────────
 
@@ -884,6 +1059,20 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     return mcp
 
 
+def run_http(mcp: "MCPServer", host: str, port: int) -> None:
+    """Serve over streamable HTTP, refusing any request a web page sends.
+
+    This server can answer permission prompts, so the SDK's default -- which
+    trusts any ``http://localhost:*`` origin -- is too loose.
+    """
+    mcp.run(
+        transport="streamable-http",
+        host=host,
+        port=port,
+        transport_security=transport_security_settings(host),
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="GAIA Agent UI MCP Server")
     parser.add_argument(
@@ -927,7 +1116,7 @@ def main():
             print(f"   Tools: {tool_count} registered\n")
         except AttributeError:
             logger.debug("MCPServer tool registry layout changed; skipping tool count")
-        mcp.run(transport="streamable-http", host=args.host, port=args.port)
+        run_http(mcp, args.host, args.port)
 
 
 if __name__ == "__main__":

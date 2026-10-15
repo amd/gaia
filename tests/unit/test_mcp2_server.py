@@ -99,7 +99,18 @@ def test_agent_ui_main_http_passes_host_and_port_to_run():
     ):
         agent_ui_mcp.main()
 
-    run.assert_called_once_with(transport="streamable-http", host="0.0.0.0", port=9877)
+    _assert_agent_ui_http_run(run, port=9877)
+
+
+def _assert_agent_ui_http_run(run, port):
+    """Bound as asked, and no web page can drive it (no origin is allowed)."""
+    run.assert_called_once()
+    kwargs = run.call_args.kwargs
+    security = kwargs.pop("transport_security")
+    assert kwargs == {"transport": "streamable-http", "host": "0.0.0.0", "port": port}
+    assert security.enable_dns_rebinding_protection is True
+    assert security.allowed_origins == []
+    assert "0.0.0.0:*" in security.allowed_hosts
 
 
 def test_tui_main_http_passes_host_and_port_to_run():
@@ -132,7 +143,7 @@ def test_cli_agent_ui_http_passes_host_and_port_to_run():
     ):
         cli.handle_mcp_serve(args)
 
-    run.assert_called_once_with(transport="streamable-http", host="0.0.0.0", port=9879)
+    _assert_agent_ui_http_run(run, port=9879)
 
 
 def test_cli_tui_http_passes_host_and_port_to_run():

@@ -9962,7 +9962,7 @@ def handle_mcp_serve(args):
     log = get_logger(__name__)
 
     try:
-        from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp
+        from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp, run_http
 
         mcp = create_agent_ui_mcp(backend_url=args.backend)
 
@@ -9991,7 +9991,7 @@ def handle_mcp_serve(args):
                 log.debug("MCPServer tool registry layout changed; skipping tool count")
             print("\nPress Ctrl+C to stop")
             print("=" * 60)
-            mcp.run(transport="streamable-http", host=args.host, port=args.port)
+            run_http(mcp, args.host, args.port)
 
     except KeyboardInterrupt:
         print("\n✅ Agent UI MCP server stopped")

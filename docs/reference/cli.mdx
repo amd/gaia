@@ -1464,6 +1464,11 @@ backend (`gaia chat --ui`) must already be running.
 | `--backend` | `http://localhost:4200` | GAIA Agent UI backend URL |
 | `--stdio` | off | Use stdio transport instead of HTTP (Claude Code / eval runner integration) |
 
+Over HTTP, any request carrying a browser `Origin` header is refused with 403,
+so a web page can't drive the server. See
+[Agent UI MCP Server](/guides/mcp/agent-ui#drive-a-turn-without-a-browser) for
+the tools that run a turn unattended.
+
 #### `gaia mcp tui` options
 
 Wraps the [TUI control API](#tui-control-api) as MCP tools, so an assistant can

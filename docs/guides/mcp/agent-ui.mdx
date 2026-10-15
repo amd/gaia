@@ -24,7 +24,19 @@ Conversations initiated via MCP appear in the browser UI in real time, so you ca
 | `get_session` | Get details of a specific session |
 | `delete_session` | Delete a session and all its messages |
 | `get_messages` | Get all messages in a session (with agent steps) |
-| `send_message` | Send a message to the GAIA agent (streams to the web UI) |
+| `send_message` | Send a message and block until the turn ends (streams to the web UI) |
+| `start_message` | Send a message and return once the backend accepts the turn |
+| `turn_status` | Streaming or idle, the pending permission prompt or question, current step, elapsed time |
+| `wait_for_turn` | Block until the turn is idle, a prompt or question is pending, or the answer contains some text |
+| `answer_prompt` | Answer the pending permission prompt: allow once, always (for the scope shown), or deny |
+| `answer_question` | Answer a question the agent asked mid-turn |
+| `stop_turn` | Stop the running turn, like the Stop button |
+| `turn_view` | The turn as the UI shows it: answer text, activity steps, and the token footer |
+| `turn_metrics` | Steps, tool calls, tokens in and out, and time for the turn |
+| `get_settings` | Active model and provider, and which Lemonade Server GAIA uses |
+| `list_models` | Chat models a provider offers |
+| `set_model` | Pick the model new turns run |
+| `set_model_server` | Switch between GAIA's Lemonade Server and your own |
 | `list_documents` | List all indexed documents |
 | `index_document` | Index a file for RAG (PDF, TXT, CSV, XLSX, etc.) |
 | `index_folder` | Index all documents in a folder |
@@ -161,6 +173,94 @@ Captures the browser window and returns the image path for review.
 
 ---
 
+## Drive a turn without a browser
+
+`send_message` blocks until the turn ends, so a turn that stops at a permission
+prompt never returns. To run a real task unattended, start the turn with
+`start_message`, then loop on `wait_for_turn(until="attention")`. That call
+returns when the turn finishes or when it needs you. Answer each prompt it
+reports, then read the result.
+
+```python
+import asyncio, json, sys
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+async def main():
+    server = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "gaia.mcp.servers.agent_ui_mcp", "--stdio",
+              "--backend", "http://localhost:4200"],
+    )
+    async with stdio_client(server) as (read, write), ClientSession(read, write) as mcp:
+        await mcp.initialize()
+
+        async def call(tool, **args):
+            r = await mcp.call_tool(tool, args, read_timeout_seconds=700)
+            body = r.structured_content or json.loads(r.content[0].text)
+            return body.get("result", body)
+
+        sid = (await call("create_session", title="harness"))["id"]
+        await call("start_message", session_id=sid, message="Write 'hello' to notes.txt")
+        while True:
+            s = await call("wait_for_turn", session_id=sid, until="attention", timeout_ms=600000)
+            if s.get("pending_prompt"):
+                p = s["pending_prompt"]
+                await call("answer_prompt", session_id=sid,
+                           confirm_id=p["confirm_id"], decision="allow_once")
+            elif s.get("state") == "idle" or s.get("ended"):
+                break
+            else:
+                raise RuntimeError(f"turn needs input: {s}")
+
+        view = await call("turn_view", session_id=sid)
+        metrics = await call("turn_metrics", session_id=sid)
+        print(view["outcome"], view["content"], view["footer"]["text"])
+        print(metrics["steps"], metrics["tool_calls"], metrics["tokens_in"], metrics["tokens_out"])
+
+asyncio.run(main())
+```
+
+`turn_view` rebuilds the turn from the same events the browser renders. The
+activity steps are folded the way the UI folds them, and the footer reads like
+the one under an answer, e.g. `12.3s · 42.5 tok/s · 123ms TTFT · 1,234 → 56 tokens`.
+Assert on these instead of taking a screenshot.
+
+A few details:
+
+- `turn_status` also attaches to a turn the user started in the browser, so its prompts can be answered the same way.
+- `wait_for_turn` takes `timeout_ms` from 1 to 600000. Out-of-range or non-integer values are refused immediately. On timeout it returns `timed_out: true` with the state the turn had. If the turn ends before the condition, it returns `ended: true` rather than waiting out the clock.
+- `turn_metrics` reports a value nobody measured as `null`, never `0`. `tokens_in`/`tokens_out` are the final model call, which is what the UI footer shows. `turn_input_tokens`/`turn_output_tokens` cover the whole turn.
+- Turns started with `start_message` use the model the Agent UI uses. Change it with `set_model`.
+
+### What answering a prompt can't do
+
+`answer_prompt` posts to the same endpoint as the user's click in the browser,
+and always names the prompt it answers. It is refused before reaching the
+backend when:
+
+| `refused` | Why |
+|-----------|-----|
+| `already_answered` | That prompt was answered already, including by a concurrent call |
+| `stale` | A different prompt is waiting now, or none is |
+| `expired` | The prompt's own timeout has passed |
+| `wrong_session` | The `confirm_id` belongs to another session |
+| `unknown_prompt` | This server never saw that prompt (no blind answers) |
+| `scope_mismatch` | `always` was sent without repeating the prompt's `always_scope` exactly |
+| `always_not_offered` | The prompt offers no `always`, so answer `allow_once` or `deny` |
+
+The backend checks the `confirm_id` again, and its rejection comes back as
+`backend_rejected`. An `always` grant covers only the scope the prompt showed,
+for example `write_file on notes.txt`, never the whole tool.
+
+Over HTTP the server refuses any request that carries a browser `Origin`
+header, including pages served from other `localhost` ports and the Agent UI's
+own origin. A web page you visit therefore can't drive it. MCP clients send no
+`Origin` and are unaffected. The backend's own `X-Gaia-UI` header and origin
+checks still apply to every call this server makes.
+
+---
+
 ## Architecture
 
 ```
@@ -216,6 +316,10 @@ claude mcp remove gaia-agent-ui
   </Accordion>
 
   <Accordion title="send_message times out">
-    Large documents or complex queries can take time. The default timeout is 180 seconds. If the Lemonade LLM server is slow to respond, check its status with `system_status`.
+    Large documents or complex queries can take time. The default timeout is 180 seconds. If the Lemonade LLM server is slow to respond, check its status with `system_status`. A turn that is waiting on a permission prompt never finishes on its own. Use `start_message` and `answer_prompt` instead (see [Drive a turn without a browser](#drive-a-turn-without-a-browser)).
+  </Accordion>
+
+  <Accordion title="403 'Invalid Origin header' over HTTP">
+    The server refuses requests that carry a browser `Origin`, so a web page can't answer prompts. Connect from an MCP client (Claude Code, the Python SDK), or use `--stdio`.
   </Accordion>
 </AccordionGroup>
