@@ -107,6 +107,36 @@ def test_a_direct_provider_does_not_claim_to_go_via_lemonade():
     assert "via Lemonade" not in described
 
 
+def test_the_cloud_notice_is_one_line_naming_the_model_once():
+    """#5080/#5081: the notice people see, not the prompt's fuller sentence."""
+    notice = resolve_inference_location("amd.DeepSeek-V4.1-Flash").notice()
+    assert notice == (
+        "Using DeepSeek-V4.1-Flash on the AMD LLM Gateway (cloud). Your "
+        "messages, and anything read from files or memory, are sent there."
+    )
+    assert "via Lemonade" not in notice
+
+
+@pytest.mark.parametrize(
+    "kwargs,name",
+    [
+        ({"model": "fireworks.accounts/fireworks/models/glm-4p6"}, "glm-4p6"),
+        ({"model": "claude-sonnet-4-5", "use_claude": True}, "claude-sonnet-4-5"),
+        ({"model": "Gemma-4-E4B-it-GGUF"}, "Gemma-4-E4B-it-GGUF"),
+    ],
+)
+def test_the_notice_names_the_model_without_its_routing_prefix(kwargs, name):
+    location = resolve_inference_location(**kwargs)
+    assert location.notice().startswith(f"Using {name} on ")
+    assert "via Lemonade" not in location.notice()
+
+
+def test_the_local_notice_keeps_the_privacy_claim_narrow():
+    notice = resolve_inference_location("Gemma-4-E4B-it-GGUF").notice()
+    assert "on this machine" in notice
+    assert "GAIA is not sending this conversation to any cloud provider" in notice
+
+
 def test_an_empty_model_id_is_still_answerable():
     location = resolve_inference_location("")
     assert location.model == "unknown"

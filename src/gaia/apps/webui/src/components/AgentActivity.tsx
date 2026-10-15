@@ -700,7 +700,7 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
     }, [output]);
 
     const hasOutput = !!(output.stdout || output.stderr);
-    const isError = output.returnCode !== 0;
+    const isError = output.returnCode !== 0 && !output.expectedExit;
 
     return (
         <div className={`cmd-output ${isError ? 'cmd-error' : ''}`}>
@@ -715,7 +715,12 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
                         <span className="cmd-duration">{output.durationSeconds.toFixed(1)}s</span>
                     )}
                     {output.returnCode !== 0 && (
-                        <span className="cmd-exit-code">exit {output.returnCode}</span>
+                        <span
+                            className={`cmd-exit-code${isError ? '' : ' cmd-exit-expected'}`}
+                            title={output.expectedExit ?? undefined}
+                        >
+                            exit {output.returnCode}
+                        </span>
                     )}
                     {hasOutput && (
                         <button

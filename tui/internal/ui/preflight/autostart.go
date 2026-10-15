@@ -138,6 +138,10 @@ func waitForLemonade(ctx context.Context, probe func(context.Context) bool) bool
 // A var so a test can exercise the row's three outcomes without a Lemonade on
 // the box.
 var tryAutoStartLemonade = func(ctx context.Context) (bool, string, string) {
+	if lemonade.ExternalModeActive() {
+		// The user runs their own server; GAIA starts none.
+		return false, "", ""
+	}
 	l := resolveLemonade()
 	if !canAutoStart(l) {
 		// Only when no system server is installed: starting GAIA's own beside

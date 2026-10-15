@@ -728,7 +728,18 @@ class ProjectMapMixin:
         """
         if not hasattr(self, "_project_map_root_cache"):
             explicit = getattr(getattr(self, "config", None), "project_root", None)
-            self._project_map_root_cache = resolve_project_root(explicit)
+            root = resolve_project_root(explicit)
+            in_scope = getattr(
+                getattr(self, "path_validator", None), "in_env_scope", None
+            )
+            # The map reads the tree into the prompt, so it obeys GAIA_ALLOWED_PATHS.
+            if root and in_scope is not None and not in_scope(root):
+                logger.warning(
+                    "[project-map] %s is outside GAIA_ALLOWED_PATHS; not mapping it",
+                    root,
+                )
+                root = None
+            self._project_map_root_cache = root
         return self._project_map_root_cache
 
     def materialize_project_map(self) -> Optional[ProjectMap]:

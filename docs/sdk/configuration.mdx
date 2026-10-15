@@ -84,6 +84,17 @@ memory) and 10% headroom, up to that maximum and never below its default. NPU
 does not cap a GPU model. Invalid nonempty values fail with an actionable error;
 unset or blank values use the default.
 
+That window is then checked against the memory free right now, for a model GAIA
+knows the size of on a Lemonade on this machine. When other apps leave too
+little, the window shrinks in 8,192-token steps, keeping 1 GB free and room for
+the embedder, to no less than 32,768 tokens, and a warning names the free memory.
+The choice holds until the process restarts, so a loaded model is not reloaded
+as free memory moves. A load that would not fit even then is refused with how
+much memory it needs; see
+[Not enough free memory](/reference/troubleshooting#not-enough-free-memory).
+`GAIA_CTX_SIZE` is never shrunk, but its load is still refused when it would run
+the machine out of memory.
+
 ## Per-request time budget
 
 A long document arrives as one large prefill, and the bigger the context window
@@ -116,6 +127,70 @@ instance-scoped exact pin and takes precedence over this environment variable.
 
 Installer verification uses the profile being installed, even before it is saved.
 This setting does not change overflow recovery; it controls requested load capacity.
+
+## Retrying a flaky model endpoint
+
+Hosted OpenAI-compatible endpoints, the proxies in front of them, and a busy
+local server occasionally drop a request: a reset connection, a 502/503/504, a
+429, a 500 from a failed upstream hop. GAIA retries those, and only those.
+
+**Each request** is retried with exponential backoff and full jitter, honouring
+`Retry-After` up to the longest-wait cap below. Retried: connection errors and
+timeouts, 408, 429, 502, 503, 504, and 500 unless its body says the request
+itself was rejected — including a cloud model's 429 or 502 that Lemonade reports
+inside a stream that had already opened, and a cloud connection that dropped or
+hit Lemonade's time limit with no status code at all. Never retried: 400
+(including content-filter rejections), 401, 403, 404, 413, 422, a TLS
+certificate failure, and context-window overflow. A cloud time limit is retried
+only within the request's deadline, never again at the agent-step level. A stream is retried here only before its first token, so one request
+never repeats output. Each retry shows a status line such as
+"The model service is busy — retrying in 8s (2/4)".
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GAIA_LLM_RETRY_ATTEMPTS` | `5` | Attempts per request, the first included. `1` turns retry off. |
+| `GAIA_LLM_RETRY_BASE_DELAY` | `2` | Backoff base in seconds: retry *n* waits up to `base × 2ⁿ`. |
+| `GAIA_LLM_RETRY_MAX_DELAY` | `30` | Longest single wait in seconds, `Retry-After` included. |
+| `GAIA_LLM_RETRY_DEADLINE` | `120` | Seconds one request may spend across all its attempts and waits. |
+| `GAIA_LLM_STREAM_IDLE_TIMEOUT` | `120` | Seconds a stream may send nothing before it counts as stalled. |
+| `GAIA_LLM_HOSTED_REPLY_TIMEOUT` | `300`, or longer for a long reply | Seconds a hosted model may take to send a whole reply without streaming. |
+
+**A stalled stream** is one that stops sending data. A hosted model gets the
+idle limit above from the moment it accepts the request; a local model gets the
+whole request budget (`GAIA_LEMONADE_REQUEST_BUDGET`) for its first token,
+because prefilling a long prompt legitimately sends nothing for minutes, and
+the idle limit after that. Any byte, a keep-alive included, resets the clock.
+A stall before the first token of a hosted model is retried once; the time it
+spent does not count against `GAIA_LLM_RETRY_DEADLINE`. A stall after the first
+token, or a local model that used its whole prefill budget, ends the request
+with a message saying so. Stop ends a stalled stream at once. A hosted model answering without
+streaming sends its reply all at once, so it gets the reply limit above (300 s,
+or 1 s per 40 requested tokens if longer) and the same single retry; a local
+model keeps its request budget.
+
+**An agent step** whose request still fails after that is not the end of the
+run. The agent waits, then asks again with its conversation and tool history
+intact; the wait doubles each time. Only the model call is repeated: tools that
+already ran are not run again. If a reply was cut off part-way, the partial
+text stays on screen and the new reply follows it; only the new reply becomes
+the answer. If the model stays unreachable, the turn ends with a one-line
+answer that says where it stopped and which tool calls are kept, the run is
+reported as failed, and saying "continue" once the service is back picks the
+task up from there.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GAIA_AGENT_MODEL_RETRIES` | `2` | Extra attempts per step after the request gave up. `0` turns this off. |
+| `GAIA_AGENT_MODEL_RETRY_COOLDOWN` | `30` | Seconds before the first of those attempts; doubles after that. |
+
+```bash
+# Fail fast while debugging an endpoint
+GAIA_LLM_RETRY_ATTEMPTS=1 GAIA_AGENT_MODEL_RETRIES=0 gaia chat
+```
+
+Invalid nonempty values fail with an actionable error; unset or blank values
+use the defaults. Stop cancels any retry wait, within half a second: the client's
+backoff as well as the agent's wait between step attempts.
 
 ## 16.2 Configuration in Code
 
