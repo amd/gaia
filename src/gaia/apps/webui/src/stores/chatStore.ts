@@ -59,6 +59,12 @@ function writePref(key: string, value: string): void {
     }
 }
 
+/** A question the agent is blocked on; `expiresAt` is when the backend stops waiting (ms), or null. */
+export interface LiveQuestion {
+    sessionId: string;
+    expiresAt: number | null;
+}
+
 interface ChatState {
     /** Registered agents; Settings → Connectors grants scopes to them. */
     agents: AgentInfo[];
@@ -123,6 +129,12 @@ interface ChatState {
     /** The run is blocked on the user's approval or answer, not on the model. */
     awaitingUser: boolean;
     setAwaitingUser: (awaiting: boolean) => void;
+    /** Mid-run questions the agent is still blocked on, by request id. A card
+     *  missing from here can no longer be answered. */
+    liveQuestions: Record<string, LiveQuestion>;
+    openQuestion: (requestId: string, sessionId: string, timeoutSeconds?: number | null) => void;
+    closeQuestion: (requestId: string) => void;
+    closeSessionQuestions: (sessionId: string) => void;
 
     // Structured cards from tool_result.render events (issue #2108).
     // Accumulated during the stream, transferred onto the finalized
@@ -318,6 +330,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setLiveStatus: (status) => set({ liveStatus: status }),
     awaitingUser: false,
     setAwaitingUser: (awaiting) => set({ awaitingUser: awaiting }),
+    liveQuestions: {},
+    openQuestion: (requestId, sessionId, timeoutSeconds) =>
+        set((state) => ({
+            liveQuestions: {
+                ...state.liveQuestions,
+                [requestId]: {
+                    sessionId,
+                    expiresAt: timeoutSeconds != null && timeoutSeconds > 0 ? Date.now() + timeoutSeconds * 1000 : null,
+                },
+            },
+        })),
+    closeQuestion: (requestId) =>
+        set((state) => {
+            if (!(requestId in state.liveQuestions)) return state;
+            const { [requestId]: _closed, ...rest } = state.liveQuestions;
+            return { liveQuestions: rest };
+        }),
+    closeSessionQuestions: (sessionId) =>
+        set((state) => {
+            const rest = Object.fromEntries(
+                Object.entries(state.liveQuestions).filter(([, q]) => q.sessionId !== sessionId),
+            );
+            return Object.keys(rest).length === Object.keys(state.liveQuestions).length ? state : { liveQuestions: rest };
+        }),
 
     // Streaming cards (#2108)
     cards: [],

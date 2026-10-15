@@ -202,6 +202,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const pendingPrompt = useChatStore((s) => s.pendingPrompt);
     const liveStatus = useChatStore((s) => s.liveStatus);
     const awaitingUser = useChatStore((s) => s.awaitingUser);
+    // Other events can arrive while a question waits; it still waits on the user.
+    const hasLiveQuestion = useChatStore((s) => Object.values(s.liveQuestions).some((q) => q.sessionId === sessionId));
 
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
@@ -462,6 +464,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         stopRequestedRef.current = true;
         setStopping(true);
         useNotificationStore.getState().dismissSessionPrompts(sessionId);
+        useChatStore.getState().closeSessionQuestions(sessionId);
         log.stream.warn('User stopped generation; waiting for the server to close the turn');
         // A 404 here usually means the run just finished and its `done` is in
         // flight; the grace timer below closes the turn if nothing arrives.
@@ -728,6 +731,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         console.error('[ChatView] needs_input event missing request_id, ignoring');
                         return;
                     }
+                    useChatStore.getState().openQuestion(
+                        event.request_id,
+                        sessionId,
+                        typeof event.timeout_seconds === 'number' ? event.timeout_seconds : null,
+                    );
                     appendCard({
                         render: 'needs_input',
                         data: {
@@ -918,6 +926,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onDone: (event) => {
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);
+                useChatStore.getState().closeSessionQuestions(sessionId);
                 if (doneHandled) return;
                 doneHandled = true;
                 // Label from the server's report, not the click: a Stop that
@@ -1023,6 +1032,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             },
             onError: (err) => {
                 useNotificationStore.getState().dismissSessionPrompts(sessionId);
+                useChatStore.getState().closeSessionQuestions(sessionId);
                 const wasStopping = stopRequestedRef.current;
                 endStopWait();
                 // Cancel any pending rAF flush
@@ -1524,7 +1534,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
                                 cards={isStreaming ? cards : lastCardsRef.current}
                                 liveStatus={isStreaming ? liveStatus : null}
-                                awaitingUser={isStreaming && awaitingUser}
+                                awaitingUser={isStreaming && (awaitingUser || hasLiveQuestion)}
                             />
                         </div>
                     )}
