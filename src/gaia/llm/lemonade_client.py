@@ -1711,6 +1711,25 @@ def streams_ok(model_id: Optional[str]) -> bool:
     return model_id not in _CLOUD_NON_STREAMING
 
 
+def _remember_cloud_availability(model_id: Optional[str], ok: bool) -> None:
+    """Record a cloud model's 404 in ``gateway.json``, or clear it on success.
+
+    A bookkeeping failure must not replace the call's own outcome, so it is
+    logged as a warning rather than raised.
+    """
+    if not model_id:
+        return
+    try:
+        from gaia.llm.gateway import clear_model_unavailable, mark_model_unavailable
+
+        if ok:
+            clear_model_unavailable(model_id)
+        else:
+            mark_model_unavailable(model_id, 404)
+    except Exception as e:  # noqa: BLE001 - the request's result still stands
+        log.warning(f"Could not record availability of {model_id}: {e}")
+
+
 def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
     """Remember which ids in a ``/api/v1/models`` payload are cloud-routed.
 
@@ -1926,6 +1945,19 @@ class LemonadeAuthError(LemonadeClientError):
     """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
 
 
+class CloudModelUnavailableError(LemonadeClientError):
+    """A cloud provider answered 404 for the requested model.
+
+    The model is not deployed, was renamed, or the account has no access to it.
+    Distinct from an auth failure (401/403), which says nothing about the model.
+    """
+
+    def __init__(self, message: str, model_id: Optional[str] = None):
+        super().__init__(message)
+        self.model_id = model_id
+        self.status = 404
+
+
 class LemonadeVersionError(LemonadeClientError):
     """Raised when Lemonade Server is older than the oldest version GAIA supports."""
 
@@ -1988,6 +2020,7 @@ def _cloud_request_error(
     status: Optional[int],
     provider: Optional[str] = None,
     reason: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> LemonadeClientError:
     """Actionable cloud failures without reflecting provider response bodies.
 
@@ -2002,10 +2035,11 @@ def _cloud_request_error(
             "authentication, verify LEMONADE_API_KEY."
         )
     if status == 404:
-        return LemonadeClientError(
+        return CloudModelUnavailableError(
             "The selected cloud model is unavailable (HTTP 404). It may need "
             "deployment or access for your account. Choose a deployed model "
-            "or router in the TUI provider settings."
+            "or router in the TUI provider settings.",
+            model_id=model,
         )
     if status == 429:
         return LemonadeClientError(
@@ -3809,9 +3843,7 @@ class LemonadeClient:
                 # cloud branch drops it (provider bodies are never reflected).
                 if self.cloud_model_provider(model):
                     raise tag_http_failure(
-                        _cloud_request_error(
-                            response.status_code, self.cloud_model_provider(model)
-                        ),
+                        self._cloud_failure(response.status_code, model),
                         response.status_code,
                         response.text,
                         response.headers,
@@ -3837,6 +3869,8 @@ class LemonadeClient:
                     f"Chat completion successful. "
                     f"Approximate response length: {token_count} characters"
                 )
+            if self.cloud_model_provider(model):
+                _remember_cloud_availability(model, ok=True)
 
             return result
 
@@ -4235,6 +4269,8 @@ class LemonadeClient:
             self.log.debug(
                 f"Completed streaming chat completion. Generated {tokens_generated} tokens."
             )
+            if tokens_generated and self.cloud_model_provider(model):
+                _remember_cloud_availability(model, ok=True)
 
         except openai.AuthenticationError:
             if self.cloud_model_provider(model):
@@ -4253,10 +4289,8 @@ class LemonadeClient:
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
             if self.cloud_model_provider(model):
                 raise attach_retry_state(
-                    _cloud_request_error(
-                        _cloud_error_status(e),
-                        self.cloud_model_provider(model),
-                        classify_exception(e),
+                    self._cloud_failure(
+                        _cloud_error_status(e), model, classify_exception(e)
                     ),
                     state,
                 ) from None
@@ -4733,6 +4767,17 @@ class LemonadeClient:
     def cloud_model_provider(self, model: str) -> Optional[str]:
         """Return the provider for a built-in or previously discovered cloud model."""
         return cloud_model_provider(model, self._model_metadata.get(model))
+
+    def _cloud_failure(
+        self, status: Optional[int], model: str, reason: Optional[str] = None
+    ) -> LemonadeClientError:
+        """The error for a failed cloud call; a 404 is also recorded per model."""
+        error = _cloud_request_error(
+            status, self.cloud_model_provider(model), reason, model
+        )
+        if isinstance(error, CloudModelUnavailableError):
+            _remember_cloud_availability(model, ok=False)
+        return error
 
     def refresh_cloud_models(self) -> Dict[str, Dict[str, Any]]:
         """Re-read the catalog so cloud-model classification is current.
