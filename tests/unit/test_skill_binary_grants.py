@@ -25,7 +25,6 @@ from gaia.agents.tools.shell_tools import (
     ALLOWED_COMMANDS,
     TIER_CONFIRM,
     TIER_CONFIRM_ONCE,
-    TIER_REFUSE,
     ShellToolsMixin,
     skill_granted_binaries,
 )
