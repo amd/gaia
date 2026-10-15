@@ -5,7 +5,7 @@
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from gaia.version import __version__ as _gaia_version
 
@@ -454,6 +454,14 @@ class FileListResponse(BaseModel):
 
     files: List[Dict[str, Any]] = []
     total: int = 0
+
+    @field_validator("files", mode="before")
+    @classmethod
+    def _names_as_entries(cls, files: Any) -> Any:
+        """``list_files`` reports bare names; keep them as ``{"name": ...}``."""
+        if not isinstance(files, list):
+            return files
+        return [{"name": f} if isinstance(f, str) else f for f in files]
 
 
 class AgentStepResponse(BaseModel):

@@ -11,6 +11,7 @@ import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta'
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import './MessageBubble.css';
 
@@ -91,6 +92,8 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
 
     if (phase === 'done') return null;
 
+    const showModelWaitHint = active && !awaitingUser && elapsed >= MODEL_WAIT_HINT_S && isModelWaitLabel(label);
+
     return (
         <span className="thinking-indicator">
             <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
@@ -98,9 +101,13 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
                 <span className="thinking-indicator-elapsed"> · {elapsed}s</span>
             )}
             {active && <span className="cursor" />}
+            {showModelWaitHint && (
+                <span className="thinking-indicator-hint" role="status">{MODEL_WAIT_HINT}</span>
+            )}
         </span>
     );
 }
+
 
 const WAITING_ON_USER_LABEL = 'Waiting for you';
 

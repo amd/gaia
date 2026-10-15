@@ -601,7 +601,7 @@ class TestPrettyPrintJsonToolResults:
         assert "result_data" in event
         rd = event["result_data"]
         assert rd["type"] == "file_list"
-        assert rd["files"] == files
+        assert rd["files"] == [{"name": f} for f in files]
         assert rd["total"] == 3
 
     def test_file_list_limited_to_20(self, handler):
@@ -620,7 +620,7 @@ class TestPrettyPrintJsonToolResults:
         handler.pretty_print_json(data, title="Result")
         events = _drain(handler)
         rd = events[0]["result_data"]
-        assert rd["files"] == files
+        assert rd["files"] == [{"name": f} for f in files]
 
     def test_chunks_result_data(self, handler):
         chunks = ["chunk1 text", "chunk2 text", "chunk3 text"]

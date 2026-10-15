@@ -60,7 +60,7 @@ from .sse_handler import (
     _clean_answer_json,
     _fix_double_escaped,
 )
-from .utils import managed_documents_dir
+from .utils import attached_upload_paths, managed_documents_dir
 from .warmup import wait_for_warm_up
 
 logger = logging.getLogger(__name__)
@@ -1265,6 +1265,32 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
     return sorted({managed, str(cwd)})
 
 
+def _with_attachments(allowed: list, attached: list) -> list:
+    """Add this turn's upload copies to *allowed* without narrowing it.
+
+    The user just picked these files, so reading GAIA's copy needs no prompt.
+    Kept apart from ``_compute_allowed_paths`` so an attachment never drops the
+    working-directory scope a session without documents has.
+    """
+    return sorted(set(allowed) | set(attached))
+
+
+def _relayed_documents(rag_file_paths: list, attached: list) -> list:
+    """Documents a relayed sidecar should grant: its only way to grant a file.
+
+    Images are left out: the sidecar indexes what it is sent, and an image is
+    read by vision, not indexed.
+    """
+    from .routers.files import IMAGE_EXTENSIONS
+
+    extra = [
+        p
+        for p in attached
+        if p not in rag_file_paths and Path(p).suffix.lower() not in IMAGE_EXTENSIONS
+    ]
+    return list(rag_file_paths) + extra
+
+
 def _extend_cached_scope(agent, allowed: list) -> None:
     """Give a cached agent the scope a new one would get for this turn.
 
@@ -1687,6 +1713,22 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _agent_ui_wording(text: str) -> str:
+    """Swap the agent's TUI-only "how to switch model" advice for the Agent UI's.
+
+    The agent loop can't tell which front-end it serves (the flagship sidecar
+    answers both), so the Agent UI rewrites the one sentence it owns here.
+    """
+    from gaia.llm.providers.lemonade import (
+        AGENT_UI_MODEL_SWITCH_HINT,
+        TUI_MODEL_SWITCH_HINT,
+    )
+
+    if not text or TUI_MODEL_SWITCH_HINT not in text:
+        return text
+    return text.replace(TUI_MODEL_SWITCH_HINT, AGENT_UI_MODEL_SWITCH_HINT)
+
+
 def _echoes_failed_tool(event: dict, steps: list) -> bool:
     """A recoverable error right after a failed tool repeats that tool's error.
 
@@ -2065,7 +2107,8 @@ async def _get_chat_response(
                 len(library_paths),
             )
 
-        allowed = _compute_allowed_paths(all_doc_paths)
+        attached = attached_upload_paths(request.message)
+        allowed = _with_attachments(_compute_allowed_paths(all_doc_paths), attached)
 
         model_id = session.get("model")
         custom_model = db.get_setting("custom_model")
@@ -2307,7 +2350,7 @@ async def _get_chat_response(
             if late_error is not None:
                 logger.warning("Timed-out chat worker then failed: %s", late_error)
             raise asyncio.TimeoutError
-        return worker.result()
+        return _agent_ui_wording(worker.result())
     except asyncio.TimeoutError:
         logger.error("Chat response timed out after %s seconds", _CHAT_TIMEOUT_SECONDS)
         return "I took too long thinking about that one. Try breaking your question into simpler parts and I'll do my best."
@@ -2324,7 +2367,7 @@ async def _get_chat_response(
         # classify the exception.
         classified = _classify_chat_exception(e)
         if classified is not None:
-            return classified.user_message
+            return _agent_ui_wording(classified.user_message)
         return (
             "I'm having trouble connecting to the language model right now. "
             "Please make sure Lemonade Server is running and try again."
@@ -2437,7 +2480,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 len(library_paths),
             )
 
-        allowed = _compute_allowed_paths(all_doc_paths)
+        attached = attached_upload_paths(request.message)
+        allowed = _with_attachments(_compute_allowed_paths(all_doc_paths), attached)
         model_id = session.get("model")
 
         # Use custom model override if set in user settings
@@ -2684,7 +2728,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         model_id,
                         agent_type,
                         session_id=session_id,
-                        documents=rag_file_paths,
+                        documents=_relayed_documents(rag_file_paths, attached),
                     )
                     return
 
@@ -2973,6 +3017,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     break
 
                 event_type = event.get("type", "")
+                if event_type in ("answer", "agent_error") and event.get("content"):
+                    event = {**event, "content": _agent_ui_wording(event["content"])}
 
                 # Capture answer content for DB storage
                 if event_type == "answer":
@@ -3200,7 +3246,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
         # Use agent result if no streamed answer was captured
         if not full_response and result_holder["answer"]:
-            full_response = result_holder["answer"]
+            full_response = _agent_ui_wording(result_holder["answer"])
             # Send as answer event since it wasn't streamed
             yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
 

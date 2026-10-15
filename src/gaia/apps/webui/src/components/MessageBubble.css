@@ -555,6 +555,15 @@
     height: 12px;
 }
 
+.thinking-indicator-hint {
+    display: block;
+    margin-top: 4px;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: normal;
+}
+
 /* Inference stats footer — visible only on hover */
 .msg-stats {
     display: flex;

@@ -156,6 +156,7 @@ from gaia.llm.providers.lemonade import (
 from gaia.llm.retry import (
     RetryNotice,
     RetryState,
+    StreamStalledError,
     describe_retry_state,
     model_retry_notices,
     retry_state_of,
@@ -7106,13 +7107,18 @@ Do NOT wrap conversational replies in JSON.
 
         # 1. Direct match anywhere in the cause chain.
         cur: Optional[BaseException] = exc
+        prev: Optional[BaseException] = None
         seen: set = set()
         while cur is not None and id(cur) not in seen:
             seen.add(id(cur))
+            if isinstance(cur, StreamStalledError):
+                # The client re-raises a stall already worded for the user.
+                return str(prev) if prev is not None else cur.describe(1)
             if isinstance(cur, LemonadeError):
                 msg = getattr(cur, "user_message", None)
                 if msg:
                     return str(msg)
+            prev = cur
             cur = cur.__cause__ or cur.__context__
 
         # 2. String-based reclassification — covers the case where the typed
@@ -7127,18 +7133,22 @@ Do NOT wrap conversational replies in JSON.
         return None
 
     def _cloud_account_refusal(self, exc: BaseException) -> Optional[str]:
-        """The user's message when a cloud provider refused the account itself.
+        """The user's message when a cloud provider refused the account or model.
 
-        Out of funds or suspended: no retry can succeed, so the turn ends as an
-        error instead of an answer.
+        Out of funds or suspended, or the model is not served there (HTTP
+        404): no retry can succeed, so the turn ends as an error instead of an
+        answer.
         """
         from gaia.llm.providers.lemonade import (
             LemonadeCloudAccountError,
+            LemonadeCloudModelUnavailableError,
             classify_lemonade_exception,
         )
 
         classified = classify_lemonade_exception(exc)
-        if isinstance(classified, LemonadeCloudAccountError):
+        if isinstance(
+            classified, (LemonadeCloudAccountError, LemonadeCloudModelUnavailableError)
+        ):
             return classified.user_message
         return None
 
@@ -7199,10 +7209,13 @@ Do NOT wrap conversational replies in JSON.
         """One status line per client-level retry, so a wait never reads as a
         hang: "The model service is busy — retrying in 8s (2/4)"."""
         when = f"in {notice.delay:.0f}s" if notice.delay >= 1 else "now"
-        self.console.print_warning(
+        message = (
             f"{self._model_trouble(notice.reason)} — retrying {when} "
             f"({notice.retry}/{notice.max_retries})"
         )
+        self.console.print_warning(message)
+        # Also the live status, so the header stops reading as a silent wait.
+        self.console.report_phase("model_retry", message)
 
     def _cool_down_for_model(self, seconds: float) -> bool:
         """Wait *seconds* in short slices so Stop still works mid-wait.
