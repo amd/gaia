@@ -483,7 +483,13 @@ def _installer_init_argv():
     ).read_text(encoding="utf-8")
     match = re.search(r'\[\s*("init",[^\]]*)\]', source)
     assert match, "backend-installer.cjs no longer runs `gaia init`"
-    return json.loads(f"[{match.group(1)}]")
+    # Spread elements (the Lemonade choice) are runtime-only; keep the literals.
+    literals = [
+        part.strip()
+        for part in match.group(1).split(",")
+        if part.strip() and not part.strip().startswith("...")
+    ]
+    return json.loads(f"[{', '.join(literals)}]")
 
 
 def test_first_launch_runs_setup_exactly_once(monkeypatch):

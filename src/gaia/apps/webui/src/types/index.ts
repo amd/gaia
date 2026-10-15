@@ -393,7 +393,7 @@ export interface SystemStatus {
      * the actual default — replaces the previously hard-coded "~25 GB".
      */
     default_model_size_gb: number | null;
-    lemonade_url: string;
+    lemonade_url: string | null;
     expected_model_loaded: boolean;
     /** Live progress while a model pull is in flight. ``null`` otherwise. */
     download_progress: DownloadProgress | null;
