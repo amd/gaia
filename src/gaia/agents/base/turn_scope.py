@@ -28,6 +28,12 @@ import re
 from typing import Any, Dict, Optional, Set
 
 from gaia.agents.base.completion import mentioned_paths, save_obligations
+from gaia.agents.base.tool_outcome import (
+    FAILED_STATUSES,
+    tool_result_dict,
+    tool_result_error_fields,
+    tool_result_failed,
+)
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
     is_mutating_tool,
@@ -134,7 +140,8 @@ def _urls_in(value: Any) -> Set[str]:
 
 
 def _error_brief(result: Any) -> str:
-    if isinstance(result, dict):
+    result = tool_result_error_fields(result)
+    if result:
         for key in ("error", "message", "stderr"):
             value = result.get(key)
             if isinstance(value, str) and value.strip():
@@ -170,13 +177,10 @@ def _streak_key(tool: str, args: Dict[str, Any]) -> str:
 
 def _is_tool_failure(result: Any) -> bool:
     """The tool refused or broke; a program exiting non-zero does not count."""
-    if (
-        not isinstance(result, dict)
-        or "return_code" in result
-        or result.get("rate_limited") is True
-    ):
+    data = tool_result_dict(result)
+    if data is not None and ("return_code" in data or data.get("rate_limited") is True):
         return False
-    return result.get("status") in ("error", "denied") or result.get("success") is False
+    return tool_result_failed(result, FAILED_STATUSES)
 
 
 class TurnScopeGuard:

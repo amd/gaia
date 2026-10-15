@@ -557,9 +557,13 @@ class WebClient:
     def parse_html(self, html: str) -> "BeautifulSoup":
         """Parse HTML content with BeautifulSoup."""
         if not BS4_AVAILABLE:
+            from gaia.agents.install_hints import (  # pylint: disable=import-outside-toplevel
+                missing_package_hint,
+            )
+
             raise ImportError(
                 "beautifulsoup4 is required for HTML parsing. "
-                "Install with: pip install beautifulsoup4"
+                + missing_package_hint("beautifulsoup4")
             )
         # Try lxml first (faster), fall back to html.parser (stdlib)
         try:

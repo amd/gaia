@@ -625,7 +625,8 @@ def test_the_fallback_never_shows_template_text_as_the_goal(agent):
     no_goal = agent._parse_llm_response('{"thought": "t", "tool": "list_skills" "x"}')
     assert no_goal["goal"] == ""
     answer = agent._parse_llm_response('{"thought": "t", "answer": "Hi" "x"}')
-    assert answer["answer"] == "Hi" and answer["goal"] == ""
+    # A quote not followed by JSON structure is one the model forgot to escape.
+    assert answer["answer"] == 'Hi" "x' and answer["goal"] == ""
 
 
 def test_a_malformed_call_is_retried_and_the_run_is_not_failed(agent):

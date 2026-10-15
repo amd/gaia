@@ -39,6 +39,16 @@ def gaia_home() -> Path:
     return Path.home() / ".gaia"
 
 
+def mcp_servers_path() -> Path:
+    """Return GAIA's global MCP server list, ``<gaia_home>/mcp_servers.json``."""
+    return gaia_home() / "mcp_servers.json"
+
+
+def gaia_agents_dir() -> Path:
+    """Return the folder installed agents live in, ``<gaia_home>/agents``."""
+    return gaia_home() / "agents"
+
+
 # Location is overridable for tests / non-standard installs. GAIA_CONFIG_FILE
 # wins outright, then GAIA_CONFIG_DIR; otherwise config.json lives in
 # ``gaia_home()``, so a run with its own GAIA_HOME never touches ~/.gaia/config.json.
