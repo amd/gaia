@@ -1301,15 +1301,30 @@ class TestResponseEnvelopeNeverStreamsRaw:
         """No tool and no answer: nothing to show, and no raw JSON either."""
         assert _stream(handler, ['{"thought": "hmm", ', '"goal": "think"}']) == []
 
-    def test_thought_plus_answer_emits_only_the_answer(self, handler):
+    def test_thought_plus_answer_streams_only_the_answer(self, handler):
         envelope = (
             '{"thought": "done", "goal": "reply", '
             '"answer": "Roy Fielding, \\"UC Irvine\\", 2000."}'
         )
         events = _stream(handler, _pieces(envelope, 4))
-        assert events == [
-            {"type": "answer", "content": 'Roy Fielding, "UC Irvine", 2000.'}
-        ]
+        assert {e["type"] for e in events} == {"chunk"}
+        assert _shown(events) == 'Roy Fielding, "UC Irvine", 2000.'
+
+    @pytest.mark.parametrize("size", [1, 4, 64])
+    def test_answer_after_a_tool_key_is_not_streamed(self, handler, size):
+        envelope = (
+            '{"thought": "t", "tool": "x", "tool_args": {"answer": "no"}, '
+            '"answer": "not yet"}'
+        )
+        assert _shown(_stream(handler, _pieces(envelope, size))) == ""
+
+    @pytest.mark.parametrize("size", [1, 4, 64])
+    def test_nested_answer_key_is_not_the_answer(self, handler, size):
+        envelope = (
+            '{"thought": "t", "goal": {"answer": "inner"}, '
+            '"tool": "x", "tool_args": {}}'
+        )
+        assert _content(_stream(handler, _pieces(envelope, size))) == []
 
     def test_answer_that_contains_json_still_shows(self, handler):
         envelope = '{"thought": "t", "answer": "Use {\\"thought\\": \\"x\\"} here."}'
