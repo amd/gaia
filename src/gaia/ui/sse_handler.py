@@ -327,6 +327,7 @@ def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
 # An envelope whose first key is "answer".
 _ANSWER_FIRST_RE = re.compile(r'\s*\{\s*"answer"\s*:')
 
+
 class SSEOutputHandler(OutputHandler):
     """
     OutputHandler that queues agent events as JSON for SSE streaming.
