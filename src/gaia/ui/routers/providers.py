@@ -232,7 +232,8 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
 
 def _is_chat_model(model: Dict[str, Any]) -> bool:
     labels = {str(label).lower() for label in model.get("labels") or []}
-    return not labels & _NON_CHAT_LABELS
+    # ``chat`` wins: FLM omni models are labeled both ``chat`` and ``audio``.
+    return "chat" in labels or not labels & _NON_CHAT_LABELS
 
 
 def _list_models(provider: str) -> List[Dict[str, Any]]:

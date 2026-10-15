@@ -613,6 +613,16 @@ def test_local_models_are_downloaded_chat_models_plus_the_default(client, lemona
     assert by_id["Qwen3-4B-GGUF"]["rank"] is None
 
 
+def test_local_models_keep_chat_models_that_also_take_audio(client, lemonade):
+    lemonade.models = [
+        {"id": "gemma4-it-e2b-FLM", "downloaded": True, "labels": ["chat", "audio"]},
+        {"id": "audio-only-FLM", "downloaded": True, "labels": ["audio"]},
+    ]
+    ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
+    assert "gemma4-it-e2b-FLM" in ids
+    assert "audio-only-FLM" not in ids
+
+
 def test_cloud_models_are_prefixed_and_ranked_first(client, lemonade):
     lemonade.models = _CATALOG
     models = client.get("/api/providers/fireworks/models").json()["models"]
