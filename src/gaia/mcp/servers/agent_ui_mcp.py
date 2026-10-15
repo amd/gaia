@@ -220,10 +220,9 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
 
         elif etype == "answer":
             # Use the answer event content to override accumulated dirty chunks.
-            # The streaming filter (Case 1b in print_streaming_text) extracts a
-            # clean answer from {"answer": "..."} JSON; print_final_answer also
-            # fires at the end.  Both should carry clean extracted text, so the
-            # last non-empty answer wins over whatever chunk accumulation happened.
+            # print_final_answer fires at the end with the clean extracted
+            # text, so the last non-empty answer wins over whatever chunk
+            # accumulation happened.
             answer_content = event.get("content", "")
             if answer_content:
                 full_content = answer_content
