@@ -251,6 +251,15 @@ def _reported(clause: str, start: int) -> bool:
     return not _CONDITIONAL_LEAD.search(clause[:start])
 
 
+def _asserted_clauses(answer: str) -> List[str]:
+    return [
+        clause
+        for sentence in _sentences(answer)
+        for clause in _ACTION_CLAUSE.split(sentence)
+        if not _NEGATION.search(clause)
+    ]
+
+
 def action_claims(answer: str) -> List[Tuple[str, str]]:
     """``(kind, phrase)`` for each kind of work *answer* reports having done.
 
@@ -258,12 +267,7 @@ def action_claims(answer: str) -> List[Tuple[str, str]]:
     …)]``. A negated clause ("I did not run the tests") and advice ("once you
     have run it") report nothing. One entry per kind, first phrase wins.
     """
-    clauses = [
-        clause
-        for sentence in _sentences(answer)
-        for clause in _ACTION_CLAUSE.split(sentence)
-        if not _NEGATION.search(clause)
-    ]
+    clauses = _asserted_clauses(answer)
     found: List[Tuple[str, str]] = []
     for kind, pattern in ACTION_CLAIMS:
         for clause in clauses:
@@ -271,6 +275,24 @@ def action_claims(answer: str) -> List[Tuple[str, str]]:
             if match and _reported(clause, match.start()):
                 found.append((kind, match.group(0).strip(" `")))
                 break
+    return found
+
+
+def read_claims(answer: str) -> List[str]:
+    """Every clause where *answer* reports reading or checking something, from
+    the verb on.
+
+    ``"I also reviewed `lanczos.c`, and it is fast"`` → ``["reviewed
+    `lanczos.c`"]``: the caller checks which names a clause covers.
+    """
+    kinds = dict(ACTION_CLAIMS)
+    patterns = (kinds["read"], kinds["verified"])
+    found: List[str] = []
+    for clause in _asserted_clauses(answer):
+        starts = [m.start() for m in (p.search(clause) for p in patterns) if m]
+        start = min(starts, default=None)
+        if start is not None and _reported(clause, start):
+            found.append(clause[start:])
     return found
 
 

@@ -55,6 +55,11 @@
       "path": "src/gaia/installer/init_command.py",
       "rule": "S603",
       "justification": "gaia init's extras install: argv is the resolved pip/uv frontend (a fixed executable plus '--python <this interpreter>') followed by install args built from the profile's pip_extras table. No user string reaches it; shell=False."
+    },
+    {
+      "path": "hub/agents/chat/python/gaia_agent_chat/python_runner.py",
+      "rule": "B102",
+      "justification": "The frozen agent's stand-in for 'python -c': it runs, in its own child process, exactly the code the run_python tool was asked (and approved) to run. Executing that code is the tool's purpose; nothing else reaches it."
     }
   ]
 }

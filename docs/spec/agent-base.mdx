@@ -140,7 +140,8 @@ def __init__(
         silent_mode: Suppress all console output (default: False)
         debug: Enable debug logging (default: False)
         output_handler: Custom output handler (default: creates AgentConsole or SilentConsole)
-        max_plan_iterations: Max plan-execute-replan cycles (default: 3, 0=unlimited)
+        max_plan_iterations: Max plan-execute-replan cycles (default: 3, 0=unlimited);
+            forces the final answer only once half the step budget is spent
         max_consecutive_repeats: Max consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError).
             The first time the limit is hit the model gets one correction and the call is not run;
             a repeat after that ends the turn. When the repeats that ran worked, the agent makes one
@@ -227,7 +228,12 @@ def process_query(
             "output_tokens": int,    # Total output tokens across all steps
             "total_tokens": int,     # Combined token count
             "error_count": int,      # Number of errors encountered
-            "error_history": list,   # Full error history
+            "error_history": list,   # Full error history; an unusable reply
+                                     # (malformed tool call, a stream that closed
+                                     # before the model finished) that a later
+                                     # reply recovered from is kept with
+                                     # "recovered": True and does not make the
+                                     # status "failed"
             # "output_file": str     # Present only when trace=True
         }
     """
