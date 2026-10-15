@@ -9,6 +9,10 @@
   stopped-state address `localhost:13305`. Without a configured `base_url` the
   agent takes the port the server actually starts on, so its first turn answers
   instead of failing with "Couldn't reach the local LLM".
+- `run_python` with no project and a working directory outside the allowed
+  paths (the Agent UI server's own folder) runs in the agent's scratch
+  directory instead of being refused, and its result names that directory. A
+  project outside the allowed paths is still refused.
 - `run_python`, `execute_python_file` and the Windows notification fallback start
   their child process without GAIA's internal credentials, as core's shell and
   MCP children already do.
