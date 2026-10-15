@@ -75,7 +75,9 @@ Strix Halo or a 32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** eve
 else, including CPU-only PCs. GAIA runs Qwen3.6 with thinking on, so each step
 reasons before it answers or calls a tool. It records the pick as `default_model` in `~/.gaia/config.json`,
 so the TUI's agent starts on it. Set `gaia config set default_model <id>` to
-choose your own; `gaia init` never overwrites it. **Qwen3.8 Flash Next** is
+choose your own; `gaia init` never overwrites it, and downloads it instead of
+Gemma. Questions about images then download Gemma (~6 GB) the first time you
+ask one. **Qwen3.8 Flash Next** is
 available on a 128 GB Strix Halo, and never picked for you: it needs ~90 GB for
 models (82 GB of weights and vision projector plus its context cache). Choose it
 with `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`, then run
@@ -187,8 +189,14 @@ mid-session, the TUI reports any reversion to its launch model.
 
 The model you last switched to — from `/provider`, `/model`, or the provider
 screen at startup — is restored the next time you open the TUI. The header names
-it before your first message, and a restore says "Restored your last model:"
-followed by the model's name.
+it before your first message, and a restore says it in one line:
+
+```
+Restored your last model: DeepSeek-V4.1-Flash on the AMD LLM Gateway (cloud). Your
+messages, and anything read from files or memory, are sent there.
+```
+
+In `/model`, the configured default model is marked `(default)`.
 
 If it can't be restored — the key is gone, the provider isn't connected, the
 model is no longer listed, or you stop the restore — GAIA says so in one line and

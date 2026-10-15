@@ -26,6 +26,10 @@ class TurnMessages(list):
         super().append(message)
         self.recorded.append(deepcopy(message))
 
+    def append_transient(self, message):
+        """Send *message* this turn without recording it in the saved history."""
+        super().append(message)
+
     def extend(self, messages):
         for message in messages:
             self.append(message)
