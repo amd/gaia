@@ -181,7 +181,8 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         )
     else:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
+            # POSIX-only branch; SIGKILL does not exist on Windows.
+            os.killpg(proc.pid, signal.SIGKILL)  # pylint: disable=no-member
         except ProcessLookupError:
             pass
 

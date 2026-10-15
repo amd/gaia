@@ -91,7 +91,7 @@ def extract_docx_text(docx_path: str) -> str:
     # ``mc`` (markup-compatibility) isn't in python-docx's prefix map,
     # so qn() can't resolve it — use the namespace URI directly.
     mc_fallback = (
-        "{http://schemas.openxmlformats.org/markup-compatibility/2006}" "Fallback"
+        "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
     )
 
     def _para_runs(elem, out):
