@@ -251,7 +251,7 @@ class TestEnvelopeShapesSeenLive:
         [
             '{"name": "a "quoted" word"}',
             '{"answer is": 42',
-            'Config:\n```json\n{"thought": "x", "tool": "y", "tool_args": {}}\n```',
+            'Config:\n```json\n{"name": "a", "tool": "y", "port": 1}\n```',
         ],
     )
     def test_broken_or_quoted_json_that_is_not_protocol_shows(self, handler, text):
@@ -340,3 +340,43 @@ def test_opener_as_the_last_token_does_not_eat_the_next_reply(handler):
     handler.print_streaming_text("", end_of_stream=True)
     _drain(handler)
     assert _shown(_feed(handler, ["Here you go."])) == "Here you go."
+
+
+class TestReviewFindings:
+    """Inputs that broke an earlier version of this filter."""
+
+    @pytest.mark.parametrize("size", [1, 5, 1000])
+    def test_a_tag_named_in_prose_does_not_cut_the_reply(self, handler, size):
+        text = "Qwen wraps each call in `<tool_call>` tags. The JSON inside names the tool."
+        assert _shown(_feed(handler, _pieces(text, size))) == text
+
+    def test_a_tag_named_while_reasoning_does_not_cut_the_answer(self, handler):
+        text = "<think>I could emit <tool_call> but no need.</think>The answer is 42."
+        events = _feed(handler, _pieces(text, 3))
+        thinking = "".join(e["content"] for e in events if e["type"] == "thinking")
+        assert "I could emit <tool_call> but no need." in thinking
+        assert _shown(events) == "The answer is 42."
+
+    def test_markup_in_the_token_that_closes_an_envelope_is_dropped(self, handler):
+        envelope = '{"thought": "t", "tool": "list_files", "tool_args": {}}'
+        chunks = [envelope[:-5], envelope[-5:] + "\n" + _dsml()[:60], _dsml()[60:]]
+        assert _shown(_feed(handler, chunks)) == ""
+
+    def test_backticks_in_prose_do_not_open_a_fence(self, handler):
+        text = 'Use ``` to fence.\n{"tool": "run_python", "tool_args": {"code": "x"}}'
+        shown = _shown(_feed(handler, _pieces(text, 1)))
+        assert shown.strip() == "Use ``` to fence."
+
+    def test_a_dropped_fenced_envelope_does_not_leave_a_fence_open(self, handler):
+        text = '```json\n{"tool": "a", "tool_args": {}}\nThen\n{"tool": "b", "tool_args": {}}'
+        shown = _shown(_feed(handler, _pieces(text, 1)))
+        assert "tool" not in shown and "Then" in shown
+
+    @pytest.mark.parametrize("fence", ["````", "~~~"])
+    def test_markup_in_longer_or_tilde_fences_stays(self, handler, fence):
+        text = (
+            f"Example:\n{fence}\n```\n"
+            + _dsml(tool="read_file", param="file_path", value="a.txt")
+            + f"\n```\n{fence}\nDone."
+        )
+        assert _shown(_feed(handler, _pieces(text, 4))) == text

@@ -322,6 +322,8 @@ _MARKUP_FAMILIES: tuple = (
         re.compile(rf"<{_BAR}tool{_SEP}call{_SEP}begin{_BAR}>"),
         lambda m: re.compile(rf"<{_BAR}tool{_SEP}call{_SEP}end{_BAR}>"),
     ),
+    # Plain-XML openers are ordinary words in prose ("wrap it in <tool_call>"),
+    # so they count only at the start of a line; the token forms above do not.
     (re.compile(r"<tool_call>"), lambda m: re.compile(r"</tool_call>")),
     (re.compile(r"<function_calls>"), lambda m: re.compile(r"</function_calls>")),
     (re.compile(r"<invoke\s+name\s*="), lambda m: re.compile(r"</invoke>")),
@@ -331,6 +333,33 @@ _MARKUP_FAMILIES: tuple = (
     ),
 )
 _MARKUP_OPEN_RE = re.compile("|".join(f"(?:{o.pattern})" for o, _ in _MARKUP_FAMILIES))
+_LINE_START_OPENERS = frozenset(o.pattern for o, _ in _MARKUP_FAMILIES[4:7])
+_FENCE_MARK_RE = re.compile(r" {0,3}(`{3,}|~{3,})")
+
+
+def _fence_after(
+    text: str, fence: Optional[str], line_start: bool
+) -> "tuple[Optional[str], bool]":
+    """Markdown fence state and line-start state after *text*.
+
+    *fence* is the open fence's marker (e.g. "```"), or None outside one. Only a
+    marker at the start of a line opens or closes a fence, as in Markdown.
+    """
+    for k, line in enumerate(text.split("\n")):
+        if k:
+            line_start = True
+        if line_start:
+            mark = _FENCE_MARK_RE.match(line)
+            if mark is not None:
+                run = mark.group(1)
+                if fence is None:
+                    fence = run
+                elif run[0] == fence[0] and len(run) >= len(fence):
+                    fence = None
+            line_start = not line.strip(" \t")
+    return fence, line_start
+
+
 # Leftover tags of a call whose opener streamed before this filter saw it.
 _MARKUP_STRAY_RE = re.compile(
     rf"<\s*/?\s*{_BAR}\s*DSML\s*{_BAR}[^>\n]{{0,80}}>"
@@ -466,10 +495,14 @@ class SSEOutputHandler(OutputHandler):
         # held back in case a tag is split across tokens, and what it calls.
         self._markup_close: Optional["re.Pattern"] = None
         self._markup_pending = ""
-        self._markup_in_fence = False
         self._markup_tool: Optional[str] = None
         self._markup_chars = 0
         self._call_progress_next = 0.0
+        # Code-fence and line-start state of the text shown so far this reply.
+        self._shown_fence: Optional[str] = None
+        self._shown_line_start = True
+        # Line-start state of the raw stream, thinking included.
+        self._raw_line_start = True
         # Tool confirmation state (blocking until frontend responds)
         self._confirm_lock = threading.Lock()
         self._confirm_event: Optional[threading.Event] = None
@@ -514,7 +547,22 @@ class SSEOutputHandler(OutputHandler):
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
+        if event and event.get("type") == "chunk":
+            self._shown_fence, self._shown_line_start = _fence_after(
+                event.get("content") or "", self._shown_fence, self._shown_line_start
+            )
         self.event_queue.put(event)
+
+    def _fence_at(self, unshown: str) -> "tuple[Optional[str], bool]":
+        """Fence and line-start state at the end of *unshown*, after what was shown."""
+        return _fence_after(unshown, self._shown_fence, self._shown_line_start)
+
+    def _reset_reply_state(self) -> None:
+        """Forget per-reply stream state; the next model call starts afresh."""
+        self._shown_fence = None
+        self._shown_line_start = True
+        self._raw_line_start = True
+        self._call_progress_next = 0.0
 
     def _elapsed(self) -> float:
         if self._start_time is None:
@@ -1021,9 +1069,7 @@ class SSEOutputHandler(OutputHandler):
             else:
                 self._report_envelope_progress()
                 return True
-        if self._envelope_scan is None and self._markup_in_fence ^ (
-            self._stream_buffer.count("```") % 2 == 1
-        ):
+        if self._envelope_scan is None and self._shown_fence is not None:
             return False  # JSON inside a code block is the answer's own content
         while self._stream_buffer:
             resume = self._envelope_scan
@@ -1069,8 +1115,11 @@ class SSEOutputHandler(OutputHandler):
             if isinstance(answer, str) and answer.strip():
                 self._emit({"type": "answer", "content": answer})
             logger.debug("Filtered response envelope: %s", self._stream_buffer[:100])
-            self._stream_buffer = self._stream_buffer[consumed:].lstrip()
+            rest = self._stream_buffer[consumed:].lstrip()
+            self._stream_buffer = ""
             self._json_filtered = True
+            # Text that arrived in the envelope's last token skipped the markup filter.
+            self._stream_buffer = self._filter_tool_markup(rest, end_of_stream)
         return False
 
     def _split_inline_envelope(self, end_of_stream: bool) -> bool:
@@ -1080,8 +1129,6 @@ class SSEOutputHandler(OutputHandler):
         the head of the buffer. True when the buffer now starts with it.
         """
         buf = self._stream_buffer
-        # Fence state where the buffer starts, so a JSON line in a code block stays.
-        in_fence = self._markup_in_fence ^ (buf.count("```") % 2 == 1)
         pos = 0
         while True:
             nl = buf.find("\n", pos)
@@ -1091,8 +1138,8 @@ class SSEOutputHandler(OutputHandler):
             pos = nl + 1
             if i >= len(buf) or buf[i] != "{":
                 continue
-            if in_fence ^ (buf.count("```", 0, nl) % 2 == 1):
-                continue
+            if self._fence_at(buf[: nl + 1])[0] is not None:
+                continue  # a JSON line in a code block is the answer's content
             if _leading_envelope(buf[i:], end_of_stream)[0] == _ENV_NONE:
                 continue
             prose = buf[:i]
@@ -1141,18 +1188,19 @@ class SSEOutputHandler(OutputHandler):
         """*text* with any native tool-call markup removed, as it streams.
 
         A call is held from its opener to its closer however long it runs, then
-        dropped; the agent runs it from the full reply. Markup inside a fenced
+        dropped; the agent parses calls from the full reply. Markup inside a fenced
         code block is an example, not a call, and passes through.
         """
         text = self._markup_pending + text
         self._markup_pending = ""
-        if self._markup_close is None and (
-            self._envelope_scan is not None
-            or self._stream_buffer.lstrip().startswith("{")
-        ):
-            self._markup_in_fence ^= text.count("```") % 2 == 1
-            return text  # inside a JSON envelope, markup is string content
+        if self._markup_close is None and self._in_open_envelope():
+            # Markup inside an envelope is string content; what follows the
+            # envelope is filtered once the envelope is consumed.
+            _, self._raw_line_start = _fence_after(text, None, self._raw_line_start)
+            return text
         out: List[str] = []
+        # Line-start state of the raw stream (thinking included) since the last call.
+        line_base, line_from = self._raw_line_start, 0
         while text:
             if self._markup_close is not None:
                 close = self._markup_close.search(text)
@@ -1183,19 +1231,21 @@ class SSEOutputHandler(OutputHandler):
                 text = text[close.end() :]
                 self._markup_close = None
                 self._json_filtered = True
+                line_base, line_from = True, len(out)
                 continue
-            opener = self._next_markup_opener(text)
+            unshown = self._stream_buffer + "".join(out)
+            line_prefix = "".join(out[line_from:])
+            opener = self._next_markup_opener(unshown, text, line_base, line_prefix)
             if opener is None:
                 cut = None if end_of_stream else _partial_markup_start(text)
-                if cut is None and not end_of_stream and text.endswith("`"):
-                    cut = len(text.rstrip("`"))  # a fence may be half-written
+                if cut is None and not end_of_stream and text.endswith(("`", "~")):
+                    cut = len(text.rstrip("`~"))  # a fence may be half-written
                 safe = text if cut is None else text[:cut]
                 self._markup_pending = "" if cut is None else text[cut:]
-                out.append(self._outside_fences(safe))
+                out.append(self._strip_stray_tags(unshown, safe))
                 break
             start, end, closer = opener
-            before = text[:start]
-            out.append(self._outside_fences(before))
+            out.append(self._strip_stray_tags(unshown, text[:start]))
             self._markup_close = closer
             self._markup_tool = None
             self._markup_chars = end - start
@@ -1207,41 +1257,60 @@ class SSEOutputHandler(OutputHandler):
             logger.debug("Dropped unterminated tool-call markup")
             self._markup_close = None
             self._json_filtered = True
+        _, self._raw_line_start = _fence_after(
+            "".join(out[line_from:]), None, line_base
+        )
         return "".join(out)
 
-    def _outside_fences(self, text: str) -> str:
-        """*text* minus stray markup tags outside code blocks; tracks fence state."""
-        parts = text.split("```")
-        for k in range(len(parts)):
-            if k:
-                self._markup_in_fence = not self._markup_in_fence
-            if not self._markup_in_fence:
-                parts[k] = _MARKUP_STRAY_RE.sub("", parts[k])
-        return "```".join(parts)
+    def _in_open_envelope(self) -> bool:
+        """Whether the stream buffer holds the start of a response envelope."""
+        if self._envelope_scan is not None:
+            return True
+        buf = self._stream_buffer
+        if not buf.lstrip().startswith("{"):
+            return False
+        return _leading_envelope(buf, False)[0] in (_ENV_PENDING, _ENV_OPEN)
 
-    def _next_markup_opener(self, text: str) -> "Optional[tuple]":
-        """``(start, end, closer)`` of the first tool-call opener outside a fence."""
+    def _strip_stray_tags(self, unshown: str, text: str) -> str:
+        """*text* minus leftover markup tags, except inside a code block."""
+        out: List[str] = []
+        last = 0
+        for m in _MARKUP_STRAY_RE.finditer(text):
+            if self._fence_at(unshown + text[: m.start()])[0] is None:
+                out.append(text[last : m.start()])
+                last = m.end()
+        out.append(text[last:])
+        return "".join(out)
+
+    def _next_markup_opener(
+        self, unshown: str, text: str, line_base: bool, line_prefix: str
+    ) -> "Optional[tuple]":
+        """``(start, end, closer)`` of the first tool-call opener outside code."""
         pos = 0
-        in_fence = self._markup_in_fence
         while True:
             m = _MARKUP_OPEN_RE.search(text, pos)
             if m is None:
                 return None
-            if in_fence ^ (text.count("```", 0, m.start()) % 2 == 1):
-                pos = m.end()
+            pos = m.end()
+            if self._fence_at(unshown + text[: m.start()])[0] is not None:
                 continue
+            _, line_start = _fence_after(
+                line_prefix + text[: m.start()], None, line_base
+            )
             for open_re, make_close in _MARKUP_FAMILIES:
                 fam = open_re.match(text, m.start())
-                if fam is not None:
-                    return m.start(), fam.end(), make_close(fam)
-            pos = m.end()
+                if fam is None:
+                    continue
+                if open_re.pattern in _LINE_START_OPENERS and not line_start:
+                    break
+                return m.start(), fam.end(), make_close(fam)
 
     def print_streaming_text(self, text_chunk: str, end_of_stream: bool = False):
         try:
             self._print_streaming_text(text_chunk, end_of_stream)
         finally:
             if end_of_stream:
-                self._markup_in_fence = False  # the next model call starts afresh
+                self._reset_reply_state()
 
     def _print_streaming_text(self, text_chunk: str, end_of_stream: bool) -> None:
         if text_chunk or (
@@ -1990,7 +2059,6 @@ class SSEOutputHandler(OutputHandler):
         # A stopped stream can leave a call open or a tag tail held back.
         if self._markup_close is not None or self._markup_pending:
             self._stream_buffer += self._filter_tool_markup("", end_of_stream=True)
-        self._markup_in_fence = False
 
         # Flush any remaining stream buffer before signaling done
         if self._stream_buffer:
@@ -2002,6 +2070,7 @@ class SSEOutputHandler(OutputHandler):
             ):
                 self._emit({"type": "chunk", "content": self._stream_buffer})
             self._stream_buffer = ""
+        self._reset_reply_state()
         self._emit(None)  # Sentinel value
 
 
