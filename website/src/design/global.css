@@ -35,55 +35,66 @@
 
   /* ------------------------------------------------------------------ type */
 
+  /* Antonio is tall and condensed, so display sizes run larger than a regular
+     sans would and line-height tighter; caps want a little air, not less. */
   .g-h-hero {
-    font-size: clamp(2.25rem, 1.3rem + 4.2vw, 58px);
-    @apply font-display font-semibold leading-[1.02] tracking-[-0.03em];
+    font-size: clamp(3.5rem, 1.6rem + 8.4vw, 150px);
+    @apply font-display font-semibold uppercase leading-[0.92] tracking-[0.005em];
   }
   .g-h-page {
-    font-size: clamp(2rem, 1.3rem + 3.2vw, 52px);
-    @apply font-display font-semibold leading-[1.04] tracking-[-0.03em];
+    font-size: clamp(2.75rem, 1.5rem + 5vw, 84px);
+    @apply font-display font-semibold uppercase leading-[0.95] tracking-[0.01em];
   }
   .g-h-agent {
-    font-size: clamp(1.75rem, 1.2rem + 2.4vw, 42px);
-    @apply font-display font-semibold leading-[1.06] tracking-[-0.03em];
+    font-size: clamp(2.25rem, 1.4rem + 3.6vw, 64px);
+    @apply font-display font-semibold uppercase leading-[0.98] tracking-[0.01em];
   }
   .g-h-section {
-    font-size: clamp(1.75rem, 1.2rem + 2.2vw, 40px);
-    @apply font-display font-semibold leading-[1.08] tracking-[-0.025em];
+    font-size: clamp(2.25rem, 1.4rem + 3.4vw, 62px);
+    @apply font-display font-semibold uppercase leading-[0.98] tracking-[0.015em];
   }
   .g-h-band {
-    font-size: clamp(1.625rem, 1.2rem + 1.8vw, 36px);
-    @apply font-display font-semibold leading-[1.1] tracking-[-0.025em];
+    font-size: clamp(2rem, 1.3rem + 2.8vw, 52px);
+    @apply font-display font-semibold uppercase leading-[1] tracking-[0.015em];
   }
   .g-h-cta {
-    font-size: clamp(2rem, 1.3rem + 3vw, 48px);
-    @apply font-display font-semibold leading-[1.04] tracking-[-0.03em];
+    font-size: clamp(2.5rem, 1.4rem + 4.2vw, 72px);
+    @apply font-display font-semibold uppercase leading-[0.96] tracking-[0.01em];
   }
   .g-h-card {
-    @apply font-display text-[20px] font-semibold tracking-[-0.01em] text-g-text;
+    @apply font-display text-[24px] font-semibold uppercase tracking-[0.03em] text-g-text;
   }
 
-  /* Hero lede — 18.5px, capped at a 520px measure. */
+  /* Hero lede — 20px, capped at a 560px measure. */
   .g-lede {
-    @apply max-w-[520px] text-[17px] leading-[1.6] text-g-muted sm:text-[18.5px];
+    @apply max-w-[560px] text-[17.5px] font-light leading-[1.6] text-g-muted sm:text-[20px];
   }
   /* Section lede — 15–17px. */
   .g-lede-sm {
     @apply text-[15px] leading-[1.6] text-g-muted sm:text-[17px];
   }
   .g-body {
-    @apply text-[14px] leading-[1.6] text-g-muted;
+    @apply text-[15px] leading-[1.6] text-g-muted;
   }
 
-  /* Mono furniture. Nothing on the site goes below 12.5px, metadata only. */
+  /* Mono furniture. Nothing on the site goes below 12.5px. */
   .mono {
     @apply font-mono;
   }
   .g-eyebrow {
-    @apply font-mono text-[12px] uppercase tracking-[0.16em] text-g-accent-text;
+    @apply font-mono text-[13px] font-medium uppercase tracking-[0.14em] text-g-muted;
+  }
+  /* Section label: light grey, led by a short red rule. Red text this small and
+     this widely tracked is hard to read, so the colour goes on the rule. */
+  .g-kicker {
+    @apply flex items-center gap-3 font-mono text-[13px] font-medium uppercase tracking-[0.14em] text-g-muted;
+  }
+  .g-kicker::before {
+    content: '';
+    @apply h-[2px] w-6 flex-none bg-g-brand;
   }
   .g-label {
-    @apply font-mono text-[11px] uppercase tracking-[0.12em] text-g-faint;
+    @apply font-mono text-[12.5px] uppercase tracking-[0.1em] text-g-faint;
   }
   .g-meta {
     @apply font-mono text-[12.5px] text-g-faint;
@@ -93,16 +104,33 @@
 
   /* Property list is explicit, not `all`: `all` sweeps up outline-color, which
      fades the focus ring in over the transition instead of showing it at once. */
+  /* Near-opaque so the starfield never runs behind a card's text. No backdrop
+     blur: re-blurring a canvas that redraws every frame costs more than it shows. */
   .g-card {
-    @apply rounded-g-card border border-g-border bg-g-surface transition-[background-color,border-color,box-shadow,transform] duration-[350ms] ease-g-out;
+    @apply rounded-g-card border border-g-border bg-g-bg2/95 transition-[background-color,border-color,box-shadow,transform] duration-[350ms] ease-g-out;
   }
+  /* The one shape motif: a 45-degree cut. The primary button has two opposite
+     corners cut; a card wears it as a red tick in its top-right corner, because
+     clipping the card itself would cut its border and focus ring off too. */
+  .g-corner {
+    @apply relative;
+  }
+  .g-corner::after {
+    content: '';
+    clip-path: polygon(0 0, 100% 0, 100% 100%);
+    @apply pointer-events-none absolute -right-px -top-px h-3.5 w-3.5 bg-g-brand;
+  }
+  .g-chamfer-btn {
+    clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+  }
+
   /* Interactive card: lifts and warms on hover. Applied to <a>/<button> cards. */
   .g-card-hover {
-    @apply hover:-translate-y-1 hover:border-g-accent-dim hover:bg-g-surface2 hover:shadow-g-card;
+    @apply hover:-translate-y-1 hover:border-g-accent-dim hover:bg-g-bg2 hover:shadow-g-card;
   }
   /* The three "ways in" cards also scale a touch. */
   .g-card-lift {
-    @apply hover:-translate-y-1.5 hover:scale-[1.015] hover:border-g-accent-dim hover:bg-g-surface2 hover:shadow-g-card;
+    @apply hover:-translate-y-1.5 hover:scale-[1.015] hover:border-g-accent-dim hover:bg-g-bg2 hover:shadow-g-card;
   }
 
   /* Icon chip — the small bordered square that holds a 24px glyph. */
@@ -112,13 +140,30 @@
 
   /* --------------------------------------------------------------- buttons */
 
+  /* Buttons are set in the display face: condensed caps read as controls. */
   .g-btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-g-btn px-5 py-2.5 text-[14px] font-semibold transition-[background-color,border-color,color,box-shadow,transform] duration-[250ms] ease-g-out;
+    @apply inline-flex items-center justify-center gap-2 rounded-g-btn px-5 py-2.5 font-display text-[16px] font-semibold uppercase tracking-[0.08em] transition-[background-color,border-color,color,box-shadow,transform,filter] duration-[250ms] ease-g-out;
   }
-  /* The fill is the same copper in both themes so it can carry white; the
-     themed --g-accent is a text/mark colour and white on its dark value is 1.9:1. */
+  /* The deepened red carries white; --g-accent is a text colour and white on
+     it is below 4.5:1. The fill is a chamfered ::before and the glow an
+     unclipped ::after, because a clip-path on the button itself would cut the
+     glow off with the corners. */
   .g-btn-primary {
-    @apply bg-g-accent-fill text-g-on-accent hover:-translate-y-0.5 hover:bg-g-accent-fill2 hover:shadow-g-btn;
+    @apply relative isolate text-g-on-accent;
+  }
+  .g-btn-primary::before {
+    content: '';
+    @apply g-chamfer-btn absolute inset-0 -z-10 bg-g-accent-fill transition-colors duration-[250ms];
+  }
+  .g-btn-primary::after {
+    content: '';
+    @apply absolute inset-1 -z-20 opacity-70 shadow-g-btn transition-opacity duration-[250ms];
+  }
+  .g-btn-primary:hover::before {
+    @apply bg-g-accent-fill2;
+  }
+  .g-btn-primary:hover::after {
+    @apply opacity-100;
   }
   .g-btn-secondary {
     @apply border border-g-border2 text-g-text hover:-translate-y-0.5 hover:border-g-accent-dim hover:text-g-accent-text;
@@ -132,17 +177,16 @@
   /* -------------------------------------------------------- pills & badges */
 
   .g-pill {
-    @apply font-mono rounded-g-pill border border-g-border px-3.5 py-1.5 text-[11px] uppercase tracking-[0.08em] text-g-muted transition-colors hover:border-g-border2 hover:text-g-text;
+    @apply font-mono rounded-g-pill border border-g-border px-3.5 py-1.5 text-[12.5px] uppercase tracking-[0.08em] text-g-muted transition-colors hover:border-g-border2 hover:text-g-text;
   }
   .g-pill-active {
     @apply border-g-accent-fill bg-g-accent-fill text-g-on-accent hover:text-g-on-accent;
   }
   /* Static descriptive pill (tags on the agent page). */
   .g-pill-static {
-    @apply font-mono rounded-g-pill border border-g-border px-3 py-1 text-[11px] text-g-muted;
+    @apply font-mono rounded-g-pill border border-g-border px-3 py-1 text-[12.5px] text-g-muted;
   }
-  /* Eyebrow pill with a solid accent dot. No halo — the design language has no
-     glow treatment. */
+  /* Eyebrow pill with a solid accent dot. */
   .g-pill-eyebrow {
     @apply inline-flex items-center gap-2.5 rounded-g-pill border border-g-border bg-g-surface py-1.5 pl-3 pr-4;
   }
@@ -151,10 +195,45 @@
   }
 
   .g-badge {
-    @apply font-mono rounded-g-badge border border-g-accent-dim px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-g-accent-text;
+    @apply font-mono rounded-g-badge border border-g-accent-dim px-1.5 py-0.5 text-[12.5px] uppercase tracking-[0.08em] text-g-accent-text;
+  }
+  /* Release candidate: AMD orange, the one place it appears. */
+  .g-badge-rc {
+    @apply font-mono rounded-g-badge border border-g-rc-dim px-1.5 py-0.5 text-[12.5px] uppercase tracking-[0.08em] text-g-rc;
+  }
+  .g-badge-latest {
+    @apply font-mono rounded-g-badge border border-g-accent-fill bg-g-accent-fill px-1.5 py-0.5 text-[12.5px] uppercase tracking-[0.08em] text-g-on-accent;
   }
   .g-badge-muted {
-    @apply font-mono rounded-g-badge border border-g-border px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-g-faint;
+    @apply font-mono rounded-g-badge border border-g-border px-1.5 py-0.5 text-[12.5px] uppercase tracking-[0.08em] text-g-faint;
+  }
+
+  /* -------------------------------------------------------------- motion */
+
+  /* Scroll reveal: Layout.astro's inline script adds .is-in as an element enters
+     the viewport. The hidden state is scoped to html.js, which Layout.astro's
+     head script sets, so a visitor without JS never gets invisible content. */
+  .js .g-reveal {
+    opacity: 0;
+    filter: blur(6px);
+    transform: translateY(24px);
+    transition: opacity 0.9s, filter 0.9s, transform 0.9s cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+  .js .g-reveal.is-in {
+    opacity: 1;
+    filter: none;
+    transform: none;
+  }
+
+  /* A soft red glow for the one red phrase in the hero. */
+  .g-glow {
+    text-shadow: 0 0 14px rgb(var(--g-brand) / 0.35), 0 0 42px rgb(var(--g-brand) / 0.45);
+  }
+
+  /* Paused from the footer: the starfield holds a still frame (starfield.ts)
+     and nothing else loops either. */
+  html[data-motion='paused'] .animate-g-breathe {
+    animation: none;
   }
 
   /* ------------------------------------------------------------ code panel */
@@ -163,15 +242,13 @@
     @apply overflow-hidden rounded-g-panel border border-g-border bg-g-code-bg;
   }
   /* Window chrome strip above a terminal / code panel. The divider sits between
-     two --g-code-bg areas, so it is drawn from the code palette — the themed
-     --g-border is a light-on-dark/dark-on-light value and vanishes on one of them. */
+     two --g-code-bg areas, so it is drawn from the code palette, not --g-border. */
   .g-code-chrome {
     @apply flex items-center gap-2 border-b px-3.5 py-2.5;
     border-bottom-color: rgb(var(--g-code-text) / 0.14);
   }
-  /* Inline `$ command` chip with a copper hairline. The panel is dark in both
-     themes, so its hairline comes from the pinned code accent, not the themed
-     one — otherwise the same panel gets two different borders. */
+  /* Inline `$ command` chip whose hairline is the code accent, so the prompt
+     and its border are one colour. */
   .g-cmd {
     @apply font-mono flex items-center gap-2 rounded-g-panel border bg-g-code-bg px-3.5 py-2.5 text-[12.5px] text-g-code-text;
     border-color: rgb(var(--g-code-accent) / 0.35);
@@ -184,8 +261,7 @@
 
   /* Syntax and severity colours for hand-authored code panels (Terminal). Prism
      handles rendered markdown separately in the agent detail page, off the same
-     tokens. The panel ground is --g-code-bg in BOTH themes, so every role here
-     is pinned rather than themed and is measured only against that ground. */
+     tokens. Every role here is measured only against --g-code-bg. */
   .g-code-panel .tok-key { color: rgb(var(--g-code-accent)); }
   .g-code-panel .tok-str { color: rgb(var(--g-code-green)); }
   .g-code-panel .tok-fn { color: rgb(var(--g-code-amber)); }

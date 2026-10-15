@@ -112,8 +112,8 @@ func Verify(ctx context.Context, claudeMode bool, chatModel string) (Status, err
 	return status, nil
 }
 
-// parseStatus reads the JSON object off the LAST line that holds one: GAIA's
-// logger shares stdout, so warnings can precede it.
+// parseStatus reads the JSON object off the LAST line that holds one, so a
+// stray line printed before it is skipped.
 func parseStatus(out string) (Status, error) {
 	lines := strings.Split(out, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {

@@ -92,6 +92,40 @@ def _ensure_email_corpus():
     ensure_corpus()
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "real_free_memory: read this machine's free memory instead of a fixed "
+        "64 GB machine (its dependencies must be mocked)",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _fixed_machine_memory(request, monkeypatch):
+    """Judge every load and preload as on a roomy 64 GB machine.
+
+    Window sizes, load refusals and the Agent UI's startup preload follow the
+    memory free on the machine running the test; without this the suite would
+    pass on a workstation and fail on a 16 GB CI runner. Opt out with
+    ``@pytest.mark.real_free_memory``.
+    """
+    from gaia.llm import lemonade_client, model_fit
+
+    monkeypatch.setattr(lemonade_client, "_FITTED_CTX_CACHE", {})
+    monkeypatch.setattr(lemonade_client, "_SYSTEM_INFO_CACHE", {})
+    if request.node.get_closest_marker("real_free_memory"):
+        return
+    monkeypatch.setattr(
+        model_fit,
+        "read_os_memory",
+        lambda: model_fit.OsMemory(ram_total_gb=64.0, ram_available_gb=48.0),
+    )
+    monkeypatch.setattr(model_fit, "ram_total_gb", lambda: 64.0)
+    monkeypatch.setattr(
+        lemonade_client, "_free_memory_snapshot", lambda url: (None, {})
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_model_broker_state():
     """Isolate the model-slot broker's process-global state between tests (#2248).
@@ -116,8 +150,7 @@ def _reset_model_broker_state():
         broker_client._discovery_enabled = False
         broker_client._attached = None
         broker_client._broker_unsupported = False
-        broker_client._held.depth = 0
-        broker_client._held.model = None
+        broker_client._held.set(None)
 
     _reset()
     yield

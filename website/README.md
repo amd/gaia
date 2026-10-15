@@ -77,9 +77,9 @@ website/
 │   │   ├── InstallCommand.astro
 │   │   ├── InstallMethods.astro
 │   │   ├── SidebarCard.astro
+│   │   ├── StarField.astro          # Mounts the background canvas
 │   │   ├── StatBlock.astro
 │   │   ├── Terminal.astro
-│   │   ├── ThemeToggle.astro
 │   │   └── WayCard.astro
 │   ├── data/
 │   │   ├── catalog.ts               # Live hub catalog access (build-time fetch)
@@ -110,19 +110,22 @@ website/
 
 ## Design System
 
-The cross-surface contract is [`docs/spec/gaia-design-language.mdx`](../docs/spec/gaia-design-language.mdx),
-shared with the Agent UI and the TUI. `src/design/tokens.css` implements it here;
-`src/design/tailwind-preset.mjs` maps those variables to `g-*` Tailwind
-utilities. Read those files rather than trusting a copy — the headlines only:
+The contract is the "The website" section of
+[`docs/spec/gaia-design-language.mdx`](../docs/spec/gaia-design-language.mdx).
+`src/design/tokens.css` implements it; `src/design/tailwind-preset.mjs` maps
+those variables to `g-*` Tailwind utilities. Read those files rather than
+trusting a copy — the headlines only:
 
-- **Accent**: copper `#9A4930` light / `#EBA474` dark (`--g-accent`) — *not* AMD red
-- **Ground**: graphite `#17161C` dark, porcelain `#F5F2EC` light
-- **Font (Display)**: Space Grotesk — headings and the wordmark only
-- **Font (UI)**: Inter
+- **Dark-only**: black `#000000` ground, white type. There is no theme toggle.
+- **Accent**: AMD red `#ED1C24` at display size (`--g-brand`), lifted to
+  `#FF4B51` for text (`--g-accent`) and deepened to `#D3121A` for button fills
+- **Release candidates**: AMD orange `#F26522` (`--g-rc`), and nothing else
+- **Font (Display)**: Antonio — headings, buttons, figures, the wordmark
+- **Font (UI)**: Titillium Web, standing in for AMD's Klavika
 - **Font (Code)**: JetBrains Mono
-
-Theme is set pre-paint by an inline script in `src/layouts/Layout.astro`, which
-toggles `[data-theme="dark"]`. Code panels stay dark in both themes.
+- **Background**: `src/scripts/starfield.ts`, a canvas of streaking stars. It
+  holds a still frame under `prefers-reduced-motion` or when a visitor pauses it
+  from the footer.
 
 ## Deployment
 

@@ -172,6 +172,10 @@ class TestNotifyDesktopScript:
                 captured["argv"] = argv
                 captured["env"] = kwargs.get("env")
 
+            def wait(self, timeout=None):
+                # Still running: the message box is up.
+                raise subprocess.TimeoutExpired("powershell", timeout)
+
         # Force the PowerShell fallback: pretend plyer is absent, on Windows.
         monkeypatch.setattr(chat_agent.platform, "system", lambda: "Windows")
         monkeypatch.setitem(__import__("sys").modules, "plyer", None)

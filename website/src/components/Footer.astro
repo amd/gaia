@@ -18,23 +18,56 @@ const LINKS = [
   <div class="g-shell flex flex-col gap-6 py-12 sm:flex-row sm:items-center sm:justify-between">
     <div>
       <div class="flex items-baseline gap-2">
-        <span class="font-display text-[18px] font-semibold tracking-[-0.02em] text-g-text">GAIA</span>
-        <span class="mono text-[10px] text-g-faint">/ AMD</span>
+        <span class="font-display text-[24px] font-semibold uppercase leading-none tracking-[0.2em] text-g-text">GAIA</span>
+        <span class="mono text-[12.5px] text-g-faint">/ AMD</span>
       </div>
       <p class="mt-2 text-[12.5px] text-g-faint">
         MIT License &bull; &copy; 2024-{currentYear} Advanced Micro Devices, Inc.
       </p>
     </div>
 
-    <nav aria-label="Footer" class="flex flex-wrap gap-x-7 gap-y-2">
-      {LINKS.map((l) => (
-        <a
-          href={l.href}
-          target={l.external ? '_blank' : undefined}
-          rel={l.external ? 'noopener noreferrer' : undefined}
-          class="text-[13px] text-g-muted transition-colors hover:text-g-text"
-        >{l.label}</a>
-      ))}
-    </nav>
+    <div class="flex flex-wrap items-center gap-x-7 gap-y-2">
+      <nav aria-label="Footer" class="flex flex-wrap gap-x-7 gap-y-2">
+        {LINKS.map((l) => (
+          <a
+            href={l.href}
+            target={l.external ? '_blank' : undefined}
+            rel={l.external ? 'noopener noreferrer' : undefined}
+            class="text-[13px] text-g-muted transition-colors hover:text-g-text"
+          >{l.label}</a>
+        ))}
+      </nav>
+      {/* WCAG 2.2.2: motion that runs past five seconds needs a way to stop it.
+          Hidden until the script below runs (without JS there is no field to
+          stop) and under reduced motion, where the field is already still. */}
+      <button
+        id="motion-toggle"
+        type="button"
+        aria-pressed="false"
+        hidden
+        class="font-mono text-[12.5px] uppercase tracking-[0.1em] text-g-faint transition-colors hover:text-g-text aria-pressed:text-g-accent-text motion-reduce:hidden"
+      >Pause background</button>
+    </div>
   </div>
 </footer>
+
+<script>
+  import type { MotionEventDetail } from '../scripts/starfield';
+
+  const btn = document.getElementById('motion-toggle');
+  const root = document.documentElement;
+  // A fixed label with aria-pressed: "Pause background, pressed" reads true in
+  // both states, where a label that flips to "Play" would contradict it.
+  const render = (paused: boolean) => btn?.setAttribute('aria-pressed', String(paused));
+  render(root.dataset.motion === 'paused');
+  btn?.removeAttribute('hidden');
+  btn?.addEventListener('click', () => {
+    const paused = root.dataset.motion !== 'paused';
+    if (paused) root.dataset.motion = 'paused';
+    else delete root.dataset.motion;
+    document.dispatchEvent(new CustomEvent<MotionEventDetail>('gaia-motion', { detail: { paused } }));
+    render(paused);
+    // Last, so blocked storage costs only the memory of the choice, not the pause.
+    localStorage.setItem('gaia-motion', paused ? 'paused' : 'running');
+  });
+</script>

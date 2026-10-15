@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
@@ -306,5 +308,16 @@ func TestMain(m *testing.M) {
 	tryAutoStartLemonade = func(context.Context) (bool, string, string) { return false, "", "" }
 	// Nor may a test start the developer's real daemon to replay a key.
 	replayKeptKey = func(context.Context, string) (bool, error) { return false, nil }
-	os.Exit(m.Run())
+	// Nor read the developer's own Lemonade choice, or find their server.
+	cfgDir, err := os.MkdirTemp("", "gaia-preflight-config-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("GAIA_CONFIG_FILE", filepath.Join(cfgDir, "config.json"))
+	detectRunningLemonade = func(context.Context) (lemonade.ProbeResult, bool) {
+		return lemonade.ProbeResult{}, false
+	}
+	code := m.Run()
+	os.RemoveAll(cfgDir)
+	os.Exit(code)
 }

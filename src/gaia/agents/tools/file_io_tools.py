@@ -17,6 +17,13 @@ from typing import Any, Callable, Dict, Optional
 from gaia.agents.base.errors import missing_host_attr_message, require_host_attr
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools.document_text import (
+    cached_document_text,
+    document_type,
+    index_only_error,
+    read_budget,
+    read_document,
+)
 from gaia.agents.tools.edit_impact import edit_impact
 from gaia.agents.tools.file_edit import (
     apply_unique_replacement,
@@ -266,14 +273,6 @@ def _function_span(node, lines: list) -> tuple:
 
 #: Lines one ranged read returns at most.
 MAX_READ_LINES = 400
-#: Chars a read returns when the host has no model-sized budget.
-DEFAULT_READ_CHARS = 20000
-
-
-def _read_budget(host: Any) -> int:
-    """Chars one read may return: the host's tool-result target, so it is never truncated."""
-    budget = getattr(host, "_truncation_budget", None)
-    return budget()[1] if callable(budget) else DEFAULT_READ_CHARS
 
 
 def _line_window(
@@ -394,6 +393,28 @@ class FileIOToolsMixin:
             "file may have changed since."
         )
 
+    def get_document_reading_system_prompt(self) -> str:
+        """Read a few documents in full rather than through retrieved snippets.
+
+        Auto-discovered by ``Agent._get_mixin_prompts``; static text, so it sits
+        in the cacheable head of the prompt. Only rendered when the agent has
+        both ways to read a document, since the rule is a choice between them.
+        """
+        registry = getattr(self, "_tools_registry", {})
+        if "read_file" not in registry or "index_document" not in registry:
+            return ""
+        return (
+            "==== READING DOCUMENTS ====\n"
+            "To review, compare, reconcile, audit or summarise a few documents, "
+            "read each one in full with read_file instead of indexing it — it "
+            "returns the text of .docx, .pdf and .xlsx files, in parts when long "
+            "(continue at next_offset until it is null). Retrieved snippets miss "
+            "what no query asked for, such as a date that differs between two "
+            "documents. For these tasks this replaces the index-then-query "
+            "rules; index and query only a large collection, or to look up one "
+            "fact."
+        )
+
     def register_file_io_tools(self) -> None:
         """Register all file I/O tools."""
 
@@ -405,12 +426,13 @@ class FileIOToolsMixin:
             start_line: Optional[int] = None,
             end_line: Optional[int] = None,
         ) -> Dict[str, Any]:
-            """Read any file and intelligently analyze based on file type.
+            """Read any file, analyzed by type.
 
-            Automatically detects file type and provides appropriate analysis:
-            - Python files (.py): Syntax validation + symbol extraction (functions/classes)
-            - Markdown files (.md): Headers + code blocks + links
-            - Other text files: Raw content
+            - Python (.py): syntax validation + functions/classes
+            - Markdown (.md): headers, code blocks, links
+            - Word (.docx), PDF and Excel (.xlsx): extracted text, in parts when
+              long; continue at next_offset until it is null
+            - Other text files: raw content
 
             Read the part you need with start_line/end_line, e.g. the line a
             search reported.
@@ -418,7 +440,7 @@ class FileIOToolsMixin:
             Args:
                 file_path: Path to the file to read
                 offset: Zero-based character offset for a bounded text page.
-                limit: Page size (1..8000 characters); omitted preserves full analysis.
+                limit: Page size in characters (1..8000 for text files); omitted preserves full analysis.
                 start_line: First line to return (1-based); the result is line-numbered.
                 end_line: Last line to return, inclusive (at most 400 lines per read).
 
@@ -439,6 +461,11 @@ class FileIOToolsMixin:
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
 
+                unreadable = index_only_error(file_path)
+                if unreadable:
+                    return unreadable
+                is_document = document_type(file_path) is not None
+
                 reads = file_read_record(self)
                 seen = stamp_of(file_path)
 
@@ -450,17 +477,26 @@ class FileIOToolsMixin:
                             "start_line/end_line (lines), not both.",
                         }
                     try:
-                        lines = read_text(file_path)[0].splitlines()
+                        if is_document:
+                            text = cached_document_text(self, file_path)[0]
+                        else:
+                            text = read_text(file_path)[0]
+                        lines = text.splitlines()
                     except UnicodeDecodeError:
                         return {
                             "status": "error",
                             "error": f"{file_path} is binary: it has no lines to read.",
                         }
-                    page = _line_window(lines, start_line, end_line, _read_budget(self))
+                    except (ImportError, ValueError) as e:
+                        return {"status": "error", "error": str(e)}
+                    page = _line_window(lines, start_line, end_line, read_budget(self))
                     if "error" in page:
                         return {"status": "error", **page}
                     reads.note(file_path, seen)
                     return {"status": "success", "file_path": file_path, **page}
+
+                if is_document:
+                    return read_document(self, file_path, offset, limit)
 
                 if offset or limit is not None:
                     from gaia.agents.base.artifacts import read_text_page

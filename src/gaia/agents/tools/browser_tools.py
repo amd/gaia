@@ -13,9 +13,99 @@ search the web, and download files for local analysis.
 import json
 import logging
 from pathlib import Path
-from typing import Literal
+from typing import List, Literal, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+#: Characters of context kept on each side of a ``find`` match.
+FIND_CONTEXT_CHARS = 300
+
+#: Text this short means the page renders its content with JavaScript.
+_NEAR_EMPTY_CHARS = 200
+_NEAR_EMPTY_NOTE = (
+    "\n\n[Almost no text on this page: its content is probably rendered by "
+    "JavaScript, which fetch_page does not run. Open it with a real-browser tool "
+    "if you have one; otherwise try another source, or report the value as not "
+    "found.]"
+)
+
+
+def _find_spans(text: str, term: str) -> List[Tuple[int, int]]:
+    """Merged ``(start, end)`` windows around every case-insensitive match of *term*."""
+    spans: List[Tuple[int, int]] = []
+    haystack, needle = text.lower(), term.lower()
+    at = haystack.find(needle)
+    while at != -1:
+        start = max(0, at - FIND_CONTEXT_CHARS)
+        end = min(len(text), at + len(needle) + FIND_CONTEXT_CHARS)
+        if spans and start <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], end)
+        else:
+            spans.append((start, end))
+        at = haystack.find(needle, at + len(needle))
+    return spans
+
+
+def text_window(
+    text: str, url: str, max_length: int, offset: int = 0, find: Optional[str] = None
+) -> str:
+    """The part of *text* the caller asked for, marked when more remains.
+
+    Never cuts silently: a part that stops before the end names the offset of
+    the next one, and a ``find`` that matches nothing says so.
+    """
+    total = len(text)
+    if find and find.strip():
+        term = find.strip()
+        # A passage the offset falls inside resumes there, so paging moves on.
+        spans = [
+            (max(start, offset), end)
+            for start, end in _find_spans(text, term)
+            if end > offset
+        ]
+        if not spans:
+            where = f"after character {offset:,} of" if offset else "in"
+            return (
+                f"[No occurrence of {term!r} {where} the page's {total:,} characters "
+                "of text. Do not infer it; try another word, another page, or "
+                "report it as not found.]"
+            )
+        parts, used = [], 0
+        for number, (start, end) in enumerate(spans):
+            label = f"[at character {start:,}]\n"
+            if parts and used + len(label) + end - start > max_length:
+                return "\n\n".join(parts) + (
+                    f"\n\n[{len(spans) - number} more passage(s) match {term!r}. "
+                    f"Call fetch_page({url!r}, find={term!r}, offset={start}) for "
+                    "the rest.]"
+                )
+            if len(label) + end - start > max_length:
+                cut = start + max(1, max_length - len(label))
+                parts.append(label + text[start:cut])
+                return "\n\n".join(parts) + (
+                    f"\n\n[This passage continues. Call fetch_page({url!r}, "
+                    f"offset={cut}) to read on.]"
+                )
+            parts.append(label + text[start:end])
+            used += len(parts[-1]) + 2
+        return "\n\n".join(parts)
+
+    if offset and offset >= total:
+        return (
+            f"[offset {offset:,} is past the end: the page has {total:,} "
+            "characters of text.]"
+        )
+    end = min(total, offset + max_length)
+    part = text[offset:end]
+    if offset:
+        part = f"[Continuing at character {offset:,} of {total:,}]\n" + part
+    if end < total:
+        part += (
+            f"\n\n[Truncated: showing characters {offset:,}-{end:,} of {total:,}. "
+            f"Call fetch_page({url!r}, offset={end}) for the next part, or pass "
+            "find='<word>' to jump to a detail.]"
+        )
+    return part
 
 
 class BrowserToolsMixin:
@@ -49,18 +139,24 @@ class BrowserToolsMixin:
             url: str,
             extract: Literal["text", "html", "links", "tables"] = "text",
             max_length: int = 5000,
+            offset: int = 0,
+            find: Optional[str] = None,
         ) -> str:
             """Fetch a web page and extract its content.
 
             Retrieves the page at the given URL and returns readable text content.
             Use this to read articles, documentation, reference pages, or any web content.
             Does NOT execute JavaScript — works best with static content, articles, docs.
+            Long text ends with a marker naming the offset of the next part; to
+            get one detail (a price, a spec) pass find instead of paging.
 
             Args:
                 url: The full URL to fetch (must start with http:// or https://)
                 extract: What to extract - 'text' (readable content), 'html' (raw HTML),
                          'links' (all links on page), 'tables' (HTML tables as JSON)
                 max_length: Maximum characters to return (default: 5000, max: 20000)
+                offset: Text mode: character offset to start from, to continue a long page
+                find: Text mode: return only the passages containing this word or phrase
             """
             if not _ensure_web_client():
                 return "Error: Browser tools not initialized. Web browsing is disabled."
@@ -76,6 +172,10 @@ class BrowserToolsMixin:
                     f"Error: Invalid extract mode '{extract}'. "
                     f"Must be one of: {', '.join(sorted(valid_modes))}"
                 )
+            if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+                return "Error: offset must be a character position, 0 or more."
+            if (offset or find) and extract != "text":
+                return "Error: offset and find apply to extract='text' only."
 
             try:
                 response = mixin._web_client.get(url)
@@ -98,12 +198,11 @@ class BrowserToolsMixin:
                     for t in ["application/json", "text/plain", "text/csv", "text/xml"]
                 ):
                     # Text-based content — return directly
-                    text = retain_excerpt(mixin, response.text, max_length)
                     return (
                         f"Content from: {url}\n"
                         f"Type: {content_type}\n"
                         f"Length: {len(response.text):,} chars\n\n"
-                        f"{text}"
+                        + text_window(response.text, url, max_length, offset, find)
                     )
                 else:
                     # Binary content — suggest download
@@ -170,13 +269,10 @@ class BrowserToolsMixin:
 
             else:  # text (default)
                 text = mixin._web_client.extract_text(soup, max_length=None)
-                text = retain_excerpt(mixin, text, max_length)
-                return (
-                    f"Page: {title}\n"
-                    f"URL: {url}\n"
-                    f"Length: {len(text):,} chars\n\n"
-                    f"{text}"
-                )
+                header = f"Page: {title}\nURL: {url}\nLength: {len(text):,} chars\n\n"
+                if len(text.strip()) < _NEAR_EMPTY_CHARS:
+                    return header + text + _NEAR_EMPTY_NOTE
+                return header + text_window(text, url, max_length, offset, find)
 
         @tool(atomic=True)
         def search_web(

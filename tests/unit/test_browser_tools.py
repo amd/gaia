@@ -336,6 +336,17 @@ class TestWebClientDuckDuckGo:
         assert results[0]["url"] == "https://example.com/page"
         assert results[1]["title"] == "Other Result"
 
+    def test_a_challenged_search_raises_instead_of_finding_nothing(self):
+        """DDG answers an automated-traffic check with 202 and no results."""
+        mock_response = MagicMock()
+        mock_response.text = "<html><body>challenge</body></html>"
+        mock_response.status_code = 202
+        mock_response.headers = {"Content-Type": "text/html"}
+
+        with patch.object(self.client, "_request", return_value=mock_response):
+            with pytest.raises(RuntimeError, match="HTTP 202"):
+                self.client.search_duckduckgo("test query")
+
 
 class TestWebClientDownload:
     """Test file download functionality."""
@@ -727,29 +738,85 @@ class TestBrowserToolsMixin:
         assert call_kwargs[1]["max_length"] is None
         assert len(result) < 20000
 
-    def test_nested_html_is_archived_before_text_extraction_cap(self):
-        import json
-
-        from gaia.agents.base.artifacts import store_for
+    def _serve(self, html):
         from gaia.web.client import WebClient
 
         self.agent._web_client = WebClient()
         response = MagicMock()
         response.headers = {"Content-Type": "text/html"}
-        response.text = (
+        response.text = html
+        self.agent._web_client.get = MagicMock(return_value=response)
+        return self.registered_tools["fetch_page"]
+
+    def test_a_long_page_is_read_to_the_end_by_following_the_marker(self):
+        import re
+
+        fetch = self._serve(
             "<blockquote><p>"
             + "x" * 10000
             + "</p></blockquote><p>REQUIRED-LAST-PARAGRAPH</p>"
         )
-        self.agent._web_client.get = MagicMock(return_value=response)
-        output = self.registered_tools["fetch_page"](
-            "https://example.com", max_length=1000
+        offset, pages = 0, []
+        while True:
+            out = fetch("https://example.com", max_length=1000, offset=offset)
+            pages.append(out)
+            marker = re.search(r"offset=(\d+)\) for the next part", out)
+            if not marker:
+                break
+            offset = int(marker.group(1))
+        assert "Truncated: showing characters 0-1,000" in pages[0]
+        assert pages[-1].rstrip().endswith("REQUIRED-LAST-PARAGRAPH")
+        assert len(pages) > 5
+
+    def test_length_reports_the_whole_page_not_the_excerpt(self):
+        fetch = self._serve("<p>" + "a" * 9000 + "</p>")
+        assert "Length: 9,000 chars" in fetch("https://example.com", max_length=1000)
+
+    def test_find_returns_the_passage_with_the_detail(self):
+        fetch = self._serve(
+            "<p>" + "menu " * 2000 + "</p><p>Unit price: $67.50 each</p>"
+            "<p>" + "footer " * 2000 + "</p>"
         )
-        excerpt = json.loads(output[output.index("{") :])
-        page = store_for(self.agent).read(
-            excerpt["artifact"], excerpt["original_chars"] - 23, 23
+        out = fetch("https://example.com", max_length=1000, find="unit price")
+        assert "$67.50" in out
+        assert "[at character" in out
+
+    def test_find_with_no_match_says_so_instead_of_guessing(self):
+        fetch = self._serve("<p>" + "no prices here " * 50 + "</p>")
+        out = fetch("https://example.com", find="$")
+        assert "No occurrence of '$'" in out
+        assert "not found" in out
+
+    def test_find_marks_matches_it_could_not_fit(self):
+        fetch = self._serve(
+            "".join(f"<p>{'pad ' * 200} price {i} {'pad ' * 200}</p>" for i in range(6))
         )
-        assert page["content"].endswith("REQUIRED-LAST-PARAGRAPH")
+        out = fetch("https://example.com", max_length=2000, find="price")
+        assert "more passage(s) match 'price'" in out
+        assert "find='price', offset=" in out
+
+    def test_find_after_an_offset_does_not_claim_the_page_lacks_it(self):
+        fetch = self._serve("<p>price $5 " + "filler " * 300 + "</p>")
+        out = fetch("https://example.com", find="price", offset=1500)
+        assert "after character 1,500" in out
+
+    def test_a_page_with_almost_no_text_is_flagged(self):
+        fetch = self._serve("<title>Shop</title><div id='app'></div>")
+        out = fetch("https://example.com")
+        assert "rendered by JavaScript" in out
+
+    def test_offset_past_the_end_is_reported(self):
+        fetch = self._serve("<p>" + "b" * 600 + "</p>")
+        out = fetch("https://example.com", offset=5000)
+        assert "past the end" in out
+
+    def test_offset_and_find_are_text_mode_only(self):
+        self.agent._web_client = MagicMock()
+        out = self.registered_tools["fetch_page"](
+            "https://example.com", extract="links", offset=10
+        )
+        assert out.startswith("Error") and "text" in out
+        self.agent._web_client.get.assert_not_called()
 
     def test_search_web_clamps_num_results(self):
         """search_web clamps num_results to valid range."""
