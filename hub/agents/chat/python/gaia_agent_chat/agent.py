@@ -28,6 +28,16 @@ except ImportError as _watchdog_err:
     Observer = None
 
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
+from gaia_agent_chat.python_jobs import (
+    DEFAULT_PYTHON_TIMEOUT,
+    finished_job_note,
+    folders_named_in,
+    resolve_python_timeout,
+    run_python_job,
+    stop_requested,
+    stopped_job_result,
+    watch_folders,
+)
 from gaia_agent_chat.python_runner import python_command
 from gaia_agent_chat.session import SessionManager
 from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
@@ -143,6 +153,7 @@ def _python_run_result(
     stdout: str,
     stderr: str,
     seconds: float,
+    note: Optional[str] = None,
 ) -> Dict[str, Any]:
     """A finished Python run as a tool result; a non-zero exit is an error.
 
@@ -158,6 +169,8 @@ def _python_run_result(
         "has_errors": code != 0,
         "duration_seconds": round(seconds, 2),
     }
+    if note:
+        result["note"] = note
     if code != 0:
         last = next(
             (s.strip() for s in reversed((run.stderr or "").splitlines()) if s.strip()),
@@ -1718,9 +1731,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except Exception as e:
                     return {"status": "error", "error": str(e)}
 
-            @tool
+            @tool(timeout_arg="timeout")
             def execute_python_file(
-                file_path: str, args: str = "", timeout: int = 60
+                file_path: str, args: str = "", timeout: int = DEFAULT_PYTHON_TIMEOUT
             ) -> dict:
                 """Execute a Python file as a subprocess and capture its output.
 
@@ -1735,14 +1748,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 Args:
                     file_path: Path to the .py file to run
                     args: Space-separated CLI arguments to pass to the script
-                    timeout: Max seconds to wait (default 60)
+                    timeout: Max seconds to run (default 120, max 1800). Raise it for big data jobs.
 
                 Returns:
                     stdout, stderr, return_code, and duration
                 """
                 import shlex
-                import subprocess
                 import time
+
+                try:
+                    timeout = resolve_python_timeout(timeout)
+                except ValueError as e:
+                    return {"status": "error", "error": str(e), "has_errors": True}
 
                 file_path = os.path.expanduser(file_path)
                 if not self.path_validator.is_path_allowed(file_path):
@@ -1761,26 +1778,33 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 cmd = python_command(
                     p.resolve(), shlex.split(args) if args.strip() else []
                 )
+                try:
+                    source = p.read_text(encoding="utf-8", errors="replace")
+                except OSError as e:
+                    return {
+                        "status": "error",
+                        "error": f"Could not read {file_path}: {e}",
+                        "has_errors": True,
+                    }
                 start = time.monotonic()
                 try:
-                    run_dir, env = _python_script_run_context(
-                        p, self._script_project_root()
-                    )
-                    r = subprocess.run(
+                    project = self._script_project_root()
+                    run_dir, env = _python_script_run_context(p, project)
+                    job = run_python_job(
                         cmd,
                         cwd=str(run_dir),
                         env=env,
-                        capture_output=True,
-                        # An inherited stdin leaves the child waiting on a pipe
-                        # nobody writes to, and the run only ends at the timeout.
-                        stdin=subprocess.DEVNULL,
-                        # text=True decodes with the locale codec — cp1252 here —
-                        # so one emoji in a print() raised instead of returning.
-                        encoding="utf-8",
-                        errors="replace",
                         timeout=timeout,
-                        check=False,
+                        should_stop=lambda: stop_requested(self),
+                        # The script's own output folders first: the search is bounded.
+                        watch=watch_folders(
+                            *folders_named_in(source), run_dir, project
+                        ),
+                        ignore=[p.resolve()],
                     )
+                    if job.stopped:
+                        return stopped_job_result(job, timeout)
+                    r = job.run
                     from gaia.agents.base.artifacts import retain_excerpt
 
                     return attach_check(
@@ -1789,6 +1813,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             retain_excerpt(self, r.stdout, 8000),
                             retain_excerpt(self, r.stderr, 2000),
                             time.monotonic() - start,
+                            finished_job_note(job),
                         ),
                         check_from_python_run(
                             " ".join([file_path, args]).strip(),
@@ -1797,12 +1822,6 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             r.stderr,
                         ),
                     )
-                except subprocess.TimeoutExpired:
-                    return {
-                        "status": "error",
-                        "error": f"Timed out after {timeout}s",
-                        "has_errors": True,
-                    }
                 except OSError as e:
                     return {
                         "status": "error",
@@ -1812,8 +1831,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except Exception as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
-            @tool
-            def run_python(code: str, timeout: int = 60) -> dict:
+            @tool(timeout_arg="timeout")
+            def run_python(code: str, timeout: int = DEFAULT_PYTHON_TIMEOUT) -> dict:
                 """Run a Python snippet and return what it prints.
 
                 Compute or check something without creating a file. Runs
@@ -1829,16 +1848,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
                 Args:
                     code: Python source to run; print() whatever you need back.
-                    timeout: Max seconds to wait (default 60)
+                    timeout: Max seconds to run (default 120, max 1800). Raise it for big data jobs.
 
                 Returns:
                     stdout, stderr, return_code, and duration.
                 """
-                import subprocess
                 import tempfile
                 import time
 
                 from gaia.agents.base.project_map import resolve_project_root
+
+                try:
+                    timeout = resolve_python_timeout(timeout)
+                except ValueError as e:
+                    return {"status": "error", "error": str(e), "has_errors": True}
 
                 offending = _imports_gaia_tools(code)
                 if offending:
@@ -1895,23 +1918,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 cmd = python_command(snippet)
                 start = time.monotonic()
                 try:
-                    r = subprocess.run(
+                    job = run_python_job(
                         cmd,
                         cwd=str(run_dir),
                         env=env,
-                        capture_output=True,
-                        stdin=subprocess.DEVNULL,
-                        encoding="utf-8",
-                        errors="replace",
                         timeout=timeout,
-                        check=False,
+                        should_stop=lambda: stop_requested(self),
+                        watch=watch_folders(*folders_named_in(code), run_dir, project),
+                        ignore=[snippet],
                     )
-                except subprocess.TimeoutExpired:
-                    return {
-                        "status": "error",
-                        "error": f"Timed out after {timeout}s",
-                        "has_errors": True,
-                    }
+                    if job.stopped:
+                        return stopped_job_result(job, timeout)
+                    r = job.run
                 except OSError as e:
                     return {
                         "status": "error",
@@ -1922,7 +1940,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     snippet.unlink(missing_ok=True)
                 return attach_check(
                     _python_run_result(
-                        r, r.stdout[:8000], r.stderr[:2000], time.monotonic() - start
+                        r,
+                        r.stdout[:8000],
+                        r.stderr[:2000],
+                        time.monotonic() - start,
+                        finished_job_note(job),
                     ),
                     check_from_python_run(
                         snippet_target(code), r.returncode, r.stdout, r.stderr
@@ -2570,7 +2592,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             return msg
 
         # The tool watchdog must outlast the wait itself, or a slow answer is
-        # dropped and the model is told the tool "may be hung".
+        # dropped and the call abandoned.
         @tool(timeout=USER_INPUT_MAX_WAIT_S + 30)
         def request_user_input(
             message: str,

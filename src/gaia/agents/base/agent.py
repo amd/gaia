@@ -381,6 +381,13 @@ def default_max_steps(default: int = DEFAULT_MAX_STEPS) -> int:
 # download a model) opt out via ``@tool(timeout=...)``.
 DEFAULT_TOOL_TIMEOUT = 180.0
 
+# Ceiling on the run time a call may ask for through its ``@tool(timeout_arg=)``
+# parameter — the longest single shell command (``MAX_COMMAND_TIMEOUT``).
+MAX_REQUESTED_TOOL_TIMEOUT = 3600.0
+
+# Room past a requested run time for the tool to kill its work and report.
+REQUESTED_TIMEOUT_GRACE = 30.0
+
 
 def tool_execution_timeout() -> float:
     """Resolve the global default per-tool execution timeout in seconds.
@@ -5462,6 +5469,41 @@ Do NOT wrap conversational replies in JSON.
             return float(override)
         return tool_execution_timeout()
 
+    def _requested_tool_timeout(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> Optional[float]:
+        """Seconds this call asked to run for via its ``timeout_arg``, if any."""
+        entry = self._tools_registry.get(tool_name) or {}
+        arg = entry.get("timeout_arg")
+        if not arg:
+            return None
+        requested = tool_args.get(arg)
+        if requested is None:
+            func = entry.get("function")
+            param = inspect.signature(func).parameters.get(arg) if func else None
+            if param is None or param.default is inspect.Parameter.empty:
+                return None
+            requested = param.default
+        try:
+            seconds = float(requested)
+        except (TypeError, ValueError):
+            return None  # the tool body refuses the bad value itself
+        if seconds <= 0:
+            return None
+        return min(seconds, MAX_REQUESTED_TOOL_TIMEOUT)
+
+    def _bounded_tool_timeout(self, tool_name: str, tool_args: Dict[str, Any]) -> float:
+        """How long to wait for this call before abandoning it.
+
+        Never less than the run time the call itself was given plus
+        ``REQUESTED_TIMEOUT_GRACE``, so the tool's own timeout fires first.
+        """
+        timeout = self._resolve_tool_timeout(tool_name)
+        requested = self._requested_tool_timeout(tool_name, tool_args)
+        if requested is None:
+            return timeout
+        return max(timeout, requested + REQUESTED_TIMEOUT_GRACE)
+
     def _call_tool_bounded(
         self, tool: Callable, tool_args: Dict[str, Any], tool_name: str
     ) -> Any:
@@ -5492,7 +5534,7 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.agents.base.tools import set_tool_cancel_event
 
-        timeout = self._resolve_tool_timeout(tool_name)
+        timeout = self._bounded_tool_timeout(tool_name, tool_args)
         holder: Dict[str, Any] = {}
         cancel = threading.Event()
         user_wait = _UserWaitClock()
@@ -6197,12 +6239,22 @@ Do NOT wrap conversational replies in JSON.
             # Bounded-execution guard fired: the tool body blocked past its
             # limit. Fail loud with an actionable message — name the tool, the
             # window, and the override knob — instead of hanging the agent loop.
+            timeout_arg = (self._tools_registry.get(tool_name) or {}).get("timeout_arg")
+            if timeout_arg:
+                remedy = (
+                    f"If the work legitimately needs longer, retry with a "
+                    f"larger `{timeout_arg}` argument or split it into smaller "
+                    f"steps; check any files it was writing before using them."
+                )
+            else:
+                remedy = (
+                    "It may be waiting on a service or connection that does "
+                    "not respond. Check the tool/connector, or raise "
+                    "GAIA_AGENT_TOOL_TIMEOUT if it legitimately needs longer."
+                )
             error_msg = (
                 f"Tool '{tool_name}' did not return within {e.timeout:g}s and "
-                f"was abandoned. The call may be hung (e.g. an unreachable "
-                f"service or stuck network request). Check the tool/connector, "
-                f"or raise GAIA_AGENT_TOOL_TIMEOUT if it legitimately needs "
-                f"longer."
+                f"was abandoned, so its result is unknown. {remedy}"
             )
             logger.error(error_msg)
             self.error_history.append(error_msg)

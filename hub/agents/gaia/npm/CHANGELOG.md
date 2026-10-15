@@ -6,6 +6,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **`run_python` and `execute_python_file` work in the released binary.** The
+  binary has no Python interpreter, so it handed every script to its own
+  argument parser, which rejected it, and no calculation, chart or `.xlsx`
+  could be produced. It now runs scripts itself, with openpyxl, python-docx,
+  python-pptx, reportlab, pypdf, pandas, numpy, matplotlib and the full
+  standard library bundled for them. The Windows binary grows from 147 MB to
+  168 MB.
+- **Long Python data jobs can finish.** `run_python` gave up after 60 s and
+  the agent abandoned `execute_python_file` at 180 s even when it had asked
+  for 15 minutes, while the script kept running and left a corrupt workbook
+  behind. Python runs now get 120 s by default and up to 1800 s on request,
+  the agent waits that long, and a run that runs out of time is killed with
+  every process it started; the result names the files that changed while it
+  ran so the agent checks them instead of reporting them finished.
 - **Document search says when it could not search.** With the embedding
   model or Lemonade Server down, `query_documents` and `query_specific_file`
   answered "no relevant information found", so the agent told the user their
