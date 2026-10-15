@@ -29,8 +29,7 @@ jobs:
               frames = sys._current_frames()
               for th in threading.enumerate():
                   if th.name == "gaia-model-stream":
-                      print(f"
---- {label}: reader alive (ident {th.ident})")
+                      print(f"--- {label}: reader alive (ident {th.ident})")
                       traceback.print_stack(frames[th.ident], file=sys.stdout)
           def pytest_runtest_setup(item):
               _dump(f"before {item.name}")

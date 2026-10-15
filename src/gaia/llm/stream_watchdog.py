@@ -24,7 +24,6 @@ abandoned it stops within one slice and closes its own connection.
 from __future__ import annotations
 
 import contextvars
-import logging
 import queue
 import ssl
 import threading
@@ -42,11 +41,9 @@ from gaia.llm.retry import (
     stream_idle_timeout,
 )
 
-logger = logging.getLogger(__name__)
-
 T = TypeVar("T")
 
-#: Longest stretch between two checks of the Stop hook while a stream is quiet.
+#: Longest stretch between two checks of Stop, or of an abandoned reader's flag.
 _POLL_INTERVAL = 0.25
 #: Seconds the HTTP client's own read timeout runs past the stall limit, so the
 #: watchdog, with its actionable message, is always the one that fires.
