@@ -1024,8 +1024,13 @@ export async function listSchedules(): Promise<{ schedules: Schedule[]; total: n
     return apiFetch('GET', '/schedules');
 }
 
+/** The user's IANA time zone, so "daily at 9am" means 9am where they are. */
+export function browserTimeZone(): string | undefined {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+}
+
 export async function createSchedule(name: string, interval: string, prompt: string): Promise<Schedule> {
-    return apiFetch('POST', '/schedules', { name, interval, prompt });
+    return apiFetch('POST', '/schedules', { name, interval, prompt, timezone: browserTimeZone() });
 }
 
 export async function updateSchedule(name: string, status: string): Promise<Schedule> {
@@ -1041,5 +1046,5 @@ export async function getScheduleResults(name: string, limit: number = 20): Prom
 }
 
 export async function parseScheduleInput(input: string): Promise<ParsedSchedule> {
-    return apiFetch('POST', '/schedules/parse', { input });
+    return apiFetch('POST', '/schedules/parse', { input, timezone: browserTimeZone() });
 }

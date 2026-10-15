@@ -44,6 +44,16 @@ function formatTime(iso: string | null, now?: Date): string {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+/** Next run as the user's local clock time, plus how far away it is. */
+export function formatNextRun(iso: string | null, now?: Date): string {
+    if (!iso) return 'never';
+    const relative = formatTime(iso, now);
+    const d = new Date(iso);
+    if (d.getTime() <= (now || new Date()).getTime()) return relative;
+    const clock = d.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+    return `${clock} (${relative})`;
+}
+
 /** Returns true if the ISO timestamp is less than 60 seconds in the future. */
 function isCountdownRange(iso: string | null): boolean {
     if (!iso) return false;
@@ -161,7 +171,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
                 <span>Runs: {schedule.run_count}</span>
                 {schedule.error_count > 0 && <span>Errors: {schedule.error_count}</span>}
                 <span>Last: {formatTime(schedule.last_run_at)}</span>
-                <span>Next: {formatTime(schedule.next_run_at, now)}</span>
+                <span>Next: {formatNextRun(schedule.next_run_at, now)}</span>
             </div>
             <div className="schedule-card-actions">
                 {schedule.session_id && (

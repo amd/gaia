@@ -521,6 +521,8 @@ export interface ParsedSchedule {
     days_of_week: number[] | null;
     description: string;
     next_run_at: string | null;
+    /** IANA zone the times are in. */
+    timezone?: string | null;
     valid: boolean;
 }
 

@@ -158,6 +158,9 @@ setup(
         # tomli/tomli-w read+write ~/.gaia/schedules.toml (tomllib is stdlib on 3.11+).
         # <4: APScheduler 4 drops apscheduler.schedulers/.events, which gaia.schedule imports.
         "apscheduler>=3.10.0,<4.0",
+        # Agent UI schedules run "daily at 9am" in the PC's own time zone;
+        # tzlocal names it (IANA) and pulls in tzdata on Windows for zoneinfo.
+        "tzlocal>=4.0",
         "tomli-w>=1.0.0",
         "tomli>=2.0.0; python_version < '3.11'",
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621

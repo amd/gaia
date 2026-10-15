@@ -315,6 +315,10 @@ export interface CreateScheduleRequest {
    * The prompt to execute on each run
    */
   prompt: string;
+  /**
+   * IANA time zone the schedule's times are in, e.g. 'America/Los_Angeles'. Defaults to the server machine's zone.
+   */
+  timezone?: string | null;
 }
 /**
  * Request to create a new chat session.
@@ -675,6 +679,10 @@ export interface ParseScheduleRequest {
    * Natural language schedule description
    */
   input: string;
+  /**
+   * IANA time zone the schedule's times are in, e.g. 'America/Los_Angeles'. Defaults to the server machine's zone.
+   */
+  timezone?: string | null;
 }
 /**
  * Parsed schedule configuration.
@@ -687,6 +695,7 @@ export interface ParseScheduleResponse {
   next_run_at?: string | null;
   start_hour?: number | null;
   time_of_day?: string | null;
+  timezone?: string | null;
   valid: boolean;
 }
 /**
