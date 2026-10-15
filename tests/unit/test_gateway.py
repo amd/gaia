@@ -220,6 +220,7 @@ class TestAuth:
             "enabled_models",
             "active_model",
             "non_streaming_models",
+            "unavailable_models",
         }
 
     def test_empty_token_is_refused_before_any_request(self, manager):

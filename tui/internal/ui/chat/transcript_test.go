@@ -639,6 +639,41 @@ func TestANonZeroExitIsAFailedStep(t *testing.T) {
 	}
 }
 
+// The shell tool now reports a failed command as status "error", which the
+// SSE layer carries as success:false — that must read as a failure in words.
+func TestAFailedCommandReportedAsAnErrorIsAFailedStep(t *testing.T) {
+	m := feed(t, sizedChat(t, 120, 40), shellCall("python -m pytest -q"), event.CanonicalToolResultEvent{
+		Type: "tool_result", Tool: "run_shell_command",
+		Preview: "Command failed (exit 2): E   SyntaxError",
+		Data: json.RawMessage(`{"success":false,"summary":"Command failed (exit 2): E   SyntaxError",` +
+			`"command_output":{"return_code":2,"stderr":"E   SyntaxError"}}`),
+	})
+	item := m.activity[len(m.activity)-1]
+	if item.Success == nil || *item.Success {
+		t.Error("a command reported as an error ticked as a success")
+	}
+	if !strings.HasPrefix(item.Detail, "failed") {
+		t.Errorf("the outcome must say it failed in words: %q", item.Detail)
+	}
+}
+
+// grep exiting 1 means "no match": the tool marks it expected_exit, and a
+// search that found nothing is an answer, not a failed step.
+func TestAnExpectedExitStaysASuccess(t *testing.T) {
+	for _, data := range []string{
+		`{"success":true,"command_output":{"return_code":1,"expected_exit":"grep exits 1 when nothing matches"}}`,
+		`{"status":"success","return_code":1,"expected_exit":"grep exits 1 when nothing matches"}`,
+	} {
+		m := feed(t, sizedChat(t, 120, 40), shellCall("grep -r TODO src"), event.CanonicalToolResultEvent{
+			Type: "tool_result", Tool: "run_shell_command",
+			Preview: "grep exits 1 when nothing matches (exit 1)", Data: json.RawMessage(data),
+		})
+		if item := m.activity[len(m.activity)-1]; item.Success == nil || !*item.Success {
+			t.Errorf("%s: an expected exit ticked as a failure", data)
+		}
+	}
+}
+
 // A long or multi-line question wrapped flush to column 0, so its second line
 // read as stray output under it. Every continuation hangs under the text.
 func TestAWrappedQuestionHangsUnderItsText(t *testing.T) {

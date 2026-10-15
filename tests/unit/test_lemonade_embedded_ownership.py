@@ -7,6 +7,7 @@ GAIA's server sitting where GAIA's used to be, and the tests assert the exact
 signal targets on Windows and on Linux.
 """
 
+import errno
 import json
 import signal
 import socket
@@ -15,6 +16,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import psutil
@@ -324,6 +326,64 @@ class TestKillTargets:
         ]
 
 
+_posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX socket rules")
+_windows_only = pytest.mark.skipif(
+    sys.platform != "win32", reason="Windows socket rules"
+)
+
+
+def _ipv6_loopback() -> bool:
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+            s.bind(("::1", 0))
+    except OSError:
+        return False
+    return True
+
+
+_needs_ipv6 = pytest.mark.skipif(not _ipv6_loopback(), reason="no IPv6 loopback")
+
+
+def _lemond_options(sock):
+    """What cpp-httplib sets on lemond's listener."""
+    opt = getattr(socket, "SO_REUSEPORT", socket.SO_REUSEADDR)
+    sock.setsockopt(socket.SOL_SOCKET, opt, 1)
+
+
+@contextmanager
+def _listener(family, host, port=0, option=None):
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        if option is not None:
+            sock.setsockopt(socket.SOL_SOCKET, option, 1)
+        sock.bind((host, port))
+        sock.listen(8)
+        yield sock.getsockname()[1]
+    finally:
+        sock.close()
+
+
+def _leave_time_wait(port=0):
+    """Run a lemond-like server on *port*, serve one connection, close it first.
+
+    The side that closes first holds TIME_WAIT, so the port is left as a
+    stopped lemond leaves it.
+    """
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    _lemond_options(server)
+    server.bind(("127.0.0.1", port))
+    server.listen(1)
+    port = server.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", port))
+    conn, _ = server.accept()
+    conn.close()
+    time.sleep(0.05)
+    client.close()
+    server.close()
+    return port
+
+
+@pytest.mark.allow_network
 class TestStablePort:
     def _start(self, manager, monkeypatch, port=None):
         monkeypatch.setattr(manager, "is_installed", lambda: True)
@@ -384,6 +444,163 @@ class TestStablePort:
         status, _ = self._start(manager, monkeypatch)
         assert status.port
         assert "last_port.json" in caplog.text
+
+    def test_the_last_servers_time_wait_does_not_move_the_port(
+        self, manager, monkeypatch
+    ):
+        first, _ = self._start(manager, monkeypatch)
+        _leave_time_wait(first.port)
+        second, _ = self._start(manager, monkeypatch)
+        assert second.port == first.port
+
+    @_posix_only
+    def test_a_users_lemond_on_the_last_port_moves_gaias(self, manager, monkeypatch):
+        """Its SO_REUSEPORT would let GAIA's lemond bind alongside it."""
+        first, _ = self._start(manager, monkeypatch)
+        with _listener(socket.AF_INET, "127.0.0.1", first.port, socket.SO_REUSEPORT):
+            second, _ = self._start(manager, monkeypatch)
+        assert second.port != first.port
+
+
+@pytest.mark.allow_network
+class TestPortProbe:
+    """`_port_free` must say what lemond's own bind would say, never less safe."""
+
+    def test_a_port_in_time_wait_is_free(self):
+        port = _leave_time_wait()
+        if sys.platform.startswith("linux"):
+            # Proves the TIME_WAIT is real: the old SO_REUSEADDR probe fails here.
+            with socket.socket() as old:
+                old.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                with pytest.raises(OSError):
+                    old.bind(("127.0.0.1", port))
+        assert embedded_mod._port_free(port) is True
+
+    @pytest.mark.parametrize(
+        "option",
+        [
+            pytest.param(None, id="plain"),
+            pytest.param(socket.SO_REUSEADDR, id="reuseaddr"),
+            pytest.param(
+                getattr(socket, "SO_REUSEPORT", None), id="reuseport", marks=_posix_only
+            ),
+            pytest.param(
+                getattr(socket, "SO_EXCLUSIVEADDRUSE", None),
+                id="exclusive",
+                marks=_windows_only,
+            ),
+        ],
+    )
+    def test_a_live_loopback_listener_is_taken(self, option):
+        with _listener(socket.AF_INET, "127.0.0.1", option=option) as port:
+            assert embedded_mod._port_free(port) is False
+
+    def test_a_live_wildcard_listener_is_taken(self):
+        """Windows lets a 127.0.0.1 bind through a 0.0.0.0 listener."""
+        with _listener(socket.AF_INET, "0.0.0.0") as port:
+            assert embedded_mod._port_free(port) is False
+
+    @_posix_only
+    def test_a_same_user_reuseport_wildcard_listener_is_taken(self):
+        with _listener(socket.AF_INET, "0.0.0.0", option=socket.SO_REUSEPORT) as port:
+            assert embedded_mod._port_free(port) is False
+
+    @_needs_ipv6
+    def test_an_ipv6_only_listener_is_taken(self):
+        """lemond binds ::1 as well as 127.0.0.1."""
+        with _listener(socket.AF_INET6, "::1") as port:
+            assert embedded_mod._port_free(port) is False
+
+    @_needs_ipv6
+    def test_a_dual_stack_listener_is_taken(self):
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        try:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            sock.bind(("::", 0))
+            sock.listen(1)
+            assert embedded_mod._port_free(sock.getsockname()[1]) is False
+        finally:
+            sock.close()
+
+    def test_a_free_port_is_free_without_an_ipv6_stack(self, monkeypatch):
+        port = embedded_mod._free_port()
+        real_socket = socket.socket
+
+        def _no_ipv6(family=socket.AF_INET, *args, **kwargs):
+            if family == socket.AF_INET6:
+                raise OSError(errno.EAFNOSUPPORT, "Address family not supported")
+            return real_socket(family, *args, **kwargs)
+
+        monkeypatch.setattr(embedded_mod.socket, "socket", _no_ipv6)
+        assert embedded_mod._port_free(port) is True
+
+    @_windows_only
+    def test_windows_never_probes_with_reuse_options(self, monkeypatch):
+        """SO_REUSEADDR there binds over a live listener."""
+        set_options = []
+        real_socket = socket.socket
+
+        class _Spy(real_socket):
+            def setsockopt(self, *args):
+                set_options.append(args)
+                return super().setsockopt(*args)
+
+        monkeypatch.setattr(embedded_mod.socket, "socket", _Spy)
+        assert embedded_mod._port_free(embedded_mod._free_port()) is True
+        assert set_options == []
+
+
+class TestStopWaitsForExit:
+    def test_stop_does_not_return_while_the_process_lives(self, manager, monkeypatch):
+        """The port closes before the process is gone; stop must wait for both."""
+        _record(manager)
+        own = _FakeProcess(
+            [_own_exe(manager), "c", "c", "--port", str(PORT)],
+            {"LEMONADE_API_KEY": KEY},
+        )
+        table = {PID: own}
+        _processes(monkeypatch, table)
+        killed = []
+        monkeypatch.setattr(
+            EmbeddedLemonade, "_health", lambda *a, **k: None if killed else {}
+        )
+        monkeypatch.setattr(EmbeddedLemonade, "_kill_tree", staticmethod(killed.append))
+        polls = []
+
+        def _sleep(seconds):
+            polls.append(seconds)
+            if len(polls) == 3:
+                del table[PID]
+
+        monkeypatch.setattr(embedded_mod.time, "sleep", _sleep)
+
+        assert manager.stop() is True
+        assert len(polls) >= 3
+        assert PID not in table
+
+    def test_a_process_that_never_exits_is_an_error_not_a_stop(
+        self, manager, monkeypatch
+    ):
+        _record(manager)
+        _processes(
+            monkeypatch,
+            {
+                PID: _FakeProcess(
+                    [_own_exe(manager), "c", "c", "--port", str(PORT)],
+                    {"LEMONADE_API_KEY": KEY},
+                )
+            },
+        )
+        killed = []
+        monkeypatch.setattr(
+            EmbeddedLemonade, "_health", lambda *a, **k: None if killed else {}
+        )
+        monkeypatch.setattr(EmbeddedLemonade, "_kill_tree", staticmethod(killed.append))
+        monkeypatch.setattr(embedded_mod.time, "sleep", lambda s: None)
+
+        with pytest.raises(EmbeddedLemonadeError, match="still alive"):
+            manager.stop(timeout=0.2)
+        assert manager.state_path.exists(), "the record of a live server was dropped"
 
 
 class TestOneStartAtATime:

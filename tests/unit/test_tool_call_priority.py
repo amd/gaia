@@ -370,10 +370,8 @@ def test_streaming_preserved_without_tools():
     """Without tools, stream=True from the caller is passed through."""
 
     def _stream_iter():
-        # Empty generator — _handle_stream consumes an iterator of chunks.
-        if False:
-            yield {}
-        return
+        # A reply with no text still ends with the server's finish chunk.
+        yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
 
     with patch("gaia.llm.providers.lemonade.LemonadeClient") as MockBackend:
         backend = MockBackend.return_value

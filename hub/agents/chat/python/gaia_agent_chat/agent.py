@@ -45,6 +45,7 @@ from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_MIN_BATCH_TOKENS,
     DEFAULT_EVICT_THRESHOLD_TOKENS,
 )
+from gaia.agents.base.errors import exit_error
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.project_map import resolve_project_root
 
@@ -54,6 +55,7 @@ from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
 from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
@@ -110,6 +112,9 @@ _FILE_CREATING_TOOLS = frozenset(
 # code, so ``NOTIFY_DESKTOP_PS_SCRIPT`` stays a constant no input can alter.
 NOTIFY_TITLE_ENV_VAR = "GAIA_NOTIFY_TITLE"
 NOTIFY_MESSAGE_ENV_VAR = "GAIA_NOTIFY_MESSAGE"
+#: Seconds notify_desktop waits for PowerShell to fail before calling it shown.
+NOTIFY_STARTUP_GRACE_S = 3
+
 NOTIFY_DESKTOP_PS_SCRIPT = (
     "Add-Type -AssemblyName System.Windows.Forms; "
     "[System.Windows.Forms.MessageBox]::Show("
@@ -1996,7 +2001,16 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     logger.warning("open_url refused %s: %s", url, e)
                     return {"status": "error", "url": url, "error": str(e)}
                 try:
-                    webbrowser.open(url)
+                    # False means no browser could be launched (headless box).
+                    if not webbrowser.open(url):
+                        return {
+                            "status": "error",
+                            "url": url,
+                            "error": (
+                                f"No web browser could be opened for {url}. "
+                                "Give the user the link to open themselves."
+                            ),
+                        }
                     return {
                         "status": "success",
                         "message": f"Opened {url} in the default browser",
@@ -2073,7 +2087,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 info["disk_total_gb"] = round(disk.total / 1e9, 1)
                 info["disk_used_pct"] = round(disk.used / disk.total * 100, 1)
             except ImportError:
-                info["note"] = "psutil not installed — install with: pip install psutil"
+                info["note"] = "psutil not installed. " + missing_package_hint("psutil")
             return {"status": "success", **info}
 
         @tool
@@ -2091,7 +2105,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             except ImportError:
                 return {
                     "status": "error",
-                    "error": "pyperclip not installed. Run: pip install pyperclip",
+                    "error": "pyperclip not installed. "
+                    + missing_package_hint("pyperclip"),
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
@@ -2117,7 +2132,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             except ImportError:
                 return {
                     "status": "error",
-                    "error": "pyperclip not installed. Run: pip install pyperclip",
+                    "error": "pyperclip not installed. "
+                    + missing_package_hint("pyperclip"),
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
@@ -2144,25 +2160,43 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 if platform.system() == "Windows":
                     try:
                         import subprocess
+                        import tempfile
 
-                        subprocess.Popen(
-                            [
-                                "powershell",
-                                "-NoProfile",
-                                "-WindowStyle",
-                                "Hidden",
-                                "-Command",
-                                NOTIFY_DESKTOP_PS_SCRIPT,
-                            ],
-                            env=child_env(
-                                {
-                                    NOTIFY_MESSAGE_ENV_VAR: message,
-                                    NOTIFY_TITLE_ENV_VAR: title,
+                        with tempfile.TemporaryFile() as err:
+                            proc = subprocess.Popen(
+                                [
+                                    "powershell",
+                                    "-NoProfile",
+                                    "-WindowStyle",
+                                    "Hidden",
+                                    "-Command",
+                                    NOTIFY_DESKTOP_PS_SCRIPT,
+                                ],
+                                env=child_env(
+                                    {
+                                        NOTIFY_MESSAGE_ENV_VAR: message,
+                                        NOTIFY_TITLE_ENV_VAR: title,
+                                    }
+                                ),
+                                stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL,
+                                stderr=err,
+                            )
+                            # The box stays up until dismissed, so a process
+                            # still alive here is the box showing; one that
+                            # already exited non-zero never drew it.
+                            try:
+                                code = proc.wait(timeout=NOTIFY_STARTUP_GRACE_S)
+                            except subprocess.TimeoutExpired:
+                                code = 0
+                            if code != 0:
+                                err.seek(0)
+                                return {
+                                    "status": "error",
+                                    "error": "Notification failed: "
+                                    + exit_error("powershell", code, err.read()),
+                                    "return_code": code,
                                 }
-                            ),
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
                         return {
                             "status": "success",
                             "message": f"Notification sent via Windows fallback: {title}",
@@ -2181,7 +2215,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         }
                 return {
                     "status": "error",
-                    "error": "plyer not installed. Run: pip install plyer",
+                    "error": "plyer not installed. " + missing_package_hint("plyer"),
                 }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
@@ -2239,6 +2273,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         timeout=10,
                         check=False,
                     )
+                    if result.returncode != 0:
+                        return {
+                            "status": "error",
+                            "error": exit_error(
+                                "tasklist", result.returncode, result.stderr
+                            ),
+                            "return_code": result.returncode,
+                        }
                     for line in result.stdout.strip().splitlines()[:50]:
                         parts = line.strip('"').split('","')
                         if len(parts) >= 2:
@@ -2291,6 +2333,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                                 "(Mission Control equivalent)"
                             ),
                         }
+                    if result.returncode != 0:
+                        return {
+                            "status": "error",
+                            "error": exit_error(
+                                "osascript", result.returncode, result.stderr
+                            ),
+                            "return_code": result.returncode,
+                            "hint": (
+                                "osascript may have been blocked by "
+                                "accessibility permissions."
+                            ),
+                        }
                 except (FileNotFoundError, subprocess.TimeoutExpired) as e:
                     logger.debug("osascript window listing unavailable: %s", e)
                 return {
@@ -2315,22 +2369,29 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         timeout=5,
                         check=False,
                     )
-                    if result.returncode == 0:
-                        for line in result.stdout.strip().splitlines():
-                            parts = line.split(None, 3)
-                            if len(parts) >= 4:
-                                windows.append(
-                                    {
-                                        "id": parts[0],
-                                        "desktop": parts[1],
-                                        "title": parts[3],
-                                    }
-                                )
+                    if result.returncode != 0:
                         return {
-                            "status": "success",
-                            "windows": windows,
-                            "count": len(windows),
+                            "status": "error",
+                            "error": exit_error(
+                                "wmctrl -l", result.returncode, result.stderr
+                            ),
+                            "return_code": result.returncode,
                         }
+                    for line in result.stdout.strip().splitlines():
+                        parts = line.split(None, 3)
+                        if len(parts) >= 4:
+                            windows.append(
+                                {
+                                    "id": parts[0],
+                                    "desktop": parts[1],
+                                    "title": parts[3],
+                                }
+                            )
+                    return {
+                        "status": "success",
+                        "windows": windows,
+                        "count": len(windows),
+                    }
                 except (FileNotFoundError, subprocess.TimeoutExpired) as e:
                     logger.debug("wmctrl window listing unavailable: %s", e)
                 return {

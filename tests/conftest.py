@@ -150,8 +150,7 @@ def _reset_model_broker_state():
         broker_client._discovery_enabled = False
         broker_client._attached = None
         broker_client._broker_unsupported = False
-        broker_client._held.depth = 0
-        broker_client._held.model = None
+        broker_client._held.set(None)
 
     _reset()
     yield
