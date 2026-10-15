@@ -19,52 +19,23 @@ jobs:
       - run: |
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout psutil httpx respx
           uv pip install --system -e ".[api]"
-      - name: probe
+      - name: old code with stack dumps
         run: |
-          cat > /tmp/probe.py <<'PY'
-          import sys, threading, time, traceback, socket
-          sys.path.insert(0, "tests/unit")
-          import pytest
-          import test_stream_stall_watchdog as t
-          from contextlib import nullcontext
-          from gaia.llm.lemonade_client import LemonadeClient
-          import os
-          os.environ["GAIA_LLM_STREAM_IDLE_TIMEOUT"] = "2"
-          def mk(server):
-              c = LemonadeClient(host="127.0.0.1", port=server.port, verbose=False)
-              c._ensure_model_loaded = lambda *a, **k: None
-              c._model_slot_lease = lambda *a, **k: nullcontext()
-              c.cloud_model_provider = lambda *a, **k: "amd"
-              c._retry_sleep = lambda s: None
-              return c
-          def dump(label):
+          git fetch -q --depth 1 origin main
+          git show FETCH_HEAD:src/gaia/llm/stream_watchdog.py > src/gaia/llm/stream_watchdog.py
+          cat > /tmp/dumpstacks.py <<'PY'
+          import sys, threading, traceback, time
+          def _dump(label):
               frames = sys._current_frames()
               for th in threading.enumerate():
                   if th.name == "gaia-model-stream":
-                      print(f"--- {label}: alive {th.name}", flush=True)
+                      print(f"
+--- {label}: reader alive (ident {th.ident})")
                       traceback.print_stack(frames[th.ident], file=sys.stdout)
-          print("threads before:", [x.name for x in threading.enumerate()])
-          with t.StallServer([t.stall_mid_stream, t.good]) as server:
-              c = mk(server)
-              try:
-                  print(t._run(c))
-              except Exception as e:
-                  print("raised", type(e).__name__)
-              for i in range(6):
-                  time.sleep(0.5)
-                  dump(f"inside server +{(i+1)*0.5}s")
-          for i in range(10):
-              time.sleep(0.5)
-              dump(f"after server close +{(i+1)*0.5}s")
-          print("done", [x.name for x in threading.enumerate()])
+          def pytest_runtest_setup(item):
+              _dump(f"before {item.name}")
+          def pytest_runtest_teardown(item):
+              _dump(f"after {item.name}")
           PY
-          echo "=== NEW CODE ==="
-          python /tmp/probe.py 2>&1 | tail -60
-          git show origin/main:src/gaia/llm/stream_watchdog.py > /tmp/old_wd.py || git fetch origin main && git show FETCH_HEAD:src/gaia/llm/stream_watchdog.py > /tmp/old_wd.py
-          cp src/gaia/llm/stream_watchdog.py /tmp/new_wd.py
-          cp /tmp/old_wd.py src/gaia/llm/stream_watchdog.py
-          echo "=== OLD CODE ==="
-          python /tmp/probe.py 2>&1 | tail -80
-          cp /tmp/new_wd.py src/gaia/llm/stream_watchdog.py
-      - name: test file alone
-        run: pytest tests/unit/test_stream_stall_watchdog.py tests/unit/test_stream_reader_abandon.py --timeout=120 -v --tb=short
+          PYTHONPATH=/tmp pytest -p dumpstacks tests/unit/test_stream_stall_watchdog.py --timeout=120 -v -s --tb=line -k "stall or stop" 2>&1 | grep -v "^\s*$" | head -300 || true
+          git checkout src/gaia/llm/stream_watchdog.py
