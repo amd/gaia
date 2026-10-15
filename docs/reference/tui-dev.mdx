@@ -87,6 +87,30 @@ shows behaviour already fixed elsewhere — that has produced bug reports for
 things fixed on another branch. Build from a merged integration branch, or state
 explicitly which slice you tested.
 
+The header's `agent gaia v<x>` and the welcome line's `GAIA core <y>` come from
+the running agent only: the `agent_version` and `gaia_version` fields of its
+model-state `status` ping (stdio), or the peer's own version (HTTP). Never from
+`~/.gaia/agents/<id>/.installed`. No version on screen means the agent that
+answered predates those fields, which is itself the answer to "which build?".
+
+### Patched dependencies
+
+`tui/third_party/` holds patched copies of upstream modules, wired in with
+`replace` in `tui/go.mod`; its `README.md` lists each patch and why. Bubble Tea
+is one of them: v1.3.10's Windows console reader drops the Ctrl state on
+Backspace and Delete, so the copy reports Ctrl+Backspace as `ctrl+h` and adds a
+`ctrl+delete` key (also mapped from `ESC[3;5~` on VT terminals). Upgrading Bubble
+Tea means re-applying the lines marked `GAIA patch`, or dropping the copy once
+upstream has the fix.
+
+### Status and error lines
+
+A status or error line is one sentence on what is wrong plus the one next step.
+Daemon errors implement `daemon.Briefer`; render `daemon.Brief(err)` on the line
+and keep `err.Error()` (route, alternatives, log path) for a `d details` pane. In
+`--dev`, harness lines the user view hides (`Step 4/50`) show as they are, with
+no `[harness]` tag.
+
 ## The control API
 
 Off by default. `--control` auto-assigns a port; `--control-port N` pins one. It

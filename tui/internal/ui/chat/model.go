@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -244,10 +245,11 @@ type ChatModel struct {
 	cancelFn  context.CancelFunc
 	agentName string
 	agentID   string
-	// agentVersion is the synchronous value known at construction time (the
-	// catalog's installed version) — see renderIdentityChip for the live
-	// refinement once the peer's own version has been probed.
+	// agentVersion and gaiaVersion are what the running agent reported in its
+	// model-state ping. Never seeded from the catalog: an install record can
+	// name a different build than the one answering.
 	agentVersion string
+	gaiaVersion  string
 	dev          bool
 
 	width  int
@@ -528,6 +530,7 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 	ti.ShowLineNumbers = false
 	// The default "┃ " prompt sits beside the block cursor and reads as a second one.
 	ti.Prompt = "› "
+	ti.KeyMap = composerKeyMap(ti.KeyMap)
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -554,15 +557,24 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 	return m.applyLaunchFullAccess().applyLaunchClaude()
 }
 
+// composerKeyMap adds the Windows word-delete keys to the textarea defaults.
+// Ctrl+Backspace arrives as ctrl+h (^H on a VT terminal, and from the patched
+// Windows console reader), so ctrl+h stops meaning a one-character delete.
+func composerKeyMap(km textarea.KeyMap) textarea.KeyMap {
+	km.DeleteCharacterBackward = key.NewBinding(key.WithKeys("backspace"), key.WithHelp("backspace", "delete character backward"))
+	km.DeleteWordBackward = key.NewBinding(key.WithKeys("ctrl+h", "alt+backspace", "ctrl+w"), key.WithHelp("ctrl+backspace", "delete word backward"))
+	km.DeleteWordForward = key.NewBinding(key.WithKeys("ctrl+delete", "alt+delete", "alt+d"), key.WithHelp("ctrl+delete", "delete word forward"))
+	return km
+}
+
 // NewChatModelForFlagship creates the ChatModel the TUI boots into.
 //
 // setupVerified says the readiness gate in front of this launch already ran
 // `gaia init --check` and it passed, so the first-boot gate must not ask again
 // — see ChatModel.setupVerified.
-func NewChatModelForFlagship(c client.AgentClient, agentID, agentName, agentVersion string, dev, setupVerified bool) ChatModel {
+func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, dev, setupVerified bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
-	m.agentVersion = agentVersion
 	m.setupVerified = setupVerified
 	return m.applyFirstBootGate()
 }
@@ -570,10 +582,9 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName, agentVers
 // NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
 // CanReturnToHub) for a real catalog agent, so agentID is the catalog id
 // rather than NewChatModel's default of the display name.
-func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName, agentVersion string, dev bool) ChatModel {
+func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
-	m.agentVersion = agentVersion
 	return m.applyFirstBootGate()
 }
 
@@ -2588,7 +2599,7 @@ func (m ChatModel) renderWelcome() string {
 	// header draws.
 	agent := lipgloss.NewStyle().
 		Foreground(theme.Text).
-		Render("Connected to: " + m.agentIdentity())
+		Render("Connected to: " + m.agentIdentity() + m.coreVersionSuffix())
 	return title + "\n" + agent + "\n\n" + hint
 }
 
@@ -3760,14 +3771,13 @@ func (m ChatModel) renderHeader() string {
 // capitalizes the display name, so the header never disagrees with itself on
 // two different launches of the same agent.
 //
-// version prefers a live probe of the peer's own reported version over the
-// value known at construction time (the catalog's installed version), read
-// through an optional interface so this package never has to import the
-// client that implements it.
+// The version only ever comes from the running agent: the HTTP peer's probe,
+// else the stdio agent's model-state ping. With neither there is no version,
+// never a guess from an install record.
 func (m ChatModel) agentIdentity() string {
 	version := m.agentVersion
 	if v, ok := m.client.(interface{ AgentVersion() string }); ok {
-		if live := v.AgentVersion(); live != "" {
+		if live := reportedVersion(v.AgentVersion()); live != "" {
 			version = live
 		}
 	}
@@ -3776,6 +3786,25 @@ func (m ChatModel) agentIdentity() string {
 		identity += " v" + version
 	}
 	return identity
+}
+
+// versionMax caps a reported version so a broken agent cannot crowd the header.
+const versionMax = 32
+
+// reportedVersion is a version an agent sent, made safe for one header row: no
+// control bytes or escapes, no leading "v" (the header adds its own), capped.
+func reportedVersion(v string) string {
+	v = strings.Join(strings.Fields(clean(v)), " ")
+	v = strings.TrimLeft(v, "vV")
+	return truncateRunes(v, versionMax)
+}
+
+// coreVersionSuffix names the GAIA core the running agent runs on, when it said.
+func (m ChatModel) coreVersionSuffix() string {
+	if m.gaiaVersion == "" {
+		return ""
+	}
+	return " (GAIA core " + m.gaiaVersion + ")"
 }
 
 // renderIdentityChip is agentIdentity styled as a header segment.

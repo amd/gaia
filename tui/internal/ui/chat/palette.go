@@ -179,7 +179,8 @@ func (m *ChatModel) syncPalette() {
 // re-filters) for these; everything else closes it (see handlePaletteKey).
 func palettePassThroughKey(t tea.KeyType) bool {
 	switch t {
-	case tea.KeyRunes, tea.KeySpace, tea.KeyBackspace, tea.KeyDelete, tea.KeyLeft, tea.KeyRight:
+	case tea.KeyRunes, tea.KeySpace, tea.KeyBackspace, tea.KeyDelete, tea.KeyLeft, tea.KeyRight,
+		tea.KeyCtrlH, tea.KeyCtrlW, tea.KeyCtrlDelete:
 		return true
 	}
 	return false

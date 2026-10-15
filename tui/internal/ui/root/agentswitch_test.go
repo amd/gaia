@@ -36,7 +36,7 @@ func liveChatModel(t *testing.T, agentID string) (FlagshipModel, *nullClient) {
 		t.Fatalf("test setup: catalog has no %q seed", agentID)
 	}
 	c := &nullClient{}
-	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, agent.Version, false, true)
+	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, false, true)
 	m := NewFlagshipModel(*agent, false).WithCatalog(cat)
 	m.chatClient.set(c)
 	m.chat = &chatModel
