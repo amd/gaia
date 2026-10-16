@@ -40,7 +40,7 @@ from typing import (
     Union,
 )
 
-from gaia.agents.base.call_risk import RISK_NOTE_ARG
+from gaia.agents.base.call_risk import RISK_NOTE_ARG, SHELL_TOOLS
 from gaia.agents.base.completion import (
     CompletionEvidence,
     caveated_answer,
@@ -106,6 +106,7 @@ from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
     SCRATCH_ARG,
+    command_reaches_folder,
     is_inside_folder,
 )
 from gaia.agents.base.tool_markup import (
@@ -1820,6 +1821,51 @@ def parse_skill_manifest(path: Optional[Path]) -> "SkillSets":
     if data is None:
         return SkillSets()
     return parse_skill_sets(data, where=f" in {path}")
+
+
+def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
+    """The scratch folder when this call runs code that may sit in it, else "".
+
+    A Python file there, or one handed a scratch path as an argument; a
+    shell line run there or naming a path there.
+    """
+    if not isinstance(prompt_args, dict):
+        return ""
+    reader = getattr(agent, "_read_validator", None)
+    scratch = getattr(reader() if callable(reader) else None, "scratch_dir", None)
+    if not scratch:
+        return ""
+    scratch = str(scratch)
+    if tool_name == "execute_python_file":
+        target = edit_target(prompt_args)
+        if is_inside_folder(target, scratch):
+            return scratch
+        args = prompt_args.get("args")
+        if isinstance(args, str) and args.strip():
+            bases = [os.getcwd()]
+            if target:
+                bases.append(os.path.dirname(os.path.abspath(target)))
+            project = getattr(agent, "_script_project_root", None)
+            root = project() if callable(project) else None
+            if root:
+                bases.append(str(root))
+            if command_reaches_folder(args, bases, scratch):
+                return scratch
+        return ""
+    if tool_name in SHELL_TOOLS:
+        command = prompt_args.get("command")
+        if not isinstance(command, str):
+            return ""
+        bases = [os.getcwd()]
+        session = getattr(agent, "_shell_session", None)
+        if session is not None and not getattr(session, "closed", True):
+            bases.append(str(session.cwd))
+        folder = prompt_args.get("working_directory")
+        if isinstance(folder, str) and folder:
+            bases = [os.path.join(os.getcwd(), folder)]
+        if command_reaches_folder(command, bases, scratch):
+            return scratch
+    return ""
 
 
 class Agent(abc.ABC):
@@ -6337,16 +6383,11 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
-        # Scratch writes never ask, so a script there is asked about on every
-        # run — the marker keeps "always" (and any broader grant) off it.
-        if tool_name == "execute_python_file" and isinstance(prompt_args, dict):
-            reader = getattr(self, "_read_validator", None)
-            scratch = getattr(
-                reader() if callable(reader) else None, "scratch_dir", None
-            )
-            target = edit_target(prompt_args)
-            if scratch and is_inside_folder(target, str(scratch)):
-                prompt_args = {**prompt_args, SCRATCH_ARG: str(scratch)}
+        # Scratch writes never ask, so code run from there is asked about on
+        # every run — the marker keeps "always" (and any broader grant) off it.
+        scratch = _scratch_reached_by(self, tool_name, prompt_args)
+        if scratch:
+            prompt_args = {**prompt_args, SCRATCH_ARG: scratch}
         # A one-time call is approved on its own prompt, which carries its
         # risk note — never through the reroute question above.
         one_time = isinstance(prompt_args, dict) and bool(
