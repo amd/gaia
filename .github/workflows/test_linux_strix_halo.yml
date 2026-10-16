@@ -46,12 +46,17 @@ jobs:
     timeout-minutes: 90
     env:
       GAIA_HW_REQUIRE: '1'
-      GAIA_HW_WORKDIR: ${{ runner.temp }}/linux-halo
-      GAIA_HW_EVIDENCE: ${{ runner.temp }}/linux-halo-evidence.md
-      GAIA_HW_ARTIFACTS: ${{ runner.temp }}/linux-halo-artifacts
-      VENV: ${{ runner.temp }}/linux-halo-venv
     steps:
       - uses: actions/checkout@v7
+
+      - name: Paths for this run
+        run: |
+          {
+            echo "GAIA_HW_WORKDIR=$RUNNER_TEMP/linux-halo"
+            echo "GAIA_HW_EVIDENCE=$RUNNER_TEMP/linux-halo-evidence.md"
+            echo "GAIA_HW_ARTIFACTS=$RUNNER_TEMP/linux-halo-artifacts"
+            echo "VENV=$RUNNER_TEMP/linux-halo-venv"
+          } >> "$GITHUB_ENV"
 
       - name: Install GAIA into a fresh venv
         env:

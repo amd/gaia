@@ -53,7 +53,6 @@ from halo_harness import (  # noqa: E402
     amdgpu_present,
     evidence,
     gb,
-    gpu_memory_of,
     port_listening,
     process_tree,
     sysfs_gpu_used,
@@ -316,7 +315,7 @@ def test_eu4_tight_memory_shrinks_the_window(gemma_install):
         f"- `gaia llm --model {GEMMA}` with 10.5 GB free: exit {result.returncode}"
     )
     evidence(f"- loaded: `{loaded}`")
-    shrink = [l for l in result.output.splitlines() if "memory is free" in l]
+    shrink = [ln for ln in result.output.splitlines() if "memory is free" in ln]
     evidence(f"- GAIA said: `{shrink[-1].strip() if shrink else '(nothing)'}`")
     assert "LLM Response:" in result.output, "the prompt was not answered"
     assert GEMMA in loaded
@@ -333,7 +332,9 @@ def test_eu4_too_little_memory_is_refused_with_a_clear_message(gemma_install):
     before = sysfs_gpu_used()
     result = _capped_llm(s, 6.0)
     loaded = s.loaded()
-    refusal = [l for l in result.output.splitlines() if "Not enough free memory" in l]
+    refusal = [
+        ln for ln in result.output.splitlines() if "Not enough free memory" in ln
+    ]
     evidence(f"- `gaia llm --model {GEMMA}` with 6 GB free: exit {result.returncode}")
     evidence(f"- GAIA said: `{refusal[0].strip() if refusal else '(nothing)'}`")
     evidence(
