@@ -74,6 +74,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia_agent import __version__ as agent_version
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
+from gaia_agent.session_index import IndexedOut, SessionIndex, guarded, open_index
 
 from gaia.agents.base.readiness import (
     probe_model_present,
@@ -1439,12 +1440,14 @@ def dispatch_query(
     out,
     dev: bool = False,
     state: Optional[PermissionState] = None,
+    index: Optional[SessionIndex] = None,
 ) -> None:
     """Route one line off the query queue: a sentinel, or a real turn.
 
     Sentinels short-circuit before run_turn/process_query — they never reach
     the LLM and are never recorded as chat turns (see _record_turn's docstring
-    on why a turn's own answer is what gets kept).
+    on why a turn's own answer is what gets kept). Only a real turn moves the
+    session *index*.
     """
     setup = getattr(agent, "_engineering_setup", None)
     if isinstance(setup, dict):
@@ -1462,6 +1465,8 @@ def dispatch_query(
             agent._engineering_reported_setup_status = setup_status
     if query == CLEAR_CONVERSATION_QUERY:
         agent.conversation_history.clear()
+        if index is not None:
+            guarded(index, index.cleared, out)
         _write({"type": "final", "answer": "conversation_cleared"}, out)
         return
     if query == MEMORY_DUMP_QUERY:
@@ -1473,6 +1478,9 @@ def dispatch_query(
     if is_model_command(query):
         run_model_command(agent, query, out)
         return
+    if index is not None:
+        guarded(index, lambda: index.turn_started(query), out)
+        out = IndexedOut(out, index)
     run_turn(agent, query, out, dev=dev, state=state)
 
 
@@ -1504,6 +1512,13 @@ def build_parser() -> "argparse.ArgumentParser":
         "--history-file",
         default=os.environ.get("GAIA_HISTORY_FILE"),
         help="Session transcript SQLite path; reuse the path to resume tool history.",
+    )
+    parser.add_argument(
+        "--session-kind",
+        default=os.environ.get("GAIA_SESSION_KIND"),
+        help="Keep a listing of this session beside --history-file so a host "
+        "can show and reopen it: 'chat' for an interactive session, or "
+        "another word (e.g. 'eval', 'scheduled') that hosts hide by default.",
     )
     parser.add_argument(
         "--use-claude",
@@ -1616,6 +1631,7 @@ def main(argv: Optional[list] = None) -> int:
         )
         agent.conversation_history = SessionHistory(history_path)
         logger.info("Session transcript: %s", history_path)
+        index = open_index(history_path, args.session_kind)
     except Exception as exc:
         print(traceback.format_exc(), file=sys.stderr)
         _write_if_wire_alive(_terminal_error(exc), out)
@@ -1655,21 +1671,26 @@ def main(argv: Optional[list] = None) -> int:
             history = getattr(agent, "conversation_history", None)
             if history is not None:
                 history.clear()
+            if index is not None:
+                guarded(index, index.cleared)
             logger.info("conversation history cleared by host /clear")
             continue
         try:
-            dispatch_query(agent, query, out, dev=args.dev, state=state)
+            dispatch_query(agent, query, out, dev=args.dev, state=state, index=index)
         except BrokenPipeError:
             # The wire is the parent. It being gone is not a turn to report.
             logger.warning("stdout closed mid-turn — ending the run loop")
             break
         except Exception as exc:  # never let one bad turn kill the process
             logger.exception("stdio turn crashed outside the run loop")
-            if not _write_if_wire_alive(_terminal_error(exc), out):
+            wire = IndexedOut(out, index) if index is not None else out
+            if not _write_if_wire_alive(_terminal_error(exc), wire):
                 break
 
     # stdin closed: the parent is done with us.
     _drain_memory(agent)
+    if index is not None:
+        guarded(index, index.closed)
     _exit_cleanly(out)
 
 

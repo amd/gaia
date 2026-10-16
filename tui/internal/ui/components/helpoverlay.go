@@ -287,9 +287,9 @@ const chatHelpText = `  GAIA Chat
   Commands    /help /clear /full-access /slack /setup
               /memory /model /provider /gateway /agents
   /cost       Session spend · /cost help for rates
-  /           On an empty line, browse commands —
-              hover/click or ↑/↓ to pick, Enter or
-              click to run, Esc or click out to close
+  /sessions   Reopen a chat · /sessions all: evals too
+  /           Empty line: browse commands · hover/↑/↓
+              picks · Enter/click runs · Esc closes
 
   Scroll        ↑ / ↓ line · PgUp/PgDn page
   Home / End    Top / bottom, if the composer is

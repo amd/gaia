@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The terminal UI can reopen a past session.** Over stdio, `--session-kind`
+  (with `--history-file`) keeps a listing beside the session's transcript:
+  its title, whether it is running, waiting on a permission prompt, done or
+  failed, and each finished turn in readable form. `/sessions` and
+  `gaia tui --resume` list and reopen sessions from it. Nothing changes for the
+  HTTP surface, or for a launch without the flag.
 - **`run_python` works in the Agent UI without a project.** It ran from the
   server's own folder, which is not an allowed path, so every approved snippet
   was refused and the agent fell back to slower shell commands. With no project

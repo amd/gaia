@@ -19,6 +19,7 @@ import (
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/sessionstore"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
@@ -49,7 +50,14 @@ func prepareTerminal() {
 // useClaude/claudeModel run it against Anthropic's Claude API instead of the
 // local Lemonade backend. A non-nil trace records every agent event to a JSONL
 // file; the caller owns it and closes it after this returns.
-func RunFlagship(mockAgent string, ctrl *control.Options, fullAccess, fullAccessSaved bool, useClaude bool, claudeModel string, trace *event.TraceWriter) error {
+// Resume is --resume: Pick opens the session list at launch, ID reopens one
+// session directly (a full id or a unique prefix). Zero starts a new session.
+type Resume struct {
+	Pick bool
+	ID   string
+}
+
+func RunFlagship(mockAgent string, ctrl *control.Options, fullAccess, fullAccessSaved bool, useClaude bool, claudeModel string, trace *event.TraceWriter, resume Resume) error {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
@@ -62,6 +70,11 @@ func RunFlagship(mockAgent string, ctrl *control.Options, fullAccess, fullAccess
 			"Report this with GAIA diagnostics", catalog.FlagshipID)
 	}
 	fullAccess, notice, err := launchFullAccess(*agent, fullAccess, fullAccessSaved)
+	if err != nil {
+		return err
+	}
+	// Resolved before the screen opens, so a bad id fails as a command-line error.
+	resumed, err := resumeTarget(*agent, resume)
 	if err != nil {
 		return err
 	}
@@ -86,6 +99,12 @@ func RunFlagship(mockAgent string, ctrl *control.Options, fullAccess, fullAccess
 			// spawn — with --mock that is the mock, not the name the seed carries.
 			Binary: agent.BinaryPath, ClaudeMode: useClaude,
 		})
+	if resumed != nil {
+		m = m.WithResume(resumed.session, resumed.turns)
+	}
+	if resume.Pick {
+		m = m.WithSessionPicker()
+	}
 	return run(m, ctrl)
 }
 
@@ -454,4 +473,44 @@ func withLastModel(m root.FlagshipModel) root.FlagshipModel {
 			". Pick one with /provider.")
 	}
 	return m.WithSavedModel(saved)
+}
+
+// sessionHeld tells whether another window has a session open; tests fake it.
+var sessionHeld sessionstore.Held = daemon.FileHeld
+
+type resumedSession struct {
+	session sessionstore.Session
+	turns   []sessionstore.Turn
+}
+
+// resumeTarget reads the session --resume=<id> names, refusing one that cannot
+// be reopened here. Nil for a launch that reopens nothing.
+func resumeTarget(agent catalog.Agent, resume Resume) (*resumedSession, error) {
+	if !resume.Pick && resume.ID == "" {
+		return nil, nil
+	}
+	if agent.ID != catalog.FlagshipID || agent.Transport != catalog.TransportSubprocess {
+		return nil, fmt.Errorf("--resume needs the built-in GAIA agent the TUI starts itself; "+
+			"this install runs %q over the %s transport, which keeps no sessions to reopen", agent.ID, agent.Transport)
+	}
+	if resume.Pick {
+		return nil, nil
+	}
+	dir, err := sessionstore.Dir()
+	if err != nil {
+		return nil, err
+	}
+	s, err := sessionstore.Get(dir, resume.ID, sessionHeld)
+	if err != nil {
+		return nil, fmt.Errorf("--resume: %w", err)
+	}
+	if s.Live {
+		return nil, fmt.Errorf("--resume: session %s (%q) is open in another GAIA window. "+
+			"Close it there first, then resume it here", s.ID, s.Title)
+	}
+	turns, err := sessionstore.Transcript(dir, s.ID)
+	if err != nil {
+		return nil, fmt.Errorf("--resume: %w", err)
+	}
+	return &resumedSession{session: s, turns: turns}, nil
 }

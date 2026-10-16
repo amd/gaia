@@ -108,6 +108,22 @@ var tracePath string
 // A file genuinely named "auto" is still reachable as `--trace=./auto`.
 const traceAutoPath = "auto"
 
+// resumeArg is --resume's raw value: "" (off), resumePick (bare --resume:
+// choose from the list), or a session id or id prefix.
+var resumeArg string
+
+const resumePick = "pick"
+
+// resumeArgAdvice catches `--resume <id>` written with a space: pflag reads
+// that as a bare --resume plus a stray argument.
+func resumeArgAdvice(args []string) error {
+	if resumeArg != resumePick || len(args) == 0 {
+		return nil
+	}
+	return fmt.Errorf("--resume takes its session id attached: write --resume=%s, "+
+		"or --resume alone to choose from the list", args[0])
+}
+
 // traceArgAdvice explains a stray positional that is really a spaced --trace
 // path, and returns nil when --trace does not explain it.
 //
@@ -186,7 +202,11 @@ var rootCmd = &cobra.Command{
 		if cmd.Flags().Changed("full-access") {
 			fullAccess, fromSaved = fullAccessFlag, false
 		}
-		return ui.RunFlagship(mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace)
+		resume := ui.Resume{Pick: resumeArg == resumePick}
+		if !resume.Pick {
+			resume.ID = resumeArg
+		}
+		return ui.RunFlagship(mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace, resume)
 	},
 }
 
@@ -216,6 +236,10 @@ func init() {
 	// not a mistake. root_test.go pins this.
 	cobra.MousetrapHelpText = ""
 
+	rootCmd.Flags().StringVar(&resumeArg, "resume", "",
+		"reopen a past session: bare --resume lists recent sessions (ones waiting "+
+			"on you first) to pick from; --resume=<id> reopens that one directly")
+	rootCmd.Flags().Lookup("resume").NoOptDefVal = resumePick
 	rootCmd.Flags().BoolVar(&developerMode, "developer-mode", false,
 		"enable the developer skill and consent-based Claude Code/Codex handoff")
 	rootCmd.PersistentFlags().BoolVar(&dev, "dev", false,
@@ -308,6 +332,9 @@ func init() {
 		// --trace on, `gaia-tui --trace chatt` still has to suggest `chat`.
 		if len(near) == 0 {
 			if err := traceArgAdvice(args, 0); err != nil {
+				return err
+			}
+			if err := resumeArgAdvice(args); err != nil {
 				return err
 			}
 		}
