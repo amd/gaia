@@ -57,6 +57,8 @@ SAVES = [
     ),
     # A source named with "from" is never a target, even with no target named.
     ("Save the action items from minutes.txt", []),
+    ("Save the totals of data.csv", []),
+    ("Save the summary using report.pdf", []),
     ("Save the action items in minutes.txt as a markdown file", []),
 ]
 

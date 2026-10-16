@@ -29,6 +29,9 @@ EMPTY = ["", "\n", "   ", " \n\t\n"]
         ("notes.txt", "Create notes.txt (empty)"),
         ("notes.txt", "Create notes.txt, empty for now"),
         ("notes.txt", "Leave notes.txt blank"),
+        ("notes.txt", "Create notes.txt. It should be empty."),
+        ("notes.txt", "Create notes.txt in C:/w. The file must stay blank."),
+        ("notes.txt", "Create an empty notes.txt and write the summary to report.md"),
         ("notes.txt", "Add an empty notes.txt to the repo"),
         ("notes.txt", "Create an empty notes.txt with nothing in it"),
         ("notes.txt", "Create an empty notes.txt and a report.md with the summary"),
@@ -62,6 +65,16 @@ def test_an_empty_file_the_user_asked_for_is_written(file_path, request_text, co
         ("notes.txt", "Put the summary in the empty notes.txt"),
         ("notes.txt", "Add the totals to the blank notes.txt"),
         ("notes.txt", "Create an empty notes.txt with the action items"),
+        # Content is asked for later, so an empty write would hide a missing step.
+        ("notes.txt", "Create a blank notes.txt, then write the summary to it"),
+        ("notes.txt", "Create an empty notes.txt and fill it with the totals"),
+        ("notes.txt", "Create an empty notes.txt. Then save the summary in notes.txt"),
+        (
+            "notes.txt",
+            "Make a blank C:/w/notes.txt and write the plan into C:/w/notes.txt",
+        ),
+        ("notes.txt", "Create notes.txt and a.txt. It should be empty."),
+        ("notes.txt", "Create notes.txt. It should be listed in the index."),
         ("other.txt", "Create an empty notes.txt"),
         ("notes.txt.bak", "Create an empty notes.txt"),
         # The empty request covers one file, not the next one with content.

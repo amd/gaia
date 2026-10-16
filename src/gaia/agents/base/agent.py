@@ -1594,10 +1594,40 @@ _FILLS_IT = re.compile(
 )
 _WITH_CONTENT = re.compile(r"^\s*(?:file\s+)?with\s+(?!nothing\b|no\b)", re.I)
 _CLAUSE_BREAK = re.compile(r",|\b(?:and|then)\b", re.I)
+# "Create notes.txt. It should be empty."
+_IT_STAYS_EMPTY = re.compile(
+    r"^\s*(?:it|the file|that file)\s+(?:should|must|can|will|needs to)\s+"
+    r"(?:be|stay|remain)\s+(?:empty|blank)\b",
+    re.I,
+)
+# "Create a blank notes.txt, then write the summary to it": content comes later.
+_FILLED_LATER = re.compile(
+    r"\b(?:write|save|put|add|copy|append|paste|insert)\b[^.;\n]*?\b(?:to|into|in)\s+"
+    r"(?:it|that file|the file|this file)\b|"
+    r"\b(?:fill|populate|update)\s+(?:it|that file|the file|this file)\b",
+    re.I,
+)
 
 
 def _base_name(path: str) -> str:
     return os.path.basename(path.replace("\\", "/").rstrip("/")).casefold()
+
+
+def _names_in(text: str) -> List[str]:
+    return [
+        _base_name(next(g for g in m.groups() if g is not None).strip(".:!?"))
+        for m in _NAME_TOKEN.finditer(text)
+    ]
+
+
+def _filled_later(request: str, name: str) -> bool:
+    """Whether *request* also asks for content to go into the file."""
+    named_target = re.compile(
+        r"\b(?:write|save|put|add|append|copy|paste)\b[^.;\n]*?\b(?:to|into|in)\s+"
+        r"(?:the\s+)?[`\"']?(?:[^\s`\"']*[/\\])?" + re.escape(name) + r"(?![\w.])",
+        re.I,
+    )
+    return bool(_FILLED_LATER.search(request) or named_target.search(request))
 
 
 def _requested_empty(file_path: Any, request: Optional[str]) -> bool:
@@ -1605,32 +1635,41 @@ def _requested_empty(file_path: Any, request: Optional[str]) -> bool:
     if not isinstance(file_path, str) or not request:
         return False
     name = _base_name(file_path)
-    for sentence in re.split(r"(?<=[.!?])\s+|\n|;", request):
-        empties = list(_EMPTY_WORD.finditer(sentence))
-        if not empties:
+    if _filled_later(request, name):
+        return False
+    sentences = re.split(r"(?<=[.!?])\s+|\n|;", request)
+    for index, sentence in enumerate(sentences):
+        if _asks_empty(sentence, name):
+            return True
+        if index and _IT_STAYS_EMPTY.match(sentence):
+            named = [n for n in _names_in(sentences[index - 1]) if "." in n]
+            if named == [name]:
+                return True
+    return False
+
+
+def _asks_empty(sentence: str, name: str) -> bool:
+    """Whether *sentence* itself asks for the file *name* to be empty."""
+    empties = list(_EMPTY_WORD.finditer(sentence))
+    if not empties or sentence.rstrip().endswith("?"):
+        return False
+    for mention in _NAME_TOKEN.finditer(sentence):
+        token = next(g for g in mention.groups() if g is not None)
+        if _base_name(token.strip(".:!?")) != name:
             continue
-        for mention in _NAME_TOKEN.finditer(sentence):
-            token = next(g for g in mention.groups() if g is not None)
-            if _base_name(token.strip(".:!?")) != name:
+        if _WITH_CONTENT.match(sentence[mention.end() :]):
+            continue
+        for word in empties:
+            first, last = sorted((word, mention), key=lambda m: m.start())
+            breaks = list(_CLAUSE_BREAK.finditer(sentence, 0, first.start()))
+            clause = sentence[breaks[-1].end() if breaks else 0 : last.end()]
+            if _EMPTY_NOT_ASKED.search(clause) or _FILLS_IT.search(clause):
                 continue
-            if _WITH_CONTENT.match(sentence[mention.end() :]):
-                continue
-            for word in empties:
-                first, last = sorted((word, mention), key=lambda m: m.start())
-                breaks = list(_CLAUSE_BREAK.finditer(sentence, 0, first.start()))
-                clause = sentence[breaks[-1].end() if breaks else 0 : last.end()]
-                question = sentence.rstrip().endswith("?")
-                if (
-                    question
-                    or _EMPTY_NOT_ASKED.search(clause)
-                    or _FILLS_IT.search(clause)
-                ):
-                    continue
-                if word.end() <= mention.start():
-                    if _only_names_between(sentence[word.end() : mention.start()]):
-                        return True
-                elif _EMPTY_AFTER.match(sentence[mention.end() : word.start()]):
+            if word.end() <= mention.start():
+                if _only_names_between(sentence[word.end() : mention.start()]):
                     return True
+            elif _EMPTY_AFTER.match(sentence[mention.end() : word.start()]):
+                return True
     return False
 
 
@@ -5438,7 +5477,7 @@ Do NOT wrap conversational replies in JSON.
             step.get("tool_args") or {}, step_results
         )
         found = _plan_step_placeholder(
-            tool_name, tool_args, request=self._current_query
+            tool_name, tool_args, request=getattr(self, "_current_query", None)
         )
         if found is None:
             return False
@@ -6217,7 +6256,9 @@ Do NOT wrap conversational replies in JSON.
                 return {**NOT_EXECUTED, "status": "error", "error": err}
 
         # A stand-in written to disk replaces the real file with that word.
-        stand_in = _write_stand_in(tool_name, tool_args, self._current_query)
+        stand_in = _write_stand_in(
+            tool_name, tool_args, getattr(self, "_current_query", None)
+        )
         if stand_in is not None:
             arg, value = stand_in
             logger.warning(
