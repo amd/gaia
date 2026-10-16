@@ -58,7 +58,14 @@ type Options struct {
 	Debug bool
 	// Version is reported by /status and written to the discovery file.
 	Version string
+	// ShutdownTimeout bounds how long Stop waits for in-flight requests.
+	// 0 means DefaultShutdownTimeout.
+	ShutdownTimeout time.Duration
 }
+
+// DefaultShutdownTimeout is how long Stop waits for in-flight requests before
+// giving up on them, so quitting the TUI cannot hang on a stuck client.
+const DefaultShutdownTimeout = 2 * time.Second
 
 // Server is the running control API.
 type Server struct {
@@ -75,6 +82,8 @@ type Server struct {
 	// instead of holding the shutdown open for their full timeout.
 	done     chan struct{}
 	stopOnce sync.Once
+	// shutdownTimeout bounds Stop's wait for in-flight requests.
+	shutdownTimeout time.Duration
 
 	// discoveryPath is resolved at Start so the caller never has to re-resolve
 	// (and handle a second error) between Start and Run.
@@ -146,6 +155,10 @@ func Start(sender Sender, state *State, opts Options) (*Server, error) {
 	if version == "" {
 		version = "dev"
 	}
+	shutdownTimeout := opts.ShutdownTimeout
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = DefaultShutdownTimeout
+	}
 
 	s := &Server{
 		listener: listener,
@@ -157,6 +170,8 @@ func Start(sender Sender, state *State, opts Options) (*Server, error) {
 		version:  version,
 		debugf:   debugf,
 		done:     make(chan struct{}),
+
+		shutdownTimeout: shutdownTimeout,
 	}
 
 	mux := http.NewServeMux()
@@ -296,7 +311,7 @@ func (s *Server) WatchTermination(sigs <-chan os.Signal, quit func()) {
 // Stop shuts the listener down and removes the discovery file.
 func (s *Server) Stop() error {
 	s.stopOnce.Do(func() { close(s.done) })
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
 	defer cancel()
 	shutdownErr := s.http.Shutdown(ctx)
 	removeErr := RemoveInfo(s.pid)
