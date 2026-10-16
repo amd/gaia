@@ -423,3 +423,21 @@ def test_workflow_publishes_the_windows_setup_after_the_raw_binaries():
     needs = re.search(r"needs: \[([^\]]+)\]", job.group(1)).group(1)
     assert "terminal-hub" in needs
     assert "--platform win-x64" in job.group(1)
+
+
+def test_documentation_links_open_the_docs_not_the_home_page():
+    # The site root is the marketing page; the docs live under /docs/.
+    nsi = _nsi()
+    assert _define("DOCS_URL") == "https://amd-gaia.ai/docs"
+    assert _define("INSTALL_DOCS_URL").startswith("https://amd-gaia.ai/docs/")
+    assert '!define MUI_FINISHPAGE_LINK_LOCATION "${DOCS_URL}"' in nsi
+    assert "Details: ${INSTALL_DOCS_URL}" in nsi
+    assert "Details: ${PRODUCT_URL}" not in nsi
+
+
+def test_docs_urls_point_at_existing_pages():
+    # A renamed guide would otherwise leave Setup linking to a 404.
+    install = _define("INSTALL_DOCS_URL").removeprefix("https://amd-gaia.ai/docs/")
+    assert (REPO_ROOT / "docs" / f"{install}.mdx").is_file()
+    nav = (REPO_ROOT / "docs" / "docs.json").read_text(encoding="utf-8")
+    assert f'"{install}"' in nav

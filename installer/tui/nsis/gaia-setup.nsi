@@ -90,6 +90,8 @@ Unicode true
 !define PRODUCT_NAME      "GAIA Terminal Hub"
 !define PRODUCT_PUBLISHER "Advanced Micro Devices, Inc."
 !define PRODUCT_URL       "https://amd-gaia.ai"
+!define DOCS_URL          "https://amd-gaia.ai/docs"
+!define INSTALL_DOCS_URL  "https://amd-gaia.ai/docs/guides/install"
 !define UNINST_KEY        "Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub"
 !define TUI_EXE           "gaia-tui.exe"
 !define AGENT_EXE         "gaia-agent.exe"
@@ -179,7 +181,7 @@ Var Failed
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchGaia
 !define MUI_FINISHPAGE_RUN_TEXT "Start ${SETUP_NAME}"
 !define MUI_FINISHPAGE_LINK "GAIA documentation"
-!define MUI_FINISHPAGE_LINK_LOCATION "${PRODUCT_URL}"
+!define MUI_FINISHPAGE_LINK_LOCATION "${DOCS_URL}"
 
 !insertmacro MUI_PAGE_LICENSE "${PAYLOAD_DIR}\LICENSE.md"
 
@@ -407,7 +409,7 @@ Section "-Lemonade" SecLemonade
     DetailPrint "Lemonade Server install FAILED with exit code $0."
     ; /SD IDOK or a silent install blocks here forever on an invisible dialog.
     MessageBox MB_OK|MB_ICONEXCLAMATION \
-      "The bundled Lemonade Server did not install (msiexec exit code $0). Setup will still install the rest of GAIA.$\r$\n$\r$\nGAIA needs Lemonade to run models locally. When Setup finishes, open GAIA - the desktop app, or gaia-tui in a new terminal - and it will offer to finish the setup.$\r$\n$\r$\nDetails: ${PRODUCT_URL}" \
+      "The bundled Lemonade Server did not install (msiexec exit code $0). Setup will still install the rest of GAIA.$\r$\n$\r$\nGAIA needs Lemonade to run models locally. When Setup finishes, open GAIA - the desktop app, or gaia-tui in a new terminal - and it will offer to finish the setup.$\r$\n$\r$\nDetails: ${INSTALL_DOCS_URL}" \
       /SD IDOK
   ${EndIf}
   ; Not back to $INSTDIR: SetOutPath creates the folder, and a desktop-app-only
