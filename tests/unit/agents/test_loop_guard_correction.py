@@ -428,3 +428,43 @@ def test_alternating_between_two_calls_is_a_loop(agent):
     # Rounds one and two ran; the third round's closing call was corrected.
     assert agent.calls == 5
     assert len(_corrections(sent)) == 1
+
+
+# ---------------------------------------------------------------------------
+# A refused call is not left showing as running (#5177)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "calls",
+    [
+        [_legacy_call()] * 3,
+        [_native_call("c1"), _native_call("c2"), _native_call("c3")],
+    ],
+    ids=["legacy", "native"],
+)
+def test_a_refused_repeat_is_not_left_running(agent, calls):
+    """The Agent UI never counts a running tool as idle, so a refused call left
+    open would keep a stuck turn from ever being stopped."""
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    handler = SSEOutputHandler()
+    agent.console = handler
+    agent.results = [{"status": "error", "error": "[Errno 21] Is a directory"}]
+    _stub_chat(agent, *calls, _answer("done differently"))
+
+    agent.process_query("fix it", max_steps=10)
+
+    assert handler.tool_running() is False
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get_nowait())
+    types = [e.get("type") for e in events if e]
+    assert types.count("tool_start") == 3
+    assert types.count("tool_end") == 3
+    refused = [
+        e
+        for e in events
+        if e and e.get("type") == "tool_result" and "repeated" in str(e)
+    ]
+    assert len(refused) == 1 and refused[0]["success"] is False

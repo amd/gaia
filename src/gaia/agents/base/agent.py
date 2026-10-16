@@ -524,6 +524,23 @@ class ToolCallTruncated(ValueError):
         )
 
 
+class TurnCancel(threading.Event):
+    """A turn's cancel signal that can say why the turn was stopped.
+
+    ``message`` is the answer the turn ends with when it stops at a step
+    boundary. ``None`` means a plain stop (the user's Stop, a disconnect).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.message: Optional[str] = None
+
+    def cancel(self, message: str) -> None:
+        """Stop the turn and end it with *message*."""
+        self.message = message
+        self.set()
+
+
 class _UserWaitClock:
     """Time a tool body spends blocked on the user, which its timeout excludes."""
 
@@ -790,6 +807,7 @@ _FAILED_CALL_ANSWER_PROMPT = (
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
 _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
+_REPEAT_NOT_RUN_NOTE = "Not run — the same call was just repeated."
 
 #: Longest repeating cycle of calls the loop guard recognises (A, B, A, B, …).
 _MAX_LOOP_PERIOD = 3
@@ -8079,6 +8097,17 @@ Do NOT wrap conversational replies in JSON.
             return list(manager.list_servers())
         return list(manager.servers_for_agent(ns_id))
 
+    def _close_unrun_tool_card(self) -> None:
+        """End a displayed tool call the repeat guard refused to run.
+
+        Without a result the call shows as still running, and a front-end that
+        waits out a running tool would never see the turn go idle.
+        """
+        self.console.pretty_print_json(
+            {"status": "error", "error": _REPEAT_NOT_RUN_NOTE}, "Tool Result"
+        )
+        self.console.print_tool_complete()
+
     def _console_cancelled(self) -> bool:
         """Cooperative mid-generation cancel check for the Agent-UI path.
 
@@ -8838,10 +8867,9 @@ Do NOT wrap conversational replies in JSON.
                     steps_taken,
                     steps_limit,
                 )
-                # Neutral wording: cancel now has several triggers (a user
-                # pressing Stop, an API client disconnecting, a stream timeout),
-                # and this text is persisted with the turn.
-                final_answer = (
+                # A limit that stopped the turn says so; a plain stop (Stop,
+                # a disconnect) gets the neutral wording.
+                final_answer = getattr(cancel_event, "message", None) or (
                     "The request was stopped before it finished. Try again, or "
                     "break it into smaller steps if it was taking too long."
                 )
@@ -10207,6 +10235,7 @@ Do NOT wrap conversational replies in JSON.
                     consecutive_count = _repeat_count(tool_call_history)
                     if consecutive_count >= self.max_consecutive_repeats:
                         self.console.stop_progress()
+                        self._close_unrun_tool_card()
                         # NATIVE path appends results to ``previous_outputs``
                         # (line 3387), not ``step_results``. Unwrap the
                         # ``result`` field so the helper sees actual tool
@@ -10460,6 +10489,7 @@ Do NOT wrap conversational replies in JSON.
                 if consecutive_count >= self.max_consecutive_repeats:
                     # Stop progress indicator
                     self.console.stop_progress()
+                    self._close_unrun_tool_card()
 
                     # Not ``step_results``: error recovery clears it before each retry.
                     recent_results = [o.get("result") for o in previous_outputs]

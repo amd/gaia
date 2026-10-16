@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, TurnCancel
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
@@ -695,6 +695,17 @@ def test_cancel_event_path_carries_the_statement(agent):
     assert "stopped before it finished" in result["result"]
     # Cancel has several triggers now; the text must not claim a timeout.
     assert "exceeded the allowed" not in result["result"]
+    assert _scope_line(result["result"]) == SENTINEL
+
+
+def test_a_limit_that_stopped_the_turn_says_why(agent):
+    event = TurnCancel()
+    event.cancel("This turn ran for 75 minutes without progress, so GAIA stopped it.")
+    agent._cancel_event = event
+    _stub_chat(agent, _answer("never reached"))
+    result = _with_sentinel(agent, "do something", max_steps=5)
+    assert result["result"].startswith("This turn ran for 75 minutes without progress")
+    assert "stopped before it finished" not in result["result"]
     assert _scope_line(result["result"]) == SENTINEL
 
 
