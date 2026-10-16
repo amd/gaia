@@ -1086,6 +1086,20 @@ class EmbeddedLemonade:
         self._clear_state()
         return stopped
 
+    def recorded_health(self) -> Tuple[bool, Optional[dict]]:
+        """Ask the recorded instance for its ``/health`` payload.
+
+        Returns:
+            ``(recorded, health)``: whether an instance is recorded at all, and
+            its health payload, or None when it did not answer.
+        """
+        state = self._read_state()
+        port = state.get("port") if state else None
+        api_key = state.get("api_key") if state else None
+        if not (port and api_key):
+            return False, None
+        return True, self._health(int(port), api_key)
+
     def current_api_key(self) -> Optional[str]:
         """Return the API key of the recorded instance, if there is one.
 

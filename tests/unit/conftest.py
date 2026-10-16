@@ -113,6 +113,18 @@ def _forbid_daemon_spawn(monkeypatch):
         pytest.fail(_DAEMON_SPAWN_MESSAGE, pytrace=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_automatic_lemonade_lease(monkeypatch):
+    """Keep every LemonadeClient a test builds from leasing Lemonade.
+
+    The lease renews on a background thread for the life of the process, so it
+    would call whatever daemon-client mock a later test installs.
+    """
+    from gaia.llm import lemonade_service
+
+    monkeypatch.setattr(lemonade_service, "_AUTO_LEASED", True)
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "allow_network: opt out of the _block_network socket guard"
