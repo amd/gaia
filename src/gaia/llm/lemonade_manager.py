@@ -17,6 +17,7 @@ from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     DEFAULT_CONTEXT_SIZE,
     DEFAULT_MODEL_NAME,
+    InsufficientMemoryError,
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
@@ -1341,6 +1342,9 @@ class LemonadeManager:
                 prompt=False,
                 auto_download=True,
             )
+        except InsufficientMemoryError:
+            # Already says how much memory is needed; a restart would not help.
+            raise
         except Exception as e:
             raise LemonadeClientError(
                 f"Failed to preload Lemonade model {model!r} with "

@@ -131,16 +131,30 @@ def _ask_the_daemon(
 
     The probe happens FIRST and short-circuits: a machine whose server is
     already up must not pay a daemon round-trip (nor start a daemon it did not
-    otherwise need) just to be told so.
+    otherwise need) just to be told so. While GAIA runs its own server, only
+    that server's recorded address is probed; a stopped one is always started
+    by the daemon, on its recorded port.
     """
-    from gaia.llm.lemonade_client import LemonadeClient
-
-    client = (
-        LemonadeClient(base_url=base_url, keep_alive=True, verbose=False)
-        if base_url
-        else LemonadeClient(keep_alive=True, verbose=False)
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        running_embedded_lemonade_url,
     )
-    if _probe(client):
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    if gaia_runs_lemonade(base_url):
+        # GAIA's own server: only its recorded address is it. A stopped one's
+        # stand-in address (the default port) may be another Lemonade.
+        own = running_embedded_lemonade_url()
+        client = (
+            LemonadeClient(base_url=own, keep_alive=True, verbose=False)
+            if own
+            else None
+        )
+    elif base_url:
+        client = LemonadeClient(base_url=base_url, keep_alive=True, verbose=False)
+    else:
+        client = LemonadeClient(keep_alive=True, verbose=False)
+    if client is not None and _probe(client):
         return LemonadeState(
             base_url=client.base_url,
             started=False,
@@ -151,8 +165,16 @@ def _ask_the_daemon(
 
     payload = {"ctx_size": ctx_size} if ctx_size else {}
     body = _post_start(payload, timeout)
+    served_url = body.get("base_url")
+    if not served_url:
+        raise LemonadeStartError(
+            "The GAIA background service answered without saying where the "
+            f"local model server listens: {body}\n"
+            "To fix: restart it with `gaia daemon stop` then `gaia daemon start`.\n"
+            "Where to look: `gaia daemon logs`"
+        )
     return LemonadeState(
-        base_url=body.get("base_url", client.base_url),
+        base_url=served_url,
         started=body.get("status") == "started",
         # Reported by the daemon, never assumed: it is False for a server the
         # daemon merely FOUND (one the user launched from the tray), which it

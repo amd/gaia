@@ -49,6 +49,7 @@ class EnsuredLemonade:
     port: int
     version: str
     started: bool
+    pid: Optional[int] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -258,6 +259,7 @@ class EmbeddedLemonadeOwner:
                 port=status.port,
                 version=status.version,
                 started=True,
+                pid=status.pid,
             )
 
     def _claim(self, embedded, current) -> EnsuredLemonade:
@@ -279,6 +281,7 @@ class EmbeddedLemonadeOwner:
             port=current.port,
             version=current.version,
             started=False,
+            pid=current.pid,
         )
 
     def ensure_in_background(self) -> threading.Thread:
