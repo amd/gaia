@@ -7,7 +7,7 @@ shows exactly the line that would run or nothing runs, a one-time approval is
 spent on one exact call, "always" is never granted for a one-time line, the
 strictest segment of a chained line decides it, the scratch-folder write
 exemption covers only the agent's real scratch folder, and no answer ever lets
-a script there run unasked.
+``execute_python_file`` run a script there unasked.
 """
 
 from __future__ import annotations
@@ -870,6 +870,68 @@ def test_inside_folder_judges_where_a_path_lands_not_its_spelling(tmp_path):
     assert is_inside_folder(str(in_link / "x.py"), s)
     assert is_inside_folder(os.path.join(s, "x.py"), str(alias))
     assert is_inside_folder(str(alias / "x.py"), s)
+
+
+def _other_spellings(path):
+    """Spellings of *path* that realpath leaves distinct from it."""
+    spellings = []
+    if sys.platform == "win32":
+        spellings.append("\\\\?\\" + path)
+        drive, rest = os.path.splitdrive(path)
+        if drive.endswith(":"):
+            spellings.append("\\\\localhost\\" + drive[0] + "$" + rest)
+    swapped = path.swapcase()
+    if swapped != path and os.path.exists(swapped):
+        spellings.append(swapped)
+    return spellings
+
+
+def test_inside_folder_sees_through_other_spellings_of_the_folder(tmp_path):
+    scratch = tmp_path / "gaia-scratch-a"
+    scratch.mkdir()
+    script = scratch / "a.py"
+    script.write_text("print(1)", encoding="utf-8")
+
+    spellings = [p for p in _other_spellings(str(script)) if os.path.exists(p)]
+    if not spellings:
+        pytest.skip("this host has no other spelling of a local path")
+    for spelling in spellings:
+        assert is_inside_folder(spelling, str(scratch)), spelling
+
+
+def test_a_scratch_script_named_another_way_is_still_asked_about(folders):
+    project, scratch = folders
+    script = scratch / "a.py"
+    script.write_text("print(1)", encoding="utf-8")
+    spellings = [p for p in _other_spellings(str(script)) if os.path.exists(p)]
+    if not spellings:
+        pytest.skip("this host has no other spelling of a local path")
+    agent, handler = scratch_mod._agent(folders)
+    # A broader grant from outside scratch must not reach it either.
+    scratch_mod._drive(
+        agent,
+        handler,
+        "execute_python_file",
+        {"file_path": str(project / "tool.py")},
+        answer=(True, True),
+    )
+
+    for spelling in spellings:
+        result, prompts = scratch_mod._drive(
+            agent, handler, "execute_python_file", {"file_path": spelling}
+        )
+        assert len(prompts) == 1, spelling
+        assert SCRATCH_ARG in prompts[0]["args"], spelling
+        assert "always_scope" not in prompts[0], spelling
+        assert result["status"] == "denied"
+
+
+def test_inside_folder_counts_an_unresolvable_path_as_inside(tmp_path, monkeypatch):
+    def broken(_path, *_a, **_k):
+        raise OSError("cannot resolve")
+
+    monkeypatch.setattr(os.path, "realpath", broken)
+    assert is_inside_folder(str(tmp_path / "a.py"), str(tmp_path))
 
 
 def test_a_scratch_marker_on_any_tool_grants_nothing(tmp_path):

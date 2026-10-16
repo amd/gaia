@@ -217,17 +217,37 @@ def is_inside_folder(path: str, folder: str) -> bool:
     """True when *path* resolves to something strictly inside *folder*.
 
     Both sides go through ``realpath``, so a symlink, junction, 8.3 name or
-    ``..`` is judged by where it really lands, never by how it is spelled.
+    ``..`` is judged by where it really lands, never by how it is spelled. A
+    spelling ``realpath`` leaves distinct (``\\\\?\\``, a UNC share, a case
+    variant on macOS) is caught by file identity. A path that cannot be
+    resolved counts as inside: the caller then asks instead of trusting it.
     """
     if not path or not folder:
         return False
     try:
-        real_path = os.path.normcase(os.path.realpath(path))
-        real_folder = os.path.normcase(os.path.realpath(folder))
-        common = os.path.commonpath([real_path, real_folder])
+        real_path = os.path.realpath(path)
+        real_folder = os.path.realpath(folder)
     except (OSError, ValueError):
-        return False  # unresolvable, or different drives on Windows
-    return common == real_folder and real_path != real_folder
+        return True
+    case_path, case_folder = os.path.normcase(real_path), os.path.normcase(real_folder)
+    try:
+        if case_path != case_folder and (
+            os.path.commonpath([case_path, case_folder]) == case_folder
+        ):
+            return True
+    except ValueError:
+        pass  # different drives or roots: fall through to file identity
+    parent = os.path.dirname(real_path)
+    while True:
+        try:
+            if os.path.samefile(parent, real_folder):
+                return True
+        except OSError:
+            pass
+        up = os.path.dirname(parent)
+        if up == parent:
+            return False
+        parent = up
 
 
 def _first_str(args: Dict[str, Any], names: Sequence[str]) -> str:
