@@ -807,6 +807,7 @@ _FAILED_CALL_ANSWER_PROMPT = (
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
 _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
+_REPEAT_NOT_RUN_NOTE = "Not run — the same call was just repeated."
 
 #: Longest repeating cycle of calls the loop guard recognises (A, B, A, B, …).
 _MAX_LOOP_PERIOD = 3
@@ -8096,6 +8097,17 @@ Do NOT wrap conversational replies in JSON.
             return list(manager.list_servers())
         return list(manager.servers_for_agent(ns_id))
 
+    def _close_unrun_tool_card(self) -> None:
+        """End a displayed tool call the repeat guard refused to run.
+
+        Without a result the call shows as still running, and a front-end that
+        waits out a running tool would never see the turn go idle.
+        """
+        self.console.pretty_print_json(
+            {"status": "error", "error": _REPEAT_NOT_RUN_NOTE}, "Tool Result"
+        )
+        self.console.print_tool_complete()
+
     def _console_cancelled(self) -> bool:
         """Cooperative mid-generation cancel check for the Agent-UI path.
 
@@ -10223,6 +10235,7 @@ Do NOT wrap conversational replies in JSON.
                     consecutive_count = _repeat_count(tool_call_history)
                     if consecutive_count >= self.max_consecutive_repeats:
                         self.console.stop_progress()
+                        self._close_unrun_tool_card()
                         # NATIVE path appends results to ``previous_outputs``
                         # (line 3387), not ``step_results``. Unwrap the
                         # ``result`` field so the helper sees actual tool
@@ -10476,6 +10489,7 @@ Do NOT wrap conversational replies in JSON.
                 if consecutive_count >= self.max_consecutive_repeats:
                     # Stop progress indicator
                     self.console.stop_progress()
+                    self._close_unrun_tool_card()
 
                     # Not ``step_results``: error recovery clears it before each retry.
                     recent_results = [o.get("result") for o in previous_outputs]

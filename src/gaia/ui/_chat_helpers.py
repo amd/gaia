@@ -1782,6 +1782,14 @@ def _turn_idle_message(seconds: int) -> str:
     )
 
 
+def _is_tool_result(name: str, args: tuple, kwargs: dict) -> bool:
+    """A ``pretty_print_json`` call showing a result, as the SSE handler reads it."""
+    if name != "pretty_print_json":
+        return False
+    title = kwargs.get("title", args[1] if len(args) > 1 else None)
+    return title != "Arguments"
+
+
 class _ActivityConsole:
     """Wraps an agent's console and records when the turn last made progress.
 
@@ -1807,7 +1815,7 @@ class _ActivityConsole:
             object.__setattr__(self, "last_progress", self._clock())
             if name == self._TOOL_START:
                 object.__setattr__(self, "tool_running", True)
-            elif name == self._TOOL_END:
+            elif name == self._TOOL_END or _is_tool_result(name, args, kwargs):
                 object.__setattr__(self, "tool_running", False)
             return value(*args, **kwargs)
 

@@ -448,3 +448,17 @@ def test_turn_cancel_without_a_reason_is_a_plain_stop():
     event = TurnCancel()
     event.cancel("why")
     assert event.is_set() and event.message == "why"
+
+
+def test_non_streaming_tool_ends_on_its_result_like_the_sse_handler():
+    from gaia.agents.base.console import SilentConsole
+
+    clock = _Clock()
+    console = helpers._ActivityConsole(SilentConsole(), clock.monotonic)
+    console.print_tool_usage("run_python")
+    console.pretty_print_json({"code": "x"}, "Arguments")
+    assert console.tool_running is True  # arguments are not the result
+    clock.advance(5)
+    console.pretty_print_json({"status": "success"}, title="Tool Result")
+    assert console.tool_running is False
+    assert console.last_progress == clock.monotonic()
