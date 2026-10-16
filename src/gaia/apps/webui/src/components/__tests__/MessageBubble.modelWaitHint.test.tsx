@@ -48,15 +48,31 @@ describe('model wait hint', () => {
         expect(screen.getByText(MODEL_WAIT_HINT)).toBeInTheDocument();
     });
 
-    it('restarts its clock when the phase changes', () => {
-        const { rerender } = renderBubble('Reading your request');
-        act(() => { vi.advanceTimersByTime((MODEL_WAIT_HINT_S - 5) * 1000); });
+    function rerenderWith(rerender: ReturnType<typeof render>['rerender'], liveStatus: string) {
         rerender(
             <MessageBubble message={streaming} isStreaming agentSteps={[]} agentStepsActive
-                liveStatus="Reading the tool results" />,
+                liveStatus={liveStatus} />,
         );
+    }
+
+    it('restarts its clock once a tool has run in between', () => {
+        const { rerender } = renderBubble('Reading your request');
+        act(() => { vi.advanceTimersByTime((MODEL_WAIT_HINT_S - 5) * 1000); });
+        rerenderWith(rerender, 'Running run_python');
+        act(() => { vi.advanceTimersByTime(1000); });
+        rerenderWith(rerender, 'Reading the tool results');
         act(() => { vi.advanceTimersByTime(10_000); });
         expect(screen.queryByText(MODEL_WAIT_HINT)).not.toBeInTheDocument();
+    });
+
+    it('keeps counting while the model-wait status repeats or retries', () => {
+        const { rerender } = renderBubble('Reading your request');
+        act(() => { vi.advanceTimersByTime(20_000); });
+        rerenderWith(rerender, 'The model stopped sending — retrying now (1/1)');
+        act(() => { vi.advanceTimersByTime(5_000); });
+        rerenderWith(rerender, 'Reading your request');
+        act(() => { vi.advanceTimersByTime((MODEL_WAIT_HINT_S - 25) * 1000); });
+        expect(screen.getByText(MODEL_WAIT_HINT)).toBeInTheDocument();
     });
 
     it('shows after a silent retry notice too', () => {
