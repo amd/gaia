@@ -4,9 +4,10 @@
 
 The client retries a transient failure itself (``gaia.llm.retry``); when it
 gives up, the error carries a retry record. The agent loop then waits and asks
-again with the conversation untouched, a bounded number of times, and only
-then ends the turn — with an answer that says plainly the model became
-unreachable, never one that could pass for a result.
+again with the conversation untouched until its outage budget runs out, and
+only then ends the turn — with an answer that says plainly the model became
+unreachable, never one that could pass for a result. The outage wait itself is
+pinned in ``test_model_outage_recovery.py``.
 
 Everything else keeps its existing path, pinned here: a permanent error ends
 the turn at once, context overflow trims and retries once, a model loaded with
@@ -21,14 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import (
-    _CONTEXT_STILL_OVERFLOWING_MESSAGE,
-    DEFAULT_MODEL_RETRY_COOLDOWN,
-    DEFAULT_MODEL_STEP_RETRIES,
-    Agent,
-    model_retry_cooldown,
-    model_step_retries,
-)
+from gaia.agents.base.agent import _CONTEXT_STILL_OVERFLOWING_MESSAGE, Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.verification import strip_verification_scope
 from gaia.llm.lemonade_client import (
@@ -79,8 +73,7 @@ def clean_registry():
 
 @pytest.fixture(autouse=True)
 def _retry_env(monkeypatch):
-    monkeypatch.delenv("GAIA_AGENT_MODEL_RETRIES", raising=False)
-    monkeypatch.setenv("GAIA_AGENT_MODEL_RETRY_COOLDOWN", "1")
+    monkeypatch.delenv("GAIA_AGENT_MODEL_OUTAGE_BUDGET", raising=False)
 
 
 def _make_agent(streaming: bool) -> _LedgerAgent:
@@ -91,7 +84,17 @@ def _make_agent(streaming: bool) -> _LedgerAgent:
     agent.streaming = streaming
     agent._is_loaded_ctx_too_small = lambda: False
     agent.sleeps = []
-    agent._model_retry_sleep = agent.sleeps.append
+    # A fake clock the outage budget is measured on; sleeping advances it.
+    agent.clock = [0.0]
+
+    def _sleep(seconds):
+        agent.sleeps.append(seconds)
+        agent.clock[0] += seconds
+
+    agent._model_retry_sleep = _sleep
+    agent._model_retry_clock = lambda: agent.clock[0]
+    # Top of the jitter range: the first outage wait is exactly 5 s.
+    agent._model_retry_random = lambda: 1.0
     return agent
 
 
@@ -195,8 +198,8 @@ def test_transient_failure_mid_run_does_not_end_the_run(agent, wrapped):
     assert len(sent) == 4
     assert sent[3] == sent[2]
     assert sum(1 for m in sent[3] if m.get("role") == "tool") == 2
-    # One cool-down (1 s, sliced so Stop stays responsive), no failure recorded.
-    assert sum(agent.sleeps) == pytest.approx(1.0)
+    # One wait (5 s, sliced so Stop stays responsive), no failure recorded.
+    assert sum(agent.sleeps) == pytest.approx(5.0)
     assert result["model_retries"]["step_retries"] == 1
     assert result["model_retries"]["request_retries"] == 4
     assert result["model_unreachable"] is False
@@ -204,53 +207,12 @@ def test_transient_failure_mid_run_does_not_end_the_run(agent, wrapped):
     assert result["status"] != "failed"
 
 
-def test_cool_down_doubles_per_step_retry(agent):
+def test_wait_doubles_per_step_retry(agent):
     _script(agent, _tool_call(1), _transient(), _transient(), _ANSWER)
     result = agent.process_query("Check the ledger", max_steps=10)
     assert _ANSWER in result["result"]
-    assert sum(agent.sleeps) == pytest.approx(1.0 + 2.0)
+    assert sum(agent.sleeps) == pytest.approx(5.0 + 10.0)
     assert result["model_retries"]["step_retries"] == 2
-
-
-def test_persistent_failure_ends_with_a_plain_unreachable_answer(agent):
-    sent = _script(
-        agent,
-        _tool_call(1),
-        _tool_call(2),
-        *[_transient() for _ in range(1 + DEFAULT_MODEL_STEP_RETRIES)],
-    )
-    result = agent.process_query("Check the ledger", max_steps=10)
-
-    text = strip_verification_scope(result["result"])
-    # One sentence saying where it stopped and what is kept, then the next step.
-    assert text == (
-        "I stopped at step 3 because the model service stayed unavailable "
-        "(5 attempts failed, the last with HTTP 503, then 2 more after waiting); "
-        f"the 2 tool calls already made ({_TOOL} 2x) and what they changed are "
-        'kept. Say "continue" once the service is back and I\'ll pick up from here.'
-    )
-    # Cannot pass for success.
-    assert result["status"] == "failed"
-    assert result["model_unreachable"] is True
-    assert "llm_unreachable" in _types(agent)
-    assert "having trouble reaching" not in text
-    assert len(sent) == 2 + 1 + DEFAULT_MODEL_STEP_RETRIES
-
-
-def test_unreachable_before_any_tool_says_nothing_ran(agent):
-    _script(agent, *[_transient() for _ in range(1 + DEFAULT_MODEL_STEP_RETRIES)])
-    result = agent.process_query("Check the ledger", max_steps=10)
-    assert "before any tool ran" in result["result"]
-    assert result["status"] == "failed"
-
-
-def test_step_retry_can_be_turned_off(agent, monkeypatch):
-    monkeypatch.setenv("GAIA_AGENT_MODEL_RETRIES", "0")
-    sent = _script(agent, _tool_call(1), _transient())
-    result = agent.process_query("Check the ledger", max_steps=10)
-    assert len(sent) == 2
-    assert agent.sleeps == []
-    assert "I stopped at step 2" in result["result"]
 
 
 @pytest.mark.parametrize("reason", ["read timeout", "upstream timeout"])
@@ -427,25 +389,24 @@ def test_tui_turn_survives_a_step_retry_and_ends_with_the_answer(agent):
     assert _ANSWER in events[-1]["answer"]
     assert any(
         e["type"] == "status"
-        and "retrying this step in 1s (1/2)" in e.get("message", "")
+        and "(HTTP 502) — retrying in 5s; waited 0s of 60 min" in e.get("message", "")
         for e in events
     )
     assert _TOOL_RUNS == [1]
 
 
-def test_tui_turn_gives_up_with_the_answer_not_an_error(agent):
-    """When retries run out the user gets the plain answer as the turn's
-    final event; an error event would end the turn without it."""
-    _script(
-        agent,
-        _tool_call(1),
-        *[_transient(reason="HTTP 429") for _ in range(1 + DEFAULT_MODEL_STEP_RETRIES)],
-    )
+def test_tui_turn_gives_up_with_the_answer_not_an_error(agent, monkeypatch):
+    """When the outage budget runs out the user gets the plain answer as the
+    turn's final event; an error event would end the turn without it."""
+    monkeypatch.setenv("GAIA_AGENT_MODEL_OUTAGE_BUDGET", "0")
+    _script(agent, _tool_call(1), _transient(reason="HTTP 429"))
     events = _tui_turn(agent)
     types = [e["type"] for e in events]
     assert "error" not in types
     assert types[-1] == "final"
-    assert events[-1]["answer"].startswith("I stopped at step 2 because the model")
+    assert events[-1]["answer"].startswith(
+        "I stopped at step 2: the model endpoint stayed unavailable"
+    )
     # Printed by the agent itself (so the CLI shows it too), not recovered
     # from the return value by the transport's fallback.
     assert "usage" in events[-1]
@@ -525,31 +486,6 @@ def test_wrong_context_size_still_reraises_for_reload(agent, tagged):
     assert len(sent) == 1
     assert agent.sleeps == []
     assert "llm_wrong_ctx_loaded_reraise" in _types(agent)
-
-
-# ── configuration ────────────────────────────────────────────────────────
-
-
-def test_step_retry_defaults(monkeypatch):
-    monkeypatch.delenv("GAIA_AGENT_MODEL_RETRIES", raising=False)
-    monkeypatch.delenv("GAIA_AGENT_MODEL_RETRY_COOLDOWN", raising=False)
-    assert model_step_retries() == DEFAULT_MODEL_STEP_RETRIES
-    assert model_retry_cooldown() == DEFAULT_MODEL_RETRY_COOLDOWN
-
-
-@pytest.mark.parametrize(
-    "name, value",
-    [
-        ("GAIA_AGENT_MODEL_RETRIES", "-1"),
-        ("GAIA_AGENT_MODEL_RETRIES", "lots"),
-        ("GAIA_AGENT_MODEL_RETRY_COOLDOWN", "-5"),
-        ("GAIA_AGENT_MODEL_RETRY_COOLDOWN", "a while"),
-    ],
-)
-def test_step_retry_settings_reject_invalid_values(monkeypatch, name, value):
-    monkeypatch.setenv(name, value)
-    with pytest.raises(ValueError, match=name):
-        model_step_retries() if "RETRIES" in name else model_retry_cooldown()
 
 
 # ── stalled stream (#5126) as the Agent UI shows it ──────────────────────

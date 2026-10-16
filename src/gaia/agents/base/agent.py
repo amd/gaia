@@ -12,11 +12,13 @@ import ast
 import contextvars
 import datetime
 import inspect
+import ipaddress
 import json
 import logging
 import math
 import os
 import queue
+import random
 import re
 import subprocess
 import threading
@@ -39,6 +41,7 @@ from typing import (
     Tuple,
     Union,
 )
+from urllib.parse import urlparse
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.completion import (
@@ -159,6 +162,7 @@ from gaia.llm.retry import (
     StreamStalledError,
     describe_retry_state,
     model_retry_notices,
+    retry_after_in_chain,
     retry_state_of,
 )
 from gaia.utils.json_string import extract_json_string_field
@@ -430,61 +434,86 @@ def tool_execution_timeout() -> float:
 
 
 # A model call that still fails after the client's own retries (see
-# ``gaia.llm.retry``) is tried again at the step level after a longer wait —
-# ``DEFAULT_MODEL_RETRY_COOLDOWN``, doubling each time — rather than ending a
-# run whose earlier steps all succeeded. Endpoint blips usually clear within
-# seconds; these waits cover the rarer outage that lasts a few minutes.
-DEFAULT_MODEL_STEP_RETRIES = 2
-DEFAULT_MODEL_RETRY_COOLDOWN = 30.0
+# ``gaia.llm.retry``) is an endpoint outage: the agent keeps waiting and asking
+# again until the outage budget is spent, then ends the turn saying so.
+MODEL_OUTAGE_BUDGET_ENV = "GAIA_AGENT_MODEL_OUTAGE_BUDGET"
+DEFAULT_MODEL_OUTAGE_BUDGET = 3600.0
+#: The first wait's ceiling; each wait doubles it, up to the cap.
+MODEL_OUTAGE_FIRST_WAIT = 5.0
+MODEL_OUTAGE_MAX_WAIT = 60.0
+#: Settings the outage budget replaced; set, they are an error, not ignored.
+_RETIRED_MODEL_RETRY_SETTINGS = (
+    "GAIA_AGENT_MODEL_RETRIES",
+    "GAIA_AGENT_MODEL_RETRY_COOLDOWN",
+)
 
 
-def model_step_retries() -> int:
-    """How many times a model step that failed transiently is tried again.
+def model_outage_budget() -> float:
+    """Seconds an agent waits for a model endpoint to come back, per model call.
 
-    Reads ``GAIA_AGENT_MODEL_RETRIES`` at call time; ``0`` turns step-level
-    retry off. Raises on a present-but-invalid value, like the other
-    ``GAIA_AGENT_*`` settings.
+    Reads ``GAIA_AGENT_MODEL_OUTAGE_BUDGET`` at call time; ``0`` turns waiting
+    off, leaving only the client's own quick retries. Raises on an invalid
+    value, and on a retired retry setting that would otherwise be ignored.
     """
-    raw = os.environ.get("GAIA_AGENT_MODEL_RETRIES")
-    if raw is None or raw.strip() == "":
-        return DEFAULT_MODEL_STEP_RETRIES
-    try:
-        value = int(raw)
-    except ValueError as e:
-        raise ValueError(
-            f"GAIA_AGENT_MODEL_RETRIES must be a whole number (0 or more), got "
-            f"{raw!r}. Unset it to use the default ({DEFAULT_MODEL_STEP_RETRIES})."
-        ) from e
-    if value < 0:
-        raise ValueError(
-            f"GAIA_AGENT_MODEL_RETRIES must be 0 or more, got {value}. Unset it "
-            f"to use the default ({DEFAULT_MODEL_STEP_RETRIES})."
-        )
-    return value
-
-
-def model_retry_cooldown() -> float:
-    """Seconds to wait before the first step-level retry; doubles after that.
-
-    Reads ``GAIA_AGENT_MODEL_RETRY_COOLDOWN`` at call time and raises on a
-    present-but-invalid value.
-    """
-    raw = os.environ.get("GAIA_AGENT_MODEL_RETRY_COOLDOWN")
-    if raw is None or raw.strip() == "":
-        return DEFAULT_MODEL_RETRY_COOLDOWN
+    for retired in _RETIRED_MODEL_RETRY_SETTINGS:
+        if os.environ.get(retired, "").strip():
+            raise ValueError(
+                f"{retired} is no longer read. Set {MODEL_OUTAGE_BUDGET_ENV} "
+                "instead: how many seconds to keep waiting for the model "
+                f"endpoint (default {DEFAULT_MODEL_OUTAGE_BUDGET:.0f}; 0 turns "
+                f"waiting off). Unset {retired}."
+            )
+    raw = os.environ.get(MODEL_OUTAGE_BUDGET_ENV, "").strip()
+    if not raw:
+        return DEFAULT_MODEL_OUTAGE_BUDGET
+    remedy = (
+        f"Set it to a number of seconds, 0 or more, or unset it for the "
+        f"default ({DEFAULT_MODEL_OUTAGE_BUDGET:.0f})."
+    )
     try:
         value = float(raw)
     except ValueError as e:
         raise ValueError(
-            f"GAIA_AGENT_MODEL_RETRY_COOLDOWN must be a number of seconds, got "
-            f"{raw!r}. Unset it to use the default ({DEFAULT_MODEL_RETRY_COOLDOWN})."
+            f"{MODEL_OUTAGE_BUDGET_ENV}={raw!r} is not a number. {remedy}"
         ) from e
-    if value < 0:
-        raise ValueError(
-            f"GAIA_AGENT_MODEL_RETRY_COOLDOWN must be 0 or more, got {value}. "
-            f"Unset it to use the default ({DEFAULT_MODEL_RETRY_COOLDOWN})."
-        )
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"{MODEL_OUTAGE_BUDGET_ENV}={raw!r} is out of range. {remedy}")
     return value
+
+
+@dataclass
+class _ModelOutage:
+    """One model call's run of transient failures."""
+
+    #: Clock reading when the outage began; ``None`` until the first failure.
+    started: Optional[float] = None
+    waits: int = 0
+    #: A local server that refused us was already started once.
+    restarted: bool = False
+
+
+#: Failures that, from a server on this machine, mean it is not running.
+_LOCAL_SERVER_DOWN_REASONS = ("connection error", "connect timeout")
+
+
+def _is_local_url(url: Optional[str]) -> bool:
+    """Whether *url* points at this machine (loopback or ``localhost``)."""
+    if not url:
+        return False
+    host = (urlparse(url).hostname or "").strip("[]").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _format_wait(seconds: float) -> str:
+    """``45s`` under a minute and a half, whole minutes above it."""
+    if seconds < 90:
+        return f"{seconds:.0f}s"
+    return f"{seconds / 60:.0f} min"
 
 
 def _trace_includes_schema_text() -> bool:
@@ -2078,8 +2107,12 @@ Do NOT wrap conversational replies in JSON.
         self._turn_model_retries: Dict[str, Any] = {
             "request_retries": 0,
             "step_retries": 0,
+            "waited_seconds": 0.0,
             "unreachable": False,
         }
+        self._turn_outage_budget = DEFAULT_MODEL_OUTAGE_BUDGET
+        # Read by hosts from another thread; a bool assignment is atomic.
+        self._model_endpoint_down = False
         # Earlier turns' user and tool text, for the grounding checks.
         self._grounding_history = ""
         # Grounding gaps that survived their correction, for the scope note.
@@ -7152,8 +7185,10 @@ Do NOT wrap conversational replies in JSON.
             return classified.user_message
         return None
 
-    #: The wait between step-level model retries. Replaced in tests.
+    #: Clock, sleep and jitter source for the outage wait. Replaced in tests.
     _model_retry_sleep = staticmethod(time.sleep)
+    _model_retry_clock = staticmethod(time.monotonic)
+    _model_retry_random = staticmethod(random.random)
 
     @staticmethod
     def _transient_model_failure(exc: BaseException) -> Optional[RetryState]:
@@ -7181,21 +7216,28 @@ Do NOT wrap conversational replies in JSON.
             return None
         return state
 
-    def _model_step_retry_wait(
-        self, exc: BaseException, retries_used: int
-    ) -> Optional[float]:
-        """Seconds to wait before trying this model step again, or ``None``
-        when it should not be retried (not transient, or retries spent)."""
-        if self._transient_model_failure(exc) is None:
-            return None
-        if retries_used >= model_step_retries():
-            return None
-        return model_retry_cooldown() * (2**retries_used)
+    def _outage_wait(self, waits: int, retry_after: Optional[float]) -> float:
+        """Seconds before asking again: the doubling backoff with jitter over
+        the upper half of its ceiling, never sooner than the endpoint's
+        ``Retry-After``, never more than ``MODEL_OUTAGE_MAX_WAIT``."""
+        ceiling = min(
+            MODEL_OUTAGE_MAX_WAIT, MODEL_OUTAGE_FIRST_WAIT * 2 ** min(waits, 16)
+        )
+        delay = ceiling * (0.5 + 0.5 * self._model_retry_random())
+        if retry_after is not None:
+            delay = max(delay, retry_after)
+        return min(delay, MODEL_OUTAGE_MAX_WAIT)
+
+    def awaiting_model_endpoint(self) -> bool:
+        """True while a model call is failing transiently and the agent is
+        waiting for the endpoint to come back. A host's turn timeout should
+        not count this time: the turn is not hung, the endpoint is down."""
+        return self._model_endpoint_down
 
     @staticmethod
     def _model_trouble(reason: Optional[str]) -> str:
         """Plain words for why the model service failed, from a retry reason."""
-        if reason in ("HTTP 429", "HTTP 503"):
+        if reason in ("HTTP 429", "HTTP 503", "HTTP 529"):
             return "The model service is busy"
         if reason in ("connection error", "connection dropped", "connect timeout"):
             return "The connection to the model service dropped"
@@ -7208,6 +7250,8 @@ Do NOT wrap conversational replies in JSON.
     def _announce_model_retry(self, notice: RetryNotice) -> None:
         """One status line per client-level retry, so a wait never reads as a
         hang: "The model service is busy — retrying in 8s (2/4)"."""
+        self._model_endpoint_down = True
+        self._turn_model_retries["waited_seconds"] += notice.delay
         when = f"in {notice.delay:.0f}s" if notice.delay >= 1 else "now"
         message = (
             f"{self._model_trouble(notice.reason)} — retrying {when} "
@@ -7217,6 +7261,13 @@ Do NOT wrap conversational replies in JSON.
         # Also the live status, so the header stops reading as a silent wait.
         self.console.report_phase("model_retry", message)
 
+    def _model_wait_cancelled(self) -> bool:
+        """Stop pressed, or the host's cancel token set."""
+        if self._console_cancelled():
+            return True
+        cancel = getattr(self, "_cancel_event", None)
+        return cancel is not None and cancel.is_set()
+
     def _cool_down_for_model(self, seconds: float) -> bool:
         """Wait *seconds* in short slices so Stop still works mid-wait.
 
@@ -7224,12 +7275,13 @@ Do NOT wrap conversational replies in JSON.
         """
         waited = 0.0
         while waited < seconds:
-            if self._console_cancelled():
+            if self._model_wait_cancelled():
                 return False
             pause = min(0.5, seconds - waited)
             self._model_retry_sleep(pause)
             waited += pause
-        return not self._console_cancelled()
+            self._turn_model_retries["waited_seconds"] += pause
+        return not self._model_wait_cancelled()
 
     def _last_request_retries(self) -> int:
         """Client-level retries behind the most recent model call, when the
@@ -7243,10 +7295,22 @@ Do NOT wrap conversational replies in JSON.
             return count
         return 0
 
+    def _model_call_succeeded(self) -> None:
+        """Book a model call that returned: count its retries, end any outage."""
+        self._turn_model_retries["request_retries"] += self._last_request_retries()
+        self._model_endpoint_down = False
+
+    def _model_endpoint(self) -> Optional[str]:
+        """The URL the model calls go to, when the provider exposes it."""
+        client = getattr(getattr(self, "chat", None), "llm_client", None)
+        backend = getattr(client, "_backend", client)
+        url = getattr(backend, "base_url", None)
+        return url if isinstance(url, str) and url else None
+
     def _model_failure_outcome(
         self,
         exc: BaseException,
-        retries_used: int,
+        outage: _ModelOutage,
         steps_taken: int,
         conversation: List[Dict[str, Any]],
         partial_output: bool = False,
@@ -7255,15 +7319,17 @@ Do NOT wrap conversational replies in JSON.
 
         Returns one of:
 
-        * ``("retry", None)`` — transient; waited out the cool-down, call again
-          with the conversation exactly as it was.
+        * ``("retry", None)`` — transient; waited (or started the local
+          server), call again with the conversation exactly as it was.
         * ``("cancelled", None)`` — the user pressed Stop during the wait.
-        * ``("unreachable", answer)`` — transient, but every retry is spent;
-          *answer* is the final answer and the run is recorded as failed.
+        * ``("unreachable", answer)`` — transient, but the outage budget is
+          spent, or a local server refused and could not be started; *answer*
+          is the final answer and the run is recorded as failed.
         * ``(None, None)`` — not a transient model failure; the caller's
           existing handling applies unchanged.
         """
-        if self._console_cancelled():
+        self._model_endpoint_down = False
+        if self._model_wait_cancelled():
             # Stop pressed during the client's backoff: it gave up on purpose.
             return "cancelled", None
         state = self._transient_model_failure(exc)
@@ -7271,54 +7337,189 @@ Do NOT wrap conversational replies in JSON.
             return None, None
         tally = self._turn_model_retries
         tally["request_retries"] += state.retries
-        wait = self._model_step_retry_wait(exc, retries_used)
+        now = self._model_retry_clock()
+        if outage.started is None:
+            # The client already spent its own backoff on this outage.
+            outage.started = now - state.waited
+        elapsed = now - outage.started
+        budget = self._turn_outage_budget
         if partial_output:
             # Close the cut-off line before saying anything else.
             self.console.print_streaming_text("", end_of_stream=True)
-        if wait is not None:
+        endpoint = self._model_endpoint()
+        if state.last_reason in _LOCAL_SERVER_DOWN_REASONS and _is_local_url(endpoint):
+            # A server on this machine that refuses is stopped, not busy:
+            # start it once, and say so at once if that does not work.
+            if not outage.restarted:
+                outage.restarted = True
+                if self._start_local_model_server(endpoint):
+                    tally["step_retries"] += 1
+                    return "retry", None
+            from gaia.llm.lemonade_launcher import describe_start_hint
+
+            stopped = (
+                f"I stopped at step {steps_taken}: the local model server at "
+                f"{endpoint} is not answering ({describe_retry_state(state)}), "
+                "and it was still down after GAIA tried to start it."
+            )
+            hint = describe_start_hint().instruction.strip()
+            remedy = hint if hint.endswith(".") else f"{hint}."
+            return "unreachable", self._give_up_on_model(
+                exc,
+                steps_taken,
+                conversation,
+                state,
+                endpoint,
+                elapsed,
+                budget,
+                stopped,
+                remedy,
+            )
+        if elapsed < budget:
+            wait = min(
+                self._outage_wait(outage.waits, retry_after_in_chain(exc)),
+                budget - elapsed,
+            )
+            outage.waits += 1
             tally["step_retries"] += 1
             logger.warning(
-                "Model call failed at step %d (%s); retrying the step in %.0fs "
-                "(step retry %d of %d)",
+                "Model call failed at step %d (%s); waiting %.0fs for the "
+                "endpoint (waited %.0fs of %.0fs)",
                 steps_taken,
                 describe_retry_state(state),
                 wait,
-                retries_used + 1,
-                model_step_retries(),
+                elapsed,
+                budget,
             )
-            self.console.print_warning(
-                f"{self._model_trouble(state.last_reason)} — retrying this step "
-                f"in {wait:.0f}s ({retries_used + 1}/{model_step_retries()}); "
-                "the work so far is kept"
+            self._announce_model_outage(
+                state.last_reason, wait, elapsed, budget, partial_output
             )
-            if not self._cool_down_for_model(wait):
-                return "cancelled", None
-            return "retry", None
-        error_msg = (
-            f"Language model unreachable at step {steps_taken}: "
-            f"{describe_retry_state(state)}"
+            self._model_endpoint_down = True
+            waited = self._cool_down_for_model(wait)
+            self._model_endpoint_down = waited
+            return ("retry", None) if waited else ("cancelled", None)
+        from gaia.llm.lemonade_client import cloud_model_provider
+
+        where = f" at {endpoint}" if endpoint else ""
+        provider = cloud_model_provider(getattr(self, "model_id", None))
+        if provider:
+            where += f" (cloud provider {provider})"
+        how_long = f" for {_format_wait(elapsed)}" if elapsed >= 1 else ""
+        stopped = (
+            f"I stopped at step {steps_taken}: the model endpoint{where} stayed "
+            f"unavailable{how_long} ({describe_retry_state(state)})."
         )
-        # Logged, not printed as an error: a front-end ends the turn on an
-        # error event, and the answer below is what the user must see.
-        logger.error("%s; last error: %s", error_msg, exc)
-        self.error_history.append(
-            {"step": steps_taken, "error": str(exc), "type": "llm_unreachable"}
-        )
-        tally["unreachable"] = True
-        return "unreachable", self._model_unreachable_answer(
-            conversation, steps_taken, state, retries_used
+        if budget > 0:
+            remedy = (
+                "Check that the endpoint is up and its API key is valid, or "
+                f"raise {MODEL_OUTAGE_BUDGET_ENV} (now {budget:.0f} seconds) to "
+                "wait longer."
+            )
+        else:
+            remedy = (
+                "Check that the endpoint is up and its API key is valid; "
+                f"{MODEL_OUTAGE_BUDGET_ENV} is 0, so GAIA did not wait for it "
+                "to come back."
+            )
+        return "unreachable", self._give_up_on_model(
+            exc,
+            steps_taken,
+            conversation,
+            state,
+            endpoint,
+            elapsed,
+            budget,
+            stopped,
+            remedy,
         )
 
-    def _model_unreachable_answer(
+    def _start_local_model_server(self, endpoint: str) -> bool:
+        """Start the local model server through the usual auto-start path;
+        True once it answers."""
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        message = (
+            "The local model server is not answering — starting it again. "
+            "The work so far is kept."
+        )
+        self.console.print_warning(message)
+        self.console.report_phase("model_retry", message)
+        logger.warning("Local model server at %s refused; starting it", endpoint)
+        self._model_endpoint_down = True
+        # Its cached "ready" state describes the server that just went away.
+        LemonadeManager.reset()
+        ready = LemonadeManager.ensure_ready(
+            base_url=endpoint, model=getattr(self, "model_id", None)
+        )
+        self._model_endpoint_down = ready
+        return ready
+
+    def _give_up_on_model(
         self,
-        conversation: List[Dict[str, Any]],
+        exc: BaseException,
         steps_taken: int,
+        conversation: List[Dict[str, Any]],
         state: RetryState,
-        step_retries: int,
+        endpoint: Optional[str],
+        elapsed: float,
+        budget: float,
+        stopped: str,
+        remedy: str,
     ) -> str:
-        """The final answer when the model stayed unreachable through every
-        retry: one sentence saying the task is unfinished and what was kept,
-        then the next step.
+        """Record the model as unreachable and build the turn's final answer."""
+        # Logged, not printed as an error: a front-end ends the turn on an
+        # error event, and the answer below is what the user must see.
+        logger.error(
+            "Model endpoint %s unavailable at step %d for %.0fs (%s); last "
+            "error: %s",
+            endpoint or "(unknown)",
+            steps_taken,
+            elapsed,
+            describe_retry_state(state),
+            exc,
+        )
+        self.error_history.append(
+            {
+                "step": steps_taken,
+                "error": str(exc),
+                "type": "llm_unreachable",
+                "endpoint": endpoint,
+                "last_error": state.last_reason,
+                "waited_seconds": round(elapsed, 1),
+                "budget_seconds": budget,
+            }
+        )
+        self._turn_model_retries["unreachable"] = True
+        return self._model_unreachable_answer(conversation, stopped, remedy)
+
+    def _announce_model_outage(
+        self,
+        reason: Optional[str],
+        wait: float,
+        elapsed: float,
+        budget: float,
+        partial_output: bool,
+    ) -> None:
+        """The status line for one outage wait: why, how long, how far in."""
+        trouble = self._model_trouble(reason)
+        if reason and reason.startswith("HTTP ") and reason not in trouble:
+            trouble = f"{trouble} ({reason})"
+        when = f"in {_format_wait(wait)}" if wait >= 1 else "now"
+        message = (
+            f"{trouble} — retrying {when}; waited {_format_wait(elapsed)} of "
+            f"{_format_wait(budget)}. The work so far is kept."
+        )
+        if partial_output:
+            message += " The cut-off reply above is discarded; the new one replaces it."
+        self.console.print_warning(message)
+        self.console.report_phase("model_retry", message)
+
+    @staticmethod
+    def _model_unreachable_answer(
+        conversation: List[Dict[str, Any]], stopped: str, remedy: str
+    ) -> str:
+        """The final answer when the model could not be reached: where it
+        stopped and why (*stopped*), what was kept, what to do (*remedy*).
 
         Never phrased as a result — the run is also marked failed — so it
         cannot be read as the task's answer.
@@ -7330,24 +7531,19 @@ Do NOT wrap conversational replies in JSON.
             for msg in conversation
             if msg.get("role") == "tool" and msg.get("name")
         )
-        tries = f", then {step_retries} more after waiting" if step_retries else ""
-        stopped = (
-            f"I stopped at step {steps_taken} because the model service stayed "
-            f"unavailable ({describe_retry_state(state)}{tries})"
-        )
         if not tools_used:
             return (
-                f"{stopped}, before any tool ran. "
-                "Send your request again once the service is back."
+                f"{stopped} No tool had run yet. {remedy} Then send your "
+                "request again."
             )
         calls = sum(tools_used.values())
         done = ", ".join(
             f"{tool} {count}x" for tool, count in tools_used.most_common(5)
         )
         return (
-            f"{stopped}; the {calls} tool call{'s' if calls != 1 else ''} already "
-            f"made ({done}) and what they changed are kept. "
-            'Say "continue" once the service is back and I\'ll pick up from here.'
+            f"{stopped} The {calls} tool call{'s' if calls != 1 else ''} already "
+            f"made ({done}) and what they changed are kept. {remedy} Then say "
+            '"continue" and I\'ll pick up from here.'
         )
 
     def _shrink_messages_for_overflow(
@@ -8253,9 +8449,12 @@ Do NOT wrap conversational replies in JSON.
             Dict containing the final result and operation details
         """
         ns_id = self._namespaced_agent_id()
-        # Only a console with a Stop button can cancel a client backoff wait.
+        # Only a Stop button or a host cancel token can cancel a client backoff.
         console = getattr(self, "console", None)
-        stoppable = getattr(console, "cancelled", None) is not None
+        stoppable = (
+            getattr(console, "cancelled", None) is not None
+            or getattr(self, "_cancel_event", None) is not None
+        )
         try:
             # Standby would stall a local model mid-turn until someone wakes the PC.
             with (
@@ -8263,7 +8462,7 @@ Do NOT wrap conversational replies in JSON.
                 stay_awake(),
                 model_retry_notices(
                     self._announce_model_retry,
-                    self._console_cancelled if stoppable else None,
+                    self._model_wait_cancelled if stoppable else None,
                 ),
             ):
                 return self._process_query_impl(user_input, max_steps, trace, filename)
@@ -8273,6 +8472,7 @@ Do NOT wrap conversational replies in JSON.
             # calls into this one. Idempotent when the turn already sealed.
             self._finish_turn_record("", 0)
             self._detach_step_timer()
+            self._model_endpoint_down = False
 
     #: How a mid-turn follow-up is framed for the model. It is the user
     #: speaking, so it goes in as a user message — but unlabelled, a user
@@ -8586,13 +8786,17 @@ Do NOT wrap conversational replies in JSON.
         # A refused cloud account ends the turn with nothing to verify.
         account_refused = False
         # Model-call retries this turn: client-level (inside one request) and
-        # step-level (the agent waiting and asking again), plus whether the
-        # model stayed unreachable. Reported on the result.
+        # step-level (the agent waiting out an outage), the seconds spent
+        # waiting, and whether the model stayed unreachable. On the result.
         self._turn_model_retries = {
             "request_retries": 0,
             "step_retries": 0,
+            "waited_seconds": 0.0,
             "unreachable": False,
         }
+        # Read now so a bad value fails the turn here, not mid-outage.
+        self._turn_outage_budget = model_outage_budget()
+        self._model_endpoint_down = False
         if self._context_evictor is not None:
             self._context_evictor.begin_turn()
         self._pending_eviction = None
@@ -9080,7 +9284,7 @@ Do NOT wrap conversational replies in JSON.
                 # behaviour as the non-streaming branch below — needed because
                 # multi-step ReAct loops accumulate tool results in `messages`.
                 _retried_after_trim_stream = False
-                _model_step_retries = 0
+                _outage = _ModelOutage()
                 full_response = ""
                 self._announce_model_call(after_tools=bool(tool_call_history))
                 while True:
@@ -9130,9 +9334,7 @@ Do NOT wrap conversational replies in JSON.
 
                         self.console.print_streaming_text("", end_of_stream=True)
                         response = full_response
-                        self._turn_model_retries[
-                            "request_retries"
-                        ] += self._last_request_retries()
+                        self._model_call_succeeded()
                         break
                     except LemonadeStreamCutOffError as e:
                         # A fragment is never the reply: ask for the whole one again.
@@ -9168,13 +9370,12 @@ Do NOT wrap conversational replies in JSON.
                         # intact, instead of ending a run that was going fine.
                         outcome, unreachable = self._model_failure_outcome(
                             e,
-                            _model_step_retries,
+                            _outage,
                             steps_taken,
                             conversation,
                             partial_output=bool(full_response),
                         )
                         if outcome == "retry":
-                            _model_step_retries += 1
                             continue
                         if outcome == "cancelled":
                             cancelled_by_console = True
@@ -9254,13 +9455,12 @@ Do NOT wrap conversational replies in JSON.
                         # intact, instead of ending a run that was going fine.
                         outcome, unreachable = self._model_failure_outcome(
                             e,
-                            _model_step_retries,
+                            _outage,
                             steps_taken,
                             conversation,
                             partial_output=bool(full_response),
                         )
                         if outcome == "retry":
-                            _model_step_retries += 1
                             continue
                         if outcome == "cancelled":
                             cancelled_by_console = True
@@ -9338,7 +9538,7 @@ Do NOT wrap conversational replies in JSON.
                 # giving up. Keeps the conversation salvageable instead of
                 # failing the whole turn.
                 _retried_after_trim = False
-                _model_step_retries = 0
+                _outage = _ModelOutage()
                 while True:
                     try:
                         chat_response = self.chat.send_messages(
@@ -9353,9 +9553,7 @@ Do NOT wrap conversational replies in JSON.
                             chat_response, "finish_reason", None
                         )
                         response_reasoning = _response_reasoning(chat_response)
-                        self._turn_model_retries[
-                            "request_retries"
-                        ] += self._last_request_retries()
+                        self._model_call_succeeded()
                         break  # success → exit retry loop
                     except ConnectionError as e:
                         self.console.stop_progress()
@@ -9363,10 +9561,9 @@ Do NOT wrap conversational replies in JSON.
                         # retried: wait, then ask again with the conversation
                         # intact, instead of ending a run that was going fine.
                         outcome, unreachable = self._model_failure_outcome(
-                            e, _model_step_retries, steps_taken, conversation
+                            e, _outage, steps_taken, conversation
                         )
                         if outcome == "retry":
-                            _model_step_retries += 1
                             continue
                         if outcome == "cancelled":
                             cancelled_by_console = True
@@ -9457,10 +9654,9 @@ Do NOT wrap conversational replies in JSON.
                         # retried: wait, then ask again with the conversation
                         # intact, instead of ending a run that was going fine.
                         outcome, unreachable = self._model_failure_outcome(
-                            e, _model_step_retries, steps_taken, conversation
+                            e, _outage, steps_taken, conversation
                         )
                         if outcome == "retry":
-                            _model_step_retries += 1
                             continue
                         if outcome == "cancelled":
                             cancelled_by_console = True
@@ -11377,6 +11573,7 @@ Do NOT wrap conversational replies in JSON.
             "model_retries": {
                 "request_retries": self._turn_model_retries["request_retries"],
                 "step_retries": self._turn_model_retries["step_retries"],
+                "waited_seconds": round(self._turn_model_retries["waited_seconds"], 1),
             },
             "model_unreachable": self._turn_model_retries["unreachable"],
             "extraction_sources": sorted(self._extraction_ledger.results),

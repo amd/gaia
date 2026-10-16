@@ -586,9 +586,20 @@ class SSEOutputHandler(OutputHandler):
         # The answer this turn already put on the wire. A transport that ends
         # the turn on it cancels the run, so the run reads it back from here.
         self.delivered_answer: str = ""
+        # Set by a model_retry status, cleared by the next event of any kind.
+        self._model_wait = False
+
+    def awaiting_model_endpoint(self) -> bool:
+        """True from a ``model_retry`` status until the next event: the agent
+        is waiting for its model endpoint to come back, not hung."""
+        return self._model_wait
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
+        if event:
+            self._model_wait = (
+                event.get("type") == "status" and event.get("phase") == "model_retry"
+            )
         if event and event.get("type") == "chunk":
             self._shown_fence, self._shown_line_start = _fence_after(
                 event.get("content") or "", self._shown_fence, self._shown_line_start

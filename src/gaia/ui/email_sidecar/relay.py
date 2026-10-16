@@ -193,7 +193,11 @@ def _dispatch_one(
             return False
 
     if etype == "status":
-        handler._emit({"type": "status", "message": str(event.get("message", ""))})
+        status = {"type": "status", "message": str(event.get("message", ""))}
+        # The phase says what the sidecar is doing; model_retry stops the turn clock.
+        if isinstance(event.get("phase"), str) and event["phase"]:
+            status["phase"] = event["phase"]
+        handler._emit(status)
 
     elif etype == "token":
         delta = event.get("delta", "")

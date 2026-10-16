@@ -1744,8 +1744,33 @@ def _echoes_failed_tool(event: dict, steps: list) -> bool:
     return last.get("success") is False or bool(running)
 
 
+def _awaiting_model(turn_agent: dict) -> bool:
+    waiting = getattr(turn_agent.get("agent"), "awaiting_model_endpoint", None)
+    return bool(callable(waiting) and waiting())
+
+
+async def _wait_for_turn(worker, budget: float, paused) -> set:
+    """Wait for *worker* up to *budget* seconds of turn time; time while
+    ``paused()`` is true does not count. Returns the done set, like
+    ``asyncio.wait``."""
+    clock = _UserWaitClock()
+    started = _time.monotonic()
+    while True:
+        now = _time.monotonic()
+        waiting = paused()
+        left = budget - (now - started - clock.update(waiting, now))
+        if left <= 0 and not waiting:
+            return set()
+        done, _ = await asyncio.wait(
+            {worker}, timeout=0.5 if waiting else min(left, 0.5)
+        )
+        if done:
+            return done
+
+
 class _UserWaitClock:
-    """Total seconds a stream has spent waiting on the user, open wait included."""
+    """Total seconds a turn has spent waiting on someone else — the user, or a
+    model endpoint that is down — open wait included."""
 
     def __init__(self) -> None:
         self._closed = 0.0
@@ -2096,6 +2121,8 @@ async def _get_chat_response(
     """
     # Set on timeout so the agent loop stops at its next step boundary.
     cancel_event = threading.Event()
+    # The turn's agent, once built, so the timeout can see it waiting on its model.
+    turn_agent: dict = {}
 
     def _do_chat():
         # Resolve document IDs to file paths.
@@ -2294,6 +2321,7 @@ async def _get_chat_response(
         _maybe_load_expected_model(effective)
 
         agent._cancel_event = cancel_event
+        turn_agent["agent"] = agent
 
         # One automatic retry on transient Lemonade failures (model
         # evicted between turns, network blip).  Mirror of the streaming
@@ -2342,7 +2370,9 @@ async def _get_chat_response(
     try:
         worker = asyncio.get_running_loop().run_in_executor(None, _do_chat)
         try:
-            done, _ = await asyncio.wait({worker}, timeout=_CHAT_TIMEOUT_SECONDS)
+            done = await _wait_for_turn(
+                worker, _CHAT_TIMEOUT_SECONDS, lambda: _awaiting_model(turn_agent)
+            )
         finally:
             if not worker.done():
                 cancel_event.set()
@@ -2995,8 +3025,12 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         while True:
             # Guard: total timeout for the streaming response
             _now = _time.time()
-            _waited = _user_wait.update(sse_handler.awaiting_user_input(), _now)
-            if _now - _stream_start - _waited > _STREAM_TIMEOUT_SECONDS:
+            _paused = (
+                sse_handler.awaiting_user_input()
+                or sse_handler.awaiting_model_endpoint()
+            )
+            _waited = _user_wait.update(_paused, _now)
+            if not _paused and _now - _stream_start - _waited > _STREAM_TIMEOUT_SECONDS:
                 logger.error(
                     "Streaming response timed out after %ds", _STREAM_TIMEOUT_SECONDS
                 )

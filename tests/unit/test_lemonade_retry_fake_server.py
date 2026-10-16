@@ -75,7 +75,7 @@ class FakeServer:
     ``("cut", body_bytes)``: send *body_bytes* as chunked SSE, then drop the
     connection without the terminating chunk."""
 
-    def __init__(self, script):
+    def __init__(self, script, port=0):
         self.script = list(script)
         self.requests = []
         server = self
@@ -122,7 +122,7 @@ class FakeServer:
                 self.wfile.write(body)
                 self.close_connection = True
 
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         self.port = self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
