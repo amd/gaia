@@ -69,7 +69,7 @@ jobs:
           python3 -c "import urllib.request, sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])"             https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-unknown-linux-gnu.tar.gz             "$RUNNER_TEMP/uv.tar.gz"
           tar -xzf "$RUNNER_TEMP/uv.tar.gz" -C "$RUNNER_TEMP/uv-bin" --strip-components=1
           UV="$RUNNER_TEMP/uv-bin/uv"
-          "$UV" venv "$VENV" --python 3.12
+          "$UV" venv "$VENV" --python 3.12 --seed
           if [ -n "$PYPI_VERSION" ]; then
             target="amd-gaia[ui,rag]==$PYPI_VERSION"
           else
