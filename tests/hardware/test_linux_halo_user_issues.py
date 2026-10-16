@@ -196,7 +196,9 @@ def test_eu2_idle_timeout_stops_the_server(fresh_install):
     s = fresh_install
     _section("EU-2: the server stops once no client is left for the idle timeout")
     pid, port, _ = s.server()
-    s.gaia("config", "set", "lemonade_idle_timeout_minutes", "1")
+    # Saved through GaiaConfig: the documented CLI command is broken (see
+    # test_config_set_accepts_the_idle_timeout below).
+    _save_idle_timeout(s, 1)
     set_at = time.monotonic()
     wait_until(
         lambda: not psutil.pid_exists(pid), 150, "the idle timeout to stop lemond"
@@ -208,25 +210,58 @@ def test_eu2_idle_timeout_stops_the_server(fresh_install):
     assert not port_listening(port), f"port {port} still listening"
     assert s.daemon_pid(), "the idle stop took the daemon down with it"
     evidence(f"- PASS: port {port} closed, daemon pid {s.daemon_pid()} still running")
-    s.gaia("config", "set", "lemonade_idle_timeout_minutes", "15")
+    s.stopped_pid = pid
+    _save_idle_timeout(s, 15)
+
+
+def _save_idle_timeout(s: Scenario, minutes: int) -> None:
+    s.python(
+        "from gaia.config import GaiaConfig\n"
+        f"GaiaConfig.save_key('lemonade_idle_timeout_minutes', {minutes})\n"
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="`gaia config set` routes every lemonade_* key to the Lemonade-choice "
+    "handler, which rejects lemonade_idle_timeout_minutes; the docs tell users "
+    "to set it this way",
+)
+def test_config_set_accepts_the_idle_timeout(fresh_install):
+    s = fresh_install
+    result = s.gaia("config", "set", "lemonade_idle_timeout_minutes", "30", check=False)
+    evidence(
+        f"- `gaia config set lemonade_idle_timeout_minutes 30`: exit "
+        f"{result.returncode}: `{result.output.strip()[:200]}`"
+    )
+    assert result.returncode == 0, result.output
+    _save_idle_timeout(s, 15)
 
 
 def test_eu3_a_relaunched_app_gets_the_same_port(fresh_install):
     s = fresh_install
     _section("EU-3: the server comes back on the same port")
     before = s.last_port()
+    stopped = getattr(s, "stopped_pid", None)
     assert before, "no last_port.json was recorded"
+    assert (
+        stopped and not s.server_running()
+    ), "the server is not stopped, so a relaunch would not restart it"
     app = s.spawn([sys.executable, str(HERE / "halo_app.py"), SMALL_MODEL], "app2.log")
     line = app.stdout.readline()
     assert line, f"the relaunched app failed (code {app.poll()}); see app2.log"
     pid, port, _ = s.server()
-    evidence(f"- after the idle stop, relaunching an app started lemond pid {pid}")
+    evidence(
+        f"- after the idle stop (lemond pid {stopped} gone), relaunching an app "
+        f"started lemond pid {pid}"
+    )
     evidence(f"- port before {before}, after {port}")
     app.stdin.write("quit\n")
     app.stdin.flush()
     app.wait(timeout=60)
+    assert pid != stopped, "the old server was still running"
     assert port == before, f"came back on port {port}, not {before}"
-    evidence("- PASS: same port")
+    evidence("- PASS: a new server process, on the same port")
 
 
 def test_eu2_daemon_stop_stops_the_server_and_eu3_port_survives(fresh_install):
@@ -324,27 +359,76 @@ def test_eu4_tight_memory_shrinks_the_window(gemma_install):
     evidence(f"- PASS: loaded at {loaded[GEMMA]:,} tokens instead of 65,536, answered")
 
 
+_APP_LOAD = """
+import json, sys
+from gaia.llm.lemonade_client import (
+    InsufficientMemoryError, LemonadeClient, resolve_ctx_size)
+model = sys.argv[1]
+ctx = resolve_ctx_size(model)
+try:
+    LemonadeClient(verbose=False).load_model(model, ctx_size=ctx, prompt=False)
+    print(json.dumps({"loaded": ctx}))
+except InsufficientMemoryError as e:
+    print(json.dumps({"refused": str(e), "ctx": ctx}))
+"""
+
+
+def _capped_app_load(s: Scenario, free_gb: float) -> dict:
+    """The Agent UI's boot-preload load, with *free_gb* free."""
+    result = s.run(
+        [sys.executable, "-c", _APP_LOAD, GEMMA],
+        timeout=900,
+        extra_env={"GAIA_HW_FREE_GB": str(free_gb), "PYTHONPATH": str(HERE / "memcap")},
+    )
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
 def test_eu4_too_little_memory_is_refused_with_a_clear_message(gemma_install):
     s = gemma_install
     _section("EU-4: 6 GB free is refused with the clear message, nothing loaded")
     pid, _, _ = s.server()
     s.api("POST", "unload")
     before = sysfs_gpu_used()
-    result = _capped_llm(s, 6.0)
+    outcome = _capped_app_load(s, 6.0)
     loaded = s.loaded()
-    refusal = [
-        ln for ln in result.output.splitlines() if "Not enough free memory" in ln
-    ]
-    evidence(f"- `gaia llm --model {GEMMA}` with 6 GB free: exit {result.returncode}")
-    evidence(f"- GAIA said: `{refusal[0].strip() if refusal else '(nothing)'}`")
+    evidence(f"- the Agent UI's load of {GEMMA} with 6 GB free: `{outcome}`")
     evidence(
         f"- loaded afterwards: `{loaded}`; machine GPU use {gb(before)} -> "
         f"{gb(sysfs_gpu_used())}"
     )
-    assert refusal, "no 'Not enough free memory' message"
+    assert "refused" in outcome, f"the load was not refused: {outcome}"
+    assert "Not enough free memory" in outcome["refused"]
     assert GEMMA not in loaded, "the refused model was loaded anyway"
+
+    cli = _capped_llm(s, 6.0)
+    evidence(
+        f"- `gaia llm --model {GEMMA}` with 6 GB free: exit {cli.returncode}; "
+        f"loaded afterwards `{s.loaded()}`"
+    )
+    assert GEMMA not in s.loaded(), "gaia llm loaded the refused model"
     assert s.server()[0] == pid, "the server died"
-    evidence("- PASS: refused before loading, with the message; server unharmed")
+    evidence(
+        "- PASS: both paths refused before loading; the app path gives the "
+        "message; server unharmed"
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="gaia llm's preload (LemonadeManager._try_preload_with_ctx) re-wraps "
+    "InsufficientMemoryError as a generic 'restart the server' error, so the "
+    "user never sees how much memory is needed or what to close",
+)
+def test_eu4_gaia_llm_shows_the_memory_message(gemma_install):
+    s = gemma_install
+    s.api("POST", "unload")
+    result = _capped_llm(s, 6.0)
+    errors = [ln for ln in result.output.splitlines() if "Error" in ln]
+    evidence(
+        f"- KNOWN BUG: `gaia llm` with 6 GB free said "
+        f"`{errors[0].strip()[:300] if errors else '(nothing)'}`"
+    )
+    assert "Not enough free memory" in result.output
 
 
 # =============================================================================
@@ -457,6 +541,14 @@ def users_lemonade():
         config = scenario.root / "server" / "config"
         cache.mkdir(parents=True, exist_ok=True)
         config.mkdir(parents=True, exist_ok=True)
+        # A user's server has settings of its own; GAIA must leave them alone.
+        (config / "config.json").write_text(
+            json.dumps(
+                {"config_version": 2, "host": "localhost", "auto_evict": True},
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         port = _free_port()
         log = open(scenario.root / "users-lemond.log", "ab")  # noqa: SIM115
         env = {k: v for k, v in scenario.env.items() if k != "LEMONADE_API_KEY"}
@@ -537,10 +629,13 @@ def test_eu1_users_lemonade_is_used_and_never_reconfigured(users_lemonade):
             evidence(f"  {count:4d}  {key}")
         evidence("  ```")
         evidence(f"- setup changes: `{changes}`")
-        evidence(f"- server config files before {config_before}, after {config_after}")
+        evidence(f"- server config dir before {config_before}")
+        evidence(f"- server config dir after  {config_after}")
+        dist = (user.lemonade_dir / "dist").exists()
+        state = (user.lemonade_dir / "state.json").exists()
         evidence(
-            f"- GAIA's own server: dist dir exists={(user.lemonade_dir / 'dist').exists()}, "
-            f"state.json exists={(user.lemonade_dir / 'state.json').exists()}, "
+            f"- GAIA's own server: dist dir exists={dist}, "
+            f"state.json exists={state}, "
             f"lemond processes under its HOME={[p.pid for p in own]}"
         )
         assert "LLM Response:" in chat.output, "chat through the user's server failed"
@@ -548,7 +643,18 @@ def test_eu1_users_lemonade_is_used_and_never_reconfigured(users_lemonade):
             "chat/completions" in p for _, p, _ in proxy.requests
         ), "the chat never reached the user's server"
         assert not changes, f"GAIA changed the user's server: {changes}"
-        assert config_after == config_before, "the user's server config changed"
+        assert (
+            config_after.get("config.json") == config_before["config.json"]
+        ), "GAIA rewrote the user's server config.json"
+        added = sorted(set(config_after) - set(config_before))
+        assert added in ([], ["user_models.json"]), f"unexpected writes: {added}"
+        if added:
+            # Pulling a `user.` model registers it there: a download, which
+            # #5119/#5141 allow. Logged so the evidence shows it.
+            evidence(
+                "- note: user_models.json was created by pulling "
+                "user.embeddinggemma-300m-GGUF (a download, allowed)"
+            )
         assert not (
             user.lemonade_dir / "dist"
         ).exists(), "GAIA installed its own server"
