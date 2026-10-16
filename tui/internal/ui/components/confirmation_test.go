@@ -442,27 +442,6 @@ func TestAlwaysPromisesOnlyTheScopeTheAgentNamed(t *testing.T) {
 	}
 }
 
-// A script in the agent's scratch folder offers "always" for that folder, so
-// one answer covers the next exploration script instead of a prompt per step.
-func TestAScratchScriptOffersAlwaysForTheScratchFolder(t *testing.T) {
-	const scope = "Python scripts in GAIA's scratch folder"
-	m := NewConfirmationModel("run-1", "execute_python_file",
-		`~\AppData\…\gaia-scratch-081b3eddb56c\explore.py`, "").
-		WithLiveChannel("cid-1", scope).WithRisk("execute")
-	m.SetWidth(160)
-
-	view := stripANSI(m.View())
-	if !strings.Contains(view, "a always: "+scope+" (this session)") {
-		t.Errorf("a scratch script must offer always for the scratch folder:\n%s", view)
-	}
-
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	msg := cmd().(ConfirmationDecidedMsg)
-	if !msg.Always || msg.AlwaysScope != scope {
-		t.Errorf("decision = %+v, want always for %q", msg, scope)
-	}
-}
-
 // A `pwd` must not be badged the same as a permanent delete: a badge that
 // reads DESTRUCTIVE on everything stops carrying information.
 func TestKnownToolsAreClassifiedRatherThanAllDestructive(t *testing.T) {

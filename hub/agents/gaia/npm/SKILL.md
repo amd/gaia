@@ -374,8 +374,7 @@ land is additionally **code-inert**: its instructions load, but any
 indexing, querying, web fetching, memory, and the read-only `check_cli_setup`
 — runs without asking. A write or edit inside the agent's own scratch
 folder (`gaia-scratch-…` under the system temp folder) runs without asking too,
-and running a script from it carries `always_scope` "Python scripts in GAIA's
-scratch folder".
+so running a script from it asks every time and carries no `always_scope`.
 
 The eight live-browser tools are gated by a **hook**, not a set, so a name
 alone does not tell you whether a call will ask. `browser_login` always asks.

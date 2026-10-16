@@ -159,8 +159,8 @@ PATH_ACCESS_PROMPT_TOOL = "allow_path_access"
 
 _UNGRANTABLE_TOOLS = frozenset({"capture_skill", PATH_ACCESS_PROMPT_TOOL})
 
-#: Display-only prompt argument: the agent's own scratch folder, set by the
-#: agent when a script it runs sits inside it.
+#: Prompt argument set by the agent (never the model) when a script it runs sits
+#: in its own scratch folder. Such a call is never offered "always".
 SCRATCH_ARG = "_scratch_dir"
 
 #: Tools whose every call is the same kind of action, so the family IS the
@@ -199,41 +199,55 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
     args = tool_args if isinstance(tool_args, dict) else {}
     if tool_name in _UNGRANTABLE_TOOLS or args.get(RISK_NOTE_ARG):
         return None
+    # Scratch writes never ask, so no prompt shows what a later run there does.
+    if args.get(SCRATCH_ARG):
+        return None
     if tool_name in _SHELL_TOOLS:
         return _shell_scope(tool_name, args)
     if tool_name in PATH_TOOLS:
         return _path_scope(tool_name, args)
     if tool_name in _SKILL_TOOLS:
         return _named_scope(tool_name, args, _SKILL_ARG_NAMES)
-    scratch = _scratch_scope(tool_name, args)
-    if scratch is not None:
-        return scratch
     if tool_name in _FAMILY_TOOLS:
         return GrantScope(keys=(tool_name,), label=_FAMILY_TOOLS[tool_name])
     return None
 
 
-def _scratch_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
-    """The grant for running a script in the agent's own scratch folder, or None.
+def is_inside_folder(path: str, folder: str) -> bool:
+    """True when *path* resolves to something strictly inside *folder*.
 
-    Narrower than "running Python files": it covers that one folder, which the
-    agent owns and the user's files are not in. Offered only when the agent
-    marked the call (``SCRATCH_ARG``) and the path really is inside it.
+    Both sides go through ``realpath``, so a symlink, junction, 8.3 name or
+    ``..`` is judged by where it really lands, never by how it is spelled. A
+    spelling ``realpath`` leaves distinct (``\\\\?\\``, a UNC share, a case
+    variant on macOS) is caught by file identity. A path that cannot be
+    resolved counts as inside: the caller then asks instead of trusting it.
     """
-    scratch = args.get(SCRATCH_ARG)
-    if tool_name != "execute_python_file" or not isinstance(scratch, str):
-        return None
-    target = path_argument(args)
-    if not target or not scratch:
-        return None
-    root = os.path.normcase(os.path.normpath(scratch))
-    inside = os.path.normcase(os.path.normpath(target))
-    if not inside.startswith(root.rstrip("\\/") + os.sep):
-        return None
-    return GrantScope(
-        keys=(f"{tool_name}:scratch:{root}",),
-        label="Python scripts in GAIA's scratch folder",
-    )
+    if not path or not folder:
+        return False
+    try:
+        real_path = os.path.realpath(path)
+        real_folder = os.path.realpath(folder)
+    except (OSError, ValueError):
+        return True
+    case_path, case_folder = os.path.normcase(real_path), os.path.normcase(real_folder)
+    try:
+        if case_path != case_folder and (
+            os.path.commonpath([case_path, case_folder]) == case_folder
+        ):
+            return True
+    except ValueError:
+        pass  # different drives or roots: fall through to file identity
+    parent = os.path.dirname(real_path)
+    while True:
+        try:
+            if os.path.samefile(parent, real_folder):
+                return True
+        except OSError:
+            pass
+        up = os.path.dirname(parent)
+        if up == parent:
+            return False
+        parent = up
 
 
 def _first_str(args: Dict[str, Any], names: Sequence[str]) -> str:
@@ -356,5 +370,6 @@ __all__ = [
     "RISK_NOTE_ARG",
     "SCRATCH_ARG",
     "grant_scope",
+    "is_inside_folder",
     "path_argument",
 ]
