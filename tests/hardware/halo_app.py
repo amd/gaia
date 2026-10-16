@@ -24,7 +24,7 @@ def main() -> int:
     from gaia.llm.lemonade_client import LemonadeClient, resolve_ctx_size
 
     lemonade_service.ensure_daemon_owns_lemonade("app", "linux-halo-hw-app")
-    client_id = lemonade_service._HELD_CLIENT
+    client_id = _registered_client_id(lemonade_service)
     if client_id is None:
         print(json.dumps({"error": "the daemon did not accept the registration"}))
         return 1
@@ -44,6 +44,15 @@ def main() -> int:
     text = reply["choices"][0]["message"]["content"]
     print(json.dumps({"client_id": client_id, "reply": text}), flush=True)
     return _wait_for_quit()
+
+
+def _registered_client_id(lemonade_service):
+    """This process's id with its own daemon, under either registration API."""
+    # #5159 replaced the single held id with a renewed lease, one id per daemon.
+    if hasattr(lemonade_service, "_LEASE"):
+        lease = lemonade_service._LEASE
+        return lease.ids.get(None) if lease is not None else None
+    return lemonade_service._HELD_CLIENT
 
 
 def _wait_for_quit() -> int:
