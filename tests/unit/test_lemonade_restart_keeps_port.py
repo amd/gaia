@@ -308,3 +308,30 @@ class TestStartFailuresAreActionable:
 
         with pytest.raises(LemonadeStartError, match="without saying where"):
             lemonade_service.ensure_lemonade_running()
+
+
+class TestGaiaLlmAdvice:
+    """`gaia llm`'s "is Lemonade there?" check never counts the stranger."""
+
+    def test_a_stopped_gaia_server_is_down_whoever_answers_the_default_port(
+        self, lab, stranger
+    ):
+        from gaia.cli import _lemonade_answers
+
+        _first_start(lab)
+
+        assert _lemonade_answers() is False
+        assert stranger.requests == []
+
+    def test_a_running_gaia_server_answers(self, lab, stranger, monkeypatch):
+        from gaia.cli import _lemonade_answers
+
+        running = lab.owner.ensure()
+        probed = []
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_supervisor._probe",
+            lambda client: probed.append(client.port) or True,
+        )
+
+        assert _lemonade_answers() is True
+        assert probed == [running.port]

@@ -216,9 +216,15 @@ def initialize_lemonade_for_agent(
 
 def _lemonade_answers(base_url: str | None = None) -> bool:
     """Whether the Lemonade Server a command uses answers its health check now."""
-    from gaia.llm.lemonade_client import LemonadeClient
+    from gaia.llm.lemonade_client import running_embedded_lemonade_url
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
     from gaia.llm.lemonade_supervisor import _probe
 
+    if gaia_runs_lemonade(base_url):
+        # A stopped GAIA server's stand-in address may be another Lemonade.
+        base_url = running_embedded_lemonade_url()
+        if not base_url:
+            return False
     if base_url:
         client = LemonadeClient(base_url=base_url, keep_alive=True, verbose=False)
     else:
