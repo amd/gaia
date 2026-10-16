@@ -23,7 +23,7 @@ import re as _re
 import threading
 import time as _time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from fastapi import HTTPException
 
@@ -233,19 +233,21 @@ _agent_cache: dict[str, dict] = (
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
 
-# Non-streaming turns are cut off after this long (seconds).
-_CHAT_TIMEOUT_SECONDS = 600.0
-
 _STREAM_TIMEOUT_ENV = "GAIA_STREAM_TIMEOUT"
-_DEFAULT_STREAM_TIMEOUT_SECONDS = 600
+# Longer than one model call may stay silent (an hour of slow local prefill),
+# so a quiet model is always ended by the LLM layer, not by this limit.
+_DEFAULT_STREAM_TIMEOUT_SECONDS = 4500
 _MAX_STREAM_TIMEOUT_SECONDS = 86400
+# How often a waiting turn checks whether it has gone idle.
+_IDLE_POLL_SECONDS = 0.2
 
 
 def _stream_timeout_from_env() -> int:
-    """Resolve the streaming-turn timeout in seconds from ``GAIA_STREAM_TIMEOUT``.
+    """Resolve the turn's no-progress limit in seconds from ``GAIA_STREAM_TIMEOUT``.
 
-    Unset or empty returns the 600 s default. Any other value must be a whole
-    number of seconds from 1 to 86400 (24 h).
+    A turn is stopped only after this long without progress; a turn that keeps
+    making progress has no time limit. Unset or empty returns the 4500 s
+    default. Any other value must be a whole number of seconds from 1 to 86400.
 
     Raises:
         ValueError: the variable is set to a non-integer or out-of-range value.
@@ -1744,20 +1746,75 @@ def _echoes_failed_tool(event: dict, steps: list) -> bool:
     return last.get("success") is False or bool(running)
 
 
-class _UserWaitClock:
-    """Total seconds a stream has spent waiting on the user, open wait included."""
+class _TurnIdleClock:
+    """Seconds a turn has gone without progress.
 
-    def __init__(self) -> None:
-        self._closed = 0.0
-        self._since: Optional[float] = None
+    A running tool or a wait on the user is quiet by design and has its own
+    deadline (the tool's timeout, the prompt's), so neither counts as idle.
+    """
 
-    def update(self, waiting: bool, now: float) -> float:
-        if waiting and self._since is None:
-            self._since = now
-        elif not waiting and self._since is not None:
-            self._closed += now - self._since
-            self._since = None
-        return self._closed + (now - self._since if self._since is not None else 0.0)
+    def __init__(self, now: float) -> None:
+        self._last = now
+
+    def progressed(self, now: float) -> None:
+        self._last = max(self._last, now)
+
+    def idle_for(self, owned_wait: bool, now: float) -> float:
+        if owned_wait:
+            self._last = now
+        return now - self._last
+
+
+def _format_duration(seconds: int) -> str:
+    for unit, size in (("hour", 3600), ("minute", 60)):
+        if seconds >= size and seconds % size == 0:
+            count = seconds // size
+            return f"{count} {unit}{'s' if count != 1 else ''}"
+    return f"{seconds} second{'s' if seconds != 1 else ''}"
+
+
+def _turn_idle_message(seconds: int) -> str:
+    """What the user is told when a turn is stopped for making no progress."""
+    return (
+        f"This turn ran for {_format_duration(seconds)} without progress, so "
+        "GAIA stopped it. Anything it finished before then is kept. Send "
+        '"continue" to pick up where it left off.'
+    )
+
+
+class _ActivityConsole:
+    """Wraps an agent's console and records when the turn last made progress.
+
+    The non-streaming path has no event queue to watch, so every console call
+    counts as progress, and a tool counts as running from its start to its end.
+    """
+
+    _TOOL_START = "print_tool_usage"
+    _TOOL_END = "print_tool_complete"
+
+    def __init__(self, inner: Any, clock: Callable[[], float]) -> None:
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_clock", clock)
+        object.__setattr__(self, "last_progress", clock())
+        object.__setattr__(self, "tool_running", False)
+
+    def __getattr__(self, name: str) -> Any:
+        value = getattr(self._inner, name)
+        if not callable(value):
+            return value
+
+        def _call(*args: Any, **kwargs: Any) -> Any:
+            object.__setattr__(self, "last_progress", self._clock())
+            if name == self._TOOL_START:
+                object.__setattr__(self, "tool_running", True)
+            elif name == self._TOOL_END:
+                object.__setattr__(self, "tool_running", False)
+            return value(*args, **kwargs)
+
+        return _call
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self._inner, name, value)
 
 
 def _canonicalize_user_input_request(event: dict) -> dict:
@@ -2094,8 +2151,11 @@ async def _get_chat_response(
     Runs the synchronous agent in a thread pool executor
     to avoid blocking the async event loop.
     """
-    # Set on timeout so the agent loop stops at its next step boundary.
-    cancel_event = threading.Event()
+    from gaia.agents.base.agent import TurnCancel
+
+    # Set when the turn stops making progress, so the agent loop ends there.
+    cancel_event = TurnCancel()
+    activity_box: dict = {}
 
     def _do_chat():
         # Resolve document IDs to file paths.
@@ -2295,36 +2355,45 @@ async def _get_chat_response(
 
         agent._cancel_event = cancel_event
 
-        # One automatic retry on transient Lemonade failures (model
-        # evicted between turns, network blip).  Mirror of the streaming
-        # path's retry logic so non-streaming clients get the same
-        # recovery behaviour. See _classify_chat_exception for the
-        # detection rules.
+        def _query():
+            # One automatic retry on transient Lemonade failures (model
+            # evicted between turns, network blip).  Mirror of the streaming
+            # path's retry logic so non-streaming clients get the same
+            # recovery behaviour. See _classify_chat_exception for the
+            # detection rules.
+            try:
+                return agent.process_query(request.message)
+            except Exception as first_exc:  # pylint: disable=broad-except
+                classified = _classify_chat_exception(first_exc)
+                if classified is None or not classified.retryable:
+                    raise
+                logger.warning(
+                    "Non-streaming chat hit retryable Lemonade error (%s) — "
+                    "reloading model and retrying once. Original: %s",
+                    type(classified).__name__,
+                    first_exc,
+                )
+                try:
+                    _maybe_load_expected_model(effective)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("Model reload before retry failed: %s", exc)
+                try:
+                    return agent.process_query(request.message)
+                except Exception as second_exc:  # pylint: disable=broad-except
+                    second_classified = _classify_chat_exception(second_exc)
+                    if second_classified is not None:
+                        raise type(second_exc)(
+                            second_classified.user_message
+                        ) from second_exc
+                    raise
+
+        activity = _ActivityConsole(agent.console, _time.monotonic)
+        agent.console = activity
+        activity_box["console"] = activity
         try:
-            result = agent.process_query(request.message)
-        except Exception as first_exc:  # pylint: disable=broad-except
-            classified = _classify_chat_exception(first_exc)
-            if classified is None or not classified.retryable:
-                raise
-            logger.warning(
-                "Non-streaming chat hit retryable Lemonade error (%s) — "
-                "reloading model and retrying once. Original: %s",
-                type(classified).__name__,
-                first_exc,
-            )
-            try:
-                _maybe_load_expected_model(effective)
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("Model reload before retry failed: %s", exc)
-            try:
-                result = agent.process_query(request.message)
-            except Exception as second_exc:  # pylint: disable=broad-except
-                second_classified = _classify_chat_exception(second_exc)
-                if second_classified is not None:
-                    raise type(second_exc)(
-                        second_classified.user_message
-                    ) from second_exc
-                raise
+            result = _query()
+        finally:
+            agent.console = activity._inner
 
         if isinstance(result, dict):
             if model_messages is not None:
@@ -2341,22 +2410,40 @@ async def _get_chat_response(
 
     try:
         worker = asyncio.get_running_loop().run_in_executor(None, _do_chat)
+        idle = _TurnIdleClock(_time.monotonic())
+        idle_message = None
         try:
-            done, _ = await asyncio.wait({worker}, timeout=_CHAT_TIMEOUT_SECONDS)
+            while not worker.done():
+                await asyncio.wait({worker}, timeout=_IDLE_POLL_SECONDS)
+                activity = activity_box.get("console")
+                # Flag first: a tool's end stamps its progress before clearing it.
+                owned_wait = activity is not None and activity.tool_running
+                if activity is not None:
+                    idle.progressed(activity.last_progress)
+                if (
+                    not worker.done()
+                    and idle.idle_for(owned_wait, _time.monotonic())
+                    > _STREAM_TIMEOUT_SECONDS
+                ):
+                    idle_message = _turn_idle_message(_STREAM_TIMEOUT_SECONDS)
+                    logger.error(
+                        "Chat turn made no progress for %ds; stopping it",
+                        _STREAM_TIMEOUT_SECONDS,
+                    )
+                    cancel_event.cancel(idle_message)
+                    break
         finally:
             if not worker.done():
                 cancel_event.set()
                 # The caller's session lock must outlive the worker thread.
                 await asyncio.wait({worker})
-        if not done:
-            late_error = worker.exception()
-            if late_error is not None:
-                logger.warning("Timed-out chat worker then failed: %s", late_error)
-            raise asyncio.TimeoutError
-        return _agent_ui_wording(worker.result())
-    except asyncio.TimeoutError:
-        logger.error("Chat response timed out after %s seconds", _CHAT_TIMEOUT_SECONDS)
-        return "I took too long thinking about that one. Try breaking your question into simpler parts and I'll do my best."
+        if idle_message is None:
+            return _agent_ui_wording(worker.result())
+        late_error = worker.exception()
+        if late_error is not None:
+            logger.warning("Stopped chat worker then failed: %s", late_error)
+            return idle_message
+        return _agent_ui_wording(worker.result() or idle_message)
     except HTTPException:
         # A deliberate, actionable rejection (e.g. the email non-streaming
         # scope cut, #2109) — propagate as a real HTTP status, never
@@ -2403,10 +2490,12 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
     sse_handler = None
     producer = None
     cleanup_done = False
-    # Cooperative cancel signal for the producer's agent loop. Set on stream
-    # timeout / client disconnect so the agent bails at its next step boundary
-    # and the producer thread is actually reaped (see agent._cancel_event).
-    cancel_event = threading.Event()
+    from gaia.agents.base.agent import TurnCancel
+
+    # Cooperative cancel signal for the producer's agent loop. Set when the
+    # turn stops making progress or the client disconnects, so the agent bails
+    # at its next step boundary and the producer thread is actually reaped.
+    cancel_event = TurnCancel()
 
     async def _cleanup_stream():
         nonlocal cleanup_done
@@ -2940,6 +3029,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             finally:
                 sse_handler.signal_done()
 
+        # The limit is on going without progress, not on total time: a long
+        # task that keeps making progress runs to the end.
+        _idle = _TurnIdleClock(_time.monotonic())
+        idle_message = None
         producer = threading.Thread(target=_run_agent, daemon=True)
         producer.start()
 
@@ -2953,9 +3046,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         step_id = 0
         idle_cycles = 0
         _stream_start = _time.time()
-        # Time spent waiting on a request_user_input answer is the user's, not
-        # the turn's; that wait has its own deadline.
-        _user_wait = _UserWaitClock()
 
         def _blocked_policy_steps():
             return [
@@ -2993,20 +3083,20 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             return persisted_policy_block_msg_id
 
         while True:
-            # Guard: total timeout for the streaming response
-            _now = _time.time()
-            _waited = _user_wait.update(sse_handler.awaiting_user_input(), _now)
-            if _now - _stream_start - _waited > _STREAM_TIMEOUT_SECONDS:
+            _owned_wait = (
+                sse_handler.awaiting_user_input() or sse_handler.tool_running()
+            )
+            if _idle.idle_for(_owned_wait, _time.monotonic()) > _STREAM_TIMEOUT_SECONDS:
                 logger.error(
-                    "Streaming response timed out after %ds", _STREAM_TIMEOUT_SECONDS
+                    "Turn made no progress for %ds (%s); stopping it",
+                    _STREAM_TIMEOUT_SECONDS,
+                    _STREAM_TIMEOUT_ENV,
                 )
+                idle_message = _turn_idle_message(_STREAM_TIMEOUT_SECONDS)
+                # Before cleanup sets the plain cancel, so the agent says why.
+                cancel_event.cancel(idle_message)
                 timeout_event = json.dumps(
-                    {
-                        "type": "agent_error",
-                        "content": f"Response timed out after {_STREAM_TIMEOUT_SECONDS}s. "
-                        "Try a simpler query, break it into smaller questions, "
-                        f"or raise {_STREAM_TIMEOUT_ENV} and restart GAIA.",
-                    }
+                    {"type": "agent_error", "content": idle_message}
                 )
                 yield f"data: {timeout_event}\n\n"
                 break
@@ -3015,6 +3105,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     None, lambda: sse_handler.event_queue.get(timeout=0.2)
                 )
                 idle_cycles = 0
+                _idle.progressed(_time.monotonic())
                 if event is None:
                     # Sentinel - agent is done
                     break
@@ -3251,6 +3342,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         if not full_response and result_holder["answer"]:
             full_response = _agent_ui_wording(result_holder["answer"])
             # Send as answer event since it wasn't streamed
+            yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
+
+        # Stopped mid-generation, the agent ends with no text; say why here.
+        if idle_message and not full_response:
+            full_response = idle_message
             yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
 
         # Clean LLM output artifacts before DB storage.

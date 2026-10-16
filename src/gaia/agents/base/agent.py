@@ -524,6 +524,23 @@ class ToolCallTruncated(ValueError):
         )
 
 
+class TurnCancel(threading.Event):
+    """A turn's cancel signal that can say why the turn was stopped.
+
+    ``message`` is the answer the turn ends with when it stops at a step
+    boundary. ``None`` means a plain stop (the user's Stop, a disconnect).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.message: Optional[str] = None
+
+    def cancel(self, message: str) -> None:
+        """Stop the turn and end it with *message*."""
+        self.message = message
+        self.set()
+
+
 class _UserWaitClock:
     """Time a tool body spends blocked on the user, which its timeout excludes."""
 
@@ -8838,10 +8855,9 @@ Do NOT wrap conversational replies in JSON.
                     steps_taken,
                     steps_limit,
                 )
-                # Neutral wording: cancel now has several triggers (a user
-                # pressing Stop, an API client disconnecting, a stream timeout),
-                # and this text is persisted with the turn.
-                final_answer = (
+                # A limit that stopped the turn says so; a plain stop (Stop,
+                # a disconnect) gets the neutral wording.
+                final_answer = getattr(cancel_event, "message", None) or (
                     "The request was stopped before it finished. Try again, or "
                     "break it into smaller steps if it was taking too long."
                 )

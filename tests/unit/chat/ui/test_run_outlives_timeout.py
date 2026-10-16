@@ -87,7 +87,7 @@ async def test_non_streaming_timeout_holds_session_until_worker_exits(runtime):
     state = http_request.app.state
     sid, agent = _seed(db)
 
-    with patch.object(helpers, "_CHAT_TIMEOUT_SECONDS", 0.1):
+    with patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 0.1):
         task = asyncio.create_task(
             chat.send_message(
                 ChatRequest(session_id=sid, message="hi", stream=False),
@@ -108,7 +108,8 @@ async def test_non_streaming_timeout_holds_session_until_worker_exits(runtime):
             agent.release.set()
         response = await asyncio.wait_for(task, timeout=5)
 
-    assert "took too long" in response.content
+    # The worker finished after being told to stop; its answer is kept.
+    assert response.content == "late answer"
     assert not state.session_locks[sid].locked()
     assert not state.chat_semaphore.locked()
 
