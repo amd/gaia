@@ -8,7 +8,10 @@ UI's boot-preload call, answers one prompt, prints one JSON line, then waits
 for ``quit`` on stdin. Exiting normally releases the registration through the
 same ``atexit`` hook the app uses, so the daemon sees an app close.
 
-Usage: python halo_app.py <model>
+With ``--register-only`` it registers and waits, loading nothing: the
+registration alone is what makes the daemon bring a stopped server back.
+
+Usage: python halo_app.py <model> [--register-only]
 """
 
 import json
@@ -25,6 +28,9 @@ def main() -> int:
     if client_id is None:
         print(json.dumps({"error": "the daemon did not accept the registration"}))
         return 1
+    if "--register-only" in sys.argv:
+        print(json.dumps({"client_id": client_id}), flush=True)
+        return _wait_for_quit()
     # The Agent UI warms the model through the daemon-started server first.
     lemonade_service.ensure_lemonade_running()
     client = LemonadeClient(verbose=False)
@@ -37,6 +43,10 @@ def main() -> int:
     )
     text = reply["choices"][0]["message"]["content"]
     print(json.dumps({"client_id": client_id, "reply": text}), flush=True)
+    return _wait_for_quit()
+
+
+def _wait_for_quit() -> int:
     for line in sys.stdin:
         if line.strip() == "quit":
             break
