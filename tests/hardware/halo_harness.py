@@ -374,7 +374,9 @@ class Scenario:
         for pattern in ("*.log", "**/*.log", "**/state.json", "**/last_port.json"):
             for path in self.root.glob(pattern):
                 if path.is_file() and "models--" not in str(path):
-                    target = dest / path.relative_to(self.root)
+                    # upload-artifact drops hidden paths such as .gaia/.
+                    rel = str(path.relative_to(self.root)).replace(".gaia", "dot-gaia")
+                    target = dest / rel
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(path, target)
         shutil.rmtree(self.root, ignore_errors=True)

@@ -223,6 +223,7 @@ def _save_idle_timeout(s: Scenario, minutes: int) -> None:
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason="`gaia config set` routes every lemonade_* key to the Lemonade-choice "
     "handler, which rejects lemonade_idle_timeout_minutes; the docs tell users "
     "to set it this way",
@@ -247,13 +248,18 @@ def test_eu3_a_relaunched_app_gets_the_same_port(fresh_install):
     assert (
         stopped and not s.server_running()
     ), "the server is not stopped, so a relaunch would not restart it"
-    app = s.spawn([sys.executable, str(HERE / "halo_app.py"), SMALL_MODEL], "app2.log")
+    app = s.spawn(
+        [sys.executable, str(HERE / "halo_app.py"), SMALL_MODEL, "--register-only"],
+        "app2.log",
+    )
     line = app.stdout.readline()
     assert line, f"the relaunched app failed (code {app.poll()}); see app2.log"
-    pid, port, _ = s.server()
+    (pid, port), took = wait_until(
+        s.server_running, 120, "the daemon to restart the server for the app"
+    )
     evidence(
-        f"- after the idle stop (lemond pid {stopped} gone), relaunching an app "
-        f"started lemond pid {pid}"
+        f"- after the idle stop (lemond pid {stopped} gone), an app registering "
+        f"brought lemond pid {pid} back in {took:.0f}s"
     )
     evidence(f"- port before {before}, after {port}")
     app.stdin.write("quit\n")
@@ -264,9 +270,39 @@ def test_eu3_a_relaunched_app_gets_the_same_port(fresh_install):
     evidence("- PASS: a new server process, on the same port")
 
 
+_ENSURE_RUNNING = """
+from gaia.llm.lemonade_service import ensure_lemonade_running
+state = ensure_lemonade_running()
+print("started", state.started, state.base_url)
+"""
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="LemonadeSupervisor._ensure_embedded reads EmbeddedLemonadeOwner."
+    "started_pid, which #5118 removed, so the daemon's /lemonade/start answers "
+    "500 whenever GAIA's server is down (e.g. after the idle timeout)",
+)
+def test_starting_a_stopped_server_through_the_daemon_succeeds(fresh_install):
+    s = fresh_install
+    stop = s.gaia("lemonade", "embedded", "stop", timeout=120, check=False)
+    if stop.returncode != 0 or s.server_running():
+        raise RuntimeError(f"could not stop GAIA's server first: {stop.output}")
+    result = s.run([sys.executable, "-c", _ENSURE_RUNNING], check=False, timeout=300)
+    last = (result.output.strip().splitlines() or ["(no output)"])[-1]
+    evidence(
+        f"- KNOWN BUG: `ensure_lemonade_running()` with GAIA's server stopped: "
+        f"exit {result.returncode}, `{last[:200]}`; "
+        f"server running afterwards: {bool(s.server_running())}"
+    )
+    assert result.returncode == 0, result.output
+
+
 def test_eu2_daemon_stop_stops_the_server_and_eu3_port_survives(fresh_install):
     s = fresh_install
     _section("EU-2/EU-3: `gaia daemon stop` stops the server; restart keeps the port")
+    wait_until(s.server_running, 120, "GAIA's server to be up before the stop")
     pid, port, _ = s.server()
     daemon = s.daemon_pid()
     s.gaia("daemon", "stop", timeout=120)
@@ -415,6 +451,7 @@ def test_eu4_too_little_memory_is_refused_with_a_clear_message(gemma_install):
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason="gaia llm's preload (LemonadeManager._try_preload_with_ctx) re-wraps "
     "InsufficientMemoryError as a generic 'restart the server' error, so the "
     "user never sees how much memory is needed or what to close",
