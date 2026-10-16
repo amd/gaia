@@ -27,7 +27,7 @@ from gaia.agents.base.tool_grants import (
     grant_scope,
     is_inside_folder,
 )
-from gaia.agents.base.tools import tool
+from gaia.agents.base.tools import tool as register_tool
 from gaia.agents.tools.shell_tools import (
     NOTE_PUSH,
     NOTE_UNINSPECTABLE,
@@ -974,13 +974,13 @@ class _RunProbe(scratch_mod._Probe):
         super()._register_tools()
         agent = self
 
-        @tool
+        @register_tool
         def run_shell_command(command: str, working_directory: str = "") -> dict:
             """Probe shell."""
             agent.ran.append(("run_shell_command", command, working_directory))
             return {"status": "success", "return_code": 0}
 
-        @tool
+        @register_tool
         def execute_python_file(file_path: str, args: str = "") -> dict:
             """Probe runner with arguments."""
             agent.ran.append(("execute_python_file", file_path, args))
