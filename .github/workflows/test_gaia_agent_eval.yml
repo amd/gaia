@@ -1,9 +1,11 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# Judged eval for the FLAGSHIP gaia agent — on gaia PRs (subset), on demand
-# (full), and as a release gate via workflow_call. The nightly full run of these
-# categories happens in eval_flagship.yml's gaia-* lanes, in parallel.
+# Judged eval for the FLAGSHIP gaia agent — on demand (full), and as a release
+# gate via workflow_call from the gaia agent release (agent-pkg-gaia-* tags).
+# Not on PRs: evals run only on releases. Every core release and RC tag runs
+# these categories in eval_flagship.yml's gaia-* lanes, in parallel; that is why
+# this serial run is not also triggered on v* tags.
 #
 # Drives `gaia eval agent --agent-type gaia` over the committed scenario corpus
 # (eval/scenarios/gaia_*, 16 categories, ~240 scenarios) against the Agent UI
@@ -34,7 +36,7 @@
 # a loud "first adoption — no baseline" notice per category and skips the diff;
 # once a baseline is committed, `gaia eval agent --compare` exit 2 surfaces as
 # a ::warning:: in report mode and fails the build under `enforce: true` (the
-# dispatch input) or an `[eval-enforce]` PR title tag.
+# dispatch input).
 #
 # MEMORY IS ON — a deliberate deviation from every other eval workflow (they
 # set GAIA_MEMORY_DISABLED=1). Persistent memory is core to the flagship
@@ -64,44 +66,10 @@
 # documents the scar). Serial execution across the eval workflows is enforced
 # by the shared `lemonade-eval` concurrency group on the JOB (never also at
 # the workflow level — that is a self-deadlock; see the concurrency notes).
-#
-# PATHS deliberately do NOT include `src/gaia/eval/**`: the email + gemma
-# consolidation workflows already trigger on it, and doubling the load on the
-# single serial Lemonade slot for the same machinery change buys nothing. For
-# a core-eval change you suspect moves gaia behavior, `workflow_dispatch` this
-# workflow against the branch.
-#
-# FORKS AND DRAFTS are skipped by the job-level `if` (unreviewed code must not
-# reach the lab pool; fork PRs carry no ANTHROPIC_API_KEY anyway). The
-# `skip-gaia-eval` label is the documented opt-OUT for a gaia PR that provably
-# cannot move behavior (docs, comments, packaging metadata).
 
 name: GAIA Agent Eval (judged scenarios, report mode)
 
 on:
-  # Pre-merge coverage for flagship behavior changes — PR subset only: the
-  # cheap tiers (t1+t2) of gaia_core, gaia_shell and gaia_tool_selection, plus
-  # gaia_shell's security scenarios (~21), filtered via --tag (category+tags compose in
-  # find_scenarios: tags OR within the list, AND with category).
-  pull_request:
-    # No `branches:` filter: it matches the PR BASE, so `[ main ]` skips
-    # stacked PRs (#2767). The `paths:` below are what scope this workflow.
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      # The flagship agent itself (prompts, tools, gate policy, packaging
-      # gate-readers this workflow invokes).
-      - 'hub/agents/gaia/python/**'
-      # GaiaAgent subclasses ChatAgent — a chat prompt/tool change moves it.
-      - 'hub/agents/chat/python/**'
-      # The judged corpus + its ground-truth contract.
-      - 'eval/scenarios/gaia_*/**'
-      - 'eval/scenarios/GAIA_FIXTURE_VALUES.md'
-      # Fixtures, thresholds manifests, fixture hub/server.
-      - 'tests/fixtures/gaia/**'
-      - '.github/workflows/test_gaia_agent_eval.yml'
-      - '.github/actions/setup-venv/**'
-      - '.github/actions/install-lemonade/**'
-      - 'installer/scripts/ensure-lemonade-running.ps1'
   # Manual trigger — the FULL run (all 16 categories, all tiers). This is also
   # how the first Gemma baselines get captured on the runner.
   workflow_dispatch:
@@ -179,11 +147,8 @@ env:
   # `flaky` is distinguishable from `stable-fail` — n=1 cannot express it.
   # Cost and wall clock scale linearly with this number.
   EVAL_ITERATIONS: ${{ inputs.iterations || '1' }}
-  # A dispatch input always wins; otherwise `[eval-enforce]` in the PR TITLE
-  # opts in pre-merge (workflow_dispatch is only offered once this file is on
-  # the default branch). Retitling alone does not re-run the gate — add the
-  # tag, then push.
-  ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.pull_request.title, '[eval-enforce]') && 'true') || 'false' }}
+  # Only a dispatch can enforce; every other run reports.
+  ENFORCE: ${{ github.event.inputs.enforce || 'false' }}
   BACKEND_URL: http://127.0.0.1:4200
   BASELINE_DIR: tests/fixtures/eval_baselines/gaia-gemma-4-e4b
   # Fixture server port — the corpus hardcodes http://127.0.0.1:8765

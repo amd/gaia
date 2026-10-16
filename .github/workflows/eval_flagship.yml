@@ -5,8 +5,8 @@
 # agent users actually meet.
 #
 # Unit tests cover code paths, not model behavior, so this is the only thing that
-# catches a behavioral regression — which is why CLAUDE.md requires a run against
-# the paths below before an LLM-affecting change lands.
+# catches a behavioral regression. It runs on release and RC tags (see `on:`);
+# CLAUDE.md says how an LLM-affecting PR relies on the next RC's run.
 #
 # Runner-only by construction. `gaia eval agent` drives the real GAIA UI backend
 # against a real Lemonade Server on AMD hardware; a GitHub-hosted runner has
@@ -63,10 +63,8 @@
 #
 # So the default posture is REPORT: every category is compared, the full diff is
 # printed, the scorecards are uploaded as an artifact, and a regression surfaces
-# as a `::warning::` annotation. Make it blocking either by dispatching with
-# `enforce: true`, or — since workflow_dispatch is only offered for workflows
-# already on the default branch — by putting `[eval-enforce]` in the PR TITLE,
-# which works on a branch before this file has merged.
+# as a `::warning::` annotation. Make it blocking by dispatching with
+# `enforce: true`; a tag run always reports.
 #
 # This mirrors how intentional regressions are handled elsewhere: the
 # `--allow-regression` flag in src/gaia/eval/scorecard_gate.py prints a
@@ -145,38 +143,32 @@
 # refuses to start without it on PATH. Installed below via npm, as
 # docs/guides/eval-ci.mdx prescribes.
 #
-# WHAT TRIGGERS IT. A `pull_request` path filter, so the gate fires on the PR's
-# own base..head diff and only when that diff touches an LLM-affecting path. It
-# used to be a `push` filter, which matches the files in the PUSH — so merging
-# main into a branch replayed all of main's churn through the filter and fired
-# this multi-hour gate on PRs containing no Python at all (#2807 and #2809 are
-# C++-only and both wore its red X). Scoping is the only thing that changed: the
-# path list is untouched, and a PR that does touch one still runs and still
-# fails loudly.
+# WHAT TRIGGERS IT. Release and RC tags, and manual dispatch — see `on:` below.
+# To measure a branch before it is tagged, `gh workflow run eval_flagship.yml
+# --ref <branch>`.
 #
-# Two consequences of leaving `push` behind, both intended. A branch with no PR
-# no longer triggers the gate — use `workflow_dispatch --ref <branch>`. And the
-# checkout is now `refs/pull/N/merge`, so the eval measures main+PR rather than
-# the branch head, which is the thing about to land.
-#
-# FORKS AND DRAFTS. Both are skipped by the job-level `if` below, not silently.
-# A fork PR could not pass anyway — ANTHROPIC_API_KEY, the eval judge, is not
-# exposed to fork PRs — and must not put unreviewed code on the lab pool. For
-# the PRs that do run the key is present; if it ever is not, the preflight fails
-# with instructions instead of running a judge-less eval that would produce a
-# meaningless scorecard.
+# FORKS AND DRAFTS. The job-level `if` guards below still skip fork and draft
+# PRs, in case a `pull_request` trigger is ever added back: a fork PR could not
+# pass (ANTHROPIC_API_KEY is not exposed to it) and must not put unreviewed code
+# on the lab pool. If the key is ever missing, the preflight fails with
+# instructions instead of running a judge-less eval.
 
 name: Agent Eval — flagship
 
 on:
-  # Nightly against the default branch. PR runs are path-filtered, so environment
-  # drift — a Lemonade version bump, a model re-quantisation, a driver or runner
-  # image change — alters nothing in the repo and therefore triggers nothing. The
-  # nightly is the only thing that catches that class, and it files an issue when
-  # a lane does not pass so the regression lands in the tracker instead of dying
-  # as an annotation nobody reads.
-  schedule:
-    - cron: '17 8 * * *'
+  # Release and release-candidate tags only (v0.24.1, v0.25.0-rc14), plus manual
+  # dispatch. Not per-PR and not nightly: the Strix Halo pool is too scarce for
+  # either - per-PR runs queued for hours and had to be cancelled. An
+  # LLM-affecting PR names the categories to watch; the next RC's run covers it.
+  # A tag run checks out the tagged commit, compares it with the committed
+  # baseline in report mode, and files an issue when it does not pass
+  # (release-escalation below). `v*.*.*` already matches the -rc tags; the
+  # second pattern says so out loud. Agent-package tags (agent-pkg-*) match
+  # neither.
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-rc*'
   workflow_dispatch:
     inputs:
       enforce:
@@ -189,54 +181,14 @@ on:
         required: false
         default: 'claude-sonnet-4-6'
       deep_diagnostics:
-        description: 'Run the full embedder-failure ladder (purges the model from disk, unloads all models). Off on PRs - it costs ~7 extra min and disturbs other jobs on the box.'
+        description: 'Run the full embedder-failure ladder (purges the model from disk, unloads all models). Off by default - it costs ~7 extra min and disturbs other jobs on the box.'
         required: false
         type: boolean
         default: false
       task_suite:
-        description: 'Space-separated suites from eval/tasks/tasks.json (PRs run core; the nightly runs everyday therock; adversarial is the traps; full is everything)'
+        description: 'Space-separated suites from eval/tasks/tasks.json (a tag run uses everyday therock; adversarial is the traps; full is everything)'
         required: false
         default: 'core'
-  # `pull_request`, NOT `push`. A `push` path filter matches the files in the
-  # PUSH, so merging main into a branch replays all of main's churn through the
-  # filter — which is how #2807 and #2809, both pure C++ PRs with no Python in
-  # their diff at all, ended up wearing a red X from an LLM-quality gate and
-  # burning hours of the scarcest runner pool. `pull_request` filters on the
-  # PR's own base..head diff, so the gate fires only when the PR itself edits a
-  # path below. The `types:` list follows test_email_agent_eval.yml;
-  # `ready_for_review` is what runs the gate on a PR
-  # that was opened as a draft (see the draft clause in the job `if:`).
-  #
-  # THE PATH LIST BELOW IS UNCHANGED ON PURPOSE. This change is mechanism only:
-  # it makes the filter mean what it already says. Note the list now includes
-  # `hub/agents/*/python/**`, so 18 hub packages newly qualify for a
-  # single-slot pool — scoping to the PR diff is what keeps that affordable.
-  pull_request:
-    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      # The surfaces that move flagship behavior.
-      - 'src/gaia/agents/base/agent.py'
-      - 'src/gaia/agents/registry.py'
-      - 'src/gaia/llm/lemonade_client.py'
-      - 'src/gaia/llm/factory.py'
-      - 'hub/agents/*/python/**'
-      - 'tests/fixtures/eval_baselines/**'
-      - '.github/workflows/eval_flagship.yml'
-      # The lane map decides which categories run at all, so an edit that orphans
-      # one has to be able to trigger the gate that would notice.
-      - 'eval/ci_lanes.json'
-      - 'util/eval_lane_matrix.py'
-      - 'tests/fixtures/gaia/stage_eval_env.py'
-      # In-core agents that carry their own model_id, plus the prompt/tool
-      # surfaces CLAUDE.md lists as eval-requiring — a tool docstring edit
-      # changes the JSON tool schema and is exactly what tool_selection scores.
-      # (ChatAgent is not listed: it now lives under hub/agents/chat/python/,
-      # already covered above.)
-      - 'src/gaia/agents/tools/**'
-      - 'src/gaia/chat/**'
-      - 'src/gaia/eval/flagship_tasks.py'
-      - 'eval/tasks/**'
 
 # NO WORKFLOW-LEVEL CONCURRENCY, deliberately. A group declared here is held by
 # the whole run, so every lane would wait on the one the first lane took and the
@@ -253,10 +205,10 @@ permissions:
   contents: read
 
 env:
-  # One scorecard per ci_lanes.json category, copied unedited from a real nightly
+  # One scorecard per ci_lanes.json category, copied unedited from a real run
   # on this pool (meta.json names the run). Captured under EVAL_MODEL below; a
   # run under any other driver is not comparable to it. Replace the files from a
-  # newer nightly; never edit a number in them.
+  # newer tag or dispatch run; never edit a number in them.
   BASELINE_DIR: tests/fixtures/eval_baselines/gaia-flagship
   # THE LANE MAP IS THE SOURCE OF TRUTH: eval/ci_lanes.json. The `lanes` job below
   # reads it, checks it, and hands each lane its own category list as
@@ -294,16 +246,8 @@ env:
   # `setup.index_documents` block 403s and scores as a failure (#3585).
   # Declares the checkout's corpus, nothing wider.
   GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
-  # A dispatch input always wins. Otherwise `[eval-enforce]` in the PR TITLE opts
-  # in — workflow_dispatch is not offered until this file is on the default
-  # branch, so without this there is no way to enforce pre-merge. Reads the PR
-  # title, not `head_commit.message`: that context exists only on `push`, so it
-  # is permanently null now that this triggers on `pull_request`.
-  #
-  # `edited` is deliberately NOT in the `types:` above — a title tweak must not
-  # be able to launch a multi-hour run on the shared slot. So retitling alone
-  # does not re-run the gate: add the tag, then push (or close/reopen).
-  ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.pull_request.title, '[eval-enforce]') && 'true') || 'false' }}
+  # Only a dispatch can enforce; a tag run compares with the baseline and reports.
+  ENFORCE: ${{ github.event.inputs.enforce || 'false' }}
   # PINNED, and that is not a stale value to bump. `--model` is not a judge-only
   # knob: runner.py passes it to `claude -p`, which DRIVES every scenario as well
   # as scoring it. So the driver is part of the agent under test, and the
@@ -356,6 +300,21 @@ env:
   GAIA_EVAL_SCRIPTED_USER: '1'
 
 jobs:
+  # An RC tag annotated with `[skip eval]` skips every lane below; a final
+  # release, a lightweight tag and a dispatch always run (util/eval_tag_gate.py).
+  # Hosted and seconds long, so the decision costs no lab-pool time.
+  eval-gate:
+    name: Eval gate (release tag)
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Read the tag annotation
+        id: gate
+        run: python util/eval_tag_gate.py
+
   # Build the lane matrix, and refuse to build a bad one. Runs on a hosted runner
   # in seconds, BEFORE anything reaches the scarce AMD pool, so a broken lane map
   # costs nothing to discover.
@@ -368,6 +327,10 @@ jobs:
   # left to a comment nobody re-reads.
   lanes:
     name: Resolve the lane matrix
+    needs: eval-gate
+    if: >-
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
@@ -394,28 +357,30 @@ jobs:
   # measured", never a regression. Memory is off here, as it is outside the
   # memory and gaia_* lanes.
   #
-  # Which suites: a PR runs `core` (the traps, ~7 tasks); the nightly runs
-  # `everyday` (the 14 tasks the published model rankings cite) and `therock`
-  # (four real fixes in a 144K-line repo). A dispatch runs the suites it names.
-  # Each suite is judged and gated on its own against
+  # Which suites: a release or RC tag runs `everyday` (the 14 tasks the
+  # published model rankings cite) and `therock` (four real fixes in a
+  # 144K-line repo). A dispatch runs the suites it names (default `core`, the
+  # traps, ~7 tasks). Each suite is judged and gated on its own against
   # eval/tasks/expectations/<model>.<suite>.json once they are committed (from
   # `gaia eval tasks propose` over repeated TASK_MODEL runs on this pool); until
-  # then the gate reports only. A nightly failure files an issue naming the suite
-  # (nightly-escalation below). PRs also run TASK_MODEL, so its 23 GB download
-  # is part of every PR's budget.
+  # then the gate reports only. A failing tag run files an issue naming the
+  # suite (release-escalation below).
   #
   # A lane in everything but the matrix. It stays its own job because its
   # steps are a different shape - embedded Lemonade, `gaia eval tasks` - not
   # because it is ordered against the others; it runs alongside them.
   flagship-tasks:
     name: Scenario eval - outcomes
+    needs: eval-gate
     outputs:
       failed_suites: ${{ steps.gate.outputs.failed }}
     if: >-
-      github.event_name != 'pull_request' ||
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true' &&
+      (github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.pull_request.draft == false ||
-      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))))
     concurrency:
       group: ${{ github.workflow }}-outcomes-${{ github.ref }}
       cancel-in-progress: false
@@ -433,7 +398,7 @@ jobs:
       # through PATH, which a runner's own setup can put ahead of the venv.
       VENV_PY: ${{ github.workspace }}\.venv\Scripts\python.exe
       VENV_GAIA: ${{ github.workspace }}\.venv\Scripts\gaia.exe
-      TASK_SUITES: ${{ github.event.inputs.task_suite || (github.event_name == 'schedule' && 'everyday therock') || 'core' }}
+      TASK_SUITES: ${{ github.event.inputs.task_suite || (github.event_name == 'push' && 'everyday therock') || 'core' }}
       # The local model the expectations were measured on. Changing it means
       # measuring and committing new expectations for it first.
       TASK_MODEL: Qwen3.6-35B-A3B-GGUF
@@ -625,7 +590,7 @@ jobs:
 
   agent-eval:
     name: Scenario eval - ${{ matrix.lane }}
-    needs: lanes
+    needs: [eval-gate, lanes]
     strategy:
       # One lane's failure must not cancel the others. They measure different
       # categories on different machines, and a lane that dies is exactly when
@@ -655,6 +620,8 @@ jobs:
     # Kept flat-indented on purpose: a YAML folded scalar preserves newlines on
     # more-indented lines, and an `if:` expression must fold to a single line.
     if: >-
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true' && needs.lanes.result == 'success' &&
       (github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.pull_request.draft == false ||
@@ -1035,7 +1002,7 @@ jobs:
           $categories = ($env:EVAL_CATEGORIES -split '\s+') | Where-Object { $_ }
           if (-not (Test-Path $env:BASELINE_DIR)) {
             if ($env:ENFORCE -eq 'true') {
-              Write-Host "::error::enforce=true but no baseline exists at $env:BASELINE_DIR, so there is nothing to enforce against and every category would pass by default. Land a flagship baseline first (run the eval on this hardware and commit the scorecards as $env:BASELINE_DIR\scorecard_<category>.json), or re-run without [eval-enforce]."
+              Write-Host "::error::enforce=true but no baseline exists at $env:BASELINE_DIR, so there is nothing to enforce against and every category would pass by default. Land a flagship baseline first (run the eval on this hardware and commit the scorecards as $env:BASELINE_DIR\scorecard_<category>.json), or re-dispatch with enforce: false."
               exit 1
             }
             Write-Host "::warning::NO BASELINE COMMITTED. Regression detection is OFF for this run: the eval still measures every category and uploads its scorecards, but nothing compares them to a known-good run. Restore the flagship baseline in $env:BASELINE_DIR."
@@ -1045,9 +1012,9 @@ jobs:
               $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
               if (-not (Test-Path $baseline)) {
                 # A category added since the baseline was captured has none until
-                # its first nightly; that is reported, and never enforced against.
+                # its first tag run; that is reported, and never enforced against.
                 if ($env:ENFORCE -eq 'true') {
-                  Write-Host "::error::enforce=true but there is no baseline at $baseline, so '$category' would pass by default. Commit its scorecard from a nightly on this hardware first, or re-run without [eval-enforce]."
+                  Write-Host "::error::enforce=true but there is no baseline at $baseline, so '$category' would pass by default. Commit its scorecard from a run on this hardware first, or re-dispatch with enforce: false."
                   exit 1
                 }
                 Write-Host "::warning::${category}: NOT COMPARED - no baseline at $baseline yet. The category still runs and its scorecard is uploaded; commit that scorecard as the baseline."
@@ -1264,7 +1231,7 @@ jobs:
             Show-LemonadeTaskLog | Out-Null
             "EMBEDDER_OK=false" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
             $level = if ($env:ENFORCE -eq 'true') { 'error' } else { 'warning' }
-            Write-Host "::${level}::The RAG embedder $embeddingModel will not load on this runner - a known Strix Halo limitation tracked in #3016, NOT a fault in this PR. The chat model loaded and served over the same llama-server binary earlier in this step, and the same embedder loads fine on the Strix Point boxes, so llama-server works here and the gap is specific to the embeddings path on this SoC. Re-running this gate will not clear it. rag_quality and context_retention cannot be measured at all; tool_selection WILL still run, but only its two corpus-free scenarios (no_tools_needed, smart_discovery) can produce a measurement - the other three index documents and need the same embedder. The deeper rungs (purge the model from disk, load without --ubatch-size 2048, load with everything else unloaded) are skipped on PR runs on purpose because they disturb other jobs on this shared box - re-dispatch with deep_diagnostics: true if you need the full elimination ladder."
+            Write-Host "::${level}::The RAG embedder $embeddingModel will not load on this runner - a known Strix Halo limitation tracked in #3016, NOT a fault in the code under test. The chat model loaded and served over the same llama-server binary earlier in this step, and the same embedder loads fine on the Strix Point boxes, so llama-server works here and the gap is specific to the embeddings path on this SoC. Re-running this gate will not clear it. rag_quality and context_retention cannot be measured at all; tool_selection WILL still run, but only its two corpus-free scenarios (no_tools_needed, smart_discovery) can produce a measurement - the other three index documents and need the same embedder. The deeper rungs (purge the model from disk, load without --ubatch-size 2048, load with everything else unloaded) are skipped by default on purpose because they disturb other jobs on this shared box - re-dispatch with deep_diagnostics: true if you need the full elimination ladder."
             exit 0
           }
 
@@ -1990,7 +1957,7 @@ jobs:
   aggregate:
     name: Scenario eval - all lanes
     needs: [lanes, agent-eval, flagship-tasks]
-    # Not on a run where the lanes were deliberately skipped (fork PR, draft):
+    # Not on a run where the lanes were deliberately skipped (`[skip eval]` RC):
     # a table of empty lanes reads as "nothing was measured" when the truth is
     # "nothing was meant to be".
     if: >-
@@ -2033,36 +2000,36 @@ jobs:
             echo "are the only copy - download them before they expire (14 days)."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Environment drift is the whole reason the nightly exists: PR runs are
-  # path-filtered, so a Lemonade version bump, a model re-quantisation, a driver
-  # or a runner-image change alters nothing in the repo and therefore triggers
-  # nothing. The nightly is the only thing that catches that class - and an
-  # annotation on a 3am scheduled run is an annotation nobody reads, so it lands
-  # in the issue tracker instead.
-  #
-  # Schedule-only on purpose. A PR author already sees their own red check; a
-  # failing PR does not need an issue filed about it.
+  # A release or RC tag run that does not pass files an issue, one per tag.
+  # The nightly that used to catch environment drift (a Lemonade bump, a
+  # re-quantised model, a runner-image change) is gone, so the tag run is now the
+  # only recurring measurement - and its annotations would otherwise go unread.
+  # It does not block publish.yml: the release proceeds, the issue records why
+  # the eval did not pass. A dispatch does not file one; the dispatcher is
+  # watching. A skipped RC (`[skip eval]`) files nothing.
   #
   # This job claims NO lane's concurrency group. A caller that holds the group
   # its callee needs deadlocks the callee before a job record exists, so
   # `needs.*.result` reads `failure` for a job that never ran and the issue filed
   # describes nothing. The now-deleted weekly caller did exactly that, every run
   # for ten days, filing issues about a job that never started.
-  nightly-escalation:
-    name: File an issue when the nightly does not pass
-    needs: [agent-eval, flagship-tasks, aggregate]
+  release-escalation:
+    name: File an issue when the release eval does not pass
+    needs: [eval-gate, agent-eval, flagship-tasks, aggregate]
     if: >-
-      always() && github.event_name == 'schedule' &&
+      always() && github.event_name == 'push' && github.ref_type == 'tag' &&
+      needs.eval-gate.outputs.run == 'true' &&
       (needs.agent-eval.result != 'success' || needs.flagship-tasks.result != 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
     steps:
-      - name: File (or update) the rolling nightly-eval issue
+      - name: File (or update) the issue for this tag
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TAG: ${{ github.ref_name }}
           LANES_RESULT: ${{ needs.agent-eval.result }}
           OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
           OUTCOMES_FAILED: ${{ needs.flagship-tasks.outputs.failed_suites }}
@@ -2070,13 +2037,13 @@ jobs:
           set -euo pipefail
           # This job has no checkout, so every gh call names the repo; without it gh
           # dies with "not a git repository" and the alert is never filed.
-          # STABLE DEDUP KEY - do not reword. The lookup below searches this exact
-          # title; changing it orphans the open issue and files a duplicate.
-          TITLE="Nightly flagship eval did not pass"
+          # DEDUP KEY - do not reword. The lookup below searches this exact title,
+          # so a re-run of the same tag comments on its issue instead of filing another.
+          TITLE="Flagship eval did not pass on ${TAG}"
           gh label create eval-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
             --description "Automated eval failure" --force
           BODY="$(cat <<EOF
-          The nightly flagship eval on \`main\` did not pass.
+          The flagship eval on release tag \`${TAG}\` did not pass. Publishing is not blocked by it.
 
           - Run: ${RUN_URL}
           - Scenario lanes: \`${LANES_RESULT}\`
@@ -2087,16 +2054,17 @@ jobs:
           transcripts, judge rationales, backend log and Lemonade logs. Those machines are ephemeral and
           already destroyed, so the artifact is the only copy, and it expires in 14 days.
 
-          A nightly failure with no PR behind it usually means the environment moved, not the code: a
-          Lemonade version bump, a re-quantised model, a driver or runner-image change. PR runs are
-          path-filtered and cannot see any of that, which is why this run exists.
+          Compare with the previous tag's run first. A failure no change since then explains usually means
+          the environment moved, not the code: a Lemonade version bump, a re-quantised model, a driver or
+          runner-image change.
 
           \`cancelled\` rather than \`failure\` means no measurement happened at all - a manual cancel, or a
-          lane that waited out GitHub's 24h queue limit. Re-dispatch the workflow.
+          lane that waited out GitHub's 24h queue limit. Re-dispatch the workflow on the tag.
           EOF
           )"
           EXISTING="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label eval-failure \
-            --search "${TITLE} in:title" --json number --jq '.[0].number // empty')"
+            --search "${TITLE} in:title" --json number,title \
+            | jq -r --arg t "${TITLE}" 'map(select(.title == $t)) | .[0].number // empty')"
           if [ -n "${EXISTING}" ]; then
             gh issue comment "${EXISTING}" --repo "$GITHUB_REPOSITORY" --body "${BODY}"
             echo "commented on existing issue #${EXISTING}"
