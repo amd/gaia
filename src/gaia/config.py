@@ -36,6 +36,12 @@ def gaia_home() -> Path:
         if not raw:
             continue
         return Path(os.path.expandvars(os.path.expanduser(raw)))
+    return default_gaia_home()
+
+
+def default_gaia_home() -> Path:
+    """``~/.gaia``: the home of a process with no ``GAIA_HOME``, and so of the
+    machine's default daemon and its Lemonade Server."""
     return Path.home() / ".gaia"
 
 

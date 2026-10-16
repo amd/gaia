@@ -242,13 +242,14 @@ def owning_daemon_dir(base_url: Optional[str] = None) -> Optional[Path]:
     import json
     from urllib.parse import urlparse
 
+    from gaia.config import default_gaia_home
     from gaia.llm.lemonade_embedded import gaia_home
     from gaia.llm.lemonade_supervisor import _is_loopback
 
     url = (base_url or os.environ.get("LEMONADE_BASE_URL", "")).strip()
     if not url:
         return None
-    default_home = Path.home() / ".gaia"
+    default_home = default_gaia_home()
     if os.path.normcase(str(gaia_home().resolve())) == os.path.normcase(
         str(default_home.resolve())
     ):
