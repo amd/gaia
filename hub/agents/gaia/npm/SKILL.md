@@ -525,7 +525,10 @@ request for every item in a document to it, and it drives
 `extract_document_items` and `save_extracted_items` so a long transcript yields
 a complete, source-quoted inventory rather than a summary. A skill turns that
 inventorying on only by listing `extract_document_items` in `tools_required`;
-wording such as "find every call site" in another skill does not.
+wording such as "find every call site" in another skill does not. Loading it
+registers the tools at once, so `load_skill` never reports them missing; coverage
+is enforced only when the request itself names a source document or asks for
+every item, and a file the user named as a deliverable is never a source.
 
 **No skill *set* loads.** `gaia-agent.yaml` ships its `skill_sets:` and
 `default_skill_set:` blocks **commented out** — following the email agent's

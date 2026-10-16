@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Finished work is no longer replaced by "I can't confirm this is done".** A
+  redaction task that loaded the `document-extract` skill had its answer swapped
+  for a coverage warning about its own `redaction_log.csv`, and a task with two
+  named outputs only knew about the last one. Every file the request names, and
+  every file the turn wrote, is now an output and never a source; the skill
+  checks coverage only when the request names a source document or asks for
+  every item; and a real coverage gap keeps the answer, followed by a short "I
+  couldn't confirm all of this" list. `load_skill` no longer tells the model the
+  extraction tools cannot run when it is about to register them, and a rejected
+  extractor reply is now logged.
 - **`run_python` works in the Agent UI without a project.** It ran from the
   server's own folder, which is not an allowed path, so every approved snippet
   was refused and the agent fell back to slower shell commands. With no project

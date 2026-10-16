@@ -1341,10 +1341,14 @@ semantic recall of every implicit item. Recall must be measured against known
 source items. General summaries, advice about extraction, negated enumeration
 requests, analysis of code files ("find all bugs in `main.py`"), binary documents
 such as PDFs, and agents without a file permission validator do not activate this
-path. Active extraction skills can activate it. Sources are existing files a
-request reads from; a path after "to" or "into" is an output, and a name that is
-not a file ("Node.js") is a topic. Data files (CSV, JSON, logs, YAML, XML) are
-left to code tools.
+path. An active extraction skill registers the tools, but enforces coverage only
+when the request names a source document or asks for every item; a redaction or
+rewrite that happens to load the skill is not checked. Sources are existing files
+a request reads from. Every file the request names as a deliverable, and every
+file the turn wrote, is an output and never a source; a name that is not a file
+("Node.js") is a topic. Data files (CSV, JSON, logs, YAML, XML) are left to code
+tools. When a source still lacks an extraction, the answer is kept and a short
+"I couldn't confirm all of this" list follows it.
 
 Existing memory hooks record extraction actions and compact provenance (source
 fingerprint, page coverage and item count), while conversation history retains the

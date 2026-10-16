@@ -43,6 +43,7 @@ from typing import (
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.completion import (
     CompletionEvidence,
+    caveated_answer,
     incomplete_answer,
     mentioned_paths,
 )
@@ -2724,6 +2725,26 @@ Do NOT wrap conversational replies in JSON.
             in getattr(getattr(skills[name], "gaia", None), "tools_required", ())
         )
 
+    def _activate_extraction_skills(self, just_loaded=False):
+        """Apply a loaded extraction skill now, so load_skill reports its tools."""
+        ledger = getattr(self, "_extraction_ledger", None)
+        if ledger is None:
+            return
+        ledger.activate_skill(
+            self._extraction_skill_instructions(ledger.query, just_loaded)
+        )
+        self._offer_extraction_tools()
+
+    def _offer_extraction_tools(self):
+        ledger = getattr(self, "_extraction_ledger", None)
+        if (
+            ledger is not None
+            and ledger.offered
+            and "extract_document_items" not in self._tools_registry
+        ):
+            self._register_extraction_tool()
+            self._apply_tool_filter(self._active_tool_filter)
+
     def _read_validator(self):
         """The agent's file read boundary, or None when it has none."""
         validator = getattr(self, "path_validator", None)
@@ -3142,7 +3163,7 @@ Do NOT wrap conversational replies in JSON.
         (``system_prompt`` and ``_openai_tools``) read these live.
         """
         extraction = getattr(self, "_extraction_ledger", None)
-        if extraction is not None and extraction.enabled and new_filter is not None:
+        if extraction is not None and extraction.offered and new_filter is not None:
             new_filter = list(
                 dict.fromkeys(
                     [*new_filter, "extract_document_items", "save_extracted_items"]
@@ -6798,23 +6819,11 @@ Do NOT wrap conversational replies in JSON.
         """
         extraction = getattr(self, "_extraction_ledger", None)
         if extraction is not None:
-            extraction.activate_skill(
-                self._extraction_skill_instructions(
-                    extraction.query,
-                    (
-                        (tool_args or {}).get("name")
-                        if tool_name == "load_skill"
-                        else False
-                    ),
-                )
+            self._activate_extraction_skills(
+                (tool_args or {}).get("name") if tool_name == "load_skill" else False
             )
             extraction.observe(tool_name, tool_args or {}, tool_result)
-            if (
-                extraction.enabled
-                and "extract_document_items" not in self._tools_registry
-            ):
-                self._register_extraction_tool()
-                self._apply_tool_filter(self._active_tool_filter)
+            self._offer_extraction_tools()
         truncated_result = tool_result
         # Its pages are bounded by the store; condensing one would archive it again.
         if (
@@ -8149,6 +8158,12 @@ Do NOT wrap conversational replies in JSON.
             return body
         return f"{body.rstrip()}\n\n{statement}"
 
+    def _turn_outputs(self) -> set:
+        """Files this turn wrote by any tool, scripts included: never sources."""
+        return {
+            key for key, item in self._completion_evidence.files.items() if item.written
+        }
+
     def _gate_unsealed_answer(
         self, answer: Optional[str], keep_answer: bool = False
     ) -> Tuple[Optional[str], List[str]]:
@@ -8165,7 +8180,7 @@ Do NOT wrap conversational replies in JSON.
         """
         self._check_extraction_sources()
         gaps = self._completion_evidence.gaps(answer or "", _claims_file_write)
-        gaps.extend(self._extraction_ledger.gaps())
+        gaps.extend(self._extraction_ledger.gaps(self._turn_outputs()))
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
         if unsupported:
             gaps.append(unsupported[1] + ".")
@@ -8459,7 +8474,7 @@ Do NOT wrap conversational replies in JSON.
             self._extraction_skill_instructions(user_input)
         )
         had_extraction_tools = "extract_document_items" in self._tools_registry
-        if self._extraction_ledger.enabled:
+        if self._extraction_ledger.offered:
             self._register_extraction_tool()
         else:
             getattr(self, "_tool_overrides", {}).pop("extract_document_items", None)
@@ -8467,7 +8482,7 @@ Do NOT wrap conversational replies in JSON.
             if self._instance_tools is not None:
                 self._instance_tools.pop("extract_document_items", None)
                 self._instance_tools.pop("save_extracted_items", None)
-        if self._extraction_ledger.enabled or had_extraction_tools:
+        if self._extraction_ledger.offered or had_extraction_tools:
             self._apply_tool_filter(self._active_tool_filter)
 
         logger.debug(f"Processing query: {user_input}")
@@ -11014,7 +11029,7 @@ Do NOT wrap conversational replies in JSON.
                 artifact_gaps = self._completion_evidence.gaps(
                     answer_candidate, _claims_file_write, soft=soft_gaps
                 )
-                extraction_gaps = self._extraction_ledger.gaps()
+                extraction_gaps = self._extraction_ledger.gaps(self._turn_outputs())
                 artifact_gaps.extend(extraction_gaps)
                 if artifact_gaps or soft_gaps:
                     if (
@@ -11100,7 +11115,12 @@ Do NOT wrap conversational replies in JSON.
                     and final_test_claim[1] + "." not in completion_gaps
                 ):
                     completion_gaps.append(final_test_claim[1] + ".")
-                if completion_gaps:
+                if completion_gaps and set(completion_gaps) <= set(extraction_gaps):
+                    # Unproven coverage is not a false claim: keep the work, name the gap.
+                    answer_candidate = caveated_answer(
+                        answer_candidate, completion_gaps
+                    )
+                elif completion_gaps:
                     answer_candidate = incomplete_answer(completion_gaps)
                 else:
                     self._note_ungrounded(answer_candidate, user_input)
@@ -11109,7 +11129,7 @@ Do NOT wrap conversational replies in JSON.
                     # Never ask another synthesis call to reproduce the set; it condenses.
                     answer_candidate += "\n\n" + inventory
                     if not completion_gaps:
-                        saved = sorted(self._extraction_ledger.destinations)
+                        saved = sorted(self._extraction_ledger.verified)
                         if saved:
                             answer_candidate += (
                                 "\n\nI saved the full list to "

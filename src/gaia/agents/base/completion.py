@@ -286,12 +286,20 @@ def destination_paths(text: str, prepositions: re.Pattern = _DESTINATION) -> lis
         if prepositions is not _DESTINATION:
             return []
         return list(dict.fromkeys(_scan_paths(clause, immediate=False)))
-    # The last preposition that names a path: "to clean logs/app.log" names none.
-    for destination in reversed(destinations):
-        paths = _scan_paths(clause[destination.end() :], immediate=True)
-        if paths:
-            return list(dict.fromkeys(paths))
-    return []
+    # Every named output counts: "the tracker as a.xlsx and the email as b.md".
+    hits = [
+        (destination.group().strip().lower(), paths)
+        for destination in destinations
+        if (paths := _scan_paths(clause[destination.end() :], immediate=True))
+    ]
+    # "the notes in notes.txt to out.md": a place followed by a target is a source.
+    kept = [
+        paths
+        for index, (preposition, paths) in enumerate(hits)
+        if preposition not in {"in", "at"}
+        or not any(later in {"to", "into"} for later, _ in hits[index + 1 :])
+    ]
+    return list(dict.fromkeys(path for paths in kept for path in paths))
 
 
 def _instructions(query: str):
@@ -339,6 +347,18 @@ def save_obligations(query: str) -> tuple[list[str], bool]:
             requested = True
             paths.extend(found)
     return list(dict.fromkeys(paths)), requested
+
+
+def named_outputs(query: str) -> list[str]:
+    """Every file the request asks to produce, including "write out/log.csv".
+
+    Wider than save_obligations, which also demands a readback of each path.
+    """
+    paths = list(save_obligations(query)[0])
+    for verb, tail in _instructions(query):
+        if verb == "write":
+            paths.extend(_scan_paths(tail, True, True))
+    return list(dict.fromkeys(paths))
 
 
 def save_instructed(query: str) -> bool:
@@ -1024,8 +1044,19 @@ class CompletionEvidence:
         return gaps
 
 
+def caveated_answer(answer: str | None, gaps: list[str]) -> str:
+    """Keep the model's answer and name what could not be confirmed after it."""
+    if not answer or not answer.strip():
+        return incomplete_answer(gaps)
+    if all(gap.endswith((_REFUSED, _UNCONFIRMED)) for gap in gaps):
+        return f"{answer.rstrip()}\n\n" + "\n".join(gaps)
+    return f"{answer.rstrip()}\n\nI couldn't confirm all of this:\n\n" + "\n".join(
+        f"- {gap[:1].upper()}{gap[1:]}" for gap in gaps
+    )
+
+
 def incomplete_answer(gaps: list[str]) -> str:
-    """Framework-owned result; never repeat the unsupported candidate answer."""
+    """Framework-owned result for a turn that produced no answer to keep."""
     if gaps and all(gap.endswith((_REFUSED, _UNCONFIRMED)) for gap in gaps):
         # Nothing is left to finish: the user's side turned the write down.
         return "\n".join(gaps)
