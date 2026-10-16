@@ -80,6 +80,7 @@ def check(home: Path) -> list[str]:
     from gaia.agents.base.memory_store import resolve_memory_db_path
     from gaia.daemon import paths
     from gaia.skills.manager import user_skills_dir
+    from gaia.ui.database import default_db_path
 
     problems = []
     for name, want in env_for(home).items():
@@ -95,6 +96,7 @@ def check(home: Path) -> list[str]:
         "MCP server list": config.mcp_servers_path(),
         "agents folder": config.gaia_agents_dir(),
         "daemon host dir": paths.host_dir(),
+        "UI database": default_db_path(),
     }
     for what, path in roots.items():
         if not _within(path, home):

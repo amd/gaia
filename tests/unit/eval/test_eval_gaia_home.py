@@ -158,3 +158,14 @@ def test_a_seeded_db_outside_the_home_is_still_read(tmp_path):
 
     assert result.returncode == 1
     assert "not empty" in result.stderr
+
+
+def test_a_ui_database_outside_the_home_fails(tmp_path):
+    # Sessions and their messages live in the UI database; it must move too.
+    home = tmp_path / "category"
+    home.mkdir()
+
+    result = _check(home, _env(home, GAIA_HOME=str(tmp_path / "elsewhere")))
+
+    assert result.returncode == 1
+    assert "UI database resolves to" in result.stderr

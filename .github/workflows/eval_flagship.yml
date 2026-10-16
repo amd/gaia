@@ -1766,6 +1766,11 @@ jobs:
         if: always()
         run: |
           $ErrorActionPreference = "Continue"
+          # The stub's activation lives in the real ~/.gaia; a step timeout skips
+          # the run step's `finally`, so deactivate it here too.
+          if ($env:GAIA_FIXTURES -eq '1' -and $env:VENV_PY -and (Test-Path $env:VENV_PY)) {
+            & $env:VENV_PY tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py remove 2>&1 | ForEach-Object { Write-Host "$_" }
+          }
           $homesRoot = Join-Path $env:RUNNER_TEMP "gaia-eval-homes"
           if (-not (Test-Path $homesRoot)) { Write-Host "No GAIA homes to delete."; exit 0 }
           foreach ($dir in @(Get-ChildItem $homesRoot -Directory)) {
