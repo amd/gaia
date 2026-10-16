@@ -1516,6 +1516,13 @@ _PLACEHOLDER_MARKERS = frozenset(
 _PLACEHOLDER_LITERALS = frozenset(
     {"todo", "tbd", "...", "…", "placeholder", "fill in", "fill_in"}
 )
+# A note to fill the content in later, standing where the content belongs.
+_PLACEHOLDER_PHRASE = re.compile(
+    r"\[?(?:(?:todo|tbd|fixme)\s*[:\-]?\s*)?(?:(?:please\s+)?fill(?:\s+(?:this|me|it))?"
+    r"\s+in(?:\s+later)?|add\s+(?:the\s+)?content(?:\s+here)?|(?:your\s+|insert\s+)?"
+    r"content\s+(?:goes\s+)?here)\]?[.!]?",
+    re.I,
+)
 _CONTENT_ARG_NAMES = frozenset(
     {
         "content",
@@ -1558,11 +1565,88 @@ def _placeholder_value(name: str, value: str) -> bool:
         return True
     if _ANGLE_PLACEHOLDER.fullmatch(text) or _UNRESOLVED_PLAN_REF.match(text):
         return True
+    if name.lower() in _CONTENT_ARG_NAMES and _PLACEHOLDER_PHRASE.fullmatch(text):
+        return True
     if _PLACEHOLDER_TOKEN.fullmatch(text):
         return name.lower() in _CONTENT_ARG_NAMES or any(
             part in _PLACEHOLDER_MARKERS for part in text.split("_")
         )
     return False
+
+
+_EMPTY_WORD = re.compile(r"\b(?:empty|blank|touch)\b", re.I)
+_NAME_TOKEN = re.compile(r"`([^`\n]+)`|\"([^\"\n]+)\"|'([^'\n]+)'|([^\s`\"'<>(),;]+)")
+# Words that may sit between "empty" and the file it describes.
+_EMPTY_LEAD_WORDS = frozenset(
+    {"a", "an", "the", "new", "file", "files", "called", "named", "text", "and", "or"}
+)
+# "notes.txt (empty)", "notes.txt, empty", "leave notes.txt blank".
+_EMPTY_AFTER = re.compile(r"^\s*[(,:—-]?\s*$")
+# "Is notes.txt empty?", "don't leave it blank": the file is not to be empty.
+_EMPTY_NOT_ASKED = re.compile(
+    r"\b(?:not|don't|do not|never|no longer|if|whether|is|are|was)\b", re.I
+)
+# "Fill the empty notes.txt with the summary": the file is to get content.
+_FILLS_IT = re.compile(
+    r"\b(?:fill|populate|put|append|insert|update|replace|overwrite|paste)\b|"
+    r"\badd\b.*\bto\b",
+    re.I,
+)
+_WITH_CONTENT = re.compile(r"^\s*(?:file\s+)?with\s+(?!nothing\b|no\b)", re.I)
+_CLAUSE_BREAK = re.compile(r",|\b(?:and|then)\b", re.I)
+
+
+def _base_name(path: str) -> str:
+    return os.path.basename(path.replace("\\", "/").rstrip("/")).casefold()
+
+
+def _requested_empty(file_path: Any, request: Optional[str]) -> bool:
+    """Whether *request* asks for *file_path* itself to be empty or blank."""
+    if not isinstance(file_path, str) or not request:
+        return False
+    name = _base_name(file_path)
+    for sentence in re.split(r"(?<=[.!?])\s+|\n|;", request):
+        empties = list(_EMPTY_WORD.finditer(sentence))
+        if not empties:
+            continue
+        for mention in _NAME_TOKEN.finditer(sentence):
+            token = next(g for g in mention.groups() if g is not None)
+            if _base_name(token.strip(".:!?")) != name:
+                continue
+            if _WITH_CONTENT.match(sentence[mention.end() :]):
+                continue
+            for word in empties:
+                first, last = sorted((word, mention), key=lambda m: m.start())
+                breaks = list(_CLAUSE_BREAK.finditer(sentence, 0, first.start()))
+                clause = sentence[breaks[-1].end() if breaks else 0 : last.end()]
+                question = sentence.rstrip().endswith("?")
+                if (
+                    question
+                    or _EMPTY_NOT_ASKED.search(clause)
+                    or _FILLS_IT.search(clause)
+                ):
+                    continue
+                if word.end() <= mention.start():
+                    if _only_names_between(sentence[word.end() : mention.start()]):
+                        return True
+                elif _EMPTY_AFTER.match(sentence[mention.end() : word.start()]):
+                    return True
+    return False
+
+
+def _only_names_between(text: str) -> bool:
+    """True when *text* lists file names, not a second thing to write."""
+    seen_name = False
+    for match in _NAME_TOKEN.finditer(text):
+        word = match.group().casefold()
+        if "." in word.strip(".") or "/" in word or "\\" in word:
+            seen_name = True
+        elif word in {"and", "or", "called", "named"}:
+            continue
+        elif seen_name or word not in _EMPTY_LEAD_WORDS:
+            # "an empty a.txt and a b.md with ...": b.md is a new object.
+            return False
+    return True
 
 
 def _empty_by_design(file_path: Any) -> bool:
@@ -1571,19 +1655,23 @@ def _empty_by_design(file_path: Any) -> bool:
     return os.path.basename(file_path.replace("\\", "/")) in EMPTY_BY_DESIGN_FILES
 
 
-def _write_stand_in(tool_name: str, tool_args: Any) -> Optional[Tuple[str, Any]]:
+def _write_stand_in(
+    tool_name: str, tool_args: Any, request: Optional[str] = None
+) -> Optional[Tuple[str, Any]]:
     """``(arg, value)`` when a file write would put a stand-in on disk, else None.
 
     The whole content must be the stand-in: a document that merely contains
     "TODO" or "<placeholder>" is real content. Empty content is a stand-in
-    except for :data:`EMPTY_BY_DESIGN_FILES`.
+    unless the file is in :data:`EMPTY_BY_DESIGN_FILES` or *request* (the
+    user's message) asked for that file to be empty.
     """
     if not isinstance(tool_args, dict):
         return None
     if tool_name in _WHOLE_FILE_WRITE_TOOLS and "content" in tool_args:
         content = tool_args["content"]
         if content is None or (isinstance(content, str) and not content.strip()):
-            if _empty_by_design(tool_args.get("file_path")):
+            file_path = tool_args.get("file_path")
+            if _empty_by_design(file_path) or _requested_empty(file_path, request):
                 return None
             return "content", content
         if isinstance(content, str) and _placeholder_value("content", content):
@@ -1596,7 +1684,7 @@ def _write_stand_in(tool_name: str, tool_args: Any) -> Optional[Tuple[str, Any]]
 
 
 def _plan_step_placeholder(
-    tool_name: str, tool_args: Any, _path: str = ""
+    tool_name: str, tool_args: Any, _path: str = "", request: Optional[str] = None
 ) -> Optional[Tuple[str, Any]]:
     """Return ``(arg, value)`` for the first stand-in value in a plan step's args.
 
@@ -1607,7 +1695,7 @@ def _plan_step_placeholder(
     if not _path and isinstance(tool_args, dict):
         if tool_name in _WHOLE_FILE_WRITE_TOOLS and "content" not in tool_args:
             return "content", None
-        found = _write_stand_in(tool_name, tool_args)
+        found = _write_stand_in(tool_name, tool_args, request)
         if found is not None:
             return found
     if isinstance(tool_args, dict):
@@ -5349,7 +5437,9 @@ Do NOT wrap conversational replies in JSON.
         tool_args = self._resolve_plan_parameters(
             step.get("tool_args") or {}, step_results
         )
-        found = _plan_step_placeholder(tool_name, tool_args)
+        found = _plan_step_placeholder(
+            tool_name, tool_args, request=self._current_query
+        )
         if found is None:
             return False
         arg, value = found
@@ -6127,7 +6217,7 @@ Do NOT wrap conversational replies in JSON.
                 return {**NOT_EXECUTED, "status": "error", "error": err}
 
         # A stand-in written to disk replaces the real file with that word.
-        stand_in = _write_stand_in(tool_name, tool_args)
+        stand_in = _write_stand_in(tool_name, tool_args, self._current_query)
         if stand_in is not None:
             arg, value = stand_in
             logger.warning(
@@ -6135,9 +6225,10 @@ Do NOT wrap conversational replies in JSON.
             )
             empty = value is None or not str(value).strip()
             why = (
-                "is empty. Only files that are empty by design ("
+                "is empty. A file is written empty only when the user asked "
+                "for an empty or blank file, or it is empty by design ("
                 + ", ".join(sorted(EMPTY_BY_DESIGN_FILES))
-                + ") are written empty"
+                + ")"
                 if empty
                 else f"is a placeholder ({value!r}), not the real content"
             )
