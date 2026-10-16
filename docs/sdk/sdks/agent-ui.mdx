@@ -856,6 +856,45 @@ class AttachDocumentRequest(BaseModel):
     own query loop; a session with neither pending is a 404, never a silent
     no-op accept.
   </Accordion>
+
+  <Accordion title="POST /api/chat/followup">
+    Hand `{session_id, text}` to the session's running turn. The agent reads it
+    at its next step without restarting. The stream then carries
+    `followup_taken` (`text`) and the message is saved as a user message. A turn
+    that ends first sends `followup_returned` (`texts`) before `done`. 404: no
+    turn is running. 409: the running turn can't take it yet (it hasn't reached
+    the model, or a relayed agent runs it). On either, the Agent UI queues the
+    message and sends it when the turn ends.
+  </Accordion>
+
+  <Accordion title="GET /api/chat/context/{session_id}">
+    Estimated tokens the chat's next message would carry, against the model's
+    window: `system`, `tools`, `documents` (results of document-reading tools),
+    `history`, `reply_reserve`, `used`, `window`, plus `turns_in_view`,
+    `turns_hidden` and `at_risk`, the questions of the oldest turns that leave
+    the model's view at the next overflow. `{"available": false, "reason"}`
+    until an agent has answered in the chat. A streaming turn sends the same
+    numbers as a `context_usage` event.
+  </Accordion>
+
+  <Accordion title="POST /api/chat/retry-with">
+    Answer the chat's latest question again on another local model:
+    `{session_id, message_id, model}`. Tools aren't run again; the other model
+    gets the turn's recorded tool calls and results as text. Returns
+    `{content, stats}`, where `stats` holds `seconds`, `load_seconds`,
+    `tokens_per_second` and token counts. Nothing is saved until
+    `/api/chat/retry-with/choose`. 409: the message isn't the latest answer, or
+    GAIA is answering in any chat (loading another model would unload the one
+    it uses). 400: a cloud model. 413: the turn doesn't fit the model's window.
+    503: the model couldn't be loaded or didn't answer.
+  </Accordion>
+
+  <Accordion title="POST /api/chat/retry-with/choose">
+    Keep one answer from a comparison: `{session_id, message_id, keep}`, where
+    `keep` is `original` or `retry`. `retry` replaces the answer in place,
+    keeping the turn's tool evidence, so the next message continues from it.
+    404: no open comparison for that message.
+  </Accordion>
 </AccordionGroup>
 
 ### Documents
