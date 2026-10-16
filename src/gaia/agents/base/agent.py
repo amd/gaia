@@ -8006,18 +8006,21 @@ Do NOT wrap conversational replies in JSON.
     def _grounding_findings(
         self, answer: Optional[str], query: str, history: str
     ) -> list:
-        """Where *answer* outruns this turn's tool record (see ``grounding.py``)."""
+        """Where *answer* outruns this turn's tool record (see ``grounding.py``).
+
+        The answer only: files the turn wrote are never sent back for a
+        rewrite, since a false positive would damage a correct deliverable.
+        """
         if not answer or not answer.strip():
             return []
         roots = [os.getcwd(), self._verification_project_root()]
-        answer = strip_verification_scope(answer)
         return ungrounded(
-            answer,
+            strip_verification_scope(answer),
             query or "",
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
             locate=path_locator(roots),
-        ) + self._deliverable_findings(answer, query or "", history, roots)
+        )
 
     def _deliverable_findings(
         self, answer: str, query: str, history: str, roots: list
@@ -8071,12 +8074,17 @@ Do NOT wrap conversational replies in JSON.
         return cache[stamp]
 
     def _note_ungrounded(self, answer: Optional[str], query: str) -> None:
-        """Record what *answer* still outruns, for this turn's scope note."""
-        self._turn_ungrounded = unverified_reasons(
-            self._grounding_findings(
-                answer, query, getattr(self, "_grounding_history", "")
+        """Record what *answer* and the files it wrote still outrun, for the scope note."""
+        history = getattr(self, "_grounding_history", "")
+        findings = self._grounding_findings(answer, query, history)
+        if answer and answer.strip():
+            findings += self._deliverable_findings(
+                strip_verification_scope(answer),
+                query or "",
+                history,
+                [os.getcwd(), self._verification_project_root()],
             )
-        )
+        self._turn_ungrounded = unverified_reasons(findings)
 
     def _project_has_tests(self, root: Optional[str]) -> bool:
         """``project_has_tests``, walked once per root per turn."""
@@ -10654,9 +10662,11 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 # An answer about named workspace files that never opened one.
+                # Plan steps run outside tool_call_log; the turn record has them.
                 if (
                     not look_first_reprompted
                     and not tool_call_log
+                    and not self._turn_tool_executions
                     and steps_taken < steps_limit - 1
                     and any(name in self._tools_registry for name in _LOOK_TOOLS)
                 ):
@@ -10708,7 +10718,7 @@ Do NOT wrap conversational replies in JSON.
                             "Call query_specific_file or query_documents NOW to retrieve the "
                             "actual content. Output a tool call JSON — not planning text."
                         )
-                    elif not tool_call_history:
+                    elif not tool_call_history and not self._turn_tool_executions:
                         correction = (
                             "You said you would look that up but called no tools. "
                             "Call the appropriate tool RIGHT NOW. "
