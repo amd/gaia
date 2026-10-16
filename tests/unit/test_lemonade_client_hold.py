@@ -22,7 +22,8 @@ def _inst(api_version="1.4"):
 
 @pytest.fixture(autouse=True)
 def _no_hold(monkeypatch):
-    monkeypatch.setattr(lemonade_service, "_HELD_CLIENT", None)
+    monkeypatch.setattr(lemonade_service, "_LEASE", None)
+    monkeypatch.setattr(lemonade_service, "_AUTO_LEASED", False)
     monkeypatch.delenv(lemonade_service.APP_PID_ENV, raising=False)
     monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
     monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
@@ -44,6 +45,22 @@ class TestRegisterCall:
             "name": "tui",
             "client_id": None,
         }
+
+    def test_another_homes_daemon_is_reached_through_its_instance_file(
+        self, tmp_path, monkeypatch
+    ):
+        import json
+
+        (tmp_path / "instance.json").write_text(
+            json.dumps({"pid": 1, "port": 4321, "token": "OTHER", "api_version": "1.4"})
+        )
+        monkeypatch.setattr(client, "is_live", lambda inst, timeout=1.5: True)
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {"client_id": "abc"}
+        with mock.patch("requests.post", return_value=response) as post:
+            client.register_lemonade_client("app", [10], host_dir=tmp_path)
+        assert ":4321/" in post.call_args.args[0]
+        assert post.call_args.kwargs["headers"]["Authorization"].endswith("OTHER")
 
     def test_an_older_daemon_is_told_to_restart(self):
         with mock.patch.object(client, "attach", return_value=_inst("1.3")):
@@ -102,7 +119,10 @@ class TestHold:
         assert registered == [[os.getpid()]]
 
     def test_exit_releases_the_hold(self, monkeypatch):
-        monkeypatch.setattr(lemonade_service, "_HELD_CLIENT", "id")
+        lease = lemonade_service._Lease(
+            kind="cli", name="cli", pids=[1], owner_dir=None, ids={None: "id"}
+        )
+        monkeypatch.setattr(lemonade_service, "_LEASE", lease)
         released = []
         monkeypatch.setattr(client, "release_lemonade_client", released.append)
 
@@ -120,6 +140,173 @@ class TestHold:
         )
         lemonade_service.ensure_daemon_owns_lemonade(kind="app")
         assert "daemon said no" in caplog.text
+
+
+class TestAnotherGaiaHome:
+    """A process under its own GAIA_HOME that uses the default home's Lemonade
+    must register with the daemon that owns that server, or that daemon stops
+    the server under it."""
+
+    @pytest.fixture
+    def homes(self, monkeypatch, tmp_path):
+        from pathlib import Path
+
+        user = tmp_path / "user"
+        (user / ".gaia" / "lemonade").mkdir(parents=True)
+        (user / ".gaia" / "lemonade" / "state.json").write_text('{"port": 60293}')
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: user))
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path / "eval-home"))
+        monkeypatch.delenv("GAIA_DAEMON_HOME", raising=False)
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:60293/api/v1")
+        return user / ".gaia" / "host"
+
+    def test_the_owning_daemon_is_found_by_port(self, homes):
+        assert lemonade_service.owning_daemon_dir() == homes
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://127.0.0.1:13305/api/v1",  # another server
+            "http://10.0.0.5:60293/api/v1",  # another machine
+        ],
+    )
+    def test_another_server_has_no_owner_here(self, homes, monkeypatch, url):
+        monkeypatch.setenv("LEMONADE_BASE_URL", url)
+        assert lemonade_service.owning_daemon_dir() is None
+
+    def test_the_default_home_needs_no_second_registration(self, homes, monkeypatch):
+        monkeypatch.delenv("GAIA_HOME")
+        assert lemonade_service.owning_daemon_dir() is None
+
+    def test_a_stopped_server_has_no_owner(self, homes):
+        (homes.parent / "lemonade" / "state.json").unlink()
+        assert lemonade_service.owning_daemon_dir() is None
+
+    def test_both_daemons_hear_of_it_and_both_are_released(self, homes, monkeypatch):
+        registered, released = [], []
+
+        def _register(kind, pids, name, client_id=None, host_dir=None):
+            registered.append(host_dir)
+            return "owner-id" if host_dir else "own-id"
+
+        monkeypatch.setattr(client, "register_lemonade_client", _register)
+        monkeypatch.setattr(
+            client,
+            "release_lemonade_client",
+            lambda cid, host_dir=None: released.append((cid, host_dir)),
+        )
+        monkeypatch.setattr(lemonade_service.atexit, "register", lambda fn: None)
+
+        lemonade_service.hold_lemonade_open("app", "agent-ui")
+        lemonade_service.release_lemonade_hold()
+
+        assert registered == [homes, None]
+        assert sorted(released, key=str) == sorted(
+            [("owner-id", homes), ("own-id", None)], key=str
+        )
+
+    def test_the_owner_hears_of_it_even_without_a_daemon_of_our_own(
+        self, homes, monkeypatch
+    ):
+        registered = []
+
+        def _register(kind, pids, name, client_id=None, host_dir=None):
+            if host_dir is None:
+                raise DaemonError("the GAIA daemon is not running")
+            registered.append(host_dir)
+            return "owner-id"
+
+        monkeypatch.setattr(
+            client,
+            "start_or_attach",
+            mock.Mock(side_effect=DaemonError("no daemon here")),
+        )
+        monkeypatch.setattr(client, "register_lemonade_client", _register)
+        monkeypatch.setattr(client, "release_lemonade_client", lambda *a, **k: None)
+        monkeypatch.setattr(lemonade_service.atexit, "register", lambda fn: None)
+
+        lemonade_service.ensure_daemon_owns_lemonade(kind="app")
+        lemonade_service.release_lemonade_hold()
+
+        assert registered == [homes]
+
+
+class TestAutomaticLease:
+    """Every client of GAIA's server leases it, however the process found it."""
+
+    def test_the_daemon_never_leases_its_own_server(self, monkeypatch):
+        monkeypatch.setattr(lemonade_service, "_SUPERVISOR", object())
+        monkeypatch.setattr(
+            lemonade_service,
+            "hold_lemonade_open",
+            mock.Mock(side_effect=AssertionError("the daemon leased itself")),
+        )
+        lemonade_service.lease_gaia_lemonade()
+        assert lemonade_service._LEASE is None
+
+    def test_a_client_leases_once_per_process_off_thread(self, monkeypatch, tmp_path):
+        import threading
+
+        held = []
+        done = threading.Event()
+
+        def _hold(kind, name="", owner_dir=None):
+            held.append((kind, owner_dir))
+            done.set()
+
+        monkeypatch.setattr(lemonade_service, "hold_lemonade_open", _hold)
+        lemonade_service.lease_gaia_lemonade(tmp_path)
+        lemonade_service.lease_gaia_lemonade(tmp_path)
+
+        assert done.wait(2)
+        assert held == [("cli", tmp_path)]
+
+    def test_an_app_takes_over_a_cli_lease(self, monkeypatch):
+        """Else closing the Agent UI would not unload: its lease said cli."""
+        monkeypatch.setenv(lemonade_service.APP_PID_ENV, "4242")
+        monkeypatch.setattr(lemonade_service.atexit, "register", lambda fn: None)
+        registered, released = [], []
+
+        def _register(kind, pids, name, client_id=None):
+            registered.append((kind, pids))
+            return f"{kind}-id"
+
+        monkeypatch.setattr(client, "register_lemonade_client", _register)
+        monkeypatch.setattr(client, "release_lemonade_client", released.append)
+
+        lemonade_service.hold_lemonade_open("cli", "auto")
+        lemonade_service.hold_lemonade_open("app", "agent-ui")
+        lemonade_service.hold_lemonade_open("cli", "auto")  # no step back
+
+        assert registered == [("cli", [os.getpid()]), ("app", [os.getpid(), 4242])]
+        assert released == ["cli-id"]
+        lemonade_service.release_lemonade_hold()
+
+    def test_a_lease_taken_before_the_daemon_is_up_registers_later(self, monkeypatch):
+        import threading
+
+        monkeypatch.setattr(lemonade_service, "HOLD_RENEW_SECONDS", 0.01)
+        monkeypatch.setattr(lemonade_service.atexit, "register", lambda fn: None)
+        daemon_up = threading.Event()
+        registered = threading.Event()
+        monkeypatch.setattr(
+            client, "attach", lambda: _inst() if daemon_up.is_set() else None
+        )
+
+        def _register(kind, pids, name, client_id=None):
+            if not daemon_up.is_set():
+                raise DaemonError("the GAIA daemon is not running")
+            registered.set()
+            return "id"
+
+        monkeypatch.setattr(client, "register_lemonade_client", _register)
+        monkeypatch.setattr(client, "release_lemonade_client", lambda cid: None)
+
+        with pytest.raises(DaemonError):
+            lemonade_service.hold_lemonade_open("cli")
+        daemon_up.set()
+        assert registered.wait(2), "the lease never reached the daemon"
+        lemonade_service.release_lemonade_hold()
 
 
 class TestRenewal:
