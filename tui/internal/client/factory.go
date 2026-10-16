@@ -10,10 +10,6 @@ import (
 
 // ForAgentOptions configures the transport built by ForAgent.
 type ForAgentOptions struct {
-	// Dev is developer mode (the TUI's --dev). It turns on the subprocess
-	// transport's stderr diagnostics and appends the agent's DevArgs to its
-	// argv, so the child logs verbosely too.
-	Dev bool
 	// Model / MaxSteps override the sidecar defaults on the daemon transport.
 	// Ignored by the subprocess transport, which takes its model via BinaryArgs.
 	Model    string
@@ -115,9 +111,12 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		}
 		// Appended, never mutated in place: BinaryArgs belongs to the catalog
 		// entry, and appending to it directly would let a full slice alias the
-		// catalog's backing array and leak --dev into the next launch.
+		// catalog's backing array and leak one launch's flags into the next.
+		//
+		// A traced launch is the debugging one, so it also puts the child's own
+		// log at DEBUG. The screen is the same either way.
 		args := agent.BinaryArgs
-		if opts.Dev && len(agent.DevArgs) > 0 {
+		if opts.Trace != nil && len(agent.DevArgs) > 0 {
 			args = append(append([]string{}, args...), agent.DevArgs...)
 		}
 		if opts.FullAccess {
@@ -137,9 +136,9 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			args = append(append([]string{}, args...), "--model", opts.Model)
 		}
 		if agent.CanonicalEvents {
-			return NewCanonicalSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
+			return NewCanonicalSubprocessClient(bin, args).WithTrace(opts.Trace), nil
 		}
-		return NewSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
+		return NewSubprocessClient(bin, args).WithTrace(opts.Trace), nil
 
 	default:
 		return nil, fmt.Errorf(

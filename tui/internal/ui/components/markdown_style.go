@@ -192,6 +192,10 @@ type syntax struct {
 	meta     string // decorators, preprocessor lines, attributes
 	added    string
 	removed  string
+	// addedBg and removedBg tint a compact diff's rows (SyntaxLine). Every
+	// colour above holds its floor on these too.
+	addedBg   string
+	removedBg string
 }
 
 // The syntax hues are One Half Dark / One Half Light — the same pair the rest
@@ -225,6 +229,9 @@ var (
 		meta:     "#E5C07B",
 		added:    "#98C379",
 		removed:  "#E06C75",
+
+		addedBg:   "#1A2E20",
+		removedBg: "#3D2125",
 	}
 
 	lightSyntax = syntax{
@@ -241,6 +248,9 @@ var (
 		meta:     "#6B4900",
 		added:    "#276024",
 		removed:  "#96232F",
+
+		addedBg:   "#DCF2E0",
+		removedBg: "#F8E0E0",
 	}
 )
 

@@ -6,8 +6,8 @@ package cli
 import "testing"
 
 // --dev and --debug are one mode with two spellings, not two switches. If they
-// ever end up bound to different variables the TUI can go verbose while the
-// agent it spawns stays quiet, which is the confusing half-state this test
+// ever end up bound to different variables, one spelling turns the control API
+// on and the other does not — the confusing half-state this test
 // exists to prevent.
 func TestDevAndDebugAreTheSameSwitch(t *testing.T) {
 	flags := rootCmd.PersistentFlags()
@@ -43,5 +43,39 @@ func TestDevAndDebugAreTheSameSwitch(t *testing.T) {
 				t.Errorf("--%s did not turn on developer mode", tc.flag)
 			}
 		})
+	}
+}
+
+// --dev is the control API and nothing else: it turns it on for an interactive
+// launch (auto-assigned port, or --control-port's), and is a no-op on a
+// one-shot, which has no session to drive — never a refusal.
+func TestDevOnlyTurnsOnTheControlAPI(t *testing.T) {
+	defer func() { dev, controlEnabled, controlPort = false, false, 0 }()
+	dev, controlEnabled, controlPort = true, false, 0
+
+	cmd := rootCmd
+	opts, err := controlOptionsFor(cmd)
+	if err != nil || opts == nil {
+		t.Fatalf("--dev did not turn the control API on: %+v, %v", opts, err)
+	}
+	if opts.Port != 0 {
+		t.Errorf("--dev picked port %d; it must auto-assign unless --control-port says otherwise", opts.Port)
+	}
+
+	interactive, err := controlOptionsForAgentRun(cmd, false)
+	if err != nil || interactive == nil {
+		t.Errorf("--dev on an interactive agent launch: %+v, %v", interactive, err)
+	}
+	oneShot, err := controlOptionsForAgentRun(cmd, true)
+	if err != nil {
+		t.Errorf("--dev with --query was refused: %v", err)
+	}
+	if oneShot != nil {
+		t.Errorf("--dev bound a control API for a one-shot: %+v", oneShot)
+	}
+
+	dev = false
+	if opts, _ := controlOptionsFor(cmd); opts != nil {
+		t.Errorf("the control API is on without --dev or --control: %+v", opts)
 	}
 }

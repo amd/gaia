@@ -9,19 +9,19 @@ import (
 	"github.com/amd/gaia/tui/internal/event"
 )
 
-// turnMetricsBlock is the --dev breakdown drawn under an answer: where the
+// turnMetricsBlock is the Ctrl+O breakdown drawn under an answer: where the
 // turn's seconds went, and how much of its input the KV cache could reuse.
 //
 // The one number the stats line cannot carry is the reason a local turn is
 // slow — the fixed prefill re-sent on every call. This block exists to make
 // that visible next to the wall time it buys.
 //
-// Returns "" whenever there is nothing real to draw: dev mode off, no record
+// Returns "" whenever there is nothing real to draw: details folded, no record
 // (an ordinary turn, or an agent older than gaia.turn/1), or a record that
 // carries no measurement — rows of zeroes read as a broken turn, not an
 // unmeasured one.
 func (m ChatModel) turnMetricsBlock(msg *Message) string {
-	if !m.dev || msg == nil || msg.Metrics == nil {
+	if !m.expandWork || msg == nil || msg.Metrics == nil {
 		return ""
 	}
 	t := msg.Metrics

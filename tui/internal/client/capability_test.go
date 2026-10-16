@@ -11,7 +11,7 @@ import (
 
 // SubprocessClient always knows the answer immediately: nothing to probe.
 func TestSubprocessSupportsMemoryUnconditionally(t *testing.T) {
-	c := NewSubprocessClient("", nil, false)
+	c := NewSubprocessClient("", nil)
 	defer c.Close()
 
 	supported, known := c.Supports(CapabilityMemory)
@@ -21,7 +21,7 @@ func TestSubprocessSupportsMemoryUnconditionally(t *testing.T) {
 }
 
 func TestSubprocessProbeCapabilitiesIsANoOp(t *testing.T) {
-	c := NewSubprocessClient("", nil, false)
+	c := NewSubprocessClient("", nil)
 	defer c.Close()
 
 	if err := c.ProbeCapabilities(context.Background()); err != nil {
@@ -304,7 +304,7 @@ func TestSupportsAnUnknownCapabilityIsUnknownNotUnsupported(t *testing.T) {
 		t.Fatalf("ProbeCapabilities: %v", err)
 	}
 
-	sub := NewSubprocessClient("", nil, false)
+	sub := NewSubprocessClient("", nil)
 	defer sub.Close()
 
 	for name, c := range map[string]CapabilityReporter{"sse": sse, "subprocess": sub} {

@@ -36,7 +36,7 @@ const samplePreScanJSON = `{"kind":"email_pre_scan","urgent":[],"actionable":[],
 
 func newPreScanTestModel(t *testing.T, c client.AgentClient, agentID, initialQuery string) ChatModel {
 	t.Helper()
-	m := NewChatModel(c, agentID, initialQuery, false)
+	m := NewChatModel(c, agentID, initialQuery)
 	m.agentID = agentID
 	m.width, m.height = 100, 30
 	return m
@@ -102,7 +102,7 @@ func TestFetchPreScanSkippedWhenInitialQueryPresent(t *testing.T) {
 // entry does.
 func TestNoPreScanFetchViaDirectCLIConstruction(t *testing.T) {
 	c := &fakePreScanClient{data: json.RawMessage(samplePreScanJSON)}
-	m := NewChatModelForCatalogAgent(c, "email", "Email", false)
+	m := NewChatModelForCatalogAgent(c, "email", "Email")
 	m.width, m.height = 100, 30
 
 	cmd := m.Init()

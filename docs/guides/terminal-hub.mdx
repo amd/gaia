@@ -443,34 +443,61 @@ names the update command.
 | `Ctrl+V` | Paste — text, or a clipboard **image** (a screenshot), which is saved to a temp file and its path inserted |
 | `Ctrl+Y` | Copy the whole answer |
 | `Ctrl+B` | Copy the last code block in the answer |
-| `Ctrl+O` | Show every step in full — the agent's narration, wrapped commands, timings — or fold it back to one row per step |
+| `Ctrl+O` | Show every step in full — each call's command or code, its timing, its full outcome, the turn's metrics — or fold it back to one bullet per step |
+| `Ctrl+G` | Open the newest file a turn created (documents only: spreadsheets, documents, decks, PDFs, text, images) |
 
 ### Reading a turn
 
-While the agent works, and afterwards, each thing it did is one short row, with
-the answer set apart below:
+Each thing the agent does is one bullet that says what it did, in plain words.
+The command or code behind it is one dim line underneath at most, and `Ctrl+O`
+shows all of it. One line at the bottom says what is happening right now, how
+long the turn has taken, and moves while it works:
 
 ```
-  ▪ Reading file: toybox/dates.py
-    └ 3 symbols
-  ▪ Editing file: toybox/dates.py x2 · approved
-  ▪ Running command: python -m pytest -q tests/
-    └ exit 0 · 2 lines
+  ● I'll read each contract first, then build the register.
+  ● Read 4 files · 17s
+    └ msa_acme.docx, nda_beta.docx, sow_gamma.docx, … 1 more
+  ● Extract clause terms into a table · 4.0s
+    └ Run a 6-line Python script
+    └ ✗ failed: KeyError: 'Term'
 
-  Fixed and verified — all 4 tests pass.
+  ⣟ Install the spreadsheet library… (2m 4s)
 ```
 
-- **Paths** are shown relative to the folder you started GAIA in, or under `~`;
-  a path that is still long keeps its end.
-- **A failed step** keeps its reason under it, remedy included — that row is
-  where a failure lives, so a retried call is one red row, not a separate error.
-- **A confirmation** asks once, in the prompt pinned above the composer. The step
-  it gated then records your answer in a word: `approved`, `denied`, or `always
-  allowed '<scope>'`.
-- **The agent's narration** ("Let me check the tests first") is folded away.
-  `Ctrl+O` shows it, along with each step's full command and timing. A stage or a
-  narration line the agent repeats word for word — a plan's "Following the plan
-  to …" headline before every step — is shown once, until it changes.
+When it finishes, the files it made are listed under the answer, with a look
+inside each one, and one line sums the turn up:
+
+```
+  Eight contracts reviewed. Three carry uncapped liability; …
+
+  Created
+    contract_review.xlsx  18 KB · 3 sheets: Register (9 rows), Clauses (65 rows), Summary
+    summary.md            1 KB · 212 words
+  ✓ Read 4 files · ran 1 Python script · 43s · ↓ 9.8k tokens
+```
+
+- **What a bullet says** comes from, best first: a description the model wrote
+  with the call, the goal the agent announced before it, then a summary built
+  from the call itself (`Run a 42-line Python script that reads 3 spreadsheets`,
+  `Search the web for 'FDIC Q2 2026'`). Placeholder text such as a plan's
+  "Following the plan to …" headline is never shown.
+- **The dot** is green when a step is done, grey while it is in progress, and red
+  only for a failure that ended the work. The words say the same thing, so
+  nothing depends on colour.
+- **A failure the agent carried on past** is one calm line, marked
+  `— carried on`. While the turn is still running, the failure keeps its full
+  reason and remedy, because the agent may yet stop on it.
+- **Writes and edits** show a compact diff: line numbers, `+` and `-`, the code
+  in colour, cut with `… N more lines`.
+- **Paths** are shown relative to the folder you started GAIA in, or under `~`.
+- **A confirmation** asks once, in the prompt pinned above the composer. A plain
+  yes adds nothing to the step; `denied`, a timeout, or an "always" grant stays
+  on it.
+- **A long turn** folds its middle once it has more than eight steps:
+  `… 23 more actions · Ctrl+O to expand`.
+- **Each file in the Created list is a link.** In a terminal that supports them
+  (Windows Terminal, iTerm2, WezTerm, kitty), clicking one opens the file.
+  `Ctrl+G` opens the newest one from the keyboard.
 
 ### Saying something while the agent is still working
 
@@ -810,6 +837,20 @@ query (SSH, tmux, a CI log) — if the screen comes out hard to read, force a mo
 ```bash
 GAIA_TUI_THEME=light gaia-tui    # or dark; unset or "auto" = detect
 ```
+
+### Motion
+
+Only what is happening right now moves: the spinner and a soft highlight
+sweeping across the status line, a gentle pulse on a prompt that is waiting for
+you, and one sweep across the summary line when a turn finishes. To turn all of
+it off:
+
+```bash
+gaia config set reduced_motion true     # every launch
+GAIA_TUI_REDUCED_MOTION=1 gaia-tui      # this launch
+```
+
+Motion is also off when `NO_COLOR` is set or the output is not a terminal.
 
 ## Troubleshooting
 

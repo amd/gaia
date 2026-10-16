@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/lemonade"
 )
@@ -168,9 +169,8 @@ func (p *procHandle) killDirect() error {
 // SubprocessClient communicates with a local agent binary via stdin/stdout JSONL.
 // Send() calls must be serialized — do not overlap two Send() calls.
 type SubprocessClient struct {
-	path  string
-	args  []string
-	debug bool
+	path string
+	args []string
 	// canonical selects the event dialect read off the pipe: the frozen legacy
 	// vocabulary (false) or the canonical one (true).
 	canonical bool
@@ -213,11 +213,10 @@ type SubprocessClient struct {
 // whitespace, which corrupts any path containing a space. Callers holding one
 // string (e.g. `gaia tui chat --subprocess "..."`) split it with
 // SplitCommandLine, which honours quoting.
-func NewSubprocessClient(path string, args []string, debug bool) *SubprocessClient {
+func NewSubprocessClient(path string, args []string) *SubprocessClient {
 	c := &SubprocessClient{
 		path:      path,
 		args:      args,
-		debug:     debug,
 		exitGrace: agentExitGrace,
 	}
 	c.fullAccess = c.FullAccessAtLaunch()
@@ -256,8 +255,8 @@ func (s *SubprocessClient) spawnArgs(fullAccess bool) []string {
 // and result previews the activity log renders; the legacy vocabulary has
 // nowhere to put them, so an agent moved onto this transport and parsed as
 // legacy would silently lose its progress reporting.
-func NewCanonicalSubprocessClient(path string, args []string, debug bool) *SubprocessClient {
-	c := NewSubprocessClient(path, args, debug)
+func NewCanonicalSubprocessClient(path string, args []string) *SubprocessClient {
+	c := NewSubprocessClient(path, args)
 	c.canonical = true
 	return c
 }
@@ -339,9 +338,7 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 		if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) == "" && lemonade.ReadEmbedded() != nil {
 			cmd.Env = append(cmd.Env, "GAIA_LEMONADE_EMBEDDED=1")
 		}
-		if s.debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Lemonade endpoint: %s\n", url)
-		}
+		control.Logf("subprocess: Lemonade endpoint %s", url)
 	}
 
 	stdinPipe, err := cmd.StdinPipe()
@@ -412,7 +409,6 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 	if err == nil {
 		s.turnCtx = ctx
 	}
-	debug := s.debug
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -510,9 +506,7 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			// mid-turn, so a raw stderr write would land on top of the UI. The
 			// writer keeps the first failure and Close() reports it once the
 			// event loop has stopped.
-			if terr := s.trace.Write(line); terr != nil && debug {
-				fmt.Fprintf(os.Stderr, "[DEBUG] trace: %v\n", terr)
-			}
+			_ = s.trace.Write(line)
 
 			var evt interface{}
 			var perr error
@@ -524,9 +518,7 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			if perr != nil {
 				// Visible, not dropped: a status warning keeps the turn alive
 				// while making a bad producer obvious.
-				if debug {
-					fmt.Fprintf(os.Stderr, "[DEBUG] parse error: %v (line: %s)\n", perr, string(line))
-				}
+
 				if !emit(event.StatusEvent{
 					Type:    "status",
 					Status:  "warning",

@@ -1,0 +1,30 @@
+ GAIA  │ agent gaia
+────────────────────────────────────────────────────────────────────────────────────────────────────
+▶ You: Review the 8 contracts in ./contracts and build a risk register in contract_review.xlsx
+
+  ● I'll read each contract first, then build the register.
+  ● Read 4 files · 17s
+    └ msa_acme.docx, nda_beta.docx, sow_gamma.docx, … 1 more
+  ● Extract clause terms into a table · 4.0s
+    └ Run a 6-line Python script
+    └ ✗ failed: KeyError: 'Term'
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ⣿ Install the spreadsheet library… (2m 4s)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+›
+  ● agent gaia streaming            ↑↓/wheel scroll · keep typing · Esc to interrupt · Ctrl+C quit

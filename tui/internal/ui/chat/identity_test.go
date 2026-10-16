@@ -17,7 +17,7 @@ import (
 // "agent <id> v<version>" shape, so a user reading the header always has the
 // exact string --agent expects back.
 func TestHeaderNamesTheRunningAgent(t *testing.T) {
-	flagship := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", false, true)
+	flagship := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", true)
 	flagship.width, flagship.height = 100, 30
 	flagship = feed(t, flagship, versionedPing("0.2.0", "0.25.0"))
 
@@ -26,7 +26,7 @@ func TestHeaderNamesTheRunningAgent(t *testing.T) {
 		t.Errorf("flagship header does not name the agent: %q", header)
 	}
 
-	email := NewChatModelForCatalogAgent(&nullClient{}, "email", "Email", false)
+	email := NewChatModelForCatalogAgent(&nullClient{}, "email", "Email")
 	email.width, email.height = 100, 30
 	email = feed(t, email, versionedPing("0.1.0", ""))
 
@@ -39,7 +39,7 @@ func TestHeaderNamesTheRunningAgent(t *testing.T) {
 // An agent that never reported a version (an older build, or before its first
 // ping) must not get one invented — no bare "v" and no fabricated number.
 func TestHeaderOmitsTheVersionWhenUnknown(t *testing.T) {
-	m := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", false, true)
+	m := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", true)
 	m.width, m.height = 100, 30
 	m = feed(t, m, canonicalModelPing("Gemma-4-E4B-it-GGUF", "Gemma-4-E4B-it-GGUF", false))
 
@@ -56,7 +56,7 @@ func TestHeaderOmitsTheVersionWhenUnknown(t *testing.T) {
 // version outright — an older agent that reports none clears it rather than
 // leaving the previous build's number on screen.
 func TestEachPingReplacesTheReportedVersion(t *testing.T) {
-	m := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", false, true)
+	m := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", true)
 	m.width, m.height = 100, 30
 	m = feed(t, m, versionedPing("0.3.0", "0.25.0"))
 	if got := m.agentIdentity(); got != "agent gaia v0.3.0" {
@@ -82,7 +82,7 @@ func versionedPing(agentVersion, gaiaVersion string) event.CanonicalStatusEvent 
 // The stable agent id belongs on screen somewhere a user would actually read
 // it, not just in debug logging or the control API.
 func TestTheAgentIDAppearsInTheRenderedFrame(t *testing.T) {
-	m := NewChatModelForCatalogAgent(&nullClient{}, "email", "Email", false)
+	m := NewChatModelForCatalogAgent(&nullClient{}, "email", "Email")
 	m.width, m.height = 100, 30
 	m.resize()
 
@@ -95,7 +95,7 @@ func TestTheAgentIDAppearsInTheRenderedFrame(t *testing.T) {
 // chip — a user who cannot tell which model is answering has lost more than
 // one who cannot tell which agent is. The identity chip is what degrades.
 func TestNarrowHeaderKeepsTheModelChipOverTheIdentityChip(t *testing.T) {
-	m := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", false, true)
+	m := NewChatModelForFlagship(&nullClient{}, "gaia", "GAIA", true)
 	m.width, m.height = 40, 30
 	m = feed(t, m, versionedPing("0.2.0", ""))
 

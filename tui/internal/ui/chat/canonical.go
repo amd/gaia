@@ -111,16 +111,6 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
-		// One live line, replaced — not a log. A user watching a 200s turn needs
-		// to know what is happening NOW; an accumulating list of "Step 2/50"
-		// and "Thinking" answers a question nobody asked and buries the tool
-		// call that actually says what the agent is doing.
-		// Tracked in both modes, shown in neither by itself: the canonical
-		// transport reports steps only in the `final` event's usage, so without
-		// this the step count is unknown until the turn is already over.
-		if n, ok := stepNumberOf(e.Message); ok {
-			m.totalSteps = n
-		}
 		// Bounded on the way in, like every other agent-supplied line the log
 		// keeps (see narrate.go). What PRINTS is still laid out to this terminal
 		// at render time; this only stops a megabyte of "status" living in the
@@ -136,11 +126,6 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		if msg := userFacingStatus(e.Message); msg != "" {
 			m.setLiveStatus(truncateRunes(msg, narrationMax))
-		} else if m.dev {
-			// --dev is where harness internals belong: suppressing them for
-			// everyone would make a wire-level bug invisible to whoever has to
-			// fix it.
-			m.setLiveStatus(truncateRunes(clean(e.Message), narrationMax))
 		}
 
 	case event.CanonicalTokenEvent:
@@ -155,18 +140,14 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 	case event.CanonicalToolCallEvent:
 		m.stashNarration()
 		m.phase = modelPhase{}
-		item := ActivityItem{
+		m.activity = append(m.activity, ActivityItem{
 			Kind:    "tool",
 			Tool:    e.Tool,
 			Content: toolNarration(e.Tool, e.Args, e.Narration),
-		}
-		if m.dev {
-			// The narration says what the call MEANS; this says what was
-			// actually passed. When an agent calls the right tool with the
-			// wrong argument the two disagree, and that gap is the bug.
-			item.Args = devPayload(e.Args, devPayloadWidth)
-		}
-		m.activity = append(m.activity, item)
+			Call:    describeCall(e.Tool, e.Args, e.Narration),
+			Goal:    m.takeGoal(),
+			At:      m.now(),
+		})
 
 	case event.CanonicalToolResultEvent:
 		m.phase = modelPhase{}
@@ -294,21 +275,16 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				}
 			}
 		}
-		active := m.turnElapsed(time.Now())
+		active := m.turnElapsed(m.now())
 		duration := active
-		durationLabel := ""
 		if m.startup.warmNext {
-			if m.dev {
-				// A bare time under the model notice reads as noise.
-				durationLabel = "model switched in "
-			} else {
-				// The opening switch's time belongs to the ready line, not its own.
-				duration = 0
-			}
+			// The opening switch's time is the agent starting up, not an answer.
+			duration = 0
 		}
 		// The turn is over, so a confirmation still up is dead — resolved here,
 		// before the work is committed, so its step carries the outcome.
 		m.resolveConfirmationOnTurnEnd()
+		work := append([]ActivityItem(nil), m.activity...)
 		if content != "" {
 			m.commitAnsweredWork()
 		} else {
@@ -318,20 +294,26 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
 		if content != "" || !m.cancelPending {
 			m.messages = append(m.messages, Message{
-				Role:          RoleAssistant,
-				Content:       content,
-				Rendered:      components.RenderMarkdown(content),
-				Duration:      duration,
-				DurationLabel: durationLabel,
-				TTFT:          ttft,
-				TokPerS:       usage.TokPerS,
-				InputTokens:   usage.InputTokens,
-				CachedTokens:  usage.CachedTokens,
-				Steps:         usage.Steps,
-				ToolsUsed:     usage.ToolsUsed,
-				Tokens:        usage.Tokens,
-				Metrics:       usage.Metrics,
+				Role:         RoleAssistant,
+				Content:      content,
+				Rendered:     components.RenderMarkdown(content),
+				Duration:     duration,
+				TTFT:         ttft,
+				TokPerS:      usage.TokPerS,
+				InputTokens:  usage.InputTokens,
+				CachedTokens: usage.CachedTokens,
+				Steps:        usage.Steps,
+				ToolsUsed:    usage.ToolsUsed,
+				Tokens:       usage.Tokens,
+				Metrics:      usage.Metrics,
+				Recap:        workRecap(work),
+				Deliverables: findDeliverables(work, content, m.queryStart),
+				FinishedAt:   m.now(),
+				CostUSD:      m.turnCostUSD(usage.InputTokens, usage.CachedTokens, usage.Tokens),
 			})
+			if duration > 0 {
+				m.markFinish()
+			}
 		}
 		// One ledger entry per turn, from what the backend reported. A turn
 		// with no token counts still counts as a turn — see sessionCost.
@@ -356,9 +338,6 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// and on the current email sidecar that is the ORDINARY case: the
 		// stateless D1 stub sends this final refusal in the same stream read the
 		// needs_confirmation event arrived on, before a human can plausibly react.
-		if usage.Steps > 0 {
-			m.totalSteps = usage.Steps
-		}
 		// This — not doneMsg — is the real settlement point for a daemon-relay
 		// turn: nothing below reschedules waitForEvent, so the channel's
 		// eventual close is never observed here. A cancelled turn that ends
@@ -610,21 +589,21 @@ func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
 	m.setToolOutputAt(at, e)
 }
 
-// setToolOutputAt attaches the raw result payload to one specific tool line.
-// Developer mode only, and a no-op otherwise.
+// setToolOutputAt records what a result says about the call it closed: when it
+// ended, how many lines of output came back, and where an edit landed. The raw
+// payload is never kept here — it is in the trace.
 //
-// Indexed rather than searched. Searching back for "the last tool line without
-// output" looked equivalent but is a different predicate from the one that
-// closed the line, and the two disagree exactly when it matters: two calls open
-// at once, or a payload that compacts to nothing, and the next result's payload
-// lands under the wrong call — which in the one view meant for verifying what
-// happened is worse than showing nothing.
+// Indexed rather than searched: with two calls open at once, a search for "the
+// last open line" attaches one call's result to the other.
 func (m *ChatModel) setToolOutputAt(at int, e event.CanonicalToolResultEvent) {
-	if !m.dev || at < 0 || at >= len(m.activity) {
+	if at < 0 || at >= len(m.activity) {
 		return
 	}
-	if payload := devPayload(e.Data, devPayloadWidth); payload != "" {
-		m.activity[at].Output = payload
+	item := &m.activity[at]
+	item.End = m.now()
+	item.OutLines = outputLines(e.Data)
+	if c := item.Call.Change; c != nil && !c.Created && item.Success != nil && *item.Success {
+		c.StartLine = locateEdit(c)
 	}
 }
 
@@ -766,7 +745,14 @@ func userFacingStatus(raw string) string {
 //   - A new stage after a tool ran: its own line. The tool is evidence of work,
 //     and this is genuinely the next thing.
 func (m *ChatModel) setLiveStatus(msg string) {
+	// Placeholder goals ("objective", "Following the plan to <the whole
+	// request>", "Plan: a → b") describe the harness, not the work (#5089).
+	if isTemplateGoal(msg) {
+		return
+	}
+	m.goalFresh = true
 	sawWork := false
+
 	for i := len(m.activity) - 1; i >= 0; i-- {
 		switch m.activity[i].Kind {
 		case "tool", "confirm":

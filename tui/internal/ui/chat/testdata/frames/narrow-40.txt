@@ -1,0 +1,24 @@
+ GAIA  │ agent gaia
+────────────────────────────────────────
+▶ You: Review the 8 contracts in
+       ./contracts and build a risk
+       register in
+       contract_review.xlsx
+
+  ● I'll read each contract first,
+    then build the register.
+  ● Read 4 files · 17s
+    └ msa_acme.docx, nda_beta.docx,…
+  ● Extract clause terms in… · 4.0s
+    └ Run a 6-line Python script
+    └ ✗ failed: KeyError: 'Term'
+
+
+
+
+
+  ⣿ Run a 3-line Python scri… (2m 31s)
+
+────────────────────────────────────────
+›
+  ● agent gaia streaming   Ctrl+C quit

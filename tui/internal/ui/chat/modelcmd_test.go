@@ -60,7 +60,7 @@ func TestModelCommandsAreRecognised(t *testing.T) {
 // command rather than silently dropped or mangled.
 func TestModelCommandDispatchesTheLiteralLineToTheAgent(t *testing.T) {
 	c := &queryCapturingClient{}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 	m.width, m.height = 100, 30
 
 	_, cmd := m.submit("/model claude-sonnet-5")
@@ -80,7 +80,7 @@ func TestModelCommandDispatchesTheLiteralLineToTheAgent(t *testing.T) {
 // never appear as if the user asked it as a chat question.
 func TestModelCommandDoesNotShowAsAChatBubble(t *testing.T) {
 	c := &queryCapturingClient{}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 	m.width, m.height = 100, 30
 
 	updated, _ := m.submit("/model")
@@ -184,7 +184,7 @@ func TestOrdinaryStatusEventsDoNotTouchTheModelChip(t *testing.T) {
 // otherwise receive the literal text as an uncomprehended chat question.
 func TestModelCommandRefusedOnAnUnsupportedAgent(t *testing.T) {
 	c := &queryCapturingClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 100, 30
 
 	updated, _ := m.submit("/model claude-sonnet-5")
@@ -237,7 +237,7 @@ func TestAnUnrequestedModelChangeWarnsOfARevert(t *testing.T) {
 // session itself requested, must never be flagged as a revert.
 func TestAConfirmedModelSwitchDoesNotWarnOfARevert(t *testing.T) {
 	c := &queryCapturingClient{}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 	m.width, m.height = 100, 30
 
 	m = feed(t, m, event.CanonicalStatusEvent{
@@ -283,7 +283,7 @@ func (c *switchRecordingClient) RecordModelSwitch(model string, claude bool) boo
 func newSwitchRecordingModel(t *testing.T) (ChatModel, *switchRecordingClient) {
 	t.Helper()
 	c := &switchRecordingClient{}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 	m.width, m.height = 100, 30
 	m = feed(t, m, event.CanonicalStatusEvent{
 		Type: "status", ModelID: "Qwen3.6-35B-A3B-GGUF", ModelDisplay: "Qwen3.6-35B-A3B-GGUF",

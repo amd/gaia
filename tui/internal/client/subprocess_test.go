@@ -70,7 +70,7 @@ func main() {
 func TestSubprocessClient_SendReceivesEvents(t *testing.T) {
 	bin := buildMockAgent(t)
 
-	c := NewSubprocessClient(bin, nil, true)
+	c := NewSubprocessClient(bin, nil)
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -121,7 +121,7 @@ func TestSubprocessClient_SendReceivesEvents(t *testing.T) {
 func TestSubprocessClient_MultiTurn(t *testing.T) {
 	bin := buildMockAgent(t)
 
-	c := NewSubprocessClient(bin, nil, false)
+	c := NewSubprocessClient(bin, nil)
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -155,7 +155,7 @@ func TestSubprocessClient_MultiTurn(t *testing.T) {
 }
 
 func TestSubprocessClient_InvalidCommand(t *testing.T) {
-	c := NewSubprocessClient("nonexistent_binary_xyz_12345", nil, false)
+	c := NewSubprocessClient("nonexistent_binary_xyz_12345", nil)
 	defer c.Close()
 
 	ctx := context.Background()
@@ -166,7 +166,7 @@ func TestSubprocessClient_InvalidCommand(t *testing.T) {
 }
 
 func TestSubprocessClient_EmptyBinaryPath(t *testing.T) {
-	c := NewSubprocessClient("", nil, false)
+	c := NewSubprocessClient("", nil)
 
 	ctx := context.Background()
 	_, err := c.Send(ctx, "hello")
@@ -176,7 +176,7 @@ func TestSubprocessClient_EmptyBinaryPath(t *testing.T) {
 }
 
 func TestSubprocessClient_CloseBeforeSend(t *testing.T) {
-	c := NewSubprocessClient("echo", nil, false)
+	c := NewSubprocessClient("echo", nil)
 
 	// Close without ever starting should be a no-op.
 	if err := c.Close(); err != nil {
@@ -222,7 +222,7 @@ func main() {
 		t.Fatalf("build exit agent: %v\n%s", err, out)
 	}
 
-	c := NewSubprocessClient(binPath, nil, false)
+	c := NewSubprocessClient(binPath, nil)
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -306,7 +306,7 @@ func TestSubprocessClient_BinaryPathWithSpaces(t *testing.T) {
 		t.Fatalf("test setup: expected a space in %q", bin)
 	}
 
-	c := NewSubprocessClient(bin, nil, false)
+	c := NewSubprocessClient(bin, nil)
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -352,7 +352,7 @@ func main() {
 func TestSubprocessClient_CancelKillsChild(t *testing.T) {
 	bin := buildAgentFrom(t, t.TempDir(), "slow_agent", slowAgentSrc)
 
-	c := NewSubprocessClient(bin, nil, false)
+	c := NewSubprocessClient(bin, nil)
 	defer c.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -414,7 +414,7 @@ func main() {
 func TestSubprocessClient_UnparseableLineIsVisible(t *testing.T) {
 	bin := buildAgentFrom(t, t.TempDir(), "garbage_agent", garbageAgentSrc)
 
-	c := NewSubprocessClient(bin, nil, false)
+	c := NewSubprocessClient(bin, nil)
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -453,7 +453,7 @@ func TestSubprocessClient_CancelEmitsNoSpuriousError(t *testing.T) {
 
 	const runs = 8
 	for i := 0; i < runs; i++ {
-		c := NewSubprocessClient(bin, nil, false)
+		c := NewSubprocessClient(bin, nil)
 		ctx, cancel := context.WithCancel(context.Background())
 
 		ch, err := c.Send(ctx, "start")
@@ -480,7 +480,7 @@ func TestSubprocessClient_CancelEmitsNoSpuriousError(t *testing.T) {
 func TestSubprocessClient_SendAfterCancelRespawns(t *testing.T) {
 	bin := buildAgentFrom(t, t.TempDir(), "respawn_agent", echoAgentSrc)
 
-	c := NewSubprocessClient(bin, nil, false)
+	c := NewSubprocessClient(bin, nil)
 	defer c.Close()
 
 	for i := 0; i < 10; i++ {

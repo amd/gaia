@@ -112,7 +112,7 @@ func main() {
 func TestFetchMemory_ReturnsParsedDump(t *testing.T) {
 	bin := buildCanonicalMemoryMockAgent(t)
 
-	c := NewCanonicalSubprocessClient(bin, nil, false)
+	c := NewCanonicalSubprocessClient(bin, nil)
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -143,7 +143,7 @@ func TestFetchMemory_ReturnsParsedDump(t *testing.T) {
 func TestFetchMemory_SentinelNeverLeaksAsALiteralQuestion(t *testing.T) {
 	bin := buildCanonicalMemoryMockAgent(t)
 
-	c := NewCanonicalSubprocessClient(bin, nil, false)
+	c := NewCanonicalSubprocessClient(bin, nil)
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -305,7 +305,7 @@ func main() {
 // both as "the agent closed the connection before answering" told a user whose
 // agent was merely still booting that it had hung up on them.
 func TestSubprocessFetchMemoryNamesTheTimeoutNotAHangUp(t *testing.T) {
-	c := NewCanonicalSubprocessClient(buildStallingAgent(t), nil, false)
+	c := NewCanonicalSubprocessClient(buildStallingAgent(t), nil)
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

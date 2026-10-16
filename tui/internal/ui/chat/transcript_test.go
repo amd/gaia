@@ -79,8 +79,10 @@ func TestSuccessiveModelMessagesAreNeverConcatenated(t *testing.T) {
 	if !strings.Contains(frame, "Fixed and verified") {
 		t.Errorf("the answer being written is not on screen:\n%s", frame)
 	}
-	if strings.Contains(frame, "Let me reproduce") {
-		t.Errorf("a step's preamble must be folded away by default:\n%s", frame)
+	// What the model said before a call is its narration: shown as plain
+	// prose on a bullet of its own, never glued to the answer.
+	if !strings.Contains(frame, "● Let me reproduce the bug first.") {
+		t.Errorf("a step's preamble must be its own narration bullet:\n%s", frame)
 	}
 
 	// No `answer` on the final: the streamed text is the answer — and only the
@@ -91,24 +93,25 @@ func TestSuccessiveModelMessagesAreNeverConcatenated(t *testing.T) {
 		t.Errorf("the answer carried the preamble with it: %+v", last)
 	}
 
-	// The preamble is folded, not thrown away.
-	if frame := frameOf(ctrlO(t, m)); !strings.Contains(frame, "Let me reproduce the bug first.") {
-		t.Errorf("Ctrl+O must show the folded narration:\n%s", frame)
+	// The preamble stays in the record once the turn is over.
+	if frame := frameOf(m); !strings.Contains(frame, "Let me reproduce the bug first.") {
+		t.Errorf("the narration left the record when the turn ended:\n%s", frame)
 	}
 }
 
-// ✻ rows were the model thinking aloud ("Let me do it.", "Hmm, should I fix it
-// too?"), all turn long. Folded, none of it is on screen — not even as the live
-// line, which names the state instead — and Ctrl+O brings every word back.
-func TestNarrationIsFoldedUntilAskedFor(t *testing.T) {
+// Statuses where the model thinks aloud ("Hmm, should I fix it too?", "Let me
+// do it.") are not what the agent is doing. Folded, none of it is on screen —
+// not even as the status line, which names the state instead — and Ctrl+O
+// brings every word back.
+func TestMusingIsFoldedUntilAskedFor(t *testing.T) {
 	m := sizedChat(t, 120, 40)
 	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Message: "Hmm, should I fix it too?"})
 	frame := frameOf(m)
 	if strings.Contains(frame, "should I fix it") {
-		t.Errorf("the model's reasoning reached the live line:\n%s", frame)
+		t.Errorf("the model's musing reached the status line:\n%s", frame)
 	}
 	if !strings.Contains(frame, "Waiting for the model") {
-		t.Errorf("the live line must still say what state the turn is in:\n%s", frame)
+		t.Errorf("the status line must still say what state the turn is in:\n%s", frame)
 	}
 
 	m = feed(t, m,
@@ -120,16 +123,16 @@ func TestNarrationIsFoldedUntilAskedFor(t *testing.T) {
 	frame = frameOf(m)
 	for _, said := range []string{"should I fix it", "Let me do it."} {
 		if strings.Contains(frame, said) {
-			t.Errorf("narration %q is on screen:\n%s", said, frame)
+			t.Errorf("musing %q is on screen:\n%s", said, frame)
 		}
 	}
-	for _, step := range []string{"Listing toybox", "Reading toybox"} {
+	for _, step := range []string{"Look through toybox", "Read dates.py"} {
 		if !strings.Contains(frame, step) {
 			t.Errorf("step %q is missing:\n%s", step, frame)
 		}
 	}
 	if frame := frameOf(ctrlO(t, m)); !strings.Contains(frame, "Let me do it.") {
-		t.Errorf("Ctrl+O must bring the narration back:\n%s", frame)
+		t.Errorf("Ctrl+O must bring the musing back:\n%s", frame)
 	}
 }
 
@@ -189,8 +192,8 @@ func TestTheLiveLineNamesTheModelsPhase(t *testing.T) {
 
 // A confirmation used to reach the screen four times: "[!] confirmation needed",
 // "[!] … resolved: approved — running it", "[!] approved decision … delivered",
-// plus the modal. Now: the modal asks, and the step it gated says one word.
-func TestAConfirmationIsShownOnceThenOneWord(t *testing.T) {
+// plus the modal. Now: the modal asks, and the step it gated is the record.
+func TestAConfirmationIsShownOnceThenQuiet(t *testing.T) {
 	m, _ := liveModel(t)
 	m.width, m.height = 120, 40
 	m.resize()
@@ -223,11 +226,14 @@ func TestAConfirmationIsShownOnceThenOneWord(t *testing.T) {
 			t.Errorf("the confirmation lifecycle leaked %q into the transcript:\n%s", noise, frame)
 		}
 	}
-	if n := strings.Count(frame, "approved"); n != 1 {
-		t.Errorf("the outcome must be said exactly once, said %d times:\n%s", n, frame)
+	// A plain yes is the expected answer and costs no words; the step is
+	// still there, once. A no or a timeout does say so (see
+	// TestDifferentAnswersNeverFoldTogether).
+	if n := strings.Count(frame, "approved"); n != 0 {
+		t.Errorf("a plain approval was spelled out %d times:\n%s", n, frame)
 	}
-	if !strings.Contains(frame, "pwd · approved") {
-		t.Errorf("the outcome belongs on the step it gated:\n%s", frame)
+	if n := strings.Count(frame, "Run pwd"); n != 1 {
+		t.Errorf("the gated step must be on record exactly once, found %d:\n%s", n, frame)
 	}
 }
 
@@ -252,7 +258,7 @@ func TestAStepIsOneShortRowRelativeToTheProject(t *testing.T) {
 	if strings.Contains(frame, base) {
 		t.Errorf("an absolute path inside the project reached the screen:\n%s", frame)
 	}
-	if want := "Running browse directory: " + filepath.Join("toybox", "__pycache__"); !strings.Contains(frame, want) {
+	if want := "Look through __pycache__"; !strings.Contains(frame, want) {
 		t.Errorf("want %q on screen:\n%s", want, frame)
 	}
 	if !strings.Contains(frame, "└ Listing 1 items in __pycache__ (0 folders, 1 files)") {
@@ -267,7 +273,7 @@ func TestAStepIsOneShortRowRelativeToTheProject(t *testing.T) {
 
 // The live drive: the sidecar clips its narration before anything can shorten
 // the path, leaving "Reading file: C:\Users\…\workt…" — the one useless part.
-// The full value is still in the call's args, so it is put back and shortened.
+// The full value is still in the call's args, so the line names the file.
 func TestASidecarClippedPathIsRestoredThenShortened(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "scratchpad", "proj")
 	withPaths(t, base, "")
@@ -278,26 +284,30 @@ func TestASidecarClippedPathIsRestoredThenShortened(t *testing.T) {
 		Type: "tool_call", Tool: "read_file",
 		Args: json.RawMessage(`{"file_path":` + quote(full) + `}`), Narration: clipped,
 	})
-	want := "Reading file: " + filepath.Join("toybox", "dates.py")
-	if frame := frameOf(m); !strings.Contains(frame, want) {
-		t.Errorf("want %q on screen:\n%s", want, frame)
+	frame := frameOf(m)
+	if !strings.Contains(frame, "Read dates.py") {
+		t.Errorf("want the file named on screen:\n%s", frame)
+	}
+	if strings.Contains(frame, full[:30]) {
+		t.Errorf("the clipped head of the path reached the screen:\n%s", frame)
 	}
 }
 
-// Folded, a step costs one row however long its command is; Ctrl+O wraps it.
+// Folded, a command costs one row however long it is; Ctrl+O wraps it.
 func TestAFoldedStepIsOneRow(t *testing.T) {
-	m := feed(t, chatAt(t, term{"standard", 80, 24}), shellCall(longShell))
+	m := feed(t, chatAt(t, term{"standard", 80, 24}), shellCall(longShell),
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "run_shell_command", Data: json.RawMessage(`{"success":true}`)})
 	rowsWith := func(m ChatModel) int {
 		n := 0
 		for _, r := range rowsOf(m.renderLiveRegion()) {
-			if strings.Contains(r, "gh issue") || strings.Contains(r, "--json") || strings.Contains(r, "--jq") {
+			if strings.Contains(r, "--json") || strings.Contains(r, "--jq") || strings.Contains(r, "length") {
 				n++
 			}
 		}
 		return n
 	}
 	if n := rowsWith(m); n != 1 {
-		t.Errorf("a folded step took %d rows:\n%s", n, ansi.Strip(m.renderLiveRegion()))
+		t.Errorf("a folded command took %d rows:\n%s", n, ansi.Strip(m.renderLiveRegion()))
 	}
 	if !strings.Contains(ansi.Strip(m.renderLiveRegion()), "…") {
 		t.Errorf("a cut must be marked:\n%s", ansi.Strip(m.renderLiveRegion()))
@@ -332,18 +342,19 @@ func TestRepeatsFoldAcrossHiddenNarration(t *testing.T) {
 		event.CanonicalFinalEvent{Type: "final", Answer: "Done."},
 	)
 	frame := frameOf(m)
-	if n := strings.Count(frame, "Editing"); n != 1 || !strings.Contains(frame, "x2") {
-		t.Errorf("two consecutive edits must fold to one row with x2, got %d rows:\n%s", n, frame)
+	if n := strings.Count(frame, "● Edited"); n != 1 || !strings.Contains(frame, "Edited dates.py, test_dates.py") {
+		t.Errorf("two consecutive edits must fold to one row naming both files, got %d rows:\n%s", n, frame)
 	}
 }
 
-// The repeat counter is what turns thirteen identical rows into one.
+// The count is what turns thirteen identical rows into one.
 func TestAFoldedRowKeepsItsCounter(t *testing.T) {
 	m := chatAt(t, term{"standard", 80, 24})
 	for i := 0; i < 13; i++ {
-		m = feed(t, m, shellCall(longShell))
+		m = feed(t, m, shellCall(longShell),
+			event.CanonicalToolResultEvent{Type: "tool_result", Tool: "run_shell_command", Data: json.RawMessage(`{"success":true}`)})
 	}
-	if got := flat(rowsOf(m.renderLiveRegion())); !strings.Contains(got, "x13") {
+	if got := flat(rowsOf(m.renderLiveRegion())); !strings.Contains(got, "Ran 13 commands") {
 		t.Errorf("the repeat count was cut off the folded row: %s", got)
 	}
 }
@@ -364,7 +375,7 @@ func TestTheWorkOutlivesTheTurnAboveTheAnswer(t *testing.T) {
 	rows := strings.Split(frameOf(m), "\n")
 	step, answer := -1, -1
 	for i, r := range rows {
-		if strings.Contains(r, "Reading toybox/dates.py") && step < 0 {
+		if strings.Contains(r, "Read dates.py") && step < 0 {
 			step = i
 		}
 		if strings.Contains(r, "Fixed — all 4 tests pass.") {
@@ -429,16 +440,17 @@ func quote(s string) string {
 }
 
 // Review finding: two calls to one tool, approved then denied, must not fold
-// into a row that says only "approved".
+// into one row — the "no" has to stay visible on its own step.
 func TestDifferentAnswersNeverFoldTogether(t *testing.T) {
 	m := sizedChat(t, 120, 40)
 	m.activity = replySteps("approved", "denied")
+	m.activity = append(m.activity, ActivityItem{Kind: "tool", Tool: "noop", Content: "Waiting"})
 	frame := frameOf(m)
-	if !strings.Contains(frame, "· approved") || !strings.Contains(frame, "· denied") {
-		t.Errorf("each answer must stay on its own step:\n%s", frame)
+	if !strings.Contains(frame, "· denied") {
+		t.Errorf("the denial is not on its step:\n%s", frame)
 	}
-	if strings.Contains(frame, "x2") {
-		t.Errorf("steps with different answers were folded:\n%s", frame)
+	if n := strings.Count(frame, "Send a reply"); n != 2 || strings.Contains(frame, "x2") {
+		t.Errorf("steps with different answers were folded (%d rows):\n%s", n, frame)
 	}
 }
 
@@ -461,7 +473,7 @@ func TestADeniedStepIsNeverTheLiveLine(t *testing.T) {
 	m := sizedChat(t, 120, 40)
 	m.activity = []ActivityItem{{Kind: "tool", Tool: "send_reply", Content: "Sending a reply", Approval: "denied"}}
 	region := ansi.Strip(m.renderLiveRegion())
-	if !strings.Contains(region, "▪ Sending a reply · denied") {
+	if !strings.Contains(region, "● Send a reply · denied") {
 		t.Errorf("a denied step must render as a finished row:\n%s", region)
 	}
 }
@@ -502,7 +514,7 @@ func TestAFoldedRowNamesEveryTargetItTouched(t *testing.T) {
 		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "edit_file", Narration: "Editing file: toybox/dates.py"},
 		toolDone("edit_file", "1 edit"),
 	)
-	want := "Editing file: toybox/dates.py, tests/test_dates.py x3"
+	want := "Edited dates.py, test_dates.py x3"
 	if frame := frameOf(m); !strings.Contains(frame, want) {
 		t.Errorf("want %q on screen:\n%s", want, frame)
 	}
@@ -520,7 +532,7 @@ func TestCancellingKeepsTheStepsThatRan(t *testing.T) {
 	if len(m.activity) != 0 {
 		t.Errorf("the live log must start over on cancel: %+v", m.activity)
 	}
-	if frame := frameOf(m); !strings.Contains(frame, "Reading toybox/dates.py") {
+	if frame := frameOf(m); !strings.Contains(frame, "Read dates.py") {
 		t.Errorf("the steps that ran before the cancel vanished:\n%s", frame)
 	}
 }

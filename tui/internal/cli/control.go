@@ -17,7 +17,7 @@ var (
 // decision logic stays a pure function (and so the package has no init cycle
 // between rootCmd and the flag lookup).
 func controlOptionsFor(cmd *cobra.Command) (*control.Options, error) {
-	return controlOptions(controlEnabled, controlPort, cmd.Flags().Changed("control-port"))
+	return controlOptions(controlEnabled || dev, controlPort, cmd.Flags().Changed("control-port"))
 }
 
 // controlOptions turns the --control / --control-port flags into control
@@ -71,6 +71,10 @@ func agentControlOptions(enabled bool, port int, explicitPort, oneShot bool) (*c
 // (`chat --agent`, `run <id>`) — the interactive case binds the control API
 // exactly like the bare root command and `chat --subprocess` (control.go was
 // only ever wired for those two paths); the one-shot case refuses it loudly.
+//
+// --dev turns the control API on for an interactive launch only: a one-shot has
+// no session to drive, and --dev changes nothing else, so it is a no-op there
+// rather than a refusal.
 func controlOptionsForAgentRun(cmd *cobra.Command, oneShot bool) (*control.Options, error) {
-	return agentControlOptions(controlEnabled, controlPort, cmd.Flags().Changed("control-port"), oneShot)
+	return agentControlOptions(controlEnabled || (dev && !oneShot), controlPort, cmd.Flags().Changed("control-port"), oneShot)
 }

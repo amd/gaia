@@ -112,8 +112,10 @@ var toolPhrases = map[string]toolPhrase{
 	"triage_message":  {With: "Triaging message %s", Without: "Triaging a message", Arg: "message_id"},
 	"search_messages": {With: "Searching your mail for %s", Without: "Searching your mail", Arg: "query"},
 
-	// Not a tool: the agent asking to reach a path outside the session.
-	"allow_path_access": {With: "Asking for access to %s", Without: "Asking for access to a location", Arg: "path"},
+	// Not tools: the agent checking in on a long turn, and asking to reach a
+	// path outside the session.
+	"continue_long_turn": {Without: "Asking whether to keep going"},
+	"allow_path_access":  {With: "Asking for access to %s", Without: "Asking for access to a location", Arg: "path"},
 }
 
 // verbForms turns a tool name's leading token into a present-participle phrase,
@@ -494,6 +496,8 @@ func clean(s string) string {
 	if strings.ContainsRune(s, 0x1b) {
 		s = ansi.Strip(s)
 	}
+	// C1 controls and bidi overrides too: model text reaches every row here.
+	s = scrubDisplayControls(s)
 	s = strings.Map(func(r rune) rune {
 		switch {
 		case r == '\t' || r == '\n' || r == '\r':

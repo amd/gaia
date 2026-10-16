@@ -298,6 +298,7 @@ const chatHelpText = `  GAIA Chat
   Click         Picks a palette row or question
                 option · Ctrl+T to click links too
   Ctrl+O        Each step in full, or folded
+  Ctrl+G        Open the newest file a turn made
 
   Copy and paste
   ──────────────────

@@ -9,10 +9,11 @@ import (
 	"os"
 	"testing"
 
+	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
-// TestMain keeps the package off the developer's own GAIA home: a fake
+// TestMain keeps the package off the developer's own GAIA home and logs: a fake
 // Lemonade on loopback would otherwise be taken for GAIA's server and its
 // requests followed to the real one.
 func TestMain(m *testing.M) {
@@ -21,11 +22,15 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("GAIA_HOME", home)
+	// Diagnostics are always written to the session log; keep them off the
+	// developer's own ~/.gaia/logs.
+	os.Setenv(control.EnvHome, home)
 	os.Setenv("LEMONADE_BASE_URL", "")
 	lemonade.StubEnsureEmbeddedForTest(func(context.Context) error {
 		return errors.New("test: no daemon")
 	})
 	code := m.Run()
+	control.CloseLog()
 	os.RemoveAll(home)
 	os.Exit(code)
 }

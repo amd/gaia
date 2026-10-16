@@ -152,18 +152,13 @@ func containsString(haystack []string, needle string) bool {
 // script and from CI.
 //
 // debugf receives every event as it arrives, raw payloads included; nil is
-// silent. It is what --dev reaches for when a turn answers with nothing.
-//
-// dev also decides whether the run reports its own machinery — step and tool
-// counts — after the answer. Those measure the agent loop, not the answer, so
-// they belong to whoever is tuning the loop; a one-shot piped into a script
-// should end at the answer.
+// silent. A one-shot ends at the answer: the agent loop's step and tool counts
+// are not printed — they are in the trace.
 func RunOneShot(
 	ctx context.Context,
 	c client.AgentClient,
 	query string,
 	out, errW io.Writer,
-	dev bool,
 	debugf func(format string, args ...any),
 ) OneShotResult {
 	if debugf == nil {
@@ -265,10 +260,6 @@ func RunOneShot(
 			} else if res.Answer != "" {
 				fmt.Fprintln(out, res.Answer)
 			}
-			if usage := event.CanonicalUsageOf(e); dev && (usage.Steps > 0 || usage.ToolsUsed > 0) {
-				fmt.Fprintf(errW, "  ℹ️  %s, %s\n",
-					plural(usage.Steps, "step"), plural(usage.ToolsUsed, "tool"))
-			}
 
 		case event.CanonicalErrorEvent:
 			debugf("error: status=%d source=%q", e.Status, e.Source)
@@ -306,9 +297,12 @@ func RunOneShot(
 			fmt.Fprintf(errW, "  🔧 %s\n", e.Tool)
 		case event.StepEvent:
 			// The agent loop's bound, not progress on the work — same reason the
-			// chat view drops it. Only --dev has a use for it.
-			if dev {
-				fmt.Fprintf(errW, "  … Step %d/%d\n", e.Step, e.Total)
+			// chat view drops it.
+			// No limit set sends no total: there is no denominator to show.
+			if e.Total > 0 {
+				debugf("step %d/%d", e.Step, e.Total)
+			} else {
+				debugf("step %d", e.Step)
 			}
 		case event.ThinkingEvent:
 			// Reasoning is not progress a script needs; --debug keeps it.
@@ -636,13 +630,4 @@ func abandonedDetail(err error, query string, elapsed time.Duration) string {
 	}
 	return fmt.Sprintf("the %q query was cancelled after %s, before the agent answered",
 		query, elapsed.Round(time.Second))
-}
-
-// plural renders a count with its noun, so a one-step turn does not report
-// "1 steps".
-func plural(n int, noun string) string {
-	if n == 1 {
-		return fmt.Sprintf("1 %s", noun)
-	}
-	return fmt.Sprintf("%d %ss", n, noun)
 }

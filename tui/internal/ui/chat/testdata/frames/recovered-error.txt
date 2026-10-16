@@ -1,0 +1,24 @@
+ GAIA  │ agent gaia
+────────────────────────────────────────────────────────────────────────────────────────────────────
+▶ You: Install formulas
+
+  ● Install formulas (pip) · 2.0s
+    └ python -m pip install formulas --quiet
+    └ ✗ failed: No module named pip — carried on
+  ● Install formulas (uv) · 4.0s
+    └ uv pip install formulas (1 line)
+
+  Installed formulas with uv.
+  ✓ Ran 1 command · 9.0s
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+› Ask anything — Enter to send, Alt+Enter for a new line
+  ● agent gaia connected     ask mode (shift+tab) · ↑↓/wheel scroll · Ctrl+O details · Ctrl+C quit

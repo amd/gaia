@@ -155,6 +155,7 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 		"KeyEnter":  "Enter",
 		"KeyCtrlT":  "Ctrl+T",
 		"KeyCtrlO":  "Ctrl+O",
+		"KeyCtrlG":  "Ctrl+G",
 		"KeyCtrlY":  "Ctrl+Y",
 		"KeyCtrlB":  "Ctrl+B",
 		"KeyCtrlV":  "Ctrl+V",

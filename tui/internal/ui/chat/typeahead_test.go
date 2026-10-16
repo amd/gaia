@@ -161,7 +161,7 @@ func TestCancellingGivesTheQueuedMessageBack(t *testing.T) {
 // literal question.
 func TestAQueuedSlashCommandStillRunsAsACommand(t *testing.T) {
 	c := &nullClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 80, 24
 	m.resize()
 	m.messages = []Message{{Role: RoleUser, Content: "earlier question"}}

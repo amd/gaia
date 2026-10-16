@@ -578,10 +578,10 @@ func seedAgents() []Agent {
 			Transport:       TransportSubprocess,
 			BinaryPath:      "gaia-agent",
 			CanonicalEvents: true,
-			// `gaia-tui --dev` also puts the child at DEBUG in
-			// ~/.gaia/logs/gaia-agent.log. Without this the TUI would go verbose
-			// while the agent kept logging errors only — and the log is where the
-			// answer usually is.
+			// `gaia-tui --trace` also puts the child at DEBUG in
+			// ~/.gaia/logs/gaia-agent.log: a run recorded for debugging should
+			// have the agent's side of it too.
+
 			DevArgs: []string{"--dev"},
 		},
 	}

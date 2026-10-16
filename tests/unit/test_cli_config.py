@@ -179,6 +179,21 @@ class TestConfigCLI:
         out = capsys.readouterr().out
         assert "Qwen3.5-35B-A3B-GGUF" in out
 
+    def test_reduced_motion_is_a_strict_boolean(self, monkeypatch, tmp_path, capsys):
+        """The terminal UI reads reduced_motion as a JSON boolean, never a string."""
+        _run_main(["config", "set", "reduced_motion", "yes"], monkeypatch, tmp_path)
+        data = json.loads((tmp_path / "config.json").read_text())
+        assert data["reduced_motion"] is True
+
+        _run_main(["config", "set", "reduced_motion", "off"], monkeypatch, tmp_path)
+        data = json.loads((tmp_path / "config.json").read_text())
+        assert data["reduced_motion"] is False
+
+        with pytest.raises(SystemExit):
+            _run_main(
+                ["config", "set", "reduced_motion", "sometimes"], monkeypatch, tmp_path
+            )
+
     def test_show_includes_path_and_fields(self, monkeypatch, tmp_path, capsys):
         _run_main(["config", "show"], monkeypatch, tmp_path)
         out = capsys.readouterr().out

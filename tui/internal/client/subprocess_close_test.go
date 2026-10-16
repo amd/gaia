@@ -47,7 +47,7 @@ func startCloseHelper(t *testing.T, mode string, exitGrace time.Duration) (*Subp
 		t.Fatal(err)
 	}
 	t.Setenv("LEMONADE_BASE_URL", "http://127.0.0.1:1/api/v1")
-	c := NewSubprocessClient(exe, []string{"-test.run=^TestSubprocessCloseHelper$", "--", "--close-helper", mode}, false)
+	c := NewSubprocessClient(exe, []string{"-test.run=^TestSubprocessCloseHelper$", "--", "--close-helper", mode})
 	c.exitGrace = exitGrace
 	runTurn(t, c, "hello")
 	proc := c.proc
@@ -119,7 +119,7 @@ func TestSubprocessClient_CloseKillsAChildThatOutlastsTheBudget(t *testing.T) {
 
 func TestNewSubprocessClientCoversTheAgentsMemoryDrain(t *testing.T) {
 	// The Python agent drains memory for up to EXTRACTION_EXIT_WAIT_S (15 s).
-	if got := NewSubprocessClient("agent", nil, false).exitGrace; got <= 15*time.Second {
+	if got := NewSubprocessClient("agent", nil).exitGrace; got <= 15*time.Second {
 		t.Fatalf("exit grace %s does not cover the agent's 15 s memory drain", got)
 	}
 }
