@@ -124,19 +124,29 @@ _STATE_ENV = {
 }
 _STATE_ROOT = Path(tempfile.mkdtemp(prefix="gaia-test-state-"))
 atexit.register(shutil.rmtree, _STATE_ROOT, ignore_errors=True)
+#: Names this conftest set, so a pytest-xdist worker can tell them from the
+#: caller's own: it inherits the controller's environment.
+_STATE_SET_BY_CONFTEST = "_GAIA_TEST_STATE_SET_BY_CONFTEST"
 
 
 def _isolate_gaia_state() -> None:
     # Module level, not a fixture: gaia.config reads GAIA_CONFIG_FILE at import,
     # which can happen before any fixture runs.
+    inherited = set()
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        # Otherwise every worker shares the controller's config and memory DB.
+        inherited = set(os.environ.get(_STATE_SET_BY_CONFTEST, "").split(","))
+    ours = []
     for name, parts in _STATE_ENV.items():
-        if os.environ.get(name):
+        if os.environ.get(name) and name not in inherited:
             continue
         path = _STATE_ROOT.joinpath(*parts)
         (path if name == "GAIA_DAEMON_HOME" else path.parent).mkdir(
             parents=True, exist_ok=True
         )
         os.environ[name] = str(path)
+        ours.append(name)
+    os.environ[_STATE_SET_BY_CONFTEST] = ",".join(ours)
 
 
 def _isolate_config_dir() -> None:
