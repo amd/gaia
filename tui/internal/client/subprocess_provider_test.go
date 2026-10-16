@@ -23,7 +23,7 @@ func TestSetModelBeforeStartReplacesOnlyInferenceFlags(t *testing.T) {
 		{"--json-events", "--dev", "--use-claude=true", "--claude-model=claude-sonnet-5", "--full-access", "--model=old-model"},
 	} {
 		original := append([]string(nil), args...)
-		c := NewCanonicalSubprocessClient("unused", args, true)
+		c := NewCanonicalSubprocessClient("unused", args)
 		if !c.SetModelBeforeStart("fireworks.gemma-4-31b-it") {
 			t.Fatal("catalog selection was refused before startup")
 		}
@@ -50,7 +50,7 @@ func TestSetModelBeforeStartRefusesRunningLegacyAndEmptySelections(t *testing.T)
 		{"empty selection", "  ", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := NewSubprocessClient("unused", []string{"--model", "existing"}, false)
+			c := NewSubprocessClient("unused", []string{"--model", "existing"})
 			c.canonical, c.started = tc.canonical, tc.started
 			if c.SetModelBeforeStart(tc.model) || c.ModelAtLaunch() != "existing" {
 				t.Fatal("unsupported switch changed the launch arguments")
@@ -60,7 +60,7 @@ func TestSetModelBeforeStartRefusesRunningLegacyAndEmptySelections(t *testing.T)
 }
 
 func TestLaunchModelSettersAndGettersAreSafeTogether(t *testing.T) {
-	c := NewCanonicalSubprocessClient("unused", []string{"--use-claude", "--claude-model", "claude-sonnet-5", "--full-access"}, false)
+	c := NewCanonicalSubprocessClient("unused", []string{"--use-claude", "--claude-model", "claude-sonnet-5", "--full-access"})
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
@@ -123,7 +123,7 @@ func TestPendingCloudSelectionLaunchesAgainstEmbeddedEndpoint(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c := NewCanonicalSubprocessClient(buildMockAgent(t), []string{"--json-events", "--use-claude"}, false)
+	c := NewCanonicalSubprocessClient(buildMockAgent(t), []string{"--json-events", "--use-claude"})
 	if !c.SetModelBeforeStart("fireworks.gemma-4-31b-it") {
 		t.Fatal("could not select cloud before launch")
 	}

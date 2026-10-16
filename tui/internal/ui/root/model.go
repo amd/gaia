@@ -3,13 +3,13 @@ package root
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/chat"
@@ -56,7 +56,6 @@ type FlagshipModel struct {
 	help   components.HelpState
 	width  int
 	height int
-	dev    bool
 	// fullAccess starts the agent with confirmation prompts off
 	// (--full-access). Off unless the launch asked for it.
 	fullAccess bool
@@ -203,12 +202,11 @@ func (b *clientBox) close() error {
 }
 
 // NewFlagshipModel builds the TUI around one agent.
-func NewFlagshipModel(agent catalog.Agent, dev bool) FlagshipModel {
+func NewFlagshipModel(agent catalog.Agent) FlagshipModel {
 	return FlagshipModel{
 		activeView: viewSplash,
 		agent:      agent,
 		chatClient: &clientBox{},
-		dev:        dev,
 		suppressed: map[string]bool{},
 		listeners:  []Listener{haltOnDisposition},
 	}
@@ -608,20 +606,18 @@ func clampInt(v, lo, hi int) int {
 	return v
 }
 
-// logf writes transport diagnostics to stderr in dev mode. It must never be
-// given a daemon token — daemon.Instance redacts its own token when formatted.
+// logf writes transport diagnostics to the session log, never the screen. It
+// must never be given a daemon token — daemon.Instance redacts its own token
+// when formatted.
 func (m FlagshipModel) logf(format string, args ...any) {
-	if !m.dev {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+	control.Logf(format, args...)
 }
 
 func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea.Model, tea.Cmd) {
 	// Interactive: this launch opens the chat view, which renders a mid-run
 	// question and answers it.
 	c, err := client.ForAgent(agent, client.ForAgentOptions{
-		Dev: m.dev, Logf: m.logf, Interactive: true,
+		Logf: m.logf, Interactive: true,
 		Model:       m.launchModel(agent),
 		Trace:       m.trace,
 		FullAccess:  m.fullAccess,
@@ -657,7 +653,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	}
 	m.chatClient.set(c)
 
-	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, m.dev, setupVerified).
+	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, setupVerified).
 		WithHubClient(m.hub())
 	if len(m.pendingTranscript) > 0 {
 		// Set only on the switch path (switchAgent) — a fresh launch never

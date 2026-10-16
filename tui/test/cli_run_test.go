@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/amd/gaia/tui/internal/control"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -208,34 +209,35 @@ func TestFailedToolRemedyReachesStderrVerbatim(t *testing.T) {
 	}
 }
 
-// --debug is documented as "enable debug logging to stderr" and produced output
-// byte-identical to a run without it on the one-shot path — the path it is most
-// needed on.
-func TestDebugAddsDiagnosticsToTheOneShotPath(t *testing.T) {
+// --dev (and its old name --debug) only turns on the control API, which a
+// one-shot has no use for — so it changes nothing about a one-shot's output.
+// Diagnostics go to the session log, where they are there for every run.
+func TestDebugChangesNothingOnTheOneShotPath(t *testing.T) {
 	gaiaBin, binDir := buildBinaries(t)
 
-	run := func(args ...string) string {
+	run := func(args ...string) (stderr, sessionLog string) {
+		home := t.TempDir()
 		cmd := exec.Command(gaiaBin, args...)
-		cmd.Env = oneShotEnv(t, binDir)
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
+		cmd.Env = append(oneShotEnv(t, binDir), control.EnvHome+"="+home)
+		var errBuf bytes.Buffer
+		cmd.Stderr = &errBuf
 		_ = cmd.Run()
-		return stderr.String()
+		raw, _ := os.ReadFile(filepath.Join(home, control.LogFileName))
+		return errBuf.String(), string(raw)
 	}
 
 	mock := filepath.Join(binDir, mockName())
-	quiet := run("run", "gaia", "--mock", mock, "--query", "list the files")
-	loud := run("run", "gaia", "--mock", mock, "--query", "list the files", "--debug")
+	quiet, quietLog := run("run", "gaia", "--mock", mock, "--query", "list the files")
+	loud, loudLog := run("run", "gaia", "--mock", mock, "--query", "list the files", "--debug")
 
-	if !strings.Contains(loud, "[DEBUG]") {
-		t.Fatalf("--debug produced no diagnostics on the one-shot path:\n%s", loud)
+	for name, out := range map[string]string{"plain": quiet, "--debug": loud} {
+		if strings.Contains(out, "[DEBUG]") {
+			t.Errorf("%s run wrote diagnostics to the terminal:\n%s", name, out)
+		}
 	}
-	if len(loud) <= len(quiet) {
-		t.Errorf("--debug output is no richer than the plain run:\n%s", loud)
-	}
-	for _, want := range []string{"one-shot: agent=gaia", "tool_result"} {
-		if !strings.Contains(loud, want) {
-			t.Errorf("--debug output is missing %q:\n%s", want, loud)
+	for name, log := range map[string]string{"plain": quietLog, "--debug": loudLog} {
+		if !strings.Contains(log, "one-shot: agent=gaia") {
+			t.Errorf("%s run left no diagnostics in the session log:\n%s", name, log)
 		}
 	}
 }

@@ -66,8 +66,6 @@ const (
 	// but it is the one mode nobody has to be warned about, so it yields to
 	// anything saying what is happening right now.
 	rankDefaultMode = 30
-	// Numbers for whoever is tuning the machinery. First to go.
-	rankDiagnostic = 10
 )
 
 // statusHints builds the hint list for the current state, in display order.
@@ -91,13 +89,6 @@ func (m ChatModel) statusHints() []hint {
 		hints = append(hints, hint{text: mode, rank: rank})
 	}
 
-	if m.dev && m.totalSteps > 0 {
-		// The agent loop's step count is a loop bound, not user progress — it
-		// says neither what is happening nor how far along the work is. For
-		// someone tuning the loop it is the number that matters, so it rides
-		// the one row always on screen, and only in --dev.
-		hints = append(hints, hint{text: stepHint(m.totalSteps), rank: rankDiagnostic})
-	}
 	if !m.followTail {
 		hints = append(hints, hint{text: "End to jump to latest", rank: rankOrient})
 	}
@@ -134,6 +125,12 @@ func (m ChatModel) statusHints() []hint {
 			}
 			hints = append(hints, hint{text: text, rank: rankSecondary})
 		}
+		// One key to the result, offered only once there is one to open.
+		if !m.streaming && m.confirmation == nil {
+			if _, ok := m.lastDeliverable(); ok {
+				hints = append(hints, hint{text: "Ctrl+G open file", rank: rankAffordance})
+			}
+		}
 	}
 
 	switch {
@@ -164,7 +161,7 @@ func (m ChatModel) statusHints() []hint {
 		// composer is frozen never tries it.
 		hints = append(hints,
 			hint{text: "keep typing", rank: rankAffordance},
-			hint{text: "Esc cancel", rank: rankInterrupt},
+			hint{text: "Esc to interrupt", rank: rankInterrupt},
 		)
 	}
 
@@ -246,33 +243,6 @@ func remaining(keep []bool) int {
 		}
 	}
 	return n
-}
-
-func stepHint(steps int) string {
-	return "step " + itoa(steps)
-}
-
-// itoa avoids pulling strconv in for one call site in a hot render path.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
 }
 
 // hintBudget is how many columns the hint may use on this terminal: whatever

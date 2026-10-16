@@ -144,7 +144,7 @@ func TestSubprocessClientTracesEveryLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "run.jsonl")
 	tw := newTestTrace(t, path)
 
-	c := NewSubprocessClient(bin, nil, false).WithTrace(tw)
+	c := NewSubprocessClient(bin, nil).WithTrace(tw)
 	defer c.Close()
 
 	ch, err := c.Send(context.Background(), "hello")
@@ -170,7 +170,7 @@ func TestSubprocessClientTracesEveryLine(t *testing.T) {
 // at the call site.
 func TestTransportsRunUntracedByDefault(t *testing.T) {
 	bin := buildMockAgent(t)
-	c := NewSubprocessClient(bin, nil, false)
+	c := NewSubprocessClient(bin, nil)
 	defer c.Close()
 
 	ch, err := c.Send(context.Background(), "hello")

@@ -14,7 +14,6 @@ import (
 // A closing "Done." status just before the answer is not kept beside it.
 func TestCommitWorkDropsNarrationThatLeadsIntoAnswer(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.dev = true
 	m.streaming = true
 	m = feed(t, m,
 		event.CanonicalStatusEvent{Type: "status", Message: "Reading the note"},
@@ -45,7 +44,6 @@ func TestCommitWorkDropsNarrationThatLeadsIntoAnswer(t *testing.T) {
 // With no answer to lead into, the last status before a failure stays on record.
 func TestCommitWorkKeepsTheLastStatusWhenTheTurnFails(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.dev = true
 	m.streaming = true
 	m = feed(t, m,
 		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "write_file", Args: json.RawMessage(`{"path":"notes.md"}`)},

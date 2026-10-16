@@ -134,7 +134,7 @@ func TestStaleDoneMsgAfterCancelIsDropped(t *testing.T) {
 // running to that real close.
 func TestEscUsesAgentCancelerInsteadOfLocalAbort(t *testing.T) {
 	c := &cancelingClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 100, 30
 	m.streaming = true
 	localAborted := false
@@ -185,7 +185,7 @@ func TestEscUsesAgentCancelerInsteadOfLocalAbort(t *testing.T) {
 // re-enabling Enter here would reopen the exact race this fix closes.
 func TestFailedCancelRequestDoesNotReenableSend(t *testing.T) {
 	c := &cancelingClient{err: errors.New("daemon unreachable")}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 100, 30
 	m.streaming = true
 	m.cancelFn = func() {}
@@ -232,7 +232,7 @@ func TestFailedCancelRequestDoesNotReenableSend(t *testing.T) {
 // panic).
 func TestSecondCancelThenResendDoesNotQuitTheApp(t *testing.T) {
 	c := &cancelingClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 100, 30
 
 	// --- Cycle 1: send, cancel, and settle the way the real daemon does --
@@ -296,7 +296,7 @@ func TestSecondCancelThenResendDoesNotQuitTheApp(t *testing.T) {
 // abort the local read and free the composer, leaving the transcript intact.
 func TestSecondEscWhileCancelPendingDoesNotQuit(t *testing.T) {
 	c := &cancelingClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 100, 30
 	m.streaming = true
 	localAborted := false
@@ -350,7 +350,7 @@ func TestSecondEscWhileCancelPendingDoesNotQuit(t *testing.T) {
 // -- but named in the status line, since nothing typed may vanish silently.
 func TestSecondEscAbandonsRatherThanRestoresAQueuedFollowUp(t *testing.T) {
 	c := &cancelingClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 100, 30
 	m.streaming = true
 	m.cancelFn = func() {}
@@ -398,7 +398,7 @@ func TestSecondEscAbandonsRatherThanRestoresAQueuedFollowUp(t *testing.T) {
 // Same reproduction on Ctrl+C, which hits the identical guard in handleKey.
 func TestSecondCtrlCThenResendDoesNotQuitTheApp(t *testing.T) {
 	c := &cancelingClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 100, 30
 
 	updated, _ := m.Update(sendQueryMsg{query: "triage my inbox"})
@@ -441,7 +441,7 @@ func TestSecondCtrlCThenResendDoesNotQuitTheApp(t *testing.T) {
 // and a genuinely-still-pending cancel must not cost the session either.
 func TestSecondCtrlCWhileCancelPendingDoesNotQuit(t *testing.T) {
 	c := &cancelingClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 100, 30
 	m.streaming = true
 	localAborted := false

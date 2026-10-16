@@ -43,7 +43,7 @@ func needsInput() event.CanonicalNeedsInputEvent {
 
 func modelWith(t *testing.T, c *respondingClient) ChatModel {
 	t.Helper()
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 80, 24
 	m.resize()
 	m.streaming = true
@@ -126,7 +126,7 @@ func TestFailedAnswerIsSurfaced(t *testing.T) {
 // A transport with no Respond is a dead end for the user; say so.
 func TestAnswerOnTransportWithoutRespondIsLoud(t *testing.T) {
 	c := &nullClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 80, 24
 	m.streaming = true
 	m = feed(t, m, needsInput())

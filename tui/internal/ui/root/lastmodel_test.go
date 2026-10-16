@@ -35,7 +35,7 @@ func headerOf(m FlagshipModel) string {
 
 func TestSavedLemonadeModelIsWhatTheFlagshipStartsOn(t *testing.T) {
 	agent := fixtureAgent(t, catalog.FlagshipID)
-	m := NewFlagshipModel(agent, false).WithSavedModel(savedFlash)
+	m := NewFlagshipModel(agent).WithSavedModel(savedFlash)
 	// The gate checks the restored model: a cloud one skips the local load.
 	if opts := m.localOptions(agent); opts.Model != flashID || opts.ClaudeMode {
 		t.Fatalf("readiness would check %+v, not the restored model", opts)
@@ -53,8 +53,8 @@ func TestSavedLemonadeModelIsWhatTheFlagshipStartsOn(t *testing.T) {
 func TestExplicitFlagsWinOverTheSavedModel(t *testing.T) {
 	agent := fixtureAgent(t, catalog.FlagshipID)
 	for name, m := range map[string]FlagshipModel{
-		"--model":      NewFlagshipModel(agent, false).WithModel("Qwen3-4B-GGUF"),
-		"--use-claude": NewFlagshipModel(agent, false).WithClaude(true, "claude-sonnet-5"),
+		"--model":      NewFlagshipModel(agent).WithModel("Qwen3-4B-GGUF"),
+		"--use-claude": NewFlagshipModel(agent).WithClaude(true, "claude-sonnet-5"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			m = m.WithSavedModel(savedFlash)
@@ -69,7 +69,7 @@ func TestExplicitFlagsWinOverTheSavedModel(t *testing.T) {
 // would run the wrong model (daemon) or refuse to start (subprocess).
 func TestSavedModelNeverReachesAnotherAgent(t *testing.T) {
 	other := fixtureAgent(t, "other")
-	m := NewFlagshipModel(fixtureAgent(t, catalog.FlagshipID), false).WithSavedModel(savedFlash)
+	m := NewFlagshipModel(fixtureAgent(t, catalog.FlagshipID)).WithSavedModel(savedFlash)
 	if got := m.launchModel(other); got != "" {
 		t.Fatalf("another agent would launch on %q", got)
 	}
@@ -88,7 +88,7 @@ func TestSavedModelNeverReachesAnotherAgent(t *testing.T) {
 func TestSwitchingBackRestoresTheLatestConfirmedChoice(t *testing.T) {
 	agent := fixtureAgent(t, catalog.FlagshipID)
 	var saved []string
-	m := NewFlagshipModel(agent, false).
+	m := NewFlagshipModel(agent).
 		WithModelMemory(func(_, model string) error { saved = append(saved, model); return nil }).
 		WithSavedModel(savedFlash)
 	m.saveModel("amd", "amd.gpt-4.1") // what the chat calls after a confirmed /model
@@ -112,7 +112,7 @@ func TestSavedLocalAndClaudeModelsAreAppliedByTheAgentNotTheGate(t *testing.T) {
 		{Provider: "local", Model: "Qwen3-4B-GGUF"},
 	} {
 		t.Run(saved.Model, func(t *testing.T) {
-			m := NewFlagshipModel(agent, false).WithSavedModel(saved)
+			m := NewFlagshipModel(agent).WithSavedModel(saved)
 			if m.launchModel(agent) != "" || m.useClaude {
 				t.Fatal("the agent must start on its default and switch after")
 			}
@@ -143,7 +143,7 @@ func TestTheModelIDWinsOverAContradictingProvider(t *testing.T) {
 // choice decides — including one changed in chat — and no other agent gets it.
 func TestAGatePickDoesNotOutliveItsLaunch(t *testing.T) {
 	agent := fixtureAgent(t, catalog.FlagshipID)
-	m := NewFlagshipModel(agent, false).WithModelMemory(nil)
+	m := NewFlagshipModel(agent).WithModelMemory(nil)
 	m.model = "amd.gpt-4.1"
 	m = m.pickedAtGate("amd.gpt-4.1")
 	updated, _ := m.launchAgent(agent, true)
@@ -174,7 +174,7 @@ func TestAPickAtTheGateIsHandedToTheChat(t *testing.T) {
 
 func TestHeaderNamesTheModelTheGateLoaded(t *testing.T) {
 	agent := fixtureAgent(t, catalog.FlagshipID)
-	m := NewFlagshipModel(agent, false)
+	m := NewFlagshipModel(agent)
 	m.gateChatModel = "Gemma-4-E4B-it-GGUF"
 	updated, _ := m.launchAgent(agent, true)
 	m = updated.(FlagshipModel)

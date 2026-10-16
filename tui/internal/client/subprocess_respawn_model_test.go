@@ -66,7 +66,7 @@ func TestConfirmedModelSwitchSurvivesARespawn(t *testing.T) {
 	t.Cleanup(func() { subprocessLemonadePorts = old })
 
 	bin := buildAgentFrom(t, t.TempDir(), "argv_agent", argvAgentSrc)
-	c := NewCanonicalSubprocessClient(bin, []string{"--json-events", "--model", "Qwen3.6-35B-A3B-GGUF"}, false)
+	c := NewCanonicalSubprocessClient(bin, []string{"--json-events", "--model", "Qwen3.6-35B-A3B-GGUF"})
 	defer c.Close()
 
 	if got, _ := turn(t, c, "hi"); got != "--json-events --model Qwen3.6-35B-A3B-GGUF" {
@@ -91,7 +91,7 @@ func TestConfirmedModelSwitchSurvivesARespawn(t *testing.T) {
 
 func TestRecordModelSwitchBuildsTheFlagsForEachBackend(t *testing.T) {
 	launch := []string{"--json-events", "--full-access", "--model", "Qwen3.6-35B-A3B-GGUF"}
-	c := NewCanonicalSubprocessClient("unused", append([]string(nil), launch...), false)
+	c := NewCanonicalSubprocessClient("unused", append([]string(nil), launch...))
 
 	// Lemonade -> Claude: the agent keeps its Lemonade model and adds Claude.
 	c.RecordModelSwitch("claude-opus-5", true)
@@ -122,7 +122,7 @@ func TestRecordModelSwitchBuildsTheFlagsForEachBackend(t *testing.T) {
 	}
 
 	// The = form a caller may have launched with is replaced too.
-	c = NewCanonicalSubprocessClient("unused", []string{"--use-claude=true", "--claude-model=claude-opus-5", "--model=old"}, false)
+	c = NewCanonicalSubprocessClient("unused", []string{"--use-claude=true", "--claude-model=claude-opus-5", "--model=old"})
 	c.RecordModelSwitch("Gemma-4-E4B-it-GGUF", false)
 	if want := []string{"--model", "Gemma-4-E4B-it-GGUF"}; !reflect.DeepEqual(c.args, want) {
 		t.Fatalf("= form argv: %v", c.args)
@@ -130,11 +130,11 @@ func TestRecordModelSwitchBuildsTheFlagsForEachBackend(t *testing.T) {
 }
 
 func TestRecordModelSwitchIgnoresLegacyAgentsAndEmptyIds(t *testing.T) {
-	legacy := NewSubprocessClient("unused", []string{"--model", "existing"}, false)
+	legacy := NewSubprocessClient("unused", []string{"--model", "existing"})
 	if legacy.RecordModelSwitch("fireworks.deepseek-v4p1-flash", false) || legacy.ModelAtLaunch() != "existing" {
 		t.Fatal("a legacy agent has no /model; its argv must not change")
 	}
-	c := NewCanonicalSubprocessClient("unused", []string{"--model", "existing"}, false)
+	c := NewCanonicalSubprocessClient("unused", []string{"--model", "existing"})
 	if c.RecordModelSwitch("  ", false) || c.ModelAtLaunch() != "existing" {
 		t.Fatal("an empty id must not change the respawn model")
 	}

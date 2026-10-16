@@ -101,7 +101,7 @@ func TestInstalledAgentOutlivesABareKill(t *testing.T) {
 }
 
 func TestInstalledAgentTreeDiesOnKill(t *testing.T) {
-	c := NewSubprocessClient(installedAgent(t), nil, false)
+	c := NewSubprocessClient(installedAgent(t), nil)
 	c.mu.Lock()
 	st, err := c.startLocked()
 	c.mu.Unlock()

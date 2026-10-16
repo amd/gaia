@@ -40,8 +40,15 @@ type Message struct {
 	InputTokens  int           // prompt tokens this turn sent; 0 => not reported
 	CachedTokens int           // prompt tokens served from the backend's cache
 
-	// DurationLabel names the time in the footnote; empty prints it bare.
-	DurationLabel string
+	// Recap is the finished turn's work in a few words ("Read 8 files · ran 2
+	// commands"), and Deliverables the files it produced. FinishedAt is when
+	// the answer landed, for the recap's one-time sweep.
+	Recap        string
+	Deliverables []deliverable
+	FinishedAt   time.Time
+	// CostUSD is what the turn cost on a per-token provider with a known
+	// price; 0 when either is not the case.
+	CostUSD float64
 
 	// Metrics is the agent's per-turn performance record. Nil unless the agent
 	// ran with GAIA_TURN_LOG set — every ordinary turn, and every turn from an
@@ -122,14 +129,19 @@ type ActivityItem struct {
 	// Detail is the one-line outcome drawn under the item once its result
 	// lands ("18 skills · 21ms"). Empty until then.
 	Detail string
-	// Args and Output are the raw call arguments and raw result payload, one
-	// line each. Populated only in developer mode — in user mode they are left
-	// empty rather than filled and hidden at render time, so the quiet path
-	// never pays to format text nobody will read.
-	Args    string
-	Output  string
-	Done    bool
-	Success *bool
+	// Call is what the call said about itself: its category, the description
+	// the model wrote with it, the derived summary, the command or code (for
+	// Ctrl+O), the files it named and, for a write or an edit, the change.
+	Call callInfo
+	// Goal is the agent's announced goal standing when the call was made — the
+	// headline when the call carries no description of its own.
+	Goal string
+	// At and End bracket the call, for the elapsed time on its row.
+	At, End time.Time
+	// OutLines is how many lines of output the call produced, 0 when unknown.
+	OutLines int
+	Done     bool
+	Success  *bool
 	// Approval is the user's answer to a confirmation this step asked for —
 	// approvalWaiting until they answer, then "approved", "denied"… — or ""
 	// when it asked for none.

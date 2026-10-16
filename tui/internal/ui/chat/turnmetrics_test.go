@@ -53,10 +53,11 @@ func sampleMetricsMessage() *Message {
 // where its seconds went, how much of its input the cache could reuse, and how
 // big the fixed prefill is — actually reach the screen.
 func TestTurnMetricsBlockShowsTheBreakdown(t *testing.T) {
-	dev := NewChatModel(&nullClient{}, "GAIA", "", true)
+	dev := NewChatModel(&nullClient{}, "GAIA", "")
+	dev.expandWork = true // the breakdown is Ctrl+O detail
 	block := dev.turnMetricsBlock(sampleMetricsMessage())
 	if block == "" {
-		t.Fatal("--dev with a record drew nothing")
+		t.Fatal("Ctrl+O with a record drew nothing")
 	}
 	for _, want := range []string{
 		"turn a3f1c2", // greppable against the log file
@@ -89,16 +90,17 @@ func TestTurnMetricsBlockShowsTheBreakdown(t *testing.T) {
 	}
 }
 
-// Two ways there is no record: dev mode off, and an agent that never sent one.
+// Two ways there is nothing to draw: details folded, and an agent that never
+// sent a record.
 // Both must draw nothing at all — an empty block would leave a stray blank
 // line under every answer.
 func TestTurnMetricsBlockAbsent(t *testing.T) {
 	cases := []struct {
-		name string
-		dev  bool
-		msg  *Message
+		name     string
+		expanded bool
+		msg      *Message
 	}{
-		{"dev off", false, sampleMetricsMessage()},
+		{"details folded", false, sampleMetricsMessage()},
 		{"older agent sent no record", true, &Message{Role: RoleAssistant, Duration: time.Second}},
 		{"nil message", true, nil},
 		// A record that decoded but measured nothing. Drawing it would put
@@ -111,7 +113,8 @@ func TestTurnMetricsBlockAbsent(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := NewChatModel(&nullClient{}, "GAIA", "", tc.dev)
+			m := NewChatModel(&nullClient{}, "GAIA", "")
+			m.expandWork = tc.expanded
 			if got := m.turnMetricsBlock(tc.msg); got != "" {
 				t.Errorf("expected nothing drawn, got:\n%s", got)
 			}
@@ -119,18 +122,22 @@ func TestTurnMetricsBlockAbsent(t *testing.T) {
 	}
 }
 
-// Prefill joins the --dev stats line; the quiet line stays the single elapsed
-// figure it was deliberately reduced to (#2899).
+// Prefill joins the Ctrl+O stats line; the folded footnote stays the recap it
+// was deliberately reduced to (#2899).
 func TestPrefillOnTheStatsLine(t *testing.T) {
 	msg := sampleMetricsMessage()
 
-	dev := NewChatModel(&nullClient{}, "GAIA", "", true)
+	dev := NewChatModel(&nullClient{}, "GAIA", "")
+	dev.expandWork = true // the breakdown is Ctrl+O detail
 	if got := dev.answerStats(msg); !strings.Contains(got, "17.0k prefill") {
-		t.Errorf("--dev stats line lost the prefill size: %q", got)
+		t.Errorf("the expanded stats line lost the prefill size: %q", got)
 	}
-	quiet := NewChatModel(&nullClient{}, "GAIA", "", false)
-	if got := quiet.answerStats(msg); got != "34.5s" {
-		t.Errorf("quiet stats line = %q; a record must not change it", got)
+	quiet := NewChatModel(&nullClient{}, "GAIA", "")
+	if got := quiet.answerStats(msg); got != "" {
+		t.Errorf("folded, the stats line must not draw: %q", got)
+	}
+	if got := quiet.recapLine(msg); got != "35s · ↓ 210 tokens" {
+		t.Errorf("folded footnote = %q; a record must not change it", got)
 	}
 }
 
@@ -190,7 +197,7 @@ func TestServerCacheCountersWinOverTheLocalEstimate(t *testing.T) {
 	msg := sampleMetricsMessage()
 	msg.Metrics = stats
 
-	block := NewChatModel(&nullClient{}, "GAIA", "", true).turnMetricsBlock(msg)
+	block := expandedChat().turnMetricsBlock(msg)
 	for _, want := range []string{"14,057 tok", "13,696 cached", "361 new", "97% hit"} {
 		if !strings.Contains(block, want) {
 			t.Errorf("block is missing %q:\n%s", want, block)
@@ -213,7 +220,7 @@ func TestAColdTurnStillUsesTheServerTotals(t *testing.T) {
 	msg := sampleMetricsMessage()
 	msg.Metrics = stats
 
-	block := NewChatModel(&nullClient{}, "GAIA", "", true).turnMetricsBlock(msg)
+	block := expandedChat().turnMetricsBlock(msg)
 	if !strings.Contains(block, "14,034 tok") || !strings.Contains(block, "0 cached") {
 		t.Errorf("cold turn did not report the server total:\n%s", block)
 	}
@@ -222,7 +229,7 @@ func TestAColdTurnStillUsesTheServerTotals(t *testing.T) {
 // Lemonade reports neither counter, so the local prefix estimate must survive —
 // it is the only cached/new signal a local llama.cpp turn has.
 func TestLocalEstimateSurvivesOnABackendThatReportsNoCache(t *testing.T) {
-	block := NewChatModel(&nullClient{}, "GAIA", "", true).turnMetricsBlock(sampleMetricsMessage())
+	block := expandedChat().turnMetricsBlock(sampleMetricsMessage())
 	for _, want := range []string{"51,204 tok", "38,110 cached", "74% hit"} {
 		if !strings.Contains(block, want) {
 			t.Errorf("block is missing %q:\n%s", want, block)
@@ -234,7 +241,8 @@ func TestLocalEstimateSurvivesOnABackendThatReportsNoCache(t *testing.T) {
 // tool time. It only appears when someone was actually asked — on every other
 // turn the figure is zero and the word "waiting" is noise.
 func TestWaitingOnYouShowsOnlyWhenSomeoneWasAsked(t *testing.T) {
-	dev := NewChatModel(&nullClient{}, "GAIA", "", true)
+	dev := NewChatModel(&nullClient{}, "GAIA", "")
+	dev.expandWork = true // the breakdown is Ctrl+O detail
 
 	quiet := dev.turnMetricsBlock(sampleMetricsMessage())
 	if strings.Contains(quiet, "waiting on you") {
@@ -261,7 +269,8 @@ func TestWaitingOnYouShowsOnlyWhenSomeoneWasAsked(t *testing.T) {
 // reads as an instant first token — the fake zero the recorder itself is
 // careful never to emit.
 func TestAMissingTTFTReadsAsAbsentNotInstant(t *testing.T) {
-	dev := NewChatModel(&nullClient{}, "GAIA", "", true)
+	dev := NewChatModel(&nullClient{}, "GAIA", "")
+	dev.expandWork = true // the breakdown is Ctrl+O detail
 	msg := sampleMetricsMessage()
 	msg.Metrics.LLMCalls = []event.CanonicalTurnCall{
 		{Step: 1, WallS: 12.8, TTFTS: 0, InputTokensLocal: 17204},
@@ -278,4 +287,11 @@ func TestAMissingTTFTReadsAsAbsentNotInstant(t *testing.T) {
 	if !strings.Contains(block, "ttft  0.4s") {
 		t.Errorf("a real ttft stopped rendering:\n%s", block)
 	}
+}
+
+// expandedChat is a chat with Ctrl+O's detail open.
+func expandedChat() ChatModel {
+	m := NewChatModel(&nullClient{}, "GAIA", "")
+	m.expandWork = true
+	return m
 }

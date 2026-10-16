@@ -3394,7 +3394,7 @@ Options accepted by every `gaia tui` command:
 | `--full-access` | off | Run every tool without asking, with the shell guardrails off — arbitrary code execution. Subprocess agents only (the flagship when the TUI launches it); refused over the background service. A banner stays on screen while it is on, and `/full-access off` ends it mid-session. See [Full access](#full-access). The retired `--bypass-permissions` fails naming this flag. |
 | `--use-claude` | off | Answer with Anthropic's Claude API instead of local Lemonade. **Your conversation is sent to Anthropic.** Needs `ANTHROPIC_API_KEY`; the local server is not started and first-run setup is skipped, so RAG, memory and the code index (which embed through Lemonade) need `gaia init --skip-chat-model` later |
 | `--claude-model <id>` | `claude-sonnet-5` | The Claude model `--use-claude` runs on. Only valid with `--use-claude`; an id the agent does not offer is refused before the TUI opens. `""` lets the agent pick |
-| `--dev` | off | Developer mode: per-turn timings, steps, tool arguments and output on screen, and DEBUG logging for agents the TUI launches. `--debug` is an alias |
+| `--dev` | off | Developer mode: turns on the loopback control API (same as `--control`) on an interactive launch, with its diagnostics in the TUI log. The screen is the same as a normal launch; detail is behind `Ctrl+O` and in `--trace`. `--debug` is an alias |
 | `--control`, `--control-port <n>` | off | The loopback control API — see [TUI Control API](#tui-control-api) |
 | `--trace[=<path>]` | off | Record every agent event to a JSONL file — see [TUI Event Trace](#tui-event-trace) |
 
@@ -3522,7 +3522,7 @@ token.
 ```bash
 gaia tui --control                 # auto-assign a port
 gaia tui --control-port 8770       # explicit port (implies --control)
-gaia tui --control --dev           # input counts, state changes, and waits; no input contents
+gaia tui --dev                     # same as --control, plus input counts, state changes and waits in the TUI log
 ```
 
 <Note>
@@ -3535,7 +3535,7 @@ gaia tui --control --dev           # input counts, state changes, and waits; no 
 |------|------|---------|-------------|
 | `--control` | flag | off | Start the control API on an auto-assigned loopback port. |
 | `--control-port` | integer | `0` | Bind a specific port. Implies `--control`. `0` auto-assigns. Port `4001` is reserved and rejected. |
-| `--dev` | flag | off | Show developer details and log input counts, state transitions, and wait outcomes to the TUI log; input contents are omitted. `--debug` remains an alias. |
+| `--dev` | flag | off | Turn the control API on (like `--control`) and log input counts, state transitions, and wait outcomes to the TUI log; input contents are omitted. Changes nothing on screen. `--debug` remains an alias. |
 
 On start the TUI writes `~/.gaia/tui/control.json` (mode `0600`) holding the
 pid, port, and token, and removes it on exit. Clients find the TUI by reading
@@ -3600,7 +3600,7 @@ payloads**.
 ```bash
 gaia tui --trace                       # ~/.gaia/traces/<timestamp>-<agent>.jsonl
 gaia tui --trace=run.jsonl             # a path you choose
-gaia tui --trace --dev                 # record to a file AND show it on screen
+gaia tui --trace --dev                 # record to a file AND drive the session over the control API
 ```
 
 The path is printed on startup (`trace → …`). An unwritable path is a startup

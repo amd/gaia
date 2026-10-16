@@ -12,33 +12,38 @@ import (
 	"github.com/amd/gaia/tui/internal/event"
 )
 
-// A triage turn touches dozens of messages over 60-90s on a local model. Two
-// static lines are indistinguishable from a hang, so the work log keeps a
-// bounded window of what actually happened.
+// A triage turn touches dozens of messages over 60-90s on a local model. The
+// region keeps a bounded window of what finished, newest last; what is running
+// now is the status line.
 func TestLiveRegionKeepsBoundedHistory(t *testing.T) {
 	m := newTestChat(t)
-	for _, tool := range []string{
-		"list_inbox", "get_message", "classify", "apply_prefs",
-		"pre_scan_inbox", "index_document", "read_file", "summarize",
-	} {
+	tools := []string{
+		"list_inbox", "get_message", "classify", "apply_prefs", "pre_scan_inbox",
+		"index_document", "fetch_page", "list_directory", "search_web", "summarize",
+		"query_documents", "load_skill",
+	}
+	for i, tool := range tools {
 		m = feed(t, m, event.CanonicalToolCallEvent{Type: "tool_call", Tool: tool})
+		if i < len(tools)-1 {
+			m = feed(t, m, event.CanonicalToolResultEvent{Type: "tool_result", Tool: tool, Preview: "done " + tool})
+		}
 	}
 
 	out := ansi.Strip(m.renderLiveRegion())
 	t.Logf("\n%s", out)
 
-	lines := strings.Split(out, "\n")
-	// Each entry is at most two lines (the action and its `└` outcome); no
-	// outcome has landed here, so the window is one line per entry.
-	if len(lines) > workLogLines {
-		t.Errorf("live region is %d lines; must stay bounded at %d", len(lines), workLogLines)
+	if lines := strings.Split(out, "\n"); len(lines) > m.logRows() {
+		t.Errorf("live region is %d lines; must stay inside its %d-row budget", len(lines), m.logRows())
 	}
-	if !strings.Contains(out, "Summarizing") {
-		t.Errorf("live region dropped the most recent tool:\n%s", out)
+	if !strings.Contains(out, "done query_documents") {
+		t.Errorf("live region dropped the most recent finished call:\n%s", out)
 	}
-	// The oldest entry scrolls out rather than the newest being discarded.
-	if strings.Contains(out, "Reading your inbox") {
-		t.Errorf("oldest entry should have scrolled out of the bounded window:\n%s", out)
+	// The oldest scrolls out, and the region says so rather than dropping it silently.
+	if strings.Contains(out, "done list_inbox") || !strings.Contains(out, "earlier actions") {
+		t.Errorf("the oldest entry should have scrolled out, counted:\n%s", out)
+	}
+	if line := ansi.Strip(m.statusLine(m.now())); !strings.Contains(line, "Load") {
+		t.Errorf("the running call is not the status line: %q", line)
 	}
 }
 
@@ -69,10 +74,10 @@ func TestLiveRegionNarratesToolsInPlainLanguage(t *testing.T) {
 	t.Logf("\n%s", out)
 
 	for _, want := range []string{
-		"Checking your installed skills",  // list_skills, in words
-		"18 skills",                       // its outcome, one line
-		"Loading the github-triage skill", // the argument that matters
-		"experimental tier",               // the outcome worth knowing
+		"Check your installed skills",  // list_skills, in words
+		"18 skills",                    // its outcome, one line
+		"Load the github-triage skill", // the argument that matters
+		"experimental tier",            // the outcome worth knowing
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("live region never said %q:\n%s", want, out)
@@ -89,7 +94,7 @@ func TestLiveRegionNarratesToolsInPlainLanguage(t *testing.T) {
 			t.Errorf("the expanded log never said %q:\n%s", want, expanded)
 		}
 	}
-	// Harness internals stay out of the user's way unless --dev asked for them.
+	// Harness internals stay out of the user's way in every mode.
 	for _, noise := range []string{"Step 1/50", "Gemma-4-E4B-it-GGUF", "list_skills", "load_skill"} {
 		if strings.Contains(out, noise) {
 			t.Errorf("live region leaked harness internals %q:\n%s", noise, out)
@@ -101,19 +106,25 @@ func TestLiveRegionNarratesToolsInPlainLanguage(t *testing.T) {
 	}
 }
 
-// For a shell tool the command IS the highest-signal thing on screen — no phrase
-// wrapped round it beats showing it.
-func TestLiveRegionShowsTheActualShellCommand(t *testing.T) {
+// A shell call leads with what it does, and the command itself — the thing a
+// user could re-run — is the one dim line of evidence under it.
+func TestAShellCallShowsItsCommandUnderItsHeadline(t *testing.T) {
 	m := newTestChat(t)
-	m = feed(t, m, event.CanonicalToolCallEvent{
-		Type: "tool_call", Tool: "run_shell_command",
-		Args: []byte(`{"command":"gh issue view 2924 --repo amd/gaia"}`),
-	})
+	m = feed(t, m,
+		event.CanonicalToolCallEvent{
+			Type: "tool_call", Tool: "run_shell_command",
+			Args: []byte(`{"command":"gh issue view 2924 --repo amd/gaia"}`),
+		},
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "run_shell_command", Data: []byte(`{"success":true}`)},
+	)
 
-	out := ansi.Strip(m.renderLiveRegion())
-	t.Logf("\n%s", out)
-	if !strings.Contains(out, "gh issue view 2924 --repo amd/gaia") {
-		t.Errorf("the command a user could re-run themselves was not shown:\n%s", out)
+	rows := strings.Split(ansi.Strip(m.renderLiveRegion()), "\n")
+	t.Logf("\n%s", strings.Join(rows, "\n"))
+	if len(rows) < 2 || !strings.Contains(rows[0], "Run gh issue") {
+		t.Fatalf("the headline does not say what ran:\n%s", strings.Join(rows, "\n"))
+	}
+	if !strings.Contains(rows[1], "└ gh issue view 2924 --repo amd/gaia") {
+		t.Errorf("the command a user could re-run is not under the headline:\n%s", strings.Join(rows, "\n"))
 	}
 }
 
@@ -136,7 +147,7 @@ func TestSidecarNarrationAndPreviewWin(t *testing.T) {
 
 	out := ansi.Strip(m.renderLiveRegion())
 	t.Logf("\n%s", out)
-	if !strings.Contains(out, "Reading issue #2924") {
+	if !strings.Contains(out, "Read issue #2924") {
 		t.Errorf("the sidecar's own narration was ignored:\n%s", out)
 	}
 	if !strings.Contains(out, "3.7 KB returned (truncated)") {
@@ -147,15 +158,18 @@ func TestSidecarNarrationAndPreviewWin(t *testing.T) {
 	}
 }
 
-// Harness mechanics are not deleted, they are demoted: whoever is debugging the
-// wire has to be able to see them.
-func TestDebugShowsTheHarnessStatusesUsersDoNotSee(t *testing.T) {
-	m := newTestChat(t)
-	m.dev = true
-	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Message: "Step 3/50"})
-
-	if out := ansi.Strip(m.renderLiveRegion()); !strings.Contains(out, "Step 3/50") {
-		t.Errorf("--dev must still surface agent-loop mechanics:\n%s", out)
+// Harness mechanics never reach the screen, in any mode: the debugging view of
+// them is the trace (--trace), not the user's frame.
+func TestHarnessStatusesNeverReachTheScreen(t *testing.T) {
+	for _, expanded := range []bool{false, true} {
+		m := newTestChat(t)
+		m.expandWork = expanded
+		m.streaming = true
+		m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Message: "Step 3/50"})
+		out := ansi.Strip(m.renderLiveRegion() + "\n" + m.statusLine(m.now()))
+		if strings.Contains(out, "Step 3/50") || strings.Contains(out, "/50") {
+			t.Errorf("expanded=%v: agent-loop mechanics reached the screen:\n%s", expanded, out)
+		}
 	}
 }
 
@@ -165,62 +179,58 @@ func TestElapsedClockAlwaysAccompaniesADescription(t *testing.T) {
 	m := newTestChat(t)
 	m.queryStart = time.Now().Add(-95 * time.Second)
 
-	out := ansi.Strip(m.renderLiveRegion())
-	t.Logf("\n%s", out)
-	clock := strings.Split(out, "\n")[0]
-	if !strings.Contains(clock, "1:35") {
-		t.Fatalf("live region missing an elapsed clock:\n%s", out)
+	line := ansi.Strip(m.statusLine(time.Now()))
+	if !strings.Contains(line, "(1m 35s)") {
+		t.Fatalf("the status line is missing an elapsed clock: %q", line)
 	}
 	// Strip the spinner rune and the clock; something readable must remain.
-	rest := strings.TrimSpace(strings.ReplaceAll(clock, "1:35", ""))
+	rest := strings.TrimSpace(strings.ReplaceAll(line, "(1m 35s)", ""))
 	if len([]rune(rest)) < 8 {
-		t.Errorf("the clock is standing alone with no description: %q", clock)
+		t.Errorf("the clock is standing alone with no description: %q", line)
 	}
 }
 
-// Twenty identical calls collapsed onto one flickering line read as a single
-// slow call; the counter is what makes repetition legible as progress.
+// Twenty identical calls read as a single slow call; the counter is what makes
+// repetition legible as progress, and every target is still named.
 func TestLiveRegionCollapsesRepeatsWithACounter(t *testing.T) {
 	m := newTestChat(t)
 	for i := 0; i < 14; i++ {
-		m = feed(t, m, event.CanonicalToolCallEvent{
-			Type: "tool_call",
-			Tool: "triage_message",
-			Args: []byte(`{"message_id":"m` + string(rune('a'+i)) + `"}`),
-		})
+		m = feed(t, m,
+			event.CanonicalToolCallEvent{
+				Type: "tool_call", Tool: "triage_message",
+				Args: []byte(`{"message_id":"m` + string(rune('a'+i)) + `"}`),
+			},
+			event.CanonicalToolResultEvent{Type: "tool_result", Tool: "triage_message", Data: []byte(`{"ok":true}`)},
+		)
 	}
 
 	out := ansi.Strip(m.renderLiveRegion())
 	t.Logf("\n%s", out)
 
-	if !strings.Contains(out, "Triaging message") || !strings.Contains(out, "x14") {
+	if !strings.Contains(out, "Triage message") || !strings.Contains(out, "x14") {
 		t.Errorf("14 calls to one tool did not collapse to a counter:\n%s", out)
 	}
-	if n := strings.Count(out, "Triaging message"); n != 1 {
-		t.Errorf("the tool appears %d times; repeats must fold into one line:\n%s", n, out)
+	if n := strings.Count(out, "●"); n != 1 {
+		t.Errorf("the tool has %d bullets; repeats must fold into one:\n%s", n, out)
 	}
 }
 
-// The reassurance line lasts until something has actually COMPLETED. Once the
-// log tells the story on its own the line is noise, and it costs the newest
-// entry its screen row.
+// The reassurance tip lasts until something has actually COMPLETED. Once the
+// log tells the story on its own the tip is noise.
 func TestStillWorkingHintLastsUntilRealWorkLands(t *testing.T) {
 	m := newTestChat(t)
 	m.queryStart = time.Now().Add(-stillWorkingAfter - time.Second)
 
-	out := ansi.Strip(m.renderLiveRegion())
-	t.Logf("silent:\n%s", out)
-	if !strings.Contains(out, "still working") || !strings.Contains(out, "60-90s") {
-		t.Errorf("after %s of silence the wait must be called expected:\n%s", stillWorkingAfter, out)
+	tip := ansi.Strip(m.statusTip(time.Now()))
+	if !strings.Contains(tip, "still working") || !strings.Contains(tip, "60-90s") {
+		t.Errorf("after %s of silence the wait must be called expected: %q", stillWorkingAfter, tip)
 	}
 
 	// A stage line is NOT progress — the agent saying it is thinking IS the
 	// wait, not the end of it. A live turn sat here for 1:47 with no hint.
 	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Message: "Working out how to answer"})
-	out = ansi.Strip(m.renderLiveRegion())
-	t.Logf("stage only:\n%s", out)
-	if !strings.Contains(out, "still working") {
-		t.Errorf("a long wait under a bare stage line still needs the hint:\n%s", out)
+	if tip := ansi.Strip(m.statusTip(time.Now())); !strings.Contains(tip, "still working") {
+		t.Errorf("a long wait under a bare stage line still needs the tip: %q", tip)
 	}
 
 	// A completed step is.
@@ -228,12 +238,11 @@ func TestStillWorkingHintLastsUntilRealWorkLands(t *testing.T) {
 		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "pre_scan_inbox"},
 		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "pre_scan_inbox", Preview: "31 messages"},
 	)
-	out = ansi.Strip(m.renderLiveRegion())
-	t.Logf("work done:\n%s", out)
-	if strings.Contains(out, "still working") {
-		t.Errorf("the hint must give way once real work has landed:\n%s", out)
+	if tip := ansi.Strip(m.statusTip(time.Now())); strings.Contains(tip, "still working") {
+		t.Errorf("the tip must give way once real work has landed: %q", tip)
 	}
-	if !strings.Contains(out, "Scanning your inbox") || !strings.Contains(out, "31 messages") {
+	out := ansi.Strip(m.renderLiveRegion())
+	if !strings.Contains(out, "Scan your inbox") || !strings.Contains(out, "31 messages") {
 		t.Errorf("the completed action never appeared:\n%s", out)
 	}
 }
@@ -260,7 +269,11 @@ func TestLiveRegionOutcomesAreReadableWithoutColour(t *testing.T) {
 	if !strings.Contains(out, "4 unread") {
 		t.Errorf("a succeeded step must report what it came back with:\n%s", out)
 	}
-	for _, emoji := range []string{"🔧", "🧠", "🎯", "✓", "✗", "⚠️"} {
+	// ✗ is decoration beside the word, never the signal on its own.
+	if !strings.Contains(out, "✗ failed") {
+		t.Errorf("the failure mark is not next to the word:\n%s", out)
+	}
+	for _, emoji := range []string{"🔧", "🧠", "🎯", "⚠️"} {
 		if strings.Contains(out, emoji) {
 			t.Errorf("live region still depends on %q rendering correctly:\n%s", emoji, out)
 		}
@@ -374,13 +387,14 @@ func TestSingleResultsAreNotPluralised(t *testing.T) {
 	}
 }
 
-// #5089: a plan run re-announces its headline after every step's own status
-// lines. The headline is said once, and the step line carries no "[harness]".
-func TestAPlanHeadlineIsSaidOnce(t *testing.T) {
-	for _, dev := range []bool{false, true} {
+// #5089: a plan run re-announces its headline — the user's whole request —
+// before every step, with "Plan: a → b" and "Executing step N" around it. None
+// of that is the work: it is never shown, folded or expanded, and the step line
+// carries no "[harness]". The steps themselves still are.
+func TestPlanNoiseIsNeverShown(t *testing.T) {
+	for _, expanded := range []bool{false, true} {
 		m := newTestChat(t)
-		m.dev = dev
-		m.expandWork = true
+		m.expandWork = expanded
 		const headline = "Following the plan to compare the term sheet"
 		for step := 1; step <= 3; step++ {
 			m = feed(t, m,
@@ -394,11 +408,13 @@ func TestAPlanHeadlineIsSaidOnce(t *testing.T) {
 		}
 
 		out := ansi.Strip(m.renderLiveRegion())
-		if n := strings.Count(out, headline); n != 1 {
-			t.Errorf("dev=%v: the plan headline was shown %d times:\n%s", dev, n, out)
+		for _, noise := range []string{headline, "Plan:", "Executing step", "[harness]", "/50"} {
+			if strings.Contains(out, noise) {
+				t.Errorf("expanded=%v: %q reached the screen:\n%s", expanded, noise, out)
+			}
 		}
-		if strings.Contains(out, "[harness]") {
-			t.Errorf("dev=%v: an internal word reached the screen:\n%s", dev, out)
+		if !strings.Contains(out, "10 chunks") && !strings.Contains(out, "x3") && !strings.Contains(out, "3 times") {
+			t.Errorf("expanded=%v: the steps themselves went missing:\n%s", expanded, out)
 		}
 	}
 }

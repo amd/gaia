@@ -139,5 +139,5 @@ func newFlagshipForHelp(t *testing.T) root.FlagshipModel {
 	if agent == nil {
 		t.Fatalf("the catalog has no %q entry", catalog.FlagshipID)
 	}
-	return root.NewFlagshipModel(*agent, false)
+	return root.NewFlagshipModel(*agent)
 }

@@ -27,7 +27,7 @@ func (n *nullClient) ResetTranscript() { n.resets++ }
 func newTestModel(t *testing.T) (ChatModel, *nullClient) {
 	t.Helper()
 	c := &nullClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "email", "")
 	m.width, m.height = 100, 30
 	return m, c
 }
@@ -102,7 +102,7 @@ func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
 	m, _ := newTestModel(t)
 	// The token count is a --dev figure; this test is about the plumbing
 	// that carries it, so it asks for the dev breakdown explicitly.
-	m.dev = true
+	m.expandWork = true
 	m.streaming = true
 	m.queryStart = time.Now().Add(-5 * time.Second)
 
@@ -131,7 +131,7 @@ func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
 // this is a fix, not a removal, and there is no fallback to the old guess.
 func TestCanonicalRenderOmitsTokensWhenZero(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.dev = true
+	m.expandWork = true
 	msg := &Message{
 		Role:      RoleAssistant,
 		Duration:  3200 * time.Millisecond,
@@ -194,7 +194,7 @@ func TestLegacyTransportWithNoMeasurementsReportsNone(t *testing.T) {
 // to drop all three, so a subprocess run showed none of them.
 func TestLegacyTransportRendersTheBackendsMeasurements(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.dev = true
+	m.expandWork = true
 	m.streaming = true
 	m.queryStart = time.Now().Add(-37 * time.Second)
 
@@ -217,7 +217,7 @@ func TestLegacyTransportRendersTheBackendsMeasurements(t *testing.T) {
 // the old client-side stamp was most wrong.
 func TestCanonicalServerReportedTTFTReachesTheUser(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.dev = true
+	m.expandWork = true
 	m.streaming = true
 	m.queryStart = time.Now().Add(-82 * time.Second)
 
@@ -525,7 +525,7 @@ func TestLegacyEventsStillHandled(t *testing.T) {
 // A one-step, one-tool turn reads "1 step · 1 tool", not "1 steps · 1 tools".
 func TestStatsLineSingularForOne(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.dev = true
+	m.expandWork = true
 	rendered := m.renderMessage(&Message{
 		Role:      RoleAssistant,
 		Duration:  time.Second,

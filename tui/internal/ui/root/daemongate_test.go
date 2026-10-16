@@ -13,7 +13,7 @@ import (
 // the launch model. The flagship's does; email's takes no per-turn model.
 func TestDaemonGateIsToldTheCloudModelOnlyForTheFlagship(t *testing.T) {
 	flagship := catalog.Agent{ID: catalog.FlagshipID, Name: "GAIA", Transport: catalog.TransportDaemon}
-	m := NewFlagshipModel(flagship, false).
+	m := NewFlagshipModel(flagship).
 		WithSavedModel(preflight.LastModel{Provider: "amd", Model: "amd.Gemma-4-31B"})
 	updated, _ := m.beginPreflight(flagship)
 	if got := updated.(FlagshipModel).preflight.LaunchModel(); got != "amd.Gemma-4-31B" {
@@ -21,7 +21,7 @@ func TestDaemonGateIsToldTheCloudModelOnlyForTheFlagship(t *testing.T) {
 	}
 
 	email := catalog.Agent{ID: "email", Name: "Email", Transport: catalog.TransportDaemon}
-	m = NewFlagshipModel(email, false)
+	m = NewFlagshipModel(email)
 	m.model = "amd.Gemma-4-31B" // a gate pick sets this whatever the agent
 	updated, _ = m.beginPreflight(email)
 	if got := updated.(FlagshipModel).preflight.LaunchModel(); got != "" {
