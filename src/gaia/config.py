@@ -160,6 +160,10 @@ class GaiaConfig:
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
             model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
             Takes effect on the next load; the embedding model keeps its own.
+        undo_retention_days: Keep the copies that let a turn's file changes be
+            undone for this many days.
+        undo_max_mb: Keep at most this many megabytes of those copies; the
+            oldest turns go first. The newest turn is always kept.
     """
 
     profile: str = "chat"
@@ -173,6 +177,8 @@ class GaiaConfig:
     lemonade_api_key_stored: bool = False
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
+    undo_retention_days: int = 7
+    undo_max_mb: int = 500
 
     #: Strings accepted for a boolean field, and what each means. Anything
     #: else raises — "false" silently meaning True is the exact accident this
