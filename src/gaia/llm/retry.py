@@ -4,8 +4,8 @@
 
 Hosted OpenAI-compatible endpoints, the gateways and proxies in front of them,
 and a local server under load all drop the occasional request: a reset
-connection, a 502/503/504 from a proxy, a 429, a 500 that is really a failed
-upstream hop. Those recover on the next attempt a few seconds later. Other
+connection, a 502/503/504 from a proxy, a 429 or 529, a 500 that is really a
+failed upstream hop. Those recover on the next attempt a few seconds later. Other
 failures never recover and must not be repeated: a 400 (bad request, content
 filter), 401/403, 404, 413, 422, a context-window overflow, or a 500 that is the
 server's verdict on the shape of the request.
@@ -186,8 +186,9 @@ def _env_number(name: str, default: float, kind: type, *, minimum: float) -> flo
 
 # ── Classification ───────────────────────────────────────────────────────
 
-#: Statuses that mean "not now" rather than "not this request".
-RETRYABLE_STATUSES = frozenset({408, 429, 502, 503, 504})
+#: Statuses that mean "not now" rather than "not this request". 529 is
+#: Anthropic's "overloaded".
+RETRYABLE_STATUSES = frozenset({408, 429, 502, 503, 504, 529})
 
 #: Body wording of a failed upstream hop: nothing was computed, so the request
 #: is safe to send again. Matched case-insensitively. These win over
@@ -263,7 +264,7 @@ def classify_http_failure(status: Optional[int], body: str = "") -> Optional[str
 
     * A context-window overflow or content-filter rejection is never retried,
       whatever status it wears.
-    * 408, 429, 502, 503 and 504 are retried.
+    * 408, 429, 502, 503, 504 and 529 are retried.
     * 500 is retried unless its body says the request itself is at fault —
       some servers answer a request they will never accept with a 500.
     * Every other status — 400, 401, 403, 404, 413, 422, 501, … — is not.
@@ -496,6 +497,47 @@ def classify_exception(error: BaseException) -> Optional[str]:
     return None
 
 
+#: Anthropic error types that mean "not now", and the status each stands for
+#: when it arrives inside an open stream, whose HTTP status is still 200.
+_ANTHROPIC_TRANSIENT_TYPES = {
+    "rate_limit_error": 429,
+    "api_error": 500,
+    "timeout_error": 504,
+    "overloaded_error": 529,
+}
+
+
+def _anthropic_error_type(body: Any) -> str:
+    if isinstance(body, dict):
+        inner = body.get("error")
+        if isinstance(inner, dict):
+            kind = inner.get("type")
+            if isinstance(kind, str):
+                return kind
+    return ""
+
+
+def classify_anthropic_error(error: BaseException, sdk: Any) -> Optional[str]:
+    """:func:`classify_exception` for an ``anthropic`` SDK error.
+
+    *sdk* is the ``anthropic`` module the provider holds, so this module never
+    imports the optional SDK itself. Same verdicts and reasons as the other
+    paths: a 429, 5xx or 529 (or the same error type inside a stream), a
+    refused connection or a timeout is transient; anything else is not.
+    """
+    if isinstance(error, sdk.APITimeoutError):
+        return "read timeout"
+    if isinstance(error, sdk.APIConnectionError):
+        return "connection error"
+    if not isinstance(error, sdk.APIStatusError):
+        return None
+    status = error.status_code
+    if status < 400:
+        mapped = _ANTHROPIC_TRANSIENT_TYPES.get(_anthropic_error_type(error.body))
+        return f"HTTP {mapped}" if mapped is not None else None
+    return classify_http_failure(status, _error_body_text(error))
+
+
 def parse_retry_after(headers: Optional[Mapping[str, str]]) -> Optional[float]:
     """Seconds a server asked us to wait, from ``Retry-After`` (seconds or an
     HTTP date) or ``retry-after-ms``. ``None`` when absent or unreadable."""
@@ -544,6 +586,20 @@ def _retry_after_of(error: BaseException) -> Optional[float]:
         return float(tagged) if isinstance(tagged, (int, float)) else None
     response = getattr(error, "response", None)
     return parse_retry_after(getattr(response, "headers", None))
+
+
+def retry_after_in_chain(error: BaseException) -> Optional[float]:
+    """Seconds the endpoint asked us to wait, from *error* or anything in its
+    cause chain (a raise site often wraps the HTTP error); ``None`` if none."""
+    cur: Optional[BaseException] = error
+    seen: set = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        delay = _retry_after_of(cur)
+        if delay is not None:
+            return delay
+        cur = cur.__cause__ or cur.__context__
+    return None
 
 
 def backoff_delay(

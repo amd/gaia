@@ -22,6 +22,7 @@ except ImportError:
     anthropic = None  # type: ignore[assignment]
 
 from ..base_client import LLMClient
+from ..retry import RetryState, attach_retry_state, classify_anthropic_error
 from .lemonade import _NATIVE_TC_KEY
 
 logger = logging.getLogger(__name__)
@@ -258,6 +259,7 @@ class ClaudeProvider(LLMClient):
 
         self._anthropic = sdk
         self._client = sdk.Anthropic(**client_kwargs)
+        self._max_retries = max_retries
         self._model = (
             model if model and model.startswith("claude-") else DEFAULT_CLAUDE_MODEL
         )
@@ -276,6 +278,11 @@ class ClaudeProvider(LLMClient):
     @property
     def provider_name(self) -> str:
         return "Claude"
+
+    @property
+    def base_url(self) -> str:
+        """The Anthropic API endpoint requests go to."""
+        return str(self._client.base_url)
 
     # ── request shaping ─────────────────────────────────────────────────
 
@@ -555,35 +562,60 @@ class ClaudeProvider(LLMClient):
 
     # ── error translation ───────────────────────────────────────────────
 
-    def _raise_actionable(self, exc: Exception) -> None:
+    def _raise_actionable(
+        self, exc: Exception, *, in_stream: bool = False, delivered: bool = False
+    ) -> None:
+        """Raise *exc* as an actionable error. A transient one carries a retry
+        record (``gaia.llm.retry``) so the agent loop can wait the outage out.
+
+        *in_stream*: the failure came from an open stream, which the SDK does
+        not retry. *delivered*: text had already reached the caller.
+        """
+        error = self._actionable(exc)
+        reason = classify_anthropic_error(exc, self._anthropic)
+        if reason is not None:
+            attach_retry_state(
+                error,
+                RetryState(
+                    attempts=1 if in_stream else self._max_retries + 1,
+                    last_reason=reason,
+                    output_delivered=delivered,
+                    exhausted=True,
+                ),
+            )
+        if error is exc:
+            raise exc
+        raise error from exc
+
+    def _actionable(self, exc: Exception) -> Exception:
         anthropic = self._anthropic
         if isinstance(exc, anthropic.AuthenticationError):
-            raise RuntimeError(
+            return RuntimeError(
                 "Anthropic rejected the credential (401). Check ANTHROPIC_API_KEY "
                 "in your environment or repo .env — regenerate it at "
                 "https://console.anthropic.com/ or via `claude setup-token`."
-            ) from exc
+            )
         if isinstance(exc, anthropic.NotFoundError):
-            raise RuntimeError(
+            return RuntimeError(
                 f"Anthropic model not found (404): {exc}. Pass a valid id via "
                 "--claude-model (e.g. claude-sonnet-5)."
-            ) from exc
+            )
         if isinstance(exc, anthropic.RateLimitError):
-            raise RuntimeError(
+            return RuntimeError(
                 f"Anthropic rate limit hit (429): {exc}. Wait for the retry window "
                 "or lower request volume; see console.anthropic.com for limits."
-            ) from exc
+            )
         if isinstance(exc, anthropic.APIConnectionError):
-            raise RuntimeError(
+            return RuntimeError(
                 f"Could not reach the Anthropic API: {exc}. Check network/proxy "
                 "connectivity to api.anthropic.com, then retry."
-            ) from exc
+            )
         if isinstance(exc, anthropic.APIStatusError):
-            raise RuntimeError(
+            return RuntimeError(
                 f"Anthropic API error (HTTP {exc.status_code}): {exc.message}. "
                 "See https://status.anthropic.com if this persists."
-            ) from exc
-        raise exc
+            )
+        return exc
 
     # ── chat ────────────────────────────────────────────────────────────
 
@@ -717,7 +749,7 @@ class ClaudeProvider(LLMClient):
                     )
                     usage_totals.absorb(getattr(event, "usage", None))
         except Exception as exc:
-            self._raise_actionable(exc)
+            self._raise_actionable(exc, in_stream=True, delivered=bool(text_parts))
             raise  # unreachable — _raise_actionable always raises
 
         self._capture_usage(usage_totals, time.monotonic() - start)

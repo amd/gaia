@@ -422,7 +422,7 @@ When GAIA asks permission, the prompt takes focus and `Enter` does nothing, so a
 
 ## Long Responses
 
-A chat reply that runs longer than 600 seconds stops with "Response timed out after 600s." Time spent waiting for you to answer a question or approve a tool doesn't count. Raise the limit for slow models or heavy queries with `GAIA_STREAM_TIMEOUT`, set before GAIA starts:
+A chat reply that runs longer than 600 seconds stops with "Response timed out after 600s." Time spent waiting for you to answer a question or approve a tool doesn't count, and neither does time spent waiting for a model endpoint that is down to come back (see [Retrying a flaky model endpoint](/sdk/configuration#retrying-a-flaky-model-endpoint)). Raise the limit for slow models or heavy queries with `GAIA_STREAM_TIMEOUT`, set before GAIA starts:
 
 ```bash
 export GAIA_STREAM_TIMEOUT=1800   # seconds; whole number from 1 to 86400
@@ -460,7 +460,7 @@ Behavior notes:
 - Scheduled runs use the GAIA agent and the model you picked; with a local model nothing leaves your machine.
 - Runs are **suspended while mobile access (tunnel) is active**, matching the autonomous agent loop's security posture. Set `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` to override.
 - One run executes at a time; overlapping schedules queue.
-- Per-run timeout defaults to 300 s; override with `GAIA_SCHEDULE_TIMEOUT`.
+- Per-run timeout defaults to 300 s; override with `GAIA_SCHEDULE_TIMEOUT`. Time spent waiting for a model endpoint that is down does not count.
 - Times are your local time, taken from the browser's time zone, and stay put across daylight-saving changes. A time skipped when clocks jump forward runs just after the jump; a time repeated when they fall back runs once. Schedules made before this was fixed were read in UTC; they move to this PC's time zone on the next start.
 
 The REST API lives at `/api/schedules` (create/list/get), `/api/schedules/{name}` (pause/resume/cancel via `PUT`, delete via `DELETE`), `/api/schedules/{name}/results` (run history), and `/api/schedules/parse` (natural-language preview).

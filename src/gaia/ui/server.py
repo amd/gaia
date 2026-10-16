@@ -27,6 +27,7 @@ import threading
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
@@ -51,6 +52,7 @@ from ._chat_helpers import _get_chat_response  # noqa: F401
 from ._chat_helpers import _index_document  # noqa: F401
 from ._chat_helpers import _resolve_rag_paths  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
+from ._chat_helpers import _awaiting_model, _wait_for_turn
 from .agent_loop import agent_loop
 
 # pylint: enable=unused-import
@@ -228,8 +230,14 @@ def lemonade_is_remote() -> bool:
     return bool(base_url) and not _is_loopback(urlparse(base_url).hostname or "")
 
 
-def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
-    """Run one scheduled prompt through a fresh GAIA agent; returns the answer."""
+def _run_scheduled_prompt(
+    db: ChatDatabase, prompt: str, turn_agent: Optional[dict] = None
+) -> str:
+    """Run one scheduled prompt through a fresh GAIA agent; returns the answer.
+
+    *turn_agent* receives the agent once built, so the caller's timeout can
+    pause while it waits for its model endpoint.
+    """
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
     except ImportError as e:
@@ -259,6 +267,8 @@ def _run_scheduled_prompt(db: ChatDatabase, prompt: str) -> str:
     )
     agent = GaiaAgent(config)
     agent._incognito_reason = "memory_off"
+    if turn_agent is not None:
+        turn_agent["agent"] = agent
     result = agent.process_query(prompt)
     if isinstance(result, dict):
         val = result.get("result")
@@ -525,11 +535,19 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                     "Stop the tunnel or set GAIA_AUTONOMOUS_ALLOW_TUNNEL=1."
                 )
 
-            loop = asyncio.get_running_loop()
-            return await asyncio.wait_for(
-                loop.run_in_executor(None, _run_scheduled_prompt, db, prompt),
-                timeout=_sched_timeout,
+            turn_agent: dict = {}
+            worker = asyncio.get_running_loop().run_in_executor(
+                None, _run_scheduled_prompt, db, prompt, turn_agent
             )
+            done = await _wait_for_turn(
+                worker, _sched_timeout, lambda: _awaiting_model(turn_agent)
+            )
+            if not done:
+                raise asyncio.TimeoutError(
+                    f"Scheduled run timed out after {_sched_timeout:.0f}s; raise "
+                    "GAIA_SCHEDULE_TIMEOUT (seconds) if it needs longer."
+                )
+            return worker.result()
 
         scheduler = Scheduler(db=db, executor=_schedule_executor)
         app.state.scheduler = scheduler

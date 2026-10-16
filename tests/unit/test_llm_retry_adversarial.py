@@ -163,9 +163,11 @@ def test_429_storm_gives_up_within_the_deadline(retry_after):
     assert state.last_reason == "HTTP 429"
 
 
-def test_429_storm_ends_the_run_with_its_work_kept(clean_registry):
+def test_429_storm_ends_the_run_with_its_work_kept(clean_registry, monkeypatch):
     """Every request 429s: the client gives up within its deadline each time,
-    the step retries run out, and the turn ends with the tool work kept."""
+    the agent waits out its outage budget, and the turn ends with the tool
+    work kept."""
+    monkeypatch.setenv("GAIA_AGENT_MODEL_OUTAGE_BUDGET", "300")
     agent = _make_agent(streaming=False)
     client_sleeps = []
     clock = {"now": 0.0}
@@ -173,6 +175,7 @@ def test_429_storm_ends_the_run_with_its_work_kept(clean_registry):
     def sleep(seconds):
         client_sleeps.append(seconds)
         clock["now"] += seconds
+        agent.clock[0] += seconds
 
     retrier = ModelCallRetrier(
         POLICY, sleep=sleep, clock=lambda: clock["now"], rng=random.Random(3)
@@ -206,10 +209,11 @@ def test_429_storm_ends_the_run_with_its_work_kept(clean_registry):
     assert "I stopped at step 2" in result["result"]
     assert "(read_ledger_for_retry_test 1x)" in result["result"]
     assert _TOOL_RUNS == [1]
-    # 1 good call + the first failing step + 2 step retries.
-    assert asked["n"] == 4
+    # At least one outage wait, and the storm ends within the budget plus the
+    # one request that found it spent.
+    assert asked["n"] >= 3
     assert all(s <= POLICY.max_delay for s in client_sleeps)
-    assert sum(client_sleeps) <= 3 * POLICY.deadline
+    assert agent.clock[0] <= 300 + POLICY.deadline
 
 
 # ── Permanent statuses dressed as transient ──────────────────────────────

@@ -491,7 +491,12 @@ class AgentLoop:
         # Run synchronous agent in a thread pool so we don't block the event loop
         worker = asyncio.get_running_loop().run_in_executor(None, _run_agent)
         try:
-            done, _ = await asyncio.wait({worker}, timeout=_TICK_TIMEOUT)
+            from gaia.ui._chat_helpers import _wait_for_turn
+
+            # A wait for a model endpoint that is down is not the tick hanging.
+            done = await _wait_for_turn(
+                worker, _TICK_TIMEOUT, sse_handler.awaiting_model_endpoint
+            )
             if not done:
                 logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
         finally:
