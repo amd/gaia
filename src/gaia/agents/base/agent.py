@@ -106,6 +106,7 @@ from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
     SCRATCH_ARG,
+    is_inside_folder,
 )
 from gaia.agents.base.tool_markup import (
     MalformedToolMarkup,
@@ -6204,15 +6205,15 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
-        # A script in the agent's own scratch folder can be granted as such —
-        # narrower than "running Python files", and it covers the next one.
+        # Scratch writes never ask, so a script there is asked about on every
+        # run — the marker keeps "always" (and any broader grant) off it.
         if tool_name == "execute_python_file" and isinstance(prompt_args, dict):
             reader = getattr(self, "_read_validator", None)
             scratch = getattr(
                 reader() if callable(reader) else None, "scratch_dir", None
             )
             target = edit_target(prompt_args)
-            if scratch and target and edit_is_inside(target, (str(scratch),)):
+            if scratch and is_inside_folder(target, str(scratch)):
                 prompt_args = {**prompt_args, SCRATCH_ARG: str(scratch)}
         # A one-time call is approved on its own prompt, which carries its
         # risk note — never through the reroute question above.

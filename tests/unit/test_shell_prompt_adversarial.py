@@ -5,8 +5,9 @@
 Each test feeds the guard something hostile and asserts it holds: the prompt
 shows exactly the line that would run or nothing runs, a one-time approval is
 spent on one exact call, "always" is never granted for a one-time line, the
-strictest segment of a chained line decides it, and the scratch-folder
-exemption covers only the agent's real scratch folder.
+strictest segment of a chained line decides it, the scratch-folder write
+exemption covers only the agent's real scratch folder, and no answer ever lets
+a script there run unasked.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import pytest
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.tool_grants import SCRATCH_ARG, grant_scope
+from gaia.agents.base.tool_grants import SCRATCH_ARG, grant_scope, is_inside_folder
 from gaia.agents.tools.shell_tools import (
     NOTE_PUSH,
     NOTE_UNINSPECTABLE,
@@ -41,8 +42,6 @@ from tests.unit.test_shell_prompt_instead_of_refuse import (
     _shell,
     _staged,
 )
-
-SCRATCH_LABEL = scratch_mod.SCRATCH_LABEL
 
 
 @pytest.fixture
@@ -692,15 +691,55 @@ def test_a_link_out_of_scratch_is_not_scratch(folders):
         folders, "execute_python_file", {"file_path": target}
     )
     [request] = prompts
-    assert request.get("always_scope") != SCRATCH_LABEL
     assert SCRATCH_ARG not in request["args"]
 
 
-def test_always_on_scratch_does_not_cover_a_link_out_of_it(folders):
+def test_a_link_into_scratch_is_still_a_scratch_script(folders):
     project, scratch = folders
-    link = scratch / "linked"
-    if not _junction(link, project):
+    link = project / "via"
+    if not _junction(link, scratch):
         pytest.skip("this host cannot create a directory link")
+    (scratch / "a.py").write_text("print(1)", encoding="utf-8")
+
+    agent, handler, result, prompts = _scratch_drive(
+        folders,
+        "execute_python_file",
+        {"file_path": str(link / "a.py")},
+        answer=(True, True),
+    )
+
+    [request] = prompts
+    assert request["args"][SCRATCH_ARG] == str(scratch.resolve())
+    assert "always_scope" not in request
+    assert handler.session_grants() == set()
+
+
+def _follow_up(name, project, scratch):
+    """A way to run code after a script in scratch was answered "always"."""
+    approved = scratch / "a.py"
+    if name == "same":
+        return approved
+    if name == "new":
+        path = scratch / "fresh.py"
+        path.write_text("print('new')", encoding="utf-8")
+        return path
+    if name == "edited":
+        approved.write_text("print('edited')", encoding="utf-8")
+        return approved
+    if name == "renamed":
+        path = scratch / "renamed.py"
+        approved.rename(path)
+        return path
+    link = project / "via"
+    if not _junction(link, scratch):
+        pytest.skip("this host cannot create a directory link")
+    return link / "a.py"
+
+
+@pytest.mark.parametrize("follow_up", ["same", "new", "edited", "renamed", "via_link"])
+def test_no_answer_lets_a_scratch_script_run_unasked(folders, follow_up):
+    project, scratch = folders
+    (scratch / "a.py").write_text("print('shown')", encoding="utf-8")
     agent, handler = scratch_mod._agent(folders)
 
     _r, prompts = scratch_mod._drive(
@@ -710,18 +749,62 @@ def test_always_on_scratch_does_not_cover_a_link_out_of_it(folders):
         {"file_path": str(scratch / "a.py")},
         answer=(True, True),
     )
-    assert prompts[0]["always_scope"] == SCRATCH_LABEL
+    assert "always_scope" not in prompts[0]
+    assert handler.session_grants() == set()
 
+    target = str(_follow_up(follow_up, project, scratch))
     result, prompts = scratch_mod._drive(
-        agent, handler, "execute_python_file", {"file_path": str(link / "b.py")}
+        agent, handler, "execute_python_file", {"file_path": target}
     )
-    assert len(prompts) == 1
+
+    assert len(prompts) == 1, follow_up
     assert result["status"] == "denied"
     assert agent.ran == [("execute_python_file", str(scratch / "a.py"))]
 
 
+def test_a_python_files_grant_from_outside_does_not_reach_scratch(folders):
+    project, scratch = folders
+    agent, handler = scratch_mod._agent(folders)
+
+    _r, prompts = scratch_mod._drive(
+        agent,
+        handler,
+        "execute_python_file",
+        {"file_path": str(project / "tool.py")},
+        answer=(True, True),
+    )
+    assert prompts[0]["always_scope"] == "running Python files"
+
+    targets = [scratch / "fresh.py"]
+    link = project / "via"
+    if _junction(link, scratch):
+        targets.append(link / "fresh.py")
+    for target in targets:
+        result, prompts = scratch_mod._drive(
+            agent, handler, "execute_python_file", {"file_path": str(target)}
+        )
+        assert len(prompts) == 1, target
+        assert result["status"] == "denied"
+
+
+def test_full_access_still_runs_a_scratch_script_unasked(folders):
+    _project, scratch = folders
+    agent, handler = scratch_mod._agent(folders)
+    handler.auto_approve_gated_tools = True
+    handler.full_access = True
+    target = str(scratch / "a.py")
+
+    result, prompts = scratch_mod._drive(
+        agent, handler, "execute_python_file", {"file_path": target}
+    )
+
+    assert prompts == []
+    assert result["status"] == "success"
+    assert agent.ran == [("execute_python_file", target)]
+
+
 @pytest.mark.parametrize("where", LOOKALIKES[:6])
-def test_a_lookalike_script_is_never_offered_the_scratch_grant(folders, where):
+def test_a_lookalike_script_is_not_marked_as_scratch(folders, where):
     target = str(where(*folders))
 
     agent, _h, _result, prompts = _scratch_drive(
@@ -729,12 +812,12 @@ def test_a_lookalike_script_is_never_offered_the_scratch_grant(folders, where):
     )
 
     [request] = prompts
-    assert request.get("always_scope") != SCRATCH_LABEL
+    assert SCRATCH_ARG not in request["args"]
     assert agent.ran == []
 
 
 def test_a_model_supplied_scratch_marker_earns_nothing(folders):
-    project, scratch = folders
+    project, _scratch = folders
     target = str(project / "tool.py")
 
     agent, handler, result, prompts = _scratch_drive(
@@ -744,30 +827,59 @@ def test_a_model_supplied_scratch_marker_earns_nothing(folders):
         answer=(True, True),
     )
 
-    for request in prompts:
-        assert request.get("always_scope") != SCRATCH_LABEL
+    assert prompts == []
+    assert result["error_type"] == "invalid_arguments"
     assert agent.ran == []
-    assert not any("scratch" in key for key in handler.session_grants())
+    assert handler.session_grants() == set()
 
 
-def test_the_scratch_grant_scope_rejects_traversal_and_prefix_tricks(tmp_path):
-    scratch = str(tmp_path / "gaia-scratch-a")
+def test_inside_folder_judges_where_a_path_lands_not_its_spelling(tmp_path):
+    scratch = tmp_path / "gaia-scratch-a"
+    outside = tmp_path / "project"
+    scratch.mkdir()
+    outside.mkdir()
+    s = str(scratch)
     for target in (
-        scratch + "-b/x.py",
-        scratch + "b/x.py",
-        os.path.join(scratch, "..", "x.py"),
-        os.path.join(scratch, "sub", "..", "..", "x.py"),
-        scratch,  # the folder itself is not a script inside it
+        s + "-b/x.py",
+        s + "b/x.py",
+        os.path.join(s, "..", "x.py"),
+        os.path.join(s, "sub", "..", "..", "x.py"),
+        s,  # the folder itself is not a script inside it
+        s + os.sep,
+        "",
     ):
-        scope = grant_scope(
-            "execute_python_file", {"file_path": target, SCRATCH_ARG: scratch}
-        )
-        assert scope is None or scope.label != SCRATCH_LABEL, target
+        assert not is_inside_folder(target, s), target
+    assert is_inside_folder(os.path.join(s, "sub", "..", "x.py"), s)
+    assert not is_inside_folder(os.path.join(s, "x.py"), "")
+    if sys.platform == "win32":
+        assert is_inside_folder(os.path.join(s.upper(), "x.py"), s)
+
+    # normpath says inside, realpath says outside: outside wins.
+    out_link = scratch / "linked"
+    # normpath says outside, realpath says inside: inside wins.
+    in_link = outside / "via"
+    # The scratch folder itself, named through a link.
+    alias = tmp_path / "alias"
+    if not (
+        _junction(out_link, outside)
+        and _junction(in_link, scratch)
+        and _junction(alias, scratch)
+    ):
+        pytest.skip("this host cannot create a directory link")
+    assert not is_inside_folder(str(out_link / "x.py"), s)
+    assert is_inside_folder(str(in_link / "x.py"), s)
+    assert is_inside_folder(os.path.join(s, "x.py"), str(alias))
+    assert is_inside_folder(str(alias / "x.py"), s)
 
 
-def test_a_scratch_marker_on_another_tool_grants_nothing(tmp_path):
+def test_a_scratch_marker_on_any_tool_grants_nothing(tmp_path):
     scratch = str(tmp_path / "gaia-scratch-a")
-    for tool in ("run_python", "write_file", "run_shell_command"):
+    for tool in (
+        "execute_python_file",
+        "run_python",
+        "write_file",
+        "run_shell_command",
+    ):
         scope = grant_scope(
             tool,
             {
@@ -777,4 +889,4 @@ def test_a_scratch_marker_on_another_tool_grants_nothing(tmp_path):
                 SCRATCH_ARG: scratch,
             },
         )
-        assert scope is None or scope.label != SCRATCH_LABEL, tool
+        assert scope is None, tool
