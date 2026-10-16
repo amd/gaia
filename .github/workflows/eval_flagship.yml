@@ -280,8 +280,9 @@ env:
   # Long-term memory surviving between categories makes a later category's score
   # depend on an earlier one's run order (convention: test_chat_agent.yml,
   # test_email_agent_eval.yml). The memory lane is the one place that state IS
-  # the subject, and it can opt back in safely because it is alone on a machine
-  # that is destroyed when the job ends.
+  # the subject, and it can opt back in safely because every category runs on
+  # its own fresh GAIA home (see the run step). Do not rely on the machine being
+  # wiped: the runner's ~/.gaia survived between runs and leaked memory (rc16).
   #
   # Do NOT flip these here. Workflow scope would re-enable memory for every lane
   # and bring back the cross-category bleed this is guarding.
@@ -1302,11 +1303,17 @@ jobs:
 
       # gaia_* scenarios read fixtures under ~/gaia-eval, starter skills and a
       # signed fixture hub. Same script as test_gaia_agent_eval.yml, so the two
-      # workflows cannot disagree on what "staged" means.
+      # workflows cannot disagree on what "staged" means. Skills and the hub's
+      # trust store go into a TEMPLATE GAIA home that the run step copies into
+      # each category's fresh home - never into the runner's real ~/.gaia, where
+      # skills captured by an earlier run were still installed (rc16).
       - name: Stage the gaia_* fixtures, skills and fixture hub
         if: env.GAIA_FIXTURES == '1'
         run: |
-          & $env:VENV_PY tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE"
+          $template = Join-Path $env:RUNNER_TEMP "gaia-eval-homes\_staged"
+          if (Test-Path $template) { Remove-Item $template -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $template | Out-Null
+          & $env:VENV_PY tests/fixtures/gaia/stage_eval_env.py --home "$env:USERPROFILE" --gaia-home $template
           if ($LASTEXITCODE -ne 0) { throw "Staging the gaia_* fixtures failed; the output above says which part." }
 
       - name: Run this lane's categories serially
@@ -1355,25 +1362,70 @@ jobs:
           # The GAIA UI backend must live in the SAME shell session as the evals:
           # a backgrounded child does not survive a step boundary. Hence backend
           # start + all this lane's categories in one step.
-          # Start-Process resolves relative paths against the .NET process CWD,
-          # which is not guaranteed to track the PowerShell location. Pin the
-          # child's working directory AND give it absolute redirect targets, so
-          # the backend and its logs both land in the workspace.
-          $outLog = Join-Path $PWD "eval-out\backend.out.log"
-          $errLog = Join-Path $PWD "eval-out\backend.err.log"
+          #
+          # ONE BACKEND PER CATEGORY, each on a fresh, empty GAIA home under the
+          # job's temp dir. The runner's real ~/.gaia outlives the job on this
+          # pool, and in rc16 the agent recalled "facts" a previous day's memory
+          # scenario had stored, and capture scenarios found skills an earlier
+          # run had captured. util/eval_gaia_home.py names the variables that move
+          # every state root GAIA reads from the environment (memory DB, skills,
+          # MCP list, agents, daemon host dir, UI database, config). The shared
+          # Lemonade and its models are reached through LEMONADE_BASE_URL and are
+          # not touched. A restart per category also keeps one category's memory
+          # out of the next one's score.
+          $homesRoot = Join-Path $env:RUNNER_TEMP "gaia-eval-homes"
+          $stagedHome = Join-Path $homesRoot "_staged"
+          New-Item -ItemType Directory -Force -Path $homesRoot | Out-Null
+
           # The agent under test runs shell commands, so it must not inherit the
-          # judge's credentials; only `claude -p` below needs them.
+          # judge's credentials; only `claude -p` below needs them. Every child
+          # this step starts goes through Start-Isolated for that reason.
+          # Start-Process resolves relative paths against the .NET process CWD,
+          # which is not guaranteed to track the PowerShell location, so callers
+          # pass an absolute working directory and absolute redirect targets.
           $judgeCredentials = @{}
           foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")) {
             $judgeCredentials[$name] = [Environment]::GetEnvironmentVariable($name)
-            Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
           }
+          function Start-Isolated($argList, $cwd, $out, $err) {
+            foreach ($name in $judgeCredentials.Keys) { Remove-Item "Env:\$name" -ErrorAction SilentlyContinue }
+            try {
+              return Start-Process -FilePath $env:VENV_PY -ArgumentList $argList `
+                -WorkingDirectory $cwd -RedirectStandardOutput $out -RedirectStandardError $err `
+                -NoNewWindow -PassThru
+            }
+            finally {
+              foreach ($name in $judgeCredentials.Keys) {
+                if ($judgeCredentials[$name]) { Set-Item "Env:\$name" $judgeCredentials[$name] }
+              }
+            }
+          }
+
+          # Stops a category's backend and the gaia daemon it spawned. The daemon
+          # lives in the category's GAIA home, so `gaia daemon stop` must run
+          # while GAIA_HOME still names that home. taskkill /T takes the
+          # backend's children (MCP servers, sidecars) with it; Stop-Process
+          # alone orphans them. Returns $false if :4200 is still answering.
+          function Stop-CategoryBackend($proc) {
+            & $env:VENV_GAIA daemon stop 2>&1 | ForEach-Object { Write-Host "$_" }
+            if ($proc -and -not $proc.HasExited) {
+              Write-Host "Stopping backend pid $($proc.Id) and its children..."
+              & taskkill /F /T /PID $proc.Id 2>&1 | Out-Null
+            }
+            foreach ($attempt in 1..30) {
+              if (-not (Test-Backend)) { return $true }
+              Start-Sleep -Seconds 1
+            }
+            return $false
+          }
+
           # gaia_* lanes: the fixture server, and the env the corpus is written
-          # against (tests/fixtures/gaia/README.md), set before the backend
+          # against (tests/fixtures/gaia/README.md), set before any backend
           # starts so the agents it spawns inherit them.
           $fixture = $null
+          $backend = $null
           $extraArgs = @()
-          $backendCwd = $PWD
+          $backendCwd = "$PWD"
           if ($env:GAIA_FIXTURES -eq '1') {
             # The backend's working directory is a session's file scope when
             # nothing is attached. The staged fixtures are what the scenarios
@@ -1388,12 +1440,12 @@ jobs:
             $env:PATH = (Join-Path $env:USERPROFILE ".gaia-eval-bin") + ";" + $env:PATH
             # gaia_email reads this offline mailbox, never a connected account.
             $env:GAIA_EVAL_MAILBOX = Join-Path $PWD "tests/fixtures/gaia/email/eval_inbox.mbox"
-            $fixture = Start-Process -FilePath $env:VENV_PY `
-              -ArgumentList "tests/fixtures/gaia/serve_fixtures.py","--port","8765" `
-              -WorkingDirectory $PWD `
-              -RedirectStandardOutput (Join-Path $PWD "eval-out\fixtures.log") `
-              -RedirectStandardError (Join-Path $PWD "eval-out\fixtures.err.log") `
-              -NoNewWindow -PassThru
+            if (-not (Test-Path (Join-Path $stagedHome "skills"))) {
+              Write-Host "::error::$stagedHome\skills is missing - the staging step did not write the template GAIA home the gaia_* categories copy their skills from."
+              exit 1
+            }
+            $fixture = Start-Isolated @("tests/fixtures/gaia/serve_fixtures.py","--port","8765") "$PWD" `
+              (Join-Path $PWD "eval-out\fixtures.log") (Join-Path $PWD "eval-out\fixtures.err.log")
             if (-not $fixture) {
               Write-Host "::error::Could not start tests/fixtures/gaia/serve_fixtures.py - the gaia_* web and skill-hub scenarios depend on it."
               exit 1
@@ -1402,40 +1454,8 @@ jobs:
             # until a CI run confirms the staged gh.exe answers (#4427).
             $extraArgs = @('--exclude-tag', 'live', '--exclude-tag', 'local_blocked_win_shim')
           }
-          $backend = Start-Process -FilePath $env:VENV_PY `
-            -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
-            -WorkingDirectory $backendCwd `
-            -RedirectStandardOutput $outLog `
-            -RedirectStandardError $errLog `
-            -NoNewWindow -PassThru
-          foreach ($name in $judgeCredentials.Keys) {
-            if ($judgeCredentials[$name]) { Set-Item "Env:\$name" $judgeCredentials[$name] }
-          }
-          if (-not $backend) {
-            Write-Host "::error::Could not start gaia.ui.server - the venv install is broken or python is not on PATH."
-            exit 1
-          }
 
           try {
-            # 120 x 5s sleeps = ~10 min of waiting, more when a probe itself
-            # times out. The job timeout is the real backstop.
-            Write-Host "Waiting ~10 min for the GAIA UI backend on $env:BACKEND_URL (pid $($backend.Id))..."
-            $ready = $false
-            foreach ($attempt in 1..120) {
-              if ($backend.HasExited) {
-                Write-Host "::error::gaia.ui.server exited during startup (exit $($backend.ExitCode)). Backend log follows."
-                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
-                exit 1
-              }
-              if (Test-Backend) { $ready = $true; break }
-              Start-Sleep -Seconds 5
-            }
-            if (-not $ready) {
-              Write-Host "::error::GAIA UI backend did not become healthy at $env:BACKEND_URL/api/health in time. Backend log follows."
-              Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
-              exit 1
-            }
-            Write-Host "Backend healthy."
             if ($fixture) {
               $served = $false
               foreach ($attempt in 1..6) {
@@ -1451,57 +1471,13 @@ jobs:
               Write-Host "Fixture server healthy."
             }
 
-            # Healthy is not the same as "can run these scenarios". The eval asks
-            # the backend for DEFAULT_AGENT_TYPE on every scenario, and an agent
-            # that ships as a hub package is simply absent when its editable
-            # install is missing: POST /api/sessions 422s, every scenario in this
-            # lane records INFRA_ERROR, and the eval still exits 0 because it
-            # produced a scorecard. Assert the id resolves BEFORE spending the
-            # slot - the install line is one place to get wrong but four lanes
-            # build their own venv from it, so the check runs four times and a
-            # miss costs seconds rather than a whole lane each.
             # Deliberately not asserting a literal "gaia": the id is read from
-            # gaia.eval.config so this check tracks the default instead of
-            # becoming a second place to update.
+            # gaia.eval.config so the registration check below tracks the default
+            # instead of becoming a second place to update.
             $defaultAgent = (& $env:VENV_PY -c "from gaia.eval.config import DEFAULT_AGENT_TYPE; print(DEFAULT_AGENT_TYPE)" 2>&1 | Out-String).Trim()
             if ($LASTEXITCODE -ne 0 -or -not $defaultAgent) {
               Write-Host "::error::Could not read DEFAULT_AGENT_TYPE from gaia.eval.config - the venv install is broken. Output: $defaultAgent"
               exit 1
-            }
-            try {
-              $agentList = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/agents" -TimeoutSec 30 -ErrorAction Stop
-            } catch {
-              Write-Host "::error::GET $env:BACKEND_URL/api/agents failed after the backend reported healthy: $($_.Exception.Message). Backend log follows."
-              Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
-              exit 1
-            }
-            $agentIds = @($agentList.agents | ForEach-Object { $_.id })
-            if ($agentIds -notcontains $defaultAgent) {
-              Write-Host "::error::The eval's default agent '$defaultAgent' is not registered in this backend, so every scenario would 422 at session creation and record INFRA_ERROR. Registered ids: $($agentIds -join ', '). Fix: add the hub package that ships '$defaultAgent' to install-package in this job's Setup Python Environment step (hub/agents/<id>/python; the flagship is hub/agents/gaia/python). See src/gaia/eval/config.py for the default and src/gaia/agents/registry.py for how entry-point agents register."
-              Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
-              exit 1
-            }
-            Write-Host "Default agent '$defaultAgent' is registered. Agents: $($agentIds -join ', ')"
-
-            # GAIA_MEMORY_DISABLED=0 keeps the store alive, but the Agent UI's own
-            # memory switch defaults OFF, and with it off every `remember` returns
-            # "skipped". Flip it for the lanes that measure memory; the runner's
-            # preflight refuses to start a memory scenario while it is still off.
-            if ($env:GAIA_MEMORY_DISABLED -eq '0') {
-              try {
-                $memory = Invoke-RestMethod -Method Put -Uri "$env:BACKEND_URL/api/memory/settings" `
-                  -Headers @{ "X-Gaia-UI" = "1" } -ContentType "application/json" `
-                  -Body '{"memory_enabled": true}' -TimeoutSec 30 -ErrorAction Stop
-              } catch {
-                Write-Host "::error::PUT $env:BACKEND_URL/api/memory/settings failed: $($_.Exception.Message). This lane measures long-term memory and cannot run with it off. Backend log follows."
-                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
-                exit 1
-              }
-              if ($memory.memory_enabled -ne $true) {
-                Write-Host "::error::The backend did not switch memory on (settings: $($memory | ConvertTo-Json -Compress)). This lane measures long-term memory and cannot run with it off."
-                exit 1
-              }
-              Write-Host "Long-term memory switched on in the backend."
             }
 
             # Per-category wall clock. The job timeout was guessed once and cost a
@@ -1509,7 +1485,8 @@ jobs:
             # these lines are what replaces the guess with a measurement. Each is
             # written the moment its category ends - appended to the step summary,
             # not buffered to the end - so a run that overruns or crashes still
-            # leaves behind the timings of whatever DID finish.
+            # leaves behind the timings of whatever DID finish. A category's time
+            # includes its own backend start.
             #
             # Not `Out-File -Encoding utf8`: on Windows PowerShell 5.1 that
             # prepends a BOM, and a BOM ahead of the leading `##` stops GitHub
@@ -1567,14 +1544,150 @@ jobs:
               Write-Host "  gaia eval agent --category $category"
               Write-Host "=================================================================="
               $swCat = [Diagnostics.Stopwatch]::StartNew()
+
+              # A fresh GAIA home for this category: the gaia_* skills template
+              # copied in, every state root pointed at it, then checked.
+              $catHome = Join-Path $homesRoot $category
+              if (Test-Path $catHome) {
+                Write-Host "::error::$catHome exists before $category started. Every category must start on a GAIA home nothing has written to."
+                exit 1
+              }
+              New-Item -ItemType Directory -Force -Path $catHome | Out-Null
+              if ($env:GAIA_FIXTURES -eq '1') {
+                Copy-Item (Join-Path $stagedHome "skills") (Join-Path $catHome "skills") -Recurse -Force
+              }
+              $isoEnv = @(& $env:VENV_PY util/eval_gaia_home.py env --home $catHome)
+              if ($LASTEXITCODE -ne 0 -or $isoEnv.Count -eq 0) {
+                Write-Host "::error::util/eval_gaia_home.py env failed for $catHome; the output above says why."
+                exit 1
+              }
+              foreach ($line in $isoEnv) {
+                $kv = $line -split '=', 2
+                Set-Item "Env:\$($kv[0])" $kv[1]
+                Write-Host "  $($kv[0])=$($kv[1])"
+              }
+              # The pre-run check: every state root resolves into this home and
+              # the memory database holds nothing.
+              & $env:VENV_PY util/eval_gaia_home.py check --home $catHome
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "::error::$category would not start on an isolated, empty GAIA home (NOT ISOLATED lines above). Refusing to score it with state from another run."
+                exit 1
+              }
+
               # The acme MCP stub exists only for gaia_mcp; staged for any other
-              # category it would widen that category's toolset. Each session
-              # builds a fresh agent, so staging mid-run takes effect.
+              # category it would widen that category's toolset. It writes the MCP
+              # list in this category's GAIA home, which the backend reads.
               $stub = 'tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py'
               if ($category -eq 'gaia_mcp') {
                 & $env:VENV_PY $stub install
                 if ($LASTEXITCODE -ne 0) { Write-Host "::error::Staging the gaia_mcp stub servers failed; the output above says why."; exit 1 }
               }
+
+              # A leftover backend still holding :4200 would answer the health
+              # probe below, and this category would measure the previous
+              # checkout (or the previous category's home) while reporting green.
+              if (Test-Backend) {
+                Write-Host "::error::$env:BACKEND_URL is already serving before $category started - a stale GAIA backend is running on this runner. Kill it (gaia kill) and re-run; otherwise this eval measures the wrong backend."
+                exit 1
+              }
+              $outLog = Join-Path $PWD "eval-out\backend-$category.out.log"
+              $errLog = Join-Path $PWD "eval-out\backend-$category.err.log"
+              $backend = Start-Isolated @("-m","gaia.ui.server","--port","4200","--host","127.0.0.1") $backendCwd $outLog $errLog
+              if (-not $backend) {
+                Write-Host "::error::Could not start gaia.ui.server - the venv install is broken or python is not on PATH."
+                exit 1
+              }
+
+              # 120 x 5s sleeps = ~10 min of waiting, more when a probe itself
+              # times out. The job timeout is the real backstop.
+              Write-Host "Waiting ~10 min for the GAIA UI backend on $env:BACKEND_URL (pid $($backend.Id))..."
+              $ready = $false
+              foreach ($attempt in 1..120) {
+                if ($backend.HasExited) {
+                  Write-Host "::error::gaia.ui.server exited during startup (exit $($backend.ExitCode)). Backend log follows."
+                  Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                  exit 1
+                }
+                if (Test-Backend) { $ready = $true; break }
+                Start-Sleep -Seconds 5
+              }
+              if (-not $ready) {
+                Write-Host "::error::GAIA UI backend did not become healthy at $env:BACKEND_URL/api/health in time. Backend log follows."
+                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                exit 1
+              }
+              Write-Host "Backend healthy."
+
+              # Healthy is not the same as "can run these scenarios". The eval asks
+              # the backend for DEFAULT_AGENT_TYPE on every scenario, and an agent
+              # that ships as a hub package is simply absent when its editable
+              # install is missing: POST /api/sessions 422s, every scenario in this
+              # lane records INFRA_ERROR, and the eval still exits 0 because it
+              # produced a scorecard. Assert the id resolves BEFORE spending the
+              # slot.
+              try {
+                $agentList = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/agents" -TimeoutSec 30 -ErrorAction Stop
+              } catch {
+                Write-Host "::error::GET $env:BACKEND_URL/api/agents failed after the backend reported healthy: $($_.Exception.Message). Backend log follows."
+                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                exit 1
+              }
+              $agentIds = @($agentList.agents | ForEach-Object { $_.id })
+              if ($agentIds -notcontains $defaultAgent) {
+                Write-Host "::error::The eval's default agent '$defaultAgent' is not registered in this backend, so every scenario would 422 at session creation and record INFRA_ERROR. Registered ids: $($agentIds -join ', '). Fix: add the hub package that ships '$defaultAgent' to install-package in this job's Setup Python Environment step (hub/agents/<id>/python; the flagship is hub/agents/gaia/python). See src/gaia/eval/config.py for the default and src/gaia/agents/registry.py for how entry-point agents register."
+                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                exit 1
+              }
+              Write-Host "Default agent '$defaultAgent' is registered. Agents: $($agentIds -join ', ')"
+
+              # GAIA_MEMORY_DISABLED=0 keeps the store alive, but the Agent UI's own
+              # memory switch defaults OFF, and with it off every `remember` returns
+              # "skipped". Flip it for the lanes that measure memory; the runner's
+              # preflight refuses to start a memory scenario while it is still off.
+              # Per category, because each category's backend has a fresh database.
+              if ($env:GAIA_MEMORY_DISABLED -eq '0') {
+                try {
+                  $memory = Invoke-RestMethod -Method Put -Uri "$env:BACKEND_URL/api/memory/settings" `
+                    -Headers @{ "X-Gaia-UI" = "1" } -ContentType "application/json" `
+                    -Body '{"memory_enabled": true}' -TimeoutSec 30 -ErrorAction Stop
+                } catch {
+                  Write-Host "::error::PUT $env:BACKEND_URL/api/memory/settings failed: $($_.Exception.Message). This lane measures long-term memory and cannot run with it off. Backend log follows."
+                  Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                  exit 1
+                }
+                if ($memory.memory_enabled -ne $true) {
+                  Write-Host "::error::The backend did not switch memory on (settings: $($memory | ConvertTo-Json -Compress)). This lane measures long-term memory and cannot run with it off."
+                  exit 1
+                }
+                Write-Host "Long-term memory switched on in the backend."
+              }
+
+              # The same pre-run check, asked of the store the BACKEND opened: it
+              # must be empty, and it must be this category's file. A backend that
+              # ignored GAIA_MEMORY_DB would pass the check above and still read
+              # the runner's real memory.
+              try {
+                $stats = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/memory/stats" -Headers @{ "X-Gaia-UI" = "1" } -TimeoutSec 30 -ErrorAction Stop
+              } catch {
+                Write-Host "::error::GET $env:BACKEND_URL/api/memory/stats failed: $($_.Exception.Message). Without it there is no proof $category starts with empty memory."
+                exit 1
+              }
+              $held = [ordered]@{
+                knowledge = $stats.knowledge.total
+                procedures = $stats.procedures.total
+                conversation_turns = $stats.conversations.total_turns
+              }
+              $notEmpty = @($held.Keys | Where-Object { $held[$_] -ne 0 } | ForEach-Object { "$_=$($held[$_])" })
+              if ($notEmpty.Count -gt 0) {
+                Write-Host "::error::The backend's memory store is not empty at the start of $category ($($notEmpty -join ', ')). Its answers would draw on another run's memory, as rc16's did. Stats: $($stats | ConvertTo-Json -Compress -Depth 4)"
+                exit 1
+              }
+              if (-not (Test-Path $env:GAIA_MEMORY_DB)) {
+                Write-Host "::error::The backend answered /api/memory/stats but did not create $env:GAIA_MEMORY_DB, so the store it opened is somewhere else - not $category's isolated GAIA home."
+                exit 1
+              }
+              Write-Host "Memory at the start of ${category}: empty, at $env:GAIA_MEMORY_DB."
+
               # Reset first: a command that fails to LAUNCH leaves $LASTEXITCODE
               # at its previous value, so an unset/stale 0 would read as success.
               $global:LASTEXITCODE = 0
@@ -1588,11 +1701,25 @@ jobs:
               # Write-Host leave $LASTEXITCODE alone, but reading it first keeps
               # that from being a thing a later edit has to remember.
               $code = $LASTEXITCODE
-              $swCat.Stop()
               if ($category -eq 'gaia_mcp') {
                 & $env:VENV_PY $stub remove
                 if ($LASTEXITCODE -ne 0) { Write-Host "::error::Removing the gaia_mcp stub servers failed; the output above says why."; exit 1 }
               }
+
+              $stopped = Stop-CategoryBackend $backend
+              $backend = $null
+              # The daemon's log dies with the home; keep it beside the backend's.
+              $daemonLog = Join-Path $catHome "host\daemon.log"
+              if (Test-Path $daemonLog) { Copy-Item $daemonLog "eval-out\daemon-$category.log" -Force }
+              if (-not $stopped) {
+                Write-Host "::error::The backend for $category still answers on $env:BACKEND_URL after being stopped; the next category would talk to it."
+                exit 1
+              }
+              Remove-Item $catHome -Recurse -Force -ErrorAction SilentlyContinue
+              if (Test-Path $catHome) {
+                Write-Host "::warning::Could not fully delete $catHome after $category (a file is still open). The next category uses its own home, so its score is unaffected; the cleanup step retries."
+              }
+              $swCat.Stop()
 
               $mins = [math]::Round($swCat.Elapsed.TotalMinutes, 1)
               Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min of the 360-min step budget)"
@@ -1620,16 +1747,44 @@ jobs:
           }
           finally {
             # Persistent runner: never leave the stub registered for the next job.
+            # Its server list sat in a category home; its activation did not.
             if ($env:GAIA_FIXTURES -eq '1') {
               & $env:VENV_PY tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py remove
             }
-            foreach ($proc in @($backend, $fixture)) {
-              if ($proc -and -not $proc.HasExited) {
-                Write-Host "Stopping pid $($proc.Id)..."
-                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-              }
+            if ($backend) { Stop-CategoryBackend $backend | Out-Null }
+            if ($fixture -and -not $fixture.HasExited) {
+              Write-Host "Stopping fixture server pid $($fixture.Id)..."
+              Stop-Process -Id $fixture.Id -Force -ErrorAction SilentlyContinue
             }
           }
+
+      # Deletes every category's GAIA home, in its own always() step so a step
+      # timeout (which kills the shell above before its `finally`) still cleans
+      # up. Stops any daemon a home still holds first: a running daemon keeps
+      # its host dir open. The runner's real ~/.gaia is never touched.
+      - name: Delete the per-category GAIA homes
+        if: always()
+        run: |
+          $ErrorActionPreference = "Continue"
+          $homesRoot = Join-Path $env:RUNNER_TEMP "gaia-eval-homes"
+          if (-not (Test-Path $homesRoot)) { Write-Host "No GAIA homes to delete."; exit 0 }
+          foreach ($dir in @(Get-ChildItem $homesRoot -Directory)) {
+            if (Test-Path (Join-Path $dir.FullName "host\instance.json")) {
+              $env:GAIA_HOME = $dir.FullName
+              $env:GAIA_DAEMON_HOME = Join-Path $dir.FullName "host"
+              & $env:VENV_GAIA daemon stop 2>&1 | ForEach-Object { Write-Host "$_" }
+            }
+          }
+          Remove-Item $homesRoot -Recurse -Force -ErrorAction SilentlyContinue
+          if (Test-Path $homesRoot) {
+            # Not an error: no later category can read it, because each one
+            # refuses to start on a home that already exists, and the runner
+            # clears its temp dir before the next job.
+            Write-Host "::warning::Could not fully delete $homesRoot; a process still holds a file in it. Files left:"
+            Get-ChildItem $homesRoot -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object { Write-Host "  $($_.FullName)" }
+            exit 0
+          }
+          Write-Host "Deleted $homesRoot."
 
       - name: Collect scorecards from the printed run directories
         # Not always(): on a concurrency cancel or a job-level timeout this would
@@ -1759,7 +1914,7 @@ jobs:
           & $env:VENV_PY -m gaia.eval.integrity_gate @gateArgs
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE for lane '$env:EVAL_LANE'. Download this run's 'eval-$env:EVAL_LANE' artifact: it carries the traces, the backend log (backend.err.log) and the Lemonade task logs from this machine, which no longer exists."
+            Write-Host "::error::Integrity gate failed (exit $code) with enforce=$env:ENFORCE for lane '$env:EVAL_LANE'. Download this run's 'eval-$env:EVAL_LANE' artifact: it carries the traces, the backend logs (backend-<category>.err.log) and the Lemonade task logs from this machine, which no longer exists."
             exit 1
           }
 
