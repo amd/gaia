@@ -196,8 +196,6 @@ def test_eu2_idle_timeout_stops_the_server(fresh_install):
     s = fresh_install
     _section("EU-2: the server stops once no client is left for the idle timeout")
     pid, port, _ = s.server()
-    # Saved through GaiaConfig: the documented CLI command is broken (see
-    # test_config_set_accepts_the_idle_timeout below).
     _save_idle_timeout(s, 1)
     set_at = time.monotonic()
     wait_until(
@@ -221,13 +219,6 @@ def _save_idle_timeout(s: Scenario, minutes: int) -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="`gaia config set` routes every lemonade_* key to the Lemonade-choice "
-    "handler, which rejects lemonade_idle_timeout_minutes; the docs tell users "
-    "to set it this way",
-)
 def test_config_set_accepts_the_idle_timeout(fresh_install):
     s = fresh_install
     result = s.gaia("config", "set", "lemonade_idle_timeout_minutes", "30", check=False)
@@ -277,16 +268,6 @@ print("started", state.started, state.base_url)
 """
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="With GAIA's server stopped (e.g. by the idle timeout) its state file "
-    "is gone, so ensure_lemonade_running() falls back to the default port 13305: "
-    "where something answers there it silently uses that server instead of "
-    "GAIA's own; where nothing does, the daemon's /lemonade/start answers 500 "
-    "because LemonadeSupervisor._ensure_embedded reads the started_pid #5118 "
-    "removed",
-)
 def test_starting_a_stopped_server_returns_gaias_own(fresh_install):
     s = fresh_install
     own_port = s.last_port()
@@ -296,7 +277,7 @@ def test_starting_a_stopped_server_returns_gaias_own(fresh_install):
     result = s.run([sys.executable, "-c", _ENSURE_RUNNING], check=False, timeout=300)
     last = (result.output.strip().splitlines() or ["(no output)"])[-1]
     evidence(
-        f"- KNOWN BUG: `ensure_lemonade_running()` with GAIA's server (port "
+        f"- `ensure_lemonade_running()` with GAIA's server (port "
         f"{own_port}) stopped: exit {result.returncode}, `{last[:200]}`; GAIA's "
         f"server running afterwards: {bool(s.server_running())}"
     )
@@ -472,20 +453,13 @@ def test_eu4_too_little_memory_is_refused_with_a_clear_message(gemma_install):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="gaia llm's preload (LemonadeManager._try_preload_with_ctx) re-wraps "
-    "InsufficientMemoryError as a generic 'restart the server' error, so the "
-    "user never sees how much memory is needed or what to close",
-)
 def test_eu4_gaia_llm_shows_the_memory_message(gemma_install):
     s = gemma_install
     s.api("POST", "unload")
     result = _capped_llm(s, 6.0)
     errors = [ln for ln in result.output.splitlines() if "Error" in ln]
     evidence(
-        f"- KNOWN BUG: `gaia llm` with 6 GB free said "
+        f"- `gaia llm` with 6 GB free said "
         f"`{errors[0].strip()[:300] if errors else '(nothing)'}`"
     )
     assert "Not enough free memory" in result.output
