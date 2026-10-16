@@ -10,7 +10,9 @@
 # workflows (#5157): the pool is shared and scarce. A tag run installs the
 # tag's source, built into a wheel; it does not wait for PyPI, because
 # publish.yml takes hours and this result is most useful before it finishes.
-# Dispatch with `pypi_version` to test a wheel that is already published.
+# Dispatch with `pypi_version` to test a wheel that is already published, or
+# with `gaia_ref` to install another ref's source (e.g. an unpublished RC tag)
+# while still running this branch's tests.
 #
 # The machine is a persistent lab box with other Lemonades on it, not a fresh
 # image. Each scenario therefore runs from its own empty HOME under
@@ -30,9 +32,14 @@ on:
         description: 'Install amd-gaia==<this> from PyPI instead of this ref (e.g. 0.25.0rc14)'
         required: false
         default: ''
+      gaia_ref:
+        description: 'Install GAIA from this ref (tag, branch or SHA) instead of this ref; the tests still come from this ref'
+        required: false
+        default: ''
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Dispatches never cancel each other, so one can be sent per pool host.
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -48,6 +55,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check out the GAIA under test
+        if: inputs.gaia_ref != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.gaia_ref }}
+          path: gaia-under-test
+
       - name: Paths for this run
         run: |
           {
@@ -60,8 +74,12 @@ jobs:
       - name: Install GAIA into a fresh venv
         env:
           PYPI_VERSION: ${{ inputs.pypi_version }}
+          GAIA_REF: ${{ inputs.gaia_ref }}
         run: |
           set -euo pipefail
+          if [ -n "$PYPI_VERSION" ] && [ -n "$GAIA_REF" ]; then
+            echo "::error::Set pypi_version or gaia_ref, not both"; exit 1
+          fi
           echo "Host: $(hostname)"
           # Not every pool host has curl, which the uv installer needs.
           mkdir -p "$RUNNER_TEMP/uv-bin"
@@ -73,6 +91,9 @@ jobs:
           "$UV" venv "$VENV" --python 3.12 --seed
           if [ -n "$PYPI_VERSION" ]; then
             target="amd-gaia[ui,rag]==$PYPI_VERSION"
+          elif [ -n "$GAIA_REF" ]; then
+            echo "GAIA ref $GAIA_REF at $(git -C gaia-under-test rev-parse HEAD)"
+            target="./gaia-under-test[ui,rag]"
           else
             target=".[ui,rag]"
           fi
