@@ -1,0 +1,40 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Linux Strix Halo (Hardware)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/linux-strix-halo-user-issues]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: [self-hosted, Linux, xsj-dispatch, strix-halo]
+    timeout-minutes: 15
+    steps:
+      - name: Describe the machine
+        run: |
+          set -x
+          hostname; uname -a; cat /etc/os-release | head -4
+          id; echo "HOME=$HOME RUNNER_TEMP=$RUNNER_TEMP RUNNER_NAME=$RUNNER_NAME"
+          nproc; free -g; df -h "$HOME" /tmp | cat
+          ls -la "$HOME" | head -40
+          du -sh "$HOME/.cache/huggingface" "$HOME/.gaia" "$HOME/.cache/lemonade" 2>/dev/null || true
+          for c in /sys/class/drm/card*/device; do
+            [ -f "$c/mem_info_vram_total" ] || continue
+            for f in vram_total vram_used gtt_total gtt_used; do echo "$c $f $(cat $c/mem_info_$f)"; done
+          done
+          which python3 python3.12 python3.11 python3.10 uv pip3 rocm-smi amd-smi lemond lemonade-server gaia || true
+          python3 --version || true
+          ps -eo pid,user,etime,cmd | grep -i -E "lemon|llama|gaia" | grep -v grep || true
+          ss -ltnp 2>/dev/null | head -30 || true
+          systemctl --user status lemond 2>&1 | head -5 || true
+          sudo -n true && echo "passwordless sudo: yes" || echo "passwordless sudo: no"
+          ls /dev/dri /dev/accel 2>/dev/null || true
+          curl -sS -o /dev/null -w "github %{http_code}\n" https://github.com || true
+          curl -sS -o /dev/null -w "hf %{http_code}\n" https://huggingface.co || true
+          amd-smi static --asic 2>/dev/null | head -20 || rocm-smi --showproductname 2>/dev/null | head -20 || true
