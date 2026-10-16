@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -109,6 +111,10 @@ func (f *fakeProgram) Close() {
 	<-f.done
 }
 
+// testShutdownTimeout is generous because the production 2s budget is marginal
+// under -race on a shared CI runner; a hung handler still fails the cleanup.
+const testShutdownTimeout = 30 * time.Second
+
 func newTestServer(t *testing.T) (*Server, *State) {
 	t.Helper()
 	t.Setenv(EnvHome, t.TempDir())
@@ -123,7 +129,7 @@ func newTestServerWithDelay(t *testing.T, delay time.Duration) (*Server, *State)
 	prog := newFakeProgram(rec, delay)
 	_ = rec.View() // seed the first frame, as the event loop does on start
 
-	srv, err := Start(prog, state, Options{Version: "test"})
+	srv, err := Start(prog, state, Options{Version: "test", ShutdownTimeout: testShutdownTimeout})
 	if err != nil {
 		prog.Close()
 		t.Fatalf("Start: %v", err)
@@ -132,6 +138,9 @@ func newTestServerWithDelay(t *testing.T, delay time.Duration) (*Server, *State)
 	srv.MarkRunning()
 	t.Cleanup(func() {
 		srv.MarkStopped()
+		// Shutdown waits up to 5s on a connection that never sent a request,
+		// and the client pool can hold one after concurrent callers.
+		http.DefaultClient.CloseIdleConnections()
 		if err := srv.Stop(); err != nil {
 			t.Errorf("Stop: %v", err)
 		}
@@ -483,7 +492,7 @@ func TestResizeIsUnboundedWithoutARealTerminal(t *testing.T) {
 func TestWaitResolvesImmediately(t *testing.T) {
 	srv, _ := newTestServer(t)
 	status, body := request(t, srv, http.MethodPost, "/wait",
-		map[string]any{"contains": "G A I A", "timeout_ms": 2000}, srv.Token())
+		map[string]any{"contains": "G A I A", "timeout_ms": 20000}, srv.Token())
 	if status != http.StatusOK {
 		t.Fatalf("wait: status = %d (%v)", status, body)
 	}
@@ -656,6 +665,60 @@ func TestDiscoveryFileLifecycle(t *testing.T) {
 	}
 	if after != nil {
 		t.Error("Stop left the discovery file behind; a client would trust a dead TUI")
+	}
+}
+
+// The shutdown budget is injectable for tests, but it must stay a ceiling: a
+// request that never finishes still makes Stop fail instead of hanging it.
+func TestStopGivesUpOnAStuckRequestAtItsBudget(t *testing.T) {
+	t.Setenv(EnvHome, t.TempDir())
+	state := NewState(nil)
+	prog := newFakeProgram(NewRecorder(newTestModel(), state), 0)
+	defer prog.Close()
+
+	const budget = 200 * time.Millisecond
+	srv, err := Start(prog, state, Options{Version: "test", ShutdownTimeout: budget})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Half a request: the server is reading it and will wait for the rest.
+	conn, err := net.Dial("tcp", net.JoinHostPort(Host, strconv.Itoa(srv.Port())))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("GET " + APIPrefix + "/status HTTP/1.1\r\nHost: x\r\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	start := time.Now()
+	err = srv.Stop()
+	took := time.Since(start)
+	if err == nil || !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("Stop with a stuck request = %v, want a deadline error", err)
+	}
+	if took < budget {
+		t.Errorf("Stop gave up after %s, before its %s budget", took, budget)
+	}
+	if took > testShutdownTimeout {
+		t.Errorf("Stop took %s; the %s budget did not bound it", took, budget)
+	}
+}
+
+func TestShutdownTimeoutDefaultsToTheProductionBudget(t *testing.T) {
+	t.Setenv(EnvHome, t.TempDir())
+	state := NewState(nil)
+	prog := newFakeProgram(NewRecorder(newTestModel(), state), 0)
+	defer prog.Close()
+
+	srv, err := Start(prog, state, Options{Version: "test"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer srv.Stop()
+	if srv.shutdownTimeout != DefaultShutdownTimeout {
+		t.Errorf("shutdownTimeout = %s, want %s when unset", srv.shutdownTimeout, DefaultShutdownTimeout)
 	}
 }
 
@@ -986,7 +1049,7 @@ func TestWaitAcceptsTheBlockerMatcher(t *testing.T) {
 	state.setSnapshot(Snapshot{View: ViewPreflight, Agent: "gaia", Blocker: "binary"})
 
 	status, body := request(t, srv, http.MethodPost, "/wait",
-		map[string]any{"state": map[string]any{"blocker": "binary"}, "timeout_ms": 2000}, srv.Token())
+		map[string]any{"state": map[string]any{"blocker": "binary"}, "timeout_ms": 20000}, srv.Token())
 	if status != http.StatusOK || body["matched"] != true {
 		t.Fatalf("status %d matched %v, want 200/true (%v)", status, body["matched"], body)
 	}
