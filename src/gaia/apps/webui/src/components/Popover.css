@@ -6,7 +6,7 @@
     z-index: 50;
     min-width: 240px;
     max-width: min(360px, calc(100vw - 32px));
-    max-height: min(420px, 70vh);
+    max-height: min(420px, 70vh, var(--popover-room, 100vh));
     overflow-y: auto;
     padding: 6px;
     background: var(--bg-card);
