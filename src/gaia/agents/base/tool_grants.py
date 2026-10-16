@@ -333,6 +333,7 @@ _CHDIR_BACK = frozenset({"popd", "pop-location"})
 
 #: A variable the shell may fill in that GAIA's own environment does not hold.
 _UNSET_VARIABLE = re.compile(r"\$(\{|[A-Za-z_])")
+_WHOLE_VARIABLE = re.compile(r"\$(\{\w+\}|\w+)")
 
 #: Wildcard matches checked before a word is counted as reaching the folder.
 _MAX_GLOB_MATCHES = 200
@@ -365,6 +366,8 @@ def command_reaches_folder(command: str, cwds: Sequence[str], folder: str) -> bo
         if program in _CHDIR:
             # Every word may be the target: `cd /d X` on cmd, `-Path X` on pwsh.
             targets = [w for w in words[1:] if not w.startswith("-")] or ["~"]
+            if any(_UNSET_VARIABLE.search(_spellings(t)[-1]) for t in targets):
+                return True
             moved = [
                 os.path.join(base, spelling)
                 for base in bases
@@ -375,12 +378,24 @@ def command_reaches_folder(command: str, cwds: Sequence[str], folder: str) -> bo
                 return True
             bases.extend(moved)
         for word in words:
-            for candidate in _path_candidates(word):
-                if _UNSET_VARIABLE.search(candidate):
+            for value in _path_candidates(word):
+                spellings = _spellings(value)
+                if _names_an_unknown_path(spellings[-1]):
                     return True
-                if any(lands(os.path.join(base, candidate)) for base in bases):
-                    return True
+                for spelling in spellings:
+                    if any(lands(os.path.join(base, spelling)) for base in bases):
+                        return True
     return False
+
+
+def _names_an_unknown_path(text: str) -> bool:
+    """True when the shell, not GAIA, decides which path *text* names.
+
+    `$A` or `$A/x` does; `awk '{print $NF}'` and `jq '$x'` name no path.
+    """
+    if not _UNSET_VARIABLE.search(text):
+        return False
+    return bool(_WHOLE_VARIABLE.fullmatch(text)) or "/" in text or "\\" in text
 
 
 def _path_candidates(word: str) -> List[str]:
@@ -396,9 +411,7 @@ def _path_candidates(word: str) -> List[str]:
         for sep in seps:
             if sep in value:
                 found.extend(part for part in value.split(sep) if len(part) > 1)
-    spelled = [s for value in found if value for s in _spellings(value)]
-    # The variable test reads the expanded spelling: `$HOME/x` is a real path.
-    return [s for s in spelled if s == spelled[-1] or not _UNSET_VARIABLE.search(s)]
+    return [value for value in found if value]
 
 
 def _spellings(word: str) -> List[str]:

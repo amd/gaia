@@ -1862,6 +1862,7 @@ def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
             bases.append(str(session.cwd))
         folder = prompt_args.get("working_directory")
         if isinstance(folder, str) and folder:
+            # Resolved as the shell tool resolves it: against the process cwd.
             bases = [os.path.join(os.getcwd(), folder)]
         if command_reaches_folder(command, bases, scratch):
             return scratch

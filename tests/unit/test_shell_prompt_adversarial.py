@@ -1276,6 +1276,8 @@ def test_the_real_shell_asks_after_cd_moved_its_session_into_scratch(
         # A variable the line sets itself is filled in by the shell, not by GAIA.
         "A={parent}; cd $A{s}{name} && pytest -q",
         "cd ${{SCRATCH_ROOT}} && pytest -q",
+        "A={parent}{s}{name}{s}test_x.py; pytest -q $A",
+        "PYTHONPATH=$SCRATCH_ROOT pytest -q",
         # The scratch folder's name prefix is predictable.
         "cd {parent}{s}gaia-scratch-te* && pytest -q",
         "pytest {parent}{s}gaia-scratch-tes?{s}test_x.py",
@@ -1333,6 +1335,8 @@ def test_a_network_path_is_never_looked_at_before_the_prompt(
         "pip install git+https://github.com/x/y.git",
         "curl --url=https://example.com/a?b=1",
         "awk '{print $1}' data.txt",
+        "awk '{print $NF}' data.txt",
+        "jq '.[] | $item' data.json",
         "grep -E 'end$' data.txt",
         "pytest tests/*.py",
     ],
