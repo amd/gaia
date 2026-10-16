@@ -286,7 +286,7 @@ const chatHelpText = `  GAIA Chat
 
   Commands    /help /clear /full-access /slack /setup
               /memory /model /provider /gateway /agents
-  /cost       Session spend · /cost help for rates
+  /cost       Spend · /cost help rates · /context fill
   /           On an empty line, browse commands —
               hover/click or ↑/↓ to pick, Enter or
               click to run, Esc or click out to close

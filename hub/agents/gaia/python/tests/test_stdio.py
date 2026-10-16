@@ -2207,6 +2207,66 @@ def test_a_smaller_model_that_hides_turns_shows_a_notice(tmp_path, monkeypatch):
     agent.conversation_history.close()
 
 
+def _context_reports(out):
+    return [e["context"] for e in map(json.loads, _lines(out)) if "context" in e]
+
+
+def test_a_turn_reports_how_full_the_context_is(tmp_path):
+    from gaia.agents.base import history
+
+    agent = _HistoryAgent()
+    agent.system_prompt = "You are GAIA."
+    agent.conversation_history = history.SessionHistory(tmp_path / "session.db")
+    events = [json.loads(line) for line in _lines(_run(agent, "read the report"))]
+    reports = [e for e in events if "context" in e]
+    assert len(reports) == 1
+    # Sent before the terminal event, so the reader is still listening.
+    assert events.index(reports[0]) < len(events) - 1
+    report = reports[0]["context"]
+    assert report["window"] > 0
+    assert report["system"] > 0
+    assert report["conversation"] > 0
+    assert report["history_budget"] <= report["window"] // 2
+    assert "dropping" not in report
+    agent.conversation_history.close()
+
+
+def test_tool_results_are_counted_apart_from_the_conversation(tmp_path):
+    from gaia.agents.base import history
+
+    agent = _HistoryAgent()
+    agent.conversation_history = history.SessionHistory(tmp_path / "session.db")
+    agent.conversation_history.record(
+        [
+            {"role": "user", "content": "read big.txt"},
+            {"role": "assistant", "content": "", "tool_calls": []},
+            {"role": "tool", "name": "read_file", "content": "word " * 2000},
+            {"role": "assistant", "content": "done"},
+        ]
+    )
+    agent.conversation_history.prepare(agent, "")
+    report = agent.conversation_history.context_report(agent)
+    assert report["tool_results"] > report["conversation"]
+    agent.conversation_history.close()
+
+
+def test_the_context_report_warns_before_turns_drop(tmp_path, monkeypatch):
+    from gaia.agents.base import history
+
+    agent = _HistoryAgent()
+    agent.conversation_history = history.SessionHistory(tmp_path / "session.db")
+    monkeypatch.setattr(history, "history_budget", lambda *args: 100)
+    monkeypatch.setattr(history, "count_tokens", lambda *args: 10)
+    warned = []
+    for i in range(12):
+        out = _run(agent, f"q{i}")
+        warned += [(i, r["dropping"]) for r in _context_reports(out) if "dropping" in r]
+    # The 11th turn overflows the budget: the next message hides six turns,
+    # and the warning names the oldest before it happens.
+    assert warned == [(10, {"turns": 6, "first": "q0"})]
+    agent.conversation_history.close()
+
+
 def test_persistence_failure_emits_one_error_and_no_premature_final(monkeypatch):
     agent = _HistoryAgent()
     agent._script = [{"type": "final_answer", "content": "done"}]

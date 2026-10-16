@@ -45,6 +45,9 @@ type Message struct {
 	// the answer landed, for the recap's one-time sweep.
 	Recap        string
 	Deliverables []deliverable
+	// Provenance is where the turn ran and what it drew on; nil when it used
+	// no tools.
+	Provenance *provenance
 	FinishedAt   time.Time
 	// CostUSD is what the turn cost on a per-token provider with a known
 	// price; 0 when either is not the case.
@@ -149,4 +152,6 @@ type ActivityItem struct {
 	// Repeat counts additional consecutive occurrences folded into this item by
 	// the live work log; 0 means it happened once.
 	Repeat int
+	// Sources are the pages and documents the call drew on (provenance.go).
+	Sources []string
 }

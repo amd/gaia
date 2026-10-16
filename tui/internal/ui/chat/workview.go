@@ -679,7 +679,8 @@ func (m ChatModel) renderLiveRegion() string {
 	for i := range entries {
 		groups[i] = m.renderEntries(entries[i:i+1], false)
 	}
-	budget := m.logRows()
+	plan := m.renderPlan(m.logWidth() + 4)
+	budget := max(m.logRows()-len(plan), 1)
 	total := 0
 	for _, g := range groups {
 		total += len(g)
@@ -708,6 +709,8 @@ func (m ChatModel) renderLiveRegion() string {
 	for _, g := range groups[len(groups)-kept:] {
 		lines = append(lines, g...)
 	}
+	// Last, so it sits right above the running step on the status line.
+	lines = append(lines, plan...)
 	return strings.Join(lines, "\n")
 }
 
@@ -1040,6 +1043,7 @@ func (m ChatModel) answerTrailer(msg *Message) string {
 	if recap := m.renderRecap(msg, m.now()); recap != "" {
 		rows = append(rows, recap)
 	}
+	rows = append(rows, m.renderProvenance(msg.Provenance)...)
 	if stats := m.answerStats(msg); stats != "" {
 		rows = append(rows, activityStyle.Render("  "+stats))
 	}

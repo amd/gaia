@@ -66,6 +66,10 @@ const (
 	// but it is the one mode nobody has to be warned about, so it yields to
 	// anything saying what is happening right now.
 	rankDefaultMode = 30
+	// How full the model's context is. A glance, until it is nearly full and
+	// the next message may push turns out of view.
+	rankContext     = 35
+	rankContextFull = 75
 )
 
 // statusHints builds the hint list for the current state, in display order.
@@ -99,6 +103,9 @@ func (m ChatModel) statusHints() []hint {
 	// whether to ask the expensive follow-up.
 	if spend := m.sessionSpendHint(); spend != "" {
 		hints = append(hints, hint{text: spend, rank: rankSecondary})
+	}
+	if h, ok := m.contextHint(); ok {
+		hints = append(hints, h)
 	}
 
 	// In an alt-screen app the wheel and the arrows are the ONLY way back to

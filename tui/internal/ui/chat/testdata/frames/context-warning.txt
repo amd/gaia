@@ -1,0 +1,20 @@
+ GAIA  │ agent gaia
+────────────────────────────────────────────────────────────────────────────────────────────────────
+▶ You: Now compare it with last quarter's numbers
+
+  Revenue is up 4% on last quarter.
+  4.0s
+
+  [!] Context is full: your next message pushes the oldest 2 turns, from "Review the 8 contracts
+  in ./contracts and build…" out of the model's view. It stays saved, and GAIA can recall it if
+  you ask.
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+› Ask anything — Enter to send, Alt+Enter for a new line
+  ● agent gaia connected                       ctx 92% nearly full · ↑↓/wheel scroll · Ctrl+C quit

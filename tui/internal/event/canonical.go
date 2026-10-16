@@ -78,6 +78,45 @@ type CanonicalStatusEvent struct {
 	// HistoryCut is set when older turns just left the model's view; Message
 	// then carries the line to keep in the transcript.
 	HistoryCut *HistoryCut `json:"history_cut,omitempty"`
+	// Plan is the agent's current plan and the step it is on, re-sent each
+	// time the step moves. Message is then a headline or empty.
+	Plan *PlanState `json:"plan,omitempty"`
+	// Context is how full the model's context will be for the next message,
+	// sent once a turn is recorded. Message is then empty.
+	Context *ContextReport `json:"context,omitempty"`
+}
+
+// ContextReport sizes the model's context by part, in estimated tokens.
+// HistoryBudget is how much history is replayed before older turns drop.
+type ContextReport struct {
+	Window        int              `json:"window"`
+	System        int              `json:"system"`
+	Tools         int              `json:"tools"`
+	Conversation  int              `json:"conversation"`
+	ToolResults   int              `json:"tool_results"`
+	HistoryBudget int              `json:"history_budget"`
+	Dropping      *ContextDropping `json:"dropping,omitempty"`
+}
+
+// ContextDropping is the turns the next message will no longer show the
+// model: how many, and the first words of the oldest one.
+type ContextDropping struct {
+	Turns int    `json:"turns"`
+	First string `json:"first"`
+}
+
+// PlanState is a plan as the agent runs it.
+type PlanState struct {
+	Steps       []PlanStep `json:"steps"`
+	CurrentStep int        `json:"current_step"`
+}
+
+// PlanStep is one step: the tool it will call and its arguments, and the
+// model's own description when it wrote one.
+type PlanStep struct {
+	Tool        string          `json:"tool,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Args        json.RawMessage `json:"args,omitempty"`
 }
 
 // HistoryCut sizes the turns no longer replayed to the model.

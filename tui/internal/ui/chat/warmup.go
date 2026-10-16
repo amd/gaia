@@ -99,7 +99,11 @@ func (m *ChatModel) finishWarmUp(answer string) {
 		}
 		ready := "[✓] Ready — " + model + " is loaded and has read its instructions (" + elapsed.String() + ")."
 		if len(m.queued) == 0 && !m.hasUserMessage() {
-			ready += "\n" + firstPromptHint
+			if list := suggestionsText(m.starters); list != "" {
+				ready += "\n\n" + list
+			} else {
+				ready += "\n" + firstPromptHint
+			}
 		}
 		m.messages = append(m.messages, Message{Role: RoleStatus, Content: ready})
 	}

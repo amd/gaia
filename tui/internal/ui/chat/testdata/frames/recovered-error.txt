@@ -10,7 +10,7 @@
 
   Installed formulas with uv.
   ✓ Ran 1 command · 9.0s
-
+  ran on this PC
 
 
 
