@@ -214,6 +214,18 @@ def initialize_lemonade_for_agent(
     return True, resolved_url
 
 
+def _lemonade_answers(base_url: str | None = None) -> bool:
+    """Whether the Lemonade Server a command uses answers its health check now."""
+    from gaia.llm.lemonade_client import LemonadeClient
+    from gaia.llm.lemonade_supervisor import _probe
+
+    if base_url:
+        client = LemonadeClient(base_url=base_url, keep_alive=True, verbose=False)
+    else:
+        client = LemonadeClient(keep_alive=True, verbose=False)
+    return _probe(client)
+
+
 def ensure_agent_models(
     agent: str,
     host: str = DEFAULT_HOST,
@@ -5092,7 +5104,7 @@ Let me know your answer!
             model=getattr(args, "model", None),
         )
         if not success:
-            return
+            sys.exit(1)
 
         try:
             from gaia.apps.llm.app import main as llm
@@ -5113,18 +5125,13 @@ Let me know your answer!
                 print(response)
                 print("=" * 50)
             return
-        except Exception as e:
-            # Check if it's a connection error and provide helpful message
-            error_msg = str(e).lower()
-            if (
-                "connection" in error_msg
-                or "refused" in error_msg
-                or "timeout" in error_msg
-            ):
+        except Exception as e:  # noqa: BLE001 -- CLI boundary: report and fail
+            print(f"❌ Error: {e}", file=sys.stderr)
+            # The install/start advice only when the server really is gone: a
+            # stalled stream also says "timeout", with Lemonade up.
+            if not _lemonade_answers(getattr(args, "base_url", None)):
                 LemonadeManager.print_server_error()
-            else:
-                print(f"❌ Error: {str(e)}")
-            return
+            sys.exit(1)
 
     # Handle evaluation
     if args.action == "eval":
@@ -6419,7 +6426,7 @@ def handle_config_command(args):
         print(value if value is not None else "")
         return
 
-    if action == "set" and args.key.startswith("lemonade_"):
+    if action == "set" and args.key in _LEMONADE_CHOICE_KEYS:
         _set_lemonade_config(args.key, args.value, config_file, path)
         return
 
@@ -6436,6 +6443,12 @@ def handle_config_command(args):
         print(f"✅ Set {args.key} = {cfg.get(args.key)}")
         print(f"   Saved to {config_file}")
         return
+
+
+#: Keys that pick which Lemonade GAIA uses; setting one probes and switches.
+_LEMONADE_CHOICE_KEYS = frozenset(
+    ("lemonade_mode", "lemonade_base_url", "lemonade_api_key_stored")
+)
 
 
 def _set_lemonade_config(key, value, config_file, path) -> None:

@@ -80,6 +80,18 @@ def build_lemonade_router(token: str, supervisor: LemonadeSupervisor) -> APIRout
         except LemonadeStartError as e:
             logger.warning("lemonade: start refused: %s", e)
             raise HTTPException(status_code=503, detail=str(e)) from e
+        except Exception as e:  # noqa: BLE001 -- system boundary: never a bare 500
+            logger.exception("lemonade: start failed unexpectedly")
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "The GAIA background service hit an unexpected error starting "
+                    f"the local model server: {type(e).__name__}: {e}\n"
+                    "To fix: report it with the daemon log attached "
+                    "(https://github.com/amd/gaia/issues).\n"
+                    "Where to look: `gaia daemon logs`"
+                ),
+            ) from e
 
         if state.started:
             logger.info(
