@@ -280,29 +280,52 @@ print("started", state.started, state.base_url)
 @pytest.mark.xfail(
     strict=True,
     raises=AssertionError,
-    reason="LemonadeSupervisor._ensure_embedded reads EmbeddedLemonadeOwner."
-    "started_pid, which #5118 removed, so the daemon's /lemonade/start answers "
-    "500 whenever GAIA's server is down (e.g. after the idle timeout)",
+    reason="With GAIA's server stopped (e.g. by the idle timeout) its state file "
+    "is gone, so ensure_lemonade_running() falls back to the default port 13305: "
+    "where something answers there it silently uses that server instead of "
+    "GAIA's own; where nothing does, the daemon's /lemonade/start answers 500 "
+    "because LemonadeSupervisor._ensure_embedded reads the started_pid #5118 "
+    "removed",
 )
-def test_starting_a_stopped_server_through_the_daemon_succeeds(fresh_install):
+def test_starting_a_stopped_server_returns_gaias_own(fresh_install):
     s = fresh_install
+    own_port = s.last_port()
     stop = s.gaia("lemonade", "embedded", "stop", timeout=120, check=False)
-    if stop.returncode != 0 or s.server_running():
+    if stop.returncode != 0 or s.server_running() or not own_port:
         raise RuntimeError(f"could not stop GAIA's server first: {stop.output}")
     result = s.run([sys.executable, "-c", _ENSURE_RUNNING], check=False, timeout=300)
     last = (result.output.strip().splitlines() or ["(no output)"])[-1]
     evidence(
-        f"- KNOWN BUG: `ensure_lemonade_running()` with GAIA's server stopped: "
-        f"exit {result.returncode}, `{last[:200]}`; "
+        f"- KNOWN BUG: `ensure_lemonade_running()` with GAIA's server (port "
+        f"{own_port}) stopped: exit {result.returncode}, `{last[:200]}`; GAIA's "
         f"server running afterwards: {bool(s.server_running())}"
     )
     assert result.returncode == 0, result.output
+    assert f"localhost:{own_port}/" in last, f"used another server: {last}"
+
+
+def _bring_server_back(s: Scenario) -> None:
+    """What a launching app does: register, and the daemon starts the server."""
+    if s.server_running():
+        return
+    app = s.spawn(
+        [sys.executable, str(HERE / "halo_app.py"), SMALL_MODEL, "--register-only"],
+        "app3.log",
+    )
+    try:
+        if not app.stdout.readline():
+            raise RuntimeError(f"the app failed (code {app.poll()}); see app3.log")
+        wait_until(s.server_running, 120, "the daemon to start GAIA's server")
+    finally:
+        app.stdin.write("quit\n")
+        app.stdin.flush()
+        app.wait(timeout=60)
 
 
 def test_eu2_daemon_stop_stops_the_server_and_eu3_port_survives(fresh_install):
     s = fresh_install
     _section("EU-2/EU-3: `gaia daemon stop` stops the server; restart keeps the port")
-    wait_until(s.server_running, 120, "GAIA's server to be up before the stop")
+    _bring_server_back(s)
     pid, port, _ = s.server()
     daemon = s.daemon_pid()
     s.gaia("daemon", "stop", timeout=120)
