@@ -1043,6 +1043,7 @@ func (m ChatModel) answerTrailer(msg *Message) string {
 	if recap := m.renderRecap(msg, m.now()); recap != "" {
 		rows = append(rows, recap)
 	}
+	rows = append(rows, m.renderProvenance(msg.Provenance)...)
 	if stats := m.answerStats(msg); stats != "" {
 		rows = append(rows, activityStyle.Render("  "+stats))
 	}

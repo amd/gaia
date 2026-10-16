@@ -1,0 +1,30 @@
+ GAIA  │ agent gaia
+────────────────────────────────────────────────────────────────────────────────────────────────────
+▶ You: What does it cost to camp in Yosemite this summer?
+
+  ● Search the web for 'Yosemite camping fees 2026' · 2.0s
+  ● Read 3 web pages · 8.0s
+  ● Search your documents for campground reservation rules · 1.0s
+
+  Campsites are $36 a night; reserve on recreation.gov.
+  ✓ Searched the web once · read 3 web pages · searched your documents once · 15s
+  ran on this PC · read 3 pages from nps.gov and 1 more site · 1 document
+  Sources
+    nps.gov/yose/planyourvisit/fees.htm
+    nps.gov/yose/planyourvisit/camping.htm
+    recreation.gov/camping/campgrounds/232447
+    park_guide.pdf
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+› Ask anything — Enter to send, Alt+Enter for a new line
+  ● agent gaia connected     ask mode (shift+tab) · ↑↓/wheel scroll · Ctrl+O details · Ctrl+C quit

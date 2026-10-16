@@ -495,6 +495,14 @@ inside each one, and one line sums the turn up:
   on it.
 - **A long turn** folds its middle once it has more than eight steps:
   `… 23 more actions · Ctrl+O to expand`.
+- **Where the turn ran** is the quiet line under the summary of any turn that
+  used tools: `ran on this PC`, or the cloud provider's name when the model runs
+  remotely, then what went online — `read 3 pages from nps.gov and 1 more site
+  · 1 document`. An answer that used no tools gets nothing added.
+- **Sources** lists the web pages and documents an answer drew on, each a link
+  your terminal can open. If every web search and page fetch failed, a `[!]`
+  line says the answer could not get live data, so it is not mistaken for a
+  sourced one.
 - **A plan** the agent makes shows as a checklist right above the running step:
   `✓` done, `▸` running, `○` still to do, with `Plan · 1 of 3 done` on top. It
   updates in place as the agent moves through it, and a new plan replaces the

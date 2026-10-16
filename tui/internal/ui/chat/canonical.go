@@ -156,6 +156,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			Call:    describeCall(e.Tool, e.Args, e.Narration),
 			Goal:    m.takeGoal(),
 			At:      m.now(),
+			Sources: callSources(e.Tool, e.Args),
 		})
 
 	case event.CanonicalToolResultEvent:
@@ -317,6 +318,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				Metrics:      usage.Metrics,
 				Recap:        workRecap(work),
 				Deliverables: findDeliverables(work, content, m.queryStart),
+				Provenance:   turnProvenance(work, m.turnPlace()),
 				FinishedAt:   m.now(),
 				CostUSD:      m.turnCostUSD(usage.InputTokens, usage.CachedTokens, usage.Tokens),
 			})
@@ -613,6 +615,7 @@ func (m *ChatModel) setToolOutputAt(at int, e event.CanonicalToolResultEvent) {
 	item := &m.activity[at]
 	item.End = m.now()
 	item.OutLines = outputLines(e.Data)
+	item.Sources = append(item.Sources, resultSources(item.Tool, e.Data)...)
 	if c := item.Call.Change; c != nil && !c.Created && item.Success != nil && *item.Success {
 		c.StartLine = locateEdit(c)
 	}
