@@ -63,8 +63,11 @@ jobs:
           PYPI_VERSION: ${{ inputs.pypi_version }}
         run: |
           set -euo pipefail
-          export UV_INSTALL_DIR="$RUNNER_TEMP/uv-bin" UV_NO_MODIFY_PATH=1
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "Host: $(hostname)"
+          # Not every pool host has curl, which the uv installer needs.
+          mkdir -p "$RUNNER_TEMP/uv-bin"
+          python3 -c "import urllib.request, sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])"             https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-unknown-linux-gnu.tar.gz             "$RUNNER_TEMP/uv.tar.gz"
+          tar -xzf "$RUNNER_TEMP/uv.tar.gz" -C "$RUNNER_TEMP/uv-bin" --strip-components=1
           UV="$RUNNER_TEMP/uv-bin/uv"
           "$UV" venv "$VENV" --python 3.12
           if [ -n "$PYPI_VERSION" ]; then
@@ -79,7 +82,9 @@ jobs:
       - name: Machine before the run
         run: |
           for c in /sys/class/drm/card*/device; do
-            [ -f "$c/mem_info_vram_used" ] && echo "$c vram_used=$(cat $c/mem_info_vram_used) gtt_used=$(cat $c/mem_info_gtt_used)"
+            if [ -f "$c/mem_info_vram_used" ]; then
+              echo "$c vram_used=$(cat $c/mem_info_vram_used) gtt_used=$(cat $c/mem_info_gtt_used)"
+            fi
           done
           ps -eo pid,user,etime,cmd | grep -E "[l]emond|[l]lama-server" || true
 
@@ -112,9 +117,11 @@ jobs:
             sleep 5
             kill -9 $(pgrep -f "$GAIA_HW_WORKDIR") 2>/dev/null || true
           fi
-          rm -rf "$GAIA_HW_WORKDIR" "$VENV" "$RUNNER_TEMP/uv-bin"
+          rm -rf "$GAIA_HW_WORKDIR" "$VENV" "$RUNNER_TEMP/uv-bin" "$RUNNER_TEMP/uv.tar.gz"
           for c in /sys/class/drm/card*/device; do
-            [ -f "$c/mem_info_vram_used" ] && echo "$c vram_used=$(cat $c/mem_info_vram_used) gtt_used=$(cat $c/mem_info_gtt_used)"
+            if [ -f "$c/mem_info_vram_used" ]; then
+              echo "$c vram_used=$(cat $c/mem_info_vram_used) gtt_used=$(cat $c/mem_info_gtt_used)"
+            fi
           done
 
       - name: Upload logs
