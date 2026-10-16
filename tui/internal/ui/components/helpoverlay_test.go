@@ -180,18 +180,20 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 
 	// commandText does the same for submit's local commands.
 	commandText := map[string]string{
-		"/provider":    "/provider",
-		"/help":        "/help",
-		"/clear":       "/clear",
-		"/memory":      "/memory",
-		"/setup":       "/setup",
-		"/full-access": "/full-access",
-		"/cost":        "/cost",
-		"/slack":       "/slack",
-		"/agents":      "/agents",
-		"/gateway":     "/gateway",
-		"/copy":        "/copy",
-		"/copy all":    "/copy all",
+		"/provider":     "/provider",
+		"/help":         "/help",
+		"/clear":        "/clear",
+		"/memory":       "/memory",
+		"/setup":        "/setup",
+		"/full-access":  "/full-access",
+		"/cost":         "/cost",
+		"/slack":        "/slack",
+		"/agents":       "/agents",
+		"/gateway":      "/gateway",
+		"/copy":         "/copy",
+		"/copy all":     "/copy all",
+		"/sessions":     "/sessions",
+		"/sessions all": "/sessions all",
 	}
 	for _, cmd := range chatModelCommands(t) {
 		if strings.HasPrefix(cmd, "/bypass") {

@@ -43,6 +43,8 @@ var paletteCommands = []paletteCommand{
 	{"/copy", "Pick any message with ↑/↓ and copy it with Enter"},
 	{"/copy all", "Copy the whole conversation as markdown"},
 	{"/agents", "List installed agents and switch this session to one"},
+	{"/sessions", "Reopen a past session — ones waiting on you come first"},
+	{"/sessions all", "Every session, eval and scheduled runs included"},
 }
 
 // modelPalettePrefix is what turns the palette into the model picker: the
