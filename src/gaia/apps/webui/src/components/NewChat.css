@@ -26,3 +26,41 @@
     color: var(--text-muted);
     font-size: 13px;
 }
+
+.new-chat-greeting {
+    margin-bottom: 14px;
+    color: var(--text-primary);
+    font-size: 20px;
+    font-weight: 600;
+    text-align: center;
+}
+
+.new-chat-meta {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.new-chat-folder {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    padding: 3px 9px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-full);
+    color: var(--text-secondary);
+    font-size: 12.5px;
+}
+
+.new-chat-folder span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.new-chat-note {
+    margin-top: 10px;
+    color: var(--text-muted);
+    font-size: 12.5px;
+}

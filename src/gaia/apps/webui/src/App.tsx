@@ -21,7 +21,7 @@ import { readUrlTarget, resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID } from './utils/newTask';
-import type { SetupCheck } from './types';
+import type { SetupCheck, StartCard } from './types';
 
 // Heavy, occasional screens load on first use.
 const MemoryDashboard = lazy(() => import('./components/MemoryDashboard').then((m) => ({ default: m.MemoryDashboard })));
@@ -80,6 +80,8 @@ function App() {
 
     const [setup, setSetup] = useState<SetupGate>({ state: 'checking' });
     const [createError, setCreateError] = useState<string | null>(null);
+    // A task picked at the end of setup that needs the user to finish typing it.
+    const [draftText, setDraftText] = useState('');
     const [showMobileAccess, setShowMobileAccess] = useState(false);
     const [tunnelActive, setTunnelActive] = useState(false);
     const [tunnelError, setTunnelError] = useState<string | null>(null);
@@ -272,6 +274,7 @@ function App() {
         addSession(session);
         setCurrentSession(session.id);
         setMessages([]);
+        setDraftText('');
         // Always sent, so the chat runs in exactly the mode its chip showed.
         try {
             await api.setPermissionMode(session.id, store.draftPermissionMode);
@@ -301,6 +304,17 @@ function App() {
         startChat(`Load the \`${name}\` skill, then tell me briefly what it lets you do.`)
             .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
     }, [newChat, startChat]);
+
+    const finishSetup = useCallback((first?: StartCard) => {
+        setSetup({ state: 'ready' });
+        void checkSystemStatus();
+        if (!first) return;
+        if (first.needs_input) {
+            setDraftText(first.prompt);
+            return;
+        }
+        startChat(first.prompt).catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
+    }, [checkSystemStatus, startChat]);
 
     // ── Keyboard shortcuts ─────────────────────────────────────────────
     useEffect(() => {
@@ -373,7 +387,7 @@ function App() {
     if (setup.state === 'needed') {
         return (
             <div className="app">
-                <SetupScreen initial={setup.check} onReady={() => { setSetup({ state: 'ready' }); void checkSystemStatus(); }} />
+                <SetupScreen initial={setup.check} onReady={finishSetup} />
             </div>
         );
     }
@@ -385,7 +399,7 @@ function App() {
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (
-        <NewChat onSend={startChat} />
+        <NewChat key={draftText} onSend={startChat} initialText={draftText} setupChecked={setup.state !== 'checking'} />
     );
 
     return (

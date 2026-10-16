@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from gaia.config import gaia_home
@@ -34,6 +34,9 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_manager import gpu_display_info
 from gaia.logger import get_logger
+
+from ..database import ChatDatabase
+from ..dependencies import get_db
 
 logger = get_logger(__name__)
 
@@ -219,3 +222,12 @@ async def onboarding_preflight() -> PreflightReport:
         blockers=list(report.blockers),
         warnings=list(report.warnings),
     )
+
+
+@router.get("/api/onboarding/start")
+def new_chat_start(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
+    """A new chat's task cards and working folder, from what is set up here."""
+    from gaia.ui.routers.skills import list_skills
+    from gaia.ui.start_screen import start_screen
+
+    return start_screen(db, list_skills()["skills"])
