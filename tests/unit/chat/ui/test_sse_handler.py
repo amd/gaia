@@ -320,6 +320,23 @@ class TestPrintPlan:
         assert "query='main'" in event["steps"][0]
         assert event["steps"][1] == "read_file"
 
+    def test_plan_items_keep_description_and_clip_long_args(self, handler):
+        plan = [
+            {
+                "tool": "write_file",
+                "tool_args": {"file_path": "a.md", "content": "x" * 5000},
+                "description": "Write the memo",
+            },
+            "Check the totals",
+        ]
+        handler.print_plan(plan, current_step=1)
+        items = _drain(handler)[0]["items"]
+        assert items[0]["tool"] == "write_file"
+        assert items[0]["description"] == "Write the memo"
+        assert items[0]["args"]["file_path"] == "a.md"
+        assert len(items[0]["args"]["content"]) == 300
+        assert items[1] == {"description": "Check the totals"}
+
     def test_plan_with_tool_dict_no_args(self, handler):
         plan = [{"tool": "list_files"}]
         handler.print_plan(plan)

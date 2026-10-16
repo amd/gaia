@@ -393,6 +393,8 @@ type ChatModel struct {
 	modelDisplay string
 	modelBackend string
 	modelRemote  bool
+	// plan is the running turn's plan checklist (plan.go).
+	plan livePlan
 
 	// awaitingModelSwitch is true for the duration of a `/model <id>` turn
 	// this session itself started. A model-state ping that disagrees with
@@ -1997,6 +1999,7 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	m.queryStart = time.Now()
 	m.userWait, m.userWaitStart = 0, time.Time{}
 	m.goalFresh = false
+	m.plan = livePlan{}
 	// A new turn starts having drawn no card yet -- see drainPendingPreScan.
 	m.preScanRenderedThisTurn = false
 	m.updateViewport()
@@ -2182,6 +2185,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 				last.Done = true
 				last.Success = &e.Success
 				last.End = m.now()
+				m.planToolFinished(last.Tool, e.Success)
 				if summary != "" {
 					last.Content += " → " + summary
 				}
@@ -2197,6 +2201,9 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 				last.End = m.now()
 			}
 		}
+
+	case event.PlanEvent:
+		m.updatePlan(planFromWire(legacyPlanSteps(e), e.CurrentStep))
 
 	case event.StepEvent:
 		// Not shown. "Step 2/50" is the agent loop's bound, not the user's

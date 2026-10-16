@@ -348,7 +348,19 @@ class CanonicalTranslator:
     def _on_plan(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         steps = event.get("steps") or []
         joined = " → ".join(str(s) for s in steps)
-        return self._user_status(f"Plan: {joined}" if joined else "Plan")
+        out = self._user_status(f"Plan: {joined}" if joined else "Plan")
+        items = event.get("items")
+        if not isinstance(items, list) or not items:
+            return out
+        # The plan rides even a repeated headline: current_step is what moved.
+        if not out:
+            out = [{"type": "status", "message": ""}]
+        current = event.get("current_step")
+        out[0]["plan"] = {
+            "steps": items,
+            "current_step": current if isinstance(current, int) else 0,
+        }
+        return out
 
     def _on_chunk(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         delta = event.get("content", "")

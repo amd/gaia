@@ -469,6 +469,27 @@ def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
 _ANSWER_FIRST_RE = re.compile(r'\s*\{\s*"answer"\s*:')
 
 
+#: Longest string argument a plan item carries; a plan is re-sent every step.
+_PLAN_ARG_MAX = 300
+
+
+def _plan_item(step: Any) -> Dict[str, Any]:
+    """One plan step as ``{tool, description, args}`` for a client to narrate."""
+    if not isinstance(step, dict):
+        return {"description": str(step)}
+    item: Dict[str, Any] = {}
+    if step.get("tool"):
+        item["tool"] = str(step["tool"])
+    if step.get("description"):
+        item["description"] = str(step["description"])
+    args = step.get("tool_args")
+    if isinstance(args, dict) and args:
+        item["args"] = {
+            k: (v[:_PLAN_ARG_MAX] if isinstance(v, str) else v) for k, v in args.items()
+        }
+    return item
+
+
 class SSEOutputHandler(OutputHandler):
     """
     OutputHandler that queues agent events as JSON for SSE streaming.
@@ -687,6 +708,7 @@ class SSEOutputHandler(OutputHandler):
                 "type": "plan",
                 "steps": plan_strs,
                 "current_step": current_step,
+                "items": [_plan_item(step) for step in plan],
             }
         )
 

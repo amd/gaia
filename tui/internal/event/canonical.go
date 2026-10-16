@@ -78,6 +78,23 @@ type CanonicalStatusEvent struct {
 	// HistoryCut is set when older turns just left the model's view; Message
 	// then carries the line to keep in the transcript.
 	HistoryCut *HistoryCut `json:"history_cut,omitempty"`
+	// Plan is the agent's current plan and the step it is on, re-sent each
+	// time the step moves. Message is then a headline or empty.
+	Plan *PlanState `json:"plan,omitempty"`
+}
+
+// PlanState is a plan as the agent runs it.
+type PlanState struct {
+	Steps       []PlanStep `json:"steps"`
+	CurrentStep int        `json:"current_step"`
+}
+
+// PlanStep is one step: the tool it will call and its arguments, and the
+// model's own description when it wrote one.
+type PlanStep struct {
+	Tool        string          `json:"tool,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Args        json.RawMessage `json:"args,omitempty"`
 }
 
 // HistoryCut sizes the turns no longer replayed to the model.

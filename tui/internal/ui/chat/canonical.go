@@ -95,6 +95,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
+		if e.Plan != nil {
+			m.updatePlan(planFromWire(e.Plan.Steps, e.Plan.CurrentStep))
+		}
+
 		// Kept in the transcript, not the live line: it explains later answers.
 		if e.HistoryCut != nil {
 			m.messages = append(m.messages, Message{
@@ -585,7 +589,9 @@ func (m ChatModel) confirmAction(runID, action string, approved bool) tea.Cmd {
 // to the render card in the transcript — this line only says it came back, how
 // much of it, and how long it took.
 func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
-	at := m.setOpenToolOutcome(e.Tool, toolResultSucceeded(e.Data), toolResultDetail(e))
+	ok := toolResultSucceeded(e.Data)
+	at := m.setOpenToolOutcome(e.Tool, ok, toolResultDetail(e))
+	m.planToolFinished(e.Tool, ok)
 	m.setToolOutputAt(at, e)
 }
 
