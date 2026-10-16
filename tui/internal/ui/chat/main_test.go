@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/amd/gaia/tui/internal/control"
@@ -25,6 +26,9 @@ func TestMain(m *testing.M) {
 	// Diagnostics are always written to the session log; keep them off the
 	// developer's own ~/.gaia/logs.
 	os.Setenv(control.EnvHome, home)
+	// The first screen's suggestions read installed skills; keep them off the
+	// developer's own ~/.gaia/skills.
+	skillsDir = func() string { return filepath.Join(home, "skills") }
 	os.Setenv("LEMONADE_BASE_URL", "")
 	lemonade.StubEnsureEmbeddedForTest(func(context.Context) error {
 		return errors.New("test: no daemon")

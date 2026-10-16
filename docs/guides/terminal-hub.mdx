@@ -398,12 +398,25 @@ GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
 Welcome to GAIA
 Connected to: agent gaia v0.2.0 (GAIA core 0.25.0)
 
-Type a message and press Enter to start chatting.
-Type /help for available commands.
+Try one — press its number:
+  1  Today's tech news in brief
+  2  Research a topic, with sources
+  3  What fills up this folder
+  4  Book recommendations
+
+Ask a question, or type /help for what else this can do.
 ────────────────────────────────────────────────────────────────────────────────
 ┃ Ask anything... (Enter to send, Ctrl+C to quit)
   ● agent gaia v0.2.0 connected                                     Ctrl+C quit
 ```
+
+The first screen suggests up to four things to try, one per installed skill
+that works without further setup (no file, link or connected account needed
+first). Press a suggestion's number on an empty composer to send it; once you
+start typing, digits are just text. On a local model the list moves into the
+line that says the model is ready, and the numbers keep working until your
+first message. The list comes from the skills in
+`~/.gaia/skills`, so it costs no model call.
 
 The `agent <id>` segment is always the stable id, lowercased — the same string
 `--agent <id>` takes, so you can read it straight off the header and pass it back.

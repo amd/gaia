@@ -397,6 +397,8 @@ type ChatModel struct {
 	plan livePlan
 	// ctxMeter is how full the model's context is (context.go).
 	ctxMeter contextMeter
+	// starters are the first screen's suggestions (suggestions.go).
+	starters []starter
 
 	// awaitingModelSwitch is true for the duration of a `/model <id>` turn
 	// this session itself started. A model-state ping that disagrees with
@@ -583,6 +585,7 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, se
 	m := NewChatModel(c, agentName, "")
 	m.agentID = agentID
 	m.setupVerified = setupVerified
+	m.starters = installedStarters(skillsDir())
 	return m.applyFirstBootGate()
 }
 
@@ -1444,6 +1447,10 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if msg.Type == tea.KeyEsc && m.warming && !m.warmHidden {
 		return m.hideWarmUpStage()
+	}
+
+	if next, cmd, ok := m.pickSuggestion(msg); ok {
+		return next, cmd
 	}
 
 	switch msg.Type {
@@ -2658,6 +2665,9 @@ func (m ChatModel) renderWelcome() string {
 	agent := lipgloss.NewStyle().
 		Foreground(theme.Text).
 		Render("Connected to: " + m.agentIdentity() + m.coreVersionSuffix())
+	if list := m.renderSuggestions(); list != "" {
+		return title + "\n" + agent + "\n\n" + list + "\n\n" + hint
+	}
 	return title + "\n" + agent + "\n\n" + hint
 }
 
