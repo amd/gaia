@@ -45,8 +45,8 @@ permissions:
 jobs:
   test-sd-windows:
     name: Test SD Image Generation (Lemonade Integration)
-    # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
-    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    # Strix Point: its models fit there, and the 128 GB Halo pool stays free for the evals.
+    runs-on: [self-hosted, Windows, xsj-dispatch, strix-point]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     # 22 (checkout ceiling below) + 10 (Initialize SD Profile's own cap) + 2 (every
     # other step; worst measured 58s). The old 25 could not cover a slow fetch (#4135).
