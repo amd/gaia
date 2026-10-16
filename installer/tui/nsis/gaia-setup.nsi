@@ -174,10 +174,14 @@ Var Failed
 !define MUI_ICON   "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING
-; Launched through a function so the Finish page opens GAIA the way the shortcuts do.
+; One checkbox per installed app; FinishShow hides the ones that weren't installed.
 !define MUI_FINISHPAGE_RUN
-!define MUI_FINISHPAGE_RUN_FUNCTION LaunchGaia
-!define MUI_FINISHPAGE_RUN_TEXT "Start ${SETUP_NAME}"
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchDesktopApp
+!define MUI_FINISHPAGE_RUN_TEXT "Open GAIA Agent UI"
+; MUI2 has one run checkbox; the readme checkbox is the standard second one.
+!define MUI_FINISHPAGE_SHOWREADME ""
+!define MUI_FINISHPAGE_SHOWREADME_FUNCTION LaunchTerminal
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "Open GAIA Terminal UI"
 !define MUI_FINISHPAGE_LINK "GAIA documentation"
 !define MUI_FINISHPAGE_LINK_LOCATION "${PRODUCT_URL}"
 
@@ -193,6 +197,7 @@ Var Failed
 !define MUI_DIRECTORYPAGE_TEXT_TOP "Setup will install the GAIA terminal (gaia-tui) in the following folder. The desktop app installs to its own folder."
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishShow
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -634,13 +639,28 @@ Function FindWindowsTerminal
   SearchPath $R0 "wt.exe"
 FunctionEnd
 
-; The desktop app when it was installed, otherwise the terminal the way its
-; shortcuts open it.
-Function LaunchGaia
+Function LaunchDesktopApp
   ${If} $UiDir != ""
     Exec '"$UiDir\${UI_EXE}"'
-  ${ElseIf} $LaunchExe != ""
+  ${EndIf}
+FunctionEnd
+
+; The way the terminal's shortcuts open it.
+Function LaunchTerminal
+  ${If} $LaunchExe != ""
     Exec '"$LaunchExe" $LaunchArgs'
+  ${EndIf}
+FunctionEnd
+
+; Unchecked as well as hidden: MUI reads the check state, not the visibility.
+Function FinishShow
+  ${If} $UiDir == ""
+    SendMessage $mui.FinishPage.Run ${BM_SETCHECK} ${BST_UNCHECKED} 0
+    ShowWindow $mui.FinishPage.Run ${SW_HIDE}
+  ${EndIf}
+  ${If} $LaunchExe == ""
+    SendMessage $mui.FinishPage.ShowReadme ${BM_SETCHECK} ${BST_UNCHECKED} 0
+    ShowWindow $mui.FinishPage.ShowReadme ${SW_HIDE}
   ${EndIf}
 FunctionEnd
 

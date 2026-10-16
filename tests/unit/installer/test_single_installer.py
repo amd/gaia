@@ -423,3 +423,51 @@ def test_workflow_publishes_the_windows_setup_after_the_raw_binaries():
     needs = re.search(r"needs: \[([^\]]+)\]", job.group(1)).group(1)
     assert "terminal-hub" in needs
     assert "--platform win-x64" in job.group(1)
+
+
+def _function(name: str) -> str:
+    m = re.search(rf"^Function {name}\r?\n(.*?)^FunctionEnd", _nsi(), re.M | re.S)
+    assert m, f"gaia-setup.nsi has no Function {name}"
+    return m.group(1)
+
+
+def test_finish_page_offers_each_app_its_own_checkbox():
+    nsi = _nsi()
+    assert "!define MUI_FINISHPAGE_RUN_FUNCTION LaunchDesktopApp" in nsi
+    assert '!define MUI_FINISHPAGE_RUN_TEXT "Open GAIA Agent UI"' in nsi
+    assert "!define MUI_FINISHPAGE_SHOWREADME_FUNCTION LaunchTerminal" in nsi
+    assert '!define MUI_FINISHPAGE_SHOWREADME_TEXT "Open GAIA Terminal UI"' in nsi
+    # Both checked by default: the user chose to install both.
+    assert "SHOWREADME_NOTCHECKED" not in nsi
+    assert "RUN_NOTCHECKED" not in nsi
+    assert "Start ${SETUP_NAME}" not in nsi
+
+
+def test_each_checkbox_opens_only_its_own_app():
+    desktop = _function("LaunchDesktopApp")
+    terminal = _function("LaunchTerminal")
+    assert "${UI_EXE}" in desktop and "$LaunchExe" not in desktop
+    assert "$LaunchExe" in terminal and "${UI_EXE}" not in terminal
+
+
+def test_finish_page_hides_and_unchecks_apps_that_were_not_installed():
+    # MUI runs a checked box's function even when it is hidden, so hiding
+    # alone would still launch an app that isn't there.
+    show = _function("FinishShow")
+    for var, box in (
+        ("$UiDir", "$mui.FinishPage.Run"),
+        ("$LaunchExe", "$mui.FinishPage.ShowReadme"),
+    ):
+        block = re.search(
+            rf'\$\{{If\}} {re.escape(var)} == ""\r?\n(.*?)\$\{{EndIf\}}', show, re.S
+        )
+        assert block, f"FinishShow does not handle a missing {var}"
+        assert f"SendMessage {box} ${{BM_SETCHECK}} ${{BST_UNCHECKED}}" in block.group(
+            1
+        )
+        assert f"ShowWindow {box} ${{SW_HIDE}}" in block.group(1)
+    # The hook must sit right before the finish page, or it attaches to another page.
+    nsi = _nsi()
+    hook = nsi.index("!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishShow")
+    between = nsi[hook : nsi.index("!insertmacro MUI_PAGE_FINISH")]
+    assert "!insertmacro" not in between
