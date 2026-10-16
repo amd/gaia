@@ -1336,7 +1336,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # A rule about a tool the session lacks made the model offer images.
         if getattr(self.config, "enable_sd_tools", False):
             data_file_rules += """
-**IMAGE GENERATION:** Always CALL `generate_image` first. Don't pre-announce availability. If it errors, state unavailable in 1-2 sentences (mention `--sd` flag); don't apologize or describe what you would have done.
+**IMAGE GENERATION:** Always CALL `generate_image` first. Don't pre-announce availability. If it errors, say so and give its error in 1-2 sentences; don't apologize or describe what you would have done.
 """
         else:
             data_file_rules += """

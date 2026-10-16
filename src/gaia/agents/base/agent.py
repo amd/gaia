@@ -778,6 +778,12 @@ _REPEATED_CALL_ANSWER_PROMPT = (
     "results above show: what you completed, what you could not confirm, and "
     "what the user should do next."
 )
+_FAILED_CALL_ANSWER_PROMPT = (
+    "`{tool}` failed {count} times in a row, so stop calling tools and answer "
+    "now from what the results above show: what you completed, what that "
+    "failure kept you from doing, and what the user should do next. The "
+    "failure itself is reported after your answer; don't repeat it."
+)
 
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
@@ -8165,7 +8171,7 @@ Do NOT wrap conversational replies in JSON.
         }
 
     def _gate_unsealed_answer(
-        self, answer: Optional[str], keep_answer: bool = False
+        self, answer: Optional[str]
     ) -> Tuple[Optional[str], List[str]]:
         """Judge an answer that never passed the loop's own completion gate.
 
@@ -8173,10 +8179,8 @@ Do NOT wrap conversational replies in JSON.
         cap — lands here, so an unverified save or an unfinished extraction is
         reported as incomplete on those paths too. ``None`` stays ``None`` when
         nothing is unverified: the caller's max-steps fallback owns that text.
-
-        ``keep_answer`` keeps *answer* ahead of the report instead of replacing
-        it: the step-cap reply was asked for what was found and what is
-        missing, and is often the only place the turn's findings exist.
+        A non-empty *answer* always stays ahead of the report: it is often the
+        only place the turn's findings exist.
         """
         self._check_extraction_sources()
         gaps = self._completion_evidence.gaps(answer or "", _claims_file_write)
@@ -8186,10 +8190,8 @@ Do NOT wrap conversational replies in JSON.
             gaps.append(unsupported[1] + ".")
         if gaps:
             report = incomplete_answer(gaps)
-            # Keep the error that ended the turn; add what stays unverified.
-            keep = bool(answer and answer.strip()) and (
-                keep_answer or bool(self._unrecovered_errors())
-            )
+            # The turn ended early, so it is unfinished; whatever it said stays.
+            keep = bool(answer and answer.strip())
             answer = f"{answer}\n\n{report}" if keep else report
         elif answer and answer.strip() and not self._unrecovered_errors():
             self._note_ungrounded(answer, getattr(self, "_current_query", ""))
@@ -10818,15 +10820,12 @@ Do NOT wrap conversational replies in JSON.
                 # The record cannot say what the answer claims, so the answer
                 # is read — but only against an outcome that exists.
                 _IMAGE_AVAILABILITY_CLAIM = [
-                    r"--sd\b",
-                    r"\bsd flag\b",
                     r"stable diffusion.*active",
                     r"stable diffusion.*when",
                     r"image generation.*flag",
                     r"generate images when",
                     r"can generate images",
                     r"i can.*create.*image",
-                    r"when.*--sd",
                 ]
                 _IMAGE_OUTCOME_REPORTED = [
                     r"not available",
@@ -10880,29 +10879,6 @@ Do NOT wrap conversational replies in JSON.
                         }
                     )
                     continue
-
-                # A failed generate_image is reported, not padded with what the
-                # model would have done; #1023: only when the latest call failed.
-                if image_outcome_recorded and capability_tool_last_succeeded is False:
-                    _SD_POST_FAILURE_VERBOSE = [
-                        r"would have done",
-                        r"what i would",
-                        r"prompt enhancement",
-                        r"i apologize for the confusion",
-                        r"let me explain what",
-                        r"enhance.*prompt",
-                        r"prompt.*technique",
-                        r"following.*research",
-                    ]
-                    _is_verbose_sd_failure = any(
-                        re.search(_p, answer_candidate, re.IGNORECASE)
-                        for _p in _SD_POST_FAILURE_VERBOSE
-                    )
-                    if _is_verbose_sd_failure:
-                        answer_candidate = (
-                            "Image generation is not available in this session — "
-                            "start GAIA with the `--sd` flag to enable it."
-                        )
 
                 # A request it never looked at, values no tool produced, or
                 # work it never did: one correction per gate, and only before
@@ -10981,8 +10957,8 @@ Do NOT wrap conversational replies in JSON.
                             steps_taken,
                             steps_limit,
                         )
+                        # Kept, with the gap named after it below.
                         completion_gaps = [why + "."]
-                        answer_candidate = incomplete_answer(completion_gaps)
                     else:
                         test_claim_corrections += 1
                         logger.debug(
@@ -11115,13 +11091,11 @@ Do NOT wrap conversational replies in JSON.
                     and final_test_claim[1] + "." not in completion_gaps
                 ):
                     completion_gaps.append(final_test_claim[1] + ".")
-                if completion_gaps and set(completion_gaps) <= set(extraction_gaps):
-                    # Unproven coverage is not a false claim: keep the work, name the gap.
+                if completion_gaps:
+                    # Never discard the work: keep it and name what is unconfirmed.
                     answer_candidate = caveated_answer(
                         answer_candidate, completion_gaps
                     )
-                elif completion_gaps:
-                    answer_candidate = incomplete_answer(completion_gaps)
                 else:
                     self._note_ungrounded(answer_candidate, user_input)
                 inventory = self._extraction_ledger.render()
@@ -11240,8 +11214,7 @@ Do NOT wrap conversational replies in JSON.
                     gated, completion_gaps = self._gate_unsealed_answer(
                         self.finalize_answer(
                             _without_tool_markup(cap_answer), conversation
-                        ),
-                        keep_answer=True,
+                        )
                     )
                     final_answer = self._with_verification_scope(gated)
                     verification_scope_applied = True
@@ -11331,9 +11304,7 @@ Do NOT wrap conversational replies in JSON.
         )
 
         if not verification_scope_applied and not account_refused:
-            final_answer, completion_gaps = self._gate_unsealed_answer(
-                final_answer, keep_answer=max_steps_reached
-            )
+            final_answer, completion_gaps = self._gate_unsealed_answer(final_answer)
 
         # Every exit other than the parsed-answer seam sets ``final_answer``
         # directly — cancel-event timeout, LLM connection error, context
@@ -11594,29 +11565,27 @@ Do NOT wrap conversational replies in JSON.
     ) -> Tuple[Optional[str], int]:
         """Final answer when the loop guard stops the turn, and the step count.
 
-        Repeats that worked prove neither outcome, so the model gets one
-        closing call (tools withheld) to say what it did from the results it
-        already has; failed or refused repeats keep the summary, which names
-        the failure. ``executed_count`` counts the calls that ran, as the
-        summary does. Returns ``(None, steps)`` when the user pressed Stop.
+        The model always gets one closing call (tools withheld) to say what it
+        did from the results it already has, so earlier work survives the
+        stop. Failed or refused repeats add the failure summary after it.
+        ``executed_count`` counts the calls that ran, as the summary does.
+        Returns ``(None, steps)`` when the user pressed Stop.
         """
         summary = self._build_loop_break_summary(
             tool_name, executed_count, recent_results
         )
-        if self._repeats_carry_a_failure(recent_results):
-            return summary, steps_taken
+        failed = self._repeats_carry_a_failure(recent_results)
 
         steps_taken += 1
         if self._turn_recorder is not None and self.chat is not None:
             self.chat.turn_step = steps_taken
         self.execution_state = self.STATE_COMPLETION
+        prompt = _FAILED_CALL_ANSWER_PROMPT if failed else _REPEATED_CALL_ANSWER_PROMPT
         try:
             answer = self._closing_answer(
                 messages,
                 conversation,
-                _REPEATED_CALL_ANSWER_PROMPT.format(
-                    tool=tool_name, count=executed_count
-                ),
+                prompt.format(tool=tool_name, count=executed_count),
                 steps_taken,
             )
         except Exception as e:  # noqa: BLE001 - the reason goes in the answer
@@ -11628,6 +11597,8 @@ Do NOT wrap conversational replies in JSON.
             )
         # Raw, like the summary branches above — the caller finalizes once.
         # Subclass hooks append corrections, so a second pass duplicates them.
+        if failed and answer is not None:
+            answer = f"{answer.rstrip()}\n\n{summary}"
         return answer, steps_taken
 
     def _end_turn_on_scope(

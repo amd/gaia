@@ -606,12 +606,12 @@ def extract_pages(source, request, ask, check_cancelled, fields=()):
                     # The reply is the only evidence of why a page was refused.
                     logger.warning(
                         "Extractor reply rejected (page %d, pass %d, attempt %d): "
-                        "%s; raw reply: %r",
+                        "%s; raw reply: %s",
                         pages + 1,
                         pass_number + 1,
                         attempt + 1,
                         error,
-                        reply if not isinstance(reply, str) else reply[:4000],
+                        repr(reply)[:4000],
                     )
                     if attempt:
                         raise ValueError(

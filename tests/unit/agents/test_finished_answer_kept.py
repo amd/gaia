@@ -276,3 +276,40 @@ def test_a_real_extraction_gap_keeps_the_answer_and_adds_a_caveat(agent, tmp_pat
     assert "I couldn't confirm all of this" in text
     assert "Incomplete extraction of" in text and "source.txt" in text
     assert "Treat it as unfinished" not in text
+
+
+# ---------------------------------------------------------------------------
+# No gate replaces a non-empty answer
+# ---------------------------------------------------------------------------
+
+
+def test_an_unbacked_save_claim_is_kept_with_its_caveat(agent):
+    claim = "Here is the summary: alpha, beta. I saved it to `summary.md`."
+    script(agent, {"answer": claim}, {"answer": claim}, {"answer": claim})
+    result = agent.process_query("Summarize alpha and beta and save it to `summary.md`")
+    assert result["status"] == "incomplete"
+    assert result["result"].startswith(claim)
+    assert "No successful write to `summary.md`" in result["result"]
+
+
+def test_a_test_claim_with_its_correction_spent_is_kept_with_its_caveat(agent):
+    answer = "Fixed the parser in parse.py. All 12 tests passed."
+    script(agent, *[{"answer": answer}] * 4)
+    result = agent.process_query("Fix the parser in parse.py", max_steps=10)
+    assert result["status"] == "incomplete"
+    assert result["result"].startswith(answer)
+    assert "No tests were run this turn." in result["result"]
+
+
+def test_an_unsealed_answer_without_an_error_is_kept(agent, tmp_path):
+    """An early exit with no error used to drop the reply for the bare report."""
+    (tmp_path / "source.txt").write_text("Exercise ALPHA")
+    script(agent, {"answer": "warm-up"})
+    agent.process_query("hello", max_steps=2)
+    agent._extraction_ledger = ExtractionLedger(
+        "List every exercise in source.txt", str(tmp_path)
+    )
+    findings = "So far: the source lists Exercise ALPHA."
+    answer, gaps = agent._gate_unsealed_answer(findings)
+    assert gaps and answer.startswith(findings)
+    assert "source.txt" in answer
